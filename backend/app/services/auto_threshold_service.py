@@ -84,7 +84,7 @@ def _advanced_scores(db: Session, *, role: Role) -> list[float]:
         .filter(
             (CandidateApplication.application_outcome == "hired")
             | CandidateApplication.pipeline_stage.in_(
-                ("invited", "in_assessment", "review", "technical_interview")
+                ("invited", "in_assessment", "review", "advanced")
             )
         )
         .all()

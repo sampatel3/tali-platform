@@ -69,6 +69,7 @@ def _classify_event(event: CandidateApplicationEvent) -> str | None:
             return "advance"
     if event.event_type == "pipeline_stage_changed":
         if (event.to_stage or "").lower() in {
+            "advanced",
             "technical_interview",
             "interview",
             "offer",

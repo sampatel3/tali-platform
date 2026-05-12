@@ -35,7 +35,7 @@ import { CandidateSheet } from '../candidates/CandidateSheet';
 import { CandidateTriageDrawer, candidateReportHref } from '../candidates/CandidateTriageDrawer';
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSheet } from '../candidates/RoleSheet';
-import { getErrorMessage, trimOrUndefined } from '../candidates/candidatesUiUtils';
+import { getErrorMessage, trimOrUndefined, formatStatusLabel } from '../candidates/candidatesUiUtils';
 
 const EMPTY_PROGRESS = { status: 'idle', total: 0, scored: 0, errors: 0, include_scored: false };
 const EMPTY_FETCH_PROGRESS = { status: 'idle', total: 0, fetched: 0, errors: 0 };
@@ -46,6 +46,7 @@ const PIPELINE_STAGE_ORDER = [
   { key: 'invited', label: 'Invited', countLabel: 'awaiting' },
   { key: 'in_assessment', label: 'In assessment', countLabel: 'live' },
   { key: 'review', label: 'Review', countLabel: 'decision' },
+  { key: 'advanced', label: 'Advanced', countLabel: 'with recruiter' },
 ];
 
 const normalizeThreshold = (value) => {
@@ -1589,84 +1590,94 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   };
 
-  // Per-role chip CRUD + sync/reset. Each call hits the API immediately;
-  // the role response carries the updated criteria + suppressed list so
-  // we just re-load the role workspace afterwards.
-  const refreshRoleAfterCriteriaChange = useCallback(async (nextRoleData) => {
-    if (nextRoleData) {
-      setRole(nextRoleData);
-    } else {
-      await loadRoleWorkspace();
-    }
-    setRefreshTick((value) => value + 1);
-  }, [loadRoleWorkspace]);
-
+  // Per-role chip CRUD + sync/reset. Merge the returned chip into role.criteria —
+  // a full role-workspace refetch would drag in 2× 2000-row application lists per edit.
   const handleCreateRoleCriterion = useCallback(async ({ text, bucket }) => {
     if (!Number.isFinite(numericRoleId)) return;
     setCriteriaBusy(true);
     try {
-      await rolesApi.createCriterion(numericRoleId, { text, bucket });
-      await refreshRoleAfterCriteriaChange();
+      const { data } = await rolesApi.createCriterion(numericRoleId, { text, bucket });
+      if (data) setRole((cur) => cur && ({
+        ...cur,
+        criteria: [...(cur.criteria || []).filter((c) => c.id !== data.id), data],
+      }));
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to add criterion.'), 'error');
     } finally {
       setCriteriaBusy(false);
     }
-  }, [numericRoleId, refreshRoleAfterCriteriaChange, showToast]);
+  }, [numericRoleId, rolesApi, showToast]);
 
   const handleUpdateRoleCriterion = useCallback(async (criterionId, updates) => {
     if (!Number.isFinite(numericRoleId)) return;
     setCriteriaBusy(true);
     try {
-      await rolesApi.updateCriterion(numericRoleId, criterionId, updates);
-      await refreshRoleAfterCriteriaChange();
+      const { data } = await rolesApi.updateCriterion(numericRoleId, criterionId, updates);
+      if (data) setRole((cur) => cur && ({
+        ...cur,
+        criteria: (cur.criteria || []).map((c) => (c.id === criterionId ? data : c)),
+      }));
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to update criterion.'), 'error');
     } finally {
       setCriteriaBusy(false);
     }
-  }, [numericRoleId, refreshRoleAfterCriteriaChange, showToast]);
+  }, [numericRoleId, rolesApi, showToast]);
 
   const handleDeleteRoleCriterion = useCallback(async (criterionId) => {
     if (!Number.isFinite(numericRoleId)) return;
-    setCriteriaBusy(true);
+    // Optimistic remove. If the chip is workspace-derived, mirror the backend
+    // and append its org_criterion_id to the suppressed list.
+    let previousRole = null;
+    setRole((cur) => {
+      previousRole = cur;
+      if (!cur) return cur;
+      const target = (cur.criteria || []).find((c) => c.id === criterionId);
+      const orgId = target?.org_criterion_id;
+      const suppressed = cur.suppressed_org_criterion_ids || [];
+      return {
+        ...cur,
+        criteria: (cur.criteria || []).filter((c) => c.id !== criterionId),
+        suppressed_org_criterion_ids: orgId != null
+          ? Array.from(new Set([...suppressed, Number(orgId)]))
+          : suppressed,
+      };
+    });
     try {
       await rolesApi.deleteCriterion(numericRoleId, criterionId);
-      await refreshRoleAfterCriteriaChange();
     } catch (error) {
+      if (previousRole) setRole(previousRole);
       showToast(getErrorMessage(error, 'Failed to remove criterion.'), 'error');
-    } finally {
-      setCriteriaBusy(false);
     }
-  }, [numericRoleId, refreshRoleAfterCriteriaChange, showToast]);
+  }, [numericRoleId, rolesApi, showToast]);
 
   const handleSyncRoleCriteria = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
     setCriteriaSyncing(true);
     try {
       const res = await rolesApi.syncCriteriaWithWorkspace(numericRoleId);
-      await refreshRoleAfterCriteriaChange(res?.data);
+      if (res?.data) setRole(res.data);
       showToast('Workspace updates pulled in.', 'success');
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to sync workspace criteria.'), 'error');
     } finally {
       setCriteriaSyncing(false);
     }
-  }, [numericRoleId, refreshRoleAfterCriteriaChange, showToast]);
+  }, [numericRoleId, rolesApi, showToast]);
 
   const handleResetRoleCriteria = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
     setCriteriaResetting(true);
     try {
       const res = await rolesApi.resetCriteriaToWorkspace(numericRoleId);
-      await refreshRoleAfterCriteriaChange(res?.data);
+      if (res?.data) setRole(res.data);
       showToast('Criteria reset to workspace defaults.', 'success');
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to reset criteria.'), 'error');
     } finally {
       setCriteriaResetting(false);
     }
-  }, [numericRoleId, refreshRoleAfterCriteriaChange, showToast]);
+  }, [numericRoleId, rolesApi, showToast]);
 
   // Restore a hidden (suppressed) workspace chip on this role: re-add it
   // by calling create with the workspace text + bucket. The backend
@@ -1683,13 +1694,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       await rolesApi.update(numericRoleId, { suppressed_org_criterion_ids: remainingSuppressed });
       // Then sync to bring the chip back with full provenance (org_criterion_id set).
       const res = await rolesApi.syncCriteriaWithWorkspace(numericRoleId);
-      await refreshRoleAfterCriteriaChange(res?.data);
+      if (res?.data) setRole(res.data);
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to restore criterion.'), 'error');
     } finally {
       setCriteriaBusy(false);
     }
-  }, [numericRoleId, role, refreshRoleAfterCriteriaChange, showToast]);
+  }, [numericRoleId, role, rolesApi, showToast]);
 
   const handleRoleSheetSubmit = async ({
     name,
@@ -2308,10 +2319,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                     return { key: stage.key, label: stage.label, count: items.length };
                   }),
                   // Rejected is an *outcome* not a *stage*; it lives at
-                  // the right of the strip so the active-pipeline tabs
-                  // (All / Applied / Invited / In assessment / Review)
-                  // read left-to-right as a recruiter would walk the
-                  // funnel.
+                  // the right so the active-pipeline tabs (All / Applied /
+                  // Invited / In assessment / Review / Advanced) read
+                  // left-to-right as a recruiter would walk the funnel.
                   { key: 'rejected', label: 'Rejected', count: rejectedApplications.length },
                 ].map((seg) => (
                   <button
@@ -2381,8 +2391,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               </button>
             </div>
             {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — clean
-                ctable with Candidate / Score / Stage / Status / Agent /
-                View →. Filtered by tableStageFilter, sorted client-side
+                ctable with Candidate / Score / Stage / Workable / Status /
+                Agent / View →. Filtered by tableStageFilter, sorted client-side
                 by tableSortBy. The full CandidatesDirectoryPage was too
                 heavy here — it carried bulk-action chrome, pagination,
                 NL-search, and filter chips that don't belong on the
@@ -2422,6 +2432,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         <th>Candidate</th>
                         <th>Score</th>
                         <th>Stage</th>
+                        <th>Workable</th>
                         <th>Status</th>
                         <th>Agent</th>
                         <th aria-label="Open" />
@@ -2474,6 +2485,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                               <td>
                                 <span className="stage-pill">{stageLabel}</span>
                               </td>
+                              <td>{application?.workable_stage ? (<span className="stage-pill" title="Current stage in Workable">{formatStatusLabel(application.workable_stage)}</span>) : (<span className="ctable-em">—</span>)}</td>
                               <td className="ctable-status">{statusText}</td>
                               <td>
                                 {agentLabel ? (
@@ -2500,7 +2512,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                             </tr>
                             {isTriageRow ? (
                               <tr className="ctable-triage-row">
-                                <td colSpan={6} className="ctable-triage-cell">
+                                <td colSpan={7} className="ctable-triage-cell">
                                   <CandidateTriageDrawer {...triageDrawerProps} />
                                 </td>
                               </tr>

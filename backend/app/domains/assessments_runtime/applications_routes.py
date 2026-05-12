@@ -119,6 +119,7 @@ from .pipeline_service import (
     initialize_pipeline_event_if_missing,
     list_application_events,
     map_legacy_status_to_pipeline,
+    should_auto_advance_to_advanced,
     transition_outcome,
     transition_stage,
 )
@@ -1783,8 +1784,11 @@ def move_application_in_workable(
     Used at the end of the Tali pipeline (typically when ``pipeline_stage``
     is ``review``) to push the candidate into the next stage of the
     recruiter's Workable pipeline — e.g. ``phone_screen`` or ``interview``.
-    Tali's own pipeline stage is not changed; this is purely a write-back
-    to the ATS.
+
+    When the target Workable stage is past Tali's handover point, the
+    candidate is also moved to Tali's ``advanced`` stage so the pipeline
+    list reflects reality (post-handover candidates leave the active
+    ``review`` bucket).
     """
     app = get_application(application_id, current_user.organization_id, db)
     if not app.workable_candidate_id:
@@ -1850,6 +1854,25 @@ def move_application_in_workable(
                 "workable_actor_member_id": (result.get("config") or {}).get("actor_member_id"),
             },
         )
+        # If the target stage is post-handover, also advance Tali's
+        # pipeline_stage so the candidate leaves the active ``review``
+        # bucket. Forward-only — never demote.
+        target_mapped_stage, _ = map_legacy_status_to_pipeline(target_stage)
+        if (
+            target_mapped_stage == "advanced"
+            and should_auto_advance_to_advanced(app.pipeline_stage)
+        ):
+            transition_stage(
+                db,
+                app=app,
+                to_stage="advanced",
+                source="recruiter",
+                actor_type="recruiter",
+                actor_id=current_user.id,
+                reason=f"Handed back to Workable: {target_stage}",
+                metadata={"workable_target_stage": target_stage},
+                idempotency_key=f"workable_handback:{app.id}:{target_stage}",
+            )
         db.commit()
         db.refresh(app)
     except HTTPException:

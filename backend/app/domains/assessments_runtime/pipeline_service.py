@@ -11,15 +11,33 @@ from sqlalchemy.orm import Session
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
 
-PIPELINE_STAGES = ("applied", "invited", "in_assessment", "review", "technical_interview")
+PIPELINE_STAGES = ("applied", "invited", "in_assessment", "review", "advanced")
 APPLICATION_OUTCOMES = ("open", "rejected", "withdrawn", "hired")
 PIPELINE_STAGE_SOURCES = ("system", "recruiter", "sync", "agent")
+
+# Workable stages that mean "the candidate is past Tali's handover point" —
+# they're now in the recruiter's interview/offer flow. We collapse all of
+# these into Tali's single `advanced` bucket; the precise stage stays
+# visible via the workable_stage column on the row.
+POST_HANDOVER_WORKABLE_STAGES = frozenset({
+    "phone_screen", "phone_interview",
+    "interview", "technical_interview", "final_interview", "onsite",
+    "assessment",
+    "offer", "offer_extended", "offer_accepted",
+    "hired",
+})
 
 _RECRUITER_STAGE_TRANSITIONS = {
     ("applied", "invited"),
     ("review", "invited"),
-    ("review", "technical_interview"),
-    ("technical_interview", "review"),
+    # Any earlier Tali stage may jump to "advanced" — used by the
+    # Workable hand-back flow when the recruiter moves the candidate
+    # directly to an interview/offer stage in the ATS.
+    ("applied", "advanced"),
+    ("invited", "advanced"),
+    ("in_assessment", "advanced"),
+    ("review", "advanced"),
+    ("advanced", "review"),
 }
 _SYSTEM_STAGE_TRANSITIONS = {
     ("invited", "in_assessment"),
@@ -75,8 +93,28 @@ def map_legacy_status_to_pipeline(status: str | None) -> tuple[str, str]:
     if key in {"withdrawn"}:
         return "review", "withdrawn"
     if key in {"hired", "offer_accepted"}:
-        return "review", "hired"
+        return "advanced", "hired"
+    if key in POST_HANDOVER_WORKABLE_STAGES:
+        return "advanced", "open"
     return "applied", "open"
+
+
+# Tali pipeline stages, in order. Used to decide whether an incoming
+# Workable stage represents *forward* movement past the recruiter's
+# current Tali stage — auto-advance is forward-only.
+_STAGE_ORDER: dict[str, int] = {stage: idx for idx, stage in enumerate(PIPELINE_STAGES)}
+
+
+def should_auto_advance_to_advanced(current_stage: str | None) -> bool:
+    """Return True when an incoming `advanced` mapping should overwrite the
+    current Tali stage. Forward-only: we move `applied`/`invited`/
+    `in_assessment`/`review` → `advanced`, but never demote from
+    `advanced` back if Workable wobbles.
+    """
+    current = normalize_pipeline_key(current_stage)
+    if current not in _STAGE_ORDER:
+        return True
+    return _STAGE_ORDER[current] < _STAGE_ORDER["advanced"]
 
 
 def status_from_pipeline(stage: str, outcome: str) -> str:
@@ -180,11 +218,19 @@ def _guard_stage_transition(*, source: str, from_stage: str, to_stage: str, app:
                 detail=f"System transition {from_stage}->{to_stage} is not allowed",
             )
         return
-    if source == "sync" and app.version > 1:
-        raise HTTPException(
-            status_code=409,
-            detail="Sync cannot override local pipeline_stage after recruiter/system updates",
-        )
+    if source == "sync":
+        # Sync may always forward-advance a candidate to "advanced" once
+        # Workable confirms they're past the handover point — Workable is
+        # the source of truth for that part of the lifecycle. All other
+        # sync transitions still require the row to be unedited locally
+        # (version <= 1).
+        if to_stage == "advanced":
+            return
+        if app.version > 1:
+            raise HTTPException(
+                status_code=409,
+                detail="Sync cannot override local pipeline_stage after recruiter/system updates",
+            )
 
 
 def _legacy_compatibility_path(from_stage: str, to_stage: str) -> list[tuple[str, str]] | None:

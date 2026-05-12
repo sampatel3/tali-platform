@@ -31,7 +31,7 @@ from .payloads import (
     role_summary,
 )
 
-PIPELINE_STAGES = ("applied", "invited", "in_assessment", "review", "technical_interview")
+PIPELINE_STAGES = ("applied", "invited", "in_assessment", "review", "advanced")
 APPLICATION_OUTCOMES = ("open", "rejected", "withdrawn", "hired")
 
 

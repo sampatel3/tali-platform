@@ -1,7 +1,7 @@
 """Tests for the outcome-learning feedback loop.
 
 Covers:
-- ``transition_stage(to=technical_interview)`` records "interviewed"
+- ``transition_stage(to=advanced)`` records "interviewed"
   outcome on a recently-approved advance decision
 - ``transition_outcome(to=hired)`` records "hired" outcome on a
   recently-approved advance decision
@@ -132,7 +132,7 @@ def test_stage_transition_to_interview_records_interviewed_outcome(db):
     transition_stage(
         db,
         app=app,
-        to_stage="technical_interview",
+        to_stage="advanced",
         source="recruiter",
         actor_type="recruiter",
         actor_id=1,
@@ -149,7 +149,7 @@ def test_stage_transition_to_interview_records_interviewed_outcome(db):
 
 
 def test_stage_transition_to_other_stage_does_not_record(db):
-    """Only technical_interview is the meaningful 'advance' destination."""
+    """Only advanced is the meaningful 'advance' destination."""
     org = _make_org(db)
     role = _make_role(db, org)
     app = _make_application(db, org=org, role=role, stage="applied")
@@ -182,7 +182,7 @@ def test_stage_transition_with_no_matching_decision_is_a_noop(db):
     transition_stage(
         db,
         app=app,
-        to_stage="technical_interview",
+        to_stage="advanced",
         source="recruiter",
         actor_type="recruiter",
         actor_id=1,
@@ -202,7 +202,7 @@ def test_stage_transition_with_no_matching_decision_is_a_noop(db):
 def test_outcome_transition_to_hired_records_hired(db):
     org = _make_org(db)
     role = _make_role(db, org)
-    app = _make_application(db, org=org, role=role, stage="technical_interview")
+    app = _make_application(db, org=org, role=role, stage="advanced")
     _approved_decision(
         db, org=org, role=role, application=app, decision_type="advance_to_interview"
     )
@@ -389,20 +389,20 @@ def test_outcome_learning_hook_failure_does_not_block_stage_transition(db):
         transition_stage(
             db,
             app=app,
-            to_stage="technical_interview",
+            to_stage="advanced",
             source="recruiter",
             actor_type="recruiter",
             actor_id=1,
         )
     db.commit()
     db.refresh(app)
-    assert app.pipeline_stage == "technical_interview"
+    assert app.pipeline_stage == "advanced"
 
 
 def test_outcome_learning_hook_failure_does_not_block_outcome_transition(db):
     org = _make_org(db)
     role = _make_role(db, org)
-    app = _make_application(db, org=org, role=role, stage="technical_interview")
+    app = _make_application(db, org=org, role=role, stage="advanced")
 
     with patch.object(
         outcome_learning,

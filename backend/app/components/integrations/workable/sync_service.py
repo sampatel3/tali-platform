@@ -23,6 +23,8 @@ from ....domains.assessments_runtime.pipeline_service import (
     initialize_pipeline_event_if_missing,
     map_legacy_status_to_pipeline,
     normalize_pipeline_key,
+    should_auto_advance_to_advanced,
+    transition_stage,
 )
 from ....domains.assessments_runtime.role_support import refresh_application_score_cache
 from ....services.document_service import (
@@ -1393,6 +1395,35 @@ class WorkableSyncService:
         app.workable_stage = sanitize_text_for_storage(str(stage or ""))
         app.external_stage_raw = sanitize_text_for_storage(str(stage or ""))
         app.external_stage_normalized = normalize_pipeline_key(str(stage or ""))
+
+        # Auto-advance Tali's pipeline_stage when Workable confirms the
+        # candidate is past the handover point. Forward-only — never demote.
+        # New apps already get the right stage via map_legacy_status_to_pipeline
+        # above; this is for existing apps the recruiter has moved in Workable
+        # since the last sync.
+        if not created_application:
+            workable_mapped_stage, _ = map_legacy_status_to_pipeline(str(stage or ""))
+            if (
+                workable_mapped_stage == "advanced"
+                and should_auto_advance_to_advanced(app.pipeline_stage)
+            ):
+                try:
+                    transition_stage(
+                        db,
+                        app=app,
+                        to_stage="advanced",
+                        source="sync",
+                        actor_type="sync",
+                        reason=f"Workable moved candidate to {stage!r}",
+                        metadata={"workable_stage": str(stage or "")},
+                        idempotency_key=f"sync_advance:{app.id}:{normalize_pipeline_key(str(stage or ''))}",
+                    )
+                except Exception:  # pragma: no cover — never block a sync
+                    import logging
+                    logging.getLogger("taali.workable.sync").exception(
+                        "Auto-advance to 'advanced' failed for app_id=%s",
+                        app.id,
+                    )
         app.external_refs = sanitize_json_for_storage(
             {
                 "workable_candidate_id": candidate_id,

@@ -84,8 +84,8 @@ def test_labelled_tier_anchors_on_advanced_median(db):
         (60.0, "invited"),
         (65.0, "in_assessment"),
         (70.0, "review"),
-        (75.0, "technical_interview"),
-        (80.0, "technical_interview"),
+        (75.0, "advanced"),
+        (80.0, "advanced"),
     ):
         _add_app(db, org=org, role=role, pre=score, stage=stage)
     # Plus 20 applied/below candidates that shouldn't affect the labelled tier.

@@ -11,7 +11,7 @@ This module records *realized outcomes* — what actually happened to a
 candidate after the agent's decision was approved. Hooks into pipeline
 state transitions:
 
-- Application stage moves to ``technical_interview`` after an approved
+- Application stage moves to ``advanced`` after an approved
   ``advance_to_interview`` agent decision → outcome="interviewed"
 - Application outcome moves to ``hired`` after an approved
   ``advance_to_interview`` agent decision → outcome="hired"
@@ -164,14 +164,15 @@ def record_advance_outcome_on_stage(
     new_stage: str,
 ) -> None:
     """Called from pipeline_service.transition_stage. When an application
-    reaches ``technical_interview``, look up any approved agent advance
-    decision and record outcome="interviewed".
+    reaches ``advanced`` (i.e., past Tali's handover into the recruiter's
+    Workable interview flow), look up any approved agent advance decision
+    and record outcome="interviewed".
 
     Idempotent — re-firing on the same stage transition just appends a
     duplicate entry, which the bounded FIFO eventually drops. Cheap
     enough not to bother deduping at insert time.
     """
-    if str(new_stage) != "technical_interview":
+    if str(new_stage) != "advanced":
         return
     role_id = getattr(application, "role_id", None)
     if role_id is None:
