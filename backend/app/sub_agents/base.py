@@ -36,6 +36,20 @@ class SubAgentResult:
     On error the sub-agent returns ``ok=False`` with ``error`` set; it
     does NOT raise. The orchestrator expects to inspect ``ok`` and skip
     the downstream policy step when False.
+
+    v2 fields (architecture spec §6.2):
+      ``uncertainty``: 0..1 calibrated standard-error-like number.
+        Higher means the agent is less sure of its score. The policy
+        engine reads this to gate ``escalate_low_confidence``.
+      ``citations``: list of ``{node_ids, edge_ids, summary}`` dicts —
+        the graph paths the agent leaned on (matches GraphCitation
+        in app.agent_runtime.contracts).
+      ``exemplars_used``: list of ``{exemplar_id, similarity}`` dicts
+        — exemplar-store hits retrieved at score time and injected as
+        few-shot. Empty list means no exemplar lookup (Phase 1 era).
+
+    All three default to safe-empty values so legacy sub-agent
+    implementations stay valid without changes.
     """
 
     sub_agent: str
@@ -45,6 +59,9 @@ class SubAgentResult:
     error: str | None = None
     cache_hit: bool = False
     tokens_used: int = 0
+    uncertainty: float = 0.0
+    citations: list[dict[str, Any]] = field(default_factory=list)
+    exemplars_used: list[dict[str, Any]] = field(default_factory=list)
 
 
 class SubAgent(Protocol):

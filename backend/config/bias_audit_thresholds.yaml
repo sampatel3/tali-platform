@@ -1,0 +1,35 @@
+# Bias-audit thresholds for the Phase 5 promotion gate (D2).
+#
+# **REQUIRES COMPLIANCE / LEGAL SIGN-OFF BEFORE PROMOTION GATE GOES LIVE.**
+# Starting values come from section_10_decisions.md §D2; the file is
+# git-tracked and every change requires PR co-sign.
+#
+# Read by: app.decision_policy.bias_audit.load_thresholds()
+
+# Disparate impact ratio (4/5ths rule). DIR < threshold blocks auto-promote.
+disparate_impact_ratio_min: 0.80
+
+# Calibration parity: |ECE_A - ECE_B| < threshold required.
+calibration_parity_max_gap: 0.05
+
+# Selection rate parity: |P(advance)_A - P(advance)_B| < threshold required.
+selection_rate_parity_max_gap: 0.05
+
+# Outcome parity: |hire_rate_A - hire_rate_B| < threshold required.
+outcome_parity_max_gap: 0.07
+
+# Protected attributes to audit on. Compliance signs off on this list per
+# jurisdiction. The starting list is the EEOC-aligned default; add e.g.
+# "caste" for India deployments, "citizenship_status" for regulated US
+# sectors, etc.
+protected_attributes:
+  - gender
+  - race
+  - age_band
+  - nationality
+  - disability_status
+  - religion
+
+# Co-sign override: a documented exception can be filed to promote despite
+# a violation. The override itself is an auditable event.
+allow_documented_override: true

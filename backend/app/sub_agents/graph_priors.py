@@ -1,26 +1,29 @@
-"""Graph-priors sub-agent.
+"""Graph-priors sub-agent — v2 (Phase 2: GraphRAG).
 
-Composes existing graph search adapters — no new Cypher/Graphiti
-queries — into a per-application "p_advance prior".
+Spec §6.2.4: this agent reasons over *paths*, not over nodes. Each
+scored signal is a path (referrer track record, company overlap with
+top performers, skill→role→outcome aggregates) with a weight and
+temporal validity. The synthesised prior is what the policy engine
+consumes.
 
 Algorithm:
-  1. Pull the candidate's neighbourhood via
-     ``candidate_graph.search.colleague_neighbourhood``.
-  2. Translate the company / school / skill anchors into structured
-     ``GraphPredicate``s and call
-     ``candidate_graph.search.candidate_ids_matching_all`` to find
-     intersection candidates in the same org.
-  3. Filter to candidates in the same role family (uses
-     ``cv_matching/calibrators/extractor._default_role_family_mapper``).
-  4. For each remaining neighbour, look up the recruiter outcome from
-     ``CandidateApplication.application_outcome`` + recent
-     ``CandidateApplicationEvent`` history.
-  5. Apply time decay: ``weight = max(0, 1 - days_since / decay_days)``.
-  6. ``p_advance = sum(weight * advanced_label) / sum(weight)``.
-  7. Cold start: when the effective neighbour count is below
-     ``min_neighbours_for_prior`` (read from the active policy's
-     ``graph_prior_config``), return ``confidence=0`` so the engine
-     degrades the prior weight to 0 cleanly.
+  1. If Graphiti is reachable and the candidate has a Graphiti node,
+     run the four multi-hop queries in ``graphrag_queries`` (referrer
+     signal, company overlap, similar candidates, skill→outcome paths)
+     at the cycle's ``decision_time`` anchor.
+  2. Synthesise the rows into a calibrated prior using
+     ``synthesise_prior`` (weighted average over present signal
+     components; confidence = signal-density).
+  3. Fall back to the legacy heuristic (colleague neighbourhood +
+     time decay over CandidateApplication outcomes) when:
+       - Graphiti is not configured for the org, OR
+       - The Cypher queries return nothing (e.g. fresh graph, no
+         outcomes ingested yet).
+     The fallback is preserved so the agent never blocks decisions
+     during the GraphRAG rollout.
+  4. Cold start: when no signal source produces output and the legacy
+     heuristic is also empty, return ``confidence=0`` so the policy
+     engine collapses the prior's weight to 0 cleanly.
 
 Per-cycle in-memory cache prevents re-running graph queries when the
 orchestrator calls ``evaluate_policy`` more than once for the same
@@ -38,6 +41,7 @@ from sqlalchemy.orm import Session
 
 from ..candidate_graph import search as graph_search
 from ..candidate_graph import client as graph_client
+from ..candidate_graph import graphrag_queries
 from ..candidate_search.schemas import GraphPredicate
 from ..cv_matching.calibrators.extractor import _default_role_family_mapper
 from ..decision_policy.engine import load_active_policy
@@ -134,6 +138,154 @@ def _candidate_predicates(neigh: dict[str, Any]) -> list[GraphPredicate]:
 class GraphPriorsSubAgent:
     name = "graph_priors"
 
+    # Tunables for the GraphRAG path. Conservative defaults — the
+    # synthesiser already collapses to confidence=0 when no signal
+    # source produces output, so these only affect *which* signals
+    # we attempt to read.
+    GRAPHRAG_MAX_SIMILAR = 10
+    GRAPHRAG_MAX_OVERLAP_COMPANIES = 10
+    GRAPHRAG_MAX_SKILL_PATHS = 15
+
+    def _try_graphrag(
+        self,
+        req: SubAgentRequest,
+        db: Session,
+        *,
+        config: GraphPriorConfig,
+    ) -> SubAgentResult | None:
+        """Multi-hop GraphRAG path. Returns None when it can't run; a
+        ``SubAgentResult`` with ``ok=True, p_advance=None`` when it ran
+        but produced no signal (caller will fall through to the legacy
+        heuristic); a populated result when it produced a calibrated
+        prior.
+        """
+        # Resolve the candidate + role IDs we need to anchor the queries.
+        app = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.id == req.application_id,
+                CandidateApplication.organization_id == req.organization_id,
+            )
+            .one_or_none()
+        )
+        if app is None:
+            return None
+        candidate_taali_id = int(app.candidate_id)
+        role_taali_id = int(req.role_id)
+        group_id = graph_client.group_id_for_org(int(req.organization_id))
+
+        # GraphRAG queries key off the Graphiti-side candidate_id /
+        # role_id properties. We use the Tali IDs as the canonical
+        # identifiers (the ingestion path writes them as
+        # ``taali_id=N`` in the episode body, which Graphiti's
+        # extractor binds to entity properties named ``candidate_id``
+        # / ``role_id``). If the graph hasn't ingested this candidate
+        # yet, the queries return empty and the synthesiser returns
+        # p_advance=None — caller falls through.
+        graph_candidate_id = str(candidate_taali_id)
+        graph_role_id = str(role_taali_id)
+        t = datetime.now(timezone.utc)
+
+        # Referrer identity is optional and the column shape differs
+        # across orgs (Workable-sourced vs manually-entered). Probe for
+        # any of the known field names; missing → no referrer signal.
+        referrer_id = None
+        for attr in ("referrer_id", "referrer_email", "referrer"):
+            value = getattr(app, attr, None)
+            if value:
+                referrer_id = str(value)
+                break
+
+        referrer = None
+        if referrer_id:
+            try:
+                referrer = graphrag_queries.referrer_signal(
+                    group_id=group_id, referrer_id=referrer_id, t=t
+                )
+            except Exception as exc:
+                logger.warning("referrer_signal failed: %s", exc)
+
+        try:
+            overlap_rows = graphrag_queries.company_overlap_with_top_performers(
+                group_id=group_id,
+                candidate_id=graph_candidate_id,
+                role_id=graph_role_id,
+                t=t,
+                limit=self.GRAPHRAG_MAX_OVERLAP_COMPANIES,
+            )
+        except Exception:
+            overlap_rows = []
+        try:
+            similar_rows = graphrag_queries.similar_past_candidates(
+                group_id=group_id,
+                candidate_id=graph_candidate_id,
+                t=t,
+                top_n=self.GRAPHRAG_MAX_SIMILAR,
+            )
+        except Exception:
+            similar_rows = []
+        try:
+            skill_rows = graphrag_queries.skill_to_outcome_paths(
+                group_id=group_id,
+                candidate_id=graph_candidate_id,
+                role_id=graph_role_id,
+                t=t,
+                limit=self.GRAPHRAG_MAX_SKILL_PATHS,
+            )
+        except Exception:
+            skill_rows = []
+
+        synthesis = graphrag_queries.synthesise_prior(
+            referrer=referrer,
+            overlap_rows=overlap_rows,
+            similar_rows=similar_rows,
+            skill_outcome_rows=skill_rows,
+        )
+        confidence = float(synthesis.get("confidence") or 0.0)
+        p_advance = synthesis.get("p_advance")
+
+        if p_advance is None:
+            # GraphRAG ran but produced nothing — let the caller fall
+            # through to the legacy heuristic.
+            return SubAgentResult(
+                sub_agent=self.name,
+                ok=True,
+                output={
+                    "p_advance": None,
+                    "confidence": 0.0,
+                    "synthesis_note": synthesis.get("synthesis_note"),
+                },
+                confidence=0.0,
+            )
+
+        # GraphRAG calibrated uncertainty: 1 - confidence is a reasonable
+        # initial mapping until Phase 3 isotonic calibration produces a
+        # better number from realised outcomes.
+        return SubAgentResult(
+            sub_agent=self.name,
+            ok=True,
+            output={
+                "p_advance": float(p_advance),
+                "p_hired": float(p_advance),
+                "neighbour_count": (
+                    len(similar_rows) + len(overlap_rows)
+                ),
+                "confidence": confidence,
+                "components": synthesis.get("components", []),
+                "source": "graphrag",
+            },
+            confidence=confidence,
+            uncertainty=max(0.0, min(1.0, 1.0 - confidence)),
+            citations=[
+                {
+                    "node_ids": [],
+                    "edge_ids": [],
+                    "summary": c.get("summary", ""),
+                }
+                for c in (synthesis.get("components") or [])
+            ],
+        )
+
     def run(
         self, req: SubAgentRequest, *, db: Session | None = None
     ) -> SubAgentResult:
@@ -177,6 +329,13 @@ class GraphPriorsSubAgent:
             return _empty_result("graph priors disabled in policy")
         if not graph_client.is_configured():
             return _empty_result("graph not configured for this org")
+
+        # GraphRAG path (Phase 2) — try multi-hop queries first. The
+        # heuristic path remains as a fallback so this rolls out
+        # without breaking organisations whose graph is sparse.
+        graphrag = self._try_graphrag(req, db, config=config)
+        if graphrag is not None and graphrag.ok and (graphrag.output.get("p_advance") is not None):
+            return graphrag
 
         app = (
             db.query(CandidateApplication)
@@ -281,6 +440,10 @@ class GraphPriorsSubAgent:
             )
 
         p_advance = weighted_sum / weight_sum
+        confidence = min(
+            1.0,
+            effective_count / max(1, 2 * int(config.min_neighbours_for_prior)),
+        )
         return SubAgentResult(
             sub_agent=self.name,
             ok=True,
@@ -289,15 +452,11 @@ class GraphPriorsSubAgent:
                 "p_hired": float(p_advance),  # same proxy in v1
                 "neighbour_count": int(effective_count),
                 "neighbour_ids": [int(a.id) for a, _ in same_family[:50]],
-                "confidence": min(
-                    1.0,
-                    effective_count / max(1, 2 * int(config.min_neighbours_for_prior)),
-                ),
+                "confidence": confidence,
+                "source": "heuristic",
             },
-            confidence=min(
-                1.0,
-                effective_count / max(1, 2 * int(config.min_neighbours_for_prior)),
-            ),
+            confidence=confidence,
+            uncertainty=max(0.0, min(1.0, 1.0 - confidence)),
             cache_hit=False,
         )
 

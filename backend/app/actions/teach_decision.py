@@ -32,7 +32,9 @@ from sqlalchemy.orm import Session
 
 from ..models.agent_decision import AgentDecision
 from ..models.decision_feedback import (
+    ATTRIBUTED_TO_VALUES,
     FAILURE_MODES,
+    FEEDBACK_DIRECTIONS,
     FEEDBACK_SCOPES,
     DecisionFeedback,
 )
@@ -49,6 +51,12 @@ def run(
     correction_text: str,
     scope: str,
     role_id: Optional[int] = None,
+    # v2 attribution fields (architecture spec §6.5). Nullable for
+    # back-compat with the legacy three-field shape; the v2 UI always
+    # supplies them.
+    attributed_to: Optional[str] = None,
+    direction: Optional[str] = None,
+    graph_write_hints: Optional[list[dict]] = None,
 ) -> Tuple[DecisionFeedback, AgentDecision]:
     if actor.type != ACTOR_RECRUITER:
         raise HTTPException(status_code=403, detail="teach is recruiter-only")
@@ -59,6 +67,16 @@ def run(
         )
     if scope not in FEEDBACK_SCOPES:
         raise HTTPException(status_code=422, detail=f"unsupported scope={scope!r}")
+    if attributed_to is not None and attributed_to not in ATTRIBUTED_TO_VALUES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported attributed_to={attributed_to!r}",
+        )
+    if direction is not None and direction not in FEEDBACK_DIRECTIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported direction={direction!r}",
+        )
     if not (correction_text or "").strip():
         raise HTTPException(status_code=422, detail="correction_text is required")
 
@@ -103,6 +121,9 @@ def run(
         correction_text=correction_text.strip(),
         scope=scope,
         cosign_required=cosign_required,
+        attributed_to=attributed_to,
+        direction=direction,
+        graph_write_hints=list(graph_write_hints) if graph_write_hints else None,
     )
     db.add(feedback)
     db.flush()  # populate feedback.id so we can backref it on the decision
@@ -115,4 +136,95 @@ def run(
     decision.feedback_id = int(feedback.id)
     decision.human_disposition = "taught"
 
+    # Phase 3 §6.8.1: when attribution names a specific sub-agent,
+    # write an exemplar so the next score-time retrieval picks it up.
+    # ``policy_combination`` doesn't go here — it feeds the policy
+    # fitter instead.
+    if attributed_to and attributed_to != "policy_combination":
+        try:
+            from ..agent_runtime import exemplar_store
+
+            features, agent_score = _features_and_agent_score_from_decision(
+                decision, agent_name=attributed_to
+            )
+            corrected = _corrected_score_from_direction(agent_score, direction)
+            exemplar_store.write_exemplar(
+                db,
+                feedback=feedback,
+                features=features,
+                agent_score=agent_score,
+                corrected_score=corrected,
+            )
+        except Exception:
+            # Exemplar writes are best-effort — never block the teach
+            # action. The decision_feedback row is already the source
+            # of truth; the exemplar is a derived index.
+            import logging
+            logging.getLogger("taali.actions.teach_decision").warning(
+                "exemplar write failed for feedback_id=%s", getattr(feedback, "id", None)
+            )
+
+    # Phase 6 §6.8.3: route graph_write_hints through the writeback
+    # pipeline. Low-risk hints auto-commit, medium queue for cosign,
+    # high get blocked. Failures here never roll back the feedback row.
+    if graph_write_hints:
+        try:
+            from ..graph_writeback.pipeline import write_back_from_feedback
+
+            write_back_from_feedback(
+                db, feedback=feedback, proposing_user_id=int(actor.user_id)
+            )
+        except Exception:
+            import logging
+            logging.getLogger("taali.actions.teach_decision").warning(
+                "graph writeback failed for feedback_id=%s",
+                getattr(feedback, "id", None),
+            )
+
     return feedback, decision
+
+
+# ---------------------------------------------------------------------------
+# Exemplar-feature helpers (kept private to the teach action so the
+# heuristics live with the consumer).
+# ---------------------------------------------------------------------------
+
+
+def _features_and_agent_score_from_decision(
+    decision: AgentDecision, *, agent_name: str
+) -> tuple[dict[str, float], float]:
+    """Extract a canonical feature vector + the agent's original score.
+
+    Pre-pilot decisions store sub-agent scores in
+    ``decision.evidence["scores"][agent_name]``; we read whatever's
+    there and let the exemplar store's cosine retriever handle
+    missing keys.
+    """
+    evidence = decision.evidence or {}
+    scores = (evidence.get("scores") or {}) if isinstance(evidence, dict) else {}
+    blob = scores.get(agent_name) or {}
+    agent_score = float(
+        blob.get("score") or blob.get("confidence") or decision.confidence or 0.0
+    )
+    # Build a flat feature dict via the store helper.
+    from ..agent_runtime.exemplar_store import features_from_sub_agent_output
+    features = features_from_sub_agent_output(blob, agent_name=agent_name)
+    return features, agent_score
+
+
+def _corrected_score_from_direction(
+    agent_score: float, direction: str | None
+) -> float | None:
+    """When the recruiter only said over/under (no explicit number),
+    estimate the corrected score symmetrically. ``None`` direction →
+    leave the corrected_score null and let the policy fitter see the
+    raw direction tag only.
+    """
+    if direction is None:
+        return None
+    delta = 0.15  # 15% of [0..1] is a meaningful shove without being a guess
+    if direction == "over":
+        return max(0.0, agent_score - delta)
+    if direction == "under":
+        return min(1.0, agent_score + delta)
+    return None

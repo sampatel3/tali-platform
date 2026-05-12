@@ -19,6 +19,7 @@ When ``applied_at`` is set, ``applied_revision_id`` points at the
 from __future__ import annotations
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     Column,
@@ -45,6 +46,22 @@ FAILURE_MODES = (
 )
 FEEDBACK_SCOPES = ("decision", "role", "org")
 
+# Multi-agent upgrade (§6.5): attribution tags. ``attributed_to`` answers
+# "which sub-agent (or the policy composer) got it wrong" so feedback can
+# route to the right learning surface. ``policy_combination`` means the
+# individual sub-agents were fine but the fitted policy composed them
+# wrong — only the policy fitter consumes it; no exemplar store gets a
+# write.
+ATTRIBUTED_TO_VALUES = (
+    "pre_screen",
+    "cv_scoring",
+    "assessment_scoring",
+    "graph_priors",
+    "policy_combination",
+)
+# ``direction``: over = scored too high, under = scored too low.
+FEEDBACK_DIRECTIONS = ("over", "under")
+
 
 class DecisionFeedback(Base):
     __tablename__ = "decision_feedback"
@@ -58,6 +75,18 @@ class DecisionFeedback(Base):
     failure_mode = Column(String(32), nullable=False)
     correction_text = Column(Text, nullable=False)
     scope = Column(String(16), nullable=False)
+
+    # Attribution + writeback intent — see ATTRIBUTED_TO_VALUES /
+    # FEEDBACK_DIRECTIONS / GraphWriteHint contracts. Nullable so the
+    # legacy ``other`` failure-mode path still works; the v2 UI requires
+    # them on every teach event.
+    attributed_to = Column(String(32), nullable=True)
+    direction = Column(String(8), nullable=True)
+    # JSON list of GraphWriteHint dicts (see
+    # ``app.graph_writeback.contracts.GraphWriteHint``). The writeback
+    # pipeline validates each hint against the allow-list at apply time;
+    # this column is the raw record.
+    graph_write_hints = Column(JSON, nullable=True)
 
     cosign_required = Column(Boolean, nullable=False, server_default=false())
     cosigned_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)

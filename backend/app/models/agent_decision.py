@@ -9,6 +9,12 @@ AGENT_DECISION_TYPES = (
     "advance_to_interview",
     "reject",
     "skip_assessment_reject",
+    # Multi-agent upgrade (§6.3): the policy may emit
+    # ``escalate_low_confidence`` instead of a confident verdict when
+    # sub-agent uncertainties exceed thresholds or scores disagree
+    # sharply. The Hub treats this as a distinct queue lane — no
+    # auto-action, recruiter must adjudicate.
+    "escalate_low_confidence",
 )
 # ``reverted_for_feedback`` is set by the "Send back & teach" action — the
 # decision goes back into the queue with the reviewer's correction note
@@ -80,6 +86,12 @@ class AgentDecision(Base):
     )
     human_disposition = Column(String, nullable=True)
     snoozed_until = Column(DateTime(timezone=True), nullable=True)
+
+    # v10 capability-flag audit snapshot. Dict of {capability_name: bool}
+    # for every capability registered at decision time. Empty dict ≡
+    # "v1/v2 era, no v10 capabilities active". Persisted by
+    # ``queue_decision.run`` reading from ``app.capabilities.flags``.
+    active_capabilities = Column(JSON, nullable=False, default=dict, server_default="{}")
 
     idempotency_key = Column(String, nullable=False)
 

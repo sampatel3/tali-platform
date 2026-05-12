@@ -37,7 +37,9 @@ from ...actions.types import Actor
 from ...deps import get_current_user
 from ...models.agent_decision import AgentDecision
 from ...models.decision_feedback import (
+    ATTRIBUTED_TO_VALUES,
     FAILURE_MODES,
+    FEEDBACK_DIRECTIONS,
     FEEDBACK_SCOPES,
     DecisionFeedback,
 )
@@ -106,6 +108,16 @@ def create_feedback(
         )
     if body.scope not in FEEDBACK_SCOPES:
         raise HTTPException(status_code=422, detail=f"unsupported scope={body.scope!r}")
+    if body.attributed_to is not None and body.attributed_to not in ATTRIBUTED_TO_VALUES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported attributed_to={body.attributed_to!r}",
+        )
+    if body.direction is not None and body.direction not in FEEDBACK_DIRECTIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported direction={body.direction!r}",
+        )
 
     try:
         feedback, decision = teach_decision_action.run(
@@ -117,6 +129,9 @@ def create_feedback(
             correction_text=body.correction_text,
             scope=body.scope,
             role_id=body.role_id,
+            attributed_to=body.attributed_to,
+            direction=body.direction,
+            graph_write_hints=body.graph_write_hints,
         )
         db.commit()
         db.refresh(feedback)

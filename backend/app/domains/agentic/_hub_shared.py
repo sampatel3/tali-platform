@@ -133,6 +133,14 @@ class FeedbackBody(BaseModel):
     correction_text: str = Field(min_length=1, max_length=8000)
     scope: str = Field(min_length=1)
     role_id: Optional[int] = None
+    # v2 attribution. The v2 TeachModal always sends these; older clients
+    # may omit them and the action treats them as None.
+    attributed_to: Optional[str] = None
+    direction: Optional[str] = None
+    # List of GraphWriteHint dicts — the route delegates schema
+    # validation to the writeback pipeline. We accept anything dict-like
+    # here so the action can pass them through verbatim.
+    graph_write_hints: Optional[list[dict]] = None
 
 
 class FeedbackPayload(BaseModel):
@@ -145,6 +153,9 @@ class FeedbackPayload(BaseModel):
     failure_mode: str
     correction_text: str
     scope: str
+    attributed_to: Optional[str] = None
+    direction: Optional[str] = None
+    graph_write_hints: Optional[list[dict]] = None
     cosign_required: bool
     cosigned_by_user_id: Optional[int]
     cosigned_by_name: Optional[str]
@@ -250,6 +261,9 @@ def feedback_payload(
         failure_mode=str(feedback.failure_mode),
         correction_text=str(feedback.correction_text),
         scope=str(feedback.scope),
+        attributed_to=feedback.attributed_to,
+        direction=feedback.direction,
+        graph_write_hints=feedback.graph_write_hints,
         cosign_required=bool(feedback.cosign_required),
         cosigned_by_user_id=(
             int(feedback.cosigned_by_user_id) if feedback.cosigned_by_user_id else None
