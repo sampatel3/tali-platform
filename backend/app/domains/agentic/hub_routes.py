@@ -178,6 +178,8 @@ def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> 
 
     return OrgKpiPayload(
         pending=int(pending),
+        pending_decisions=int(pending_decisions),
+        pending_questions=int(open_needs_input),
         today=int(today),
         auto_applied_today=int(auto_applied_today),
         org_budget_spent_cents=int(spent_cents),

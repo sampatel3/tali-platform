@@ -99,7 +99,15 @@ def open_needs_input_filter():
 
 
 class OrgKpiPayload(BaseModel):
+    # ``pending`` is the unioned count (AgentDecision pending +
+    # AgentNeedsInput open) — total user-actionable items in the
+    # Review queue. ``pending_decisions`` and ``pending_questions``
+    # break it down so tile-specific labels don't have to conflate
+    # them ("Decisions today: X / N pending" should use the decisions-
+    # only count, not the union).
     pending: int
+    pending_decisions: int
+    pending_questions: int
     today: int
     auto_applied_today: int
     org_budget_spent_cents: int
