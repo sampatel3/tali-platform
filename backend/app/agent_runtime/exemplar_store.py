@@ -278,10 +278,98 @@ def features_from_sub_agent_output(
     return feats
 
 
+def render_exemplars_for_prompt(
+    db: Session,
+    *,
+    agent_name: str,
+    organization_id: int,
+    role_id: int | None,
+    query_features: dict[str, float],
+    k: int = 2,
+) -> str:
+    """Build the few-shot block a sub-agent prepends to its prompt.
+
+    Returns the empty string when no exemplars exist for this
+    (agent, org, role) — the prompt then has no overhead and the call
+    is indistinguishable from a pre-exemplar run.
+
+    k defaults to 2 to bound the per-call token cost. Each exemplar
+    contributes roughly 200-400 tokens depending on the recruiter's
+    correction text length; capped at k=2 the few-shot overhead is
+    ~500 tokens per call which the prompt cache will amortise after
+    the first round.
+
+    Cost guard: a cheap COUNT() check first so we don't pay the cosine
+    walk on an empty store (the common pre-pilot case).
+    """
+    # Cheap pre-check: skip retrieval if the store is empty for this
+    # (agent, org). Avoids cosine work on every call until the first
+    # teach event for this agent has been recorded.
+    if not _store_has_rows(db, agent_name=agent_name, organization_id=organization_id):
+        return ""
+    hits = retrieve_top_k(
+        db,
+        agent_name=agent_name,
+        organization_id=organization_id,
+        role_id=role_id,
+        query_features=query_features,
+        k=k,
+        fallback_org_wide=True,
+    )
+    if not hits:
+        return ""
+    blocks: list[str] = [
+        "### Past corrections to learn from",
+        (
+            "These are recruiter teach events on candidates similar to "
+            "the one you are scoring now. The recruiter said the agent's "
+            "score was wrong in the direction shown. Calibrate your "
+            "current score accordingly."
+        ),
+    ]
+    for i, (exemplar, similarity) in enumerate(hits, start=1):
+        agent_score = float(exemplar.agent_score or 0.0)
+        corrected = (
+            f"{float(exemplar.corrected_score):.2f}"
+            if exemplar.corrected_score is not None
+            else "unspecified"
+        )
+        direction = exemplar.direction or "unknown direction"
+        reason = (exemplar.attributed_reason or "").strip()
+        if len(reason) > 400:
+            reason = reason[:400] + "…"
+        blocks.append(
+            f"Example {i} (similarity={similarity:.2f}): "
+            f"agent scored {agent_score:.2f}, recruiter corrected to "
+            f"{corrected} ({direction}). Reason: {reason or '(none)'}"
+        )
+    return "\n".join(blocks)
+
+
+def _store_has_rows(
+    db: Session, *, agent_name: str, organization_id: int
+) -> bool:
+    """Cheap existence check for the cost-guard pre-filter."""
+    try:
+        return (
+            db.query(AgentExemplar.id)
+            .filter(
+                AgentExemplar.organization_id == organization_id,
+                AgentExemplar.agent_name == agent_name,
+            )
+            .limit(1)
+            .first()
+            is not None
+        )
+    except Exception:
+        return False
+
+
 __all__ = [
     "DEFAULT_CAP_PER_AGENT",
     "evict_overflow",
     "features_from_sub_agent_output",
+    "render_exemplars_for_prompt",
     "retrieve_top_k",
     "write_exemplar",
 ]

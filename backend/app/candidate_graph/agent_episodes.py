@@ -277,13 +277,85 @@ def emit_hiring_outcome_event(**kwargs: Any) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# RoleIntent (Amendment A1) — graph mirror of the manually authored row
+# ---------------------------------------------------------------------------
+
+
+def build_role_intent_episode(
+    *,
+    organization_id: int,
+    role_id: int,
+    role_name: str | None,
+    intent_version: int,
+    structured_summary: str,
+    free_text: str | None,
+    authored_by_user_id: int | None,
+    authored_at: datetime,
+) -> Episode | None:
+    """Compose an episode that mirrors a newly authored RoleIntent row.
+
+    Graphiti's extractor picks up the structured fields as semantic
+    edges between Role and RoleIntent (HAS_INTENT) and tracks the
+    AUTHORED_BY edge to the Recruiter entity. Bi-temporal: the
+    episode's reference_time is the authored_at moment.
+    """
+    if organization_id <= 0:
+        return None
+    group_id = graph_client.group_id_for_org(organization_id)
+    role_label = role_name or f"Role {role_id}"
+    body_lines = [
+        f"Role: {role_label} (taali_id={role_id})",
+        f"{schema.NODE_ROLE_INTENT} v{intent_version}: the recruiter "
+        f"has authored a versioned role intent for this role.",
+        (
+            f"This Role {schema.EDGE_HAS_INTENT} the "
+            f"{schema.NODE_ROLE_INTENT} above."
+        ),
+    ]
+    if authored_by_user_id:
+        body_lines.append(
+            f"The {schema.NODE_ROLE_INTENT} {schema.EDGE_AUTHORED_BY} "
+            f"recruiter id={authored_by_user_id}."
+        )
+    body_lines.append("")
+    body_lines.append("Structured intent:")
+    body_lines.append(structured_summary[:1500] if structured_summary else "(empty)")
+    if free_text:
+        body_lines.append("")
+        body_lines.append("Free-text notes:")
+        body_lines.append(free_text[:1200])
+    return Episode(
+        name=f"role-intent-{role_id}-v{intent_version}",
+        body="\n".join(body_lines),
+        source_description=f"recruiter.role_intent.v{intent_version}",
+        reference_time=authored_at,
+        group_id=group_id,
+    )
+
+
+def emit_role_intent_event(**kwargs: Any) -> bool:
+    """Fire-and-forget emit of a RoleIntent episode. Never raises."""
+    episode = build_role_intent_episode(**kwargs)
+    if episode is None:
+        return False
+    try:
+        sent = dispatch([episode])
+        return bool(sent)
+    except Exception as exc:
+        logger.warning("emit_role_intent_event failed: %s", exc)
+        return False
+
+
 __all__ = [
     "build_agent_score_episode",
     "build_decision_episode",
     "build_hiring_outcome_episode",
     "build_recruiter_action_episode",
+    "build_role_intent_episode",
     "emit_decision_event",
     "emit_hiring_outcome_event",
     "emit_recruiter_action_event",
+    "emit_role_intent_event",
     "emit_score_event",
 ]
