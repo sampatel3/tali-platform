@@ -255,8 +255,10 @@ def update_role(
         role.auto_reject_threshold_mode = str(updates["auto_reject_threshold_mode"])
     if "workable_actor_member_id" in updates:
         role.workable_actor_member_id = updates["workable_actor_member_id"] or None
+    activation_transition = False  # false -> true; triggers post-commit backfill
     if "agentic_mode_enabled" in updates:
         next_enabled = bool(updates["agentic_mode_enabled"])
+        was_enabled = bool(role.agentic_mode_enabled)
         if next_enabled:
             # Activating requires a monthly USD budget so the agent can't
             # quietly run up costs. Allow either a value already on the role
@@ -272,6 +274,9 @@ def update_role(
         if role.agentic_mode_enabled and role.agent_paused_at is not None:
             role.agent_paused_at = None
             role.agent_paused_reason = None
+        # Capture the false -> true edge so we can fire the activation
+        # backfill once the role row is committed.
+        activation_transition = next_enabled and not was_enabled
     if "agent_action_allowlist" in updates:
         role.agent_action_allowlist = updates["agent_action_allowlist"]
     if "agent_token_budget_per_cycle" in updates:
@@ -301,6 +306,57 @@ def update_role(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update role")
+
+    # On agentic-mode activation (false -> true), kick off a one-shot
+    # background backfill so the agent's first cycle has scores and a
+    # populated graph to reason over. Runs the same cascade the manual
+    # "Process candidates" dialog runs:
+    #   fetch missing CVs from Workable -> score unscored candidates ->
+    #   project them into Graphiti.
+    # Idempotent: already-scored / already-graphed candidates are skipped.
+    if activation_transition:
+        try:
+            from .applications_routes import (
+                _empty_process_progress,
+                _PROCESS_CANCEL_PREFIX,
+                _process_progress,
+                _clear_cancel_flag,
+                _run_process,
+                _set_process_progress,
+            )
+            import threading
+            existing = _process_progress.get(role.id, {})
+            if existing.get("status") not in {"running", "cancelling"}:
+                progress = _empty_process_progress()
+                progress.update({
+                    "status": "running",
+                    "role_name": role.name,
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                    "score": {**progress["score"], "mode": "new"},
+                    "trigger": "agent_activation",
+                })
+                _set_process_progress(role.id, progress)
+                _clear_cancel_flag(_PROCESS_CANCEL_PREFIX, role.id)
+                threading.Thread(
+                    target=_run_process,
+                    args=(role.id, current_user.organization_id),
+                    kwargs={
+                        "fetch_cvs": True,
+                        "refresh_cvs": False,
+                        "pre_screen": False,
+                        "refresh_pre_screen": False,
+                        "score_mode": "new",
+                        "sync_graph": True,
+                        "refresh_graph": False,
+                        "user_id": current_user.id,
+                    },
+                    daemon=True,
+                ).start()
+        except Exception:
+            logger.exception(
+                "agent activation backfill failed to launch for role_id=%s", role.id
+            )
+
     return role_to_response(role)
 
 
