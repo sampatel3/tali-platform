@@ -42,7 +42,7 @@ EVENT_TYPE_TO_KIND: dict[str, str] = {
 # Stages that count as "advanced past assessment". A move into one of
 # these from a pre-assessment stage is treated as an advance action.
 ADVANCED_STAGES = frozenset(
-    {"technical_interview", "interview", "offer", "hired"}
+    {"advanced", "technical_interview", "interview", "offer", "hired"}
 )
 
 

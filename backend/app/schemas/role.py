@@ -198,14 +198,14 @@ class ApplicationCreate(BaseModel):
     candidate_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     candidate_position: Optional[str] = Field(default=None, max_length=200)
     status: Optional[str] = Field(default="applied", max_length=100)
-    pipeline_stage: Optional[Literal["applied", "invited", "in_assessment", "review", "technical_interview"]] = None
+    pipeline_stage: Optional[Literal["applied", "invited", "in_assessment", "review", "advanced"]] = None
     application_outcome: Optional[Literal["open", "rejected", "withdrawn", "hired"]] = None
     notes: Optional[str] = Field(default=None, max_length=4000)
 
 
 class ApplicationUpdate(BaseModel):
     status: Optional[str] = Field(default=None, max_length=100)
-    pipeline_stage: Optional[Literal["applied", "invited", "in_assessment", "review", "technical_interview"]] = None
+    pipeline_stage: Optional[Literal["applied", "invited", "in_assessment", "review", "advanced"]] = None
     application_outcome: Optional[Literal["open", "rejected", "withdrawn", "hired"]] = None
     expected_version: Optional[int] = Field(default=None, ge=1)
     notes: Optional[str] = Field(default=None, max_length=4000)
@@ -219,7 +219,7 @@ class ApplicationResponse(BaseModel):
     candidate_id: int
     role_id: int
     status: str
-    pipeline_stage: Literal["applied", "invited", "in_assessment", "review", "technical_interview"] = "applied"
+    pipeline_stage: Literal["applied", "invited", "in_assessment", "review", "advanced"] = "applied"
     pipeline_stage_updated_at: Optional[datetime] = None
     pipeline_stage_source: Literal["system", "recruiter", "sync", "agent"] = "system"
     application_outcome: Literal["open", "rejected", "withdrawn", "hired"] = "open"
@@ -319,7 +319,7 @@ class ApplicationCvUploadResponse(BaseModel):
 
 
 class ApplicationStageUpdate(BaseModel):
-    pipeline_stage: Literal["applied", "invited", "in_assessment", "review", "technical_interview"]
+    pipeline_stage: Literal["applied", "invited", "in_assessment", "review", "advanced"]
     expected_version: Optional[int] = Field(default=None, ge=1)
     reason: Optional[str] = Field(default=None, max_length=2000)
     idempotency_key: Optional[str] = Field(default=None, max_length=200)
