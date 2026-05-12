@@ -707,7 +707,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               return (
                 <div
                   key={role.id}
-                  className={`job-card ${workableRole ? 'from-wk' : ''}`}
+                  className={`job-card ${workableRole ? 'from-wk' : ''} ${agentEnabled ? 'agent-on' : ''}`}
                   onClick={() => onNavigate('job-pipeline', { roleId: role.id })}
                   role="button"
                   tabIndex={0}

@@ -2114,6 +2114,15 @@ html[data-theme="dark"] {
   border-color: color-mix(in oklab, #2d8cff 25%, var(--line));
 }
 
+.job-card.agent-on {
+  background: color-mix(in oklab, var(--purple) 5%, var(--bg-2));
+  border-color: color-mix(in oklab, var(--purple) 22%, var(--line));
+}
+
+.job-card.agent-on:hover {
+  border-color: color-mix(in oklab, var(--purple) 40%, var(--line));
+}
+
 .job-head {
   display: flex;
   justify-content: space-between;
