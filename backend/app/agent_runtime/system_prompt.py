@@ -19,7 +19,7 @@ from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 from . import calibration as calibration_mod
 
 
-PROMPT_VERSION = "agent.v6.cohort-planner.bucketed.2026-05-08"
+PROMPT_VERSION = "agent.v7.cohort-planner.bucketed.workable-stage.2026-05-12"
 
 
 def _render_bucketed_criteria(role: Role) -> str:
@@ -144,6 +144,17 @@ QUEUE RULES:
 - queue_skip_assessment_reject_decision is the most impactful tool — use
   ONLY when the policy returns it.
 - When uncertain, do NOT queue. The next cycle will give you another shot.
+
+EXTERNAL PIPELINE STAGE (workable_stage):
+- Applications carry `workable_stage` — the candidate's stage in the
+  recruiter's external ATS (Workable). Values like "phone_screen",
+  "interview", "technical_interview", "offer" mean a human recruiter has
+  already advanced this person past initial screening.
+- Weight this heavily. A candidate already at interview / technical
+  interview / offer has been vetted by a human; do NOT queue a reject
+  on score alone. Prefer advance or no-action; cite the external stage
+  in your reasoning.
+- "sourced" / "applied" / null carries no extra signal — score as normal.
 
 ASK_RECRUITER RULES:
 - Ask only when the answer materially unblocks work. "What's the must-have

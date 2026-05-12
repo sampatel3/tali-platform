@@ -35,7 +35,7 @@ import { CandidateSheet } from '../candidates/CandidateSheet';
 import { CandidateTriageDrawer, candidateReportHref } from '../candidates/CandidateTriageDrawer';
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSheet } from '../candidates/RoleSheet';
-import { getErrorMessage, trimOrUndefined } from '../candidates/candidatesUiUtils';
+import { getErrorMessage, trimOrUndefined, formatStatusLabel } from '../candidates/candidatesUiUtils';
 
 const EMPTY_PROGRESS = { status: 'idle', total: 0, scored: 0, errors: 0, include_scored: false };
 const EMPTY_FETCH_PROGRESS = { status: 'idle', total: 0, fetched: 0, errors: 0 };
@@ -2391,8 +2391,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               </button>
             </div>
             {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — clean
-                ctable with Candidate / Score / Stage / Status / Agent /
-                View →. Filtered by tableStageFilter, sorted client-side
+                ctable with Candidate / Score / Stage / Workable / Status /
+                Agent / View →. Filtered by tableStageFilter, sorted client-side
                 by tableSortBy. The full CandidatesDirectoryPage was too
                 heavy here — it carried bulk-action chrome, pagination,
                 NL-search, and filter chips that don't belong on the
@@ -2432,6 +2432,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         <th>Candidate</th>
                         <th>Score</th>
                         <th>Stage</th>
+                        <th>Workable</th>
                         <th>Status</th>
                         <th>Agent</th>
                         <th aria-label="Open" />
@@ -2484,6 +2485,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                               <td>
                                 <span className="stage-pill">{stageLabel}</span>
                               </td>
+                              <td>{application?.workable_stage ? (<span className="stage-pill" title="Current stage in Workable">{formatStatusLabel(application.workable_stage)}</span>) : (<span className="ctable-em">—</span>)}</td>
                               <td className="ctable-status">{statusText}</td>
                               <td>
                                 {agentLabel ? (
@@ -2510,7 +2512,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                             </tr>
                             {isTriageRow ? (
                               <tr className="ctable-triage-row">
-                                <td colSpan={6} className="ctable-triage-cell">
+                                <td colSpan={7} className="ctable-triage-cell">
                                   <CandidateTriageDrawer {...triageDrawerProps} />
                                 </td>
                               </tr>
