@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from ..domains.assessments_runtime.role_support import get_application
 from ..models.agent_decision import AGENT_DECISION_TYPES, AgentDecision
+from ..models.candidate_application_event import CandidateApplicationEvent
 from .types import ACTOR_AGENT, Actor
 
 
@@ -151,6 +152,26 @@ def run(
     # keeps Graphiti billing bounded to the decision volume. Failure
     # is logged and ignored; the Postgres row is the source of truth.
     _emit_decision_episode_safe(db, decision=decision)
+
+    # Also record a CandidateApplicationEvent so the per-role
+    # /agent/status endpoint's `last_activity` reflects this decision
+    # the moment it's queued — that's what the AgentBar tick reads.
+    # Without this, AgentBar shows "Idle · waiting for new candidates"
+    # even when the agent has just queued work, because formatTick
+    # only sees pipeline_stage_changed / outcome_changed events that
+    # are written by approve_decision *after* recruiter action.
+    db.add(
+        CandidateApplicationEvent(
+            application_id=application_id,
+            organization_id=organization_id,
+            event_type="agent_decision_queued",
+            actor_type="agent",
+            actor_id=actor.agent_run_id,
+            reason=f"Queued {decision_type.replace('_', ' ')}",
+            idempotency_key=f"agent_decision_queued:{decision.id}",
+            event_metadata={"decision_id": int(decision.id), "decision_type": decision_type},
+        )
+    )
     return decision
 
 
