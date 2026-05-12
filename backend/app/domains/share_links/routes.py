@@ -106,9 +106,15 @@ class CreateShareLinkPayload(BaseModel):
         ...,
         description="Share mode: 'recruiter' | 'client' | 'single-view'.",
     )
-    expiry: str = Field(
-        ...,
-        description="Expiry preset key: '24h' | '7d' | '30d' | 'single-view'.",
+    expiry: str | None = Field(
+        default=None,
+        description="Expiry preset key: '24h' | '7d' | '30d' | 'single-view'. Ignored when ``expiry_days`` is set.",
+    )
+    expiry_days: int | None = Field(
+        default=None,
+        ge=1,
+        le=30,
+        description="Custom expiry in days (1-30). Takes precedence over ``expiry`` when both are set.",
     )
 
 
@@ -152,11 +158,20 @@ def create_share_link(
 ):
     if payload.mode not in SHARE_LINK_MODES:
         raise HTTPException(status_code=400, detail="Invalid share mode")
-    if payload.expiry not in _EXPIRY_PRESETS:
+
+    # ``expiry_days`` (custom 1-30) takes precedence; otherwise fall back
+    # to the legacy preset keys for back-compat with older clients.
+    if payload.expiry_days is not None:
+        delta = timedelta(days=payload.expiry_days)
+        expiry_preset = f"{payload.expiry_days}d"
+    elif payload.expiry in _EXPIRY_PRESETS:
+        delta = _EXPIRY_PRESETS[payload.expiry]
+        expiry_preset = payload.expiry
+    else:
         raise HTTPException(status_code=400, detail="Invalid expiry preset")
 
     app = get_application(application_id, current_user.organization_id, db)
-    expires_at = _utcnow() + _EXPIRY_PRESETS[payload.expiry]
+    expires_at = _utcnow() + delta
 
     link = ShareLink(
         organization_id=app.organization_id,
@@ -164,7 +179,7 @@ def create_share_link(
         created_by_user_id=current_user.id,
         token=_generate_token(),
         mode=payload.mode,
-        expiry_preset=payload.expiry,
+        expiry_preset=expiry_preset,
         expires_at=expires_at,
     )
     db.add(link)

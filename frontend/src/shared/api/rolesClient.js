@@ -39,14 +39,15 @@ export const roles = {
   getApplicationByShareToken: (shareToken, config = {}) => api.get(`/applications/share/${shareToken}`, config),
   getApplicationShareLink: (applicationId) => api.post(`/applications/${applicationId}/share-link`),
   // HANDOFF v2 §3 — multi-link share contract.
-  // POST mints a new link with mode + expiry preset; GET lists all links
-  // (active + revoked + expired so the report footer can render audit
-  // history); DELETE revokes a single link by id without affecting the
-  // others.
+  // POST mints a new link; pass either a preset (``expiry: '7d'``) or a
+  // custom number of days (``expiry_days: 14``). GET / DELETE remain in
+  // the client for parity with the backend but the recruiter UI no
+  // longer surfaces a list / revoke view (HANDOFF revision: header
+  // share buttons are now one-shot — see ShareLinkBar).
   listApplicationShareLinks: (applicationId) =>
     api.get(`/applications/${applicationId}/share-links`),
-  createApplicationShareLink: (applicationId, { mode, expiry }) =>
-    api.post(`/applications/${applicationId}/share-links`, { mode, expiry }),
+  createApplicationShareLink: (applicationId, payload = {}) =>
+    api.post(`/applications/${applicationId}/share-links`, payload),
   revokeShareLink: (linkId) => api.delete(`/share-links/${linkId}`),
   listApplicationEvents: (applicationId, params = {}) => api.get(`/applications/${applicationId}/events`, { params }),
   generateApplicationInterviewDebrief: (applicationId, data = {}) => api.post(`/applications/${applicationId}/interview-debrief`, data),

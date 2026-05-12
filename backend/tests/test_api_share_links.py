@@ -129,6 +129,47 @@ def test_create_share_link_rejects_invalid_mode_or_expiry(client):
     )
     assert bad_expiry.status_code == 400
 
+    # ``expiry_days`` rejects out-of-range values (1-30 only).
+    bad_days = client.post(
+        f"/api/v1/applications/{application['id']}/share-links",
+        json={"mode": "client", "expiry_days": 0},
+        headers=headers,
+    )
+    assert bad_days.status_code == 422
+    too_long = client.post(
+        f"/api/v1/applications/{application['id']}/share-links",
+        json={"mode": "client", "expiry_days": 60},
+        headers=headers,
+    )
+    assert too_long.status_code == 422
+
+
+def test_create_share_link_with_custom_expiry_days(client):
+    """``expiry_days`` (1-30) is the new custom-expiry path used by the
+    client-share dialog. Stores ``expiry_preset = '<N>d'`` for display.
+    """
+    headers, _ = auth_headers(client)
+    _, application = _make_role_and_application(client, headers)
+
+    create = client.post(
+        f"/api/v1/applications/{application['id']}/share-links",
+        json={"mode": "client", "expiry_days": 3},
+        headers=headers,
+    )
+    assert create.status_code == 200, create.text
+    link = create.json()
+    assert link["expiry_preset"] == "3d"
+    assert link["active"] is True
+
+    # ``expiry_days`` wins over ``expiry`` when both are sent.
+    both = client.post(
+        f"/api/v1/applications/{application['id']}/share-links",
+        json={"mode": "recruiter", "expiry": "30d", "expiry_days": 7},
+        headers=headers,
+    )
+    assert both.status_code == 200, both.text
+    assert both.json()["expiry_preset"] == "7d"
+
 
 def test_public_share_view_short_circuits_single_view_after_first_get(client):
     headers, _ = auth_headers(client)
@@ -219,6 +260,90 @@ def test_public_share_view_bumps_view_count(client):
     row = listing.json()["links"][0]
     assert row["view_count"] == 3
     assert row["last_viewed_at"] is not None
+
+
+def test_share_links_resolve_via_legacy_applications_share_route(client):
+    """A token minted via the multi-link contract must resolve through
+    the same ``GET /api/v1/applications/share/{token}`` route the SPA
+    already uses for the legacy single-link tokens. The mode on the
+    ``share_links`` row dictates whether the response is client-safe,
+    regardless of the URL ``?view=`` param.
+    """
+    headers, _ = auth_headers(client)
+    _, application = _make_role_and_application(client, headers)
+
+    client_link = client.post(
+        f"/api/v1/applications/{application['id']}/share-links",
+        json={"mode": "client", "expiry_days": 7},
+        headers=headers,
+    )
+    assert client_link.status_code == 200, client_link.text
+    client_token = client_link.json()["token"]
+
+    # Even when the URL asks for ``view=interview``, a client-mode token
+    # is forced into the client-safe payload.
+    forced_client = client.get(
+        f"/api/v1/applications/share/{client_token}?view=interview",
+    )
+    assert forced_client.status_code == 200, forced_client.text
+    assert forced_client.json()["id"] == application["id"]
+
+    recruiter_link = client.post(
+        f"/api/v1/applications/{application['id']}/share-links",
+        json={"mode": "recruiter", "expiry_days": 7},
+        headers=headers,
+    )
+    assert recruiter_link.status_code == 200, recruiter_link.text
+    recruiter_token = recruiter_link.json()["token"]
+
+    recruiter_view = client.get(
+        f"/api/v1/applications/share/{recruiter_token}",
+    )
+    assert recruiter_view.status_code == 200, recruiter_view.text
+
+    # Each resolve bumps view_count on the share_links row so the
+    # recruiter-facing UI can show 'seen' state.
+    listing = client.get(
+        f"/api/v1/applications/{application['id']}/share-links",
+        headers=headers,
+    )
+    by_token = {row["token"]: row for row in listing.json()["links"]}
+    assert by_token[client_token]["view_count"] == 1
+    assert by_token[recruiter_token]["view_count"] == 1
+
+
+def test_share_links_legacy_route_rejects_revoked_and_expired_tokens(client):
+    headers, _ = auth_headers(client)
+    _, application = _make_role_and_application(client, headers)
+
+    create = client.post(
+        f"/api/v1/applications/{application['id']}/share-links",
+        json={"mode": "client", "expiry_days": 7},
+        headers=headers,
+    )
+    link_id = create.json()["id"]
+    token = create.json()["token"]
+
+    client.delete(f"/api/v1/share-links/{link_id}", headers=headers)
+    revoked = client.get(f"/api/v1/applications/share/{token}")
+    assert revoked.status_code == 410
+
+    fresh = client.post(
+        f"/api/v1/applications/{application['id']}/share-links",
+        json={"mode": "client", "expiry_days": 1},
+        headers=headers,
+    )
+    fresh_id = fresh.json()["id"]
+    fresh_token = fresh.json()["token"]
+    db = TestingSessionLocal()
+    try:
+        link = db.query(ShareLink).filter(ShareLink.id == fresh_id).first()
+        link.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        db.commit()
+    finally:
+        db.close()
+    expired = client.get(f"/api/v1/applications/share/{fresh_token}")
+    assert expired.status_code == 410
 
 
 def test_share_links_are_org_scoped(client):

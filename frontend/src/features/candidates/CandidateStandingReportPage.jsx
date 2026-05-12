@@ -797,10 +797,11 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const [error, setError] = useState('');
   const [busyAction, setBusyAction] = useState('');
   const [shareModalOpen, setShareModalOpen] = useState(false);
-  // 'interview' = internal panel link · 'client' = external client link.
-  // Pre-set when the candidate header opens the modal so the right tab
-  // is active (HANDOFF v2 §3).
-  const [shareInitialMode, setShareInitialMode] = useState('client');
+  // 'internal' → recruiter-mode link, fixed 7-day expiry, auto-created on
+  // open. 'client' → client-mode link with a 1-14 day picker. The dialog
+  // is one-shot (no manage / revoke UI); recruiters mint a new link each
+  // time they share.
+  const [shareKind, setShareKind] = useState('client');
   const [applicationEvents, setApplicationEvents] = useState([]);
   // Notes & timeline tab — local note draft + a tick that lets us refetch
   // the events feed after a successful save without a full page reload.
@@ -1361,7 +1362,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 type="button"
                 className="btn btn-outline btn-sm"
                 onClick={() => {
-                  setShareInitialMode('interview');
+                  setShareKind('internal');
                   setShareModalOpen(true);
                 }}
                 disabled={!application?.id}
@@ -1373,7 +1374,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 type="button"
                 className="btn btn-purple btn-sm"
                 onClick={() => {
-                  setShareInitialMode('client');
+                  setShareKind('client');
                   setShareModalOpen(true);
                 }}
                 disabled={!application?.id}
@@ -2035,7 +2036,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         open={shareModalOpen}
         onClose={() => setShareModalOpen(false)}
         applicationId={application?.id}
-        initialMode={shareInitialMode}
+        kind={shareKind}
       />
     </div>
   );

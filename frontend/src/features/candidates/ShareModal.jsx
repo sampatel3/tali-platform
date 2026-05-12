@@ -1,331 +1,208 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Copy, Link2, RefreshCw, Trash2, X } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Check, Copy, Link2, X } from 'lucide-react';
 
 import { roles as rolesApi } from '../../shared/api';
 
-const buildShareUrl = (mode, token) => {
-  if (!token) return '';
+// HANDOFF v2 §3 — share-link contract.
+// Recipients open ``/c/{appId}?view=<interview|client>&k=<token>`` which
+// the SPA already routes to ``CandidateStandingReportPage``; that page
+// resolves the token via ``GET /api/v1/applications/share/{token}``,
+// which now also accepts ``share_links`` tokens (not just the legacy
+// single-token column).
+const buildShareUrl = (applicationId, mode, token) => {
+  if (!applicationId || !token) return '';
   if (typeof window === 'undefined') return '';
-  // HANDOFF v2 §3 — recipients land on /share/:token, the public
-  // route on the backend that gates by expiry / view-count and tells
-  // the frontend which mode to render in.
-  return `${window.location.origin}/share/${token}`;
+  const view = mode === 'client' ? 'client' : 'interview';
+  return `${window.location.origin}/c/${applicationId}?view=${view}&k=${token}`;
 };
 
-const EXPIRY_OPTIONS = [
-  { value: '7d', label: 'In 7 days' },
-  { value: '24h', label: 'In 24 hours' },
-  { value: '30d', label: 'In 30 days' },
-  { value: 'single-view', label: 'Single view, then expires' },
-];
+const INTERNAL_EXPIRY_DAYS = 7;
+const CLIENT_DAYS_MIN = 1;
+const CLIENT_DAYS_MAX = 14;
+const CLIENT_DAYS_DEFAULT = 7;
 
-const MODE_OPTIONS = [
-  {
-    value: 'client',
-    label: 'Client view',
-    sub: 'Score, recommendation, and evidence — no prompts.',
-  },
-  {
-    value: 'recruiter',
-    label: 'Recruiter view',
-    sub: 'Full report with timeline, prompts, and AI usage.',
-  },
-];
-
-const formatExpiryLabel = (link) => {
-  if (link?.revoked) return 'Revoked';
-  if (link?.expired) return 'Expired';
-  if (link?.single_view_consumed) return 'Used';
-  if (link?.expiry_preset) {
-    const match = EXPIRY_OPTIONS.find((opt) => opt.value === link.expiry_preset);
-    if (match) return match.label;
-  }
-  if (link?.expires_at) {
-    const date = new Date(link.expires_at);
-    if (!Number.isNaN(date.getTime())) return `Until ${date.toLocaleString()}`;
-  }
-  return '—';
+const clampClientDays = (value) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return CLIENT_DAYS_DEFAULT;
+  return Math.max(CLIENT_DAYS_MIN, Math.min(CLIENT_DAYS_MAX, Math.round(num)));
 };
 
-// ShareModal — HANDOFF v2 §3 multi-link contract.
-// Mints a new share link per recruiter click, lists all existing links
-// (active + revoked + expired) with revoke + copy controls. Single-
-// view mode invalidates after the first GET against /share/:token.
-//
-// `initialMode` lets the caller pre-select 'interview' (internal panel)
-// or 'client' (external) when the modal opens — e.g. the candidate
-// header has separate "Share internally" + "Share with client" buttons
-// that open the same modal but on the right tab.
-export const ShareModal = ({ open, onClose, applicationId, initialMode = 'client' }) => {
-  const [mode, setMode] = useState(initialMode);
-  const [expiry, setExpiry] = useState('7d');
+const TITLE = {
+  internal: 'Internal share link',
+  client: 'Client share link',
+};
 
-  // Re-sync mode when the modal opens with a different initial mode
-  // (e.g. user closes the client tab, then clicks "Share internally").
-  useEffect(() => {
-    if (open) setMode(initialMode);
-  }, [open, initialMode]);
-  const [links, setLinks] = useState([]);
-  const [loading, setLoading] = useState(false);
+const SUBTITLE = {
+  internal: `Full report for hiring panel. Expires quietly in ${INTERNAL_EXPIRY_DAYS} days.`,
+  client: 'Score, recommendation, and evidence — no recruiter prompts.',
+};
+
+// One-shot share dialog. ``kind === 'internal'`` mints a recruiter-mode
+// link with a fixed 7-day expiry the moment the dialog opens.
+// ``kind === 'client'`` shows a 1–14 day picker first, mints on submit.
+// No history / revoke surfaces — recruiters mint new links instead.
+export const ShareModal = ({ open, onClose, applicationId, kind = 'internal' }) => {
+  const [days, setDays] = useState(CLIENT_DAYS_DEFAULT);
+  const [link, setLink] = useState(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
-  const [copiedKey, setCopiedKey] = useState(null);
-  const [busyLinkId, setBusyLinkId] = useState(null);
+  const [copied, setCopied] = useState(false);
+  // Track which (kind, applicationId) combo we've auto-created for, so
+  // re-opens with a different kind retrigger the auto-create instead of
+  // reusing the stale internal link.
+  const autoCreatedKeyRef = useRef(null);
 
-  const refreshLinks = useCallback(async () => {
-    if (!applicationId) return;
+  const createLink = useCallback(async (overrides = {}) => {
+    if (!applicationId) return null;
     setError('');
-    setLoading(true);
+    setCreating(true);
     try {
-      const res = await rolesApi.listApplicationShareLinks(applicationId);
-      const next = Array.isArray(res?.data?.links) ? res.data.links : [];
-      setLinks(next);
+      const payload = kind === 'internal'
+        ? { mode: 'recruiter', expiry_days: INTERNAL_EXPIRY_DAYS }
+        : { mode: 'client', expiry_days: clampClientDays(overrides.days ?? days) };
+      const res = await rolesApi.createApplicationShareLink(applicationId, payload);
+      const next = res?.data || null;
+      if (next?.token) {
+        setLink(next);
+        const url = buildShareUrl(applicationId, next.mode, next.token);
+        if (url) {
+          try {
+            await navigator.clipboard.writeText(url);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+          } catch {
+            // Copy failure is non-fatal — recipient can copy from the row.
+          }
+        }
+      }
+      return next;
     } catch (err) {
-      setError(err?.response?.data?.detail || 'Could not load share links.');
+      setError(err?.response?.data?.detail || 'Could not create share link.');
+      return null;
     } finally {
-      setLoading(false);
+      setCreating(false);
     }
-  }, [applicationId]);
+  }, [applicationId, days, kind]);
 
   useEffect(() => {
-    if (!open) return undefined;
-    setError('');
-    setCopiedKey(null);
-    void refreshLinks();
+    if (!open) {
+      autoCreatedKeyRef.current = null;
+      setLink(null);
+      setError('');
+      setCopied(false);
+      setDays(CLIENT_DAYS_DEFAULT);
+      return undefined;
+    }
     const onKey = (e) => {
       if (e.key === 'Escape') onClose?.();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [open, refreshLinks, onClose]);
+  }, [open, onClose]);
 
-  const handleCreate = useCallback(async () => {
-    if (!applicationId || creating) return;
-    setError('');
-    setCreating(true);
-    try {
-      const res = await rolesApi.createApplicationShareLink(applicationId, { mode, expiry });
-      const link = res?.data;
-      if (link?.id) {
-        setLinks((prev) => [link, ...prev.filter((row) => row.id !== link.id)]);
-        const url = buildShareUrl(link.mode, link.token);
-        if (url) {
-          try {
-            await navigator.clipboard.writeText(url);
-            setCopiedKey(`row-${link.id}`);
-            setTimeout(() => setCopiedKey((curr) => (curr === `row-${link.id}` ? null : curr)), 2000);
-          } catch {
-            // Copy failure is non-fatal — recipient can copy from the row.
-          }
-        }
-      } else {
-        await refreshLinks();
-      }
-    } catch (err) {
-      setError(err?.response?.data?.detail || 'Could not create share link.');
-    } finally {
-      setCreating(false);
-    }
-  }, [applicationId, mode, expiry, creating, refreshLinks]);
+  useEffect(() => {
+    if (!open || kind !== 'internal' || !applicationId) return;
+    const key = `${kind}:${applicationId}`;
+    if (autoCreatedKeyRef.current === key) return;
+    autoCreatedKeyRef.current = key;
+    void createLink();
+  }, [open, kind, applicationId, createLink]);
 
-  const handleRevoke = useCallback(async (linkId) => {
-    setError('');
-    setBusyLinkId(linkId);
-    try {
-      const res = await rolesApi.revokeShareLink(linkId);
-      const updated = res?.data;
-      if (updated?.id) {
-        setLinks((prev) => prev.map((row) => (row.id === updated.id ? updated : row)));
-      } else {
-        await refreshLinks();
-      }
-    } catch (err) {
-      setError(err?.response?.data?.detail || 'Could not revoke share link.');
-    } finally {
-      setBusyLinkId(null);
-    }
-  }, [refreshLinks]);
-
-  const handleCopy = useCallback(async (key, text) => {
+  const handleCopy = useCallback(async (text) => {
     if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
-      setCopiedKey(key);
-      setTimeout(() => setCopiedKey((curr) => (curr === key ? null : curr)), 2000);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     } catch {
       setError('Copy failed. Select the link and copy manually.');
     }
   }, []);
 
-  const activeLinks = useMemo(() => links.filter((row) => row?.active), [links]);
-  const inactiveLinks = useMemo(() => links.filter((row) => !row?.active), [links]);
-
   if (!open) return null;
 
+  const url = link ? buildShareUrl(applicationId, link.mode, link.token) : '';
+
   return (
-    <div className="mc-share-overlay" role="dialog" aria-modal="true" aria-label="Share candidate report" onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}>
-      <div className="mc-share-card">
+    <div
+      className="mc-share-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label={TITLE[kind]}
+      onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}
+    >
+      <div className="mc-share-card mc-share-card-sm">
         <header className="mc-share-head">
           <div>
-            <div className="mc-kicker">CANDIDATE REPORT · SHARE LINKS</div>
-            <h2 className="mc-share-title">Share this candidate report</h2>
+            <div className="mc-kicker">CANDIDATE REPORT · SHARE</div>
+            <h2 className="mc-share-title">{TITLE[kind]}</h2>
           </div>
-          <button type="button" className="mc-icon-btn" onClick={onClose} aria-label="Close share modal">
+          <button type="button" className="mc-icon-btn" onClick={onClose} aria-label="Close share dialog">
             <X size={16} strokeWidth={1.7} />
           </button>
         </header>
 
         <div className="mc-share-body">
-          {/* Create-link panel */}
-          <fieldset className="mc-share-modes" aria-label="View mode">
-            {MODE_OPTIONS.map((opt) => (
-              <ModeToggle
-                key={opt.value}
-                mode={mode}
-                setMode={setMode}
-                value={opt.value}
-                label={opt.label}
-                sub={opt.sub}
-              />
-            ))}
-          </fieldset>
+          <p className="mc-share-foot">{SUBTITLE[kind]}</p>
 
-          <div className="mc-share-expiry">
-            <label className="mc-share-label">
-              Expires in
-              <select
-                className="mc-share-select"
-                value={expiry}
-                onChange={(e) => setExpiry(e.target.value)}
+          {kind === 'client' && !link ? (
+            <div className="mc-share-expiry">
+              <label className="mc-share-label">
+                Expires in
+                <input
+                  type="number"
+                  min={CLIENT_DAYS_MIN}
+                  max={CLIENT_DAYS_MAX}
+                  value={days}
+                  onChange={(e) => setDays(clampClientDays(e.target.value))}
+                  className="mc-share-select"
+                  style={{ width: 70 }}
+                />
+                days
+              </label>
+              <button
+                type="button"
+                className="btn btn-purple btn-sm"
+                onClick={() => void createLink({ days })}
+                disabled={creating || !applicationId}
               >
-                {EXPIRY_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              className="btn btn-purple btn-sm"
-              onClick={handleCreate}
-              disabled={creating || !applicationId}
-            >
-              <Link2 size={13} strokeWidth={1.8} />
-              {creating ? 'Creating…' : 'Create link'}
-            </button>
-          </div>
-
-          {error ? <div className="mc-share-error">{error}</div> : null}
-
-          {/* Active links — HANDOFF v2 §3: visible in the report footer
-              with revoke + new-link controls. */}
-          <div className="mc-share-links">
-            <div className="mc-share-links-head">
-              <span className="mc-kicker is-mute">ACTIVE LINKS</span>
-              <span className="mc-share-links-count">
-                {loading ? 'Loading…' : `${activeLinks.length} active`}
-              </span>
-            </div>
-            {activeLinks.length === 0 && !loading ? (
-              <p className="mc-share-empty">No active links yet. Create one above.</p>
-            ) : (
-              <ul className="mc-share-link-list">
-                {activeLinks.map((link) => {
-                  const url = buildShareUrl(link.mode, link.token);
-                  const copyKey = `row-${link.id}`;
-                  return (
-                    <li key={link.id} className="mc-share-link-row">
-                      <div className="mc-share-link-meta">
-                        <span className={`mc-share-link-mode ${link.mode}`}>{link.mode}</span>
-                        <span className="mc-share-link-expiry">{formatExpiryLabel(link)}</span>
-                        {link.view_count > 0 ? (
-                          <span className="mc-share-link-views">{link.view_count} view{link.view_count === 1 ? '' : 's'}</span>
-                        ) : null}
-                      </div>
-                      <input
-                        readOnly
-                        value={url}
-                        className="mc-share-link-input"
-                        aria-label={`${link.mode} share link`}
-                      />
-                      <button
-                        type="button"
-                        className="mc-share-link-btn"
-                        onClick={() => handleCopy(copyKey, url)}
-                        disabled={!url}
-                      >
-                        <Copy size={13} strokeWidth={1.8} />
-                        {copiedKey === copyKey ? 'Copied' : 'Copy'}
-                      </button>
-                      <button
-                        type="button"
-                        className="mc-share-link-btn is-ghost"
-                        onClick={() => handleRevoke(link.id)}
-                        disabled={busyLinkId === link.id}
-                        title="Revoke this link — it stops working immediately"
-                      >
-                        <Trash2 size={13} strokeWidth={1.8} />
-                        {busyLinkId === link.id ? 'Revoking…' : 'Revoke'}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-
-          {/* Audit history — revoked / expired / single-view-consumed.
-              Surfaced so recruiters can see who shared what and when. */}
-          {inactiveLinks.length > 0 ? (
-            <div className="mc-share-links is-history">
-              <div className="mc-share-links-head">
-                <span className="mc-kicker is-mute">HISTORY</span>
-                <button
-                  type="button"
-                  className="mc-share-link-btn is-ghost"
-                  onClick={() => void refreshLinks()}
-                  disabled={loading}
-                >
-                  <RefreshCw size={13} strokeWidth={1.8} className={loading ? 'animate-spin' : ''} />
-                  Refresh
-                </button>
-              </div>
-              <ul className="mc-share-link-list">
-                {inactiveLinks.map((link) => (
-                  <li key={link.id} className="mc-share-link-row is-inactive">
-                    <div className="mc-share-link-meta">
-                      <span className={`mc-share-link-mode ${link.mode}`}>{link.mode}</span>
-                      <span className="mc-share-link-expiry">{formatExpiryLabel(link)}</span>
-                      {link.view_count > 0 ? (
-                        <span className="mc-share-link-views">{link.view_count} view{link.view_count === 1 ? '' : 's'}</span>
-                      ) : null}
-                    </div>
-                  </li>
-                ))}
-              </ul>
+                <Link2 size={13} strokeWidth={1.8} />
+                {creating ? 'Creating…' : 'Generate link'}
+              </button>
             </div>
           ) : null}
 
-          <p className="mc-share-foot">
-            Recipients see only what the selected mode allows. Revoking a link invalidates anyone
-            holding it; single-view links auto-revoke after the first open.
-          </p>
+          {error ? <div className="mc-share-error">{error}</div> : null}
+
+          {link ? (
+            <div className="mc-share-link">
+              <Link2 size={14} strokeWidth={1.8} />
+              <input
+                readOnly
+                value={url}
+                className="mc-share-link-input"
+                aria-label={`${link.mode} share link`}
+                onFocus={(e) => e.target.select()}
+              />
+              <button
+                type="button"
+                className="mc-share-link-btn"
+                onClick={() => handleCopy(url)}
+                disabled={!url}
+              >
+                {copied ? <Check size={13} strokeWidth={1.8} /> : <Copy size={13} strokeWidth={1.8} />}
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+          ) : null}
+
+          {kind === 'internal' && creating ? (
+            <p className="mc-share-help">Creating link…</p>
+          ) : null}
         </div>
       </div>
     </div>
   );
 };
-
-const ModeToggle = ({ mode, setMode, value, label, sub }) => (
-  <button
-    type="button"
-    role="radio"
-    aria-checked={mode === value}
-    className={`mc-share-mode ${mode === value ? 'on' : ''}`.trim()}
-    onClick={() => setMode(value)}
-  >
-    <span className="mc-share-mode-label">{label}</span>
-    <span className="mc-share-mode-sub">{sub}</span>
-  </button>
-);
 
 export default ShareModal;

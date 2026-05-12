@@ -32,6 +32,12 @@ from ...models.application_interview import ApplicationInterview
 from ...models.cv_score_job import CvScoreJob, SCORE_JOB_DONE, SCORE_JOB_ERROR, SCORE_JOB_PENDING, SCORE_JOB_RUNNING
 from ...models.organization import Organization
 from ...models.role import Role
+from ...models.share_link import (
+    SHARE_LINK_MODE_CLIENT,
+    SHARE_LINK_MODE_RECRUITER,
+    SHARE_LINK_MODE_SINGLE_VIEW,
+    ShareLink,
+)
 from ...models.task import Task
 from ...models.user import User
 from ...platform.config import settings
@@ -190,12 +196,25 @@ def _get_application_by_share_token(
     *,
     org_id: int | None = None,
     db: Session,
-) -> CandidateApplication:
+) -> tuple[CandidateApplication, ShareLink | None]:
+    """Resolve a share token to an application.
+
+    Tokens can come from two sources:
+    1. Legacy ``CandidateApplication.report_share_token`` (single-link
+       per application). Returned with ``link=None``.
+    2. Multi-link ``share_links`` table (HANDOFF v2 §3). Validated for
+       revoke / expiry / single-view consumption before returning.
+
+    Recruiters with a session see both kinds; the public ``/c/:appId?k=``
+    route uses ``current_user=None``, in which case org scoping is skipped
+    (the token itself is the auth gate).
+    """
     normalized_token = sanitize_text_for_storage(str(share_token or "").strip())
     if not normalized_token or not normalized_token.startswith("shr_"):
         raise HTTPException(status_code=404, detail="Candidate report unavailable.")
 
-    query = (
+    # Legacy single-token path.
+    legacy_query = (
         db.query(CandidateApplication)
         .options(
             joinedload(CandidateApplication.candidate),
@@ -208,14 +227,56 @@ def _get_application_by_share_token(
             CandidateApplication.deleted_at.is_(None),
         )
     )
-
     if org_id is not None:
-        query = query.filter(CandidateApplication.organization_id == org_id)
+        legacy_query = legacy_query.filter(CandidateApplication.organization_id == org_id)
+    legacy_app = legacy_query.first()
+    if legacy_app is not None:
+        return legacy_app, None
 
-    app = query.first()
-    if not app:
+    # Multi-link share_links table.
+    link = (
+        db.query(ShareLink)
+        .filter(ShareLink.token == normalized_token)
+        .first()
+    )
+    if link is None:
         raise HTTPException(status_code=404, detail="Candidate report unavailable.")
-    return app
+
+    now = utcnow()
+    if link.revoked_at is not None:
+        raise HTTPException(status_code=410, detail="Share link has been revoked")
+    expires_at = link.expires_at
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at is not None and expires_at <= now:
+        raise HTTPException(status_code=410, detail="Share link has expired")
+    if link.mode == SHARE_LINK_MODE_SINGLE_VIEW and link.view_count > 0:
+        raise HTTPException(status_code=410, detail="Single-view link has already been consumed")
+
+    app_query = (
+        db.query(CandidateApplication)
+        .options(
+            joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.role),
+            joinedload(CandidateApplication.interviews),
+            joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
+        )
+        .filter(
+            CandidateApplication.id == link.application_id,
+            CandidateApplication.deleted_at.is_(None),
+        )
+    )
+    if org_id is not None:
+        app_query = app_query.filter(CandidateApplication.organization_id == org_id)
+    app = app_query.first()
+    if app is None:
+        raise HTTPException(status_code=404, detail="Candidate report unavailable.")
+
+    link.view_count = (link.view_count or 0) + 1
+    link.last_viewed_at = now
+    db.commit()
+
+    return app, link
 
 
 def _sync_workable_outcome_change(
@@ -783,15 +844,21 @@ def get_application_detail_by_share_token(
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_optional_current_user),
 ):
-    app = _get_application_by_share_token(
+    # When the token comes from share_links we trust the link's mode over
+    # the URL ``?view=`` param so a client-mode token can't unmask
+    # recruiter-only fields by passing ``?view=interview``.
+    app, link = _get_application_by_share_token(
         share_token,
         org_id=current_user.organization_id if current_user else None,
         db=db,
     )
+    effective_view = view
+    if link is not None:
+        effective_view = "client" if link.mode == SHARE_LINK_MODE_CLIENT else "interview"
     return application_detail_payload(
         app,
         include_cv_text=include_cv_text,
-        client_safe=(view == "client"),
+        client_safe=(effective_view == "client"),
     )
 
 

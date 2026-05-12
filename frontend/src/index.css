@@ -10702,6 +10702,8 @@ button.eng-badge-button:focus-visible {
   overflow: hidden;
 }
 
+.mc-share-card.mc-share-card-sm { width: min(440px, 100%); }
+
 .mc-share-head {
   display: flex;
   align-items: flex-start;

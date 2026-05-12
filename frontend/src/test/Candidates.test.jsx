@@ -589,8 +589,8 @@ describe('CandidatesPage', () => {
     expect(await screen.findByText('Candidate standing report', {}, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.getAllByText(/Standing Candidate/i).length).toBeGreaterThan(0);
     // Header now exposes one Share-internally + one Share-with-client
-    // button instead of the legacy "Shareable link" panel + 4-button row.
-    // Both buttons open the same ShareModal pre-set to the right tab.
+    // button. Each opens a focused one-shot dialog — internal auto-mints
+    // a 7-day recruiter link; client asks for 1-14 days first.
     expect(screen.getByRole('button', { name: /Share with client/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Share internally/i })).toBeInTheDocument();
   });
@@ -634,10 +634,8 @@ describe('CandidatesPage', () => {
     await waitFor(() => {
       expect(rolesApi.getApplicationByShareToken).toHaveBeenCalledWith('shr_candidate_report_12');
       expect(screen.getByText('Candidate standing report')).toBeInTheDocument();
-      // The new header exposes two share buttons that open the modal —
-      // the inline Input/Copy/Email row was removed per user feedback
-      // ("tidy all the shareable links — way too many"). Modal-internal
-      // copy + revoke flows are covered in ShareModal's own tests.
+      // The header exposes two share buttons; each opens a one-shot
+      // dialog that mints a fresh link. No inline Input/Copy/Email row.
       expect(screen.getByRole('button', { name: /Share internally/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Share with client/i })).toBeInTheDocument();
     });
