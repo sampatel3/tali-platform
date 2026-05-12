@@ -17,6 +17,12 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from ..decision_policy.abstention import (
+    DEFAULT_CONFIDENCE_FLOOR,
+    DEFAULT_PER_AGENT_UNCERTAINTY_THRESHOLD,
+    DEFAULT_SHARP_DISAGREEMENT_DELTA,
+    should_escalate,
+)
 from ..decision_policy.engine import (
     DecisionInputs,
     PolicyDecision,
@@ -29,6 +35,7 @@ from ..models.role import Role
 from ..sub_agents.base import SubAgentRequest, SubAgentResult
 from ..sub_agents.registry import get_sub_agent
 from .manual_action_reader import read_recent_manual_actions
+from .role_intent import fetch_active_intent
 
 
 logger = logging.getLogger("taali.agent_runtime.policy_evaluator")
@@ -57,8 +64,16 @@ def _gather_sub_agent_outputs(
     application_id: int,
     role_id: int,
     metering_context: dict[str, Any] | None,
+    role_intent_extra: dict[str, Any] | None = None,
     skip_cache: bool = False,
 ) -> dict[str, SubAgentResult]:
+    """Run all four sub-agents in sequence.
+
+    ``role_intent_extra`` (when present) is injected into each
+    ``SubAgentRequest.extra`` under the ``role_intent`` key. Sub-agents
+    that opt in to the overlay read it from there; sub-agents that
+    don't are unaffected (existing behaviour preserved).
+    """
     out: dict[str, SubAgentResult] = {}
     for name in PRE_EVAL_SUB_AGENT_NAMES:
         try:
@@ -66,12 +81,16 @@ def _gather_sub_agent_outputs(
         except KeyError:
             logger.warning("sub_agent %s not registered; skipping", name)
             continue
+        extra: dict[str, Any] = {}
+        if role_intent_extra:
+            extra["role_intent"] = role_intent_extra
         req = SubAgentRequest(
             organization_id=organization_id,
             application_id=application_id,
             role_id=role_id,
             skip_cache=skip_cache,
             metering_context=metering_context,
+            extra=extra,
         )
         try:
             out[name] = sa.run(req, db=db)  # type: ignore[call-arg]
@@ -176,12 +195,30 @@ def evaluate_for_application(
             {},
         )
 
+    # Amendment A1: authored intent is fetched once per evaluation and
+    # passed through SubAgentRequest.extra so sub-agents that opt-in
+    # (today: none; planned: cv_scoring, pre_screen) can read it
+    # without re-fetching. Returns None when no intent has been
+    # authored for the role — pre-A1 behaviour is preserved.
+    role_intent_extra: dict[str, Any] | None = None
+    try:
+        intent_record = fetch_active_intent(db, role_id=int(role.id))
+        if intent_record is not None:
+            role_intent_extra = {
+                "version": int(intent_record.version),
+                "structured": intent_record.structured.model_dump(),
+                "free_text": intent_record.free_text,
+            }
+    except Exception:  # pragma: no cover — never break the cycle
+        role_intent_extra = None
+
     outputs = _gather_sub_agent_outputs(
         db,
         organization_id=int(role.organization_id),
         application_id=int(application_id),
         role_id=int(role.id),
         metering_context=metering_context,
+        role_intent_extra=role_intent_extra,
         skip_cache=skip_cache,
     )
     scores = _scores_from_outputs(outputs)
@@ -234,7 +271,80 @@ def evaluate_for_application(
     )
 
     verdict = evaluate(inputs, db=db)
+
+    # Phase 4 abstention overlay (zero LLM cost — pure-Python triggers
+    # over the sub-agent outputs the rule engine just consumed). When
+    # the verdict is already ``no_action`` / ``skip`` we don't escalate
+    # — the engine has already decided not to act.
+    verdict = _maybe_escalate(verdict, outputs)
     return verdict, outputs
+
+
+def _maybe_escalate(
+    verdict: PolicyDecision,
+    outputs: dict[str, SubAgentResult],
+) -> PolicyDecision:
+    """Overlay ``escalate_low_confidence`` when sub-agents disagree or
+    are individually uncertain. Preserves the original rule_path so the
+    audit shows both the original verdict and the abstention reason.
+
+    Skips when:
+    - The engine already chose ``skip`` / ``no_action`` / ``auto_reject``.
+      Manual-action skip and hard-rule auto-rejects are deliberate and
+      not abstention candidates.
+    - Fewer than 3 sub-agents produced a usable score (disagreement
+      can't be measured meaningfully).
+    """
+    if verdict.decision_type in ("skip", "no_action", "auto_reject"):
+        return verdict
+    if verdict.skipped_due_to_manual:
+        return verdict
+    per_agent_scores: list[float] = []
+    per_agent_uncertainties: list[float] = []
+    per_agent_names: list[str] = []
+    for name, result in outputs.items():
+        if not result.ok:
+            continue
+        per_agent_names.append(name)
+        # Normalise [0, 100] → [0, 1] so the disagreement spread is
+        # meaningful regardless of the original signal scale.
+        raw_score = result.confidence
+        if raw_score is None:
+            raw_score = float((result.output or {}).get("score") or 0.0)
+        if raw_score > 1.0:
+            raw_score = raw_score / 100.0
+        per_agent_scores.append(float(raw_score))
+        per_agent_uncertainties.append(float(result.uncertainty or 0.0))
+    if len([s for s in per_agent_scores if s is not None]) < 3:
+        return verdict
+    abstain = should_escalate(
+        per_agent_scores=per_agent_scores,
+        per_agent_uncertainties=per_agent_uncertainties,
+        calibrated_confidence=float(verdict.confidence) if verdict.confidence else None,
+        per_agent_uncertainty_threshold=DEFAULT_PER_AGENT_UNCERTAINTY_THRESHOLD,
+        sharp_disagreement_delta=DEFAULT_SHARP_DISAGREEMENT_DELTA,
+        confidence_floor=DEFAULT_CONFIDENCE_FLOOR,
+        per_agent_names=per_agent_names,
+    )
+    if not abstain.escalate:
+        return verdict
+    rule_path = list(verdict.rule_path) + [
+        f"abstention_overlay:{abstain.triggered_by}:{abstain.reason}"
+    ]
+    return PolicyDecision(
+        decision_type="escalate_low_confidence",
+        confidence=verdict.confidence,
+        reasoning=(
+            f"Escalated for low confidence — {abstain.reason}. "
+            f"Original verdict: {verdict.decision_type}. "
+            f"Original reasoning: {verdict.reasoning}"
+        ),
+        rule_path=rule_path,
+        policy_revision_id=verdict.policy_revision_id,
+        decision_point=verdict.decision_point,
+        intent_overrode=verdict.intent_overrode,
+        skipped_due_to_manual=False,
+    )
 
 
 __all__ = [

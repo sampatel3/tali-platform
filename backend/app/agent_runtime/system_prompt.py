@@ -163,6 +163,50 @@ OUTPUT CONTRACT:
 """
 
 
+def _render_role_intent(role: Role) -> str:
+    """Render the active RoleIntent (Amendment A1) for inclusion in the
+    system prompt. Returns empty string when no intent has been authored
+    for the role — sub-agents see an empty overlay and the prompt is
+    indistinguishable from the pre-A1 shape.
+
+    Read once per cycle and cached by Anthropic's ephemeral prompt cache
+    along with the role block — so the per-tool-round cost stays at
+    cache-hit pricing for everything after the first call.
+    """
+    try:
+        from .role_intent import fetch_active_intent
+        from ..platform.database import SessionLocal
+        with SessionLocal() as db:
+            record = fetch_active_intent(db, role_id=int(role.id))
+    except Exception:  # pragma: no cover — defensive
+        return ""
+    if record is None:
+        return ""
+    s = record.structured
+    lines: list[str] = [
+        f"ROLE INTENT (v{record.version}, authored {record.authored_at.date()}):",
+    ]
+    if s.soft_signals:
+        lines.append(f"- Soft signals: {', '.join(s.soft_signals)}")
+    if s.deal_breakers:
+        lines.append(f"- Deal-breakers: {', '.join(s.deal_breakers)}")
+    if s.growth_expectations:
+        lines.append(f"- Growth: {s.growth_expectations}")
+    if s.context_for_opening:
+        lines.append(f"- Context: {s.context_for_opening}")
+    if s.weighting_notes:
+        lines.append(f"- Weighting: {s.weighting_notes}")
+    if s.must_haves_missing_from_spec:
+        lines.append(
+            f"- Must-haves not in spec: {', '.join(s.must_haves_missing_from_spec)}"
+        )
+    if record.free_text:
+        # Cap the free-text section so a verbose author doesn't blow up
+        # token usage on every cycle.
+        lines.append(f"- Notes: {record.free_text[:1200]}")
+    return "\n".join(lines)
+
+
 def build_system_prompt(
     *,
     role: Role,
@@ -177,12 +221,14 @@ def build_system_prompt(
     job_spec = (role.job_spec_text or "").strip() or "(no job spec attached)"
     criteria_block = _render_bucketed_criteria(role)
     interview_focus = role.interview_focus or {}
+    intent_block = _render_role_intent(role)
 
     role_block = (
         f"ROLE: {role.name} (id={role.id})\n"
         f"JOB SPEC:\n{job_spec[:6000]}"
         + (f"\n\n{criteria_block}" if criteria_block else "")
         + (f"\n\nINTERVIEW FOCUS HINTS: {interview_focus}" if interview_focus else "")
+        + (f"\n\n{intent_block}" if intent_block else "")
     )
 
     calibration_block = (

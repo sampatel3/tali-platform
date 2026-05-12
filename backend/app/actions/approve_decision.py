@@ -90,4 +90,23 @@ def run(
     decision.resolved_by_user_id = actor.user_id
     decision.resolution_note = note
     decision.human_disposition = "approved"
+
+    # Phase 2 §6.7: emit a recruiter-action episode (low volume — one
+    # per resolved decision). Never blocks the response.
+    try:
+        from ..candidate_graph import agent_episodes
+        agent_episodes.emit_recruiter_action_event(
+            organization_id=int(organization_id),
+            decision_id=int(decision.id),
+            recruiter_id=int(actor.user_id) if actor.user_id else 0,
+            action="approve",
+            reason=note,
+            happened_at=decision.resolved_at,
+        )
+    except Exception:
+        import logging
+        logging.getLogger("taali.actions.approve_decision").warning(
+            "recruiter-action episode emit failed for decision_id=%s",
+            getattr(decision, "id", None),
+        )
     return decision
