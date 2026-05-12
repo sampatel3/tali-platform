@@ -520,15 +520,40 @@ def _extract_taali_ids(results: Any) -> set[int]:
     return ids
 
 
-_COMPANY_SUFFIXES = (
+# Definitive company markers — substrings that almost never appear in
+# job titles, school names, or country names. Substring match is safe
+# here.
+_DEFINITIVE_COMPANY_SUFFIXES = (
     " ltd", " limited", " inc", " corp", " llc", " gmbh", " plc", " pvt",
-    " group", " holdings", " technologies", " technology", " tech", " systems",
+    " holdings", " ventures", " partners", " associates", " agency",
+    " studio", " labs", " bank",
+)
+# Soft company markers — common as substrings of job titles too
+# ("Senior Software Engineer" contains " software"). Only treat these as
+# Company AFTER ruling out job titles.
+_SOFT_COMPANY_SUFFIXES = (
+    " group", " technologies", " technology", " tech", " systems",
     " solutions", " services", " consulting", " international", " global",
-    " ventures", " partners", " associates", " agency", " studio", " labs",
-    " software", " digital", " media", " bank", " financial", " capital",
+    " software", " digital", " media", " financial", " capital",
     " investments", " logistics", " aviation", " healthcare", " pharma",
     " energy", " telecom", " networks", " cloud", " ai", " data",
 )
+# Words that strongly indicate a job title (the entity is a role, not a
+# company / school / country). Whole-word match — we split the name on
+# whitespace and intersect — so we don't false-positive on e.g.
+# "engineering.com" or "Lead Bank".
+_JOB_TITLE_WORDS = frozenset({
+    "engineer", "engineers", "developer", "developers", "architect",
+    "architects", "analyst", "analysts", "scientist", "scientists",
+    "manager", "managers", "director", "directors", "designer",
+    "designers", "consultant", "consultants", "intern", "interns",
+    "founder", "founders", "ceo", "cto", "cfo", "coo", "cio", "vp",
+    "lead", "leads", "specialist", "specialists", "officer", "officers",
+    "administrator", "associate", "executive", "executives", "president",
+    "chief", "researcher", "researchers", "writer", "editor", "producer",
+    "recruiter", "recruiters", "accountant", "auditor", "controller",
+    "trainee",
+})
 _SCHOOL_KEYWORDS = (
     "university", "college", "school", "institute", "academy", "polytechnic",
     "iit", "iim", "nit", "faculty", "department", "campus",
@@ -549,13 +574,24 @@ def _label_for(
 ) -> str:
     """Pick the closest match in our GraphNode label vocabulary.
 
-    Priority:
-    1. Explicit kind/label on the node (e.g. from older backfills).
-    2. Source-side heuristic: in RELATES_TO edges the source is almost always
-       a Person (the entity about whom the fact is stated).
-    3. Name-based heuristics: company suffix, school keyword, country name.
-    4. Edge context: if edge is WORKED_AT the target is likely Company, etc.
-    5. Safe default: Skill (renders small and generic).
+    Priority (most-reliable signal first):
+    1. Explicit kind/label on the node.
+    2. Definitive company suffix (" inc", " ltd", " corp", …) — substring
+       match; these almost never appear inside job titles.
+    3. School keyword.
+    4. Country.
+    5. Job-title word (whole-token match: "engineer", "architect", …) —
+       checked BEFORE soft company suffixes so "Senior Software
+       Engineer" doesn't get mis-coloured as a Company because of the
+       " software" substring.
+    6. Soft company suffix (" software", " tech", " data", …) — substring
+       match, but only after ruling out job titles.
+    7. Edge context: if edge is WORKED_AT the target is likely Company, etc.
+    8. Safe default: Skill (renders small and generic).
+
+    For source nodes (the "subject" of a RELATES_TO edge — almost always
+    the candidate themselves), we apply the same precedence but default
+    to Person rather than Skill at the end.
     """
     raw = " ".join([*(fallback_labels or []), str(node_attrs.get("kind", ""))])
     raw_lower = raw.lower()
@@ -572,29 +608,35 @@ def _label_for(
         return "Skill"
 
     name_lower = (name or "").lower().strip()
+    name_tokens = set(name_lower.split())
 
-    # 2. Source side — Graphiti always puts the "subject" entity as the source
-    #    of RELATES_TO edges in employment/education facts. If this is the
-    #    source and has a name that doesn't match company/school patterns,
-    #    treat as Person.
-    if is_source:
-        if any(s in name_lower for s in _COMPANY_SUFFIXES):
-            return "Company"
-        if any(kw in name_lower for kw in _SCHOOL_KEYWORDS):
-            return "School"
-        return "Person"
-
-    # 3. Name-based heuristics for target nodes — use substring, not endswith,
-    #    because company names often have trailing context (" - EMEA", " (India)").
-    if any(s in name_lower for s in _COMPANY_SUFFIXES):
+    # 2. Definitive company markers
+    if any(s in name_lower for s in _DEFINITIVE_COMPANY_SUFFIXES):
         return "Company"
+
+    # 3. School / 4. Country
     if any(kw in name_lower for kw in _SCHOOL_KEYWORDS):
         return "School"
     if name_lower in _COUNTRY_KEYWORDS or (len(name_lower) == 2 and name_lower.isalpha()):
         return "Country"
 
-    # 4. Edge context — only use for WORKED_AT/STUDIED_AT/LOCATED_IN where we
-    #    know the target type; HAS_SKILL default stays Skill.
+    # 5. Job-title words (whole-token match) — must come before soft
+    # company suffixes so e.g. "Senior Software Engineer" wins on
+    # "engineer" before " software" can mis-classify it.
+    if name_tokens & _JOB_TITLE_WORDS:
+        return "Skill"
+
+    # 6. Soft company suffixes
+    if any(s in name_lower for s in _SOFT_COMPANY_SUFFIXES):
+        return "Company"
+
+    # Source-side default: the subject of a RELATES_TO edge is almost
+    # always a Person.
+    if is_source:
+        return "Person"
+
+    # 7. Edge context — only use for WORKED_AT/STUDIED_AT/LOCATED_IN where we
+    # know the target type; HAS_SKILL default stays Skill.
     if edge_context == "WORKED_AT":
         return "Company"
     if edge_context == "STUDIED_AT":

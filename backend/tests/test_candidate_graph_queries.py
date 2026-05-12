@@ -271,6 +271,58 @@ def test_colleague_neighbourhood_groups_by_company():
     assert "Python" in out["skills"]
 
 
+def test_label_for_classifies_job_titles_as_skill_not_company():
+    # The bug from production: "Senior Software Engineer" was rendered
+    # as a Company (black) because the heuristic substring-matched
+    # " software" against the company-suffix list before checking
+    # whether the name looked like a job title.
+    cases = [
+        ("Senior Software Engineer", "Skill"),
+        ("Software Engineer", "Skill"),
+        ("Solutions Architect", "Skill"),  # was matching " solutions"
+        ("Data Scientist", "Skill"),       # was matching " data"
+        ("AI Engineer", "Skill"),          # was matching " ai"
+        ("Cloud Architect", "Skill"),      # was matching " cloud"
+        ("Lead Software Developer", "Skill"),
+        ("Chief Technology Officer", "Skill"),
+        ("Product Manager", "Skill"),
+        ("Senior Recruiter", "Skill"),
+    ]
+    for name, expected in cases:
+        got = graph_search._label_for({}, [], name, edge_context="HAS_SKILL")
+        assert got == expected, f"{name!r}: expected {expected}, got {got}"
+
+
+def test_label_for_still_recognises_real_companies():
+    # The job-title check must not regress real company classifications.
+    cases = [
+        ("Acme Inc", "Company"),                 # definitive suffix
+        ("Acme Holdings", "Company"),            # definitive suffix
+        ("Microsoft Software", "Company"),       # soft suffix, no job title
+        ("AD Ports Group", "Company"),           # soft " group"
+        ("Fusemachines", "Company"),             # falls through to edge_context
+        ("AWS Cloud Services", "Company"),       # soft " cloud" / " services"
+        ("Stripe", "Company"),                   # falls through to edge_context
+    ]
+    for name, expected in cases:
+        # Pass WORKED_AT context because real company nodes are usually
+        # the target of WORKED_AT edges.
+        got = graph_search._label_for({}, [], name, edge_context="WORKED_AT")
+        assert got == expected, f"{name!r}: expected {expected}, got {got}"
+
+
+def test_label_for_handles_ambiguous_company_with_job_title_word():
+    # If a name has BOTH a definitive company suffix AND a job-title
+    # word, the company suffix wins because it's a more reliable
+    # signal — "Engineering Solutions Inc" is a company, not a role.
+    assert (
+        graph_search._label_for({}, [], "Engineering Solutions Inc")
+        == "Company"
+    )
+    # But without the definitive suffix, the job-title word wins:
+    assert graph_search._label_for({}, [], "Engineering Manager") == "Skill"
+
+
 def test_search_unconfigured_returns_empty():
     with patch.object(graph_search.graph_client, "is_configured", return_value=False):
         assert (
