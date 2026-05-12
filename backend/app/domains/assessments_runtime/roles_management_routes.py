@@ -256,9 +256,11 @@ def update_role(
     if "workable_actor_member_id" in updates:
         role.workable_actor_member_id = updates["workable_actor_member_id"] or None
     agent_activated_now = False
+    agent_resumed_now = False
     if "agentic_mode_enabled" in updates:
         next_enabled = bool(updates["agentic_mode_enabled"])
         was_enabled = bool(role.agentic_mode_enabled)
+        was_paused = role.agent_paused_at is not None
         if next_enabled:
             # Activating requires a monthly USD budget so the agent can't
             # quietly run up costs. Allow either a value already on the role
@@ -275,6 +277,16 @@ def update_role(
             role.agent_paused_at = None
             role.agent_paused_reason = None
         agent_activated_now = next_enabled and not was_enabled
+        # Resume = "was paused while enabled, now no longer paused while still
+        # enabled". Distinct from activation. Both deserve an immediate cycle —
+        # otherwise the recruiter clicks Resume and waits up to 30 minutes for
+        # the next beat-scheduled tick to fire.
+        agent_resumed_now = (
+            was_enabled
+            and was_paused
+            and next_enabled
+            and role.agent_paused_at is None
+        )
     if "agent_action_allowlist" in updates:
         role.agent_action_allowlist = updates["agent_action_allowlist"]
     if "agent_token_budget_per_cycle" in updates:
@@ -304,17 +316,23 @@ def update_role(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update role")
-    # Flipping agent mode on should kick a daily-review-style cycle so the
-    # agent immediately triages existing applied/scored-no-decision
-    # candidates instead of waiting up to 24h for the next beat-scheduled
-    # sweep. Failures here are logged but do not fail the PATCH — the
-    # daily sweep will still catch up.
-    if agent_activated_now:
+    # Activation OR resume should kick a daily-review-style cycle so the
+    # agent immediately picks up where things stand instead of waiting up
+    # to 30 minutes for the cohort-tick beat (or 24h for daily-review).
+    # On activation: drain unscored/un-pre-screened backlog. On resume:
+    # retry whatever was paused (typically a per-cycle budget exhaustion).
+    # Failures here are logged but do not fail the PATCH — the beat
+    # sweeps will still catch up eventually.
+    if agent_activated_now or agent_resumed_now:
         try:
             from ...tasks.agent_tasks import agent_daily_review_role
             agent_daily_review_role.delay(int(role.id))
         except Exception:
-            logger.exception("Failed to enqueue activation cycle for role_id=%s", role.id)
+            logger.exception(
+                "Failed to enqueue %s cycle for role_id=%s",
+                "activation" if agent_activated_now else "resume",
+                role.id,
+            )
     return role_to_response(role)
 
 

@@ -250,23 +250,24 @@ def test_daily_review_role_returns_skip_when_role_missing(db):
 # ---------------------------------------------------------------------------
 
 
-def test_initial_user_message_emits_daily_review_variant_for_cron_trigger():
+def test_initial_user_message_emits_proactive_sweep_variant_for_cron_trigger():
+    """The cron variant directs the agent to drain unscored backlog before
+    triaging, end the cycle, then let the next tick act on fresh signal."""
     from app.agent_runtime.orchestrator import _initial_user_message
 
     msg = _initial_user_message(trigger="cron", application_id=None)
-    assert "Daily review tick" in msg
-    assert "proactive sweep" in msg.lower()
-    # Should still mention search_applications + agent_run_complete + the
-    # one-decision-per-cycle ceiling that constrains all cycle types.
-    assert "search_applications" in msg
+    assert "Proactive sweep" in msg
+    # Drain-before-triage guidance + the standard cycle terminators.
+    assert "survey_role_state" in msg
+    assert "batch_score_cv" in msg
     assert "agent_run_complete" in msg
     assert "ONE queued decision" in msg or "one queued decision" in msg.lower()
 
 
-def test_initial_user_message_does_not_use_daily_review_for_event_trigger():
+def test_initial_user_message_does_not_use_proactive_sweep_for_event_trigger():
     """An event cycle with no application_id is rare but possible — must
-    still get the cycle-tick message, not the daily-review one."""
+    still get the cycle-tick message, not the proactive-sweep one."""
     from app.agent_runtime.orchestrator import _initial_user_message
 
     msg = _initial_user_message(trigger="event", application_id=None)
-    assert "Daily review tick" not in msg
+    assert "Proactive sweep" not in msg

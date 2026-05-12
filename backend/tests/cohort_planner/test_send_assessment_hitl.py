@@ -1,11 +1,16 @@
-"""HITL gate on send_assessment when role.auto_promote=False."""
+"""HITL gate on send_assessment when role.auto_promote=False.
+
+The gate now queues an AgentDecision(decision_type='send_assessment')
+instead of an AgentNeedsInput row, so the per-candidate verdict lands
+in the recruiter's Review queue alongside advance/reject decisions.
+"""
 
 from __future__ import annotations
 
 from unittest.mock import patch
 
 from app.agent_runtime.tool_registry import _tool_send_assessment
-from app.models.agent_needs_input import AgentNeedsInput
+from app.models.agent_decision import AgentDecision
 from app.models.agent_run import AgentRun
 
 from .conftest import make_world
@@ -25,7 +30,7 @@ def _make_run(db, role) -> AgentRun:
     return run
 
 
-def test_hitl_gate_opens_needs_input_instead_of_sending(db):
+def test_hitl_gate_queues_decision_instead_of_sending(db):
     org, role, _, app = make_world(db, send_requires_approval=True)
     run = _make_run(db, role)
     args = {"application_id": int(app.id)}
@@ -33,13 +38,14 @@ def test_hitl_gate_opens_needs_input_instead_of_sending(db):
         result = _tool_send_assessment(db, agent_run=run, role=role, args=args)
     send.assert_not_called()
     assert result["status"] == "awaiting_recruiter_approval"
-    assert "needs_input_id" in result
-    rows = db.query(AgentNeedsInput).filter(
-        AgentNeedsInput.role_id == role.id,
-        AgentNeedsInput.kind == "send_assessment_approval",
+    assert "decision_id" in result
+    rows = db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.decision_type == "send_assessment",
     ).all()
     assert len(rows) == 1
-    assert rows[0].is_open
+    assert rows[0].status == "pending"
+    assert int(rows[0].application_id) == int(app.id)
 
 
 def test_no_gate_auto_executes_send(db):
@@ -58,3 +64,19 @@ def test_no_gate_auto_executes_send(db):
         result = _tool_send_assessment(db, agent_run=run, role=role, args=args)
     send.assert_called_once()
     assert result == {"status": "sent", "assessment_id": 7}
+
+
+def test_hitl_gate_returns_existing_decision_instead_of_duplicating(db):
+    """Repeated agent calls for the same candidate hit the dedup branch."""
+    org, role, _, app = make_world(db, send_requires_approval=True)
+    run = _make_run(db, role)
+    args = {"application_id": int(app.id)}
+    with patch("app.agent_runtime.tool_registry.send_assessment.run"):
+        first = _tool_send_assessment(db, agent_run=run, role=role, args=args)
+        second = _tool_send_assessment(db, agent_run=run, role=role, args=args)
+    assert first["decision_id"] == second["decision_id"]
+    rows = db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.decision_type == "send_assessment",
+    ).all()
+    assert len(rows) == 1

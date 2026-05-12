@@ -32,7 +32,16 @@ from ..models.role import Role
 from ..models.usage_event import UsageEvent
 
 
-DEFAULT_TOKEN_BUDGET_PER_CYCLE = 50_000
+# 50k was undersized for any meaningful cohort: the initial
+# survey_role_state + read_pending_recruiter_inputs + a few candidate
+# fetches on a role with 100+ applicants already exceed it, so the
+# cycle dies in setup before dispatching a single score / advance /
+# send. The real backpressure on runaway agent behaviour is
+# ``role.agent_decision_budget_per_cycle`` (20 by default) — that
+# bounds *actions* per cycle, which is what we care about. Tokens are
+# a cost ceiling; the monthly USD cap already guards spend. Bumping
+# to 200k lets the first cycle on a meaningful role actually complete.
+DEFAULT_TOKEN_BUDGET_PER_CYCLE = 200_000
 DEFAULT_DECISION_BUDGET_PER_CYCLE = 20
 DEFAULT_USD_BUDGET_MONTHLY_CENTS = 5_000  # $50.00
 

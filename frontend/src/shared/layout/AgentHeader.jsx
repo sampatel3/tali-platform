@@ -111,6 +111,7 @@ const AgentPanel = ({
     budgetCents = 5000,
     tick = null,
     inFlight = false,
+    pausedReason = null,
   } = agent || {};
   const status = !on ? (paused ? 'paused' : 'off') : 'on';
   const pct = budgetCents > 0
@@ -146,7 +147,9 @@ const AgentPanel = ({
         {on && tick ? <div className="agent-tick">{tick}</div> : null}
         {paused ? (
           <div className="agent-tick">
-            Auto-paused — monthly cap reached. Raise the cap or resume to continue.
+            {pausedReason
+              ? `Auto-paused — ${pausedReason}. Resume to continue.`
+              : 'Auto-paused. Resume to continue.'}
           </div>
         ) : null}
 
@@ -313,6 +316,10 @@ export const buildAgentPropFromStatus = (status, options = {}) => {
     budgetCents: Number(status.monthly_budget_cents || 0) || 5000,
     tick: formatTick(status) || fallbackTick,
     inFlight: Boolean(status.current_run),
+    // Actual reason the orchestrator set — surfaces "per-cycle token
+    // budget exhausted" / "monthly USD cap reached" / etc. instead of a
+    // hardcoded blanket message.
+    pausedReason: status.paused_reason || null,
   };
 };
 

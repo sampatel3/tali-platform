@@ -243,9 +243,10 @@ def test_resend_assessment_invite_dispatch_invokes_action(db):
     assert result["status"] == "resent"
 
 
-def test_resend_assessment_invite_dispatch_hitl_gate_opens_needs_input(db):
-    """When auto_promote=False the tool opens an ask_recruiter card instead
-    of calling the action."""
+def test_resend_assessment_invite_dispatch_hitl_gate_queues_decision(db):
+    """When auto_promote=False the tool queues an AgentDecision (decision_type
+    'resend_assessment_invite') instead of calling the action; the recruiter
+    approves on the Home page and the approve path dispatches."""
     org = _make_org(db)
     role = _make_role(db, org)
     role.auto_promote = False
@@ -254,12 +255,7 @@ def test_resend_assessment_invite_dispatch_hitl_gate_opens_needs_input(db):
     assessment = _make_assessment(db, org=org, role=role, app=app)
     run = _make_agent_run(db, role)
 
-    with patch(
-        "app.actions.resend_assessment_invite.run"
-    ) as mock_action, patch(
-        "app.actions.ask_recruiter.open",
-        return_value=type("_R", (), {"id": 777})(),
-    ) as mock_ask:
+    with patch("app.actions.resend_assessment_invite.run") as mock_action:
         result = tool_registry.dispatch(
             "resend_assessment_invite",
             {"assessment_id": int(assessment.id)},
@@ -269,11 +265,14 @@ def test_resend_assessment_invite_dispatch_hitl_gate_opens_needs_input(db):
         )
 
     assert not mock_action.called
-    assert mock_ask.called
-    assert mock_ask.call_args.kwargs["kind"] == "resend_assessment_invite_approval"
     assert result["status"] == "awaiting_recruiter_approval"
-    assert result["needs_input_id"] == 777
+    assert "decision_id" in result
     assert result["assessment_id"] == int(assessment.id)
+    decision = db.query(AgentDecision).filter(AgentDecision.id == result["decision_id"]).one()
+    assert decision.decision_type == "resend_assessment_invite"
+    assert decision.status == "pending"
+    assert int(decision.application_id) == int(app.id)
+    assert (decision.evidence or {}).get("assessment_id") == int(assessment.id)
 
 
 def test_resend_assessment_invite_dispatch_refuses_cross_role(db):
@@ -338,148 +337,11 @@ def test_resend_assessment_invite_dispatch_returns_not_found_for_unknown_id(db):
     assert not mock_action.called
 
 
-def test_resend_assessment_invite_dispatch_consumes_prior_approval(db):
-    """HITL approval loop fix (Codex P1 follow-up on #141).
-
-    Sequence: ``auto_promote=False`` role, recruiter previously
-    approved a resend card targeting this assessment_id via the
-    ``subject_id`` column. Next dispatch must run the action (not
-    open a new card) and mark the approval consumed.
-    """
-    from datetime import datetime, timezone
-
-    org = _make_org(db)
-    role = _make_role(db, org)
-    role.auto_promote = False
-    db.flush()
-    app = _make_application(db, org=org, role=role, name="A", email="a@x.test")
-    assessment = _make_assessment(db, org=org, role=role, app=app)
-    run = _make_agent_run(db, role)
-
-    approved = AgentNeedsInput(
-        organization_id=org.id,
-        role_id=role.id,
-        kind="resend_assessment_invite_approval",
-        subject_id=int(assessment.id),
-        prompt="x",
-        resolved_at=datetime.now(timezone.utc),
-        response={"value": "approve"},
-    )
-    db.add(approved)
-    db.flush()
-
-    fake_result = type(
-        "_R",
-        (),
-        {"as_dict": lambda self: {"assessment_id": int(assessment.id), "status": "resent", "detail": None}},
-    )()
-    with patch(
-        "app.actions.resend_assessment_invite.run", return_value=fake_result
-    ) as mock_run:
-        result = tool_registry.dispatch(
-            "resend_assessment_invite",
-            {"assessment_id": int(assessment.id)},
-            db=db,
-            agent_run=run,
-            role=role,
-        )
-
-    assert mock_run.called
-    assert result["status"] == "resent"
-    db.refresh(approved)
-    assert approved.dismissed_at is not None
-
-
-def test_resend_assessment_invite_dispatch_recruiter_declined_when_prior_card_skipped(db):
-    from datetime import datetime, timezone
-
-    org = _make_org(db)
-    role = _make_role(db, org)
-    role.auto_promote = False
-    db.flush()
-    app = _make_application(db, org=org, role=role, name="A", email="a@x.test")
-    assessment = _make_assessment(db, org=org, role=role, app=app)
-    run = _make_agent_run(db, role)
-
-    declined = AgentNeedsInput(
-        organization_id=org.id,
-        role_id=role.id,
-        kind="resend_assessment_invite_approval",
-        subject_id=int(assessment.id),
-        prompt="x",
-        resolved_at=datetime.now(timezone.utc),
-        response={"value": "skip"},
-    )
-    db.add(declined)
-    db.flush()
-
-    with patch(
-        "app.actions.resend_assessment_invite.run"
-    ) as mock_run, patch(
-        "app.actions.ask_recruiter.open"
-    ) as mock_ask_open:
-        result = tool_registry.dispatch(
-            "resend_assessment_invite",
-            {"assessment_id": int(assessment.id)},
-            db=db,
-            agent_run=run,
-            role=role,
-        )
-
-    assert not mock_run.called
-    assert not mock_ask_open.called
-    assert result["status"] == "recruiter_declined"
-    assert result["assessment_id"] == int(assessment.id)
-
-
-def test_send_assessment_dispatch_consumes_prior_approval(db):
-    """Same fix applied symmetrically to send_assessment. Codex didn't
-    flag this one because it was latent (no test exercised the HITL
-    path), but the bug shape was identical."""
-    from datetime import datetime, timezone
-
-    org = _make_org(db)
-    role = _make_role(db, org)
-    role.auto_promote = False
-    db.flush()
-    app = _make_application(db, org=org, role=role, name="A", email="a@x.test", taali=80.0)
-    run = _make_agent_run(db, role)
-
-    approved = AgentNeedsInput(
-        organization_id=org.id,
-        role_id=role.id,
-        kind="send_assessment_approval",
-        subject_id=int(app.id),
-        prompt="x",
-        resolved_at=datetime.now(timezone.utc),
-        response={"value": "approve"},
-    )
-    db.add(approved)
-    db.flush()
-
-    fake_result = type(
-        "_R",
-        (),
-        {"as_dict": lambda self: {"assessment_id": 99, "status": "sent", "detail": None}},
-    )()
-    with patch(
-        "app.actions.send_assessment.run", return_value=fake_result
-    ) as mock_run:
-        result = tool_registry.dispatch(
-            "send_assessment",
-            {"application_id": int(app.id)},
-            db=db,
-            agent_run=run,
-            role=role,
-        )
-
-    assert mock_run.called
-    assert result["status"] == "sent"
-    db.refresh(approved)
-    assert approved.dismissed_at is not None
-
-
-def test_send_assessment_dispatch_hitl_opens_new_card_when_no_prior_approval(db):
+def test_send_assessment_dispatch_hitl_queues_decision(db):
+    """auto_promote=False on the agent's send_assessment tool queues an
+    AgentDecision(decision_type='send_assessment') and does NOT touch the
+    underlying send_assessment action. Approval routes through
+    approve_decision.run (covered in test_approve_decision_dispatches_*)."""
     org = _make_org(db)
     role = _make_role(db, org)
     role.auto_promote = False
@@ -487,12 +349,7 @@ def test_send_assessment_dispatch_hitl_opens_new_card_when_no_prior_approval(db)
     app = _make_application(db, org=org, role=role, name="A", email="a@x.test")
     run = _make_agent_run(db, role)
 
-    with patch(
-        "app.actions.send_assessment.run"
-    ) as mock_run, patch(
-        "app.actions.ask_recruiter.open",
-        return_value=type("_R", (), {"id": 555})(),
-    ) as mock_ask:
+    with patch("app.actions.send_assessment.run") as mock_run:
         result = tool_registry.dispatch(
             "send_assessment",
             {"application_id": int(app.id)},
@@ -502,64 +359,143 @@ def test_send_assessment_dispatch_hitl_opens_new_card_when_no_prior_approval(db)
         )
 
     assert not mock_run.called
-    assert mock_ask.called
-    # subject_id is passed through so per-candidate dedupe works.
-    assert mock_ask.call_args.kwargs["subject_id"] == int(app.id)
     assert result["status"] == "awaiting_recruiter_approval"
-    assert result["needs_input_id"] == 555
+    assert "decision_id" in result
+    decision = db.query(AgentDecision).filter(AgentDecision.id == result["decision_id"]).one()
+    assert decision.decision_type == "send_assessment"
+    assert decision.status == "pending"
+    assert int(decision.application_id) == int(app.id)
 
 
-def test_consume_resolved_skips_approval_for_different_subject(db):
-    """Cross-target safety via subject_id (NOT prompt substring): a
-    prior approval for application 12346 must not be consumed when the
-    agent is processing application 1, even if application 1's id is a
-    substring of '12346'. Codex's second P1 on this PR was that the
-    earlier ``target_marker`` approach filtered the chosen row in
-    Python after ``first()``, so a later approval for a different
-    subject masked an earlier valid one. ``subject_id`` lifts the
-    discriminator into the SQL query so this can't recur.
-    """
-    from datetime import datetime, timezone
-
+def test_send_assessment_dispatch_dedups_existing_pending_decision(db):
+    """Repeated agent calls for the same candidate return the existing
+    pending decision instead of piling up duplicate cards in the
+    recruiter's queue."""
     org = _make_org(db)
     role = _make_role(db, org)
     role.auto_promote = False
     db.flush()
-    target_app = _make_application(db, org=org, role=role, name="T", email="t@x.test")
+    app = _make_application(db, org=org, role=role, name="A", email="a@x.test")
     run = _make_agent_run(db, role)
 
-    other_id = int(target_app.id) + 12345
-    stale = AgentNeedsInput(
-        organization_id=org.id,
-        role_id=role.id,
-        kind="send_assessment_approval",
-        subject_id=other_id,
-        prompt="x",
-        resolved_at=datetime.now(timezone.utc),
-        response={"value": "approve"},
-    )
-    db.add(stale)
-    db.flush()
-
-    with patch(
-        "app.actions.send_assessment.run"
-    ) as mock_run, patch(
-        "app.actions.ask_recruiter.open",
-        return_value=type("_R", (), {"id": 777})(),
-    ) as mock_ask:
-        result = tool_registry.dispatch(
+    with patch("app.actions.send_assessment.run"):
+        first = tool_registry.dispatch(
             "send_assessment",
-            {"application_id": int(target_app.id)},
+            {"application_id": int(app.id)},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+        second = tool_registry.dispatch(
+            "send_assessment",
+            {"application_id": int(app.id)},
             db=db,
             agent_run=run,
             role=role,
         )
 
-    assert not mock_run.called
-    assert mock_ask.called
-    assert result["status"] == "awaiting_recruiter_approval"
-    db.refresh(stale)
-    assert stale.dismissed_at is None
+    assert first["decision_id"] == second["decision_id"]
+    rows = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == role.id,
+            AgentDecision.application_id == app.id,
+            AgentDecision.decision_type == "send_assessment",
+        )
+        .all()
+    )
+    assert len(rows) == 1
+
+
+def test_approve_decision_dispatches_send_assessment(db):
+    """Recruiter approving a send_assessment decision invokes the
+    underlying send_assessment action with the agent's chosen
+    task_id / duration carried via evidence."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.auto_promote = False
+    db.flush()
+    app = _make_application(db, org=org, role=role, name="A", email="a@x.test")
+    user = _make_recruiter(db, org)
+
+    decision = AgentDecision(
+        organization_id=org.id,
+        role_id=role.id,
+        application_id=app.id,
+        agent_run_id=None,
+        decision_type="send_assessment",
+        recommendation="send_assessment",
+        status="pending",
+        reasoning="strong candidate",
+        evidence={"task_id": 7, "duration_minutes": 120},
+        confidence=0.9,
+        model_version="m",
+        prompt_version="p",
+        idempotency_key=f"test:{app.id}:send_assessment",
+    )
+    db.add(decision)
+    db.flush()
+
+    with patch("app.actions.approve_decision.send_assessment.run") as mock_run:
+        approve_decision.run(
+            db,
+            Actor.recruiter(user),
+            organization_id=org.id,
+            decision_id=int(decision.id),
+        )
+        db.flush()
+
+    assert mock_run.called
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs["application_id"] == int(app.id)
+    assert kwargs["task_id"] == 7
+    assert kwargs["duration_minutes"] == 120
+    db.refresh(decision)
+    assert decision.status == "approved"
+
+
+def test_approve_decision_dispatches_resend_assessment_invite(db):
+    """Recruiter approving a resend decision invokes the resend action
+    with the assessment_id stored in evidence."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.auto_promote = False
+    db.flush()
+    app = _make_application(db, org=org, role=role, name="A", email="a@x.test")
+    assessment = _make_assessment(db, org=org, role=role, app=app)
+    user = _make_recruiter(db, org)
+
+    decision = AgentDecision(
+        organization_id=org.id,
+        role_id=role.id,
+        application_id=app.id,
+        agent_run_id=None,
+        decision_type="resend_assessment_invite",
+        recommendation="resend_assessment_invite",
+        status="pending",
+        reasoning="invite expired",
+        evidence={"assessment_id": int(assessment.id)},
+        confidence=0.8,
+        model_version="m",
+        prompt_version="p",
+        idempotency_key=f"test:{app.id}:resend_assessment_invite",
+    )
+    db.add(decision)
+    db.flush()
+
+    with patch("app.actions.approve_decision.resend_assessment_invite.run") as mock_run:
+        approve_decision.run(
+            db,
+            Actor.recruiter(user),
+            organization_id=org.id,
+            decision_id=int(decision.id),
+        )
+        db.flush()
+
+    assert mock_run.called
+    assert mock_run.call_args.kwargs["assessment_id"] == int(assessment.id)
+    db.refresh(decision)
+    assert decision.status == "approved"
 
 
 def test_create_application_dispatch_invokes_action(db):

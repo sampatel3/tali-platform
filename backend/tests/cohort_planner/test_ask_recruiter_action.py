@@ -116,7 +116,7 @@ def test_answer_records_response_and_actor(db):
         agent,
         organization_id=int(org.id),
         role_id=int(role.id),
-        kind="send_assessment_approval",
+        kind="candidate_tie_break",
         prompt="Approve send?",
     )
     rec_actor, rec_user = _recruiter_actor(db, int(org.id))
