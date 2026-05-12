@@ -79,6 +79,13 @@ celery_app.conf.update(
             "task": "app.tasks.decision_policy_tasks.nightly_retune_sweep",
             "schedule": 86400.0,
         },
+        # Watchdog for AgentRun rows stuck in status='running' (worker
+        # crash, deploy restart, OOM mid-cycle). Without this the row
+        # stays "running" forever, hiding real failures in /agent/status.
+        "agent-expire-stuck-runs": {
+            "task": "app.tasks.agent_tasks.agent_expire_stuck_runs",
+            "schedule": 300.0,  # every 5 min — fast enough to surface within one cohort tick
+        },
     },
 )
 

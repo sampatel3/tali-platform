@@ -351,8 +351,31 @@ def run_cycle(
         run.status = "aborted"
         run.error = run.error or "exceeded MAX_TOOL_ROUNDS without agent_run_complete"
 
+    # The for-else above sets "aborted"; tool exception path sets "failed";
+    # complete-tool break leaves status="running" so we promote to
+    # "succeeded" here. Status can still be "budget_paused" from the round
+    # gate — leave that alone.
     if run.status == "running":
-        run.status = "succeeded" if finished_via_complete_tool else "succeeded"
+        run.status = "succeeded" if finished_via_complete_tool else "aborted"
+
+    # Persist the per-cycle decisions_total even when the cycle didn't
+    # call agent_run_complete — otherwise aborted / failed cycles lose
+    # their feedback signal and calibration drifts over time. Only the
+    # complete-tool branch carries observations; on other paths we save
+    # the bare decisions count.
+    if not finished_via_complete_tool:
+        try:
+            calibration.save(
+                db,
+                role=role,
+                updates={"decisions_total": run.decisions_emitted},
+            )
+        except Exception:  # pragma: no cover — calibration save must never break the cycle
+            logger.exception(
+                "calibration.save on non-complete terminal failed role=%s run=%s",
+                role.id,
+                getattr(run, "id", None),
+            )
 
     run.tools_called = [{"name": n, "count": c} for n, c in tools_called_summary.items()]
     run.finished_at = datetime.now(timezone.utc)

@@ -330,3 +330,61 @@ def agent_manual_run(self, role_id: int, application_id: Optional[int] = None) -
             return {"status": "error", "role_id": role_id}
     finally:
         db.close()
+
+
+# Stuck cycles. A worker crash mid-cycle (OOM, deploy restart, dyno reschedule)
+# leaves the AgentRun row in status='running' forever. That hides real
+# failures in /agent/status and prevents the next cohort tick from
+# reasoning about "is this role currently running" correctly. Every 5 min
+# the watchdog scans for runs older than STUCK_RUN_TIMEOUT and marks them
+# failed.
+STUCK_RUN_TIMEOUT_MINUTES = 10
+
+
+@celery_app.task(
+    name="app.tasks.agent_tasks.agent_expire_stuck_runs",
+    bind=True,
+    max_retries=0,
+)
+def agent_expire_stuck_runs(self) -> dict:
+    """Mark agent_runs in status='running' older than the timeout as failed.
+
+    No-op when nothing is stuck. Idempotent — re-running has no effect
+    on rows already moved out of 'running'.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from ..models.agent_run import AgentRun
+    from ..platform.database import SessionLocal
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=STUCK_RUN_TIMEOUT_MINUTES)
+    db = SessionLocal()
+    expired_ids: list[int] = []
+    try:
+        stuck = (
+            db.query(AgentRun)
+            .filter(
+                AgentRun.status == "running",
+                AgentRun.started_at < cutoff,
+            )
+            .all()
+        )
+        now = datetime.now(timezone.utc)
+        for run in stuck:
+            run.status = "failed"
+            run.error = (
+                run.error
+                or f"watchdog: still running after {STUCK_RUN_TIMEOUT_MINUTES}m — worker likely crashed mid-cycle"
+            )
+            run.finished_at = now
+            expired_ids.append(int(run.id))
+        if expired_ids:
+            db.commit()
+            logger.warning("agent_expire_stuck_runs marked %d run(s) failed: %s", len(expired_ids), expired_ids)
+    except Exception:
+        db.rollback()
+        logger.exception("agent_expire_stuck_runs failed")
+        return {"status": "error"}
+    finally:
+        db.close()
+    return {"status": "ok", "expired_count": len(expired_ids), "agent_run_ids": expired_ids}

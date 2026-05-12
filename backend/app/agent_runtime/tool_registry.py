@@ -220,9 +220,11 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                         "empty must_have/preferred slots; monthly_budget_missing "
                         "for null budget; threshold_ambiguous when score_threshold "
                         "is unset and the cohort spread is high; "
-                        "send_assessment_approval for HITL gate; "
                         "candidate_tie_break for advance/reject ambiguity; "
-                        "other as a last resort."
+                        "other as a last resort. Per-candidate HITL gates "
+                        "(approve send/resend) are NOT NeedsInput — they flow "
+                        "through agent_decisions via send_assessment / "
+                        "resend_assessment_invite tools."
                     ),
                 },
                 "prompt": {"type": "string", "description": "1-3 sentence question, recruiter-facing."},
