@@ -124,4 +124,61 @@ def run(
         if existing is not None:
             return existing
         raise
+
+    # Phase 2 §6.7: one consolidated Graphiti episode per decision.
+    # Folds the four sub-agent scores into the decision body so we get
+    # one LLM extraction pass per decision instead of one per score —
+    # keeps Graphiti billing bounded to the decision volume. Failure
+    # is logged and ignored; the Postgres row is the source of truth.
+    _emit_decision_episode_safe(db, decision=decision)
     return decision
+
+
+def _emit_decision_episode_safe(db: Session, *, decision: AgentDecision) -> None:
+    """Best-effort consolidated decision episode emit. Never raises.
+
+    Looks up candidate + role context inline so the orchestrator caller
+    doesn't have to thread them through.
+    """
+    try:
+        from ..candidate_graph import agent_episodes
+        from ..models.candidate import Candidate
+        from ..models.candidate_application import CandidateApplication
+
+        app = (
+            db.query(CandidateApplication)
+            .filter(CandidateApplication.id == decision.application_id)
+            .one_or_none()
+        )
+        if app is None:
+            return
+        candidate = (
+            db.query(Candidate).filter(Candidate.id == app.candidate_id).one_or_none()
+        )
+        full_name = candidate.full_name if candidate is not None else None
+        candidate_id = int(candidate.id) if candidate is not None else int(app.candidate_id)
+        agent_episodes.emit_decision_event(
+            organization_id=int(decision.organization_id),
+            candidate_full_name=full_name,
+            candidate_taali_id=candidate_id,
+            application_id=int(decision.application_id),
+            role_id=int(decision.role_id),
+            decision_id=int(decision.id),
+            recommended_action=str(decision.recommendation),
+            confidence=float(decision.confidence or 0.0),
+            policy_revision_id=None,
+            reasoning=str(decision.reasoning or ""),
+            created_at=decision.created_at or _now(),
+        )
+    except Exception:
+        import logging
+        logging.getLogger("taali.actions.queue_decision").warning(
+            "decision episode emit failed for decision_id=%s",
+            getattr(decision, "id", None),
+            exc_info=False,
+        )
+
+
+def _now():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc)

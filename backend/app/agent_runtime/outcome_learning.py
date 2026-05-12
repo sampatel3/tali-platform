@@ -76,14 +76,76 @@ def _append_outcome(
     application_id: int,
 ) -> None:
     """Append one outcome entry to role.agent_calibration["outcomes"]."""
+    now = datetime.now(timezone.utc)
     entry = {
         "decision_type": str(decision.decision_type),
         "decision_id": int(decision.id),
         "outcome": str(outcome),
-        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "observed_at": now.isoformat(),
         "application_id": int(application_id),
     }
     calibration_mod.save(db, role=role, updates={"outcomes": [entry]})
+
+    # Phase 2 §6.7: emit a HiringOutcome episode (irreplaceable training
+    # signal, low volume — one per realised outcome).
+    _emit_outcome_episode_safe(
+        db, decision=decision, application_id=application_id, outcome=outcome, observed_at=now,
+    )
+
+
+def _emit_outcome_episode_safe(
+    db: Session,
+    *,
+    decision: AgentDecision,
+    application_id: int,
+    outcome: str,
+    observed_at: datetime,
+) -> None:
+    """Best-effort HiringOutcome episode emit. Never raises.
+
+    Maps the v1 outcome vocabulary
+    (``hired`` / ``interviewed`` / ``rejected_confirmed``) to the v2
+    outcome_type values defined in
+    ``app.agent_runtime.contracts.HiringOutcome``.
+    """
+    try:
+        from ..candidate_graph import agent_episodes
+        from ..models.candidate import Candidate
+        outcome_type_map = {
+            "hired": "hired",
+            "interviewed": "reached_interview",
+            "rejected_confirmed": "rejected_late",
+        }
+        outcome_type = outcome_type_map.get(outcome, outcome)
+        app = (
+            db.query(CandidateApplication)
+            .filter(CandidateApplication.id == application_id)
+            .one_or_none()
+        )
+        if app is None:
+            return
+        candidate = (
+            db.query(Candidate).filter(Candidate.id == app.candidate_id).one_or_none()
+        )
+        full_name = candidate.full_name if candidate is not None else None
+        candidate_id = (
+            int(candidate.id) if candidate is not None else int(app.candidate_id)
+        )
+        agent_episodes.emit_hiring_outcome_event(
+            organization_id=int(decision.organization_id),
+            candidate_full_name=full_name,
+            candidate_taali_id=candidate_id,
+            decision_id=int(decision.id),
+            outcome_type=outcome_type,
+            quality_signal=None,
+            observed_at=observed_at,
+        )
+    except Exception:
+        logger.warning(
+            "outcome episode emit failed for decision_id=%s outcome=%s",
+            getattr(decision, "id", None),
+            outcome,
+        )
 
 
 def record_advance_outcome_on_stage(
