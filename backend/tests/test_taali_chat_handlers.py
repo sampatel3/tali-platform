@@ -135,6 +135,75 @@ def test_nl_search_candidates_rejects_empty_query(db):
 
 
 # ---------------------------------------------------------------------------
+# _graph_topology — referential-integrity guard
+# ---------------------------------------------------------------------------
+
+
+def _node(node_id: str, *, label: str = "Person", name: str | None = None) -> dict:
+    return {
+        "id": node_id,
+        "label": label,
+        "name": name or node_id,
+        "extra": {},
+    }
+
+
+def _edge(source: str, target: str, *, label: str = "WORKED_AT", fact: str = "") -> dict:
+    return {
+        "source": source,
+        "target": target,
+        "label": label,
+        "extra": {"fact": fact} if fact else {},
+    }
+
+
+def test_graph_topology_drops_edges_with_unknown_endpoints():
+    # Production crash: when payload had >60 nodes, the previous slicing
+    # let through edges referencing dropped nodes — cytoscape throws
+    # synchronously on dangling endpoints and the React error boundary
+    # caught it as "Something went wrong".
+    payload = GraphPayload(
+        nodes=[_node("a"), _node("b"), _node("c")],
+        edges=[
+            _edge("a", "b"),                 # both endpoints kept → keep
+            _edge("a", "ghost"),             # target not in nodes → drop
+            _edge("ghost-2", "c"),           # source not in nodes → drop
+        ],
+    )
+    out = handlers._graph_topology(payload)
+    edge_pairs = {(e["source"], e["target"]) for e in out["edges"]}
+    assert edge_pairs == {("a", "b")}
+    # The kept node ids must cover every kept edge endpoint.
+    kept_node_ids = {n["id"] for n in out["nodes"]}
+    for edge in out["edges"]:
+        assert edge["source"] in kept_node_ids
+        assert edge["target"] in kept_node_ids
+
+
+def test_graph_topology_caps_at_60_nodes_but_preserves_edge_endpoints():
+    # Build 80 nodes + 100 edges. Edges reference nodes scattered across
+    # the full 80, including some past index 60. The kept nodes must
+    # cover every kept edge endpoint, AND the cap of 60 nodes /
+    # 100 edges must hold.
+    nodes = [_node(f"n-{i}") for i in range(80)]
+    # Edges 0..49 reference low-index nodes; edges 50..99 reference
+    # high-index nodes (which would be dropped by naive slicing).
+    edges = (
+        [_edge(f"n-{i}", f"n-{(i + 1) % 50}") for i in range(50)]
+        + [_edge(f"n-{60 + (i % 20)}", f"n-{60 + ((i + 1) % 20)}") for i in range(50)]
+    )
+    payload = GraphPayload(nodes=nodes, edges=edges)
+    out = handlers._graph_topology(payload)
+    assert len(out["nodes"]) <= 60
+    assert len(out["edges"]) <= 100
+    kept_ids = {n["id"] for n in out["nodes"]}
+    for edge in out["edges"]:
+        assert edge["source"] in kept_ids and edge["target"] in kept_ids, (
+            f"edge {edge} references a node not in the kept set"
+        )
+
+
+# ---------------------------------------------------------------------------
 # graph_search_candidates
 # ---------------------------------------------------------------------------
 
@@ -177,6 +246,14 @@ def test_graph_search_returns_candidates_from_graph(db):
                 "label": "Person",
                 "name": "External",
                 "extra": {"taali_id": "999999"},
+            },
+            # Edge endpoint must exist in the node list — _graph_topology
+            # drops dangling edges to keep cytoscape from crashing.
+            {
+                "id": "company-1",
+                "label": "Company",
+                "name": "Stripe",
+                "extra": {},
             },
         ],
         edges=[

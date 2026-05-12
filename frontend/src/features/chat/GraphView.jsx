@@ -22,14 +22,20 @@ const NODE_COLOR = {
 const buildElements = (graph) => {
   const elements = [];
   if (!graph) return elements;
+  const nodeIds = new Set();
   for (const n of graph.nodes || []) {
+    nodeIds.add(n.id);
     elements.push({
       data: { id: n.id, label: n.name || n.label, kind: n.label },
     });
   }
   // Use a stable id for every edge so cytoscape doesn't drop dupes.
+  // Skip edges whose source/target isn't in the kept node set —
+  // cytoscape throws synchronously on dangling endpoints, which would
+  // bubble up to the React error boundary.
   const seen = new Set();
   for (const e of graph.edges || []) {
+    if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
     const key = `${e.source}->${e.target}|${e.label}`;
     if (seen.has(key)) continue;
     seen.add(key);
