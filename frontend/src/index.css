@@ -9176,7 +9176,10 @@ button.eng-badge-button:focus-visible {
      wrap without getting clipped by overflow: hidden. */
   min-height: 320px;
   display: flex;
-  align-items: center;
+  /* Anchor inner content to the top so the title sits at the same y position
+     on every page, with or without a right-side agent panel. (Centering left
+     short title blocks ~50px lower than pages with a tall panel.) */
+  align-items: flex-start;
   /* Quiet base — the bright running gradient fades in on top via the
      .ah-bright-overlay layer so OFF→ON cross-fades cleanly. */
   background: var(--grad-dark-vert);
