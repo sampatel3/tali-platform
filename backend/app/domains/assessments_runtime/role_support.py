@@ -765,6 +765,7 @@ def application_to_response(
         candidate_email=(candidate.email if candidate else ""),
         candidate_name=(candidate.full_name if candidate else None),
         candidate_position=(candidate.position if candidate else None),
+        role_name=(getattr(app.role, "name", None) if getattr(app, "role", None) else None),
         cv_filename=app.cv_filename or (candidate.cv_filename if candidate else None),
         cv_uploaded_at=app.cv_uploaded_at or (candidate.cv_uploaded_at if candidate else None),
         cv_match_score=cv_match_score,
