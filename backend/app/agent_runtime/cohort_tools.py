@@ -21,6 +21,7 @@ from typing import Any
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
+from ..models.agent_decision import AgentDecision
 from ..models.agent_needs_input import AgentNeedsInput
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
@@ -154,12 +155,35 @@ def find_apps_in_state(
     Used by the orchestrator after ``survey_role_state`` tells it
     where the work is — e.g. "47 apps need_pre_screen, give me the
     first 25".
+
+    For triage states (``ready_for_assessment_decision`` /
+    ``ready_for_advance_decision``), applications that already have a
+    pending AgentDecision are excluded — otherwise the agent re-picks
+    the same top candidate every cycle, hits the dedup branch in
+    _tool_send_assessment, and never advances down the list. Triage
+    states also sort by cv_match_score so high-signal candidates land
+    at the top regardless of insertion order.
     """
     if state not in COHORT_STATES:
         return []
     q = _state_query(db, organization_id=organization_id, role_id=role_id, state=state)
     if q is None:
         return []
+    if state in ("ready_for_assessment_decision", "ready_for_advance_decision"):
+        pending_subq = (
+            db.query(AgentDecision.application_id)
+            .filter(
+                AgentDecision.organization_id == organization_id,
+                AgentDecision.role_id == role_id,
+                AgentDecision.status == "pending",
+            )
+            .subquery()
+        )
+        q = q.filter(~CandidateApplication.id.in_(pending_subq))
+    if state == "ready_for_assessment_decision":
+        q = q.order_by(CandidateApplication.cv_match_score.desc().nullslast())
+    elif state == "ready_for_advance_decision":
+        q = q.order_by(CandidateApplication.assessment_score_cache_100.desc().nullslast())
     rows = q.with_entities(CandidateApplication.id).limit(int(limit)).all()
     return [int(r[0]) for r in rows]
 
