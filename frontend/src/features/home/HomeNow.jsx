@@ -30,6 +30,7 @@ import {
 } from './atoms';
 import { TeachModal } from './TeachModal';
 import { ActivityFeed } from './ActivityFeed';
+import AgentNeedsInputCard from '../jobs/AgentNeedsInputCard';
 
 const STATUS_TABS = [
   { id: 'pending', label: 'Pending' },
@@ -483,6 +484,13 @@ export const HomeNow = ({
       </div>
 
       <Toolbar filters={filters} setFilters={setFilters} roles={rolesBreakdown} bulkAction={bulkActionEl} />
+
+      {/* Open orchestrator questions across the org (or scoped to the
+          toolbar's role filter when set). Hides itself when the queue
+          is empty so a clean state renders nothing. Centralised here so
+          recruiters answer everything from one place rather than having
+          to bounce into each role page. */}
+      <AgentNeedsInputCard roleId={filters.role_id || undefined} />
 
       <div className="rq-hybrid-grid">
         <PendingSidebar
