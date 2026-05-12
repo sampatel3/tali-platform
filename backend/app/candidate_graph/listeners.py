@@ -51,6 +51,11 @@ def _sync_candidate_async(candidate_id: int) -> None:
             )
             if candidate is None:
                 return
+            # Cost gate: only sync candidates the recruiter or Tali has
+            # advanced past initial screening. Rejected / not-yet-advanced
+            # candidates are skipped to keep Graphiti extraction bounded.
+            if not sync_module.should_sync_candidate_to_graph(candidate, db):
+                return
             sync_module.sync_candidate(candidate, db=db)
         finally:
             db.close()
@@ -117,6 +122,7 @@ def register_listeners() -> None:
             return
 
         from ..models.candidate import Candidate
+        from ..models.candidate_application import CandidateApplication
         from ..models.application_interview import ApplicationInterview
         from ..models.candidate_application_event import CandidateApplicationEvent
 
@@ -155,7 +161,32 @@ def register_listeners() -> None:
             except Exception:
                 logger.exception("event after_insert listener crashed (suppressed)")
 
+        @event.listens_for(CandidateApplication, "after_update")
+        def _application_after_update(mapper, connection, target):  # noqa: ARG001
+            """Trigger a candidate sync when an application transitions into
+            a graph-worthy state. Without this hook, a candidate who was
+            below the cost gate at insert time but later gets advanced
+            (by Tali OR by Workable hand-back) would never reach Graphiti.
+
+            The _sync_candidate_async itself re-checks the gate, so this
+            listener stays cheap when the transition isn't graph-worthy.
+            """
+            try:
+                cand_id = getattr(target, "candidate_id", None)
+                if cand_id is None:
+                    return
+                _spawn(
+                    _sync_candidate_async,
+                    f"graphiti-candidate-{cand_id}-via-app-{target.id}",
+                    int(cand_id),
+                )
+            except Exception:
+                logger.exception(
+                    "application after_update listener crashed (suppressed)"
+                )
+
         _registered = True
         logger.info(
-            "Graphiti listeners registered (Candidate + ApplicationInterview + CandidateApplicationEvent)"
+            "Graphiti listeners registered "
+            "(Candidate + CandidateApplication + ApplicationInterview + Event)"
         )

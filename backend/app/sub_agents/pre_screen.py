@@ -44,6 +44,20 @@ def _resolve_jd_text(role: Role) -> str:
     )
 
 
+def _augment_with_overlays(jd_text: str, req: SubAgentRequest) -> str:
+    """Append RoleIntent + exemplar overlays from req.extra so recruiter
+    feedback (teach/override events) and recruiter-authored intent reach
+    the prompt. Empty overlays are no-ops."""
+    parts: list[str] = [jd_text]
+    intent = req.extra.get("role_intent") if req.extra else None
+    if intent:
+        parts.append("\n\nRECRUITER INTENT FOR THIS ROLE:\n" + str(intent))
+    exemplars = req.extra.get("exemplars_text") if req.extra else None
+    if exemplars:
+        parts.append("\n\n" + str(exemplars))
+    return "".join(parts)
+
+
 def _build_db(injected: Session | None) -> tuple[Session, bool]:
     """Tests pass an injected session; production opens its own.
     Returns (session, owns_session) so we know whether to close.
@@ -125,6 +139,12 @@ class PreScreenSubAgent:
                 ok=False,
                 error="missing cv_text or jd_text",
             )
+
+        # Append recruiter overlays (RoleIntent + past teach exemplars)
+        # to the JD so the runner sees them. Empty overlays are no-ops.
+        # Cache key includes the augmented text — recruiter feedback
+        # naturally invalidates stale scores.
+        jd_text = _augment_with_overlays(jd_text, req)
 
         # The runner is internally cached (compute_pre_screen_cache_key)
         # so calling here is cheap on a hit. ``skip_cache=True``

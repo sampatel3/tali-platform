@@ -28,6 +28,51 @@ from . import episodes as episode_module
 logger = logging.getLogger("taali.candidate_graph.sync")
 
 
+# Workable stages that mean the candidate is past handover — the recruiter
+# has already advanced them. Mirrors POST_HANDOVER_WORKABLE_STAGES in
+# pipeline_service; redeclared here so candidate_graph has no dependency
+# on the assessments_runtime domain.
+_POST_HANDOVER_WORKABLE_STAGES = frozenset({
+    "phone_screen", "phone_interview",
+    "interview", "technical_interview", "final_interview", "onsite",
+    "assessment",
+    "offer", "offer_extended", "offer_accepted",
+    "hired",
+})
+
+
+def should_sync_candidate_to_graph(candidate: Candidate, db: Session) -> bool:
+    """Cost gate for the listener-driven Graphiti sync.
+
+    Returns True only when the candidate has at least one application
+    worth indexing into the graph: either Tali has promoted them past
+    initial screening (``pipeline_stage`` in ``in_assessment`` /
+    ``advanced``) OR the recruiter has moved them past handover in
+    Workable (``workable_stage`` in the post-handover set).
+
+    Rejected and not-yet-advanced candidates are skipped to keep
+    Graphiti extraction costs bounded. The backfill CLI bypasses this
+    gate by calling ``sync_candidate`` directly.
+    """
+    if candidate.id is None:
+        return False
+    rows = (
+        db.query(CandidateApplication.pipeline_stage,
+                 CandidateApplication.workable_stage)
+        .filter(CandidateApplication.candidate_id == candidate.id)
+        .filter(CandidateApplication.deleted_at.is_(None))
+        .all()
+    )
+    for pipeline_stage, workable_stage in rows:
+        ps = (pipeline_stage or "").strip().lower()
+        if ps in ("in_assessment", "advanced"):
+            return True
+        ws = (workable_stage or "").strip().lower()
+        if ws in _POST_HANDOVER_WORKABLE_STAGES:
+            return True
+    return False
+
+
 def sync_candidate(
     candidate: Candidate,
     *,

@@ -121,6 +121,17 @@ class CvScoringSubAgent:
                 error="missing cv_text or jd_text",
             )
 
+        # Append recruiter overlays (RoleIntent + past teach exemplars)
+        # from req.extra so the runner sees them. Empty overlays are
+        # no-ops. Cache key includes the augmented text — recruiter
+        # feedback naturally invalidates stale scores.
+        intent = req.extra.get("role_intent") if req.extra else None
+        exemplars = req.extra.get("exemplars_text") if req.extra else None
+        if intent:
+            jd_text = f"{jd_text}\n\nRECRUITER INTENT FOR THIS ROLE:\n{intent}"
+        if exemplars:
+            jd_text = f"{jd_text}\n\n{exemplars}"
+
         result = run_cv_match(
             cv_text,
             jd_text,
