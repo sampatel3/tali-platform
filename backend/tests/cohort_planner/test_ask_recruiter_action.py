@@ -60,12 +60,15 @@ def test_open_creates_a_row_for_known_kind(db):
 def test_open_is_idempotent_on_role_kind(db):
     org, role, _, _ = make_world(db)
     actor = _agent_actor(db, role)
+    # Use kind='other' so the canonical-prompt override doesn't kick in —
+    # this test is specifically about idempotency on (role_id, kind) and
+    # the agent-supplied prompt being applied when a row already exists.
     a = ask_recruiter.open(
         db,
         actor,
         organization_id=int(org.id),
         role_id=int(role.id),
-        kind="intent_slot_missing",
+        kind="other",
         prompt="First framing",
     )
     b = ask_recruiter.open(
@@ -73,7 +76,7 @@ def test_open_is_idempotent_on_role_kind(db):
         actor,
         organization_id=int(org.id),
         role_id=int(role.id),
-        kind="intent_slot_missing",
+        kind="other",
         prompt="Refined framing",
     )
     assert a.id == b.id  # same row

@@ -34,6 +34,7 @@ class NeedsInputView(BaseModel):
 
     id: int
     role_id: int
+    role_name: str | None = None
     kind: str
     prompt: str
     options: list[dict[str, Any]] | None = None
@@ -56,6 +57,7 @@ class NeedsInputView(BaseModel):
         return cls(
             id=int(row.id),
             role_id=int(row.role_id),
+            role_name=row.role.name if row.role is not None else None,
             kind=row.kind,
             prompt=row.prompt,
             options=row.options,

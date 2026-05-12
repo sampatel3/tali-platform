@@ -3135,6 +3135,27 @@ html[data-theme="dark"] {
   line-height: 1.5;
 }
 
+.agent-needs-input-role {
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mute);
+  margin-bottom: 6px;
+}
+
+.agent-needs-input-role a {
+  color: var(--purple);
+  text-decoration: none;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.agent-needs-input-role a:hover {
+  text-decoration: underline;
+}
+
 .agent-needs-input-rationale {
   margin-top: 4px !important;
   color: var(--mute) !important;

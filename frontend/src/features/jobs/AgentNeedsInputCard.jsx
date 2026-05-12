@@ -91,6 +91,22 @@ export default function AgentNeedsInputCard({ roleId }) {
         {rows.map((row) => (
           <li key={row.id} className={`agent-needs-input-row kind-${row.kind}`}>
             <div className="agent-needs-input-prompt">
+              {/* Org-wide card on Home: show the role this question belongs
+                  to so the recruiter has context. Hidden when scoped to one
+                  role (job page) — the role is implicit there. */}
+              {!roleId && row.role_name ? (
+                <div className="agent-needs-input-role">
+                  Role:{' '}
+                  <a
+                    href={`/jobs/${row.role_id}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                    }}
+                  >
+                    {row.role_name}
+                  </a>
+                </div>
+              ) : null}
               <p>{row.prompt}</p>
               {row.rationale ? (
                 <p className="agent-needs-input-rationale">{row.rationale}</p>

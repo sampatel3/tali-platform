@@ -82,6 +82,19 @@ def open(
             detail=f"role {role_id} not found in org {organization_id}",
         )
 
+    # Override the agent's free-text prompt with a canonical plain-English
+    # version for the standard config-gap kinds. The agent's wording tends
+    # to leak schema terms ("score_threshold", "CV-match", "triage"); the
+    # recruiter sees a consistent, concrete question with a suggested value
+    # baked in so they don't have to invent one from scratch.
+    canonical = _canonical_for_kind(db, role=role, kind=kind)
+    if canonical is not None:
+        prompt = canonical["prompt"]
+        if canonical.get("rationale") and not (rationale or "").strip():
+            rationale = canonical["rationale"]
+        if canonical.get("options") and not options:
+            options = canonical["options"]
+
     subject_filter = (
         AgentNeedsInput.subject_id == subject_id
         if subject_id is not None
@@ -129,6 +142,63 @@ def open(
     db.add(row)
     db.flush()
     return row
+
+
+def _canonical_for_kind(
+    db: Session, *, role: Role, kind: str
+) -> Optional[dict[str, Any]]:
+    """Plain-English overrides for the standard role-config-gap kinds.
+
+    The agent's free-text prompts tend to surface schema vocabulary
+    ("score_threshold", "CV-match", "triage") that's noise to a
+    recruiter. For known kinds we render a fixed prompt with the role
+    name + concrete numbers so the question is consistent and
+    actionable. Returns None for kinds we don't templatise (the agent's
+    own wording wins).
+    """
+    if kind == "threshold_ambiguous":
+        # Run the existing cohort-based recommender so the question
+        # leads with a concrete proposal instead of asking the recruiter
+        # to pick a number from nothing.
+        from ..services.auto_threshold_service import compute_recommended_threshold
+
+        rec = compute_recommended_threshold(db, role=role)
+        prompt = (
+            f"For '{role.name}', I'd like to use **{rec.value}** as the score "
+            f"bar for advancing candidates. Tap Use {rec.value} to accept, or "
+            f"send a different number to override."
+        )
+        rationale_bits = [rec.rationale]
+        if rec.sample_size > 0:
+            rationale_bits.append(f"(based on {rec.sample_size} candidate signal{'s' if rec.sample_size != 1 else ''})")
+        return {
+            "prompt": prompt,
+            "rationale": " ".join(rationale_bits),
+            "options": [{"value": str(rec.value), "label": f"Use {rec.value}"}],
+        }
+    if kind == "monthly_budget_missing":
+        return {
+            "prompt": (
+                f"What's the monthly spending cap for '{role.name}'? This "
+                f"covers scoring, pre-screening, and assessment invites for "
+                f"the role. Most technical roles run $50–$100 per month."
+            ),
+            "rationale": "I can't run cycles on this role until there's a cap.",
+        }
+    if kind == "intent_slot_missing":
+        return {
+            "prompt": (
+                f"What are the must-have requirements for '{role.name}'? "
+                f"List the things a candidate has to have for you to consider "
+                f"them — e.g. specific skills, years of experience, "
+                f"certifications, location constraints."
+            ),
+            "rationale": (
+                "Without must-haves I can only triage on score. Capturing "
+                "them lets me reject candidates who clearly don't fit."
+            ),
+        }
+    return None
 
 
 def answer(
