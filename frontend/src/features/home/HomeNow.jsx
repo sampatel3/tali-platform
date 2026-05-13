@@ -7,6 +7,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  ArrowRight,
   Brain,
   Check,
   ExternalLink,
@@ -14,7 +15,9 @@ import {
   FileText,
   Inbox,
   ListChecks,
+  Repeat,
   Search,
+  Send,
   X,
 } from 'lucide-react';
 
@@ -29,8 +32,154 @@ import {
   TypeBadge,
 } from './atoms';
 import { TeachModal } from './TeachModal';
+import { OverrideModal } from './OverrideModal';
 import { ActivityFeed } from './ActivityFeed';
 import AgentNeedsInputCard from '../jobs/AgentNeedsInputCard';
+
+
+// Type-aware action set. Each decision_type maps to:
+//   - primary: the agent's recommendation, fires immediately on click
+//     (no confirmation modal).
+//   - alternatives: destructive alternative actions the recruiter can
+//     pick. Each opens OverrideModal with required "why" textarea, then
+//     dispatches via /agent-decisions/{id}/override with the action id.
+//
+// Plus the two universals — Send back & teach (TeachModal) and Snooze
+// 1h (immediate, no modal) — rendered after the type-specific buttons.
+const DECISION_ACTIONS = {
+  send_assessment: {
+    primaryLabel: 'Send assessment',
+    primaryIcon: Send,
+    alternatives: [
+      {
+        action: 'reject',
+        label: 'Reject',
+        icon: X,
+        kicker: 'REJECT CANDIDATE',
+        headline: 'Reject {name}?',
+        body: 'This will disqualify them in Workable and send the rejection email. Cannot be undone from this screen.',
+        confirmLabel: 'Reject',
+        confirmClass: 'rq-override',
+        placeholder: 'e.g. Missing AWS Glue experience confirmed by the recruiter screen',
+      },
+      {
+        action: 'skip_assessment_advance',
+        label: 'Skip & advance',
+        icon: ArrowRight,
+        kicker: 'SKIP ASSESSMENT',
+        headline: 'Skip the assessment and advance {name}?',
+        body: 'Moves them to the next Workable stage without sending the assessment email.',
+        confirmLabel: 'Advance',
+        confirmClass: 'rq-approve',
+        placeholder: 'e.g. Internal referral — pre-vetted, no need for an assessment',
+      },
+    ],
+  },
+  advance_to_interview: {
+    primaryLabel: 'Advance to next stage',
+    primaryIcon: ArrowRight,
+    alternatives: [
+      {
+        action: 'reject',
+        label: 'Reject',
+        icon: X,
+        kicker: 'REJECT CANDIDATE',
+        headline: 'Reject {name}?',
+        body: 'This will disqualify them in Workable and send the rejection email.',
+        confirmLabel: 'Reject',
+        confirmClass: 'rq-override',
+      },
+    ],
+  },
+  reject: {
+    primaryLabel: 'Reject',
+    primaryIcon: X,
+    primaryClass: 'rq-override',
+    alternatives: [
+      {
+        action: 'send_assessment',
+        label: 'Send assessment',
+        icon: Send,
+        kicker: 'OVERRIDE TO SEND',
+        headline: 'Send the assessment to {name} instead?',
+        body: "Dispatches the assessment invite. The agent will recalibrate based on your reason.",
+        confirmLabel: 'Send assessment',
+        confirmClass: 'rq-approve',
+      },
+      {
+        action: 'advance',
+        label: 'Advance instead',
+        icon: ArrowRight,
+        kicker: 'OVERRIDE TO ADVANCE',
+        headline: 'Advance {name} instead?',
+        body: "Moves them to the next Workable stage without sending the rejection email.",
+        confirmLabel: 'Advance',
+        confirmClass: 'rq-approve',
+      },
+    ],
+  },
+  skip_assessment_reject: {
+    primaryLabel: 'Reject',
+    primaryIcon: X,
+    primaryClass: 'rq-override',
+    alternatives: [
+      {
+        action: 'send_assessment',
+        label: 'Send assessment anyway',
+        icon: Send,
+        kicker: 'OVERRIDE TO SEND',
+        headline: 'Send the assessment to {name} anyway?',
+        body: "The agent thought this was a pre-screen skip. You disagree — assessment dispatches.",
+        confirmLabel: 'Send assessment',
+        confirmClass: 'rq-approve',
+      },
+      {
+        action: 'advance',
+        label: 'Advance',
+        icon: ArrowRight,
+        kicker: 'OVERRIDE TO ADVANCE',
+        headline: 'Advance {name} instead?',
+        body: 'Moves them to the next Workable stage without sending the rejection email.',
+        confirmLabel: 'Advance',
+        confirmClass: 'rq-approve',
+      },
+    ],
+  },
+  resend_assessment_invite: {
+    primaryLabel: 'Resend invite',
+    primaryIcon: Repeat,
+    alternatives: [
+      {
+        action: 'reject',
+        label: 'Reject',
+        icon: X,
+        kicker: 'REJECT CANDIDATE',
+        headline: 'Reject {name}?',
+        body: 'This will disqualify them in Workable and send the rejection email.',
+        confirmLabel: 'Reject',
+        confirmClass: 'rq-override',
+      },
+      {
+        action: 'skip_assessment_advance',
+        label: 'Skip & advance',
+        icon: ArrowRight,
+        kicker: 'SKIP ASSESSMENT',
+        headline: 'Skip the assessment and advance {name}?',
+        body: 'Moves them to the next Workable stage without resending the invite.',
+        confirmLabel: 'Advance',
+        confirmClass: 'rq-approve',
+      },
+    ],
+  },
+};
+
+// Fallback for any decision_type not mapped above (e.g. legacy or
+// escalate_low_confidence). Single generic Approve + the universals.
+const DEFAULT_ACTIONS = {
+  primaryLabel: 'Approve',
+  primaryIcon: Check,
+  alternatives: [],
+};
 
 const STATUS_TABS = [
   { id: 'pending', label: 'Pending' },
@@ -177,7 +326,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
   </aside>
 );
 
-const DecisionDetail = ({ decision, onApprove, onOverride, onTeach, onSnooze, onNavigate, busy }) => {
+const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze, onNavigate, busy }) => {
   if (!decision) {
     return (
       <section className="rq-hybrid-detail">
@@ -291,25 +440,48 @@ const DecisionDetail = ({ decision, onApprove, onOverride, onTeach, onSnooze, on
       ) : null}
 
       {decision.status === 'pending' || decision.status === 'reverted_for_feedback' ? (
-        <div className="rq-action-bar">
-          <div className="rq-action-l">
-            <button type="button" className="rq-btn rq-approve" onClick={() => onApprove(decision)} disabled={busy}>
-              <Check size={14} strokeWidth={2.4} aria-hidden="true" />
-              Approve
-            </button>
-            <button type="button" className="rq-btn rq-override" onClick={() => onOverride(decision)} disabled={busy}>
-              <X size={14} strokeWidth={2} aria-hidden="true" />
-              Override
-            </button>
-            <button type="button" className="rq-btn rq-teach" onClick={() => onTeach(decision)} disabled={busy}>
-              <Brain size={14} strokeWidth={2} aria-hidden="true" />
-              Send back &amp; teach
-            </button>
-          </div>
-          <button type="button" className="rq-btn rq-defer" onClick={() => onSnooze(decision)} disabled={busy}>
-            Snooze 1h
-          </button>
-        </div>
+        (() => {
+          const spec = DECISION_ACTIONS[decision.decision_type] || DEFAULT_ACTIONS;
+          const PrimaryIcon = spec.primaryIcon || Check;
+          return (
+            <div className="rq-action-bar">
+              <div className="rq-action-l">
+                <button
+                  type="button"
+                  className={`rq-btn ${spec.primaryClass || 'rq-approve'}`}
+                  onClick={() => onApprove(decision)}
+                  disabled={busy}
+                >
+                  <PrimaryIcon size={14} strokeWidth={2.4} aria-hidden="true" />
+                  {spec.primaryLabel}
+                </button>
+                {(spec.alternatives || []).map((alt) => {
+                  const AltIcon = alt.icon || X;
+                  return (
+                    <button
+                      key={alt.action}
+                      type="button"
+                      className="rq-btn rq-override"
+                      onClick={() => onAlternative(decision, alt)}
+                      disabled={busy}
+                      title={alt.body}
+                    >
+                      <AltIcon size={14} strokeWidth={2} aria-hidden="true" />
+                      {alt.label}
+                    </button>
+                  );
+                })}
+                <button type="button" className="rq-btn rq-teach" onClick={() => onTeach(decision)} disabled={busy}>
+                  <Brain size={14} strokeWidth={2} aria-hidden="true" />
+                  Send back &amp; teach
+                </button>
+              </div>
+              <button type="button" className="rq-btn rq-defer" onClick={() => onSnooze(decision)} disabled={busy}>
+                Snooze 1h
+              </button>
+            </div>
+          );
+        })()
       ) : (
         <div className="home-empty" style={{ marginTop: 12 }}>
           {decision.status === 'approved' ? 'Approved — actions are read-only.'
@@ -337,6 +509,9 @@ export const HomeNow = ({
   const { showToast } = useToast() || { showToast: () => {} };
   const [busyId, setBusyId] = useState(null);
   const [teachFor, setTeachFor] = useState(null);
+  // Alternative-action confirmation modal target. When set, OverrideModal
+  // is rendered with the decision + the chosen alternative spec.
+  const [alternativeFor, setAlternativeFor] = useState(null);
 
   const selected = useMemo(
     () => decisions.find((d) => d.id === selectedId) || pendingOrdered[0] || null,
@@ -356,17 +531,11 @@ export const HomeNow = ({
     }
   };
 
-  const handleOverride = async (decision) => {
-    setBusyId(decision.id);
-    try {
-      await agentApi.overrideDecision(decision.id, {});
-      showToast?.('Overridden.', 'success');
-      await reload?.();
-    } catch (err) {
-      showToast?.(err?.response?.data?.detail || 'Override failed', 'error');
-    } finally {
-      setBusyId(null);
-    }
+  // Open OverrideModal for the chosen alternative. The actual POST
+  // happens inside the modal so the recruiter has to fill in the
+  // required "why" textarea before submitting.
+  const handleAlternative = (decision, alternative) => {
+    setAlternativeFor({ decision, alternative });
   };
 
   const handleSnooze = async (decision) => {
@@ -505,7 +674,7 @@ export const HomeNow = ({
             decision={selected}
             busy={busyId === selected?.id}
             onApprove={handleApprove}
-            onOverride={handleOverride}
+            onAlternative={handleAlternative}
             onSnooze={handleSnooze}
             onTeach={(d) => setTeachFor(d)}
             onNavigate={onNavigate}
@@ -526,6 +695,21 @@ export const HomeNow = ({
           onClose={() => setTeachFor(null)}
           onSubmitted={async () => {
             showToast?.('Feedback recorded. Decision returned to the queue.', 'success');
+            await reload?.();
+          }}
+        />
+      ) : null}
+
+      {alternativeFor ? (
+        <OverrideModal
+          decision={alternativeFor.decision}
+          alternative={alternativeFor.alternative}
+          onClose={() => setAlternativeFor(null)}
+          onSubmitted={async () => {
+            showToast?.(
+              `${alternativeFor.alternative.confirmLabel || 'Override'} dispatched.`,
+              'success',
+            );
             await reload?.();
           }}
         />
