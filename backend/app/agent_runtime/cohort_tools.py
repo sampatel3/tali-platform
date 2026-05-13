@@ -156,7 +156,10 @@ def _role_intent_shape(role: Role) -> dict[str, Any]:
     whether captured intent is rich enough to triage."""
     from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 
-    by_bucket: dict[str, list[str]] = {"must": [], "preferred": [], "constraints": []}
+    # Canonical bucket literals are singular ("constraint") per
+    # role_criterion model. Earlier I used "constraints" (plural) here
+    # which silently dropped every constraint chip (Codex #190).
+    by_bucket: dict[str, list[str]] = {"must": [], "preferred": [], "constraint": []}
     for c in role.criteria or []:
         if c.deleted_at is not None:
             continue
@@ -171,13 +174,12 @@ def _role_intent_shape(role: Role) -> dict[str, Any]:
     return {
         "must_count": len(by_bucket["must"]),
         "preferred_count": len(by_bucket["preferred"]),
-        "constraints_count": len(by_bucket["constraints"]),
-        # Send up to 5 examples per bucket — enough for the agent to
-        # see what dimensions are covered without bloating the survey
-        # payload on roles with hundreds of derived criteria.
+        # Surfaced to the agent under the plural name for readability;
+        # the underlying bucket literal is singular.
+        "constraints_count": len(by_bucket["constraint"]),
         "must_examples": by_bucket["must"][:5],
         "preferred_examples": by_bucket["preferred"][:5],
-        "constraints_examples": by_bucket["constraints"][:5],
+        "constraints_examples": by_bucket["constraint"][:5],
         "has_job_spec": bool((role.job_spec_text or "").strip())
         or bool((role.description or "").strip()),
     }
@@ -213,6 +215,21 @@ def _recent_resolved_answers(
         v = r.response.get("value")
         if v is None:
             continue
+        # Only consider an answer "useful" when it parses into the
+        # role's numeric type — otherwise we'd suppress the gap (per
+        # _intent_gaps) without producing an effective_* value, leaving
+        # the agent permanently blocked on send/advance triage. Codex
+        # #187: "around fifty" should NOT close the threshold gap.
+        if r.kind == "threshold_ambiguous":
+            try:
+                int(float(str(v)))
+            except (TypeError, ValueError):
+                continue
+        elif r.kind == "monthly_budget_missing":
+            try:
+                float(str(v).strip().lstrip("$").replace(",", ""))
+            except (TypeError, ValueError):
+                continue
         out[r.kind] = v
     return out
 

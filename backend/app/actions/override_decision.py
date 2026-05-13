@@ -35,6 +35,14 @@ _OVERRIDE_DISPATCH_ACTIONS = {
     "skip_assessment_advance",
     "send_assessment",
 }
+# Legacy override_action values that older clients pass — we still
+# accept them as no-op overrides (status=overridden, no side effect on
+# candidate) so the v0 "manual_review" UI path doesn't 422. Eventually
+# the migrated clients drop these and we can tighten the allowlist.
+_OVERRIDE_LEGACY_NOOP = {
+    "manual_review",
+    "hold",
+}
 
 
 def run(
@@ -100,7 +108,7 @@ def run(
             metadata={**metadata, "override_action": override_action},
         )
     elif override_action == "send_assessment":
-        send_assessment.run(
+        send_result = send_assessment.run(
             db,
             actor,
             organization_id=organization_id,
@@ -108,7 +116,25 @@ def run(
             task_id=None,
             duration_minutes=90,
         )
-    elif override_action and override_action not in _OVERRIDE_DISPATCH_ACTIONS and override_action != "hold":
+        # send_assessment can no-op (misconfigured / insufficient_credits /
+        # already_exists / no_candidate / voided). Don't mark the decision
+        # overridden in those cases — the candidate didn't get an email
+        # and closing the queue row would lose the pending state without
+        # actually doing the override (Codex #192).
+        send_status = getattr(send_result, "status", None)
+        if send_status not in ("sent", "already_exists"):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"send_assessment override failed (status={send_status!r}). "
+                    "Decision remains pending."
+                ),
+            )
+    elif (
+        override_action
+        and override_action not in _OVERRIDE_DISPATCH_ACTIONS
+        and override_action not in _OVERRIDE_LEGACY_NOOP
+    ):
         raise HTTPException(
             status_code=422,
             detail=f"unknown override_action={override_action!r}",

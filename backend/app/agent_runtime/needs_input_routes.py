@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from ..actions import ask_recruiter as ask_recruiter_action
 from ..actions.types import Actor
@@ -101,7 +101,11 @@ def list_needs_input(
     """List open (default) / resolved / all needs-input rows for the
     current org. Optionally filter by ``role_id``.
     """
-    q = db.query(AgentNeedsInput).filter(
+    # joinedload role so NeedsInputView.from_row's row.role.name access
+    # doesn't trigger N+1 queries on the list endpoint (Codex #185).
+    q = db.query(AgentNeedsInput).options(
+        joinedload(AgentNeedsInput.role),
+    ).filter(
         AgentNeedsInput.organization_id == user.organization_id
     )
     if role_id is not None:

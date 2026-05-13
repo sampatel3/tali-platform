@@ -264,7 +264,13 @@ def build_interview_episodes(interview: ApplicationInterview) -> list[Episode]:
 #   - cv_scored: the score itself lives on candidate_applications; the
 #     reason field is templated ("CV scored: scored (46%)") with no facts
 #     for the LLM to extract.
-_NOISE_EVENT_TYPES = {"pipeline_initialized", "cv_scored"}
+# ``agent_decision_queued`` is written by ``queue_decision.run`` so the
+# AgentBar's last_activity tick has something to render mid-cycle. The
+# rich decision episode is emitted separately by
+# ``_emit_decision_episode_safe`` in the same path — letting this
+# generic event also flow to Graphiti would double extraction + billing
+# for every queued decision.
+_NOISE_EVENT_TYPES = {"pipeline_initialized", "cv_scored", "agent_decision_queued"}
 
 
 def build_event_episode(event: CandidateApplicationEvent) -> Episode | None:
