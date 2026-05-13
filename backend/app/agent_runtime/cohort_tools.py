@@ -133,6 +133,12 @@ def survey_role_state(db: Session, *, organization_id: int, role_id: int) -> dic
         "effective_monthly_budget_cents": effective_budget,
         "counts": counts,
         "intent_gaps": intent_gaps,
+        # Shape of the recruiter's intent — lets the agent judge whether
+        # the captured intent is "rich enough" to triage well, beyond the
+        # blunt zero-must-haves rule that intent_gaps uses. The agent can
+        # open an intent_clarification question when it spots a thin
+        # dimension (e.g. must-haves listed but no seniority signal).
+        "role_intent_shape": _role_intent_shape(role),
         "open_recruiter_questions": [
             {
                 "id": int(q.id),
@@ -142,6 +148,38 @@ def survey_role_state(db: Session, *, organization_id: int, role_id: int) -> dic
             }
             for q in open_questions
         ],
+    }
+
+
+def _role_intent_shape(role: Role) -> dict[str, Any]:
+    """Per-bucket counts + a few example chips so the agent can judge
+    whether captured intent is rich enough to triage."""
+    from ..models.role_criterion import CRITERION_SOURCE_DERIVED
+
+    by_bucket: dict[str, list[str]] = {"must": [], "preferred": [], "constraints": []}
+    for c in role.criteria or []:
+        if c.deleted_at is not None:
+            continue
+        if c.source == CRITERION_SOURCE_DERIVED:
+            continue
+        text = (c.text or "").strip()
+        if not text:
+            continue
+        bucket = getattr(c, "bucket", None)
+        if bucket in by_bucket:
+            by_bucket[bucket].append(text)
+    return {
+        "must_count": len(by_bucket["must"]),
+        "preferred_count": len(by_bucket["preferred"]),
+        "constraints_count": len(by_bucket["constraints"]),
+        # Send up to 5 examples per bucket — enough for the agent to
+        # see what dimensions are covered without bloating the survey
+        # payload on roles with hundreds of derived criteria.
+        "must_examples": by_bucket["must"][:5],
+        "preferred_examples": by_bucket["preferred"][:5],
+        "constraints_examples": by_bucket["constraints"][:5],
+        "has_job_spec": bool((role.job_spec_text or "").strip())
+        or bool((role.description or "").strip()),
     }
 
 

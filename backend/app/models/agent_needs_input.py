@@ -52,6 +52,7 @@ NEEDS_INPUT_KINDS = (
     # with decision_type=send_assessment / resend_assessment_invite —
     # they're per-candidate verdicts and belong in the decisions queue.
     "intent_slot_missing",                  # role has empty must_have / preferred / etc.
+    "intent_clarification",                 # agent judges current intent thin / ambiguous on a specific dimension
     "monthly_budget_missing",               # role.monthly_usd_budget_cents is null
     "threshold_ambiguous",                  # role.score_threshold not set + cohort spread is high
     "task_assignment_missing",              # role has no assessment task linked

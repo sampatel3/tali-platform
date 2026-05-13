@@ -155,6 +155,60 @@ def test_existing_decision_for_subject_picks_latest_non_discarded(db):
     assert int(found.id) == int(pending.id)
 
 
+def test_role_intent_shape_counts_buckets(db):
+    """survey_role_state.role_intent_shape exposes per-bucket counts +
+    examples so the agent can judge whether intent is rich enough."""
+    from app.models.role_criterion import RoleCriterion
+
+    org, role, _, _ = make_world(db)
+    # Wipe the fixture's defaults so this is deterministic.
+    db.query(RoleCriterion).filter(RoleCriterion.role_id == role.id).delete()
+    db.flush()
+    db.add_all([
+        RoleCriterion(role_id=role.id, source="recruiter", bucket="must", text="Python 5y", weight=1.0),
+        RoleCriterion(role_id=role.id, source="recruiter", bucket="preferred", text="AWS", weight=0.5),
+        RoleCriterion(role_id=role.id, source="recruiter", bucket="preferred", text="Docker", weight=0.5),
+        # Derived chips don't count — only recruiter-set intent.
+        RoleCriterion(role_id=role.id, source="derived_from_spec", bucket="preferred", text="Git", weight=0.3),
+    ])
+    db.flush()
+
+    out = cohort_tools.survey_role_state(db, organization_id=int(org.id), role_id=int(role.id))
+    shape = out["role_intent_shape"]
+    assert shape["must_count"] == 1
+    assert shape["preferred_count"] == 2
+    assert shape["constraints_count"] == 0
+    assert shape["must_examples"] == ["Python 5y"]
+    assert set(shape["preferred_examples"]) == {"AWS", "Docker"}
+    assert shape["constraints_examples"] == []
+
+
+def test_intent_clarification_keeps_agent_prompt(db):
+    """ask_recruiter.open for intent_clarification doesn't override the
+    agent's prompt — it only injects the settings-tab link."""
+    from app.actions import ask_recruiter
+    from app.actions.types import Actor
+    from app.models.agent_needs_input import AgentNeedsInput
+
+    org, role, _, _ = make_world(db)
+    run = _make_run(db, role)
+    actor = Actor.agent(int(run.id))
+    agent_question = "You have 2 preferreds but zero must-haves — what's non-negotiable for this hire?"
+    row = ask_recruiter.open(
+        db,
+        actor,
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        kind="intent_clarification",
+        prompt=agent_question,
+    )
+    db.flush()
+    assert row.prompt == agent_question
+    # Settings link still rides through via response_schema → API surface.
+    assert row.response_schema is not None
+    assert row.response_schema.get("link_url") == f"/jobs/{int(role.id)}?tab=agent-settings"
+
+
 def test_existing_decision_for_subject_returns_none_when_all_discarded(db):
     """A previous discarded decision must NOT block a fresh queue —
     otherwise the agent can never re-queue after a recruiter rejects."""
