@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from ..models.agent_needs_input import NEEDS_INPUT_KINDS, AgentNeedsInput
 from ..models.role import Role
-from .types import ACTOR_AGENT, ACTOR_RECRUITER, Actor
+from .types import ACTOR_AGENT, ACTOR_RECRUITER, ACTOR_SYSTEM, Actor
 
 
 def open(
@@ -53,10 +53,14 @@ def open(
     preserves the legacy role-wide semantic for kinds like
     ``monthly_budget_missing`` that don't have a subject.
     """
-    if actor.type != ACTOR_AGENT:
+    # Agent (inside a cycle) and system (e.g. activation checklist run
+    # from the PATCH /roles/{id} handler) can both open questions.
+    # Recruiters open questions through the UI, which goes through a
+    # different route — never this code path.
+    if actor.type not in (ACTOR_AGENT, ACTOR_SYSTEM):
         raise HTTPException(
             status_code=403,
-            detail="ask_recruiter.open is agent-only",
+            detail="ask_recruiter.open is agent/system-only",
         )
     if kind not in NEEDS_INPUT_KINDS:
         raise HTTPException(
@@ -89,6 +93,15 @@ def open(
             rationale = canonical["rationale"]
         if canonical.get("options") and not options:
             options = canonical["options"]
+        # Settings-tab link (when present) rides on response_schema so we
+        # don't need a schema migration. The needs-input GET view surfaces
+        # it back as link_url / link_label on the wire.
+        if canonical.get("link_url"):
+            response_schema = dict(response_schema or {})
+            response_schema["link_url"] = canonical["link_url"]
+            response_schema["link_label"] = canonical.get(
+                "link_label", "Open settings"
+            )
 
     subject_filter = (
         AgentNeedsInput.subject_id == subject_id
@@ -184,14 +197,32 @@ def _canonical_for_kind(
         return {
             "prompt": (
                 f"What are the must-have requirements for '{role.name}'? "
-                f"List the things a candidate has to have for you to consider "
-                f"them — e.g. specific skills, years of experience, "
-                f"certifications, location constraints."
+                f"Write them in plain language (e.g. \"5+ years Python, AWS, "
+                f"remote-friendly, US time zones\") and I'll structure them. "
+                f"Or open the role's agent settings to enter must-have / "
+                f"preferred / constraints directly."
             ),
             "rationale": (
                 "Without must-haves I can only triage on score. Capturing "
                 "them lets me reject candidates who clearly don't fit."
             ),
+            "link_url": f"/jobs/{int(role.id)}?tab=agent-settings",
+            "link_label": "Open agent settings",
+        }
+    if kind == "task_assignment_missing":
+        return {
+            "prompt": (
+                f"'{role.name}' has no assessment task linked. Without one "
+                f"I can't send assessment invites to candidates who clear "
+                f"the score bar. Pick a task on the role page (or create a "
+                f"new one), then I'll resume."
+            ),
+            "rationale": (
+                "A task defines what the candidate is actually asked to do. "
+                "It's the deliverable the invite points at."
+            ),
+            "link_url": f"/jobs/{int(role.id)}?tab=agent-settings",
+            "link_label": "Pick a task",
         }
     return None
 

@@ -316,6 +316,21 @@ def update_role(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update role")
+    # On activation, surface every missing-config gap as a NeedsInput row
+    # on the Home hub in one shot — the recruiter sees the full checklist
+    # rather than discovering gaps one cycle at a time. Idempotent on
+    # (role_id, kind). Fires every false→true transition regardless of
+    # whether the role was previously active.
+    if agent_activated_now:
+        try:
+            from ...services.agent_activation_checklist import surface_activation_questions
+            surface_activation_questions(db, role=role)
+            db.commit()
+        except Exception:
+            logger.exception(
+                "Activation checklist failed for role_id=%s", role.id
+            )
+            db.rollback()
     # Activation OR resume should kick a daily-review-style cycle so the
     # agent immediately picks up where things stand instead of waiting up
     # to 30 minutes for the cohort-tick beat (or 24h for daily-review).
