@@ -134,7 +134,9 @@ export default function AgentNeedsInputCard({ roleId }) {
                   placeholder={
                     row.kind === 'intent_slot_missing'
                       ? 'e.g. 5+ years Python, AWS, remote-friendly, US time zones…'
-                      : 'Your answer…'
+                      : row.kind === 'intent_clarification'
+                        ? 'Reply to the agent\'s specific question above…'
+                        : 'Your answer…'
                   }
                   onSubmit={(text) => handleAnswer(row.id, text)}
                 />
@@ -170,7 +172,7 @@ export default function AgentNeedsInputCard({ roleId }) {
 // Kinds whose answers are long-form prose (must-haves, intent context)
 // get a textarea instead of a single-line input. Single-line still wins
 // for short numeric answers (threshold, budget).
-const LONG_FORM_KINDS = new Set(['intent_slot_missing']);
+const LONG_FORM_KINDS = new Set(['intent_slot_missing', 'intent_clarification']);
 
 function FreeTextAnswer({ busy, onSubmit, multiline = false, placeholder = 'Your answer…' }) {
   const [text, setText] = useState('');

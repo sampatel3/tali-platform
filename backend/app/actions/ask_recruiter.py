@@ -88,7 +88,11 @@ def open(
     # baked in so they don't have to invent one from scratch.
     canonical = _canonical_for_kind(db, role=role, kind=kind)
     if canonical is not None:
-        prompt = canonical["prompt"]
+        # Prompt override is opt-in per kind. Some kinds (like
+        # intent_clarification) want the agent's free-text question to
+        # win and only inherit the settings-tab link.
+        if canonical.get("prompt"):
+            prompt = canonical["prompt"]
         if canonical.get("rationale") and not (rationale or "").strip():
             rationale = canonical["rationale"]
         if canonical.get("options") and not options:
@@ -223,6 +227,16 @@ def _canonical_for_kind(
             ),
             "link_url": f"/jobs/{int(role.id)}?tab=agent-settings",
             "link_label": "Pick a task",
+        }
+    if kind == "intent_clarification":
+        # Agentic kind — the agent passes a specific question about a thin
+        # intent dimension ("you have 3 preferreds but no must-haves",
+        # "missing seniority signal", etc.). We don't override the prompt
+        # so the agent's framing wins; we only inject the settings link
+        # so the recruiter has the same one-click escape hatch.
+        return {
+            "link_url": f"/jobs/{int(role.id)}?tab=agent-settings",
+            "link_label": "Open agent settings",
         }
     return None
 
