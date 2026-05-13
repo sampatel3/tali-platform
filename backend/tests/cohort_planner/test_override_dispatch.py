@@ -104,7 +104,11 @@ def test_override_to_send_assessment_on_reject_dispatches_send(db):
     user = _make_user(db, org)
     decision = _make_decision(db, org, role, app, "reject")
 
-    with patch("app.actions.override_decision.send_assessment.run") as mock_send:
+    fake_send_result = type("_R", (), {"status": "sent", "assessment_id": 9})()
+    with patch(
+        "app.actions.override_decision.send_assessment.run",
+        return_value=fake_send_result,
+    ) as mock_send:
         override_decision.run(
             db,
             Actor.recruiter(user),
@@ -120,6 +124,57 @@ def test_override_to_send_assessment_on_reject_dispatches_send(db):
     assert kwargs["application_id"] == int(app.id)
     db.refresh(decision)
     assert decision.status == "overridden"
+
+
+def test_override_to_send_assessment_rejects_when_dispatch_fails(db):
+    """If send_assessment returns a non-sent status (misconfigured /
+    insufficient_credits / no_candidate), the override raises 409 and
+    the decision stays pending — recruiter doesn't lose the queue row
+    on a silent failure (Codex #192)."""
+    import pytest
+    from fastapi import HTTPException
+
+    org, role, _, app = make_world(db)
+    user = _make_user(db, org)
+    decision = _make_decision(db, org, role, app, "reject")
+
+    fake_fail = type("_R", (), {"status": "misconfigured", "assessment_id": None})()
+    with patch(
+        "app.actions.override_decision.send_assessment.run",
+        return_value=fake_fail,
+    ):
+        with pytest.raises(HTTPException) as excinfo:
+            override_decision.run(
+                db,
+                Actor.recruiter(user),
+                organization_id=int(org.id),
+                decision_id=int(decision.id),
+                override_action="send_assessment",
+                note="Try sending",
+            )
+    assert excinfo.value.status_code == 409
+    db.refresh(decision)
+    assert decision.status == "pending"
+
+
+def test_override_with_manual_review_legacy_is_accepted(db):
+    """Legacy clients still pass override_action='manual_review' — it
+    should resolve as a no-op override (Codex #192), not 422."""
+    org, role, _, app = make_world(db)
+    user = _make_user(db, org)
+    decision = _make_decision(db, org, role, app, "send_assessment")
+    override_decision.run(
+        db,
+        Actor.recruiter(user),
+        organization_id=int(org.id),
+        decision_id=int(decision.id),
+        override_action="manual_review",
+        note="Legacy path",
+    )
+    db.flush()
+    db.refresh(decision)
+    assert decision.status == "overridden"
+    assert decision.override_action == "manual_review"
 
 
 def test_override_with_no_action_is_no_op_on_candidate(db):

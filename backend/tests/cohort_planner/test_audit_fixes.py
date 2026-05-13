@@ -183,6 +183,48 @@ def test_role_intent_shape_counts_buckets(db):
     assert shape["constraints_examples"] == []
 
 
+def test_role_intent_shape_counts_constraints_with_canonical_bucket(db):
+    """Constraint chips use bucket='constraint' (singular). Earlier my
+    code keyed off 'constraints' (plural) and silently dropped them —
+    Codex #190. This test pins the canonical-bucket behaviour."""
+    from app.models.role_criterion import RoleCriterion
+
+    org, role, _, _ = make_world(db)
+    db.query(RoleCriterion).filter(RoleCriterion.role_id == role.id).delete()
+    db.flush()
+    db.add(
+        RoleCriterion(role_id=role.id, source="recruiter", bucket="constraint", text="Remote only", weight=1.0)
+    )
+    db.flush()
+    out = cohort_tools.survey_role_state(db, organization_id=int(org.id), role_id=int(role.id))
+    shape = out["role_intent_shape"]
+    assert shape["constraints_count"] == 1
+    assert shape["constraints_examples"] == ["Remote only"]
+
+
+def test_unparseable_threshold_answer_keeps_gap_open(db):
+    """Codex #187: "around fifty" is not numeric. The gap should stay
+    open so the agent re-asks, instead of being suppressed while
+    effective_score_threshold stays None."""
+    org, role, _, _ = make_world(db)
+    role.score_threshold = None
+    db.flush()
+    unparseable = AgentNeedsInput(
+        organization_id=org.id,
+        role_id=role.id,
+        kind="threshold_ambiguous",
+        prompt="x",
+        resolved_at=datetime.now(timezone.utc),
+        response={"value": "around fifty"},
+    )
+    db.add(unparseable)
+    db.flush()
+    out = cohort_tools.survey_role_state(db, organization_id=int(org.id), role_id=int(role.id))
+    assert out["effective_score_threshold"] is None
+    # Gap stays open so the agent re-asks.
+    assert "score_threshold is unset" in out["intent_gaps"]
+
+
 def test_intent_clarification_keeps_agent_prompt(db):
     """ask_recruiter.open for intent_clarification doesn't override the
     agent's prompt — it only injects the settings-tab link."""

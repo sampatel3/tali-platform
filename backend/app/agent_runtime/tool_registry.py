@@ -1066,6 +1066,12 @@ def _tool_resend_assessment_invite(
             role=role,
             args=queue_args,
             decision_type="resend_assessment_invite",
+            # Two assessments on the same application would otherwise
+            # collide on the base idempotency key {run}:{app}:{type}
+            # and the second resend would silently reuse the first
+            # decision row (Codex #176). Include assessment_id so each
+            # invite gets its own queue entry.
+            idempotency_key_suffix=f"assess{assessment_id}",
         )
         return {
             "status": (
@@ -1284,7 +1290,13 @@ def _auto_execute_decision(
 
 
 def _queue(
-    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any], decision_type: str
+    db: Session,
+    *,
+    agent_run: AgentRun,
+    role: Role,
+    args: dict[str, Any],
+    decision_type: str,
+    idempotency_key_suffix: Optional[str] = None,
 ) -> Any:
     actor = Actor.agent(int(agent_run.id))
     evidence = _stamp_policy_revision_in_evidence(
@@ -1302,7 +1314,15 @@ def _queue(
         confidence=float(args["confidence"]),
         model_version=str(agent_run.model_version or ""),
         prompt_version=str(agent_run.prompt_version or ""),
+        idempotency_key_suffix=idempotency_key_suffix,
     )
+    # Per-cycle decision budget counts ACTUAL new rows, not tool calls.
+    # The orchestrator's by-name counter over-counted dedup paths
+    # (send_assessment with existing decision; auto_promote=True direct
+    # dispatch; queue_* IntegrityError-retry). Anchoring the counter
+    # here means it tracks what's truly in the queue. (Codex #179)
+    if getattr(decision, "_just_created", True):
+        agent_run.decisions_emitted = int(agent_run.decisions_emitted or 0) + 1
     auto_attr = _AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type)
     if auto_attr and bool(getattr(role, auto_attr, False)):
         _auto_execute_decision(

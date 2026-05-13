@@ -79,6 +79,7 @@ def run(
     model_version: str,
     prompt_version: str,
     recommendation: Optional[str] = None,
+    idempotency_key_suffix: Optional[str] = None,
 ) -> AgentDecision:
     if actor.type != ACTOR_AGENT:
         raise HTTPException(
@@ -103,7 +104,12 @@ def run(
             detail=f"application {application_id} does not belong to role {role_id}",
         )
 
-    idempotency_key = f"{actor.agent_run_id}:{application_id}:{decision_type}"
+    # Optional suffix lets the caller scope the key to a sub-identity
+    # below (application_id, decision_type) — used by resend_assessment_invite
+    # to keep separate approvals for separate assessments on the same
+    # application from colliding (Codex #176).
+    base_key = f"{actor.agent_run_id}:{application_id}:{decision_type}"
+    idempotency_key = f"{base_key}:{idempotency_key_suffix}" if idempotency_key_suffix else base_key
     active_capabilities = _capture_active_capabilities(
         db,
         organization_id=organization_id,
@@ -143,8 +149,16 @@ def run(
             .first()
         )
         if existing is not None:
+            # Surface the dedup-existing branch on the returned object so
+            # callers can decide whether to count it against the per-cycle
+            # decision budget. Tracking this here (rather than via a
+            # tuple-return API change) keeps the dozens of test callers
+            # working unchanged. (Codex #179)
+            existing._just_created = False  # type: ignore[attr-defined]
             return existing
         raise
+
+    decision._just_created = True  # type: ignore[attr-defined]
 
     # Phase 2 §6.7: one consolidated Graphiti episode per decision.
     # Folds the four sub-agent scores into the decision body so we get
@@ -153,13 +167,11 @@ def run(
     # is logged and ignored; the Postgres row is the source of truth.
     _emit_decision_episode_safe(db, decision=decision)
 
-    # Also record a CandidateApplicationEvent so the per-role
-    # /agent/status endpoint's `last_activity` reflects this decision
-    # the moment it's queued — that's what the AgentBar tick reads.
-    # Without this, AgentBar shows "Idle · waiting for new candidates"
-    # even when the agent has just queued work, because formatTick
-    # only sees pipeline_stage_changed / outcome_changed events that
-    # are written by approve_decision *after* recruiter action.
+    # CandidateApplicationEvent so the per-role /agent/status endpoint's
+    # ``last_activity`` reflects this decision the moment it's queued
+    # — that's what the AgentBar tick reads. The Graphiti listener has
+    # ``agent_decision_queued`` in its _NOISE_EVENT_TYPES set so this
+    # doesn't double-ingest alongside _emit_decision_episode_safe above.
     db.add(
         CandidateApplicationEvent(
             application_id=application_id,

@@ -90,7 +90,11 @@ def _initial_user_message(*, trigger: str, application_id: Optional[int]) -> str
             "Step 2 — dispatch backlog (fire-and-forget):\n"
             "  If survey.needs_score > 0: find_apps_in_state(state='needs_score',\n"
             "    limit=25) → batch_score_cv with those ids. Scoring runs async\n"
-            "    on a separate queue; it doesn't block this cycle.\n\n"
+            "    on a separate queue; it doesn't block this cycle.\n"
+            "  If survey.needs_pre_screen > 0 (and needs_score == 0): the\n"
+            "    cv_score_orchestrator runs pre-screen automatically as part of\n"
+            "    scoring, so find_apps_in_state(state='needs_pre_screen',\n"
+            "    limit=25) → batch_score_cv on those ids dispatches both.\n\n"
             "Step 3 — TRIAGE A BATCH then END:\n"
             "  find_apps_in_state(state='ready_for_assessment_decision', limit=20).\n"
             "  The list is sorted by cv_match_score desc and excludes candidates\n"
@@ -112,8 +116,8 @@ def _initial_user_message(*, trigger: str, application_id: Optional[int]) -> str
             "      must-haves are independent.\n"
             "    - borderline → skip this cycle.\n"
             "  Always run evaluate_policy before each queue_* call. If the\n"
-            "  policy returns abstain / skip_due_to_missing_config for a\n"
-            "  candidate, skip them silently and move to the next.\n\n"
+            "  policy returns skip / no_action / escalate_low_confidence,\n"
+            "  skip the candidate silently and move to the next.\n\n"
             "Rules:\n"
             "  - ≤ 1 send_assessment or queue_advance_decision per cycle.\n"
             "  - ≤ 5 reject decisions per cycle (queue_reject_decision +\n"
@@ -225,7 +229,19 @@ def run_cycle(
         agent_state_snapshot=snapshot,
     )
     db.add(run)
+    # Commit the "running" row immediately so the watchdog
+    # (agent_expire_stuck_runs) can observe it if the worker crashes
+    # mid-cycle. Otherwise the row sits in the worker's transaction
+    # un-committed and the watchdog's status='running' scan finds
+    # nothing (Codex #188). Tool-side flushes after this still need
+    # explicit commits at the task wrapper boundary — that's where
+    # the terminal status update lands.
     db.flush()  # populate run.id so tools can stamp it
+    db.commit()
+    # commit() expires loaded objects by default; refresh both so
+    # subsequent mutations stay attached and tracked.
+    db.refresh(run)
+    db.refresh(role)
 
     trigger_context = (
         f"{trigger} → application_id={application_id}"
@@ -328,8 +344,11 @@ def run_cycle(
 
             try:
                 result = dispatch(name, args, db=db, agent_run=run, role=role)
-                if name in QUEUE_DECISION_TOOL_NAMES:
-                    run.decisions_emitted += 1
+                # decisions_emitted is incremented inside _queue when a
+                # real AgentDecision row is created — moved out of here
+                # so dedup / auto-execute-direct-dispatch paths don't
+                # over-count (Codex #179). QUEUE_DECISION_TOOL_NAMES is
+                # still exported for tests and prompt docs.
                 if is_run_complete(result):
                     run_complete_payload = result
                 is_error = False
