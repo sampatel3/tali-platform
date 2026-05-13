@@ -3219,7 +3219,8 @@ html[data-theme="dark"] {
   flex: 1;
 }
 
-.agent-needs-input-freeform input {
+.agent-needs-input-freeform input,
+.agent-needs-input-freeform textarea {
   flex: 1;
   padding: 6px 10px;
   border-radius: 8px;
@@ -3227,6 +3228,9 @@ html[data-theme="dark"] {
   font-size: 12.5px;
   background: var(--bg);
   color: var(--ink);
+  font-family: inherit;
+  resize: vertical;
+  min-height: 32px;
 }
 
 .agent-needs-input-freeform button {
@@ -3238,6 +3242,26 @@ html[data-theme="dark"] {
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
+  align-self: flex-end;
+}
+
+.agent-needs-input-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--purple) 40%, var(--line));
+  color: var(--purple);
+  background: color-mix(in oklab, var(--purple) 6%, transparent);
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.agent-needs-input-link:hover {
+  background: color-mix(in oklab, var(--purple) 12%, transparent);
 }
 
 .sub-tabs {

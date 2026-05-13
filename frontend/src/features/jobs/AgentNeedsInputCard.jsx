@@ -11,7 +11,7 @@
 // across the org (the default on Home).
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { CheckCircle2, MessageSquareWarning, X } from 'lucide-react';
+import { ArrowUpRight, CheckCircle2, MessageSquareWarning, X } from 'lucide-react';
 
 import api from '../../shared/api/httpClient';
 
@@ -130,9 +130,25 @@ export default function AgentNeedsInputCard({ roleId }) {
               ) : (
                 <FreeTextAnswer
                   busy={busyId === row.id}
+                  multiline={LONG_FORM_KINDS.has(row.kind)}
+                  placeholder={
+                    row.kind === 'intent_slot_missing'
+                      ? 'e.g. 5+ years Python, AWS, remote-friendly, US time zones…'
+                      : 'Your answer…'
+                  }
                   onSubmit={(text) => handleAnswer(row.id, text)}
                 />
               )}
+              {row.link_url ? (
+                <a
+                  className="agent-needs-input-link"
+                  href={row.link_url}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <ArrowUpRight size={12} />
+                  {row.link_label || 'Open settings'}
+                </a>
+              ) : null}
               <button
                 type="button"
                 className="agent-needs-input-dismiss"
@@ -151,25 +167,38 @@ export default function AgentNeedsInputCard({ roleId }) {
   );
 }
 
-function FreeTextAnswer({ busy, onSubmit }) {
+// Kinds whose answers are long-form prose (must-haves, intent context)
+// get a textarea instead of a single-line input. Single-line still wins
+// for short numeric answers (threshold, budget).
+const LONG_FORM_KINDS = new Set(['intent_slot_missing']);
+
+function FreeTextAnswer({ busy, onSubmit, multiline = false, placeholder = 'Your answer…' }) {
   const [text, setText] = useState('');
+  const submit = (e) => {
+    e.preventDefault();
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    onSubmit(trimmed);
+  };
   return (
-    <form
-      className="agent-needs-input-freeform"
-      onSubmit={(e) => {
-        e.preventDefault();
-        const trimmed = text.trim();
-        if (!trimmed) return;
-        onSubmit(trimmed);
-      }}
-    >
-      <input
-        type="text"
-        placeholder="Your answer…"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        disabled={busy}
-      />
+    <form className="agent-needs-input-freeform" onSubmit={submit}>
+      {multiline ? (
+        <textarea
+          rows={3}
+          placeholder={placeholder}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          disabled={busy}
+        />
+      ) : (
+        <input
+          type="text"
+          placeholder={placeholder}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          disabled={busy}
+        />
+      )}
       <button type="submit" disabled={busy || !text.trim()}>
         Send
       </button>

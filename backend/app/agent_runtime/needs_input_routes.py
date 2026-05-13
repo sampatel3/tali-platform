@@ -45,6 +45,13 @@ class NeedsInputView(BaseModel):
     resolved_at: datetime | None = None
     resolved_by_user_id: int | None = None
     created_at: datetime
+    # Settings-tab deep-link the recruiter can click instead of typing
+    # a free-text answer (populated for intent_slot_missing /
+    # task_assignment_missing). Stored on response_schema under
+    # link_url / link_label keys; pulled into top-level fields here so
+    # the frontend doesn't have to dig into response_schema.
+    link_url: str | None = None
+    link_label: str | None = None
 
     @classmethod
     def from_row(cls, row: AgentNeedsInput) -> "NeedsInputView":
@@ -54,6 +61,7 @@ class NeedsInputView(BaseModel):
             status = "dismissed"
         else:
             status = "open"
+        schema = row.response_schema if isinstance(row.response_schema, dict) else {}
         return cls(
             id=int(row.id),
             role_id=int(row.role_id),
@@ -72,6 +80,8 @@ class NeedsInputView(BaseModel):
                 else None
             ),
             created_at=row.created_at,
+            link_url=schema.get("link_url"),
+            link_label=schema.get("link_label"),
         )
 
 
