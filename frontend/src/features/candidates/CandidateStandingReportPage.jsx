@@ -3,6 +3,7 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import { AlertCircle, Check, Copy, Download, ExternalLink, Eye, X } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
+import { viewShareLink } from '../../shared/api';
 import { getCachedDocumentBlob } from '../../shared/api/documentCache';
 import { useToast } from '../../context/ToastContext';
 import {
@@ -772,24 +773,18 @@ const CvMatchRail = ({
   );
 };
 
-const buildFallbackShareUrl = (applicationId, shareToken) => {
-  const normalized = String(shareToken || '').trim();
-  if (!normalized) return '';
-  const appId = String(applicationId || 'candidate').trim();
-  const path = `/c/${encodeURIComponent(appId)}?view=interview&k=${encodeURIComponent(normalized)}`;
-  if (typeof window === 'undefined') return path;
-  return `${window.location.origin}${path}`;
-};
-
 export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null }) => {
   const { showToast } = useToast();
-  const { applicationId } = useParams();
+  // ``shareToken`` is set when the SPA is mounted via the public
+  // ``/share/:shareToken`` route. ``applicationId`` is set on the
+  // recruiter-side ``/c/:applicationId`` and ``/candidates/:applicationId``
+  // routes. Exactly one is present at a time.
+  const { applicationId, shareToken: routeShareToken } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const rolesApi = 'roles' in apiClient ? apiClient.roles : null;
   const assessmentsApi = 'assessments' in apiClient ? apiClient.assessments : null;
   const candidatesApi = 'candidates' in apiClient ? apiClient.candidates : null;
   const organizationsApi = 'organizations' in apiClient ? apiClient.organizations : null;
-  const teamApi = 'team' in apiClient ? apiClient.team : null;
 
   const [application, setApplication] = useState(null);
   const [completedAssessment, setCompletedAssessment] = useState(null);
@@ -808,21 +803,19 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const [noteDraft, setNoteDraft] = useState('');
   const [savingNote, setSavingNote] = useState(false);
   const [eventsRefetchTick, setEventsRefetchTick] = useState(0);
-  const [shareState, setShareState] = useState({
-    url: '',
-    token: '',
-    createdAt: null,
-    loading: false,
-    error: '',
-  });
+  // View mode received from the backend when loaded via /share/:token —
+  // "client" (scrubbed external view) or "recruiter" (full report). Null
+  // when not on a share route (recruiter is logged in and viewing /c/:id).
+  const [shareViewMode, setShareViewMode] = useState(null);
 
   const routeApplicationKey = String(applicationId || '').trim();
-  const sharedRouteToken = String(searchParams.get('k') || '').trim()
-    || (routeApplicationKey.startsWith('shr_') ? routeApplicationKey : '');
+  const sharedRouteToken = String(routeShareToken || '').trim();
+  const isShareRoute = Boolean(sharedRouteToken);
   const numericApplicationId = Number(routeApplicationKey);
-  const viewParam = searchParams.get('view');
-  const isClientView = viewParam === 'client';
-  const isInterviewView = viewParam === 'interview' || isClientView;
+  const isClientView = shareViewMode === 'client';
+  // Any share-route recipient (client OR recruiter view) hides internal
+  // recruiter-only controls like "Rescore" and "Share" actions.
+  const isInterviewView = isShareRoute;
   const hiddenTabs = isClientView
     ? CLIENT_HIDDEN_TABS
     : (isInterviewView ? INTERNAL_TABS : new Set());
@@ -865,13 +858,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       setCompletedAssessment(AI_SHOWCASE_COMPLETED_ASSESSMENT);
       setOrgData(null);
       setApplicationEvents([]);
+      setShareViewMode(null);
       setError('');
       setLoading(false);
       return;
     }
 
-    const canLoadById = !sharedRouteToken && rolesApi?.getApplication && Number.isFinite(numericApplicationId);
-    const canLoadByShare = Boolean(sharedRouteToken && rolesApi?.getApplicationByShareToken);
+    const canLoadById = !isShareRoute && rolesApi?.getApplication && Number.isFinite(numericApplicationId);
+    const canLoadByShare = Boolean(isShareRoute && sharedRouteToken);
     if (!canLoadById && !canLoadByShare) {
       setApplication(null);
       setCompletedAssessment(null);
@@ -883,10 +877,20 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     setLoading(true);
     setError('');
     try {
-      const appRes = sharedRouteToken
-        ? await rolesApi.getApplicationByShareToken(sharedRouteToken)
-        : await rolesApi.getApplication(numericApplicationId, { params: { include_cv_text: true } });
-      const nextApplication = appRes?.data || null;
+      let nextApplication = null;
+      if (isShareRoute) {
+        // /share/:token unauth flow — backend returns the full
+        // application payload (client-safe scrubbed when mode=client)
+        // plus the view mode. One round-trip, no separate fetch.
+        const shareRes = await viewShareLink(sharedRouteToken);
+        const payload = shareRes?.data || {};
+        nextApplication = payload.application || null;
+        setShareViewMode(payload.view === 'client' ? 'client' : 'recruiter');
+      } else {
+        const appRes = await rolesApi.getApplication(numericApplicationId, { params: { include_cv_text: true } });
+        nextApplication = appRes?.data || null;
+        setShareViewMode(null);
+      }
       setApplication(nextApplication);
 
       const assessmentId = resolveAssessmentId(nextApplication);
@@ -894,7 +898,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         assessmentId
         && COMPLETED_ASSESSMENT_STATUSES.has(resolveAssessmentStatus(nextApplication))
       );
-      const canUseInternalApis = !sharedRouteToken;
+      const canUseInternalApis = !isShareRoute;
 
       const [assessmentRes, orgRes, eventsRes] = await Promise.all([
         canUseInternalApis && hasCompletedAssessment && assessmentsApi?.get
@@ -917,27 +921,20 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       setCompletedAssessment(null);
       setApplicationEvents([]);
       setError(message);
-      showToast(message, 'error');
+      // Don't toast on share-route failures — the page is unauth and
+      // the visible error message is the whole story. Toast was a
+      // recruiter-side affordance.
+      if (!isShareRoute) showToast(message, 'error');
     } finally {
       setLoading(false);
     }
-  }, [assessmentsApi, numericApplicationId, organizationsApi, rolesApi, routeApplicationKey, sharedRouteToken, showToast]);
+  }, [assessmentsApi, isShareRoute, numericApplicationId, organizationsApi, rolesApi, routeApplicationKey, sharedRouteToken, showToast]);
 
   useEffect(() => {
     void loadStandingReport();
     // `eventsRefetchTick` is bumped after a recruiter saves a note so the
     // standing report reloads with the new event in the timeline.
   }, [loadStandingReport, eventsRefetchTick]);
-
-  useEffect(() => {
-    if (!sharedRouteToken) return;
-    const fallbackUrl = buildFallbackShareUrl(application?.id || routeApplicationKey, sharedRouteToken);
-    setShareState((prev) => ({
-      ...prev,
-      token: prev.token || sharedRouteToken,
-      url: !prev.url || prev.url.includes('/c/shr_') ? fallbackUrl : prev.url,
-    }));
-  }, [application?.id, routeApplicationKey, sharedRouteToken]);
 
   const reportModel = useMemo(() => (
     application ? buildStandingCandidateReportModel({
@@ -959,7 +956,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const canOpenAssessmentDetail = Boolean(completedAssessment?.id);
   const workableConnected = Boolean(orgData?.workable_connected);
   const workableSource = Boolean(application?.workable_sourced || application?.workable_score_raw != null || application?.workable_profile_url);
-  const shareUrl = shareState.url || (sharedRouteToken ? buildFallbackShareUrl(application?.id || routeApplicationKey, sharedRouteToken) : '');
   // Strengths and risks are now derived from the same
   // requirements_assessment data that drives the Matched / Missing
   // cards on the CV & match tab — so what shows on Overview matches
@@ -1127,110 +1123,10 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     ].filter((item) => item.when || item.detail);
   }, [application, applicationEvents, completedAssessment]);
 
-  const loadShareLink = useCallback(async ({ force = false } = {}) => {
-    if (!application?.id) return null;
-    if (!force && shareUrl && shareState.createdAt) {
-      return {
-        share_url: shareUrl,
-        share_token: shareState.token || sharedRouteToken,
-        created_at: shareState.createdAt,
-      };
-    }
-    if (!rolesApi?.getApplicationShareLink) {
-      if (sharedRouteToken) {
-        return {
-          share_url: buildFallbackShareUrl(application?.id || routeApplicationKey, sharedRouteToken),
-          share_token: sharedRouteToken,
-          created_at: shareState.createdAt,
-        };
-      }
-      throw new Error('Share link endpoint is unavailable.');
-    }
-
-    setShareState((prev) => ({ ...prev, loading: true, error: '' }));
-    try {
-      const res = await rolesApi.getApplicationShareLink(application.id);
-      const payload = res?.data || {};
-      const nextState = {
-        url: payload.share_url || buildFallbackShareUrl(application.id, payload.share_token || sharedRouteToken),
-        token: payload.share_token || sharedRouteToken,
-        createdAt: payload.created_at || null,
-        loading: false,
-        error: '',
-      };
-      setShareState(nextState);
-      return payload;
-    } catch (err) {
-      const message = getErrorMessage(err, 'Failed to create secure report link.');
-      setShareState((prev) => ({ ...prev, loading: false, error: message }));
-      throw err;
-    }
-  }, [application?.id, rolesApi, routeApplicationKey, shareState.createdAt, shareState.token, shareUrl, sharedRouteToken]);
-
-  useEffect(() => {
-    if (!application?.id || routeApplicationKey === 'demo' || sharedRouteToken || isInterviewView) return;
-    void loadShareLink().catch(() => {});
-  }, [application?.id, isInterviewView, loadShareLink, routeApplicationKey, sharedRouteToken]);
-
   // Report PDF export removed per HANDOFF v2 §3 — share links replace PDFs
-  // entirely; do not reintroduce a download path.
-
-  const handleCopyLink = async () => {
-    try {
-      const payload = await loadShareLink({ force: !shareUrl });
-      const nextShareUrl = payload?.share_url || shareUrl || buildFallbackShareUrl(application?.id || routeApplicationKey, payload?.share_token || sharedRouteToken);
-      if (!nextShareUrl) throw new Error('Share link unavailable.');
-      await navigator.clipboard.writeText(nextShareUrl);
-      showToast('Secure report link copied.', 'success');
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to copy report link.'), 'error');
-    }
-  };
-
-  const handleCopyClientLink = async () => {
-    try {
-      const payload = await loadShareLink({ force: !shareUrl });
-      const baseUrl = payload?.share_url || shareUrl || buildFallbackShareUrl(application?.id || routeApplicationKey, payload?.share_token || sharedRouteToken);
-      if (!baseUrl) throw new Error('Share link unavailable.');
-      const clientUrl = baseUrl.replace('view=interview', 'view=client');
-      await navigator.clipboard.writeText(clientUrl);
-      showToast('External client link copied (recruiter notes hidden).', 'success');
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to copy client link.'), 'error');
-    }
-  };
-
-  const handleEmailShare = async () => {
-    try {
-      const payload = await loadShareLink({ force: !shareUrl });
-      const nextShareUrl = payload?.share_url || shareUrl || buildFallbackShareUrl(application?.id || routeApplicationKey, payload?.share_token || sharedRouteToken);
-      if (!nextShareUrl) throw new Error('Share link unavailable.');
-
-      let recipientEmails = [];
-      if (teamApi?.list) {
-        try {
-          const teamRes = await teamApi.list();
-          recipientEmails = Array.from(new Set(
-            (Array.isArray(teamRes?.data) ? teamRes.data : [])
-              .filter((member) => member?.is_active !== false && member?.is_email_verified !== false)
-              .map((member) => String(member?.email || '').trim().toLowerCase())
-              .filter(Boolean)
-          ));
-        } catch {
-          recipientEmails = [];
-        }
-      }
-
-      const subject = encodeURIComponent(`Standing report · ${application?.candidate_name || application?.candidate_email || 'Candidate'}`);
-      const body = encodeURIComponent(
-        `Interview-view candidate report link for review.\n\nThis read-only link shows the panel-safe Overview, Assessment, and Interview prep tabs.\n\n${nextShareUrl}`
-      );
-      const bcc = recipientEmails.length ? `&bcc=${encodeURIComponent(recipientEmails.join(','))}` : '';
-      window.location.href = `mailto:?subject=${subject}${bcc}&body=${body}`;
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to prepare report email.'), 'error');
-    }
-  };
+  // entirely; do not reintroduce a download path. All sharing now flows
+  // through ShareModal → the share_links table → the public /share/:token
+  // SPA route.
 
   // Save a recruiter note. We persist via assessmentsApi.addNote when an
   // assessment is linked (it writes a `recruiter_note` event to the
@@ -1427,8 +1323,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             </button>
           </div>
         ) : null}
-
-        {shareState.error ? <p className="mt-3 text-xs text-[var(--taali-danger)]">{shareState.error}</p> : null}
 
         {isClientView && application?.client_share_summary ? (
           <div className="report-card" style={{ marginTop: 18, borderLeft: '4px solid var(--taali-accent, #4f46e5)' }}>

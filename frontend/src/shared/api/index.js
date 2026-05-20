@@ -1,5 +1,7 @@
 import api from './httpClient';
 
+export { viewShareLink } from './httpClient';
+
 export { auth } from './authClient';
 export { assessments } from './assessmentsClient';
 export { roles } from './rolesClient';

@@ -1559,67 +1559,6 @@ def test_global_and_role_pipeline_source_filters_support_workable_only(client, d
     assert pipeline_payload["stage_counts"]["applied"] >= 1
 
 
-def test_candidate_report_share_links_are_idempotent_and_member_only(client):
-    owner_headers, _ = auth_headers(client)
-    role = _create_role_with_spec(client, owner_headers, name="Share link role")
-
-    created = client.post(
-        f"/api/v1/roles/{role['id']}/applications",
-        json={
-            "candidate_email": "share-link@example.com",
-            "candidate_name": "Share Link Candidate",
-            "candidate_position": "Platform Engineer",
-        },
-        headers=owner_headers,
-    )
-    assert created.status_code == 201, created.text
-    application = created.json()
-
-    share_resp = client.post(
-        f"/api/v1/applications/{application['id']}/share-link",
-        headers=owner_headers,
-    )
-    assert share_resp.status_code == 200, share_resp.text
-    share_payload = share_resp.json()
-    assert share_payload["application_id"] == application["id"]
-    assert share_payload["share_token"].startswith("shr_")
-    assert share_payload["share_url"].endswith(
-        f"/c/{application['id']}?view=interview&k={share_payload['share_token']}"
-    )
-    assert share_payload["member_access_only"] is False
-
-    share_resp_repeat = client.post(
-        f"/api/v1/applications/{application['id']}/share-link",
-        headers=owner_headers,
-    )
-    assert share_resp_repeat.status_code == 200, share_resp_repeat.text
-    assert share_resp_repeat.json()["share_token"] == share_payload["share_token"]
-
-    owner_access = client.get(
-        f"/api/v1/applications/share/{share_payload['share_token']}",
-        headers=owner_headers,
-    )
-    assert owner_access.status_code == 200, owner_access.text
-    owner_payload = owner_access.json()
-    assert owner_payload["id"] == application["id"]
-    assert owner_payload["candidate_email"] == "share-link@example.com"
-
-    public_access = client.get(
-        f"/api/v1/applications/share/{share_payload['share_token']}",
-    )
-    assert public_access.status_code == 200, public_access.text
-    public_payload = public_access.json()
-    assert public_payload["id"] == application["id"]
-    assert public_payload["candidate_email"] == "share-link@example.com"
-
-    other_headers, _ = auth_headers(client)
-    other_access = client.get(
-        f"/api/v1/applications/share/{share_payload['share_token']}",
-        headers=other_headers,
-    )
-    assert other_access.status_code == 404
-
-
 def test_role_pipeline_supports_multi_stage_filter(client):
     headers, _ = auth_headers(client)
     role = _create_role_with_spec(client, headers, name="Role pipeline multi-stage role")

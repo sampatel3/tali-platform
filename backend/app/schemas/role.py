@@ -309,14 +309,6 @@ class ApplicationDetailResponse(ApplicationResponse):
     candidate_interview_kit: Optional[dict[str, Any]] = None
 
 
-class ApplicationReportShareLinkResponse(BaseModel):
-    application_id: int
-    share_token: str
-    share_url: str
-    created_at: datetime
-    member_access_only: bool = True
-
-
 class ApplicationCvUploadResponse(BaseModel):
     success: bool = True
     application_id: int

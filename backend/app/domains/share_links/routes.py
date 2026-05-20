@@ -134,10 +134,22 @@ class ShareLinkListResponse(BaseModel):
 
 
 class PublicShareViewResponse(BaseModel):
+    """Single-shot response for share-link recipients.
+
+    Returns the full application detail payload (scrubbed when the link's
+    mode is ``client``) so the SPA can render the standing report in one
+    round-trip — no separate auth-bypassed application fetch needed.
+
+    Metadata fields (``application_id``, ``mode``, ``view``, ``expires_at``)
+    are kept top-level for the test surface and so the SPA can inspect
+    them without unpacking ``application``.
+    """
+
     application_id: int
     mode: str
     view: str
     expires_at: str | None
+    application: dict[str, Any]
 
 
 @router.post(
@@ -263,14 +275,29 @@ def view_share_link(
     link.last_viewed_at = now
     db.commit()
 
-    # The actual share view (recruiter / client / single-view) is
-    # rendered client-side from CandidateStandingReportPage with the
-    # right `mode` flag. We just return the metadata the frontend
-    # needs to know which mode to render in.
     view = "client" if link.mode == SHARE_LINK_MODE_CLIENT else "recruiter"
+
+    # Resolve the application with the same joinedload set the recruiter
+    # detail view uses, then serialize via application_detail_payload so
+    # the SPA gets every field it normally renders. ``client_safe=True``
+    # scrubs recruiter notes / transcripts and switches in the client
+    # share summary, matching the rendering rules in CandidateStandingReportPage.
+    from ..assessments_runtime.applications_routes import _load_application_for_detail
+    from ..assessments_runtime.role_support import application_detail_payload
+
+    app = _load_application_for_detail(db=db, application_id=link.application_id)
+    if app is None:
+        raise HTTPException(status_code=404, detail="Candidate report unavailable.")
+    application_payload = application_detail_payload(
+        app,
+        include_cv_text=False,
+        client_safe=(view == "client"),
+    )
+
     return {
         "application_id": link.application_id,
         "mode": link.mode,
         "view": view,
         "expires_at": expires_at.isoformat() if expires_at else None,
+        "application": application_payload,
     }

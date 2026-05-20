@@ -90,8 +90,6 @@ class CandidateApplication(Base):
     role_fit_score_cache_100 = Column(Float, nullable=True)
     score_mode_cache = Column(String, nullable=True)
     score_cached_at = Column(DateTime(timezone=True), nullable=True)
-    report_share_token = Column(String, nullable=True, unique=True, index=True)
-    report_share_created_at = Column(DateTime(timezone=True), nullable=True)
 
     deleted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

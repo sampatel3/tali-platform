@@ -47,8 +47,6 @@ vi.mock('../shared/api', () => ({
     list: vi.fn().mockResolvedValue({ data: [] }),
     get: vi.fn(),
     getApplication: vi.fn(),
-    getApplicationByShareToken: vi.fn(),
-    getApplicationShareLink: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
     remove: vi.fn(),
@@ -184,15 +182,6 @@ describe('CandidatesPage', () => {
 
     rolesApi.list.mockResolvedValue({ data: baseRoles });
     rolesApi.listTasks.mockResolvedValue({ data: [{ id: 700, name: 'Async Debugging Challenge' }] });
-    rolesApi.getApplicationShareLink.mockResolvedValue({
-      data: {
-        application_id: 12,
-        share_token: 'shr_candidate_report_12',
-        share_url: 'https://www.taali.ai/c/12?view=interview&k=shr_candidate_report_12',
-        created_at: '2026-01-16T10:00:00Z',
-        member_access_only: false,
-      },
-    });
     teamApi.list.mockResolvedValue({
       data: [
         { id: 1, email: 'admin@taali.ai', is_active: true, is_email_verified: true },
@@ -593,54 +582,6 @@ describe('CandidatesPage', () => {
     // Both buttons open the same ShareModal pre-set to the right tab.
     expect(screen.getByRole('button', { name: /Share with client/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Share internally/i })).toBeInTheDocument();
-  });
-
-  it('loads a standing report from a shared token route and exposes share buttons', async () => {
-    rolesApi.getApplicationByShareToken.mockResolvedValue({
-      data: {
-        id: 12,
-        candidate_id: 102,
-        candidate_email: 'standing@example.com',
-        candidate_name: 'Standing Candidate',
-        candidate_position: 'AI Full Stack Engineer',
-        role_name: 'AI Full Stack Engineer',
-        pipeline_stage: 'review',
-        application_outcome: 'open',
-        status: 'applied',
-        cv_filename: 'standing.pdf',
-        cv_match_score: 81,
-        cv_match_details: {
-          score_scale: '0-100',
-          summary: 'Strong enough CV evidence to review before sending an assessment.',
-          requirements_match_score_100: 74,
-        },
-        assessment_history: [],
-        created_at: '2026-01-10T10:00:00Z',
-        updated_at: '2026-01-10T10:00:00Z',
-      },
-    });
-    rolesApi.getApplicationShareLink.mockResolvedValue({
-      data: {
-        application_id: 12,
-        share_token: 'shr_candidate_report_12',
-        share_url: 'https://www.taali.ai/c/12?view=interview&k=shr_candidate_report_12',
-        created_at: '2026-01-16T10:00:00Z',
-        member_access_only: false,
-      },
-    });
-
-    await renderAppAt('/candidates/shr_candidate_report_12');
-
-    await waitFor(() => {
-      expect(rolesApi.getApplicationByShareToken).toHaveBeenCalledWith('shr_candidate_report_12');
-      expect(screen.getByText('Candidate standing report')).toBeInTheDocument();
-      // The new header exposes two share buttons that open the modal —
-      // the inline Input/Copy/Email row was removed per user feedback
-      // ("tidy all the shareable links — way too many"). Modal-internal
-      // copy + revoke flows are covered in ShareModal's own tests.
-      expect(screen.getByRole('button', { name: /Share internally/i })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Share with client/i })).toBeInTheDocument();
-    });
   });
 
   it.skip('shows the assessment summary view in the sidebar for completed candidates [TODO: rewrite for jobs-first IA — role mgmt moved to JobsPage]', async () => {
