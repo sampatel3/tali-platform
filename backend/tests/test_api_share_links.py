@@ -195,6 +195,35 @@ def test_public_share_view_rejects_revoked_and_expired_links(client):
     assert expired_view.status_code == 410
 
 
+def test_public_share_view_returns_full_application_payload(client):
+    """The share-recipient endpoint returns the full application detail
+    in one round-trip, scrubbed to client view when the link mode is
+    ``client``. Without this, the SPA has no unauthenticated way to
+    fetch the application — the share link would just render an empty page.
+    """
+    headers, _ = auth_headers(client)
+    _, application = _make_role_and_application(client, headers)
+
+    create = client.post(
+        f"/api/v1/applications/{application['id']}/share-links",
+        json={"mode": "client", "expiry": "7d"},
+        headers=headers,
+    )
+    assert create.status_code == 200
+    token = create.json()["token"]
+
+    view = client.get(f"/share/{token}")
+    assert view.status_code == 200, view.text
+    payload = view.json()
+    assert payload["application_id"] == application["id"]
+    assert payload["mode"] == "client"
+    assert payload["view"] == "client"
+    assert "application" in payload
+    inner = payload["application"]
+    assert inner["id"] == application["id"]
+    assert inner["candidate_email"] == "share-link@example.com"
+
+
 def test_public_share_view_bumps_view_count(client):
     headers, _ = auth_headers(client)
     _, application = _make_role_and_application(client, headers)

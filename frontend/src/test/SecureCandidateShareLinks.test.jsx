@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../shared/api', () => ({
+  viewShareLink: vi.fn(),
   auth: {
     login: vi.fn(),
     register: vi.fn(),
@@ -68,16 +69,9 @@ vi.mock('../shared/api', () => ({
     }),
     listApplications: vi.fn().mockResolvedValue({ data: [] }),
     getApplication: vi.fn(),
-    getApplicationByShareToken: vi.fn(),
-    getApplicationShareLink: vi.fn().mockResolvedValue({
-      data: {
-        application_id: 12,
-        share_token: 'shr_candidate_report_12',
-        share_url: 'https://www.taali.ai/c/12?view=interview&k=shr_candidate_report_12',
-        created_at: '2026-01-16T10:00:00Z',
-        member_access_only: false,
-      },
-    }),
+    listApplicationShareLinks: vi.fn().mockResolvedValue({ data: { links: [] } }),
+    createApplicationShareLink: vi.fn(),
+    revokeShareLink: vi.fn(),
     listApplicationEvents: vi.fn().mockResolvedValue({ data: [] }),
     listTasks: vi.fn().mockResolvedValue({ data: [] }),
     batchScoreStatus: vi.fn(),
@@ -121,17 +115,9 @@ vi.mock('@monaco-editor/react', () => ({
   default: () => <div data-testid="code-editor" />,
 }));
 
-import { auth, roles as rolesApi } from '../shared/api';
+import { auth, viewShareLink } from '../shared/api';
 import App from '../App';
 import { AuthProvider } from '../context/AuthContext';
-
-const mockUser = {
-  id: 1,
-  email: 'member@taali.ai',
-  full_name: 'Member User',
-  organization_id: 1,
-  role: 'admin',
-};
 
 const sharedApplication = {
   id: 12,
@@ -170,7 +156,6 @@ describe('SecureCandidateShareLinks', () => {
     localStorage.clear();
     window.history.replaceState(null, '', '/');
     auth.me.mockRejectedValue(new Error('Not authenticated'));
-    rolesApi.getApplicationByShareToken.mockResolvedValue({ data: sharedApplication });
   });
 
   afterEach(() => {
@@ -178,43 +163,53 @@ describe('SecureCandidateShareLinks', () => {
     localStorage.clear();
   });
 
-  it('opens unauthenticated interviewer report links with token access', async () => {
-    renderAppAt('/c/12?view=interview&k=shr_candidate_report_12');
+  it('renders the unauthenticated /share/:token route via viewShareLink', async () => {
+    // HANDOFF v2 §3 — recipients land on /share/:token. The page calls
+    // the public unauth endpoint, gets the application payload plus the
+    // view mode in one round-trip, and renders the standing report
+    // without requiring a recruiter session.
+    viewShareLink.mockResolvedValue({
+      data: {
+        application_id: 12,
+        mode: 'recruiter',
+        view: 'recruiter',
+        expires_at: '2026-05-27T08:20:31.421293+00:00',
+        application: sharedApplication,
+      },
+    });
+
+    renderAppAt('/share/shr_candidate_report_12');
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/c/12');
-      expect(rolesApi.getApplicationByShareToken).toHaveBeenCalledWith('shr_candidate_report_12');
-      expect(screen.getByText(/Interview view/i)).toBeInTheDocument();
+      expect(viewShareLink).toHaveBeenCalledWith('shr_candidate_report_12');
+      expect(window.location.pathname).toBe('/share/shr_candidate_report_12');
     });
   });
 
-  it('returns members to legacy shared report links after sign-in', async () => {
-    auth.login.mockResolvedValue({ data: { access_token: 'tok123' } });
-    auth.me.mockResolvedValue({ data: mockUser });
+  it('switches to client-scrubbed view when the link mode is client', async () => {
+    viewShareLink.mockResolvedValue({
+      data: {
+        application_id: 12,
+        mode: 'client',
+        view: 'client',
+        expires_at: '2026-05-27T08:20:31.421293+00:00',
+        application: {
+          ...sharedApplication,
+          client_share_summary: {
+            verdict: 'Strong fit for the platform-engineering role',
+            why_now: 'Direct experience with the JD requirements.',
+          },
+        },
+      },
+    });
 
-    renderAppAt('/login?next=%2Fcandidates%2Fshr_candidate_report_12');
+    renderAppAt('/share/shr_client_view_xyz');
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText('you@company.com')).toBeInTheDocument();
-    });
-
-    fireEvent.change(screen.getByPlaceholderText('you@company.com'), {
-      target: { value: 'member@taali.ai' },
-    });
-    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
-      target: { value: 'password123' },
-    });
-    const primarySignInButton = screen.getAllByRole('button').find((button) => (
-      /sign in/i.test(button.textContent || '')
-      && (button.textContent || '').includes('→')
-    ));
-    expect(primarySignInButton).toBeTruthy();
-    fireEvent.click(primarySignInButton);
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe('/candidates/shr_candidate_report_12');
-      expect(rolesApi.getApplicationByShareToken).toHaveBeenCalledWith('shr_candidate_report_12');
-      expect(screen.getByText('Candidate standing report')).toBeInTheDocument();
+      expect(viewShareLink).toHaveBeenCalledWith('shr_client_view_xyz');
+      // Client-mode-only block from the candidate report renders only
+      // when the view mode is "client".
+      expect(screen.getByText(/Why we['’]re sharing this candidate/i)).toBeInTheDocument();
     });
   });
 });

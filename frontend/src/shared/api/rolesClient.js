@@ -36,8 +36,6 @@ export const roles = {
   listPipeline: (roleId, params = {}) => api.get(`/roles/${roleId}/pipeline`, { params }),
   listApplicationsGlobal: (params = {}) => api.get('/applications', { params }),
   getApplication: (applicationId, config = {}) => api.get(`/applications/${applicationId}`, config),
-  getApplicationByShareToken: (shareToken, config = {}) => api.get(`/applications/share/${shareToken}`, config),
-  getApplicationShareLink: (applicationId) => api.post(`/applications/${applicationId}/share-link`),
   // HANDOFF v2 §3 — multi-link share contract.
   // POST mints a new link with mode + expiry preset; GET lists all links
   // (active + revoked + expired so the report footer can render audit

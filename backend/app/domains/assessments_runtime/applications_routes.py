@@ -22,7 +22,7 @@ from ...actions.types import Actor
 from ...components.assessments.repository import assessment_to_response, utcnow
 from ...components.assessments.service import get_assessment_creation_gate
 from ...components.integrations.workable.sync_service import _extract_candidate_fields
-from ...deps import get_current_user, get_optional_current_user
+from ...deps import get_current_user
 from ...domains.integrations_notifications.invite_flow import dispatch_assessment_invite
 from ...models.assessment import Assessment
 from ...models.candidate import Candidate
@@ -45,7 +45,6 @@ from ...schemas.role import (
     ApplicationEventResponse,
     ApplicationInterviewResponse,
     ApplicationOutcomeUpdate,
-    ApplicationReportShareLinkResponse,
     ApplicationResponse,
     ApplicationStageUpdate,
     ApplicationUpdate,
@@ -135,67 +134,19 @@ def _application_is_workable_linked(app: CandidateApplication) -> bool:
     return bool(sanitize_text_for_storage(str(getattr(app, "workable_candidate_id", None) or "").strip()))
 
 
-def _generate_application_report_share_token() -> str:
-    return f"shr_{secrets.token_urlsafe(18)}"
-
-
-def _build_application_report_share_url(application_id: int, share_token: str) -> str:
-    frontend_base = str(settings.FRONTEND_URL or "").rstrip("/")
-    path = f"/c/{application_id}?view=interview&k={share_token}"
-    if not frontend_base:
-        return path
-    return f"{frontend_base}{path}"
-
-
-def _application_report_share_response(app: CandidateApplication) -> ApplicationReportShareLinkResponse:
-    token = sanitize_text_for_storage(str(app.report_share_token or "").strip())
-    if not token:
-        raise HTTPException(status_code=500, detail="Candidate report share link is unavailable.")
-    created_at = app.report_share_created_at or app.updated_at or app.created_at or utcnow()
-    return ApplicationReportShareLinkResponse(
-        application_id=app.id,
-        share_token=token,
-        share_url=_build_application_report_share_url(app.id, token),
-        created_at=created_at,
-        member_access_only=False,
-    )
-
-
-def _ensure_application_report_share_link(*, db: Session, app: CandidateApplication) -> CandidateApplication:
-    existing_token = sanitize_text_for_storage(str(app.report_share_token or "").strip())
-    if existing_token:
-        if app.report_share_created_at is None:
-            app.report_share_created_at = app.updated_at or app.created_at or utcnow()
-            db.add(app)
-            db.commit()
-            db.refresh(app)
-        return app
-
-    for _ in range(5):
-        app.report_share_token = _generate_application_report_share_token()
-        app.report_share_created_at = utcnow()
-        db.add(app)
-        try:
-            db.commit()
-            db.refresh(app)
-            return app
-        except IntegrityError:
-            db.rollback()
-
-    raise HTTPException(status_code=500, detail="Failed to create candidate report share link.")
-
-
-def _get_application_by_share_token(
-    share_token: str,
+def _load_application_for_detail(
     *,
-    org_id: int | None = None,
     db: Session,
-) -> CandidateApplication:
-    normalized_token = sanitize_text_for_storage(str(share_token or "").strip())
-    if not normalized_token or not normalized_token.startswith("shr_"):
-        raise HTTPException(status_code=404, detail="Candidate report unavailable.")
+    application_id: int,
+) -> CandidateApplication | None:
+    """Eager-load an application with the joinedload set the standing
+    report page needs (candidate, role, interviews, assessments+tasks).
 
-    query = (
+    Used by the public share-link endpoint to fetch the application
+    referenced by a ``share_links`` row without re-implementing the
+    joinedload tree in two places.
+    """
+    return (
         db.query(CandidateApplication)
         .options(
             joinedload(CandidateApplication.candidate),
@@ -204,18 +155,11 @@ def _get_application_by_share_token(
             joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
         )
         .filter(
-            CandidateApplication.report_share_token == normalized_token,
+            CandidateApplication.id == application_id,
             CandidateApplication.deleted_at.is_(None),
         )
+        .first()
     )
-
-    if org_id is not None:
-        query = query.filter(CandidateApplication.organization_id == org_id)
-
-    app = query.first()
-    if not app:
-        raise HTTPException(status_code=404, detail="Candidate report unavailable.")
-    return app
 
 
 def _sync_workable_outcome_change(
@@ -769,41 +713,6 @@ def get_application_detail(
     """Get a single application; optionally include full cv_text for CV viewer sidebar."""
     app = get_application(application_id, current_user.organization_id, db)
     return ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
-
-
-@router.get("/applications/share/{share_token}")
-def get_application_detail_by_share_token(
-    share_token: str,
-    include_cv_text: bool = Query(False, description="Include full CV extracted text for viewer"),
-    view: str = Query(
-        default="interview",
-        pattern="^(interview|client)$",
-        description="`interview` (default, hiring-manager view) or `client` (external; scrubs recruiter notes/transcripts and adds a 'why shared' summary).",
-    ),
-    db: Session = Depends(get_db),
-    current_user: User | None = Depends(get_optional_current_user),
-):
-    app = _get_application_by_share_token(
-        share_token,
-        org_id=current_user.organization_id if current_user else None,
-        db=db,
-    )
-    return application_detail_payload(
-        app,
-        include_cv_text=include_cv_text,
-        client_safe=(view == "client"),
-    )
-
-
-@router.post("/applications/{application_id}/share-link", response_model=ApplicationReportShareLinkResponse)
-def ensure_application_report_share_link(
-    application_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    app = get_application(application_id, current_user.organization_id, db)
-    app = _ensure_application_report_share_link(db=db, app=app)
-    return _application_report_share_response(app)
 
 
 @router.post("/applications/{application_id}/interview-debrief")

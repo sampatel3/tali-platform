@@ -3,9 +3,10 @@
 HANDOFF v2 §3 — every "Download PDF" / "Export PDF" reference was
 replaced with shareable links. Recruiters can mint multiple active
 links per candidate report, each with its own mode (recruiter / client
-/ single-view) and expiry. The legacy single-token field on
-``CandidateApplication.report_share_token`` is retained for
-back-compat with existing share URLs but new links live here.
+/ single-view) and expiry. This table is the sole source of truth
+for share links; the predecessor single-token-per-application
+``CandidateApplication.report_share_token`` column was dropped in
+migration ``086_drop_application_report_share_columns``.
 
 Modes:
 - ``recruiter``    — full report incl. timeline + AI usage

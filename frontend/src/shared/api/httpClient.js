@@ -9,6 +9,14 @@ const api = axios.create({
   },
 });
 
+// Public unauth share-link endpoint lives at the app root (no /api/v1
+// prefix) so recipients can open it without a recruiter session. The
+// SPA's /share/:token route uses this to fetch the application payload
+// in one round-trip — the backend scrubs to client-view shape when
+// the share link's mode is "client".
+export const viewShareLink = (token) =>
+  axios.get(`${API_URL}/share/${encodeURIComponent(token)}`);
+
 const isAuthEndpoint = (url = '') => (
   url.includes('/auth/jwt/login')
   || url.includes('/auth/register')
@@ -28,7 +36,7 @@ const isPublicPath = (pathname = '', search = '') => {
     || pathname.startsWith('/verify-email')
     || pathname.startsWith('/demo')
     || pathname.startsWith('/c/')
-    || (/^\/candidates\/shr_[^/]+$/.test(pathname))
+    || pathname.startsWith('/share/')
     || pathname.startsWith('/assess/')
     || pathname.startsWith('/assessment/')
     || pathname.startsWith('/showcase/')) {
