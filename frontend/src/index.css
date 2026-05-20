@@ -59,6 +59,11 @@
   --peach: #ffd1b8;
   --green: #15a36a;
   --red: #e64a4a;
+  /* Deeper red for higher-severity reject states (currently the
+     pre-screen reject, where the agent has flagged the candidate as
+     not worth assessing). Visibly darker than --red so the recruiter
+     reads it as a stronger no without losing the red-family signal. */
+  --red-deep: #a83232;
   --amber: #d88a1c;
   --workable: #2d8cff;
   --workable-dark: #1a5fbf;
