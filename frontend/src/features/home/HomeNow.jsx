@@ -119,31 +119,19 @@ const DECISION_ACTIONS = {
     ],
   },
   skip_assessment_reject: {
+    // No inline overrides for pre-screen reject. The agent has flagged
+    // the CV as not worth assessing (often fraud / hard-constraint
+    // failures like salary mismatch caught from Workable answers); a
+    // one-click "Send assessment anyway" trains recruiters to ignore
+    // the cost-protection signal and drains assessment credits on
+    // candidates that shouldn't be tested. If the recruiter disagrees,
+    // the right path is ``Send back & teach`` — that produces a
+    // learning signal and re-runs the agent with the new context. The
+    // universals (teach + snooze) are appended by the renderer.
     primaryLabel: 'Reject',
     primaryIcon: X,
     primaryClass: 'rq-override',
-    alternatives: [
-      {
-        action: 'send_assessment',
-        label: 'Send assessment anyway',
-        icon: Send,
-        kicker: 'OVERRIDE TO SEND',
-        headline: 'Send the assessment to {name} anyway?',
-        body: "The agent thought this was a pre-screen skip. You disagree — assessment dispatches.",
-        confirmLabel: 'Send assessment',
-        confirmClass: 'rq-approve',
-      },
-      {
-        action: 'advance',
-        label: 'Advance',
-        icon: ArrowRight,
-        kicker: 'OVERRIDE TO ADVANCE',
-        headline: 'Advance {name} instead?',
-        body: 'Moves them to the next Workable stage without sending the rejection email.',
-        confirmLabel: 'Advance',
-        confirmClass: 'rq-approve',
-      },
-    ],
+    alternatives: [],
   },
   resend_assessment_invite: {
     primaryLabel: 'Resend invite',
@@ -193,7 +181,7 @@ const TYPE_OPTIONS = [
   { id: '', label: 'All types' },
   { id: 'advance_to_interview', label: 'Advance' },
   { id: 'reject', label: 'Reject' },
-  { id: 'skip_assessment_reject', label: 'Reject (no assess)' },
+  { id: 'skip_assessment_reject', label: 'Reject (pre-screen)' },
 ];
 
 const Toolbar = ({ filters, setFilters, roles, bulkAction }) => (

@@ -138,7 +138,7 @@ const OUTCOME_LABEL = {
 const VERB_FOR_DECISION = {
   advance_to_interview: 'advance',
   reject: 'reject',
-  skip_assessment_reject: 'reject (no assess)',
+  skip_assessment_reject: 'reject (pre-screen)',
 };
 
 const OutcomesList = ({ rows }) => {

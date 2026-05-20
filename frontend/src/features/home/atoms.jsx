@@ -29,8 +29,12 @@ const TYPE_BADGE = {
     Icon: X,
   },
   skip_assessment_reject: {
-    label: 'REJECT (NO ASSESS)',
-    color: 'var(--red)',
+    // Deeper red than plain ``reject`` so the recruiter reads this as a
+    // stronger signal: "the agent has flagged this CV as not worth
+    // assessing." Pre-screen-stage rejection, distinct from general
+    // mid-pipeline rejection.
+    label: 'REJECT (PRE-SCREEN)',
+    color: 'var(--red-deep)',
     Icon: X,
   },
   // Phase 4 abstention — sub-agents disagreed or were too uncertain.
