@@ -7,6 +7,20 @@ import React from 'react';
 
 import { formatUsd } from './atoms';
 
+// Map raw backend pause reasons to short, recruiter-friendly labels.
+// The backend writes implementation-detail strings like "monthly USD cap
+// reached: 5012c >= 5000c"; we don't want that uppercased on the home page.
+const humanizePausedReason = (reason) => {
+  if (!reason) return null;
+  const r = String(reason).toLowerCase();
+  if (r.startsWith('monthly usd cap')) return 'Monthly budget reached';
+  if (r.startsWith('role paused')) return null; // already pause-on-pause; redundant
+  if (r.includes('decision budget')) return 'Cycle limit reached'; // shouldn't auto-pause anymore but keep safe fallback
+  // Unknown reason: show a short, properly-cased prefix instead of SHOUTING
+  // the raw value.
+  return String(reason).slice(0, 32);
+};
+
 export const HomeRoles = ({ rows, loading, onNavigate }) => (
   <section className="home-section">
     <div className="home-section-head">
@@ -58,7 +72,10 @@ export const HomeRoles = ({ rows, loading, onNavigate }) => (
                 <span className="rq-r-name-main">{r.name}</span>
                 {r.paused ? (
                   <span className="rq-r-flag amber">
-                    PAUSED{r.paused_reason ? ` · ${String(r.paused_reason).toUpperCase()}` : ''}
+                    {(() => {
+                      const label = humanizePausedReason(r.paused_reason);
+                      return label ? `PAUSED · ${label}` : 'PAUSED';
+                    })()}
                   </span>
                 ) : null}
                 {r.paused ? null : r.agentic_mode_enabled ? (
