@@ -425,7 +425,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [workableForm, setWorkableForm] = useState({
     emailMode: 'manual_taali',
     defaultSyncMode: 'full',
-    syncIntervalMinutes: 30,
     inviteStageName: '',
     autoRejectEnabled: false,
     workableActorMemberId: '',
@@ -725,7 +724,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     setWorkableForm({
       emailMode: workableConfig.email_mode || 'manual_taali',
       defaultSyncMode: workableConfig.default_sync_mode || 'full',
-      syncIntervalMinutes: Number(workableConfig.sync_interval_minutes || 30),
       inviteStageName: workableConfig.invite_stage_name || '',
       autoRejectEnabled: Boolean(workableConfig.auto_reject_enabled),
       workableActorMemberId: workableConfig.workable_actor_member_id || '',
@@ -1177,7 +1175,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
           sync_scope: 'open_jobs_active_candidates',
           score_precedence: 'workable_first',
           default_sync_mode: defaultSyncMode,
-          sync_interval_minutes: Number(workableForm.syncIntervalMinutes || 30),
           invite_stage_name: emailMode === 'workable_preferred_fallback_manual' ? inviteStageName : '',
           auto_reject_enabled: autoRejectEnabled,
           workable_actor_member_id: workableActorMemberId || null,
@@ -1266,8 +1263,11 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     : orgData?.workable_last_sync_at
       ? 'healthy'
       : 'stale';
-  const nextWorkablePull = orgData?.workable_last_sync_at && workableConfig.sync_interval_minutes
-    ? new Date(new Date(orgData.workable_last_sync_at).getTime() + Number(workableConfig.sync_interval_minutes || 30) * 60000)
+  // Jobs metadata syncs every 15 min (sync_workable_jobs Beat task).
+  // The legacy ``sync_interval_minutes`` config was removed by the 2026-05-20
+  // sync redesign — per-candidate cadences live in the beat schedule now.
+  const nextWorkablePull = orgData?.workable_last_sync_at
+    ? new Date(new Date(orgData.workable_last_sync_at).getTime() + 15 * 60000)
     : null;
   const lastSyncSummary = orgData?.workable_last_sync_summary || {};
   // Usage-based pricing (post 2026-04-29). Balance is in micro-credits

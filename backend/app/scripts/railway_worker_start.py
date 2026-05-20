@@ -131,9 +131,10 @@ def main() -> int:
     # service later, set TALI_WORKER_QUEUES="scoring" on that service
     # and "celery" on this one — see backend/docs/CELERY_QUEUES.md.
     queues = os.environ.get("TALI_WORKER_QUEUES", "celery,scoring").strip() or "celery,scoring"
-    # Bumped from 2 → 4 so Workable sync (long, 60+ min) can't claim
-    # every slot. Combined with the sync_workable_orgs lock, scoring
-    # always has at least 2-3 slots free in practice.
+    # Bumped from 2 → 4 so Workable syncs (split across jobs-only,
+    # starred, agent-mode, and nightly tasks per the 2026-05-20
+    # redesign) can't claim every slot. With per-task Redis locks
+    # scoring keeps at least 2-3 slots free in practice.
     concurrency = os.environ.get("TALI_WORKER_CONCURRENCY", "4")
     # `--beat` runs the periodic-task scheduler in-process. Only the
     # worker that owns scheduling should set this (TALI_WORKER_BEAT).

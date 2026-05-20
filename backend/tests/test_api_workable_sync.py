@@ -624,8 +624,8 @@ def test_sync_workable_jobs_uses_jobs_only_mode(db, monkeypatch):
             return {"jobs_seen": 0}
 
     monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(assessment_tasks, "_acquire_jobs_sync_lock", lambda: False)
-    monkeypatch.setattr(assessment_tasks, "_release_jobs_sync_lock", lambda c: None)
+    monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", lambda *a, **kw: False)
+    monkeypatch.setattr(assessment_tasks, "_release_workable_org_mutex", lambda *a, **kw: None)
     from app.components.integrations.workable import sync_service as sync_service_mod
     monkeypatch.setattr(sync_service_mod, "WorkableSyncService", _FakeService)
 
@@ -681,8 +681,8 @@ def test_sync_agent_mode_roles_filters_to_agentic_unpaused(db, monkeypatch):
             return {"jobs_seen": 0}
 
     monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(assessment_tasks, "_acquire_agent_mode_lock", lambda org_id: False)
-    monkeypatch.setattr(assessment_tasks, "_release_agent_mode_lock", lambda h: None)
+    monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", lambda *a, **kw: False)
+    monkeypatch.setattr(assessment_tasks, "_release_workable_org_mutex", lambda *a, **kw: None)
     from app.components.integrations.workable import sync_service as sync_service_mod
     monkeypatch.setattr(sync_service_mod, "WorkableSyncService", _FakeService)
 
@@ -741,8 +741,8 @@ def test_sync_workable_daily_candidates_skips_starred_and_active_agent(db, monke
             return {"jobs_seen": 0}
 
     monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(assessment_tasks, "_acquire_daily_candidate_lock", lambda org_id: False)
-    monkeypatch.setattr(assessment_tasks, "_release_daily_candidate_lock", lambda h: None)
+    monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", lambda *a, **kw: False)
+    monkeypatch.setattr(assessment_tasks, "_release_workable_org_mutex", lambda *a, **kw: None)
     from app.components.integrations.workable import sync_service as sync_service_mod
     monkeypatch.setattr(sync_service_mod, "WorkableSyncService", _FakeService)
 
@@ -862,3 +862,128 @@ def test_sync_org_jobs_only_mode_skips_candidate_fetch(db, monkeypatch):
         .all()
     )
     assert sorted(r.workable_job_id for r in roles) == ["JOB1", "JOB2"]
+
+
+def test_sync_org_jobs_only_handles_rate_limit_gracefully(db):
+    """A 429 during jobs_only sync's job listing must propagate cleanly.
+
+    The caller (e.g. ``sync_workable_jobs``) wraps the call in a broad
+    ``except Exception``, so the rate-limit error needs to bubble up
+    distinguishably rather than silently mutating partial state.
+    """
+    from app.components.integrations.workable.service import WorkableRateLimitError
+    from app.components.integrations.workable.sync_service import WorkableSyncService
+
+    org = Organization(
+        name="RL Org",
+        slug="rl-org",
+        workable_connected=True,
+        workable_access_token="tk",
+        workable_subdomain="rl",
+    )
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+
+    class _RateLimitClient:
+        def list_open_jobs(self):
+            raise WorkableRateLimitError("Workable API rate limited (429)")
+
+        def get_job_details(self, job_id):
+            raise AssertionError("get_job_details should not be reached after rate-limit")
+
+        def list_job_candidates(self, *args, **kwargs):
+            raise AssertionError("list_job_candidates should not be reached after rate-limit")
+
+    service = WorkableSyncService(_RateLimitClient())
+    with pytest.raises(WorkableRateLimitError):
+        service.sync_org(db, org, mode="jobs_only")
+
+    # Org should be marked partial/failed but in a consistent state.
+    db.expire_all()
+    refreshed = db.query(Organization).filter(Organization.id == org.id).first()
+    assert refreshed.workable_last_sync_status in ("failed", "partial"), (
+        f"Expected failed/partial last_sync_status, got: {refreshed.workable_last_sync_status}"
+    )
+
+
+def test_workable_org_mutex_blocks_concurrent_task_types(monkeypatch):
+    """The unified mutex prevents two sync task types touching the same org concurrently.
+
+    Regression for the 2026-05-20 rate-limit incident: jobs / starred /
+    agent / nightly tasks all share Workable's per-token rate limit.
+    The per-org mutex is what stops them from racing into 429s.
+    """
+    from app.tasks import assessment_tasks
+
+    # In-process fake of the Redis subset the mutex helpers use.
+    store: dict[str, str] = {}
+
+    class _FakeRedisClient:
+        def set(self, key, value, nx=False, ex=None):
+            if nx and key in store:
+                return False
+            store[key] = value
+            return True
+
+        def get(self, key):
+            return store.get(key)
+
+        def delete(self, key):
+            store.pop(key, None)
+
+    shared_client = _FakeRedisClient()
+
+    class _FakeRedisModule:
+        Redis = type("_RedisStub", (), {"from_url": staticmethod(lambda url: shared_client)})
+
+    import sys
+    monkeypatch.setitem(sys.modules, "redis", _FakeRedisModule)
+
+    # Acquire as "jobs"; the next attempt by any other source should be blocked.
+    held = assessment_tasks._acquire_workable_org_mutex(42, source="jobs")
+    assert held is not None, f"First acquire should succeed, got {held}; store={store}"
+    blocked = assessment_tasks._acquire_workable_org_mutex(42, source="starred")
+    assert blocked is None, "A second source must be blocked while jobs holds the lock"
+    # Different org isn't blocked.
+    other = assessment_tasks._acquire_workable_org_mutex(43, source="starred")
+    assert other is not None, "Different org should acquire freely"
+
+    # Release frees up.
+    assessment_tasks._release_workable_org_mutex(held)
+    after = assessment_tasks._acquire_workable_org_mutex(42, source="agent")
+    assert after is not None, "After release, next source can acquire"
+
+
+def test_reaper_clears_stale_org_progress_without_running_run(db):
+    """Reaper second sweep: stale org-level progress (no run row) gets cleared too."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.tasks.assessment_tasks import _STUCK_RUN_TIMEOUT_HOURS, reap_stuck_workable_sync_runs
+
+    # Org with stale workable_sync_started_at but no in-flight run.
+    # This is what sync_workable_jobs / sync_starred_roles leave when
+    # their worker dies — those tasks don't create WorkableSyncRun rows.
+    org = Organization(
+        name="StaleProgress Org",
+        slug="staleprogress-org",
+        workable_connected=True,
+        workable_access_token="tk",
+        workable_subdomain="staleprogress",
+        workable_sync_started_at=datetime.now(timezone.utc) - timedelta(hours=_STUCK_RUN_TIMEOUT_HOURS + 1),
+        workable_sync_progress={"phase": "syncing_jobs", "jobs_processed": 5},
+    )
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+    org_id = org.id
+
+    result = reap_stuck_workable_sync_runs.run()
+    assert result["status"] == "ok"
+    assert result["cleared_orgs"] == 1
+    assert org_id in result["stale_org_ids"]
+
+    db.expire_all()
+    refreshed = db.query(Organization).filter(Organization.id == org_id).first()
+    assert refreshed.workable_sync_started_at is None
+    assert refreshed.workable_sync_progress is None

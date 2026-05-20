@@ -202,41 +202,56 @@ def send_assessment_expiry_reminders():
 # 15 min (jobs_only), starred-role candidates every 5 min, agent-mode
 # candidates every 5 min, everything else once nightly.
 
-_STARRED_SYNC_LOCK_KEY_PREFIX = "celery:lock:sync_starred_roles"
-_STARRED_SYNC_LOCK_TTL_SECONDS = 600  # 10m ceiling — starred sync is filtered, fast
+# Single per-org mutex shared by all four Workable sync tasks. Two tasks
+# touching the same Workable token at the same time used to share-rate-
+# limit each other into 429s (each ``sync_org`` calls ``list_open_jobs``
+# which fires 5 endpoint hits, and per-candidate prefetches fan out
+# further). A single mutex means only one task type is talking to
+# Workable for a given org at a time. If a task can't get the lock it
+# skips that fire — the next Beat tick (5-15 min away) will retry.
+_WORKABLE_ORG_MUTEX_KEY_PREFIX = "celery:lock:workable_org_sync"
+# 30-min ceiling. Jobs / starred / agent runs typically take seconds to
+# a few minutes; nightly runs may take longer but should still finish
+# well under 30 min thanks to the CV-skip cache. If a worker actually
+# hangs the lock auto-releases after the TTL and the next task can run.
+_WORKABLE_ORG_MUTEX_TTL_SECONDS = 1800
 
 
-def _acquire_starred_lock(org_id: int):
-    """Per-org lock for starred-role sync.
+def _acquire_workable_org_mutex(org_id: int, *, source: str):
+    """Acquire the per-org Workable mutex shared across all sync tasks.
 
-    Independent from the broader sync_workable_orgs lock so a slow
-    org-wide sync can't block the 15-min starred cadence.
+    ``source`` is a short label (``"jobs"`` / ``"starred"`` / ``"agent"``
+    / ``"nightly"``) recorded as the lock value so we can see in Redis
+    which task is holding the lock when debugging.
+
+    Returns the handle on success, ``None`` if held by another task,
+    ``False`` on Redis failure (caller treats as "run unguarded").
     """
     try:
         import redis  # type: ignore
 
         client = redis.Redis.from_url(settings.REDIS_URL)
-        key = f"{_STARRED_SYNC_LOCK_KEY_PREFIX}:{org_id}"
-        acquired = client.set(key, "1", nx=True, ex=_STARRED_SYNC_LOCK_TTL_SECONDS)
-        if not acquired:
-            return None
-        return (client, key)
+        key = f"{_WORKABLE_ORG_MUTEX_KEY_PREFIX}:{org_id}"
+        if client.set(key, source, nx=True, ex=_WORKABLE_ORG_MUTEX_TTL_SECONDS):
+            return (client, key)
+        return None
     except Exception:
         logger.exception(
-            "Failed to acquire starred-roles sync lock org_id=%s; running unguarded",
+            "Failed to acquire workable-org mutex org_id=%s source=%s; running unguarded",
             org_id,
+            source,
         )
         return False
 
 
-def _release_starred_lock(handle) -> None:
+def _release_workable_org_mutex(handle) -> None:
     if not handle:
         return
     try:
         client, key = handle
         client.delete(key)
     except Exception:
-        logger.exception("Failed to release starred-roles sync lock")
+        logger.exception("Failed to release workable-org mutex")
 
 
 @celery_app.task
@@ -302,9 +317,10 @@ def sync_starred_roles():
             shortcodes = by_org.get(int(org.id)) or []
             if not shortcodes:
                 continue
-            lock_handle = _acquire_starred_lock(int(org.id))
+            lock_handle = _acquire_workable_org_mutex(int(org.id), source="starred")
             if lock_handle is None:
-                # Another starred-sync is already running for this org.
+                # Another sync task is currently talking to Workable for
+                # this org — skip this fire to avoid 429 races.
                 skipped += 1
                 continue
             try:
@@ -333,7 +349,7 @@ def sync_starred_roles():
                     shortcodes,
                 )
             finally:
-                _release_starred_lock(lock_handle)
+                _release_workable_org_mutex(lock_handle)
         return {"status": "ok", "synced": synced, "skipped": skipped, "failed": failed}
     finally:
         db.close()
@@ -357,33 +373,6 @@ def sync_starred_roles():
 #   - sync_workable_daily_candidates   (nightly, mode=full)     — every other
 #                                       role's candidates once per day.
 # ---------------------------------------------------------------------------
-
-_JOBS_SYNC_LOCK_KEY = "celery:lock:sync_workable_jobs"
-_JOBS_SYNC_LOCK_TTL_SECONDS = 600  # 10m ceiling — jobs-only is fast
-
-
-def _acquire_jobs_sync_lock():
-    """Best-effort Redis lock for sync_workable_jobs."""
-    try:
-        import redis  # type: ignore
-
-        client = redis.Redis.from_url(settings.REDIS_URL)
-        if client.set(_JOBS_SYNC_LOCK_KEY, "1", nx=True, ex=_JOBS_SYNC_LOCK_TTL_SECONDS):
-            return client
-        return None
-    except Exception:
-        logger.exception("Failed to acquire jobs-sync lock; running unguarded")
-        return False
-
-
-def _release_jobs_sync_lock(client) -> None:
-    if not client:
-        return
-    try:
-        client.delete(_JOBS_SYNC_LOCK_KEY)
-    except Exception:
-        logger.exception("Failed to release jobs-sync lock")
-
 
 @celery_app.task
 def sync_workable_jobs():
@@ -409,13 +398,9 @@ def sync_workable_jobs():
     if settings.MVP_DISABLE_WORKABLE:
         return {"status": "skipped", "reason": "workable_disabled"}
 
-    lock_client = _acquire_jobs_sync_lock()
-    if lock_client is None:
-        logger.info("sync_workable_jobs skipping: another instance is already running")
-        return {"status": "skipped", "reason": "already_running"}
-
     db: Session = SessionLocal()
     synced = 0
+    skipped = 0
     failed = 0
     try:
         orgs = (
@@ -428,6 +413,12 @@ def sync_workable_jobs():
             .all()
         )
         for org in orgs:
+            lock_handle = _acquire_workable_org_mutex(int(org.id), source="jobs")
+            if lock_handle is None:
+                # Another task type is currently hitting Workable for
+                # this org. Skip — next Beat tick will retry.
+                skipped += 1
+                continue
             try:
                 service = WorkableSyncService(
                     WorkableService(
@@ -440,42 +431,11 @@ def sync_workable_jobs():
             except Exception:
                 failed += 1
                 logger.exception("Workable jobs-only sync failed for org_id=%s", org.id)
-        return {"status": "ok", "synced": synced, "failed": failed}
+            finally:
+                _release_workable_org_mutex(lock_handle)
+        return {"status": "ok", "synced": synced, "skipped": skipped, "failed": failed}
     finally:
         db.close()
-        _release_jobs_sync_lock(lock_client)
-
-
-_AGENT_MODE_SYNC_LOCK_KEY_PREFIX = "celery:lock:sync_agent_mode_roles"
-_AGENT_MODE_SYNC_LOCK_TTL_SECONDS = 600  # 10m ceiling — fast filtered sync
-
-
-def _acquire_agent_mode_lock(org_id: int):
-    """Per-org lock for agent-mode sync."""
-    try:
-        import redis  # type: ignore
-
-        client = redis.Redis.from_url(settings.REDIS_URL)
-        key = f"{_AGENT_MODE_SYNC_LOCK_KEY_PREFIX}:{org_id}"
-        if client.set(key, "1", nx=True, ex=_AGENT_MODE_SYNC_LOCK_TTL_SECONDS):
-            return (client, key)
-        return None
-    except Exception:
-        logger.exception(
-            "Failed to acquire agent-mode sync lock org_id=%s; running unguarded",
-            org_id,
-        )
-        return False
-
-
-def _release_agent_mode_lock(handle) -> None:
-    if not handle:
-        return
-    try:
-        client, key = handle
-        client.delete(key)
-    except Exception:
-        logger.exception("Failed to release agent-mode sync lock")
 
 
 @celery_app.task
@@ -485,9 +445,8 @@ def sync_agent_mode_roles():
     Mirrors sync_starred_roles but filters to roles with the agent loop
     turned on (and not paused). Runs at the same 5-min cadence so the
     agent always sees fresh Workable state. A role that is BOTH starred
-    and agentic will be picked up by both tasks — Redis locks prevent
-    overlap within a single org, and ``sync_org`` is idempotent across
-    repeated upserts.
+    and agentic gets picked up by whichever task wins the per-org
+    mutex race — the other one skips and the work isn't duplicated.
     """
     from sqlalchemy.orm import Session
 
@@ -538,7 +497,7 @@ def sync_agent_mode_roles():
             shortcodes = by_org.get(int(org.id)) or []
             if not shortcodes:
                 continue
-            lock_handle = _acquire_agent_mode_lock(int(org.id))
+            lock_handle = _acquire_workable_org_mutex(int(org.id), source="agent")
             if lock_handle is None:
                 skipped += 1
                 continue
@@ -565,41 +524,10 @@ def sync_agent_mode_roles():
                     shortcodes,
                 )
             finally:
-                _release_agent_mode_lock(lock_handle)
+                _release_workable_org_mutex(lock_handle)
         return {"status": "ok", "synced": synced, "skipped": skipped, "failed": failed}
     finally:
         db.close()
-
-
-_DAILY_CANDIDATE_SYNC_LOCK_KEY_PREFIX = "celery:lock:sync_workable_daily_candidates"
-_DAILY_CANDIDATE_SYNC_LOCK_TTL_SECONDS = 7200  # 2h ceiling — nightly catch-all
-
-
-def _acquire_daily_candidate_lock(org_id: int):
-    try:
-        import redis  # type: ignore
-
-        client = redis.Redis.from_url(settings.REDIS_URL)
-        key = f"{_DAILY_CANDIDATE_SYNC_LOCK_KEY_PREFIX}:{org_id}"
-        if client.set(key, "1", nx=True, ex=_DAILY_CANDIDATE_SYNC_LOCK_TTL_SECONDS):
-            return (client, key)
-        return None
-    except Exception:
-        logger.exception(
-            "Failed to acquire daily-candidate sync lock org_id=%s; running unguarded",
-            org_id,
-        )
-        return False
-
-
-def _release_daily_candidate_lock(handle) -> None:
-    if not handle:
-        return
-    try:
-        client, key = handle
-        client.delete(key)
-    except Exception:
-        logger.exception("Failed to release daily-candidate sync lock")
 
 
 @celery_app.task
@@ -663,7 +591,7 @@ def sync_workable_daily_candidates():
             shortcodes = by_org.get(int(org.id)) or []
             if not shortcodes:
                 continue
-            lock_handle = _acquire_daily_candidate_lock(int(org.id))
+            lock_handle = _acquire_workable_org_mutex(int(org.id), source="nightly")
             if lock_handle is None:
                 skipped += 1
                 continue
@@ -690,7 +618,7 @@ def sync_workable_daily_candidates():
                     len(shortcodes),
                 )
             finally:
-                _release_daily_candidate_lock(lock_handle)
+                _release_workable_org_mutex(lock_handle)
         return {"status": "ok", "synced": synced, "skipped": skipped, "failed": failed}
     finally:
         db.close()
@@ -709,6 +637,12 @@ _STUCK_RUN_TIMEOUT_HOURS = 6
 @celery_app.task
 def reap_stuck_workable_sync_runs():
     """Finalize WorkableSyncRun rows whose worker died before the run finished.
+
+    Also clears stale org-level ``workable_sync_progress`` JSON for orgs
+    that have no in-flight run but still hold old progress state — this
+    happens when ``sync_workable_jobs`` / ``sync_starred_roles`` /
+    ``sync_agent_mode_roles`` (which call ``sync_org`` without a
+    ``run_id``) die mid-sync and never get the chance to clear it.
 
     A real run takes 30-90 minutes including candidate CV downloads, so 6h
     is a safe ceiling that won't kill a healthy in-flight sync. Beat fires
@@ -734,11 +668,9 @@ def reap_stuck_workable_sync_runs():
             )
             .all()
         )
-        if not stuck:
-            return {"status": "ok", "reaped": 0}
 
         now = datetime.now(timezone.utc)
-        org_ids: set[int] = set()
+        org_ids_from_runs: set[int] = set()
         for run in stuck:
             run.status = "failed"
             run.finished_at = now
@@ -748,14 +680,12 @@ def reap_stuck_workable_sync_runs():
                 f"Stuck-run reaper: marked failed after {_STUCK_RUN_TIMEOUT_HOURS}h timeout"
             )
             run.errors = errors
-            org_ids.add(int(run.organization_id))
+            org_ids_from_runs.add(int(run.organization_id))
 
-        # Clear matching org sync flags so the next sync trigger isn't
-        # confused by stale in-flight state pointing at the dead run.
-        if org_ids:
+        if org_ids_from_runs:
             (
                 db.query(Organization)
-                .filter(Organization.id.in_(org_ids))
+                .filter(Organization.id.in_(org_ids_from_runs))
                 .update(
                     {
                         Organization.workable_sync_started_at: None,
@@ -765,13 +695,65 @@ def reap_stuck_workable_sync_runs():
                     synchronize_session=False,
                 )
             )
-        db.commit()
-        logger.warning(
-            "reap_stuck_workable_sync_runs reaped %d run(s) across %d org(s): run_ids=%s",
-            len(stuck),
-            len(org_ids),
-            [r.id for r in stuck],
+
+        # Second sweep: orgs whose ``workable_sync_progress`` JSON is
+        # stale but have no in-flight run row to reap. These come from
+        # the run-less Beat tasks (sync_workable_jobs, sync_starred_roles,
+        # sync_agent_mode_roles) — when their worker dies mid-flight,
+        # ``_persist_progress`` leaves the org's progress JSON pointing
+        # at the half-finished work forever, and nothing else clears it.
+        stale_orgs = (
+            db.query(Organization.id)
+            .filter(
+                Organization.workable_sync_started_at.isnot(None),
+                Organization.workable_sync_started_at < threshold,
+                ~Organization.id.in_(
+                    db.query(WorkableSyncRun.organization_id).filter(
+                        WorkableSyncRun.status == "running",
+                        WorkableSyncRun.finished_at.is_(None),
+                    )
+                ),
+            )
+            .all()
         )
-        return {"status": "ok", "reaped": len(stuck), "org_ids": sorted(org_ids)}
+        org_ids_from_stale = {int(row[0]) for row in stale_orgs}
+        if org_ids_from_stale:
+            (
+                db.query(Organization)
+                .filter(Organization.id.in_(org_ids_from_stale))
+                .update(
+                    {
+                        Organization.workable_sync_started_at: None,
+                        Organization.workable_sync_progress: None,
+                        Organization.workable_sync_cancel_requested_at: None,
+                    },
+                    synchronize_session=False,
+                )
+            )
+
+        if not stuck and not org_ids_from_stale:
+            return {"status": "ok", "reaped": 0, "cleared_orgs": 0}
+
+        db.commit()
+        if stuck:
+            logger.warning(
+                "reap_stuck_workable_sync_runs reaped %d run(s) across %d org(s): run_ids=%s",
+                len(stuck),
+                len(org_ids_from_runs),
+                [r.id for r in stuck],
+            )
+        if org_ids_from_stale:
+            logger.warning(
+                "reap_stuck_workable_sync_runs cleared stale progress for %d org(s): org_ids=%s",
+                len(org_ids_from_stale),
+                sorted(org_ids_from_stale),
+            )
+        return {
+            "status": "ok",
+            "reaped": len(stuck),
+            "cleared_orgs": len(org_ids_from_stale),
+            "run_org_ids": sorted(org_ids_from_runs),
+            "stale_org_ids": sorted(org_ids_from_stale),
+        }
     finally:
         db.close()
