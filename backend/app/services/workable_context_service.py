@@ -15,13 +15,49 @@ block without exploding the static-block cache.
 
 from __future__ import annotations
 
+import ast
 import logging
+import re
 from typing import Any
 
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 
 logger = logging.getLogger(__name__)
+
+
+# Legacy rows stored skills/tags as ``str(dict)`` reprs (e.g. ``"{'name':
+# 'AWS'}"``). New ingestion writes clean labels, but historical data
+# still needs to render readably — this regex pulls the label out.
+_LEGACY_DICT_LABEL_RE = re.compile(
+    r"""[\"']?(?:name|body|text|label)[\"']?\s*:\s*[\"']([^\"']+)[\"']""",
+    re.IGNORECASE,
+)
+
+
+def _label_from_legacy_repr(text: str) -> str | None:
+    """Pull a readable label out of a legacy ``str(dict)`` row.
+
+    Tries ``ast.literal_eval`` first (handles well-formed Python dict
+    reprs) and falls back to a regex scrape so a malformed string still
+    yields something useful for the LLM rather than a noisy repr.
+    """
+    stripped = text.strip()
+    if not stripped or not (stripped.startswith("{") or "'name'" in stripped or '"name"' in stripped):
+        return None
+    try:
+        parsed = ast.literal_eval(stripped)
+    except (ValueError, SyntaxError):
+        parsed = None
+    if isinstance(parsed, dict):
+        for key in ("name", "body", "text", "label"):
+            val = parsed.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    match = _LEGACY_DICT_LABEL_RE.search(stripped)
+    if match:
+        return match.group(1).strip()
+    return None
 
 
 # Caps keep the block bounded for the LLM. Pre-screen runs at ~256 output
@@ -51,10 +87,17 @@ def _join_nonempty(parts: list[str], sep: str = " · ") -> str:
 def _format_answer(answer: dict) -> str | None:
     """Render one Workable questionnaire answer.
 
-    Workable's answer payloads are heterogeneous: free-text answers carry
-    a ``body``, multi-choice answers carry ``choices`` + ``selected``,
-    boolean answers carry ``checked``. Question text lives under
-    ``question.body`` (or ``question_key`` as a fallback).
+    Workable's payload shape varies. Two known forms in the wild:
+
+    Nested (what we've actually seen in prod):
+        {"question": {"body": "..."}, "answer": {"body": "..."}}
+        {"question": {"body": "..."}, "answer": {"checked": true}}
+
+    Flat (documented in some Workable API spec versions):
+        {"question_key": "...", "body": "...", "checked": ...}
+
+    We look in both places for body / checked / choices so the formatter
+    handles either shape without needing the caller to normalise first.
     """
     if not isinstance(answer, dict):
         return None
@@ -73,20 +116,28 @@ def _format_answer(answer: dict) -> str | None:
     if not question_text:
         return None
 
+    # Inner answer block — present in nested-shape payloads, absent in
+    # flat-shape. Fall through to the top level for flat payloads.
+    inner = answer.get("answer") if isinstance(answer.get("answer"), dict) else {}
+
     parts: list[str] = []
-    body = answer.get("body")
-    if body:
+    body = inner.get("body") if inner else None
+    if body is None:
+        body = answer.get("body")
+    if body not in (None, ""):
         parts.append(_trim(body))
 
-    checked = answer.get("checked")
+    checked = inner.get("checked") if inner else None
+    if checked is None:
+        checked = answer.get("checked")
     if isinstance(checked, bool):
         parts.append("Yes" if checked else "No")
 
     # ``choices`` can either be a list of dicts ({id, body, selected}) or
     # a list of strings the candidate picked. ``selected`` is sometimes a
-    # parallel array; handle both.
-    choices = answer.get("choices")
-    selected = answer.get("selected")
+    # parallel array; handle both. Also check the nested ``answer`` block.
+    choices = (inner.get("choices") if inner else None) or answer.get("choices")
+    selected = (inner.get("selected") if inner else None) or answer.get("selected")
     chosen: list[str] = []
     if isinstance(choices, list):
         for c in choices:
@@ -301,13 +352,36 @@ def format_workable_context(
             )
 
     # ── Skills / tags ─────────────────────────────────────────────────
+    def _label(item: Any) -> str:
+        # Skills and tags come back as either plain strings or
+        # ``{"name": "AWS", ...}`` dicts depending on the Workable
+        # endpoint version. Legacy rows ingested before the extractor
+        # fix have ``str(dict)`` reprs stored as strings; try to rescue
+        # those into readable labels so the prompt doesn't show noise.
+        if isinstance(item, dict):
+            return _trim(
+                item.get("name")
+                or item.get("body")
+                or item.get("text")
+                or item.get("label")
+                or "",
+                80,
+            )
+        if isinstance(item, str):
+            rescued = _label_from_legacy_repr(item)
+            if rescued:
+                return _trim(rescued, 80)
+        return _trim(item, 80)
+
     tag_lines: list[str] = []
     if isinstance(candidate.skills, list) and candidate.skills:
-        skills = [_trim(s, 80) for s in candidate.skills if s]
+        skills = [_label(s) for s in candidate.skills if s]
+        skills = [s for s in skills if s]
         if skills:
             tag_lines.append("Skills: " + ", ".join(skills[:40]))
     if isinstance(candidate.tags, list) and candidate.tags:
-        tags = [_trim(t, 80) for t in candidate.tags if t]
+        tags = [_label(t) for t in candidate.tags if t]
+        tags = [t for t in tags if t]
         if tags:
             tag_lines.append("Tags: " + ", ".join(tags[:40]))
     if tag_lines:

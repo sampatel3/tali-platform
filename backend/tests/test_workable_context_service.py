@@ -92,6 +92,53 @@ def test_questionnaire_boolean_answer_surfaces_checked():
     assert "No" in out
 
 
+def test_questionnaire_nested_answer_shape_from_production():
+    """Workable returns answers in a nested shape in practice:
+    ``{"question": {"body": "..."}, "answer": {"body": "25000"}}``.
+
+    Regression: the formatter originally only handled the flat shape
+    (``{"body": "...", "question_key": "..."}``) and silently dropped
+    every answer that came in the nested form — which meant prod
+    candidates whose salary expectation lived in the questionnaire
+    were invisible to pre-screen.
+    """
+    cand = _candidate(
+        workable_data={
+            "answers": [
+                {
+                    "answer": {"body": "25000"},
+                    "question": {
+                        "body": "Please confirm your salary expectation for this role, monthly in AED"
+                    },
+                },
+                {
+                    "answer": {"body": "30days"},
+                    "question": {"body": "Please confirm your current notice period"},
+                },
+                {
+                    "answer": {"checked": False},
+                    "question": {"body": "Do you currently live in the UAE?"},
+                },
+                {
+                    "answer": {"checked": True},
+                    "question": {"body": "Do you have 5+ years experience in data engineering roles?"},
+                },
+            ]
+        }
+    )
+    out = format_workable_context(cand, None)
+    assert "<WORKABLE_QUESTIONNAIRE_ANSWERS>" in out
+    # The salary signal — the whole point of the change — must be present.
+    assert "salary expectation" in out.lower()
+    assert "25000" in out
+    # Notice period text answer.
+    assert "notice period" in out.lower()
+    assert "30days" in out
+    # Boolean answers render Yes/No.
+    assert "UAE" in out
+    assert "5+ years" in out
+
+
 def test_recruiter_comment_with_salary_is_surfaced():
     cand = _candidate(
         workable_comments=[
@@ -150,6 +197,52 @@ def test_profile_block_includes_headline_location_and_application_stage():
     assert "Dubai, UAE" in out
     assert "Phone Screen" in out
     assert "Inbound application" in out
+
+
+def test_skills_and_tags_handle_dict_or_string_items():
+    """Production stores skills/tags as either plain strings or
+    ``{"name": "AWS"}`` dicts depending on the Workable endpoint
+    version. Both must render as readable labels, not dict reprs."""
+    cand = _candidate(
+        skills=[
+            {"name": "Amazon Web Services (AWS)"},
+            {"name": "Python"},
+            "JavaScript",
+        ],
+        tags=[{"name": "senior"}, "remote"],
+    )
+    out = format_workable_context(cand, None)
+    assert "<WORKABLE_TAGS>" in out
+    assert "Amazon Web Services (AWS)" in out
+    assert "Python" in out
+    assert "JavaScript" in out
+    assert "senior" in out
+    assert "remote" in out
+    # No raw dict reprs leaked into the prompt.
+    assert "'name':" not in out
+    assert "{'" not in out
+
+
+def test_skills_rescue_legacy_str_repr_rows():
+    """Pre-migration rows stored skills as ``str(dict)`` reprs
+    (``["{'name': 'AWS'}", ...]``). The formatter must extract the
+    readable label from those legacy strings instead of leaking the
+    Python repr into the LLM prompt."""
+    cand = _candidate(
+        skills=[
+            "{'name': 'Amazon Web Services (AWS)'}",
+            "{'name': 'Git'}",
+            "{'name': 'JavaScript'}",
+        ],
+        tags=["{'name': 'senior'}"],
+    )
+    out = format_workable_context(cand, None)
+    assert "Amazon Web Services (AWS)" in out
+    assert "Git" in out
+    assert "JavaScript" in out
+    assert "senior" in out
+    assert "'name':" not in out
+    assert "{'" not in out
 
 
 def test_education_and_experience_blocks_render():

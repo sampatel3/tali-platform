@@ -661,15 +661,44 @@ def _extract_candidate_fields(payload: dict) -> dict:
             if isinstance(s, dict)
         ])
 
-    # Tags
+    # Tags. Workable returns either plain strings or
+    # ``{"name": "senior"}`` dicts depending on endpoint version. The
+    # prior implementation called ``str(t)`` on dicts which stored the
+    # Python repr (e.g. ``"{'name': 'senior'}"``) as a string and
+    # poisoned downstream consumers — extract the readable label here.
+    def _label_value(item: Any) -> str | None:
+        if isinstance(item, dict):
+            value = (
+                item.get("name")
+                or item.get("body")
+                or item.get("text")
+                or item.get("label")
+            )
+            return value if isinstance(value, str) and value.strip() else None
+        if isinstance(item, str):
+            return item.strip() or None
+        return None
+
     tags = payload.get("tags")
     if isinstance(tags, list) and tags:
-        fields["tags"] = [sanitize_text_for_storage(str(t)) for t in tags if t]
+        cleaned_tags = [
+            sanitize_text_for_storage(label)
+            for label in (_label_value(t) for t in tags)
+            if label
+        ]
+        if cleaned_tags:
+            fields["tags"] = cleaned_tags
 
-    # Skills
+    # Skills — same shape variability as tags.
     skills = payload.get("skills")
     if isinstance(skills, list) and skills:
-        fields["skills"] = [sanitize_text_for_storage(str(s)) for s in skills if s]
+        cleaned_skills = [
+            sanitize_text_for_storage(label)
+            for label in (_label_value(s) for s in skills)
+            if label
+        ]
+        if cleaned_skills:
+            fields["skills"] = cleaned_skills
 
     # Education
     education = payload.get("education_entries") or payload.get("education")
