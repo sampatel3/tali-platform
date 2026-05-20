@@ -757,6 +757,11 @@
   color: var(--mute);
 }
 
+.rq-r-flag.on {
+  background: color-mix(in oklab, var(--purple) 14%, transparent);
+  color: var(--purple);
+}
+
 .rq-r-pending em {
   font-style: normal;
   color: var(--purple);

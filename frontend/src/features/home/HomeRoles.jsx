@@ -61,9 +61,11 @@ export const HomeRoles = ({ rows, loading, onNavigate }) => (
                     PAUSED{r.paused_reason ? ` · ${String(r.paused_reason).toUpperCase()}` : ''}
                   </span>
                 ) : null}
-                {!r.agentic_mode_enabled && !r.paused ? (
+                {r.paused ? null : r.agentic_mode_enabled ? (
+                  <span className="rq-r-flag on">AGENT ON</span>
+                ) : (
                   <span className="rq-r-flag mute">AGENT OFF</span>
-                ) : null}
+                )}
               </span>
               <span className={r.pending > 0 ? 'rq-r-pending on' : 'rq-r-pending'}>
                 {r.pending > 0 ? <em>{r.pending}</em> : <span style={{ color: 'var(--mute)' }}>—</span>}
