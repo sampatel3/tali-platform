@@ -3,6 +3,7 @@ import React from 'react';
 import { ScoreHeroCard, ScoreMetricCard, InsightCard } from '../../shared/ui/AssessmentSignalPrimitives';
 import { ComparisonRadar } from '../../shared/ui/ComparisonRadar';
 import { Badge, Card, Panel, cx } from '../../shared/ui/TaaliPrimitives';
+import { CandidateSnapshotCard } from './CandidateSnapshotCard';
 import { RoleFitEvidenceSections } from './RoleFitEvidenceSections';
 
 const variantConfig = {
@@ -114,6 +115,7 @@ export function CandidateReportView({
     probeDescription,
     integritySummaryText,
     evidenceSections = {},
+    candidateSnapshot = null,
     hasCompletedAssessment,
     hasDimensionSignal,
   } = model || {};
@@ -134,6 +136,7 @@ export function CandidateReportView({
 
   return (
     <div className={cx(config.root, className)}>
+      <CandidateSnapshotCard snapshot={candidateSnapshot} variant={variant} />
       <Panel className="overflow-hidden p-0">
         <div className={cx('grid gap-0', config.heroGrid)}>
           <div className="px-5 py-5 md:px-6" style={{ background: 'var(--taali-card-bg)' }}>

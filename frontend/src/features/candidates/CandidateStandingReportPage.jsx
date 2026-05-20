@@ -21,6 +21,7 @@ import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
 import { RadarChart } from '../../shared/ui/RadarChart';
 import { ScoreRing } from '../../shared/ui/ScoreRing';
 import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES } from './assessmentViewModels';
+import { CandidateSnapshotCard } from './CandidateSnapshotCard';
 import {
   getErrorMessage,
   resolveCvMatchDetails,
@@ -1525,6 +1526,15 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
 
           return (
             <>
+              {/* (0) At-a-glance snapshot strip — years exp, tech stack, recent roles.
+                  Sits above the hero band so recruiters and external clients can
+                  scan candidate basics in 3 seconds without scrolling the full CV. */}
+              {reportModel?.candidateSnapshot ? (
+                <div className="mb-3">
+                  <CandidateSnapshotCard snapshot={reportModel.candidateSnapshot} variant="page" />
+                </div>
+              ) : null}
+
               {/* (1) Hero band */}
               <div className="mc-overview-hero">
                 <div className="mc-overview-hero-score">

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildAssessmentSummaryModel,
+  buildCandidateSnapshot,
   buildRoleFitEvidenceModel,
   buildStandingCandidateReportModel,
 } from './assessmentViewModels';
@@ -201,5 +202,130 @@ describe('assessmentViewModels', () => {
     expect(model.firefliesModel.statusLabel).toBe('Stage 1 Fireflies transcript linked');
     expect(model.firefliesModel.latestSummary).toContain('strong backend delivery');
     expect(model.firefliesModel.latestProviderUrl).toBe('https://fireflies.ai/view/ff-123');
+  });
+
+  describe('buildCandidateSnapshot', () => {
+    it('extracts years_experience, top_skills, and timeline from cv_match_details', () => {
+      const snapshot = buildCandidateSnapshot({
+        application: {
+          cv_match_details: {
+            candidate_snapshot: {
+              years_experience: 12,
+              top_skills: ['Python', 'dbt', 'Snowflake', 'Airflow', 'Terraform'],
+              timeline: [
+                { company: 'Direct Line Group', role: 'Lead Data Engineer', start_year: 2022, end_year: null, is_current: true },
+                { company: 'Lloyds', role: 'Data Engineer', start_year: 2018, end_year: 2022 },
+                { company: 'JPMC', role: 'Junior Data Engineer', start_year: 2015, end_year: 2018 },
+              ],
+            },
+          },
+        },
+      });
+
+      expect(snapshot).not.toBeNull();
+      expect(snapshot.yearsLabel).toBe('12 yrs');
+      expect(snapshot.topSkills).toEqual(['Python', 'dbt', 'Snowflake', 'Airflow', 'Terraform']);
+      expect(snapshot.timeline).toHaveLength(3);
+      expect(snapshot.timeline[0]).toMatchObject({
+        company: 'Direct Line Group',
+        role: 'Lead Data Engineer',
+        range: '2022 – Present',
+        isCurrent: true,
+      });
+      expect(snapshot.timeline[1].range).toBe('2018 – 2022');
+    });
+
+    it('falls back to matching_skills as top_skills when no snapshot block exists', () => {
+      const snapshot = buildCandidateSnapshot({
+        application: {
+          cv_match_details: {
+            matching_skills: ['React', 'TypeScript', 'GraphQL'],
+          },
+        },
+      });
+
+      expect(snapshot).not.toBeNull();
+      expect(snapshot.topSkills).toEqual(['React', 'TypeScript', 'GraphQL']);
+      expect(snapshot.timeline).toEqual([]);
+      expect(snapshot.yearsLabel).toBeNull();
+    });
+
+    it('reads from completedAssessment.cv_job_match_details (and prompt_analytics fallback)', () => {
+      // Completed-assessment payloads land at cv_job_match_details, NOT
+      // cv_match_details. Mirrors the getRoleFitPayload resolver so a
+      // re-scored assessment is preferred over a stale application blob.
+      const snapshot = buildCandidateSnapshot({
+        application: {
+          cv_match_details: {
+            candidate_snapshot: {
+              years_experience: 3,
+              top_skills: ['stale-skill'],
+              timeline: [],
+            },
+          },
+        },
+        completedAssessment: {
+          cv_job_match_details: {
+            candidate_snapshot: {
+              years_experience: 8,
+              top_skills: ['fresh-skill'],
+              timeline: [{ company: 'New Co', role: 'Lead', start_year: 2024, is_current: true }],
+            },
+          },
+        },
+      });
+
+      expect(snapshot.yearsLabel).toBe('8 yrs');
+      expect(snapshot.topSkills).toEqual(['fresh-skill']);
+      expect(snapshot.timeline[0].company).toBe('New Co');
+    });
+
+    it('falls back to prompt_analytics.cv_job_match.details when cv_job_match_details is absent', () => {
+      const snapshot = buildCandidateSnapshot({
+        completedAssessment: {
+          prompt_analytics: {
+            cv_job_match: {
+              details: {
+                candidate_snapshot: {
+                  years_experience: 5,
+                  top_skills: ['nested-skill'],
+                  timeline: [],
+                },
+              },
+            },
+          },
+        },
+      });
+
+      expect(snapshot).not.toBeNull();
+      expect(snapshot.topSkills).toEqual(['nested-skill']);
+    });
+
+    it('returns null when no usable data is present', () => {
+      expect(buildCandidateSnapshot({ application: {} })).toBeNull();
+      expect(buildCandidateSnapshot({ application: { cv_match_details: {} } })).toBeNull();
+      expect(buildCandidateSnapshot({})).toBeNull();
+    });
+
+    it('formats sub-year experience and drops invalid timeline rows', () => {
+      const snapshot = buildCandidateSnapshot({
+        application: {
+          cv_match_details: {
+            candidate_snapshot: {
+              years_experience: 0.5,
+              top_skills: ['Go'],
+              timeline: [
+                { company: '', role: '' },
+                { company: 'Acme', role: 'Engineer', start_year: 2024 },
+              ],
+            },
+          },
+        },
+      });
+
+      expect(snapshot.yearsLabel).toBe('<1 yr');
+      expect(snapshot.timeline).toHaveLength(1);
+      expect(snapshot.timeline[0]).toMatchObject({ company: 'Acme', range: '2024 – Present' });
+    });
   });
 });

@@ -14,9 +14,11 @@ from app.cv_matching.prompts import (
     build_cv_match_prompt,
 )
 from app.cv_matching.schemas import (
+    CandidateSnapshot,
     Confidence,
     Priority,
     Status,
+    TimelineEntry,
 )
 
 
@@ -176,3 +178,46 @@ def test_cv_match_result_round_trip_with_dimension_scores():
     r = CVMatchResult.model_validate(payload)
     assert r.dimension_scores is not None
     assert r.dimension_scores.skills_coverage == 80.0
+
+
+def test_candidate_snapshot_optional_and_truncated():
+    """The candidate_snapshot block is optional. When supplied, top_skills cap at 6
+    and timeline caps at 5 — same defensive truncation pattern as the other lists."""
+    # Optional: absent → None
+    payload = {
+        "prompt_version": PROMPT_VERSION,
+        "matching_skills": [],
+        "missing_skills": [],
+        "experience_highlights": [],
+        "concerns": [],
+        "summary": "ok",
+    }
+    r = CVMatchResult.model_validate(payload)
+    assert r.candidate_snapshot is None
+
+    snap = CandidateSnapshot.model_validate(
+        {
+            "years_experience": 7.5,
+            "top_skills": ["a", "b", "c", "d", "e", "f", "g", "h"],
+            "timeline": [
+                {"company": "X", "role": "Lead", "start_year": 2022, "end_year": None, "is_current": True},
+                {"company": "Y", "role": "Senior", "start_year": 2018, "end_year": 2022},
+                {"company": "Z", "role": "Mid", "start_year": 2015, "end_year": 2018},
+                {"company": "W", "role": "Junior", "start_year": 2013, "end_year": 2015},
+                {"company": "V", "role": "Intern", "start_year": 2012, "end_year": 2013},
+                {"company": "U", "role": "Volunteer", "start_year": 2010, "end_year": 2012},
+            ],
+        }
+    )
+    assert snap.years_experience == 7.5
+    assert len(snap.top_skills) == 6  # truncated from 8
+    assert len(snap.timeline) == 5  # truncated from 6
+    assert isinstance(snap.timeline[0], TimelineEntry)
+    assert snap.timeline[0].is_current is True
+
+
+def test_prompt_describes_candidate_snapshot():
+    assert "candidate_snapshot" in CV_MATCH_PROMPT
+    assert "years_experience" in CV_MATCH_PROMPT
+    assert "top_skills" in CV_MATCH_PROMPT
+    assert "timeline" in CV_MATCH_PROMPT

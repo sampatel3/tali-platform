@@ -229,6 +229,107 @@ export const resolveScoreSource = ({ application, completedAssessment }) => {
   };
 };
 
+const trimmedString = (value) => String(value || '').trim();
+
+const parseYear = (value) => {
+  if (value == null || value === '') return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  const year = Math.trunc(numeric);
+  if (year < 1900 || year > 2100) return null;
+  return year;
+};
+
+const formatYearsExperience = (value) => {
+  const numeric = toFiniteNumber(value);
+  if (numeric == null || numeric < 0) return null;
+  if (numeric < 1) return '<1 yr';
+  const rounded = Math.round(numeric * 2) / 2;
+  const display = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+  return `${display} yr${rounded === 1 ? '' : 's'}`;
+};
+
+const buildTimelineEntry = (entry) => {
+  if (!entry || typeof entry !== 'object') return null;
+  const company = trimmedString(entry.company);
+  const role = trimmedString(entry.role);
+  if (!company && !role) return null;
+  const startYear = parseYear(entry.start_year);
+  const endYear = parseYear(entry.end_year);
+  const isCurrent = Boolean(entry.is_current) || endYear == null;
+  const range = (() => {
+    if (startYear && isCurrent) return `${startYear} – Present`;
+    if (startYear && endYear) return `${startYear} – ${endYear}`;
+    if (startYear) return `${startYear}`;
+    if (endYear) return `– ${endYear}`;
+    return null;
+  })();
+  return { company, role, range, isCurrent };
+};
+
+// Builds the at-a-glance recruiter snapshot rendered above the prose summary.
+// Sources, in order: (1) the LLM-emitted candidate_snapshot block from
+// cv_match_details (the canonical place), (2) a thin fallback derived from
+// the older cv_match_details fields for candidates scored before v13.
+//
+// Completed-assessment payloads land at cv_job_match_details (with a deeper
+// prompt_analytics.cv_job_match.details fallback) — same resolver pattern as
+// getRoleFitPayload. We try assessment sources first so that re-scored
+// completed attempts win over stale application blobs.
+export const buildCandidateSnapshot = ({ application, completedAssessment } = {}) => {
+  const detailsCandidates = [
+    completedAssessment?.cv_job_match_details,
+    completedAssessment?.prompt_analytics?.cv_job_match?.details,
+    application?.cv_match_details,
+  ].filter((item) => item && typeof item === 'object');
+
+  for (const details of detailsCandidates) {
+    const raw = details.candidate_snapshot;
+    if (!raw || typeof raw !== 'object') continue;
+
+    const yearsLabel = formatYearsExperience(raw.years_experience);
+    const topSkills = Array.isArray(raw.top_skills)
+      ? raw.top_skills
+        .map((skill) => trimmedString(skill))
+        .filter(Boolean)
+        .slice(0, 6)
+      : [];
+    const timeline = Array.isArray(raw.timeline)
+      ? raw.timeline.map(buildTimelineEntry).filter(Boolean).slice(0, 3)
+      : [];
+
+    if (!yearsLabel && !topSkills.length && !timeline.length) continue;
+
+    return {
+      yearsLabel,
+      yearsExperience: toFiniteNumber(raw.years_experience),
+      topSkills,
+      timeline,
+      source: 'cv_match',
+    };
+  }
+
+  // Fallback for legacy applications: derive top_skills from matching_skills.
+  // Years_experience and timeline aren't recoverable from the older payload
+  // without re-parsing the CV, so we leave them empty rather than guess.
+  for (const details of detailsCandidates) {
+    const matchingSkills = Array.isArray(details.matching_skills)
+      ? details.matching_skills.map((skill) => trimmedString(skill)).filter(Boolean).slice(0, 6)
+      : [];
+    if (matchingSkills.length) {
+      return {
+        yearsLabel: null,
+        yearsExperience: null,
+        topSkills: matchingSkills,
+        timeline: [],
+        source: 'legacy_matching_skills',
+      };
+    }
+  }
+
+  return null;
+};
+
 export const buildRoleFitEvidenceModel = ({ application, completedAssessment }) => {
   const payload = getRoleFitPayload({ application, completedAssessment });
   const details = payload.details && typeof payload.details === 'object' ? payload.details : {};
@@ -732,6 +833,7 @@ export const buildStandingCandidateReportModel = ({
     summaryModel,
   });
   const firefliesModel = buildFirefliesModel({ application });
+  const candidateSnapshot = buildCandidateSnapshot({ application, completedAssessment });
 
   return {
     identity,
@@ -748,6 +850,7 @@ export const buildStandingCandidateReportModel = ({
     integritySummaryText,
     evidenceSections,
     firefliesModel,
+    candidateSnapshot,
     hasCompletedAssessment: summaryModel.source.kind === 'assessment',
     hasDimensionSignal: dimensionEntries.length > 0,
   };
