@@ -64,6 +64,7 @@ class AgentDecisionPayload(BaseModel):
     override_action: Optional[str] = None
     candidate_name: Optional[str] = None
     candidate_email: Optional[str] = None
+    role_name: Optional[str] = None
 
 
 class AgentRunPayload(BaseModel):
@@ -144,7 +145,11 @@ def _confidence_to_float(value: Any) -> Optional[float]:
         return None
 
 
-def _decision_to_payload(decision: AgentDecision, candidate: Optional[Candidate]) -> AgentDecisionPayload:
+def _decision_to_payload(
+    decision: AgentDecision,
+    candidate: Optional[Candidate],
+    role: Optional[Role] = None,
+) -> AgentDecisionPayload:
     return AgentDecisionPayload(
         id=int(decision.id),
         role_id=int(decision.role_id),
@@ -165,6 +170,7 @@ def _decision_to_payload(decision: AgentDecision, candidate: Optional[Candidate]
         override_action=decision.override_action,
         candidate_name=getattr(candidate, "full_name", None) if candidate else None,
         candidate_email=getattr(candidate, "email", None) if candidate else None,
+        role_name=getattr(role, "name", None) if role else None,
     )
 
 
@@ -207,9 +213,10 @@ def list_agent_decisions(
         raise HTTPException(status_code=422, detail=f"unsupported status={status!r}")
 
     query = (
-        db.query(AgentDecision, Candidate)
+        db.query(AgentDecision, Candidate, Role)
         .join(CandidateApplication, CandidateApplication.id == AgentDecision.application_id)
         .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
+        .outerjoin(Role, Role.id == AgentDecision.role_id)
         .filter(AgentDecision.organization_id == current_user.organization_id)
     )
     if role_id is not None:
@@ -243,7 +250,7 @@ def list_agent_decisions(
         )
     query = query.order_by(desc(AgentDecision.created_at)).limit(limit)
     rows = query.all()
-    return [_decision_to_payload(decision, candidate) for decision, candidate in rows]
+    return [_decision_to_payload(decision, candidate, role) for decision, candidate, role in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +288,8 @@ def approve(
         .filter(CandidateApplication.id == decision.application_id)
         .first()
     )
-    return _decision_to_payload(decision, candidate)
+    role = db.query(Role).filter(Role.id == decision.role_id).first()
+    return _decision_to_payload(decision, candidate, role)
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +328,8 @@ def override(
         .filter(CandidateApplication.id == decision.application_id)
         .first()
     )
-    return _decision_to_payload(decision, candidate)
+    role = db.query(Role).filter(Role.id == decision.role_id).first()
+    return _decision_to_payload(decision, candidate, role)
 
 
 # ---------------------------------------------------------------------------

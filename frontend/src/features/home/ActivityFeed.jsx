@@ -88,7 +88,7 @@ export const ActivityFeed = ({
                       style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer' }}
                       onClick={(e) => { e.stopPropagation(); onNavigate?.('job-pipeline', { roleId: row.role_id }); }}
                     >
-                      Role #{row.role_id}
+                      {row.role_name || `Role #${row.role_id}`}
                     </button>
                     {row.confidence != null ? <> · agent {Math.round(row.confidence * 100)}% confident</> : null}
                   </div>

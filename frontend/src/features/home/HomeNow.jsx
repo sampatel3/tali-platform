@@ -393,13 +393,13 @@ const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze,
         <DeepLinkRow
           Icon={Eye}
           label="Open role pipeline"
-          value={`Role #${decision.role_id}`}
+          value={decision.role_name || `Role #${decision.role_id}`}
           onClick={() => onNavigate?.('job-pipeline', { roleId: decision.role_id })}
         />
         <DeepLinkRow
           Icon={ExternalLink}
           label="Open assessment results"
-          value={`Application ${decision.application_id}`}
+          value={decision.candidate_name ? `${decision.candidate_name}'s assessment` : `Application ${decision.application_id}`}
           onClick={() => onNavigate?.('candidate-detail', { candidateDetailAssessmentId: decision.application_id })}
         />
       </div>
