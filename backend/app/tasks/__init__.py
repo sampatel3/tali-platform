@@ -5,8 +5,10 @@ from .assessment_tasks import (
     send_results_email,
     post_results_to_workable,
     cleanup_expired_assessments,
-    sync_workable_orgs,
+    sync_workable_jobs,
     sync_starred_roles,
+    sync_agent_mode_roles,
+    sync_workable_daily_candidates,
     reap_stuck_workable_sync_runs,
 )
 # Eager-import scoring_tasks so Celery autodiscover registers the
@@ -58,8 +60,10 @@ __all__ = [
     "send_results_email",
     "post_results_to_workable",
     "cleanup_expired_assessments",
-    "sync_workable_orgs",
+    "sync_workable_jobs",
     "sync_starred_roles",
+    "sync_agent_mode_roles",
+    "sync_workable_daily_candidates",
     "reap_stuck_workable_sync_runs",
     "score_application_job",
     "batch_score_role",

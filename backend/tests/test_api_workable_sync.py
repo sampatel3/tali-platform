@@ -594,63 +594,271 @@ def test_reap_stuck_workable_sync_runs_finalizes_old_running_rows(db):
     assert survivor.finished_at is None
 
 
-def test_sync_workable_orgs_uses_redis_debounce_not_workable_last_sync_at(db, monkeypatch):
-    """sync_workable_orgs must not be debounced by ``workable_last_sync_at``.
+def test_sync_workable_jobs_uses_jobs_only_mode(db, monkeypatch):
+    """sync_workable_jobs Beat task must invoke sync_org with mode='jobs_only'.
 
-    Regression for the starvation bug discovered on 2026-05-20: the old
-    code read ``org.workable_last_sync_at`` and skipped if it was within
-    the sync-interval window. But ``sync_starred_roles`` (shorter cadence)
-    also writes that column via ``sync_org``, so the timestamp was
-    permanently fresh and the full sweep never ran. Newly published
-    but unstarred jobs would never get synced.
+    Regression for the 2026-05-20 redesign: the 15-min jobs sweep must
+    skip candidate fetching entirely, otherwise it'll hit the same rate
+    limit that took down the old ``sync_workable_orgs`` task.
     """
-    from datetime import datetime, timezone
-
     from app.tasks import assessment_tasks
 
     org = Organization(
-        name="Debounce Org",
-        slug="debounce-org",
+        name="Jobs-Only Org",
+        slug="jobs-only-org",
         workable_connected=True,
         workable_access_token="tk",
-        workable_subdomain="debounce",
-        workable_config={"sync_model": "scheduled_pull_only", "sync_interval_minutes": 30},
-        # Simulate the starved-by-starred-sync scenario: the timestamp
-        # was just refreshed by a starred-sync run.
-        workable_last_sync_at=datetime.now(timezone.utc),
+        workable_subdomain="jobsonly",
     )
     db.add(org)
     db.commit()
 
-    called: list[int] = []
+    captured: list[dict] = []
 
     class _FakeService:
         def __init__(self, *args, **kwargs):
             pass
 
-        def sync_org(self, *args, **kwargs):
-            called.append(1)
+        def sync_org(self, db_session, org_obj, *, mode="metadata", **kwargs):
+            captured.append({"mode": mode, "kwargs": kwargs, "org_id": org_obj.id})
             return {"jobs_seen": 0}
 
     monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(assessment_tasks, "_acquire_sync_lock", lambda: False)
-    monkeypatch.setattr(assessment_tasks, "_release_sync_lock", lambda c: None)
-    monkeypatch.setattr(assessment_tasks, "_is_full_sync_recent", lambda org_id: False)
-    marks: list[int] = []
-    monkeypatch.setattr(
-        assessment_tasks,
-        "_mark_full_sync_recent",
-        lambda org_id, interval: marks.append(int(org_id)),
-    )
-
-    # The task lazily imports WorkableSyncService inside its body, so we
-    # patch the import target rather than the module-level symbol.
+    monkeypatch.setattr(assessment_tasks, "_acquire_jobs_sync_lock", lambda: False)
+    monkeypatch.setattr(assessment_tasks, "_release_jobs_sync_lock", lambda c: None)
     from app.components.integrations.workable import sync_service as sync_service_mod
     monkeypatch.setattr(sync_service_mod, "WorkableSyncService", _FakeService)
 
-    result = assessment_tasks.sync_workable_orgs.run()
+    result = assessment_tasks.sync_workable_jobs.run()
     assert result["status"] == "ok"
-    # Despite ``workable_last_sync_at`` being current, the sync must have
-    # run — proving the debounce no longer uses that column.
-    assert called, "sync_org should have been invoked (debounce must not block)"
-    assert org.id in marks, "Redis debounce key should be set after a successful sync"
+    assert captured, "sync_org should have been invoked"
+    assert all(c["mode"] == "jobs_only" for c in captured), (
+        f"All invocations must be jobs_only mode, got: {[c['mode'] for c in captured]}"
+    )
+
+
+def test_sync_agent_mode_roles_filters_to_agentic_unpaused(db, monkeypatch):
+    """sync_agent_mode_roles must only sync roles with agentic_mode_enabled=true and not paused."""
+    from datetime import datetime, timezone
+
+    from app.tasks import assessment_tasks
+
+    org = Organization(
+        name="Agent Org",
+        slug="agent-org",
+        workable_connected=True,
+        workable_access_token="tk",
+        workable_subdomain="agent",
+    )
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+
+    on_role = Role(
+        organization_id=org.id, name="Agent On", source="workable",
+        workable_job_id="ON1", agentic_mode_enabled=True, agent_paused_at=None,
+    )
+    paused_role = Role(
+        organization_id=org.id, name="Agent Paused", source="workable",
+        workable_job_id="PAUSED1", agentic_mode_enabled=True,
+        agent_paused_at=datetime.now(timezone.utc),
+    )
+    off_role = Role(
+        organization_id=org.id, name="Agent Off", source="workable",
+        workable_job_id="OFF1", agentic_mode_enabled=False,
+    )
+    db.add_all([on_role, paused_role, off_role])
+    db.commit()
+
+    captured: list[list[str]] = []
+
+    class _FakeService:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def sync_org(self, db_session, org_obj, *, selected_job_shortcodes=None, **kwargs):
+            captured.append(list(selected_job_shortcodes or []))
+            return {"jobs_seen": 0}
+
+    monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
+    monkeypatch.setattr(assessment_tasks, "_acquire_agent_mode_lock", lambda org_id: False)
+    monkeypatch.setattr(assessment_tasks, "_release_agent_mode_lock", lambda h: None)
+    from app.components.integrations.workable import sync_service as sync_service_mod
+    monkeypatch.setattr(sync_service_mod, "WorkableSyncService", _FakeService)
+
+    result = assessment_tasks.sync_agent_mode_roles.run()
+    assert result["status"] == "ok"
+    assert captured == [["ON1"]], (
+        f"Only the un-paused agentic role should sync, got: {captured}"
+    )
+
+
+def test_sync_workable_daily_candidates_skips_starred_and_active_agent(db, monkeypatch):
+    """Nightly task syncs roles that are NEITHER starred NOR (agentic && not paused)."""
+    from datetime import datetime, timezone
+
+    from app.tasks import assessment_tasks
+
+    org = Organization(
+        name="Daily Org",
+        slug="daily-org",
+        workable_connected=True,
+        workable_access_token="tk",
+        workable_subdomain="daily",
+    )
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+
+    plain = Role(
+        organization_id=org.id, name="Plain", source="workable",
+        workable_job_id="PLAIN1",
+    )
+    starred = Role(
+        organization_id=org.id, name="Starred", source="workable",
+        workable_job_id="STAR1", starred_for_auto_sync=True,
+    )
+    active_agent = Role(
+        organization_id=org.id, name="Active Agent", source="workable",
+        workable_job_id="AGT1", agentic_mode_enabled=True, agent_paused_at=None,
+    )
+    paused_agent = Role(
+        organization_id=org.id, name="Paused Agent", source="workable",
+        workable_job_id="AGTP1", agentic_mode_enabled=True,
+        agent_paused_at=datetime.now(timezone.utc),
+    )
+    db.add_all([plain, starred, active_agent, paused_agent])
+    db.commit()
+
+    captured: list[list[str]] = []
+
+    class _FakeService:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def sync_org(self, db_session, org_obj, *, selected_job_shortcodes=None, **kwargs):
+            captured.append(sorted(selected_job_shortcodes or []))
+            return {"jobs_seen": 0}
+
+    monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
+    monkeypatch.setattr(assessment_tasks, "_acquire_daily_candidate_lock", lambda org_id: False)
+    monkeypatch.setattr(assessment_tasks, "_release_daily_candidate_lock", lambda h: None)
+    from app.components.integrations.workable import sync_service as sync_service_mod
+    monkeypatch.setattr(sync_service_mod, "WorkableSyncService", _FakeService)
+
+    result = assessment_tasks.sync_workable_daily_candidates.run()
+    assert result["status"] == "ok"
+    # Plain + paused-agent should both be picked up; starred and active agent skipped.
+    assert captured == [["AGTP1", "PLAIN1"]], (
+        f"Expected nightly to cover plain + paused-agent only, got: {captured}"
+    )
+
+
+def test_filter_payloads_missing_cv_excludes_apps_with_existing_cv(db):
+    """Prefetch wave must skip CV downloads for applications that already have one."""
+    from app.components.integrations.workable.sync_service import WorkableSyncService
+    from app.models.candidate import Candidate
+    from app.models.candidate_application import CandidateApplication
+
+    org = Organization(
+        name="CVSkip Org",
+        slug="cvskip-org",
+        workable_connected=True,
+        workable_access_token="tk",
+        workable_subdomain="cvskip",
+    )
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+
+    role = Role(organization_id=org.id, name="R", source="workable", workable_job_id="JOB1")
+    db.add(role)
+    db.commit()
+    db.refresh(role)
+
+    # Three candidates: one with cv_file_url (skip), one with cv_text (skip),
+    # one with neither (must be in the prefetch wave).
+    candidates = []
+    for i, (cid, url, text) in enumerate([
+        ("cand_has_url", "https://s3/cv1.pdf", None),
+        ("cand_has_text", None, "Resume text here"),
+        ("cand_empty", None, None),
+    ]):
+        c = Candidate(organization_id=org.id, workable_candidate_id=cid, full_name=f"C{i}")
+        db.add(c)
+        db.commit()
+        db.refresh(c)
+        app = CandidateApplication(
+            organization_id=org.id,
+            role_id=role.id,
+            candidate_id=c.id,
+            workable_candidate_id=cid,
+            cv_file_url=url,
+            cv_text=text,
+        )
+        db.add(app)
+        candidates.append(cid)
+    db.commit()
+
+    payloads_by_id = {cid: {"id": cid} for cid in candidates}
+
+    class _StubClient:
+        pass
+
+    service = WorkableSyncService(_StubClient())
+    filtered = service._filter_payloads_missing_cv(db, org, role, payloads_by_id)
+    assert list(filtered.keys()) == ["cand_empty"], (
+        f"Only the empty candidate should need CV download, got: {list(filtered.keys())}"
+    )
+
+
+def test_sync_org_jobs_only_mode_skips_candidate_fetch(db, monkeypatch):
+    """mode='jobs_only' must upsert role rows and never call list_job_candidates."""
+    from app.components.integrations.workable.service import WorkableService
+    from app.components.integrations.workable.sync_service import WorkableSyncService
+
+    org = Organization(
+        name="JobsOnly Org",
+        slug="jobsonly-org",
+        workable_connected=True,
+        workable_access_token="tk",
+        workable_subdomain="jobsonly2",
+    )
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+
+    fake_jobs = [
+        {"shortcode": "JOB1", "id": "JOB1", "title": "First", "state": "published"},
+        {"shortcode": "JOB2", "id": "JOB2", "title": "Second", "state": "published"},
+    ]
+
+    candidate_calls: list[str] = []
+
+    class _FakeClient:
+        def list_open_jobs(self):
+            return fake_jobs
+
+        def get_job_details(self, job_id):
+            return {"job": {"shortcode": job_id, "title": next(j["title"] for j in fake_jobs if j["shortcode"] == job_id)}}
+
+        def list_job_candidates(self, *args, **kwargs):
+            candidate_calls.append(str(args[0]) if args else "?")
+            return []
+
+    service = WorkableSyncService(_FakeClient())
+    summary = service.sync_org(db, org, mode="jobs_only")
+
+    assert summary["jobs_seen"] == 2
+    assert summary["jobs_total"] == 2
+    assert summary["jobs_processed"] == 2
+    assert candidate_calls == [], (
+        f"jobs_only must not fetch candidates, but called: {candidate_calls}"
+    )
+
+    roles = (
+        db.query(Role)
+        .filter(Role.organization_id == org.id, Role.source == "workable")
+        .all()
+    )
+    assert sorted(r.workable_job_id for r in roles) == ["JOB1", "JOB2"]

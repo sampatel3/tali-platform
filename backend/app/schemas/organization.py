@@ -12,7 +12,12 @@ class WorkableConfigBase(BaseModel):
     granted_scopes: List[str] = Field(default_factory=list)
     score_precedence: Literal["workable_first"] = "workable_first"
     default_sync_mode: Literal["metadata", "full"] = "full"
-    sync_interval_minutes: int = Field(default=30, ge=5, le=1440)
+    # Deprecated 2026-05-20: sync cadence is no longer org-configurable;
+    # see the celery beat_schedule for the per-task cadences (jobs metadata
+    # every 15 min, starred / agent candidates every 5 min, everything
+    # else nightly). Kept in the schema for back-compat so older clients
+    # that still send the field don't get rejected — it's a no-op.
+    sync_interval_minutes: int = Field(default=15, ge=5, le=1440)
     invite_stage_name: str = Field(default="", min_length=0, max_length=200)
     auto_reject_enabled: bool = False
     workable_actor_member_id: Optional[str] = Field(default=None, max_length=200)

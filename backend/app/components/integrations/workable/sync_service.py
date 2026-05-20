@@ -786,7 +786,10 @@ class WorkableSyncService:
     ) -> dict:
         run = self._get_sync_run(db, run_id)
         requested_mode = (mode or "metadata").strip().lower()
-        if requested_mode not in {"metadata", "full"}:
+        # ``jobs_only`` upserts role rows and exits before fetching
+        # candidates — used by the 15-min jobs sweep so new postings
+        # land fast without paying the per-candidate CV cost.
+        if requested_mode not in {"metadata", "full", "jobs_only"}:
             requested_mode = "metadata"
         effective_mode = requested_mode
         selected_identifiers: set[str] = set()
@@ -885,6 +888,22 @@ class WorkableSyncService:
                         summary["jobs_upserted"] += 1
 
                     shortcode = sanitize_text_for_storage(str(job.get("shortcode") or job.get("id") or "?"))[:20]
+
+                    # ``jobs_only`` mode: skip every candidate fetch. The
+                    # 15-min jobs sweep uses this to keep role rows fresh
+                    # without burning the per-candidate API/CV budget.
+                    if effective_mode == "jobs_only":
+                        summary["jobs_processed"] = job_idx + 1
+                        summary["phase"] = "syncing_jobs"
+                        summary["current_step"] = "upserted_role"
+                        summary["current_job_shortcode"] = shortcode
+                        summary["current_candidate_index"] = None
+                        summary["last_request"] = f"GET /jobs/{shortcode}"
+                        if (job_idx + 1) % 10 == 0:
+                            summary["db_snapshot"] = self._build_db_snapshot(db, org)
+                            self._persist_progress(db, org, run, summary)
+                        continue
+
                     summary["phase"] = "syncing_candidates"
                     summary["current_step"] = "listing_candidates"
                     summary["current_job_shortcode"] = shortcode
@@ -906,7 +925,15 @@ class WorkableSyncService:
                     if effective_mode == "full" and candidates:
                         try:
                             prefetched_payloads = self._prefetch_full_candidate_payloads(candidates)
-                            prefetched_resumes = self._prefetch_candidate_resumes(prefetched_payloads)
+                            # Skip CV downloads for candidate_applications
+                            # that already have one. Re-downloading the same
+                            # PDF every sync was the dominant cost driver of
+                            # the old 30-min sync_workable_orgs sweep and
+                            # the proximate cause of Workable rate-limiting.
+                            payloads_needing_cv = self._filter_payloads_missing_cv(
+                                db, org, role, prefetched_payloads,
+                            )
+                            prefetched_resumes = self._prefetch_candidate_resumes(payloads_needing_cv)
                         except WorkableRateLimitError:
                             # Re-raise so the per-job try/except below
                             # records the rate-limit and stops the sync
@@ -1098,6 +1125,48 @@ class WorkableSyncService:
                 if isinstance(payload, dict) and payload:
                     payloads[cid] = payload
         return payloads
+
+    def _filter_payloads_missing_cv(
+        self,
+        db: Session,
+        org: Organization,
+        role: Role,
+        payloads_by_id: dict[str, dict],
+    ) -> dict[str, dict]:
+        """Return only the payloads whose ``candidate_application`` lacks a CV.
+
+        Workable CVs are immutable per upload — once we have one in S3,
+        re-downloading wastes a Workable API call and a S3 round-trip.
+        Filter the prefetch input to candidates whose existing
+        ``CandidateApplication`` row for this role has neither
+        ``cv_file_url`` nor ``cv_text`` populated.
+        """
+        if not payloads_by_id:
+            return {}
+        candidate_ids = [cid for cid in payloads_by_id.keys() if cid]
+        if not candidate_ids:
+            return {}
+        # Single roundtrip: pull every application for this role+org that
+        # already has a CV. Anything not in the result set still needs one.
+        already_have_cv = {
+            row[0]
+            for row in db.query(CandidateApplication.workable_candidate_id)
+            .filter(
+                CandidateApplication.organization_id == org.id,
+                CandidateApplication.role_id == role.id,
+                CandidateApplication.deleted_at.is_(None),
+                CandidateApplication.workable_candidate_id.in_(candidate_ids),
+                (CandidateApplication.cv_file_url.isnot(None))
+                | (CandidateApplication.cv_text.isnot(None)),
+            )
+            .all()
+            if row[0]
+        }
+        return {
+            cid: payload
+            for cid, payload in payloads_by_id.items()
+            if cid not in already_have_cv
+        }
 
     def _prefetch_candidate_resumes(
         self,
@@ -1470,7 +1539,14 @@ class WorkableSyncService:
                 app.cv_filename = candidate.cv_filename
                 app.cv_text = candidate.cv_text
                 app.cv_uploaded_at = candidate.cv_uploaded_at
-            if not (app.cv_text or "").strip():
+            # Only fetch a CV if we don't already have one for this app.
+            # The prefetch wave (``_filter_payloads_missing_cv``) makes the
+            # same decision in bulk for the parallel path; this guard
+            # keeps the sequential fallback consistent so a partially-
+            # populated row (URL but no extracted text, for example)
+            # doesn't trigger a needless re-download.
+            need_cv = not (app.cv_text or "").strip() and not (app.cv_file_url or "").strip()
+            if need_cv:
                 # Prefer the parallel-prefetched resume; only hit the
                 # network here if prefetch had nothing for this candidate.
                 downloaded = prefetched_resume or self.client.download_candidate_resume(candidate_payload)

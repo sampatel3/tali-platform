@@ -1,4 +1,6 @@
 from celery import Celery
+from celery.schedules import crontab
+
 from ..platform.config import settings
 
 celery_app = Celery(
@@ -29,17 +31,36 @@ celery_app.conf.update(
     task_default_queue="celery",
     task_routes=_TASK_ROUTES,
     beat_schedule={
-        "workable-sync-every-30-minutes": {
-            "task": "app.tasks.assessment_tasks.sync_workable_orgs",
-            "schedule": 1800.0,
+        # Sync redesign (2026-05-20): the old ``sync_workable_orgs`` did a
+        # full-fat sync every 30 min and was rate-limiting Workable while
+        # re-downloading CVs we already had. Now split across four tasks:
+        #   * jobs metadata refresh — every 15 min (jobs_only mode)
+        #   * starred-role candidates — every 5 min (full)
+        #   * agent-mode-role candidates — every 5 min (full)
+        #   * everything else — once nightly (full)
+        "workable-jobs-every-15-minutes": {
+            "task": "app.tasks.assessment_tasks.sync_workable_jobs",
+            "schedule": 900.0,
         },
         # Starred roles are the ones the recruiter is actively piloting Tali
-        # on — we keep them in lockstep with Workable so stage changes (e.g.,
-        # candidate moved to Technical Interview by the recruiter) reflect in
-        # Tali within a few minutes rather than the 15-min default.
+        # on — candidates kept in lockstep so stage changes (e.g. candidate
+        # moved to Technical Interview) reflect in Tali within minutes.
         "sync-starred-roles-every-5-minutes": {
             "task": "app.tasks.assessment_tasks.sync_starred_roles",
             "schedule": 300.0,
+        },
+        # Agent-mode roles need fresh candidate state every cycle so the
+        # agent loop's decisions reflect the latest Workable signals.
+        "sync-agent-mode-roles-every-5-minutes": {
+            "task": "app.tasks.assessment_tasks.sync_agent_mode_roles",
+            "schedule": 300.0,
+        },
+        # Nightly catch-all for non-starred, non-agent roles. 03:15 UTC
+        # is off-peak for our user base and avoids colliding with the
+        # daily Anthropic reconciliation at midnight.
+        "sync-workable-daily-candidates": {
+            "task": "app.tasks.assessment_tasks.sync_workable_daily_candidates",
+            "schedule": crontab(hour=3, minute=15),
         },
         # Recover Workable sync runs whose worker died mid-flight. Without
         # this, status='running' rows linger forever and ``POST /workable/sync``

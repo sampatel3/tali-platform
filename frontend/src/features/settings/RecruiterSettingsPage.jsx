@@ -1687,16 +1687,15 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         <option value="metadata">Metadata sync</option>
                       </select>
                     </label>
-                    <label className="field">
-                      <span className="k">Sync interval (minutes)</span>
-                      <input
-                        type="number"
-                        min={5}
-                        max={1440}
-                        value={workableForm.syncIntervalMinutes}
-                        onChange={(event) => setWorkableForm((prev) => ({ ...prev, syncIntervalMinutes: event.target.value }))}
-                      />
-                    </label>
+                    <div className="field" style={{ gridColumn: '1 / -1' }}>
+                      <span className="k">Sync schedule</span>
+                      <div className="v" style={{ display: 'grid', gap: 4, fontSize: 13, lineHeight: 1.5 }}>
+                        <div><strong>Jobs metadata</strong> — every 15 minutes (new postings + title/description edits)</div>
+                        <div><strong>Starred role candidates</strong> — every 5 minutes</div>
+                        <div><strong>Agent-mode role candidates</strong> — every 5 minutes</div>
+                        <div><strong>All other roles' candidates</strong> — once nightly at 03:15 UTC</div>
+                      </div>
+                    </div>
                     <label className="field">
                       <span className="k">Invite stage name</span>
                       <input

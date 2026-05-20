@@ -410,13 +410,15 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       ? 'Needs refresh'
       : 'Healthy';
   const nextPullAt = useMemo(() => {
+    // Jobs metadata syncs every 15 minutes (sync_workable_jobs Beat task).
+    // Candidate cadences vary per role (starred/agent/nightly) — those
+    // surface on the role page itself rather than here.
     const lastSyncAt = orgData?.workable_last_sync_at;
-    const intervalMinutes = Number(orgData?.workable_config?.sync_interval_minutes || 0);
-    if (!lastSyncAt || !Number.isFinite(intervalMinutes) || intervalMinutes <= 0) return null;
+    if (!lastSyncAt) return null;
     const parsed = new Date(lastSyncAt);
     if (Number.isNaN(parsed.getTime())) return null;
-    return new Date(parsed.getTime() + (intervalMinutes * 60000));
-  }, [orgData?.workable_config?.sync_interval_minutes, orgData?.workable_last_sync_at]);
+    return new Date(parsed.getTime() + (15 * 60000));
+  }, [orgData?.workable_last_sync_at]);
 
   const filtered = useMemo(() => (
     roles.filter((role) => filterRoleBySource(role, sourceFilter))

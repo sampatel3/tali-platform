@@ -194,168 +194,13 @@ def send_assessment_expiry_reminders():
         db.close()
 
 
-_WORKABLE_SYNC_LOCK_KEY = "celery:lock:sync_workable_orgs"
-_WORKABLE_SYNC_LOCK_TTL_SECONDS = 7200  # 2h ceiling — auto-released if a worker dies mid-sync
-
-# Per-org "full sync just ran" marker. ``org.workable_last_sync_at`` was
-# the original debounce signal, but ``sync_starred_roles`` also writes
-# that timestamp via ``sync_org`` on every fire (the starred cadence is
-# shorter than the full-sync interval here), which permanently kept the
-# timestamp fresh and starved the full-org sweep — see the missing-roles
-# incident on 2026-05-20. Recording the full-sync timestamp in Redis
-# keeps it isolated from the starred path. Loss of the key (Redis
-# restart) is acceptable — worst case the next Beat tick runs an extra
-# sync.
-_WORKABLE_FULL_SYNC_RECENT_KEY_PREFIX = "celery:debounce:sync_workable_orgs:org"
-
-
-def _mark_full_sync_recent(org_id: int, interval_minutes: int) -> None:
-    """Record that a successful full sync just ran for ``org_id``."""
-    try:
-        import redis  # type: ignore
-
-        client = redis.Redis.from_url(settings.REDIS_URL)
-        key = f"{_WORKABLE_FULL_SYNC_RECENT_KEY_PREFIX}:{org_id}"
-        client.set(key, "1", ex=max(60, int(interval_minutes) * 60))
-    except Exception:
-        logger.exception(
-            "Failed to set full-sync debounce key for org_id=%s; next beat will retry",
-            org_id,
-        )
-
-
-def _is_full_sync_recent(org_id: int) -> bool:
-    """True if a full sync ran within its configured interval for this org."""
-    try:
-        import redis  # type: ignore
-
-        client = redis.Redis.from_url(settings.REDIS_URL)
-        key = f"{_WORKABLE_FULL_SYNC_RECENT_KEY_PREFIX}:{org_id}"
-        return bool(client.get(key))
-    except Exception:
-        logger.exception(
-            "Failed to read full-sync debounce key for org_id=%s; treating as not recent",
-            org_id,
-        )
-        return False
-
-
-def _acquire_sync_lock():
-    """Best-effort Redis lock so only one sync_workable_orgs runs at a time.
-
-    The Workable paginated sync regularly takes 60-70 min — longer than its
-    30-min schedule — and previously piled up on the worker pool, blocking
-    every other Celery task (including scoring). Using SETNX with a TTL
-    means crashed workers don't leave the lock stuck forever.
-
-    Returns the redis client if we got the lock, None if another sync is
-    already running, or False on Redis errors (caller treats as no-lock,
-    runs anyway — better than failing closed and never syncing).
-    """
-    try:
-        import redis  # type: ignore
-
-        client = redis.Redis.from_url(settings.REDIS_URL)
-        # SET NX EX TTL — atomic acquire-with-expiry.
-        acquired = client.set(
-            _WORKABLE_SYNC_LOCK_KEY,
-            "1",
-            nx=True,
-            ex=_WORKABLE_SYNC_LOCK_TTL_SECONDS,
-        )
-        if not acquired:
-            return None
-        return client
-    except Exception:
-        logger.exception("Failed to acquire Workable sync lock; running unguarded")
-        return False
-
-
-def _release_sync_lock(client) -> None:
-    if not client:
-        return
-    try:
-        client.delete(_WORKABLE_SYNC_LOCK_KEY)
-    except Exception:
-        logger.exception("Failed to release Workable sync lock")
-
-
-@celery_app.task
-def sync_workable_orgs():
-    """Periodic task: sync Workable jobs/candidates for hybrid-workflow orgs.
-
-    Self-skips when another instance is already running (Redis-backed
-    lock with a 2-hour TTL ceiling). Without the lock, scheduled fires
-    pile up on slow paginated syncs and starve the worker pool.
-    """
-    from sqlalchemy.orm import Session
-
-    from ..components.integrations.workable.service import WorkableService
-    from ..components.integrations.workable.sync_service import WorkableSyncService
-    from ..models.organization import Organization
-    from ..platform.database import SessionLocal
-
-    if settings.MVP_DISABLE_WORKABLE:
-        return {"status": "skipped", "reason": "workable_disabled"}
-
-    lock_client = _acquire_sync_lock()
-    if lock_client is None:
-        # Another sync is in progress — skip this scheduled fire entirely.
-        # Beat will try again at the next interval.
-        logger.info("sync_workable_orgs skipping: another sync is already running")
-        return {"status": "skipped", "reason": "already_running"}
-
-    db: Session = SessionLocal()
-    synced = 0
-    skipped = 0
-    failed = 0
-    try:
-        orgs = (
-            db.query(Organization)
-            .filter(
-                Organization.workable_connected == True,  # noqa: E712
-                Organization.workable_access_token != None,  # noqa: E711
-                Organization.workable_subdomain != None,  # noqa: E711
-            )
-            .all()
-        )
-        for org in orgs:
-            config = org.workable_config if isinstance(org.workable_config, dict) else {}
-            sync_model = str(config.get("sync_model") or "scheduled_pull_only")
-            try:
-                sync_interval_minutes = int(config.get("sync_interval_minutes") or 30)
-            except Exception:
-                sync_interval_minutes = 30
-            if sync_model != "scheduled_pull_only":
-                skipped += 1
-                continue
-            # Debounce on a Redis key written by this task only. We used to
-            # read ``org.workable_last_sync_at`` here, but ``sync_starred_roles``
-            # also writes that column (via ``sync_org``) on every fire,
-            # which permanently kept the timestamp fresh and starved the
-            # full sweep — newly-published-but-unstarred jobs would never
-            # sync.
-            if _is_full_sync_recent(int(org.id)):
-                skipped += 1
-                continue
-            try:
-                service = WorkableSyncService(
-                    WorkableService(
-                        access_token=org.workable_access_token,
-                        subdomain=org.workable_subdomain,
-                    )
-                )
-                service.sync_org(db, org, full_resync=False)
-                _mark_full_sync_recent(int(org.id), sync_interval_minutes)
-                synced += 1
-            except Exception:
-                failed += 1
-                logger.exception("Workable sync task failed for org_id=%s", org.id)
-        return {"status": "ok", "synced": synced, "skipped": skipped, "failed": failed}
-    finally:
-        db.close()
-        _release_sync_lock(lock_client)
-
+# Note: ``sync_workable_orgs`` (every-30-min full sync of every job AND
+# every candidate AND every CV download) was removed on 2026-05-20. It
+# was the source of the constant rate-limiting and the starvation bug
+# (``workable_last_sync_at`` debounce starved by ``sync_starred_roles``
+# 's writes — see PR #194). Sync is now split per-cadence: jobs every
+# 15 min (jobs_only), starred-role candidates every 5 min, agent-mode
+# candidates every 5 min, everything else once nightly.
 
 _STARRED_SYNC_LOCK_KEY_PREFIX = "celery:lock:sync_starred_roles"
 _STARRED_SYNC_LOCK_TTL_SECONDS = 600  # 10m ceiling — starred sync is filtered, fast
@@ -489,6 +334,363 @@ def sync_starred_roles():
                 )
             finally:
                 _release_starred_lock(lock_handle)
+        return {"status": "ok", "synced": synced, "skipped": skipped, "failed": failed}
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Sync redesign (2026-05-20): split the monolithic sync into per-cadence tasks
+#
+# Old behavior: every 30 min, sync_workable_orgs did a full-fat sync of every
+# job and every candidate for every org — including re-downloading CVs we
+# already had. That re-fetched ~50k applications worth of data hourly, which
+# is what kept rate-limiting Workable.
+#
+# New behavior:
+#   - sync_workable_jobs               (15 min, mode=jobs_only) — refresh role
+#                                       metadata so new postings appear fast.
+#   - sync_starred_roles               (5 min,  mode=full)      — starred roles
+#                                       (existing, untouched).
+#   - sync_agent_mode_roles            (5 min,  mode=full)      — agentic-mode
+#                                       roles so the agent loop has fresh data.
+#   - sync_workable_daily_candidates   (nightly, mode=full)     — every other
+#                                       role's candidates once per day.
+# ---------------------------------------------------------------------------
+
+_JOBS_SYNC_LOCK_KEY = "celery:lock:sync_workable_jobs"
+_JOBS_SYNC_LOCK_TTL_SECONDS = 600  # 10m ceiling — jobs-only is fast
+
+
+def _acquire_jobs_sync_lock():
+    """Best-effort Redis lock for sync_workable_jobs."""
+    try:
+        import redis  # type: ignore
+
+        client = redis.Redis.from_url(settings.REDIS_URL)
+        if client.set(_JOBS_SYNC_LOCK_KEY, "1", nx=True, ex=_JOBS_SYNC_LOCK_TTL_SECONDS):
+            return client
+        return None
+    except Exception:
+        logger.exception("Failed to acquire jobs-sync lock; running unguarded")
+        return False
+
+
+def _release_jobs_sync_lock(client) -> None:
+    if not client:
+        return
+    try:
+        client.delete(_JOBS_SYNC_LOCK_KEY)
+    except Exception:
+        logger.exception("Failed to release jobs-sync lock")
+
+
+@celery_app.task
+def sync_workable_jobs():
+    """Periodic task: refresh Workable role metadata only — no candidate fetch.
+
+    Runs every 15 minutes. Picks up newly-published jobs, title/description
+    edits, and state changes (e.g. published → closed). Skips candidates
+    entirely, so it stays well under Workable's rate limit even for orgs
+    with hundreds of jobs.
+
+    Candidates flow through three separate cadences:
+      * starred roles → sync_starred_roles (5 min)
+      * agent-mode roles → sync_agent_mode_roles (5 min)
+      * everything else → sync_workable_daily_candidates (nightly)
+    """
+    from sqlalchemy.orm import Session
+
+    from ..components.integrations.workable.service import WorkableService
+    from ..components.integrations.workable.sync_service import WorkableSyncService
+    from ..models.organization import Organization
+    from ..platform.database import SessionLocal
+
+    if settings.MVP_DISABLE_WORKABLE:
+        return {"status": "skipped", "reason": "workable_disabled"}
+
+    lock_client = _acquire_jobs_sync_lock()
+    if lock_client is None:
+        logger.info("sync_workable_jobs skipping: another instance is already running")
+        return {"status": "skipped", "reason": "already_running"}
+
+    db: Session = SessionLocal()
+    synced = 0
+    failed = 0
+    try:
+        orgs = (
+            db.query(Organization)
+            .filter(
+                Organization.workable_connected == True,  # noqa: E712
+                Organization.workable_access_token != None,  # noqa: E711
+                Organization.workable_subdomain != None,  # noqa: E711
+            )
+            .all()
+        )
+        for org in orgs:
+            try:
+                service = WorkableSyncService(
+                    WorkableService(
+                        access_token=org.workable_access_token,
+                        subdomain=org.workable_subdomain,
+                    )
+                )
+                service.sync_org(db, org, mode="jobs_only")
+                synced += 1
+            except Exception:
+                failed += 1
+                logger.exception("Workable jobs-only sync failed for org_id=%s", org.id)
+        return {"status": "ok", "synced": synced, "failed": failed}
+    finally:
+        db.close()
+        _release_jobs_sync_lock(lock_client)
+
+
+_AGENT_MODE_SYNC_LOCK_KEY_PREFIX = "celery:lock:sync_agent_mode_roles"
+_AGENT_MODE_SYNC_LOCK_TTL_SECONDS = 600  # 10m ceiling — fast filtered sync
+
+
+def _acquire_agent_mode_lock(org_id: int):
+    """Per-org lock for agent-mode sync."""
+    try:
+        import redis  # type: ignore
+
+        client = redis.Redis.from_url(settings.REDIS_URL)
+        key = f"{_AGENT_MODE_SYNC_LOCK_KEY_PREFIX}:{org_id}"
+        if client.set(key, "1", nx=True, ex=_AGENT_MODE_SYNC_LOCK_TTL_SECONDS):
+            return (client, key)
+        return None
+    except Exception:
+        logger.exception(
+            "Failed to acquire agent-mode sync lock org_id=%s; running unguarded",
+            org_id,
+        )
+        return False
+
+
+def _release_agent_mode_lock(handle) -> None:
+    if not handle:
+        return
+    try:
+        client, key = handle
+        client.delete(key)
+    except Exception:
+        logger.exception("Failed to release agent-mode sync lock")
+
+
+@celery_app.task
+def sync_agent_mode_roles():
+    """Periodic task: pull candidates for roles where ``agentic_mode_enabled``.
+
+    Mirrors sync_starred_roles but filters to roles with the agent loop
+    turned on (and not paused). Runs at the same 5-min cadence so the
+    agent always sees fresh Workable state. A role that is BOTH starred
+    and agentic will be picked up by both tasks — Redis locks prevent
+    overlap within a single org, and ``sync_org`` is idempotent across
+    repeated upserts.
+    """
+    from sqlalchemy.orm import Session
+
+    from ..components.integrations.workable.service import WorkableService
+    from ..components.integrations.workable.sync_service import WorkableSyncService
+    from ..models.organization import Organization
+    from ..models.role import Role
+    from ..platform.database import SessionLocal
+
+    if settings.MVP_DISABLE_WORKABLE:
+        return {"status": "skipped", "reason": "workable_disabled"}
+
+    db: Session = SessionLocal()
+    synced = 0
+    skipped = 0
+    failed = 0
+    try:
+        rows = (
+            db.query(Role.organization_id, Role.workable_job_id)
+            .filter(
+                Role.agentic_mode_enabled == True,  # noqa: E712
+                Role.agent_paused_at.is_(None),
+                Role.deleted_at.is_(None),
+                Role.workable_job_id.isnot(None),
+            )
+            .all()
+        )
+        by_org: dict[int, list[str]] = {}
+        for org_id, wid in rows:
+            shortcode = str(wid or "").strip()
+            if not shortcode:
+                continue
+            by_org.setdefault(int(org_id), []).append(shortcode)
+        if not by_org:
+            return {"status": "ok", "synced": 0, "skipped": 0, "failed": 0}
+
+        orgs = (
+            db.query(Organization)
+            .filter(
+                Organization.id.in_(list(by_org.keys())),
+                Organization.workable_connected == True,  # noqa: E712
+                Organization.workable_access_token != None,  # noqa: E711
+                Organization.workable_subdomain != None,  # noqa: E711
+            )
+            .all()
+        )
+        for org in orgs:
+            shortcodes = by_org.get(int(org.id)) or []
+            if not shortcodes:
+                continue
+            lock_handle = _acquire_agent_mode_lock(int(org.id))
+            if lock_handle is None:
+                skipped += 1
+                continue
+            try:
+                service = WorkableSyncService(
+                    WorkableService(
+                        access_token=org.workable_access_token,
+                        subdomain=org.workable_subdomain,
+                    )
+                )
+                service.sync_org(
+                    db,
+                    org,
+                    full_resync=False,
+                    mode="full",
+                    selected_job_shortcodes=shortcodes,
+                )
+                synced += 1
+            except Exception:
+                failed += 1
+                logger.exception(
+                    "Agent-mode sync failed for org_id=%s shortcodes=%s",
+                    org.id,
+                    shortcodes,
+                )
+            finally:
+                _release_agent_mode_lock(lock_handle)
+        return {"status": "ok", "synced": synced, "skipped": skipped, "failed": failed}
+    finally:
+        db.close()
+
+
+_DAILY_CANDIDATE_SYNC_LOCK_KEY_PREFIX = "celery:lock:sync_workable_daily_candidates"
+_DAILY_CANDIDATE_SYNC_LOCK_TTL_SECONDS = 7200  # 2h ceiling — nightly catch-all
+
+
+def _acquire_daily_candidate_lock(org_id: int):
+    try:
+        import redis  # type: ignore
+
+        client = redis.Redis.from_url(settings.REDIS_URL)
+        key = f"{_DAILY_CANDIDATE_SYNC_LOCK_KEY_PREFIX}:{org_id}"
+        if client.set(key, "1", nx=True, ex=_DAILY_CANDIDATE_SYNC_LOCK_TTL_SECONDS):
+            return (client, key)
+        return None
+    except Exception:
+        logger.exception(
+            "Failed to acquire daily-candidate sync lock org_id=%s; running unguarded",
+            org_id,
+        )
+        return False
+
+
+def _release_daily_candidate_lock(handle) -> None:
+    if not handle:
+        return
+    try:
+        client, key = handle
+        client.delete(key)
+    except Exception:
+        logger.exception("Failed to release daily-candidate sync lock")
+
+
+@celery_app.task
+def sync_workable_daily_candidates():
+    """Nightly catch-all: full sync of candidates for non-starred, non-agent roles.
+
+    Starred and agent-mode roles get candidates every 5 min. This task
+    covers everything else so an inactive role's candidates stay updated
+    at a once-a-day cadence. Scheduled at 03:00 UTC by default — see
+    celery_app.beat_schedule.
+    """
+    from sqlalchemy.orm import Session
+
+    from ..components.integrations.workable.service import WorkableService
+    from ..components.integrations.workable.sync_service import WorkableSyncService
+    from ..models.organization import Organization
+    from ..models.role import Role
+    from ..platform.database import SessionLocal
+
+    if settings.MVP_DISABLE_WORKABLE:
+        return {"status": "skipped", "reason": "workable_disabled"}
+
+    db: Session = SessionLocal()
+    synced = 0
+    skipped = 0
+    failed = 0
+    try:
+        rows = (
+            db.query(Role.organization_id, Role.workable_job_id)
+            .filter(
+                Role.source == "workable",
+                Role.deleted_at.is_(None),
+                Role.workable_job_id.isnot(None),
+                Role.starred_for_auto_sync == False,  # noqa: E712
+                # Skip agent-mode unless it's paused — paused agents still
+                # need the nightly catch-up since the 5-min path skips them.
+                ((Role.agentic_mode_enabled == False) | (Role.agent_paused_at.isnot(None))),  # noqa: E712
+            )
+            .all()
+        )
+        by_org: dict[int, list[str]] = {}
+        for org_id, wid in rows:
+            shortcode = str(wid or "").strip()
+            if not shortcode:
+                continue
+            by_org.setdefault(int(org_id), []).append(shortcode)
+        if not by_org:
+            return {"status": "ok", "synced": 0, "skipped": 0, "failed": 0}
+
+        orgs = (
+            db.query(Organization)
+            .filter(
+                Organization.id.in_(list(by_org.keys())),
+                Organization.workable_connected == True,  # noqa: E712
+                Organization.workable_access_token != None,  # noqa: E711
+                Organization.workable_subdomain != None,  # noqa: E711
+            )
+            .all()
+        )
+        for org in orgs:
+            shortcodes = by_org.get(int(org.id)) or []
+            if not shortcodes:
+                continue
+            lock_handle = _acquire_daily_candidate_lock(int(org.id))
+            if lock_handle is None:
+                skipped += 1
+                continue
+            try:
+                service = WorkableSyncService(
+                    WorkableService(
+                        access_token=org.workable_access_token,
+                        subdomain=org.workable_subdomain,
+                    )
+                )
+                service.sync_org(
+                    db,
+                    org,
+                    full_resync=False,
+                    mode="full",
+                    selected_job_shortcodes=shortcodes,
+                )
+                synced += 1
+            except Exception:
+                failed += 1
+                logger.exception(
+                    "Daily candidate sync failed for org_id=%s (%d shortcodes)",
+                    org.id,
+                    len(shortcodes),
+                )
+            finally:
+                _release_daily_candidate_lock(lock_handle)
         return {"status": "ok", "synced": synced, "skipped": skipped, "failed": failed}
     finally:
         db.close()

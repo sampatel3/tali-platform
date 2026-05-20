@@ -396,15 +396,16 @@ export const WorkableSyncStrip = ({
   }, []);
 
   const workableConnected = Boolean(org?.workable_connected);
-  const workableConfig = org?.workable_config || {};
   const summary = org?.workable_last_sync_summary || {};
   const lastSyncAt = org?.workable_last_sync_at || null;
-  const intervalMinutes = Number(workableConfig.sync_interval_minutes || 0);
+  // Jobs metadata refreshes every 15 minutes (sync_workable_jobs Beat task).
+  // Candidate cadences vary per role and surface on the role page.
+  const JOBS_SYNC_INTERVAL_MINUTES = 15;
   const nextPullAt = useMemo(() => {
     const parsed = toDate(lastSyncAt);
-    if (!parsed || !Number.isFinite(intervalMinutes) || intervalMinutes <= 0) return null;
-    return new Date(parsed.getTime() + (intervalMinutes * 60000));
-  }, [intervalMinutes, lastSyncAt]);
+    if (!parsed) return null;
+    return new Date(parsed.getTime() + (JOBS_SYNC_INTERVAL_MINUTES * 60000));
+  }, [lastSyncAt]);
   const health = resolveSyncHealth({
     status: org?.workable_last_sync_status,
     lastSyncedAt: lastSyncAt,
