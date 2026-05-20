@@ -72,7 +72,14 @@ def queue_pre_screen_reject(
 
     Idempotent on ``application_id`` — re-running pre-screen against the
     same application produces at most one row.
+
+    Gated on ``role.agentic_mode_enabled``: agent-OFF roles aren't under
+    agent management, so we shouldn't auto-create Decision Hub cards on
+    their behalf. The recruiter would see decisions appearing for roles
+    they didn't enable the agent on — surprising and unwelcome.
     """
+    if not bool(getattr(role, "agentic_mode_enabled", False)):
+        return None
     try:
         key = _idempotency_key(int(application.id))
         existing = (
@@ -162,6 +169,11 @@ def backfill_existing_below_threshold(
             CandidateApplication.pre_screen_score_100 < 50,
             CandidateApplication.application_outcome == "open",
             Role.deleted_at.is_(None),
+            # Only agent-on roles. Agent-off roles aren't under agent
+            # management; surfacing decisions for them would surprise the
+            # recruiter ("why are these candidates in my queue when I
+            # never enabled the agent here?").
+            Role.agentic_mode_enabled.is_(True),
         )
     )
     if organization_id is not None:
