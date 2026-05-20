@@ -2409,12 +2409,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   ?? a?.taali_score
                   ?? a?.assessment_score
                   ?? a?.cv_match_score;
-                // ``Number(null) === 0`` and is finite, so the bare
-                // ``Number.isFinite(Number(raw))`` check would let unscored
-                // candidates sort like a real zero. Guard on null/undefined
-                // explicitly so they fall to the end of the sort instead.
-                if (raw == null) return -1;
-                return Number.isFinite(Number(raw)) ? Number(raw) : -1;
+                // raw == null guard: Number(null) === 0 IS finite, so unscored sorts as a real zero without it.
+                return raw != null && Number.isFinite(Number(raw)) ? Number(raw) : -1;
               };
               const sorted = [...filteredApps].sort((a, b) => (
                 tableSortBy === 'asc' ? cmpScore(a) - cmpScore(b) : cmpScore(b) - cmpScore(a)
@@ -2449,14 +2445,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                           ?? application?.taali_score
                           ?? application?.assessment_score
                           ?? application?.cv_match_score;
-                        // Guard explicitly on null/undefined: ``Number(null) === 0``
-                        // and IS finite, so without this an unscored candidate
-                        // would render a literal "0" pill instead of "—".
-                        const score = compositeRaw == null
-                          ? null
-                          : Number.isFinite(Number(compositeRaw))
-                            ? Math.round(Number(compositeRaw))
-                            : null;
+                        // compositeRaw == null guard: Number(null) === 0 IS finite — without this, unscored renders as a literal "0" pill instead of "—".
+                        const score = compositeRaw != null && Number.isFinite(Number(compositeRaw)) ? Math.round(Number(compositeRaw)) : null;
                         const scoreClass = score == null ? '' : score >= 80 ? 'hi' : score >= 60 ? 'mid' : 'lo';
                         const stageLabel = (PIPELINE_STAGE_ORDER.find((s) => s.key === stage)?.label) || (stage ? stage.replace(/_/g, ' ') : '—');
                         const statusText = resolvePipelineCardFooterStatus(application);
