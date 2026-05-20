@@ -294,6 +294,90 @@ def test_none_comments_response_preserves_stale_stored_comments(db):
     )
 
 
+def test_activities_pagination_walks_all_pages(db, monkeypatch):
+    """Workable paginates activities at 50/page by default. A candidate
+    with a long history (multiple comments + assessment + interview +
+    messages) would lose older entries if sync stopped after page 1.
+
+    This test pages through three responses (50 + 50 + 30 = 130 total)
+    and asserts every comment-typed entry made it into ``workable_comments``.
+    """
+    pages = [
+        {
+            "activities": [
+                {"action": "comment", "body": f"page1 #{i}", "member": {"name": "R"}}
+                for i in range(50)
+            ],
+            "paging": {"next": "https://x.workable.com/spi/v3/page2"},
+        },
+        {
+            "activities": [
+                {"action": "comment", "body": f"page2 #{i}", "member": {"name": "R"}}
+                for i in range(50)
+            ],
+            "paging": {"next": "https://x.workable.com/spi/v3/page3"},
+        },
+        {
+            "activities": [
+                {"action": "comment", "body": f"page3 #{i}", "member": {"name": "R"}}
+                for i in range(30)
+            ],
+            # No paging.next → walk stops.
+        },
+    ]
+
+    class PaginatingClient(WorkableService):
+        def __init__(self):
+            super().__init__(access_token="x", subdomain="test")
+            self._call_count = 0
+
+        def get_candidate(self, cid):
+            return {"id": cid, "name": "Alice"}
+
+        def download_candidate_resume(self, p):
+            return None
+
+        def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
+            return None, None, None
+
+        def _request_optional(self, method, path, **kwargs):
+            self._call_count += 1
+            return pages[0]
+
+        def _get_next_page(self, next_url):
+            # Cursor walks pages 2 → 3 → exhausted.
+            if "page2" in next_url:
+                return pages[1]
+            if "page3" in next_url:
+                return pages[2]
+            return {}
+
+    org, role, candidate, _ = _build_org_role_candidate_app(
+        db,
+        org_slug="activities-paginate",
+        agentic=False,
+        starred=True,
+        pre_screen_score=None,
+        cv_match_score=None,
+    )
+    service = WorkableSyncService(PaginatingClient())
+    service._sync_candidate_for_role(
+        db=db, org=org, role=role,
+        job={"id": role.workable_job_id, "shortcode": role.workable_job_id},
+        candidate_ref={"id": _CANDIDATE_ID, "email": "a@x.test", "stage": "Phone Screen"},
+        now=datetime.now(timezone.utc), run=None, mode="full",
+    )
+    db.refresh(candidate)
+    # 130 total comment entries across 3 pages — none lost.
+    assert candidate.workable_comments is not None
+    assert len(candidate.workable_comments) == 130
+    # Older entries (later pages) must be present, not just page 1.
+    bodies = {c.get("body") for c in candidate.workable_comments}
+    assert "page1 #0" in bodies
+    assert "page2 #49" in bodies
+    assert "page3 #29" in bodies
+
+
 def test_activities_split_into_comments_and_non_comments(db):
     """The activities feed is the only source for both comments and
     the rest of the timeline (Workable's API doesn't expose a GET on
