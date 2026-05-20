@@ -243,9 +243,20 @@ def agent_cohort_tick_sweep(self) -> dict:
     max_retries=0,
 )
 def agent_cohort_tick_role(self, role_id: int) -> dict:
-    """One cohort tick for ``role_id``. Runs the orchestrator with
-    trigger="cron" and no application_id — the agent surveys the role
-    via ``survey_role_state`` and acts on what it finds.
+    """One cohort tick for ``role_id``.
+
+    Two phases:
+    1. Auto-enqueue scoring (pre-screen + CV match) for any unscored
+       candidates on this role. The cohort planner observes the
+       ``needs_pre_screen`` / ``needs_score`` counts but has no tool
+       to act on them — scoring lives in a separate worker. Without
+       this step the recruiter had to manually click "Process N
+       candidates" before the agent could see anything new.
+    2. Run the agent orchestrator with trigger="cron" — survey state
+       and act on whatever is currently scored.
+
+    Scoring is async so this tick's run_cycle won't see *this* tick's
+    newly enqueued scores. The next tick (30 min later) will pick them up.
     """
     from ..agent_runtime.orchestrator import run_cycle
     from ..models.role import Role
@@ -258,6 +269,14 @@ def agent_cohort_tick_role(self, role_id: int) -> dict:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
         if not bool(role.agentic_mode_enabled) or role.agent_paused_at is not None:
             return {"status": "skipped", "reason": "not_eligible", "role_id": role_id}
+
+        # Phase 1: auto-enqueue scoring for unscored candidates.
+        # enqueue_score is idempotent (returns the existing pending/running
+        # job when one exists) and bounded by the role's monthly $ cap via
+        # the role_budget_gate it checks internally, so this is safe to
+        # call on every unscored app every tick.
+        auto_scored = _auto_enqueue_scoring(db, role=role)
+
         try:
             run = run_cycle(
                 db,
@@ -272,13 +291,72 @@ def agent_cohort_tick_role(self, role_id: int) -> dict:
                 "agent_run_id": int(run.id),
                 "run_status": str(run.status),
                 "decisions_emitted": int(run.decisions_emitted),
+                "auto_scored_enqueued": auto_scored,
             }
         except Exception:
             db.rollback()
             logger.exception("agent_cohort_tick_role failed role_id=%s", role_id)
-            return {"status": "error", "role_id": role_id}
+            return {"status": "error", "role_id": role_id, "auto_scored_enqueued": auto_scored}
     finally:
         db.close()
+
+
+def _auto_enqueue_scoring(db, *, role) -> int:
+    """Queue a scoring job for every unscored, scorable candidate on the
+    role. Returns the count of new/existing jobs touched (skipped apps
+    return 0).
+
+    Skipping rules already live inside ``enqueue_score``:
+    - no cv_text / no spec / no API key → returns None
+    - org credit balance too low → returns None
+    - role monthly $ cap reached → returns None
+    - existing pending/running job → returns that job (no duplicate)
+
+    We don't cap the per-tick volume: the worker pool naturally serializes
+    via Redis queue depth, and one tick per role per 30 minutes is the
+    realistic upper bound on how often we'd re-scan anyway.
+    """
+    try:
+        from ..models.candidate_application import CandidateApplication
+        from ..services.cv_score_orchestrator import enqueue_score
+
+        unscored = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.organization_id == role.organization_id,
+                CandidateApplication.role_id == role.id,
+                CandidateApplication.cv_match_score.is_(None),
+                CandidateApplication.application_outcome == "open",
+                CandidateApplication.deleted_at.is_(None),
+                CandidateApplication.cv_text.isnot(None),
+                CandidateApplication.cv_text != "",
+            )
+            .all()
+        )
+        touched = 0
+        for app in unscored:
+            try:
+                job = enqueue_score(db, app, force=False)
+                if job is not None:
+                    touched += 1
+            except Exception:
+                logger.exception(
+                    "auto-enqueue_score failed for application_id=%s role_id=%s",
+                    app.id,
+                    role.id,
+                )
+        db.commit()
+        if touched:
+            logger.info(
+                "agent_cohort_tick auto-enqueued %d scoring job(s) for role_id=%s",
+                touched,
+                role.id,
+            )
+        return touched
+    except Exception:
+        logger.exception("auto-enqueue scoring failed for role_id=%s", getattr(role, "id", None))
+        db.rollback()
+        return 0
 
 
 @celery_app.task(
