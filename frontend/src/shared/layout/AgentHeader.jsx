@@ -147,9 +147,19 @@ const AgentPanel = ({
         {on && tick ? <div className="agent-tick">{tick}</div> : null}
         {paused ? (
           <div className="agent-tick">
-            {pausedReason
-              ? `Auto-paused — ${pausedReason}. Resume to continue.`
-              : 'Auto-paused. Resume to continue.'}
+            {(() => {
+              // Mirror HomeRoles' humanization so the role detail page
+              // matches the home page label. Backend writes
+              // implementation-detail strings; recruiters see a clean phrase.
+              const r = String(pausedReason || '').toLowerCase();
+              let pretty = null;
+              if (r.startsWith('monthly usd cap')) pretty = 'monthly budget reached';
+              else if (r.includes('decision budget')) pretty = 'cycle limit reached';
+              else if (pausedReason) pretty = String(pausedReason).slice(0, 64);
+              return pretty
+                ? `Auto-paused — ${pretty}. Resume to continue.`
+                : 'Auto-paused. Resume to continue.';
+            })()}
           </div>
         ) : null}
 

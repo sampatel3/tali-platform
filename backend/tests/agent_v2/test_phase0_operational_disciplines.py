@@ -107,7 +107,6 @@ def test_system_prompt_caches_static_header_and_role_block(db):
     blocks = build_system_prompt(
         role=role,
         trigger_context="manual",
-        budget_remaining_tokens=10_000,
         decision_budget_remaining=10,
     )
     # Layer 1 (static header) and Layer 2 (role block + intent overlay)
@@ -136,14 +135,12 @@ def test_system_prompt_does_not_leak_per_cycle_data_above_cache(db):
     blocks = build_system_prompt(
         role=role,
         trigger_context="UNIQUE_TRIGGER_TOKEN",
-        budget_remaining_tokens=123_456,
         decision_budget_remaining=789,
     )
     cached_text = " ".join(b.get("text", "") for b in blocks if b.get("cache_control"))
     # If per-cycle values appear in the cached portion, the cache would
     # be invalidated on every cycle — defeats the entire discipline.
     assert "UNIQUE_TRIGGER_TOKEN" not in cached_text
-    assert "123456" not in cached_text and "123,456" not in cached_text
     assert "789" not in cached_text
 
 

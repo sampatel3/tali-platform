@@ -295,6 +295,58 @@ def test_run_cycle_aborts_when_max_rounds_exceeded(db):
     assert client.messages.create.call_count == orchestrator.MAX_TOOL_ROUNDS
 
 
+def test_run_cycle_does_not_pause_role_on_per_cycle_decision_exhaustion(db):
+    """Per-cycle decision exhaustion ends the *cycle* but leaves the *role*
+    enabled — the next scheduled run picks up where this one left off.
+
+    Regression: previously the orchestrator called pause_role() here, so a
+    single cycle that ran a bit long permanently disabled the role until a
+    human clicked Resume. Per-cycle limits are pacing/safety circuits, not
+    money — only the monthly $ cap should auto-pause the role.
+    """
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.agent_decision_budget_per_cycle = 1  # trip on the second pre-round check
+    db.flush()
+    app = _make_app(db, org=org, role=role)
+
+    client = _scripted_client([
+        # First round queues one decision — pre-round check passes (0 < 1).
+        _response(
+            blocks=[
+                _block_tool_use(
+                    tool_use_id="tu_1",
+                    name="queue_advance_decision",
+                    input_={
+                        "application_id": int(app.id),
+                        "reasoning": "Strong CV match.",
+                        "evidence": {"taali_score": 90},
+                        "confidence": 0.9,
+                    },
+                ),
+            ],
+            stop_reason="tool_use",
+        ),
+        # Anthropic shouldn't get called again — pre-round check at the top
+        # of round 2 sees decisions_emitted=1 >= cap=1 and breaks out.
+    ])
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+    db.commit()
+
+    assert run.status == "budget_paused"
+    assert "decision budget" in (run.error or "")
+    db.refresh(role)
+    # Role stays enabled — the agent will run again on next cron tick.
+    assert role.agent_paused_at is None
+    assert role.agent_paused_reason is None
+
+
 def test_run_cycle_pauses_role_on_monthly_budget_exhausted(db):
     org = _make_org(db)
     role = _make_role(db, org)
