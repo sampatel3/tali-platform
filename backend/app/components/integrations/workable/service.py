@@ -337,6 +337,42 @@ class WorkableService:
             return [f for f in files if isinstance(f, dict)]
         return []
 
+    def get_candidate_comments(self, candidate_id: str) -> list[dict]:
+        """Fetch recruiter comments via GET /candidates/:id/comments.
+
+        Comments often contain hard-constraint information the candidate
+        gave during phone screens (salary expectation, notice period,
+        location, work authorisation) — surfaced to the pre-screen LLM so
+        those constraints are checked before the candidate moves on.
+        """
+        if not candidate_id:
+            return []
+        payload = self._request_optional("GET", f"/candidates/{candidate_id}/comments")
+        if not isinstance(payload, dict):
+            return []
+        comments = payload.get("comments") or payload.get("data")
+        if isinstance(comments, list):
+            return [c for c in comments if isinstance(c, dict)]
+        return []
+
+    def get_candidate_activities(self, candidate_id: str) -> list[dict]:
+        """Fetch activity log via GET /candidates/:id/activities.
+
+        Includes stage transitions, automated events, and
+        ``comment`` / ``disqualified`` entries that may carry context the
+        pre-screen LLM needs (e.g. recruiter rejection reasons replayed
+        on rehiring).
+        """
+        if not candidate_id:
+            return []
+        payload = self._request_optional("GET", f"/candidates/{candidate_id}/activities")
+        if not isinstance(payload, dict):
+            return []
+        activities = payload.get("activities") or payload.get("data")
+        if isinstance(activities, list):
+            return [a for a in activities if isinstance(a, dict)]
+        return []
+
     def get_candidate_ratings(self, candidate_id: str) -> dict:
         if self._ratings_supported is False:
             return {}

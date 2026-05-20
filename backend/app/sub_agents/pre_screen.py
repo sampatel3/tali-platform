@@ -26,6 +26,7 @@ from ..services.fraud_detection import (
     build_fraud_signals_payload,
     detect_cv_copy_paste,
 )
+from ..services.workable_context_service import format_workable_context
 from .base import SubAgent, SubAgentRequest, SubAgentResult
 from .registry import register_sub_agent
 
@@ -146,10 +147,34 @@ class PreScreenSubAgent:
         # naturally invalidates stale scores.
         jd_text = _augment_with_overlays(jd_text, req)
 
+        # Surface every Workable surface (questionnaire answers,
+        # recruiter comments, activity log, structured profile) so hard
+        # constraints stated only in Workable (e.g. salary from a
+        # LinkedIn apply answer) influence the score. Empty when the
+        # candidate has no Workable footprint.
+        workable_context = ""
+        try:
+            workable_context = format_workable_context(
+                candidate=getattr(app, "candidate", None),
+                application=app,
+            )
+        except Exception:  # pragma: no cover — defensive
+            logger.exception(
+                "format_workable_context failed for app=%s; proceeding without",
+                app.id,
+            )
+
         # The runner is internally cached (compute_pre_screen_cache_key)
         # so calling here is cheap on a hit. ``skip_cache=True``
-        # invalidates that path explicitly.
-        result = run_pre_screen(cv_text, jd_text, skip_cache=req.skip_cache)
+        # invalidates that path explicitly. Workable context is part of
+        # the cache key, so refreshed metadata correctly busts stale
+        # scores.
+        result = run_pre_screen(
+            cv_text,
+            jd_text,
+            skip_cache=req.skip_cache,
+            workable_context=workable_context or None,
+        )
         if result.decision == "error":
             return SubAgentResult(
                 sub_agent=self.name,

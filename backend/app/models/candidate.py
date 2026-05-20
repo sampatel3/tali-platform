@@ -33,6 +33,12 @@ class Candidate(Base):
     education_entries = Column(JSON, nullable=True)
     experience_entries = Column(JSON, nullable=True)
     summary = Column(Text, nullable=True)
+    # Recruiter comments and activity log fetched from
+    # /candidates/{id}/comments and /candidates/{id}/activities. Surfaced to
+    # the pre-screen prompt so hard constraints expressed only in Workable
+    # (e.g. salary expectation in a recruiter note) are visible to the LLM.
+    workable_comments = Column(JSON, nullable=True)
+    workable_activities = Column(JSON, nullable=True)
     workable_enriched = Column(Boolean, default=False)
     workable_created_at = Column(DateTime(timezone=True), nullable=True)
 
