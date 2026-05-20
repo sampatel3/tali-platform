@@ -57,37 +57,32 @@ def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> 
     range_start = now - timedelta(days=range_days)
     month_start = month_start_utc()
 
-    # Pending (snooze-aware) + oldest pending age. "Pending" includes
-    # both agent decisions awaiting approve/override and open orchestrator
-    # questions awaiting a recruiter answer — the Review queue UI surfaces
-    # both, so the KPI must count both.
-    pending_q = db.query(AgentDecision).filter(
+    # Pending decisions (snooze-aware) + pending orchestrator questions.
+    # The Review queue surfaces both kinds together, so the unioned
+    # ``pending`` is what the tab badge shows; the per-kind splits drive
+    # tile labels ("N decisions today / M questions waiting") without
+    # conflating them. Schema requires both — older versions of this
+    # function only emitted ``pending`` and the endpoint 500'd on
+    # pydantic validation.
+    pending_decisions_q = db.query(AgentDecision).filter(
         AgentDecision.organization_id == organization_id,
         pending_filter(now),
     )
-    pending_decisions = pending_q.count()
-    oldest_pending_row = pending_q.order_by(AgentDecision.created_at.asc()).first()
-
-    open_needs_input_q = db.query(AgentNeedsInput).filter(
-        AgentNeedsInput.organization_id == organization_id,
-        AgentNeedsInput.resolved_at.is_(None),
-        AgentNeedsInput.dismissed_at.is_(None),
+    pending_decisions = pending_decisions_q.count()
+    pending_questions = (
+        db.query(AgentNeedsInput)
+        .filter(
+            AgentNeedsInput.organization_id == organization_id,
+            AgentNeedsInput.resolved_at.is_(None),
+            AgentNeedsInput.dismissed_at.is_(None),
+        )
+        .count()
     )
-    open_needs_input = open_needs_input_q.count()
-    oldest_needs_input_row = (
-        open_needs_input_q.order_by(AgentNeedsInput.created_at.asc()).first()
-    )
-    pending = int(pending_decisions) + int(open_needs_input)
-
-    # Oldest-pending age compares the oldest of either kind.
-    oldest_candidates = [
-        row.created_at
-        for row in (oldest_pending_row, oldest_needs_input_row)
-        if row is not None and row.created_at is not None
-    ]
+    pending = int(pending_decisions) + int(pending_questions)
+    oldest_pending_row = pending_decisions_q.order_by(AgentDecision.created_at.asc()).first()
     oldest_pending_age = (
-        int((now - min(oldest_candidates)).total_seconds())
-        if oldest_candidates
+        int((now - oldest_pending_row.created_at).total_seconds())
+        if oldest_pending_row is not None and oldest_pending_row.created_at is not None
         else None
     )
 
@@ -165,8 +160,12 @@ def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> 
         1 for r in role_rows if bool(r.agentic_mode_enabled) and r.agent_paused_at is not None
     )
 
+    # Customer-facing org spend = Tali charged credits (raw Anthropic cost ×
+    # per-feature markup). One unit across Usage tab / Jobs budget / role caps
+    # so caps and displayed spend reconcile. Raw cost lives in cost_usd_micro
+    # for internal Anthropic reconciliation; we never surface it to recruiters.
     spent_micro = (
-        db.query(func.coalesce(func.sum(UsageEvent.cost_usd_micro), 0))
+        db.query(func.coalesce(func.sum(UsageEvent.credits_charged), 0))
         .filter(
             UsageEvent.organization_id == organization_id,
             UsageEvent.created_at >= month_start,
@@ -179,7 +178,7 @@ def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> 
     return OrgKpiPayload(
         pending=int(pending),
         pending_decisions=int(pending_decisions),
-        pending_questions=int(open_needs_input),
+        pending_questions=int(pending_questions),
         today=int(today),
         auto_applied_today=int(auto_applied_today),
         org_budget_spent_cents=int(spent_cents),
@@ -267,10 +266,7 @@ def roles_breakdown(
 
     # Pre-compute per-role aggregates in three single queries to avoid
     # N+1 across the role list.
-    # "Pending" per role = pending decisions + open needs-input. Counted
-    # in two queries and summed in Python so the per-role table reflects
-    # the same union the KPI / status endpoints use.
-    pending_decisions_by_role: dict[int, int] = dict(
+    pending_by_role = dict(
         db.query(AgentDecision.role_id, func.count(AgentDecision.id))
         .filter(
             AgentDecision.organization_id == current_user.organization_id,
@@ -279,21 +275,6 @@ def roles_breakdown(
         .group_by(AgentDecision.role_id)
         .all()
     )
-    open_needs_input_by_role: dict[int, int] = dict(
-        db.query(AgentNeedsInput.role_id, func.count(AgentNeedsInput.id))
-        .filter(
-            AgentNeedsInput.organization_id == current_user.organization_id,
-            AgentNeedsInput.resolved_at.is_(None),
-            AgentNeedsInput.dismissed_at.is_(None),
-        )
-        .group_by(AgentNeedsInput.role_id)
-        .all()
-    )
-    pending_by_role: dict[int, int] = {}
-    for rid, n in pending_decisions_by_role.items():
-        pending_by_role[int(rid)] = pending_by_role.get(int(rid), 0) + int(n)
-    for rid, n in open_needs_input_by_role.items():
-        pending_by_role[int(rid)] = pending_by_role.get(int(rid), 0) + int(n)
     today_by_role = dict(
         db.query(AgentDecision.role_id, func.count(AgentDecision.id))
         .filter(
@@ -313,7 +294,7 @@ def roles_breakdown(
         .all()
     )
     spend_by_role = dict(
-        db.query(UsageEvent.role_id, func.coalesce(func.sum(UsageEvent.cost_usd_micro), 0))
+        db.query(UsageEvent.role_id, func.coalesce(func.sum(UsageEvent.credits_charged), 0))
         .filter(
             UsageEvent.organization_id == current_user.organization_id,
             UsageEvent.created_at >= month_start,

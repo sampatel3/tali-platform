@@ -61,7 +61,10 @@ const pivotByDay = (buckets) => {
     }
     const cell = byDay.get(day);
     const surface = surfaceFor(b.group_key);
-    const dollars = Number(b.cost_usd || 0);
+    // credits_charged_usd is the customer-facing dollar amount (raw Anthropic
+    // cost × per-feature markup). Same unit as the Jobs page budget card and
+    // per-role $X/$50 indicators, so all three displays reconcile.
+    const dollars = Number(b.credits_charged_usd || 0);
     cell.surfaces[surface] += dollars;
     cell.total += dollars;
     cell.calls += Number(b.event_count || 0);
@@ -73,16 +76,40 @@ const sumBySurface = (buckets) => {
   const totals = { workspace: { cost_usd: 0, event_count: 0 }, scoring: { cost_usd: 0, event_count: 0 }, prescreen: { cost_usd: 0, event_count: 0 } };
   for (const b of buckets) {
     const surface = surfaceFor(b.group_key);
-    totals[surface].cost_usd += Number(b.cost_usd || 0);
+    totals[surface].cost_usd += Number(b.credits_charged_usd || 0);
     totals[surface].event_count += Number(b.event_count || 0);
   }
   return SURFACES.map((s) => ({ id: s.id, label: s.label, color: s.color, ...totals[s.id] }));
 };
 
-// Tiny SVG stacked bar chart — no external deps. Each bar = one day,
-// segments stacked from bottom in the SURFACES order so In-IDE sits
-// at the base, Scoring above it, Pre-screen on top (per handoff).
+// Pick a "nice" axis ceiling and tick step for a given max value, so the
+// Y-axis lands on round dollar amounts ($0, $5, $10, …) instead of the
+// raw data max. Targets ~4–5 ticks; falls back to a tiny step when the
+// window has near-zero spend.
+const niceAxis = (maxValue) => {
+  const target = Math.max(maxValue, 0.0001);
+  const rough = target / 4;
+  const pow10 = Math.pow(10, Math.floor(Math.log10(rough)));
+  const candidates = [1, 2, 2.5, 5, 10].map((m) => m * pow10);
+  const step = candidates.find((c) => c >= rough) || 10 * pow10;
+  const ceiling = Math.ceil(target / step) * step;
+  const ticks = [];
+  for (let v = 0; v <= ceiling + step / 2; v += step) ticks.push(v);
+  return { ceiling, step, ticks };
+};
+
+const formatTick = (v) => {
+  if (v >= 1) return `$${Math.round(v)}`;
+  if (v >= 0.01) return `$${v.toFixed(2)}`;
+  return `$${v.toFixed(4)}`;
+};
+
+// SVG stacked bar chart with a Y-axis, gridlines, and an interactive
+// hover tooltip showing the per-surface breakdown for the focused day.
+// No external charting deps — keeps the settings bundle small.
 const StackedBarChart = ({ days }) => {
+  const [hoverIdx, setHoverIdx] = useState(null);
+
   if (days.length === 0) {
     return (
       <div className="settings-billing-card" style={{ padding: 24, textAlign: 'center' }}>
@@ -94,26 +121,78 @@ const StackedBarChart = ({ days }) => {
     );
   }
 
-  const maxTotal = Math.max(...days.map((d) => d.total), 0.000001);
-  const HEIGHT = 220;
-  const PAD_Y = 16;
+  const maxTotal = Math.max(...days.map((d) => d.total), 0);
+  const axis = niceAxis(maxTotal);
+
+  const HEIGHT = 240;
+  const PAD_TOP = 12;
+  const PAD_BOTTOM = 28;
+  const PAD_LEFT = 56;
+  const PAD_RIGHT = 12;
   const BAR_GAP = 4;
-  const BAR_WIDTH = Math.max(8, Math.floor(640 / days.length) - BAR_GAP);
-  const WIDTH = days.length * (BAR_WIDTH + BAR_GAP);
+  const plotMinWidth = 640;
+  const innerWidth = Math.max(plotMinWidth, days.length * 28);
+  const BAR_WIDTH = Math.max(8, Math.floor(innerWidth / days.length) - BAR_GAP);
+  const plotWidth = days.length * (BAR_WIDTH + BAR_GAP) - BAR_GAP;
+  const WIDTH = PAD_LEFT + plotWidth + PAD_RIGHT;
+  const plotHeight = HEIGHT - PAD_TOP - PAD_BOTTOM;
+  const yFor = (v) => PAD_TOP + plotHeight - (v / axis.ceiling) * plotHeight;
+
+  // Sparse x-axis labels: aim for ~6 labels regardless of window length.
+  const labelStride = Math.max(1, Math.ceil(days.length / 6));
+
+  const hovered = hoverIdx != null ? days[hoverIdx] : null;
+  const hoveredX = hoverIdx != null ? PAD_LEFT + hoverIdx * (BAR_WIDTH + BAR_GAP) + BAR_WIDTH / 2 : 0;
+  // Anchor tooltip to the side of the bar that keeps it on-screen.
+  const tooltipOnLeft = hoveredX > PAD_LEFT + plotWidth * 0.65;
 
   return (
-    <div style={{ overflowX: 'auto' }}>
-      <svg width={WIDTH} height={HEIGHT} role="img" aria-label="Daily spend stacked by surface">
+    <div style={{ position: 'relative', overflowX: 'auto' }}>
+      <svg
+        width={WIDTH}
+        height={HEIGHT}
+        role="img"
+        aria-label="Daily spend stacked by surface"
+        onMouseLeave={() => setHoverIdx(null)}
+      >
+        {/* Y-axis gridlines + tick labels */}
+        {axis.ticks.map((tick) => {
+          const y = yFor(tick);
+          return (
+            <g key={`tick-${tick}`}>
+              <line
+                x1={PAD_LEFT}
+                x2={WIDTH - PAD_RIGHT}
+                y1={y}
+                y2={y}
+                stroke="var(--line-2)"
+                strokeWidth={1}
+                shapeRendering="crispEdges"
+              />
+              <text
+                x={PAD_LEFT - 8}
+                y={y}
+                textAnchor="end"
+                dominantBaseline="middle"
+                fontSize={11}
+                fill="var(--mute)"
+              >
+                {formatTick(tick)}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Bars + invisible hit areas (full plot height) for stable hover */}
         {days.map((day, idx) => {
-          const x = idx * (BAR_WIDTH + BAR_GAP);
-          let yCursor = HEIGHT - PAD_Y;
-          // Stacking order: In-IDE (bottom), Scoring (middle), Pre-screen (top)
+          const x = PAD_LEFT + idx * (BAR_WIDTH + BAR_GAP);
+          let yCursor = yFor(0);
           return (
             <g key={day.day}>
               {SURFACES.map((surface) => {
                 const value = day.surfaces[surface.id] || 0;
                 if (value <= 0) return null;
-                const segH = (value / maxTotal) * (HEIGHT - PAD_Y * 2);
+                const segH = (value / axis.ceiling) * plotHeight;
                 yCursor -= segH;
                 return (
                   <rect
@@ -123,16 +202,117 @@ const StackedBarChart = ({ days }) => {
                     width={BAR_WIDTH}
                     height={Math.max(1, segH)}
                     fill={surface.color}
-                  >
-                    <title>{`${day.day} · ${surface.label}: ${formatUsd4(value)}`}</title>
-                  </rect>
+                    opacity={hoverIdx == null || hoverIdx === idx ? 1 : 0.55}
+                  />
                 );
               })}
-              <title>{`${day.day} · ${formatUsd4(day.total)} · ${day.calls} requests`}</title>
+              <rect
+                x={x - BAR_GAP / 2}
+                y={PAD_TOP}
+                width={BAR_WIDTH + BAR_GAP}
+                height={plotHeight}
+                fill="transparent"
+                onMouseEnter={() => setHoverIdx(idx)}
+                style={{ cursor: 'pointer' }}
+              />
+              {idx % labelStride === 0 || idx === days.length - 1 ? (
+                <text
+                  x={x + BAR_WIDTH / 2}
+                  y={HEIGHT - PAD_BOTTOM + 14}
+                  textAnchor="middle"
+                  fontSize={11}
+                  fill="var(--mute)"
+                >
+                  {day.day.slice(5)}
+                </text>
+              ) : null}
             </g>
           );
         })}
+
+        {/* Baseline above the x-axis labels */}
+        <line
+          x1={PAD_LEFT}
+          x2={WIDTH - PAD_RIGHT}
+          y1={yFor(0)}
+          y2={yFor(0)}
+          stroke="var(--line)"
+          strokeWidth={1}
+          shapeRendering="crispEdges"
+        />
       </svg>
+
+      {hovered ? (
+        <div
+          role="tooltip"
+          style={{
+            position: 'absolute',
+            top: PAD_TOP,
+            left: tooltipOnLeft ? undefined : Math.min(hoveredX + 12, WIDTH - 220),
+            right: tooltipOnLeft ? Math.max(PAD_RIGHT, WIDTH - hoveredX + 12) : undefined,
+            background: 'var(--bg-2)',
+            border: '1px solid var(--line)',
+            borderRadius: 10,
+            boxShadow: 'var(--shadow-sm)',
+            padding: '10px 12px',
+            fontSize: 12,
+            minWidth: 200,
+            pointerEvents: 'none',
+            zIndex: 2,
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>{hovered.day}</div>
+          {SURFACES.map((surface) => {
+            const value = hovered.surfaces[surface.id] || 0;
+            return (
+              <div
+                key={surface.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  margin: '2px 0',
+                  color: value > 0 ? 'inherit' : 'var(--mute)',
+                }}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: 8,
+                      height: 8,
+                      background: surface.color,
+                      borderRadius: 2,
+                      display: 'inline-block',
+                    }}
+                  />
+                  {surface.label}
+                </span>
+                <span style={{ fontVariantNumeric: 'tabular-nums' }}>{formatUsd4(value)}</span>
+              </div>
+            );
+          })}
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: 12,
+              marginTop: 8,
+              paddingTop: 6,
+              borderTop: '1px solid var(--line-2)',
+              fontWeight: 600,
+            }}
+          >
+            <span>Total</span>
+            <span style={{ fontVariantNumeric: 'tabular-nums' }}>{formatUsd4(hovered.total)}</span>
+          </div>
+          <div style={{ marginTop: 2, color: 'var(--mute)' }}>
+            {formatNumber(hovered.calls)} requests
+          </div>
+        </div>
+      ) : null}
+
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 8 }}>
         {SURFACES.map((surface) => (
           <div key={surface.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
@@ -148,10 +328,6 @@ const StackedBarChart = ({ days }) => {
             <span>{surface.label}</span>
           </div>
         ))}
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--taali-muted)', marginTop: 4 }}>
-        <span>{days[0]?.day}</span>
-        <span>{days[days.length - 1]?.day}</span>
       </div>
     </div>
   );
