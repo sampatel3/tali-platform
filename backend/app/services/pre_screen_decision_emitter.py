@@ -82,13 +82,23 @@ def queue_pre_screen_reject(
         return None
     try:
         key = _idempotency_key(int(application.id))
-        existing = (
+        # Skip if THIS app already has any pending decision — not just one
+        # with our exact idempotency key. The original backfill (#201 + the
+        # post-deploy run) only deduped on its own ``pre_screen_reject:*``
+        # key, so apps that already had an agent-emitted ``reject`` row
+        # got a *second* row from the backfill — recruiter saw the same
+        # candidate twice. One pending per app, always.
+        existing_pending = (
             db.query(AgentDecision)
-            .filter(AgentDecision.idempotency_key == key)
+            .filter(
+                AgentDecision.application_id == int(application.id),
+                AgentDecision.status == "pending",
+            )
+            .order_by(AgentDecision.created_at.desc())
             .first()
         )
-        if existing is not None:
-            return existing
+        if existing_pending is not None:
+            return existing_pending
 
         body = {"pre_screen_score_100": pre_screen_score, "threshold_100": threshold}
         if evidence:
@@ -183,12 +193,19 @@ def backfill_existing_below_threshold(
     skipped_existing = 0
     failed = 0
     for app, role in q.all():
-        existing = (
+        # Skip apps that already have ANY pending decision, not just our
+        # own pre_screen_reject key. The first version of this loop only
+        # checked the latter and produced 21 duplicate rows in prod when
+        # an agent-emitted reject already existed on the app.
+        existing_pending = (
             db.query(AgentDecision)
-            .filter(AgentDecision.idempotency_key == _idempotency_key(int(app.id)))
+            .filter(
+                AgentDecision.application_id == int(app.id),
+                AgentDecision.status == "pending",
+            )
             .first()
         )
-        if existing is not None:
+        if existing_pending is not None:
             skipped_existing += 1
             continue
         result = queue_pre_screen_reject(
