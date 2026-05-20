@@ -1,30 +1,27 @@
 """Per-job budget enforcement.
 
-Two layers:
+One layer left, after a long compaction:
 
-1. Pre-call gate (agent loop only): before each Anthropic round, refuse
-   if the running cycle has already emitted
-   ``role.agent_decision_budget_per_cycle`` decisions. This is a pacing
-   guard — keeps the recruiter's review queue from getting blasted with
-   100 decisions from a single cycle. The runaway-loop guard itself is
-   ``MAX_TOOL_ROUNDS`` in ``orchestrator.py`` (hard cap of 10 rounds
-   per cycle). Hitting either of these *ends the cycle* — it does NOT
-   pause the role. The next scheduled run picks up where this one left
-   off.
-2. Monthly USD cap (universal): sum ``UsageEvent.credits_charged`` across
-   *all* features (scoring, pre-screen, assessment, agent) for the role
-   in the current calendar month and refuse if over
-   ``role.monthly_usd_budget_cents``. Pauses the role on hit and is
-   checked from every Anthropic-spending entry point that has role
-   context — so when agentic mode is on, the budget covers everything
-   the platform does for that role, not just the agent. This is the
-   only condition that should ever auto-pause a role.
+**Monthly USD cap** (universal). Sum ``UsageEvent.credits_charged`` across
+*all* features (scoring, pre-screen, assessment, agent) for the role in
+the current calendar month and refuse if over
+``role.monthly_usd_budget_cents``. Pauses the role on hit and is
+checked from every Anthropic-spending entry point that has role context
+— when agentic mode is on, this budget covers everything the platform
+does for that role, not just the agent. This is the *only* condition
+that should ever auto-pause a role.
 
-Previously a per-cycle *token* budget also lived here (default 50k).
-Removed: it was redundant with MAX_TOOL_ROUNDS, fired on legitimate
-cycles processing a normal candidate cohort, and (worse) leaked into
-``pause_role`` so a single cycle that ran a bit long permanently
-disabled the role.
+Removed history (all in 2026-05):
+- per-cycle TOKEN gate (default 50k) — redundant with MAX_TOOL_ROUNDS,
+  fired on legitimate large cohorts, and worst of all leaked into
+  ``pause_role`` so any single cycle that ran a bit long permanently
+  disabled the role.
+- per-cycle DECISION gate (default 20) — intended as "pacing" so the
+  reviewer's queue wouldn't get blasted with 100 decisions at once, but
+  in practice meant a role with 400 candidates needed dozens of daily
+  cron cycles to clear. Pacing is a UI concern, not an orchestrator
+  one. Trust the monthly $ cap as the only spending guard;
+  MAX_TOOL_ROUNDS bounds runaway loops.
 
 Org-level credit balance is enforced separately by the existing
 ``usage_metering_service`` ledger.
@@ -43,7 +40,6 @@ from ..models.role import Role
 from ..models.usage_event import UsageEvent
 
 
-DEFAULT_DECISION_BUDGET_PER_CYCLE = 20
 DEFAULT_USD_BUDGET_MONTHLY_CENTS = 5_000  # $50.00
 
 
@@ -57,20 +53,8 @@ def _month_start_utc(now: datetime) -> datetime:
     return datetime(now.year, now.month, 1, tzinfo=timezone.utc)
 
 
-def role_decision_budget(role: Role) -> int:
-    return int(role.agent_decision_budget_per_cycle or DEFAULT_DECISION_BUDGET_PER_CYCLE)
-
-
 def role_monthly_usd_cents(role: Role) -> int:
     return int(role.monthly_usd_budget_cents or DEFAULT_USD_BUDGET_MONTHLY_CENTS)
-
-
-def check_pre_round(*, role: Role, decisions_emitted: int) -> BudgetCheck:
-    if role.agent_paused_at is not None:
-        return BudgetCheck(ok=False, reason=f"role paused: {role.agent_paused_reason or 'unspecified'}")
-    if decisions_emitted >= role_decision_budget(role):
-        return BudgetCheck(ok=False, reason=f"per-cycle decision budget exhausted ({decisions_emitted})")
-    return BudgetCheck(ok=True)
 
 
 def month_to_date_spend_cents(db: Session, *, role: Role) -> int:

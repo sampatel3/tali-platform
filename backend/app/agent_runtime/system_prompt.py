@@ -239,7 +239,6 @@ def build_system_prompt(
     *,
     role: Role,
     trigger_context: str,
-    decision_budget_remaining: int,
 ) -> list[dict[str, Any]]:
     """Return Anthropic system blocks. Static header is cached."""
     calibration = calibration_mod.load(role)
@@ -265,7 +264,6 @@ def build_system_prompt(
     runtime_block = (
         f"CURRENT CYCLE CONTEXT:\n"
         f"- Trigger: {trigger_context}\n"
-        f"- Queued-decision budget remaining this cycle: {decision_budget_remaining}\n"
         f"- Prompt version: {PROMPT_VERSION}"
     )
 
