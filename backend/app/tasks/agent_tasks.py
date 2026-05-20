@@ -199,7 +199,7 @@ def agent_daily_review_role(self, role_id: int) -> dict:
     max_retries=0,
 )
 def agent_cohort_tick_sweep(self) -> dict:
-    """Phase 7 cohort planner: every 5 min, fan a tick to each
+    """Phase 7 cohort planner: every 30 min, fan a tick to each
     agent-enabled, non-paused role.
 
     Replaces the per-application event trigger. The orchestrator

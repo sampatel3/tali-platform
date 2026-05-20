@@ -129,7 +129,7 @@ def on_application_created(
 
     # Phase 7: per-application event trigger removed. The cohort-planner
     # orchestrator runs role-wide on a Celery beat schedule
-    # (``agent_cohort_tick`` every 5 min per active role) and surveys
+    # (``agent_cohort_tick`` every 30 min per active role) and surveys
     # the cohort itself — there's no value in waking it up for one
     # application. Events still write to ``candidate_application_events``
     # for the audit trail; the agent's manual_action_reader and
