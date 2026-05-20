@@ -196,6 +196,105 @@ def test_agent_on_role_skips_rescore_when_never_scored(db):
         )
 
 
+def test_empty_comments_response_overwrites_stale_stored_comments(db):
+    """When Workable returns an empty comments list (recruiter cleared
+    them), the candidate's stored comments must be overwritten to ``[]``
+    so the digest reflects the change and pre-screen sees current state.
+
+    Previously ``if comments:`` skipped the assignment on empty lists,
+    leaving stale data and silently breaking the rescore trigger."""
+
+    class EmptyCommentsClient(WorkableService):
+        def __init__(self):
+            super().__init__(access_token="x", subdomain="test")
+
+        def get_candidate(self, cid):
+            return {"id": cid, "name": "Alice"}
+
+        def get_candidate_comments(self, cid):
+            return []  # Recruiter cleared comments → empty list, NOT None
+
+        def get_candidate_activities(self, cid):
+            return []
+
+        def download_candidate_resume(self, p):
+            return None
+
+        def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
+            return None, None, None
+
+    org, role, candidate, _ = _build_org_role_candidate_app(
+        db,
+        org_slug="empty-overwrites-stale",
+        agentic=True,
+        starred=True,
+        pre_screen_score=72.0,
+        cv_match_score=None,
+    )
+    assert candidate.workable_comments == [
+        {"body": "Initial comment", "member": {"name": "Recruiter"}}
+    ]
+
+    service = WorkableSyncService(EmptyCommentsClient())
+    service._sync_candidate_for_role(
+        db=db, org=org, role=role,
+        job={"id": role.workable_job_id, "shortcode": role.workable_job_id},
+        candidate_ref={"id": _CANDIDATE_ID, "email": "a@x.test", "stage": "Phone Screen"},
+        now=datetime.now(timezone.utc), run=None, mode="full",
+    )
+    db.refresh(candidate)
+    assert candidate.workable_comments == [], (
+        "empty fetch response must clear stale comments"
+    )
+
+
+def test_none_comments_response_preserves_stale_stored_comments(db):
+    """When the comments endpoint fails (returns ``None``), we must
+    keep the previously stored comments rather than clobber them with
+    an empty list — that would lose data on every transient failure."""
+
+    class FailingCommentsClient(WorkableService):
+        def __init__(self):
+            super().__init__(access_token="x", subdomain="test")
+
+        def get_candidate(self, cid):
+            return {"id": cid, "name": "Alice"}
+
+        def get_candidate_comments(self, cid):
+            return None  # Fetch failure
+
+        def get_candidate_activities(self, cid):
+            return None
+
+        def download_candidate_resume(self, p):
+            return None
+
+        def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
+            return None, None, None
+
+    org, role, candidate, _ = _build_org_role_candidate_app(
+        db,
+        org_slug="none-preserves-stale",
+        agentic=True,
+        starred=True,
+        pre_screen_score=72.0,
+        cv_match_score=None,
+    )
+    original_comments = candidate.workable_comments
+
+    service = WorkableSyncService(FailingCommentsClient())
+    service._sync_candidate_for_role(
+        db=db, org=org, role=role,
+        job={"id": role.workable_job_id, "shortcode": role.workable_job_id},
+        candidate_ref={"id": _CANDIDATE_ID, "email": "a@x.test", "stage": "Phone Screen"},
+        now=datetime.now(timezone.utc), run=None, mode="full",
+    )
+    db.refresh(candidate)
+    assert candidate.workable_comments == original_comments, (
+        "fetch failure must not clobber stored comments"
+    )
+
+
 def test_agent_on_role_skips_rescore_when_context_unchanged(db):
     """Idempotent sync: re-syncing with identical Workable data must not
     enqueue a fresh rescore on every Beat tick."""

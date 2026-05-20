@@ -93,3 +93,51 @@ def test_digest_handles_malformed_inputs_without_raising():
         comments={"not": "a list"},
         activities=42,
     ) == _workable_context_digest(answers=[], comments=[], activities=[])
+
+
+def test_digest_changes_when_structured_profile_fields_change():
+    """The formatter surfaces headline / location / skills / education /
+    experience / etc. — so the digest must also pick up changes there
+    or the agent-on rescore trigger would miss them."""
+    base = dict(answers=[], comments=[], activities=[])
+
+    # Headline.
+    assert _workable_context_digest(**base, headline="Senior Backend") != (
+        _workable_context_digest(**base, headline="Junior Backend")
+    )
+    # Summary.
+    assert _workable_context_digest(**base, summary="A") != (
+        _workable_context_digest(**base, summary="B")
+    )
+    # Skills.
+    assert _workable_context_digest(**base, skills=["Python"]) != (
+        _workable_context_digest(**base, skills=["Python", "Go"])
+    )
+    # Education.
+    assert _workable_context_digest(**base, education_entries=[{"school": "MIT"}]) != (
+        _workable_context_digest(**base, education_entries=[{"school": "Stanford"}])
+    )
+    # Experience.
+    assert _workable_context_digest(**base, experience_entries=[{"company": "Stripe"}]) != (
+        _workable_context_digest(**base, experience_entries=[{"company": "Anthropic"}])
+    )
+    # Location.
+    assert _workable_context_digest(**base, location_city="Dubai") != (
+        _workable_context_digest(**base, location_city="London")
+    )
+    # Phone (candidate updated contact info).
+    assert _workable_context_digest(**base, phone="+971111") != (
+        _workable_context_digest(**base, phone="+971222")
+    )
+    # Profile URL.
+    assert _workable_context_digest(**base, profile_url="a") != (
+        _workable_context_digest(**base, profile_url="b")
+    )
+    # Tags.
+    assert _workable_context_digest(**base, tags=["senior"]) != (
+        _workable_context_digest(**base, tags=["junior"])
+    )
+    # Social profiles.
+    assert _workable_context_digest(**base, social_profiles=[{"type": "linkedin", "url": "x"}]) != (
+        _workable_context_digest(**base, social_profiles=[{"type": "linkedin", "url": "y"}])
+    )

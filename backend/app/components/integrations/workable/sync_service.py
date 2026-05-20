@@ -59,11 +59,27 @@ def _workable_context_digest(
     answers: Any,
     comments: Any,
     activities: Any,
+    headline: Any = None,
+    summary: Any = None,
+    tags: Any = None,
+    skills: Any = None,
+    education_entries: Any = None,
+    experience_entries: Any = None,
+    social_profiles: Any = None,
+    location_city: Any = None,
+    location_country: Any = None,
+    phone: Any = None,
+    profile_url: Any = None,
 ) -> str:
-    """Stable digest of the inputs that feed the pre-screen Workable
-    context block. Used to detect whether a starred-role sync brought in
-    new questionnaire answers, recruiter comments, or activity entries
-    that warrant a rescore.
+    """Stable digest of every input the pre-screen Workable context
+    block surfaces. Used to detect whether an agent-on role's sync
+    picked up any change worth rescoring.
+
+    Covers questionnaire answers, recruiter comments, activity log, and
+    every structured profile field the formatter reads (headline,
+    summary, tags, skills, education, experience, social profiles,
+    location, phone, profile URL). When any of those flip, the digest
+    changes and ``_sync_candidate_for_role`` enqueues a rescore.
 
     Order-insensitive within each list (sorting on a serialised form) so
     that minor reorderings from the Workable API don't trigger spurious
@@ -82,10 +98,27 @@ def _workable_context_digest(
             return {k: _normalize(v) for k, v in value.items()}
         return value
 
+    def _list_or_empty(value: Any) -> list:
+        return value if isinstance(value, list) else []
+
+    def _scalar(value: Any) -> Any:
+        return value if isinstance(value, (str, int, float, bool)) else None
+
     payload = {
-        "answers": _normalize(answers if isinstance(answers, list) else []),
-        "comments": _normalize(comments if isinstance(comments, list) else []),
-        "activities": _normalize(activities if isinstance(activities, list) else []),
+        "answers": _normalize(_list_or_empty(answers)),
+        "comments": _normalize(_list_or_empty(comments)),
+        "activities": _normalize(_list_or_empty(activities)),
+        "headline": _scalar(headline),
+        "summary": _scalar(summary),
+        "tags": _normalize(_list_or_empty(tags)),
+        "skills": _normalize(_list_or_empty(skills)),
+        "education_entries": _normalize(_list_or_empty(education_entries)),
+        "experience_entries": _normalize(_list_or_empty(experience_entries)),
+        "social_profiles": _normalize(_list_or_empty(social_profiles)),
+        "location_city": _scalar(location_city),
+        "location_country": _scalar(location_country),
+        "phone": _scalar(phone),
+        "profile_url": _scalar(profile_url),
     }
     blob = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
@@ -1478,6 +1511,8 @@ class WorkableSyncService:
         # Snapshot the Workable surfaces feeding pre-screen BEFORE we
         # overwrite them. We use the digest later to decide whether a
         # rescore is warranted for agent-on roles with existing scores.
+        # Includes every field the formatter renders — so a change to
+        # headline/location/skills/etc. also fires the rescore.
         prev_answers = (
             candidate.workable_data.get("answers")
             if isinstance(candidate.workable_data, dict)
@@ -1487,6 +1522,17 @@ class WorkableSyncService:
             answers=prev_answers,
             comments=candidate.workable_comments,
             activities=candidate.workable_activities,
+            headline=candidate.headline,
+            summary=candidate.summary,
+            tags=candidate.tags,
+            skills=candidate.skills,
+            education_entries=candidate.education_entries,
+            experience_entries=candidate.experience_entries,
+            social_profiles=candidate.social_profiles,
+            location_city=candidate.location_city,
+            location_country=candidate.location_country,
+            phone=candidate.phone,
+            profile_url=candidate.profile_url,
         )
 
 
@@ -1502,12 +1548,14 @@ class WorkableSyncService:
         # Fetch comments + activities on full enrichment. These often
         # carry hard-constraint signal (salary expectation, notice period,
         # location) that pre-screen needs to see to filter correctly.
-        # Failures are non-fatal; both endpoints fall through on rate-limit
-        # or missing scopes via ``_request_optional``.
+        # The client returns ``None`` on fetch failure (rate-limit handled
+        # via raise, other transport errors fall through) so we can
+        # distinguish "no data" from "couldn't reach Workable" — only
+        # the former should overwrite stored rows.
         if mode == "full":
             try:
                 comments = self.client.get_candidate_comments(candidate_id)
-                if comments:
+                if comments is not None:
                     candidate.workable_comments = sanitize_json_for_storage(comments)
             except WorkableRateLimitError:
                 raise
@@ -1515,7 +1563,7 @@ class WorkableSyncService:
                 logger.debug("Workable comments fetch failed for candidate_id=%s", candidate_id)
             try:
                 activities = self.client.get_candidate_activities(candidate_id)
-                if activities:
+                if activities is not None:
                     candidate.workable_activities = sanitize_json_for_storage(activities)
             except WorkableRateLimitError:
                 raise
@@ -1531,6 +1579,17 @@ class WorkableSyncService:
             answers=new_answers,
             comments=candidate.workable_comments,
             activities=candidate.workable_activities,
+            headline=candidate.headline,
+            summary=candidate.summary,
+            tags=candidate.tags,
+            skills=candidate.skills,
+            education_entries=candidate.education_entries,
+            experience_entries=candidate.experience_entries,
+            social_profiles=candidate.social_profiles,
+            location_city=candidate.location_city,
+            location_country=candidate.location_country,
+            phone=candidate.phone,
+            profile_url=candidate.profile_url,
         )
         workable_context_changed = (
             mode == "full" and prev_context_digest != new_context_digest

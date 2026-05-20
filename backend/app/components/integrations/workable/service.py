@@ -337,38 +337,56 @@ class WorkableService:
             return [f for f in files if isinstance(f, dict)]
         return []
 
-    def get_candidate_comments(self, candidate_id: str) -> list[dict]:
+    def get_candidate_comments(self, candidate_id: str) -> list[dict] | None:
         """Fetch recruiter comments via GET /candidates/:id/comments.
 
         Comments often contain hard-constraint information the candidate
         gave during phone screens (salary expectation, notice period,
         location, work authorisation) — surfaced to the pre-screen LLM so
         those constraints are checked before the candidate moves on.
+
+        Returns ``None`` when the fetch fails (rate-limit handled
+        separately by raising, but other transport / 404 errors fall
+        through to ``None``) so callers can distinguish "no comments"
+        from "couldn't reach Workable" and preserve existing stored
+        comments instead of clobbering them with ``[]``.
         """
         if not candidate_id:
-            return []
+            return None
         payload = self._request_optional("GET", f"/candidates/{candidate_id}/comments")
         if not isinstance(payload, dict):
-            return []
-        comments = payload.get("comments") or payload.get("data")
+            return None
+        # ``_request_optional`` returns ``{}`` on swallowed errors. Treat
+        # an empty dict as "couldn't reach the endpoint"; only a dict
+        # that carries the expected key counts as a real response.
+        if "comments" not in payload and "data" not in payload:
+            return None
+        comments = payload.get("comments") or payload.get("data") or []
         if isinstance(comments, list):
             return [c for c in comments if isinstance(c, dict)]
         return []
 
-    def get_candidate_activities(self, candidate_id: str) -> list[dict]:
+    def get_candidate_activities(self, candidate_id: str) -> list[dict] | None:
         """Fetch activity log via GET /candidates/:id/activities.
 
         Includes stage transitions, automated events, and
         ``comment`` / ``disqualified`` entries that may carry context the
         pre-screen LLM needs (e.g. recruiter rejection reasons replayed
         on rehiring).
+
+        Returns ``None`` on fetch failure — same rationale as
+        ``get_candidate_comments``: distinguish "no activities" from
+        "couldn't reach the endpoint" so callers don't clobber stored
+        data on transient errors.
         """
         if not candidate_id:
-            return []
+            return None
         payload = self._request_optional("GET", f"/candidates/{candidate_id}/activities")
         if not isinstance(payload, dict):
-            return []
-        activities = payload.get("activities") or payload.get("data")
+            return None
+        if "activities" not in payload and "data" not in payload:
+            return None
+        activities = payload.get("activities") or payload.get("data") or []
         if isinstance(activities, list):
             return [a for a in activities if isinstance(a, dict)]
         return []
