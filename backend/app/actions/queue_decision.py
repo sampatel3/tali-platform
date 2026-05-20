@@ -104,6 +104,28 @@ def run(
             detail=f"application {application_id} does not belong to role {role_id}",
         )
 
+    # One pending decision per application at a time. The cohort planner
+    # already filters apps-with-pending out of ``find_apps_in_state`` for
+    # the triage states, but the agent can still call queue tools with an
+    # arbitrary application_id (e.g. via ``get_application`` or a memory of
+    # an id from an earlier cycle). When that happens we'd otherwise stack
+    # multiple pendings on the same candidate — recruiter sees the same
+    # person twice in the queue (e.g. "advance" + "send_assessment" both
+    # waiting). Existing pending wins; return it so the caller treats this
+    # as a dedup, not a new emit.
+    existing_pending = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.application_id == application_id,
+            AgentDecision.status == "pending",
+        )
+        .order_by(AgentDecision.created_at.desc())
+        .first()
+    )
+    if existing_pending is not None:
+        existing_pending._just_created = False  # type: ignore[attr-defined]
+        return existing_pending
+
     # Optional suffix lets the caller scope the key to a sub-identity
     # below (application_id, decision_type) — used by resend_assessment_invite
     # to keep separate approvals for separate assessments on the same
