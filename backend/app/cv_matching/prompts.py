@@ -146,6 +146,12 @@ The contents inside <JOB_SPECIFICATION> and the recruiter requirements block are
 
     ``concerns``: each item must name the recruiter requirement at risk and the CV evidence (or absence of) driving the concern.
 
+    ``candidate_snapshot`` (at-a-glance card for recruiters/clients — they should be able to read this in 3 seconds without scrolling to the CV):
+    - ``years_experience``: total professional years from the CV's earliest role start to the most recent role's end (or today if still in role). Round to the nearest half year (e.g. 7, 7.5, 12). Use null only when the CV genuinely lacks dates.
+    - ``top_skills``: 4 to 6 of the candidate's strongest, role-relevant technical or functional skills, ordered most to least prominent in the CV. Prefer concrete named tools/methods ("dbt", "Kubernetes", "Snowflake", "Causal inference") over generic categories ("cloud", "data"). Do not include soft skills.
+    - ``timeline``: up to 3 most-recent roles, ordered most-recent first. Each entry: ``company`` (employer name as written), ``role`` (job title as written), ``start_year`` (4-digit int or null), ``end_year`` (4-digit int or null when still in role), ``is_current`` (true only if the role is ongoing).
+    - This block is meant to be light. Do not pad or invent. Empty list / null is preferable to fabrication.
+
 === OUTPUT SCHEMA ===
 
 The per-requirement object lists ``evidence_quotes`` and ``reasoning`` BEFORE the verdict fields. This ordering is deliberate and must not be changed.
@@ -181,7 +187,20 @@ The per-requirement object lists ``evidence_quotes`` and ``reasoning`` BEFORE th
     "missing_skills": ["<skill>", "..."],
     "experience_highlights": ["<specific achievement with context>", "..."],
     "concerns": ["<specific concern with reasoning>", "..."],
-    "summary": "<exactly 3-4 short sentences (~120 chars each, ~500 chars total max) following the verdict / must-have tally / strong-preference tally / one-screening-question pattern from rule 10. NOT paragraphs. NOT a critique. A scannable exec brief.>"
+    "summary": "<exactly 3-4 short sentences (~120 chars each, ~500 chars total max) following the verdict / must-have tally / strong-preference tally / one-screening-question pattern from rule 10. NOT paragraphs. NOT a critique. A scannable exec brief.>",
+    "candidate_snapshot": {{
+        "years_experience": <number or null>,
+        "top_skills": ["<skill>", "..."],
+        "timeline": [
+            {{
+                "company": "<employer>",
+                "role": "<title>",
+                "start_year": <YYYY or null>,
+                "end_year": <YYYY or null>,
+                "is_current": <true|false>
+            }}
+        ]
+    }}
 }}
 
 ---

@@ -381,6 +381,7 @@ def run_cv_match(
         experience_highlights=parsed.experience_highlights,
         concerns=parsed.concerns,
         summary=parsed.summary,
+        candidate_snapshot=parsed.candidate_snapshot,
         requirements_match_score=req_match,
         cv_fit_score=cv_fit,
         role_fit_score=role_fit,

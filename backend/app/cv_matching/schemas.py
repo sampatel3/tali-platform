@@ -345,6 +345,56 @@ def _truncate_to_5(v: Any) -> Any:
     return v
 
 
+class TimelineEntry(BaseModel):
+    """One employer/role on the at-a-glance career timeline.
+
+    ``end_year`` is None when the candidate is still in role.
+    ``start_year`` is None only when the CV omits the start date for that
+    entry — the snapshot card still renders the row with a "—" placeholder.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    company: str = ""
+    role: str = ""
+    start_year: int | None = None
+    end_year: int | None = None
+    is_current: bool = False
+
+
+class CandidateSnapshot(BaseModel):
+    """At-a-glance candidate snapshot for the recruiter/client summary card.
+
+    Cheap secondary output the LLM emits alongside the scoring fields. The
+    frontend renders it as a chip row above the prose ``summary``, so
+    recruiters get years_experience / tech stack / last 3 employers without
+    scrolling the full CV.
+
+    ``extra="ignore"`` for the same reason as the other CV-match models —
+    the LLM occasionally adds helper fields under the v9 anchoring prompt.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    years_experience: float | None = None
+    top_skills: list[str] = Field(default_factory=list)
+    timeline: list[TimelineEntry] = Field(default_factory=list)
+
+    @field_validator("top_skills", mode="before")
+    @classmethod
+    def _truncate_top_skills(cls, v):
+        if isinstance(v, list) and len(v) > 6:
+            return v[:6]
+        return v
+
+    @field_validator("timeline", mode="before")
+    @classmethod
+    def _truncate_timeline(cls, v):
+        if isinstance(v, list) and len(v) > 5:
+            return v[:5]
+        return v
+
+
 class CVMatchResult(BaseModel):
     """Raw LLM output after JSON parsing.
 
@@ -367,6 +417,7 @@ class CVMatchResult(BaseModel):
     experience_highlights: list[str] = Field(default_factory=list, max_length=5)
     concerns: list[str] = Field(default_factory=list, max_length=5)
     summary: str = ""
+    candidate_snapshot: CandidateSnapshot | None = None
 
     @field_validator("experience_highlights", "concerns", mode="before")
     @classmethod
@@ -392,6 +443,7 @@ class CVMatchOutput(BaseModel):
     experience_highlights: list[str] = Field(default_factory=list, max_length=5)
     concerns: list[str] = Field(default_factory=list, max_length=5)
     summary: str = ""
+    candidate_snapshot: CandidateSnapshot | None = None
 
     requirements_match_score: float = Field(default=0.0, ge=0, le=100)
     cv_fit_score: float = Field(default=0.0, ge=0, le=100)

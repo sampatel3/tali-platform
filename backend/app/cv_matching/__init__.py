@@ -8,7 +8,7 @@ Single scoring path. No version flags. Iterate by bumping ``PROMPT_VERSION``
 and (when relevant) ``MODEL_VERSION``.
 """
 
-PROMPT_VERSION = "cv_match_v12"
+PROMPT_VERSION = "cv_match_v13"
 MODEL_VERSION = "claude-haiku-4-5-20251001"
 
 
@@ -16,6 +16,7 @@ def __getattr__(name: str):
     """Lazy re-exports so submodule import errors don't crash callers that
     only need a schema or PROMPT_VERSION."""
     if name in {
+        "CandidateSnapshot",
         "Category",
         "Confidence",
         "CVMatchOutput",
@@ -28,6 +29,7 @@ def __getattr__(name: str):
         "RequirementInput",
         "ScoringStatus",
         "Status",
+        "TimelineEntry",
     }:
         from . import schemas
 
@@ -52,6 +54,7 @@ def __getattr__(name: str):
 __all__ = [
     "BatchJob",
     "BatchSubmission",
+    "CandidateSnapshot",
     "Category",
     "Confidence",
     "CVMatchOutput",
@@ -66,6 +69,7 @@ __all__ = [
     "RequirementInput",
     "ScoringStatus",
     "Status",
+    "TimelineEntry",
     "retrieve_cv_match_batch",
     "run_cv_match",
     "run_cv_match_batch",
