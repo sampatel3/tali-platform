@@ -21,6 +21,7 @@ import pytest
 from sqlalchemy import event
 
 from app.agent_runtime import orchestrator
+from app.models.agent_decision import AgentDecision
 from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
@@ -40,6 +41,11 @@ def _assign_big_pk(mapper, connection, target):  # pragma: no cover — fired by
 
 
 event.listen(AgentRun, "before_insert", _assign_big_pk)
+# AgentDecision was added to the orchestrator's queue-tool flow but never
+# wired to the SQLite BigInteger-PK workaround above, so any test path
+# that emits a decision via _tool_queue_advance_decision blew up with
+# NOT NULL on agent_decisions.id. Hook it here too.
+event.listen(AgentDecision, "before_insert", _assign_big_pk)
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +410,16 @@ def test_run_cycle_falls_back_to_settings_model_when_role_override_blank(db):
 
 
 def test_run_cycle_finishes_on_end_turn_without_complete(db):
-    """Anthropic responding with stop_reason='end_turn' should end the cycle cleanly."""
+    """Anthropic responding with stop_reason='end_turn' without the agent
+    having called ``agent_run_complete`` ends the cycle as ``aborted``.
+
+    Agents are required to explicitly signal completion via the complete
+    tool — otherwise we can't distinguish "model ran out of things to do
+    and stopped" (legitimate) from "model dropped the work mid-task"
+    (silent failure). Test was written against the older contract where
+    any end_turn was treated as success; the orchestrator was tightened
+    so only the complete-tool path promotes to succeeded.
+    """
     org = _make_org(db)
     role = _make_role(db, org)
     app = _make_app(db, org=org, role=role)
@@ -424,7 +439,5 @@ def test_run_cycle_finishes_on_end_turn_without_complete(db):
         )
     db.commit()
 
-    # Loop breaks on non-tool_use stop_reason; the orchestrator treats this
-    # as a successful terminal state (the agent just chose to stop).
-    assert run.status == "succeeded"
+    assert run.status == "aborted"
     assert run.finished_at is not None

@@ -91,12 +91,25 @@ def _resolve_ids(email: str) -> tuple[int, int]:
 # Phase 1: backend readers return marked-up dollars
 # ---------------------------------------------------------------------------
 
-# Note: a /agent/org-status integration test for the same SQL switch is
-# intentionally omitted — the OrgKpiPayload schema in _hub_shared.py requires
-# pending_decisions/pending_questions which _compute_kpis doesn't currently
-# populate (pre-existing latent bug, tracked separately). The per-role
-# breakdown test below exercises the same credits_charged aggregation pattern
-# in the same module.
+def test_org_status_sums_credits_charged_and_populates_pending_splits(client):
+    """Org-wide KPI poll: ``org_budget_spent_cents`` is now charged credits
+    (raw × markup), and the previously-broken ``pending_decisions`` /
+    ``pending_questions`` schema fields are populated so OrgKpiPayload
+    validation passes (was 500'ing pre-fix)."""
+    headers, email = auth_headers(client)
+    org_id, role_id = _resolve_ids(email)
+    _seed_usage(org_id=org_id, role_id=role_id, cost_micro=2_000_000, credits=6_000_000)
+
+    resp = client.get("/api/v1/agent/org-status", headers=headers)
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    # $6 charged → 600 cents. (Raw would have been 200 cents — proves the switch.)
+    assert payload["org_budget_spent_cents"] == 600
+    # The split fields exist and start at zero for a freshly-registered org.
+    assert payload["pending_decisions"] == 0
+    assert payload["pending_questions"] == 0
+    assert payload["pending"] == payload["pending_decisions"] + payload["pending_questions"]
+
 
 def test_role_breakdown_per_role_spend_uses_credits_charged(client):
     """Per-role 'AGENT ON · $X/$50' chip on the Jobs page."""

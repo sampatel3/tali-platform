@@ -36,6 +36,7 @@ from ._hub_shared import (
 )
 from ...deps import get_current_user
 from ...models.agent_decision import AgentDecision
+from ...models.agent_needs_input import AgentNeedsInput
 from ...models.role import Role
 from ...models.usage_event import UsageEvent
 from ...models.user import User
@@ -56,13 +57,29 @@ def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> 
     range_start = now - timedelta(days=range_days)
     month_start = month_start_utc()
 
-    # Pending (snooze-aware) + oldest pending age.
-    pending_q = db.query(AgentDecision).filter(
+    # Pending decisions (snooze-aware) + pending orchestrator questions.
+    # The Review queue surfaces both kinds together, so the unioned
+    # ``pending`` is what the tab badge shows; the per-kind splits drive
+    # tile labels ("N decisions today / M questions waiting") without
+    # conflating them. Schema requires both — older versions of this
+    # function only emitted ``pending`` and the endpoint 500'd on
+    # pydantic validation.
+    pending_decisions_q = db.query(AgentDecision).filter(
         AgentDecision.organization_id == organization_id,
         pending_filter(now),
     )
-    pending = pending_q.count()
-    oldest_pending_row = pending_q.order_by(AgentDecision.created_at.asc()).first()
+    pending_decisions = pending_decisions_q.count()
+    pending_questions = (
+        db.query(AgentNeedsInput)
+        .filter(
+            AgentNeedsInput.organization_id == organization_id,
+            AgentNeedsInput.resolved_at.is_(None),
+            AgentNeedsInput.dismissed_at.is_(None),
+        )
+        .count()
+    )
+    pending = int(pending_decisions) + int(pending_questions)
+    oldest_pending_row = pending_decisions_q.order_by(AgentDecision.created_at.asc()).first()
     oldest_pending_age = (
         int((now - oldest_pending_row.created_at).total_seconds())
         if oldest_pending_row is not None and oldest_pending_row.created_at is not None
@@ -160,6 +177,8 @@ def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> 
 
     return OrgKpiPayload(
         pending=int(pending),
+        pending_decisions=int(pending_decisions),
+        pending_questions=int(pending_questions),
         today=int(today),
         auto_applied_today=int(auto_applied_today),
         org_budget_spent_cents=int(spent_cents),
