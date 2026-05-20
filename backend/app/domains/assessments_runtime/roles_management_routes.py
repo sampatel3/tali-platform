@@ -277,6 +277,13 @@ def update_role(
             role.agent_paused_at = None
             role.agent_paused_reason = None
         agent_activated_now = next_enabled and not was_enabled
+        # Agent-on implies "auto-sync this role" — keep the periodic
+        # Workable fetch (comments, activities, questionnaire answers)
+        # flowing so the agent's pre-screen + scoring see fresh signal
+        # without the recruiter having to remember to star it. One-way:
+        # disabling the agent doesn't unstar (star is sticky).
+        if agent_activated_now and not role.starred_for_auto_sync:
+            role.starred_for_auto_sync = True
         # Resume = "was paused while enabled, now no longer paused while still
         # enabled". Distinct from activation. Both deserve an immediate cycle —
         # otherwise the recruiter clicks Resume and waits up to 30 minutes for

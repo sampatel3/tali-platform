@@ -337,6 +337,75 @@ class WorkableService:
             return [f for f in files if isinstance(f, dict)]
         return []
 
+    # Workable's activities endpoint paginates at 50 entries by default
+    # (limit can be raised but max is 100). For candidates with long
+    # histories — assessments + interviews + multiple recruiter comments
+    # — older entries (including recruiter comments carrying salary /
+    # notice-period context) would silently fall off the first page,
+    # which defeats the purpose of feeding this data into pre-screen.
+    # ``MAX_ACTIVITIES_PAGES`` caps total pages walked so a runaway feed
+    # can't drain our Workable rate budget on one candidate.
+    _ACTIVITIES_PAGE_LIMIT = 100
+    _ACTIVITIES_MAX_PAGES = 10
+
+    def get_candidate_activities(self, candidate_id: str) -> list[dict] | None:
+        """Fetch the full paginated activity log via
+        GET /candidates/:id/activities.
+
+        Workable's activity feed is the authoritative source for both
+        the timeline (stage transitions, assessment/interview/message
+        events) AND recruiter comments — entries carry ``action ==
+        "comment"`` with ``body`` + ``member`` set. Workable's public
+        API does not expose a ``GET`` on ``/candidates/:id/comments``
+        (only ``POST`` for creation), so the activities feed is the
+        only way to ingest recruiter comments.
+
+        Walks pagination via the ``paging.next`` link until exhausted
+        or ``_ACTIVITIES_MAX_PAGES`` is hit. Returns ``None`` if the
+        first page fails so callers can distinguish "no activities"
+        from "couldn't reach the endpoint" and preserve stored data.
+        Partial failures (page 1 succeeds, page 2 errors) return what
+        we got — a partial timeline is better than wiping stored data.
+        """
+        if not candidate_id:
+            return None
+        payload = self._request_optional(
+            "GET",
+            f"/candidates/{candidate_id}/activities",
+            params={"limit": str(self._ACTIVITIES_PAGE_LIMIT)},
+        )
+        if not isinstance(payload, dict):
+            return None
+        if "activities" not in payload and "data" not in payload:
+            return None
+
+        def _extract(p: dict) -> list[dict]:
+            items = p.get("activities") or p.get("data") or []
+            return [a for a in items if isinstance(a, dict)] if isinstance(items, list) else []
+
+        results: list[dict] = _extract(payload)
+        pages_walked = 1
+        while pages_walked < self._ACTIVITIES_MAX_PAGES:
+            paging = payload.get("paging") if isinstance(payload, dict) else None
+            next_url = paging.get("next") if isinstance(paging, dict) else None
+            if not isinstance(next_url, str) or not next_url.strip():
+                break
+            try:
+                payload = self._get_next_page(next_url)
+            except WorkableRateLimitError:
+                raise
+            if not isinstance(payload, dict) or not payload:
+                break
+            results.extend(_extract(payload))
+            pages_walked += 1
+        if pages_walked >= self._ACTIVITIES_MAX_PAGES:
+            logger.warning(
+                "Workable activities pagination hit cap (%d pages) for candidate=%s — older entries may be truncated",
+                self._ACTIVITIES_MAX_PAGES,
+                candidate_id,
+            )
+        return results
+
     def get_candidate_ratings(self, candidate_id: str) -> dict:
         if self._ratings_supported is False:
             return {}

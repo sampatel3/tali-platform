@@ -20,6 +20,7 @@ from .pricing_service import Feature
 from .taali_scoring import compute_role_fit_score
 from .usage_metering_service import record_event as _meter_record_event
 from .workable_actions_service import render_workable_note_template
+from .workable_context_service import format_workable_context
 
 logger = logging.getLogger("taali.pre_screening_service")
 
@@ -310,8 +311,33 @@ def execute_pre_screen_only(
             )
         )
 
+    # Workable metadata (questionnaire answers, recruiter comments,
+    # activity log, structured profile) often carries hard-constraint
+    # signal the CV doesn't — e.g. salary expectation from a LinkedIn
+    # apply form, notice period from a recruiter screening call. Render
+    # whatever's available and pass it through; the formatter returns
+    # an empty string when the candidate has no Workable footprint so
+    # the LLM prompt collapses cleanly.
+    workable_context = ""
     try:
-        pre = run_pre_screen(cv_text, job_spec_text, requirements, client=client)
+        workable_context = format_workable_context(
+            candidate=getattr(app, "candidate", None),
+            application=app,
+        )
+    except Exception:  # pragma: no cover — defensive
+        logger.exception(
+            "format_workable_context failed for app=%s; proceeding without",
+            app.id,
+        )
+
+    try:
+        pre = run_pre_screen(
+            cv_text,
+            job_spec_text,
+            requirements,
+            client=client,
+            workable_context=workable_context or None,
+        )
     except Exception as exc:  # noqa: BLE001 — guard the LLM call
         return {"status": "error", "reason": f"pre_screen_failed: {exc}"[:200]}
 

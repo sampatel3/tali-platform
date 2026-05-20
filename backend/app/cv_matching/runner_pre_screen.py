@@ -54,6 +54,7 @@ def compute_pre_screen_cache_key(
     cv_text: str,
     jd_text: str,
     requirements: list[RequirementInput] | None,
+    workable_context: str | None = None,
 ) -> str:
     payload = {
         "cv": cv_text or "",
@@ -62,6 +63,7 @@ def compute_pre_screen_cache_key(
             r.requirement for r in (requirements or [])
             if getattr(r.priority, "value", str(r.priority or "")).lower() == "must_have"
         ],
+        "workable_context": (workable_context or "").strip(),
         "prompt_version": PRE_SCREEN_PROMPT_VERSION,
         "model_version": MODEL_VERSION,
     }
@@ -187,16 +189,26 @@ def run_pre_screen(
     *,
     client=None,
     skip_cache: bool = False,
+    workable_context: str | None = None,
 ) -> PreScreenResult:
     """Run the pre-screen LLM call. Never raises.
 
     Returns a ``PreScreenResult`` with ``decision`` in
     {yes, no, maybe, error}. ``error`` means the call or parse failed —
     the orchestrator should treat it as ``maybe`` so v3 still runs.
+
+    ``workable_context`` is an optional pre-rendered text block carrying
+    every Workable surface for the candidate (questionnaire answers,
+    recruiter comments, activity log, structured profile). It's threaded
+    into the variable per-candidate prompt block so hard constraints
+    expressed only in Workable get filtered at pre-screen.
     """
     trace_id = str(uuid.uuid4())
     cache_key = compute_pre_screen_cache_key(
-        cv_text=cv_text, jd_text=jd_text, requirements=requirements,
+        cv_text=cv_text,
+        jd_text=jd_text,
+        requirements=requirements,
+        workable_context=workable_context,
     )
 
     if not skip_cache:
@@ -228,7 +240,9 @@ def run_pre_screen(
                 cache_hit=False,
             )
 
-    messages = build_pre_screen_messages(cv_text, jd_text, requirements)
+    messages = build_pre_screen_messages(
+        cv_text, jd_text, requirements, workable_context=workable_context
+    )
     started = time.monotonic()
     try:
         # Pre-screen usage_event is recorded by cv_score_orchestrator.score_application
