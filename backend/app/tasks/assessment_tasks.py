@@ -197,6 +197,48 @@ def send_assessment_expiry_reminders():
 _WORKABLE_SYNC_LOCK_KEY = "celery:lock:sync_workable_orgs"
 _WORKABLE_SYNC_LOCK_TTL_SECONDS = 7200  # 2h ceiling — auto-released if a worker dies mid-sync
 
+# Per-org "full sync just ran" marker. ``org.workable_last_sync_at`` was
+# the original debounce signal, but ``sync_starred_roles`` also writes
+# that timestamp via ``sync_org`` on every fire (the starred cadence is
+# shorter than the full-sync interval here), which permanently kept the
+# timestamp fresh and starved the full-org sweep — see the missing-roles
+# incident on 2026-05-20. Recording the full-sync timestamp in Redis
+# keeps it isolated from the starred path. Loss of the key (Redis
+# restart) is acceptable — worst case the next Beat tick runs an extra
+# sync.
+_WORKABLE_FULL_SYNC_RECENT_KEY_PREFIX = "celery:debounce:sync_workable_orgs:org"
+
+
+def _mark_full_sync_recent(org_id: int, interval_minutes: int) -> None:
+    """Record that a successful full sync just ran for ``org_id``."""
+    try:
+        import redis  # type: ignore
+
+        client = redis.Redis.from_url(settings.REDIS_URL)
+        key = f"{_WORKABLE_FULL_SYNC_RECENT_KEY_PREFIX}:{org_id}"
+        client.set(key, "1", ex=max(60, int(interval_minutes) * 60))
+    except Exception:
+        logger.exception(
+            "Failed to set full-sync debounce key for org_id=%s; next beat will retry",
+            org_id,
+        )
+
+
+def _is_full_sync_recent(org_id: int) -> bool:
+    """True if a full sync ran within its configured interval for this org."""
+    try:
+        import redis  # type: ignore
+
+        client = redis.Redis.from_url(settings.REDIS_URL)
+        key = f"{_WORKABLE_FULL_SYNC_RECENT_KEY_PREFIX}:{org_id}"
+        return bool(client.get(key))
+    except Exception:
+        logger.exception(
+            "Failed to read full-sync debounce key for org_id=%s; treating as not recent",
+            org_id,
+        )
+        return False
+
 
 def _acquire_sync_lock():
     """Best-effort Redis lock so only one sync_workable_orgs runs at a time.
@@ -246,7 +288,6 @@ def sync_workable_orgs():
     lock with a 2-hour TTL ceiling). Without the lock, scheduled fires
     pile up on slow paginated syncs and starve the worker pool.
     """
-    from datetime import datetime, timedelta, timezone
     from sqlalchemy.orm import Session
 
     from ..components.integrations.workable.service import WorkableService
@@ -288,12 +329,15 @@ def sync_workable_orgs():
             if sync_model != "scheduled_pull_only":
                 skipped += 1
                 continue
-            last_sync = getattr(org, "workable_last_sync_at", None)
-            if last_sync is not None:
-                effective_last_sync = last_sync if last_sync.tzinfo else last_sync.replace(tzinfo=timezone.utc)
-                if effective_last_sync >= datetime.now(timezone.utc) - timedelta(minutes=max(sync_interval_minutes, 5)):
-                    skipped += 1
-                    continue
+            # Debounce on a Redis key written by this task only. We used to
+            # read ``org.workable_last_sync_at`` here, but ``sync_starred_roles``
+            # also writes that column (via ``sync_org``) on every fire,
+            # which permanently kept the timestamp fresh and starved the
+            # full sweep — newly-published-but-unstarred jobs would never
+            # sync.
+            if _is_full_sync_recent(int(org.id)):
+                skipped += 1
+                continue
             try:
                 service = WorkableSyncService(
                     WorkableService(
@@ -302,6 +346,7 @@ def sync_workable_orgs():
                     )
                 )
                 service.sync_org(db, org, full_resync=False)
+                _mark_full_sync_recent(int(org.id), sync_interval_minutes)
                 synced += 1
             except Exception:
                 failed += 1
@@ -445,5 +490,86 @@ def sync_starred_roles():
             finally:
                 _release_starred_lock(lock_handle)
         return {"status": "ok", "synced": synced, "skipped": skipped, "failed": failed}
+    finally:
+        db.close()
+
+
+# Stuck-run cleanup. If a Celery worker dies mid-sync (OOM, SIGKILL,
+# container restart) the finally block in ``sync_runner.execute_workable_sync_run``
+# never runs, leaving the ``WorkableSyncRun`` row in ``status='running'``
+# with ``finished_at=NULL`` forever. ``_latest_running_run_for_org`` then
+# matches that row and every subsequent POST /workable/sync returns
+# ``already_running`` — the user is silently locked out until someone
+# runs a manual SQL UPDATE.
+_STUCK_RUN_TIMEOUT_HOURS = 6
+
+
+@celery_app.task
+def reap_stuck_workable_sync_runs():
+    """Finalize WorkableSyncRun rows whose worker died before the run finished.
+
+    A real run takes 30-90 minutes including candidate CV downloads, so 6h
+    is a safe ceiling that won't kill a healthy in-flight sync. Beat fires
+    this every 30 minutes.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy.orm import Session
+
+    from ..models.organization import Organization
+    from ..models.workable_sync_run import WorkableSyncRun
+    from ..platform.database import SessionLocal
+
+    db: Session = SessionLocal()
+    try:
+        threshold = datetime.now(timezone.utc) - timedelta(hours=_STUCK_RUN_TIMEOUT_HOURS)
+        stuck = (
+            db.query(WorkableSyncRun)
+            .filter(
+                WorkableSyncRun.status == "running",
+                WorkableSyncRun.finished_at.is_(None),
+                WorkableSyncRun.started_at < threshold,
+            )
+            .all()
+        )
+        if not stuck:
+            return {"status": "ok", "reaped": 0}
+
+        now = datetime.now(timezone.utc)
+        org_ids: set[int] = set()
+        for run in stuck:
+            run.status = "failed"
+            run.finished_at = now
+            run.phase = run.phase or "aborted"
+            errors = list(run.errors or [])
+            errors.append(
+                f"Stuck-run reaper: marked failed after {_STUCK_RUN_TIMEOUT_HOURS}h timeout"
+            )
+            run.errors = errors
+            org_ids.add(int(run.organization_id))
+
+        # Clear matching org sync flags so the next sync trigger isn't
+        # confused by stale in-flight state pointing at the dead run.
+        if org_ids:
+            (
+                db.query(Organization)
+                .filter(Organization.id.in_(org_ids))
+                .update(
+                    {
+                        Organization.workable_sync_started_at: None,
+                        Organization.workable_sync_progress: None,
+                        Organization.workable_sync_cancel_requested_at: None,
+                    },
+                    synchronize_session=False,
+                )
+            )
+        db.commit()
+        logger.warning(
+            "reap_stuck_workable_sync_runs reaped %d run(s) across %d org(s): run_ids=%s",
+            len(stuck),
+            len(org_ids),
+            [r.id for r in stuck],
+        )
+        return {"status": "ok", "reaped": len(stuck), "org_ids": sorted(org_ids)}
     finally:
         db.close()

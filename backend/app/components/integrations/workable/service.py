@@ -128,13 +128,18 @@ class WorkableService:
         return []
 
     def list_open_jobs(self) -> list[dict]:
-        """Fetch all open/published jobs, with full pagination across all states."""
+        """Fetch all jobs across every Workable state, with full pagination."""
         seen_shortcodes: set[str] = set()
         all_jobs: list[dict] = []
+        # Workable's valid states are: published, draft, archived, closed.
+        # The no-state call returns jobs across all states for the token
+        # we use, but we keep per-state calls as a defensive fallback in
+        # case the no-state default changes for some token scopes.
         params_list = [
             {"state": "published", "limit": str(WORKABLE_JOBS_LIMIT)},
-            {"state": "open", "limit": str(WORKABLE_JOBS_LIMIT)},
             {"state": "draft", "limit": str(WORKABLE_JOBS_LIMIT)},
+            {"state": "archived", "limit": str(WORKABLE_JOBS_LIMIT)},
+            {"state": "closed", "limit": str(WORKABLE_JOBS_LIMIT)},
             {"limit": str(WORKABLE_JOBS_LIMIT)},
         ]
         for i, params in enumerate(params_list):

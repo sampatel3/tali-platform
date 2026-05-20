@@ -111,8 +111,36 @@ def admin_clear_workable_sync(
         },
         synchronize_session=False,
     )
+    # Also finalize any orphaned ``status='running'`` runs so the next
+    # POST /workable/sync isn't blocked by ``_latest_running_run_for_org``.
+    # Without this the org flags get cleared but stuck runs (worker died
+    # mid-sync, container restart, etc.) still match the "already running"
+    # check and the user stays trapped.
+    now = datetime.now(timezone.utc)
+    stuck_runs = (
+        db.query(WorkableSyncRun)
+        .filter(
+            WorkableSyncRun.organization_id == org.id,
+            WorkableSyncRun.finished_at.is_(None),
+            WorkableSyncRun.status == "running",
+        )
+        .all()
+    )
+    cleared_run_ids: list[int] = []
+    for run in stuck_runs:
+        run.status = "failed"
+        run.finished_at = now
+        run.phase = run.phase or "aborted"
+        errors = list(run.errors or [])
+        errors.append("admin/clear-sync: finalized orphaned running run")
+        run.errors = errors
+        cleared_run_ids.append(run.id)
     db.commit()
-    return {"status": "ok", "message": f"Cleared Workable sync state for {email}. They can start a new sync."}
+    return {
+        "status": "ok",
+        "message": f"Cleared Workable sync state for {email}. They can start a new sync.",
+        "cleared_run_ids": cleared_run_ids,
+    }
 
 
 def _get_org_for_user(db: Session, current_user: User) -> Organization:

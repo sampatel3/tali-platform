@@ -466,3 +466,191 @@ def test_run_workable_sync_script_exits_without_email():
         assert exc_info.value.code == 1
     finally:
         sys.argv = orig_argv
+
+
+def test_admin_clear_sync_finalizes_orphaned_running_runs(client, db, monkeypatch):
+    """admin/clear-sync must mark stuck ``status='running'`` runs as failed.
+
+    Regression for the 2026-05-20 incident: a sync worker died mid-run,
+    leaving Run #10 in ``status='running' / finished_at=NULL`` for >2
+    months. Calling /admin/clear-sync cleared the org flags but left the
+    run row untouched, so ``_latest_running_run_for_org`` still matched
+    and ``POST /workable/sync`` kept returning ``already_running``.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.models.workable_sync_run import WorkableSyncRun
+    from app.platform.config import settings as app_settings
+
+    headers, email = auth_headers(client, email="stuck-sync@example.com", organization_name="Stuck Sync Org")
+    owner = db.query(User).filter(User.email == email).first()
+    assert owner is not None
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    assert org is not None
+    org.workable_connected = True
+    org.workable_access_token = "tk"
+    org.workable_subdomain = "stuck"
+    org.workable_sync_started_at = datetime.now(timezone.utc) - timedelta(days=60)
+    db.commit()
+
+    # Plant an orphaned "running" run row.
+    stuck = WorkableSyncRun(
+        organization_id=org.id,
+        mode="metadata",
+        status="running",
+        phase="queued",
+        jobs_total=0,
+        jobs_processed=0,
+        started_at=datetime.now(timezone.utc) - timedelta(days=60),
+        finished_at=None,
+        errors=[],
+    )
+    db.add(stuck)
+    db.commit()
+    db.refresh(stuck)
+    stuck_id = stuck.id
+
+    secret = (app_settings.SECRET_KEY or "").strip() or "test-secret"
+    monkeypatch.setattr(app_settings, "SECRET_KEY", secret)
+
+    resp = client.post(
+        "/api/v1/workable/admin/clear-sync",
+        headers={"X-Admin-Secret": secret},
+        json={"email": email},
+    )
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload.get("status") == "ok"
+    assert stuck_id in (payload.get("cleared_run_ids") or [])
+
+    # Reload — run must now be terminal, org flags cleared.
+    db.expire_all()
+    final = db.query(WorkableSyncRun).filter(WorkableSyncRun.id == stuck_id).first()
+    assert final is not None
+    assert final.status == "failed"
+    assert final.finished_at is not None
+    refreshed_org = db.query(Organization).filter(Organization.id == org.id).first()
+    assert refreshed_org.workable_sync_started_at is None
+
+
+def test_reap_stuck_workable_sync_runs_finalizes_old_running_rows(db):
+    """Reaper marks runs failed once they've been ``running`` past the timeout."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.models.workable_sync_run import WorkableSyncRun
+    from app.tasks.assessment_tasks import _STUCK_RUN_TIMEOUT_HOURS, reap_stuck_workable_sync_runs
+
+    org = Organization(
+        name="Reaper Org",
+        slug="reaper-org",
+        workable_connected=True,
+        workable_access_token="tk",
+        workable_subdomain="reaper",
+    )
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+
+    now = datetime.now(timezone.utc)
+    old_run = WorkableSyncRun(
+        organization_id=org.id,
+        mode="full",
+        status="running",
+        phase="syncing_candidates",
+        jobs_total=10,
+        jobs_processed=2,
+        started_at=now - timedelta(hours=_STUCK_RUN_TIMEOUT_HOURS + 1),
+        finished_at=None,
+        errors=[],
+    )
+    fresh_run = WorkableSyncRun(
+        organization_id=org.id,
+        mode="full",
+        status="running",
+        phase="syncing_candidates",
+        jobs_total=10,
+        jobs_processed=1,
+        started_at=now - timedelta(minutes=5),
+        finished_at=None,
+        errors=[],
+    )
+    db.add_all([old_run, fresh_run])
+    db.commit()
+    db.refresh(old_run)
+    db.refresh(fresh_run)
+
+    result = reap_stuck_workable_sync_runs.run()  # bypass Celery dispatch in test
+    assert result["status"] == "ok"
+    assert result["reaped"] == 1
+
+    db.expire_all()
+    reaped = db.query(WorkableSyncRun).filter(WorkableSyncRun.id == old_run.id).first()
+    assert reaped.status == "failed"
+    assert reaped.finished_at is not None
+    assert any("Stuck-run reaper" in str(e) for e in (reaped.errors or []))
+
+    survivor = db.query(WorkableSyncRun).filter(WorkableSyncRun.id == fresh_run.id).first()
+    assert survivor.status == "running"
+    assert survivor.finished_at is None
+
+
+def test_sync_workable_orgs_uses_redis_debounce_not_workable_last_sync_at(db, monkeypatch):
+    """sync_workable_orgs must not be debounced by ``workable_last_sync_at``.
+
+    Regression for the starvation bug discovered on 2026-05-20: the old
+    code read ``org.workable_last_sync_at`` and skipped if it was within
+    the sync-interval window. But ``sync_starred_roles`` (shorter cadence)
+    also writes that column via ``sync_org``, so the timestamp was
+    permanently fresh and the full sweep never ran. Newly published
+    but unstarred jobs would never get synced.
+    """
+    from datetime import datetime, timezone
+
+    from app.tasks import assessment_tasks
+
+    org = Organization(
+        name="Debounce Org",
+        slug="debounce-org",
+        workable_connected=True,
+        workable_access_token="tk",
+        workable_subdomain="debounce",
+        workable_config={"sync_model": "scheduled_pull_only", "sync_interval_minutes": 30},
+        # Simulate the starved-by-starred-sync scenario: the timestamp
+        # was just refreshed by a starred-sync run.
+        workable_last_sync_at=datetime.now(timezone.utc),
+    )
+    db.add(org)
+    db.commit()
+
+    called: list[int] = []
+
+    class _FakeService:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def sync_org(self, *args, **kwargs):
+            called.append(1)
+            return {"jobs_seen": 0}
+
+    monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
+    monkeypatch.setattr(assessment_tasks, "_acquire_sync_lock", lambda: False)
+    monkeypatch.setattr(assessment_tasks, "_release_sync_lock", lambda c: None)
+    monkeypatch.setattr(assessment_tasks, "_is_full_sync_recent", lambda org_id: False)
+    marks: list[int] = []
+    monkeypatch.setattr(
+        assessment_tasks,
+        "_mark_full_sync_recent",
+        lambda org_id, interval: marks.append(int(org_id)),
+    )
+
+    # The task lazily imports WorkableSyncService inside its body, so we
+    # patch the import target rather than the module-level symbol.
+    from app.components.integrations.workable import sync_service as sync_service_mod
+    monkeypatch.setattr(sync_service_mod, "WorkableSyncService", _FakeService)
+
+    result = assessment_tasks.sync_workable_orgs.run()
+    assert result["status"] == "ok"
+    # Despite ``workable_last_sync_at`` being current, the sync must have
+    # run — proving the debounce no longer uses that column.
+    assert called, "sync_org should have been invoked (debounce must not block)"
+    assert org.id in marks, "Redis debounce key should be set after a successful sync"

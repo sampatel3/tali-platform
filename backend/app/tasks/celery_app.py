@@ -41,6 +41,13 @@ celery_app.conf.update(
             "task": "app.tasks.assessment_tasks.sync_starred_roles",
             "schedule": 300.0,
         },
+        # Recover Workable sync runs whose worker died mid-flight. Without
+        # this, status='running' rows linger forever and ``POST /workable/sync``
+        # returns ``already_running`` on every subsequent attempt.
+        "reap-stuck-workable-sync-runs-every-30-minutes": {
+            "task": "app.tasks.assessment_tasks.reap_stuck_workable_sync_runs",
+            "schedule": 1800.0,
+        },
         "assessment-expiry-reminders-daily": {
             "task": "app.tasks.assessment_tasks.send_assessment_expiry_reminders",
             "schedule": 86400.0,
