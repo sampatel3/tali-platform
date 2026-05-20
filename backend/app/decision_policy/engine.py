@@ -122,6 +122,12 @@ class PolicyDecision:
     same outward effect, but recorded distinctly so audits can tell the
     difference between "recruiter already handled" and "agent decided
     not to recommend".
+
+    ``reject_reason`` is the short-form tag the rule attached to the
+    verdict — copied from ``Rule.reject_reason`` when the rule fired.
+    Downstream tooling (Decision Hub chips, the granular
+    ``role.auto_reject_prescreen`` toggle) reads this to decide how to
+    surface or act on the verdict. Empty string when not applicable.
     """
 
     decision_type: str
@@ -132,6 +138,7 @@ class PolicyDecision:
     decision_point: str | None = None
     intent_overrode: bool = False
     skipped_due_to_manual: bool = False
+    reject_reason: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -549,8 +556,13 @@ def _evaluate_decision_point(
         # hard rule — if a recruiter-authored rule fires it explicitly,
         # the verdict is already certain and shouldn't be diluted by the
         # absence of other signals (e.g. pre-screen-stage rejects fire
-        # before role_fit_score is computed).
-        if action != "auto_reject" and confidence < point.confidence_floor:
+        # before role_fit_score is computed). Rules with an explicit
+        # ``reject_reason`` are treated the same way: a named reject
+        # reason ("pre_screen_below_threshold", "must_have_blocked")
+        # signals a deterministic fact the recruiter cares about, not a
+        # probabilistic threshold that needs corroborating signal.
+        is_hard_rule = action == "auto_reject" or bool(rule.reject_reason)
+        if not is_hard_rule and confidence < point.confidence_floor:
             return PolicyDecision(
                 decision_type="no_action",
                 confidence=confidence,
@@ -569,6 +581,7 @@ def _evaluate_decision_point(
             or _explain_match(point_name, rule, contributions, ctx),
             rule_path=rule_path,
             decision_point=point_name,
+            reject_reason=(rule.reject_reason or "") if point_name == "reject" else "",
         )
 
     # No rule fired — fall through to no_action so the orchestrator

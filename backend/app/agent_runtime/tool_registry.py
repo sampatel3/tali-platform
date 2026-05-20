@@ -574,7 +574,9 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             "evidence clearly indicates they are not a fit. Always cite "
             "concrete weaknesses (low TAALI, missing requirements, "
             "assessment failures). Be conservative — when in doubt prefer "
-            "queue_advance_decision or simply do nothing this cycle."
+            "queue_advance_decision or simply do nothing this cycle. Pass the "
+            "``reject_reason`` returned by evaluate_policy so the Hub renders "
+            "the right chip and granular auto-execute toggles can fire."
         ),
         "input_schema": {
             "type": "object",
@@ -583,6 +585,15 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                 "reasoning": {"type": "string", "description": _QUEUE_REASONING_DESC},
                 "evidence": {"type": "object", "description": _QUEUE_EVIDENCE_DESC},
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "reject_reason": {
+                    "type": "string",
+                    "description": (
+                        "Short-form reason copied from evaluate_policy's "
+                        "verdict (e.g. 'role_fit_low', 'pre_screen_below_threshold', "
+                        "'must_have_blocked'). Empty string when the policy did "
+                        "not provide one — the Hub falls back to a generic chip."
+                    ),
+                },
             },
             "required": ["application_id", "reasoning", "confidence"],
         },
@@ -596,7 +607,9 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             "scores are clearly below threshold AND requirements are not met. "
             "This decision is more impactful than queue_reject_decision because "
             "the candidate never gets the chance to demonstrate skill in the "
-            "assessment — be cautious and require strong evidence."
+            "assessment — be cautious and require strong evidence. Pass the "
+            "``reject_reason`` returned by evaluate_policy so the Hub renders "
+            "the right chip and granular auto-execute toggles can fire."
         ),
         "input_schema": {
             "type": "object",
@@ -605,6 +618,16 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                 "reasoning": {"type": "string", "description": _QUEUE_REASONING_DESC},
                 "evidence": {"type": "object", "description": _QUEUE_EVIDENCE_DESC},
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "reject_reason": {
+                    "type": "string",
+                    "description": (
+                        "Short-form reason copied from evaluate_policy's "
+                        "verdict (e.g. 'pre_screen_below_threshold'). Required "
+                        "for this tool when the verdict provided one — without "
+                        "it the granular auto-execute toggle "
+                        "(role.auto_reject_prescreen) won't fire."
+                    ),
+                },
             },
             "required": ["application_id", "reasoning", "confidence"],
         },
@@ -1302,6 +1325,13 @@ def _queue(
     evidence = _stamp_policy_revision_in_evidence(
         db, role=role, evidence=args.get("evidence")
     )
+    # Stamp the policy-supplied ``reject_reason`` (when present) into
+    # evidence so the Hub can render a streamlined chip and granular
+    # auto-execute toggles (role.auto_reject_prescreen) can fire later
+    # without re-evaluating the policy.
+    reject_reason = str(args.get("reject_reason") or "").strip()
+    if reject_reason and not evidence.get("reject_reason"):
+        evidence = {**evidence, "reject_reason": reject_reason}
     decision = queue_decision.run(
         db,
         actor,
@@ -1323,12 +1353,40 @@ def _queue(
     # here means it tracks what's truly in the queue. (Codex #179)
     if getattr(decision, "_just_created", True):
         agent_run.decisions_emitted = int(agent_run.decisions_emitted or 0) + 1
-    auto_attr = _AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type)
-    if auto_attr and bool(getattr(role, auto_attr, False)):
+    if _should_auto_execute(
+        role=role, decision_type=decision_type, reject_reason=reject_reason
+    ):
         _auto_execute_decision(
             db, role=role, decision=decision, decision_type=decision_type
         )
     return {"decision_id": int(decision.id), "status": str(decision.status), "decision_type": decision_type}
+
+
+def _should_auto_execute(
+    *, role: Role, decision_type: str, reject_reason: str
+) -> bool:
+    """Decide whether a freshly-queued decision should execute immediately.
+
+    Two flags can trigger auto-execute on a reject:
+    - ``role.auto_reject`` (master): any reject the agent queues runs.
+    - ``role.auto_reject_prescreen`` (granular): only rejects whose
+      policy verdict cited the pre-screen-below-threshold rule run.
+
+    For non-reject decisions (``advance_to_interview``, ``send_assessment``,
+    ``resend_assessment_invite``), the existing ``auto_promote`` toggle
+    is the only path.
+    """
+    if decision_type in ("reject", "skip_assessment_reject"):
+        if bool(getattr(role, "auto_reject", False)):
+            return True
+        if (
+            reject_reason == "pre_screen_below_threshold"
+            and bool(getattr(role, "auto_reject_prescreen", False))
+        ):
+            return True
+        return False
+    auto_attr = _AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type)
+    return bool(auto_attr) and bool(getattr(role, auto_attr, False))
 
 
 def _tool_queue_advance_decision(
@@ -1399,6 +1457,12 @@ def _tool_evaluate_policy(
         ),
         "intent_overrode": bool(verdict.intent_overrode),
         "skipped_due_to_manual": bool(verdict.skipped_due_to_manual),
+        # Empty string when not a reject verdict — the agent passes
+        # this back into queue_reject_decision /
+        # queue_skip_assessment_reject_decision so the Hub can render
+        # a streamlined chip and ``role.auto_reject_prescreen`` can
+        # auto-execute the prescreen subset.
+        "reject_reason": str(verdict.reject_reason or ""),
         "sub_agent_outputs": {
             name: (
                 {

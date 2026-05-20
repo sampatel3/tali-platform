@@ -82,13 +82,13 @@ celery_app.conf.update(
             "task": "app.tasks.reconciliation_tasks.reconcile_anthropic_usage",
             "schedule": 86400.0,
         },
-        # Phase 7 cohort planner tick: every 30 min, fan a tick to each
+        # Phase 7 cohort planner tick: every 5 min, fan a tick to each
         # agent-enabled, non-paused role. The orchestrator surveys
         # cohort state and acts on what it finds. Replaces the old
         # per-application event trigger.
-        "agent-cohort-tick-every-30-minutes": {
+        "agent-cohort-tick-every-5-minutes": {
             "task": "app.tasks.agent_tasks.agent_cohort_tick_sweep",
-            "schedule": 1800.0,
+            "schedule": 300.0,
         },
         # Agent daily review (legacy): kept for the proactive once-a-day
         # sweep that surfaces idle candidates / stale scores / etc. The

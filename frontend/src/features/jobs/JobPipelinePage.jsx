@@ -20,6 +20,7 @@ import { Spinner } from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
+import AgentNeedsInputCard from './AgentNeedsInputCard';
 import { useAgentStatus } from '../../shared/layout/AgentBar';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 // AgentRail (the legacy left "cockpit rail") was retired with the v3
@@ -34,7 +35,8 @@ import { CandidateSheet } from '../candidates/CandidateSheet';
 import { CandidateTriageDrawer, candidateReportHref } from '../candidates/CandidateTriageDrawer';
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSheet } from '../candidates/RoleSheet';
-import { getErrorMessage, trimOrUndefined, formatStatusLabel } from '../candidates/candidatesUiUtils';
+import { getErrorMessage, trimOrUndefined } from '../candidates/candidatesUiUtils';
+import { AUTONOMY_RULE_META, AUTONOMY_LABEL_BY_KEY } from './autonomyRules';
 
 const EMPTY_PROGRESS = { status: 'idle', total: 0, scored: 0, errors: 0, include_scored: false };
 const EMPTY_FETCH_PROGRESS = { status: 'idle', total: 0, fetched: 0, errors: 0 };
@@ -45,7 +47,6 @@ const PIPELINE_STAGE_ORDER = [
   { key: 'invited', label: 'Invited', countLabel: 'awaiting' },
   { key: 'in_assessment', label: 'In assessment', countLabel: 'live' },
   { key: 'review', label: 'Review', countLabel: 'decision' },
-  { key: 'advanced', label: 'Advanced', countLabel: 'with recruiter' },
 ];
 
 const normalizeThreshold = (value) => {
@@ -628,11 +629,11 @@ const RoleAgentSettingsTab = ({
   const dayOfMonth = new Date().getDate();
   const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
   const projectedCents = dayOfMonth ? Math.round((monthlySpentCents * daysInMonth) / dayOfMonth) : monthlySpentCents;
-  // Two real HITL toggles, persisted on the role record. Default off
-  // (= every candidate-affecting decision goes to the Decision Hub for
-  // human approval). Flipping on lets the agent execute that family of
-  // actions immediately and audit-log the result.
+  // HITL toggles on the role record. Default off — every decision
+  // goes to the Decision Hub. ``auto_reject_prescreen`` auto-executes
+  // only the prescreen subset; ``auto_reject`` wins when both are set.
   const autoReject = Boolean(role?.auto_reject);
+  const autoRejectPrescreen = Boolean(role?.auto_reject_prescreen);
   const autoPromote = Boolean(role?.auto_promote);
   const handleAutonomyToggle = (key, value) => {
     if (typeof onAutonomyChange === 'function') onAutonomyChange(key, value);
@@ -806,34 +807,32 @@ const RoleAgentSettingsTab = ({
           <p className="mc-agent-settings-card-help" style={{ marginBottom: 14 }}>
             By default every candidate-affecting decision the agent makes goes to your Decision Hub for approval. Flip these on to let the agent act without asking.
           </p>
-          {[
-            {
-              key: 'auto_reject',
-              value: autoReject,
-              title: 'Auto-reject',
-              sub: 'Below-threshold candidates are rejected immediately (pre-screen, scoring, and assessment stages). Off: every reject lands in the Decision Hub for one-click approval.',
-            },
-            {
-              key: 'auto_promote',
-              value: autoPromote,
-              title: 'Auto-promote',
-              sub: 'Sending an assessment and advancing to interview happen without approval. Off: each invite/advance queues as a Decision Hub card.',
-            },
-          ].map((rule, idx) => (
-            <label key={rule.key} className={`mc-agent-settings-rule ${idx === 0 ? '' : 'is-divided'}`}>
-              <button
-                type="button"
-                className={`mc-switch ${rule.value ? 'on' : ''}`}
-                onClick={() => handleAutonomyToggle(rule.key, !rule.value)}
-                aria-pressed={Boolean(rule.value)}
-                aria-label={rule.title}
-              />
-              <div>
-                <div className="mc-agent-settings-rule-title">{rule.title}</div>
-                <div className="mc-agent-settings-rule-sub">{rule.sub}</div>
-              </div>
-            </label>
-          ))}
+          {AUTONOMY_RULE_META.map((meta, idx) => {
+            const v = { auto_reject: autoReject, auto_reject_prescreen: autoRejectPrescreen, auto_promote: autoPromote };
+            const on = Boolean(v[meta.key]);
+            const disabled = meta.disabledIfKey ? Boolean(v[meta.disabledIfKey]) : false;
+            return (
+              <label
+                key={meta.key}
+                className={`mc-agent-settings-rule ${idx === 0 ? '' : 'is-divided'}${disabled ? ' is-disabled' : ''}`}
+                style={disabled ? { opacity: 0.55 } : undefined}
+              >
+                <button
+                  type="button"
+                  className={`mc-switch ${on ? 'on' : ''}`}
+                  onClick={() => { if (!disabled) handleAutonomyToggle(meta.key, !on); }}
+                  aria-pressed={on}
+                  aria-disabled={disabled ? 'true' : 'false'}
+                  aria-label={meta.title}
+                  disabled={disabled}
+                />
+                <div>
+                  <div className="mc-agent-settings-rule-title">{meta.title}</div>
+                  <div className="mc-agent-settings-rule-sub">{meta.sub}</div>
+                </div>
+              </label>
+            );
+          })}
         </section>
 
         {/* Save bar */}
@@ -1147,11 +1146,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     if (!Number.isFinite(numericRoleId)) return;
     setLoading(true);
     try {
-      // Two separate fetches (open + rejected) at the backend's 2000-row
-      // ceiling — splits the budget so a long reject history can't crowd
-      // open candidates out, and avoids the 500-row default that would
-      // silently truncate thousand-applicant roles.
-      const appsQuery = (outcome) => ({ sort_by: 'pre_screen_score', sort_order: 'desc', application_outcome: outcome, limit: 2000 });
+      // Two separate fetches (open + rejected). A single
+      // ``application_outcome=all`` call has a backend 500-row cap, so
+      // a role with hundreds of historical rejects can push out open
+      // candidates entirely. Two parallel calls give each bucket its
+      // own budget.
+      const appsQuery = (outcome) => ({ sort_by: 'pre_screen_score', sort_order: 'desc', application_outcome: outcome });
       const [roleRes, tasksRes, openAppsRes, rejectedAppsRes, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
         rolesApi.get(numericRoleId),
         rolesApi.listTasks(numericRoleId),
@@ -1170,7 +1170,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       const nextRole = roleRes?.data || null;
       setRole(nextRole);
       setWorkspaceCriteria(Array.isArray(orgCriteriaRes?.data) ? orgCriteriaRes.data : []);
-      setThresholdDraft(nextRole?.score_threshold != null ? String(nextRole.score_threshold) : '');
+      setThresholdDraft(nextRole?.auto_reject_threshold_100 != null ? String(nextRole.auto_reject_threshold_100) : '');
       // Fetch the agent's threshold recommendation when the role is
       // in auto mode so the panel shows it without waiting for click.
       if (nextRole?.auto_reject_threshold_mode === 'auto' && Number.isFinite(numericRoleId)) {
@@ -1307,8 +1307,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   ), [activeApplications]);
 
   const thresholdValue = useMemo(
-    () => resolveOptionalPercent(role?.score_threshold),
-    [role?.score_threshold]
+    () => resolveOptionalPercent(role?.auto_reject_threshold_100),
+    [role?.auto_reject_threshold_100]
   );
   const belowThresholdCount = useMemo(() => {
     if (thresholdValue == null) return 0;
@@ -1374,13 +1374,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     ];
   }, [activeApplications.length, agentStatus, belowThresholdCount, role, thresholdValue, unscoredApplications.length]);
 
-  const groupedApplications = useMemo(() => [
-    ...PIPELINE_STAGE_ORDER.map((stage) => ({
-      ...stage,
-      items: activeApplications.filter((application) => String(application?.pipeline_stage || '').toLowerCase() === stage.key),
-    })),
-    { key: 'rejected', label: 'Rejected', countLabel: 'closed', items: rejectedApplications },
-  ], [activeApplications, rejectedApplications]);
+  const groupedApplications = useMemo(() => PIPELINE_STAGE_ORDER.map((stage) => ({
+    ...stage,
+    items: activeApplications.filter((application) => String(application?.pipeline_stage || '').toLowerCase() === stage.key),
+  })), [activeApplications]);
 
   // Recruiter chips on this role (excludes derived_from_spec entries — those
   // come from the job spec parser and are managed separately).
@@ -1580,7 +1577,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     setSavingRoleConfig(true);
     try {
       await rolesApi.update(numericRoleId, {
-        score_threshold: thresholdDraft === '' ? null : Number(normalizeThreshold(thresholdDraft)),
+        auto_reject_threshold_100: thresholdDraft === '' ? null : Number(normalizeThreshold(thresholdDraft)),
       });
       await loadRoleWorkspace();
       setRefreshTick((value) => value + 1);
@@ -1592,94 +1589,84 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   };
 
-  // Per-role chip CRUD + sync/reset. Merge the returned chip into role.criteria —
-  // a full role-workspace refetch would drag in 2× 2000-row application lists per edit.
+  // Per-role chip CRUD + sync/reset. Each call hits the API immediately;
+  // the role response carries the updated criteria + suppressed list so
+  // we just re-load the role workspace afterwards.
+  const refreshRoleAfterCriteriaChange = useCallback(async (nextRoleData) => {
+    if (nextRoleData) {
+      setRole(nextRoleData);
+    } else {
+      await loadRoleWorkspace();
+    }
+    setRefreshTick((value) => value + 1);
+  }, [loadRoleWorkspace]);
+
   const handleCreateRoleCriterion = useCallback(async ({ text, bucket }) => {
     if (!Number.isFinite(numericRoleId)) return;
     setCriteriaBusy(true);
     try {
-      const { data } = await rolesApi.createCriterion(numericRoleId, { text, bucket });
-      if (data) setRole((cur) => cur && ({
-        ...cur,
-        criteria: [...(cur.criteria || []).filter((c) => c.id !== data.id), data],
-      }));
+      await rolesApi.createCriterion(numericRoleId, { text, bucket });
+      await refreshRoleAfterCriteriaChange();
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to add criterion.'), 'error');
     } finally {
       setCriteriaBusy(false);
     }
-  }, [numericRoleId, rolesApi, showToast]);
+  }, [numericRoleId, refreshRoleAfterCriteriaChange, showToast]);
 
   const handleUpdateRoleCriterion = useCallback(async (criterionId, updates) => {
     if (!Number.isFinite(numericRoleId)) return;
     setCriteriaBusy(true);
     try {
-      const { data } = await rolesApi.updateCriterion(numericRoleId, criterionId, updates);
-      if (data) setRole((cur) => cur && ({
-        ...cur,
-        criteria: (cur.criteria || []).map((c) => (c.id === criterionId ? data : c)),
-      }));
+      await rolesApi.updateCriterion(numericRoleId, criterionId, updates);
+      await refreshRoleAfterCriteriaChange();
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to update criterion.'), 'error');
     } finally {
       setCriteriaBusy(false);
     }
-  }, [numericRoleId, rolesApi, showToast]);
+  }, [numericRoleId, refreshRoleAfterCriteriaChange, showToast]);
 
   const handleDeleteRoleCriterion = useCallback(async (criterionId) => {
     if (!Number.isFinite(numericRoleId)) return;
-    // Optimistic remove. If the chip is workspace-derived, mirror the backend
-    // and append its org_criterion_id to the suppressed list.
-    let previousRole = null;
-    setRole((cur) => {
-      previousRole = cur;
-      if (!cur) return cur;
-      const target = (cur.criteria || []).find((c) => c.id === criterionId);
-      const orgId = target?.org_criterion_id;
-      const suppressed = cur.suppressed_org_criterion_ids || [];
-      return {
-        ...cur,
-        criteria: (cur.criteria || []).filter((c) => c.id !== criterionId),
-        suppressed_org_criterion_ids: orgId != null
-          ? Array.from(new Set([...suppressed, Number(orgId)]))
-          : suppressed,
-      };
-    });
+    setCriteriaBusy(true);
     try {
       await rolesApi.deleteCriterion(numericRoleId, criterionId);
+      await refreshRoleAfterCriteriaChange();
     } catch (error) {
-      if (previousRole) setRole(previousRole);
       showToast(getErrorMessage(error, 'Failed to remove criterion.'), 'error');
+    } finally {
+      setCriteriaBusy(false);
     }
-  }, [numericRoleId, rolesApi, showToast]);
+  }, [numericRoleId, refreshRoleAfterCriteriaChange, showToast]);
 
   const handleSyncRoleCriteria = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
     setCriteriaSyncing(true);
     try {
       const res = await rolesApi.syncCriteriaWithWorkspace(numericRoleId);
-      if (res?.data) setRole(res.data);
+      await refreshRoleAfterCriteriaChange(res?.data);
       showToast('Workspace updates pulled in.', 'success');
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to sync workspace criteria.'), 'error');
     } finally {
       setCriteriaSyncing(false);
     }
-  }, [numericRoleId, rolesApi, showToast]);
+  }, [numericRoleId, refreshRoleAfterCriteriaChange, showToast]);
 
   const handleResetRoleCriteria = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
     setCriteriaResetting(true);
     try {
       const res = await rolesApi.resetCriteriaToWorkspace(numericRoleId);
-      if (res?.data) setRole(res.data);
+      await refreshRoleAfterCriteriaChange(res?.data);
       showToast('Criteria reset to workspace defaults.', 'success');
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to reset criteria.'), 'error');
     } finally {
       setCriteriaResetting(false);
     }
-  }, [numericRoleId, rolesApi, showToast]);
+  }, [numericRoleId, refreshRoleAfterCriteriaChange, showToast]);
 
   // Restore a hidden (suppressed) workspace chip on this role: re-add it
   // by calling create with the workspace text + bucket. The backend
@@ -1696,17 +1683,21 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       await rolesApi.update(numericRoleId, { suppressed_org_criterion_ids: remainingSuppressed });
       // Then sync to bring the chip back with full provenance (org_criterion_id set).
       const res = await rolesApi.syncCriteriaWithWorkspace(numericRoleId);
-      if (res?.data) setRole(res.data);
+      await refreshRoleAfterCriteriaChange(res?.data);
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to restore criterion.'), 'error');
     } finally {
       setCriteriaBusy(false);
     }
-  }, [numericRoleId, role, rolesApi, showToast]);
+  }, [numericRoleId, role, refreshRoleAfterCriteriaChange, showToast]);
 
   const handleRoleSheetSubmit = async ({
     name,
     description,
+    additionalRequirements,
+    autoRejectEnabled,
+    autoRejectThreshold100,
+    autoRejectNoteTemplate,
     jobSpecFile,
     taskIds,
   }) => {
@@ -1717,6 +1708,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       await rolesApi.update(numericRoleId, {
         name,
         description: trimOrUndefined(description),
+        additional_requirements: trimOrUndefined(additionalRequirements),
+        auto_reject_enabled: autoRejectEnabled ? true : null,
+        auto_reject_threshold_100: autoRejectEnabled ? autoRejectThreshold100 : null,
+        auto_reject_note_template: autoRejectEnabled ? trimOrUndefined(autoRejectNoteTemplate) : null,
       });
 
       if (jobSpecFile && rolesApi.uploadJobSpec) {
@@ -1928,7 +1923,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     <div>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
       <AgentHeader
-        kicker={`${role?.name || 'Role'} · #${role?.id || '—'}`}
+        kicker={`ROLE · #${role?.id || '—'}`}
         title={role?.name || 'Role'}
         backLink={{ label: 'All roles', onClick: () => onNavigate('jobs') }}
         actions={(
@@ -1994,6 +1989,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       />
       <div className="page">
         <div className="mc-cockpit-main">
+        {/* Phase 7: orchestrator's open questions for this role. Hides
+            itself when there are none — won't render an empty frame. */}
+        <AgentNeedsInputCard roleId={role?.id} />
         <div className="sub-tabs sub-tabs-sticky">
           <div className="seg">
             <button type="button" className={activeView === 'table' ? 'active' : ''} onClick={() => setActiveView('table')}>Candidates</button>
@@ -2183,14 +2181,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             }}
             onAutonomyChange={async (key, value) => {
               if (!Number.isFinite(numericRoleId)) return;
-              if (key !== 'auto_reject' && key !== 'auto_promote') return;
+              const label = AUTONOMY_LABEL_BY_KEY[key];
+              if (!label) return;
               setRole((cur) => (cur ? { ...cur, [key]: value } : cur));
               try {
                 await rolesApi.update(numericRoleId, { [key]: value });
                 showToast(
                   value
-                    ? `${key === 'auto_reject' ? 'Auto-reject' : 'Auto-promote'} on — agent will execute without approval.`
-                    : `${key === 'auto_reject' ? 'Auto-reject' : 'Auto-promote'} off — every decision goes to the Decision Hub.`,
+                    ? `${label} on — agent will execute without approval.`
+                    : `${label} off — every decision goes to the Decision Hub.`,
                   'success',
                 );
               } catch (error) {
@@ -2318,9 +2317,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                     return { key: stage.key, label: stage.label, count: items.length };
                   }),
                   // Rejected is an *outcome* not a *stage*; it lives at
-                  // the right so the active-pipeline tabs (All / Applied /
-                  // Invited / In assessment / Review / Advanced) read
-                  // left-to-right as a recruiter would walk the funnel.
+                  // the right of the strip so the active-pipeline tabs
+                  // (All / Applied / Invited / In assessment / Review)
+                  // read left-to-right as a recruiter would walk the
+                  // funnel.
                   { key: 'rejected', label: 'Rejected', count: rejectedApplications.length },
                 ].map((seg) => (
                   <button
@@ -2390,8 +2390,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               </button>
             </div>
             {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — clean
-                ctable with Candidate / Score / Stage / Workable / Status /
-                Agent / View →. Filtered by tableStageFilter, sorted client-side
+                ctable with Candidate / Score / Stage / Status / Agent /
+                View →. Filtered by tableStageFilter, sorted client-side
                 by tableSortBy. The full CandidatesDirectoryPage was too
                 heavy here — it carried bulk-action chrome, pagination,
                 NL-search, and filter chips that don't belong on the
@@ -2431,7 +2431,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         <th>Candidate</th>
                         <th>Score</th>
                         <th>Stage</th>
-                        <th>Workable</th>
                         <th>Status</th>
                         <th>Agent</th>
                         <th aria-label="Open" />
@@ -2484,7 +2483,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                               <td>
                                 <span className="stage-pill">{stageLabel}</span>
                               </td>
-                              <td>{application?.workable_stage ? (<span className="stage-pill" title="Current stage in Workable">{formatStatusLabel(application.workable_stage)}</span>) : (<span className="ctable-em">—</span>)}</td>
                               <td className="ctable-status">{statusText}</td>
                               <td>
                                 {agentLabel ? (
@@ -2511,7 +2509,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                             </tr>
                             {isTriageRow ? (
                               <tr className="ctable-triage-row">
-                                <td colSpan={7} className="ctable-triage-cell">
+                                <td colSpan={6} className="ctable-triage-cell">
                                   <CandidateTriageDrawer {...triageDrawerProps} />
                                 </td>
                               </tr>

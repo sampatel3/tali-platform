@@ -48,6 +48,12 @@ class Rule(BaseModel):
     parses (see ``engine._eval_condition``). Keeping it string-shaped
     rather than AST-shaped lets recruiters paste plain English on the
     Hub later without us teaching them an AST.
+
+    ``reject_reason`` is an optional short-form tag the engine copies
+    onto the verdict so downstream tooling (Decision Hub chips,
+    granular auto-execute toggles like ``role.auto_reject_prescreen``)
+    can branch on *why* a reject fired, not just that one did. Only
+    meaningful when ``then`` is reject-shaped — ignored otherwise.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -56,6 +62,7 @@ class Rule(BaseModel):
     then: str
     priority: int = Field(ge=0, le=10_000)
     reason_template: str | None = None
+    reject_reason: str | None = None
 
     @field_validator("then")
     @classmethod

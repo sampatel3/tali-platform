@@ -136,7 +136,10 @@ def _gather_sub_agent_outputs(
 
 
 def _flags_from_application(
-    app: CandidateApplication, scores: dict[str, float]
+    app: CandidateApplication,
+    scores: dict[str, float],
+    *,
+    role: Role | None = None,
 ) -> dict[str, bool]:
     """Build the boolean flags the engine's rules reference.
 
@@ -145,6 +148,13 @@ def _flags_from_application(
     inverse, exposed positively because rule conditions read better.
     ``assessment_completed`` mirrors the assessment_scoring sub-agent's
     output for engine convenience.
+
+    ``pre_screen_below_threshold`` is true when the application's
+    pre-screen score is set and falls below the role's effective
+    pre-screen reject threshold (``role.score_threshold`` if set, else
+    the engine's default reject ceiling). Drives the queue-reject path
+    when the org hasn't opted into auto-reject — the agent surfaces it
+    to the recruiter's Decision Hub as a streamlined chip.
     """
     has_pending = False
     try:
@@ -165,6 +175,19 @@ def _flags_from_application(
     except Exception:  # pragma: no cover — defensive
         has_pending = False
 
+    pre_screen = scores.get("pre_screen_score")
+    threshold = (
+        float(getattr(role, "score_threshold", None) or 0.0)
+        if role is not None
+        else 0.0
+    )
+    pre_screen_below = (
+        pre_screen is not None
+        and threshold > 0.0
+        and float(pre_screen) < threshold
+        and getattr(app, "application_outcome", "open") == "open"
+    )
+
     return {
         "has_pending_assessment": has_pending,
         "no_pending_assessment": not has_pending,
@@ -175,6 +198,7 @@ def _flags_from_application(
         # set it True from intent_parser ``disqualifying_signals`` once
         # the matching pass is implemented (Phase 5+).
         "must_have_blocked": False,
+        "pre_screen_below_threshold": bool(pre_screen_below),
     }
 
 
@@ -257,7 +281,7 @@ def evaluate_for_application(
         skip_cache=skip_cache,
     )
     scores = _scores_from_outputs(outputs)
-    flags = _flags_from_application(app, scores)
+    flags = _flags_from_application(app, scores, role=role)
 
     # Resolve manual-action lookback window from the active policy
     # itself so a retune that widens / narrows it takes effect without
@@ -327,12 +351,19 @@ def _maybe_escalate(
     - The engine already chose ``skip`` / ``no_action`` / ``auto_reject``.
       Manual-action skip and hard-rule auto-rejects are deliberate and
       not abstention candidates.
+    - The verdict carries an explicit ``reject_reason`` — that signals
+      a deterministic rule fired on a hard fact (pre-screen below
+      threshold, role_fit far below ceiling, must-have blocked). The
+      sub-agents are doing different work; their uncertainty doesn't
+      invalidate the rule's verdict.
     - Fewer than 3 sub-agents produced a usable score (disagreement
       can't be measured meaningfully).
     """
     if verdict.decision_type in ("skip", "no_action", "auto_reject"):
         return verdict
     if verdict.skipped_due_to_manual:
+        return verdict
+    if verdict.reject_reason:
         return verdict
     per_agent_scores: list[float] = []
     per_agent_uncertainties: list[float] = []

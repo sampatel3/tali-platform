@@ -279,7 +279,7 @@ def update_role(
         agent_activated_now = next_enabled and not was_enabled
         # Resume = "was paused while enabled, now no longer paused while still
         # enabled". Distinct from activation. Both deserve an immediate cycle —
-        # otherwise the recruiter clicks Resume and waits up to 30 minutes for
+        # otherwise the recruiter clicks Resume and waits up to 5 minutes for
         # the next beat-scheduled tick to fire.
         agent_resumed_now = (
             was_enabled
@@ -305,6 +305,11 @@ def update_role(
         role.score_threshold = updates["score_threshold"]
     if "auto_reject" in updates and updates["auto_reject"] is not None:
         role.auto_reject = bool(updates["auto_reject"])
+    if (
+        "auto_reject_prescreen" in updates
+        and updates["auto_reject_prescreen"] is not None
+    ):
+        role.auto_reject_prescreen = bool(updates["auto_reject_prescreen"])
     if "auto_promote" in updates and updates["auto_promote"] is not None:
         role.auto_promote = bool(updates["auto_promote"])
     if "suppressed_org_criterion_ids" in updates:
@@ -333,7 +338,7 @@ def update_role(
             db.rollback()
     # Activation OR resume should kick a daily-review-style cycle so the
     # agent immediately picks up where things stand instead of waiting up
-    # to 30 minutes for the cohort-tick beat (or 24h for daily-review).
+    # to 5 minutes for the cohort-tick beat (or 24h for daily-review).
     # On activation: drain unscored/un-pre-screened backlog. On resume:
     # retry whatever was paused (typically a per-cycle budget exhaustion).
     # Failures here are logged but do not fail the PATCH — the beat

@@ -9,10 +9,36 @@ const DECISION_LABEL = {
   skip_assessment_reject: 'Reject without sending assessment',
 };
 
+// Streamlined chips for the reject reasons the policy stamps onto
+// evidence. Keys must match the engine's ``reject_reason`` values.
+const REJECT_REASON_CHIPS = {
+  pre_screen_below_threshold: {
+    label: 'Pre-screen reject',
+    title: 'Pre-screen score is below the role’s reject threshold — quick reject candidate.',
+  },
+  role_fit_low: {
+    label: 'Role-fit reject',
+    title: 'CV match is far below the send-assessment floor.',
+  },
+  must_have_blocked: {
+    label: 'Must-have failure',
+    title: 'Candidate fails a must-have requirement.',
+  },
+};
+
 const formatConfidence = (value) => {
   if (value === null || value === undefined) return null;
   const pct = Math.round(Number(value) * 100);
   return `${pct}% confident`;
+};
+
+const rejectReasonChip = (evidence) => {
+  if (!evidence || typeof evidence !== 'object') return null;
+  const reason = typeof evidence.reject_reason === 'string'
+    ? evidence.reject_reason.trim()
+    : '';
+  if (!reason) return null;
+  return REJECT_REASON_CHIPS[reason] || { label: reason, title: reason };
 };
 
 const renderEvidence = (evidence) => {
@@ -37,6 +63,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onOverride, busy = fals
   const [expanded, setExpanded] = useState(false);
   const decisionLabel = DECISION_LABEL[decision.decision_type] || decision.decision_type;
   const confidenceLabel = formatConfidence(decision.confidence);
+  const rejectChip = rejectReasonChip(decision.evidence);
   const candidateLabel = decision.candidate_name || decision.candidate_email || `Application #${decision.application_id}`;
 
   return (
@@ -47,6 +74,14 @@ export const AgentDecisionCard = ({ decision, onApprove, onOverride, busy = fals
             <span className="font-semibold">{candidateLabel}</span>
             <ArrowRight size={14} className="text-taali-fg-muted" aria-hidden />
             <span className="font-medium text-taali-accent">{decisionLabel}</span>
+            {rejectChip ? (
+              <span
+                className="rounded bg-[var(--purple-tint)] px-2 py-0.5 text-[11px] font-medium text-[var(--purple)]"
+                title={rejectChip.title}
+              >
+                {rejectChip.label}
+              </span>
+            ) : null}
             {confidenceLabel ? (
               <span className="rounded bg-taali-bg-muted px-2 py-0.5 text-[11px] text-taali-fg-muted">
                 {confidenceLabel}

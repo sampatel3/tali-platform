@@ -153,6 +153,31 @@ def _default_policy_json(*, role_fit_min: float) -> dict[str, Any]:
                             "Pre-screen score below the configured threshold; "
                             "auto-rejecting at pre-screen stage."
                         ),
+                        "reject_reason": "pre_screen_below_threshold",
+                    },
+                    {
+                        # Pre-screen-below-threshold QUEUE path. Fires
+                        # when the candidate's pre-screen score sits
+                        # below the role's reject threshold and there's
+                        # no assessment in flight, but the org/role
+                        # hasn't opted into auto-reject. Routes to the
+                        # recruiter's Decision Hub with a clear
+                        # ``reject_reason`` so the Hub can render a
+                        # streamlined chip and the recruiter can bulk-
+                        # approve. The granular
+                        # ``role.auto_reject_prescreen`` toggle reads
+                        # the same ``reject_reason`` to auto-execute
+                        # *just* these without flipping the master
+                        # ``role.auto_reject``.
+                        "if": "pre_screen_below_threshold AND no_pending_assessment",
+                        "then": "queue_skip_assessment_reject_decision",
+                        "priority": 60,
+                        "reason_template": (
+                            "Pre-screen score below the role's reject threshold "
+                            "with no assessment in flight — queueing reject "
+                            "without sending assessment."
+                        ),
+                        "reject_reason": "pre_screen_below_threshold",
                     },
                     {
                         "if": "role_fit_score <= role_fit_max AND no_pending_assessment",
@@ -162,6 +187,7 @@ def _default_policy_json(*, role_fit_min: float) -> dict[str, Any]:
                             "Role-fit far below the send-assessment floor and no "
                             "assessment pending — queueing reject."
                         ),
+                        "reject_reason": "role_fit_low",
                     },
                 ],
                 "confidence_floor": 0.6,

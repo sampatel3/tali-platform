@@ -19,7 +19,7 @@ from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 from . import calibration as calibration_mod
 
 
-PROMPT_VERSION = "agent.v8.cohort-planner.bucketed.advanced-bucket.2026-05-12"
+PROMPT_VERSION = "agent.v9.cohort-planner.reject-reason-threaded.2026-05-20"
 
 
 def _render_bucketed_criteria(role: Role) -> str:
@@ -152,6 +152,12 @@ QUEUE RULES:
   confidence in [0, 1].
 - ALWAYS run evaluate_policy first. When the policy says queue, you queue.
   When the policy says skip / no_action, you do NOT queue.
+- When evaluate_policy returns a non-empty ``reject_reason`` (e.g.
+  "pre_screen_below_threshold", "role_fit_low"), thread it through the
+  matching queue_reject_decision / queue_skip_assessment_reject_decision
+  call. The Hub renders a streamlined chip from it and granular
+  auto-execute toggles (``role.auto_reject_prescreen``) read it to fire
+  without flipping the master ``role.auto_reject``.
 - queue_skip_assessment_reject_decision is the most impactful tool — use
   ONLY when the policy returns it.
 - When uncertain, do NOT queue. The next cycle will give you another shot.
@@ -241,6 +247,8 @@ def build_system_prompt(
     trigger_context: str,
     budget_remaining_tokens: int,
     decision_budget_remaining: int,
+    round_idx: int = 0,
+    max_rounds: int = 16,
 ) -> list[dict[str, Any]]:
     """Return Anthropic system blocks. Static header is cached."""
     calibration = calibration_mod.load(role)
@@ -263,9 +271,29 @@ def build_system_prompt(
         "CALIBRATION SO FAR:\n" + calibration_summary
     )
 
+    # Final-rounds urgency: when ≤2 rounds remain, the agent must wrap up
+    # with agent_run_complete on its next turn. Aborting on the cap is a
+    # failure mode that loses any unqueued decisions and wastes tokens.
+    rounds_remaining = max(0, max_rounds - round_idx)
+    if rounds_remaining <= 2:
+        round_hint = (
+            f"- Round {round_idx + 1}/{max_rounds} — ONLY {rounds_remaining} round(s) "
+            "left. Call agent_run_complete next. Do NOT start new compare/evaluate "
+            "chains; queue what you already know and finish."
+        )
+    elif rounds_remaining <= 4:
+        round_hint = (
+            f"- Round {round_idx + 1}/{max_rounds} — {rounds_remaining} round(s) "
+            "left. Stop exploring; queue your remaining clear-signal decisions and "
+            "call agent_run_complete."
+        )
+    else:
+        round_hint = f"- Round {round_idx + 1}/{max_rounds}"
+
     runtime_block = (
         f"CURRENT CYCLE CONTEXT:\n"
         f"- Trigger: {trigger_context}\n"
+        f"{round_hint}\n"
         f"- Token budget remaining this cycle: {budget_remaining_tokens}\n"
         f"- Queued-decision budget remaining this cycle: {decision_budget_remaining}\n"
         f"- Prompt version: {PROMPT_VERSION}"

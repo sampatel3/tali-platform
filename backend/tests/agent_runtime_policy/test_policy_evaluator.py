@@ -51,3 +51,24 @@ def test_missing_application_returns_no_action(db):
     )
     assert verdict.decision_type == "no_action"
     assert outputs == {}
+
+
+def test_pre_screen_below_threshold_queues_with_reject_reason(db):
+    """End-to-end: a candidate scored well below the role's pre-screen
+    threshold (with no role_fit signal) gets a queueable verdict with
+    reject_reason='pre_screen_below_threshold'. Confirms the
+    policy_evaluator computes the flag and the engine fires the new
+    rule."""
+    org, role, _, app = make_world(db)
+    # Role threshold is 65 (from conftest). Score 30 is well below.
+    role.score_threshold = 65
+    app.pre_screen_score_100 = 30.0
+    # Deliberately leave cv_match_details unset so role_fit_score
+    # doesn't get computed — the new queue rule must fire without it.
+    app.application_outcome = "open"
+    db.flush()
+    verdict, _ = evaluate_for_application(
+        db, role=role, application_id=int(app.id)
+    )
+    assert verdict.decision_type == "queue_skip_assessment_reject_decision"
+    assert verdict.reject_reason == "pre_screen_below_threshold"

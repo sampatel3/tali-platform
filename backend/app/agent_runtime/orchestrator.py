@@ -32,11 +32,17 @@ from .tool_registry import AGENT_TOOLS, QUEUE_DECISION_TOOL_NAMES, dispatch, is_
 logger = logging.getLogger("taali.agent_runtime")
 
 
-# Tool surface in v3 has 13 tools. Bumping rounds up gives the agent enough
-# headroom to chain a cohort search → compare → decision sequence. Each round
-# is still capped to MAX_TOKENS_PER_ROUND, and the per-cycle token + decision
-# budgets in budget_guard.py provide hard ceilings independent of round count.
-MAX_TOOL_ROUNDS = 10
+# Tool surface in v3 has 13 tools. The cron prompt asks for survey →
+# (optional ask_recruiter) → batch_score → triage up to 5 rejects + 1
+# advance → agent_run_complete. Each candidate triaged costs at least
+# one evaluate_policy + one queue_* call; the model doesn't always batch
+# them in parallel, so the round budget needs to cover a serial worst
+# case (~14 rounds). 16 gives headroom without inviting drift — the
+# per-cycle token + decision budgets in budget_guard.py still provide
+# hard ceilings independent of round count. Bumped from 10 (2026-05-20)
+# after several roles hit the cap with 0–1 decisions emitted because
+# rounds were spent on compare_applications + evaluate_policy chains.
+MAX_TOOL_ROUNDS = 16
 MAX_TOKENS_PER_ROUND = 2048
 
 
@@ -279,6 +285,8 @@ def run_cycle(
             decision_budget_remaining=max(
                 0, budget_guard.role_decision_budget(role) - run.decisions_emitted
             ),
+            round_idx=round_idx,
+            max_rounds=MAX_TOOL_ROUNDS,
         )
 
         try:

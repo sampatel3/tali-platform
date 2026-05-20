@@ -122,6 +122,16 @@ class Role(Base):
     auto_reject = Column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    # ``auto_reject_prescreen`` is the granular sibling of ``auto_reject``:
+    # when True, only rejects whose policy verdict cites the
+    # ``pre_screen_below_threshold`` rule auto-execute. Recruiters use this
+    # to bulk-cull obvious pre-screen rejects without giving up HITL on
+    # judgment-based rejects. The agent's ``_queue`` path honors either
+    # flag — ``auto_reject`` alone covers all rejects, this one covers
+    # just the pre-screen subset.
+    auto_reject_prescreen = Column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     auto_promote = Column(
         Boolean, nullable=False, default=False, server_default="false"
     )
