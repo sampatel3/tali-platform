@@ -32,16 +32,7 @@ from ..models.role import Role
 from ..models.usage_event import UsageEvent
 
 
-# 50k was undersized for any meaningful cohort: the initial
-# survey_role_state + read_pending_recruiter_inputs + a few candidate
-# fetches on a role with 100+ applicants already exceed it, so the
-# cycle dies in setup before dispatching a single score / advance /
-# send. The real backpressure on runaway agent behaviour is
-# ``role.agent_decision_budget_per_cycle`` (20 by default) — that
-# bounds *actions* per cycle, which is what we care about. Tokens are
-# a cost ceiling; the monthly USD cap already guards spend. Bumping
-# to 200k lets the first cycle on a meaningful role actually complete.
-DEFAULT_TOKEN_BUDGET_PER_CYCLE = 200_000
+DEFAULT_TOKEN_BUDGET_PER_CYCLE = 50_000
 DEFAULT_DECISION_BUDGET_PER_CYCLE = 20
 DEFAULT_USD_BUDGET_MONTHLY_CENTS = 5_000  # $50.00
 
@@ -79,14 +70,16 @@ def check_pre_round(*, role: Role, tokens_used: int, decisions_emitted: int) -> 
 
 
 def month_to_date_spend_cents(db: Session, *, role: Role) -> int:
-    """Sum *all* Anthropic spend on this role for the current month, in cents.
+    """Month-to-date charged spend on this role, in cents.
 
-    Aggregates ``UsageEvent.cost_usd_micro`` across every feature
-    (scoring, pre-screen, assessment, agent) where ``role_id`` matches.
+    Aggregates ``UsageEvent.credits_charged`` (raw Anthropic cost ×
+    per-feature markup) across every feature where ``role_id`` matches.
+    Same unit as ``Role.monthly_usd_budget_cents`` so the cap check and
+    every customer-facing display reconcile.
     """
     month_start = _month_start_utc(datetime.now(timezone.utc))
     spent_micro = (
-        db.query(func.coalesce(func.sum(UsageEvent.cost_usd_micro), 0))
+        db.query(func.coalesce(func.sum(UsageEvent.credits_charged), 0))
         .filter(
             UsageEvent.organization_id == role.organization_id,
             UsageEvent.role_id == role.id,

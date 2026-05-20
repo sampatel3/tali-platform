@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel
 
@@ -28,6 +28,7 @@ from ...services.pricing_service import (
     resolve_pack as _resolve_pack,
 )
 from ...services.usage_metering_service import usage_summary as _usage_summary
+from ...services.anthropic_reconciliation_service import reconcile_recent
 from sqlalchemy import func
 
 router = APIRouter(prefix="/billing", tags=["Billing"])
@@ -616,6 +617,45 @@ def get_usage_reconciliation(
         "totals": totals,
         "rows": serialized,
     }
+
+
+# Hard cap chosen to match Anthropic's usage_report retention window. If
+# Anthropic ever advertises a different limit we surface their error to
+# the caller — the cap here is just a server-side sanity bound.
+_RECONCILE_MAX_DAYS = 180
+
+
+@router.post("/admin/reconcile")
+def admin_reconcile(
+    days: int = 7,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Trigger an Anthropic-vs-internal reconciliation pass for the trailing
+    ``days`` days. Admin-only. Used to seed history after the rolling 48h
+    beat task has been in place — or to re-pull when drift is suspected.
+
+    Returns the summary dict from ``reconcile_recent`` (rows upserted,
+    skip/error reasons). Idempotent: re-running over the same window
+    upserts on (date, workspace, model).
+    """
+    if not getattr(current_user, "is_superuser", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+    if days < 1 or days > _RECONCILE_MAX_DAYS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"days must be in [1, {_RECONCILE_MAX_DAYS}]",
+        )
+    summary = reconcile_recent(db, days=int(days))
+    if summary.get("error"):
+        # Surface the upstream failure verbatim; the caller (admin UI/CLI)
+        # decides whether to retry. Don't bubble as 5xx — the request was
+        # well-formed; it's Anthropic that wouldn't talk to us.
+        return {"ok": False, "days": int(days), **summary}
+    return {"ok": True, "days": int(days), **summary}
 
 
 @router.post("/topup")

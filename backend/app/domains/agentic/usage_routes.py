@@ -88,7 +88,7 @@ def role_usage_breakdown(
     rows = (
         db.query(
             UsageEvent.feature,
-            func.coalesce(func.sum(UsageEvent.cost_usd_micro), 0).label("cost_micro"),
+            func.coalesce(func.sum(UsageEvent.credits_charged), 0).label("cost_micro"),
             func.count(UsageEvent.id).label("event_count"),
         )
         .filter(
