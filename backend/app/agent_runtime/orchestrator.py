@@ -259,27 +259,9 @@ def run_cycle(
     finished_via_complete_tool = False
 
     for round_idx in range(MAX_TOOL_ROUNDS):
-        check = budget_guard.check_pre_round(
-            role=role,
-            decisions_emitted=run.decisions_emitted,
-        )
-        if not check.ok:
-            # Per-cycle limits (decision count, already-paused state) just end
-            # this cycle. The role stays enabled and the next scheduled run
-            # picks up. Role-pause is reserved for the monthly $ cap, which
-            # is checked above before the loop starts. Previously this path
-            # called pause_role() too, which permanently disabled roles after
-            # one slightly-too-long cycle.
-            run.status = "budget_paused"
-            run.error = check.reason
-            break
-
         system = build_system_prompt(
             role=role,
             trigger_context=trigger_context,
-            decision_budget_remaining=max(
-                0, budget_guard.role_decision_budget(role) - run.decisions_emitted
-            ),
         )
 
         try:

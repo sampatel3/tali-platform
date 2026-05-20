@@ -11,6 +11,7 @@ from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.role import Role
 from .document_service import sanitize_text_for_storage
+from .pre_screen_decision_emitter import queue_pre_screen_reject
 from .pre_screening_service import (
     evaluate_auto_reject_decision,
     mark_auto_reject_state,
@@ -51,12 +52,27 @@ def run_auto_reject_if_needed(
         return {**decision, "performed": False}
 
     # Per-role HITL gate. When ``auto_reject`` is False (the default),
-    # we don't disqualify in Workable directly — the agent's next cycle
-    # will queue this candidate as a Decision Hub card via its normal
-    # ``queue_skip_assessment_reject_decision`` flow, where the recruiter
-    # approves the same reject manually. This keeps "below-threshold"
-    # candidates open until a human signs off.
+    # we don't disqualify in Workable directly — instead surface a Decision
+    # Hub card so the recruiter approves the reject manually. The original
+    # design here deferred this to the next agent cycle, but the agent's
+    # cohort planner never surveyed "below-threshold" candidates so 270
+    # ended up stranded in prod. Emit the decision directly now (pre-screen
+    # is deterministic; no agent reasoning needed).
     if role is not None and not bool(getattr(role, "auto_reject", False)):
+        snapshot = decision.get("snapshot") if isinstance(decision.get("snapshot"), dict) else {}
+        config = decision.get("config") if isinstance(decision.get("config"), dict) else {}
+        queue_pre_screen_reject(
+            db,
+            organization_id=int(app.organization_id),
+            role=role,
+            application=app,
+            pre_screen_score=snapshot.get("pre_screen_score"),
+            threshold=config.get("threshold_100"),
+            evidence={
+                "cv_fit_score": snapshot.get("cv_fit_score"),
+                "requirements_fit_score": snapshot.get("requirements_fit_score"),
+            },
+        )
         mark_auto_reject_state(
             app,
             state="awaiting_recruiter_approval",
