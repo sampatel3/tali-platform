@@ -271,10 +271,16 @@ const buildTimelineEntry = (entry) => {
 // Sources, in order: (1) the LLM-emitted candidate_snapshot block from
 // cv_match_details (the canonical place), (2) a thin fallback derived from
 // the older cv_match_details fields for candidates scored before v13.
+//
+// Completed-assessment payloads land at cv_job_match_details (with a deeper
+// prompt_analytics.cv_job_match.details fallback) — same resolver pattern as
+// getRoleFitPayload. We try assessment sources first so that re-scored
+// completed attempts win over stale application blobs.
 export const buildCandidateSnapshot = ({ application, completedAssessment } = {}) => {
   const detailsCandidates = [
+    completedAssessment?.cv_job_match_details,
+    completedAssessment?.prompt_analytics?.cv_job_match?.details,
     application?.cv_match_details,
-    completedAssessment?.cv_match_details,
   ].filter((item) => item && typeof item === 'object');
 
   for (const details of detailsCandidates) {

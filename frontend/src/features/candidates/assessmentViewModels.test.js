@@ -250,6 +250,57 @@ describe('assessmentViewModels', () => {
       expect(snapshot.yearsLabel).toBeNull();
     });
 
+    it('reads from completedAssessment.cv_job_match_details (and prompt_analytics fallback)', () => {
+      // Completed-assessment payloads land at cv_job_match_details, NOT
+      // cv_match_details. Mirrors the getRoleFitPayload resolver so a
+      // re-scored assessment is preferred over a stale application blob.
+      const snapshot = buildCandidateSnapshot({
+        application: {
+          cv_match_details: {
+            candidate_snapshot: {
+              years_experience: 3,
+              top_skills: ['stale-skill'],
+              timeline: [],
+            },
+          },
+        },
+        completedAssessment: {
+          cv_job_match_details: {
+            candidate_snapshot: {
+              years_experience: 8,
+              top_skills: ['fresh-skill'],
+              timeline: [{ company: 'New Co', role: 'Lead', start_year: 2024, is_current: true }],
+            },
+          },
+        },
+      });
+
+      expect(snapshot.yearsLabel).toBe('8 yrs');
+      expect(snapshot.topSkills).toEqual(['fresh-skill']);
+      expect(snapshot.timeline[0].company).toBe('New Co');
+    });
+
+    it('falls back to prompt_analytics.cv_job_match.details when cv_job_match_details is absent', () => {
+      const snapshot = buildCandidateSnapshot({
+        completedAssessment: {
+          prompt_analytics: {
+            cv_job_match: {
+              details: {
+                candidate_snapshot: {
+                  years_experience: 5,
+                  top_skills: ['nested-skill'],
+                  timeline: [],
+                },
+              },
+            },
+          },
+        },
+      });
+
+      expect(snapshot).not.toBeNull();
+      expect(snapshot.topSkills).toEqual(['nested-skill']);
+    });
+
     it('returns null when no usable data is present', () => {
       expect(buildCandidateSnapshot({ application: {} })).toBeNull();
       expect(buildCandidateSnapshot({ application: { cv_match_details: {} } })).toBeNull();
