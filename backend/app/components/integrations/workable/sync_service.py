@@ -1545,26 +1545,33 @@ class WorkableSyncService:
         for field, value in extracted.items():
             setattr(candidate, field, value)
 
-        # Fetch comments + activities on full enrichment. These often
-        # carry hard-constraint signal (salary expectation, notice period,
-        # location) that pre-screen needs to see to filter correctly.
-        # The client returns ``None`` on fetch failure (rate-limit handled
-        # via raise, other transport errors fall through) so we can
-        # distinguish "no data" from "couldn't reach Workable" — only
-        # the former should overwrite stored rows.
+        # Fetch the activity log on full enrichment. Workable's
+        # activities feed is the authoritative source for both timeline
+        # entries (stage transitions, assessment events, etc.) AND
+        # recruiter comments — there is no public ``GET`` on
+        # ``/candidates/:id/comments``. We split the response so the
+        # formatter can render comments and other activity types in
+        # separate <WORKABLE_*> blocks.
+        #
+        # ``None`` from the client means the fetch failed (rate-limit
+        # handled separately by re-raising). Only overwrite stored rows
+        # on a successful response so transient errors don't clobber.
         if mode == "full":
-            try:
-                comments = self.client.get_candidate_comments(candidate_id)
-                if comments is not None:
-                    candidate.workable_comments = sanitize_json_for_storage(comments)
-            except WorkableRateLimitError:
-                raise
-            except Exception:
-                logger.debug("Workable comments fetch failed for candidate_id=%s", candidate_id)
             try:
                 activities = self.client.get_candidate_activities(candidate_id)
                 if activities is not None:
-                    candidate.workable_activities = sanitize_json_for_storage(activities)
+                    comment_entries = [
+                        a for a in activities if a.get("action") == "comment"
+                    ]
+                    other_entries = [
+                        a for a in activities if a.get("action") != "comment"
+                    ]
+                    candidate.workable_comments = sanitize_json_for_storage(
+                        comment_entries
+                    )
+                    candidate.workable_activities = sanitize_json_for_storage(
+                        other_entries
+                    )
             except WorkableRateLimitError:
                 raise
             except Exception:

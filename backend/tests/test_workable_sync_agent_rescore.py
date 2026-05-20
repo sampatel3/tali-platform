@@ -26,9 +26,11 @@ _CANDIDATE_ID = "wk_cand_42"
 
 
 class _StubClient(WorkableService):
-    """Workable client stub that returns one comment per fetch.
-
-    Different comments across calls so the digest changes between syncs.
+    """Workable client stub that returns one comment-type activity per
+    fetch. Different comment bodies across calls so the digest changes
+    between syncs. The single ``get_candidate_activities`` call mirrors
+    production: Workable doesn't expose a GET on /candidates/:id/comments,
+    so comments arrive via the activities feed (``action="comment"``).
     """
 
     def __init__(self, comments_body: str):
@@ -38,11 +40,14 @@ class _StubClient(WorkableService):
     def get_candidate(self, candidate_id):
         return {"id": candidate_id, "name": "Alice"}
 
-    def get_candidate_comments(self, candidate_id):
-        return [{"body": self._comments_body, "member": {"name": "Recruiter"}}]
-
     def get_candidate_activities(self, candidate_id):
-        return []
+        return [
+            {
+                "action": "comment",
+                "body": self._comments_body,
+                "member": {"name": "Recruiter"},
+            }
+        ]
 
     def download_candidate_resume(self, payload):
         return None
@@ -204,18 +209,15 @@ def test_empty_comments_response_overwrites_stale_stored_comments(db):
     Previously ``if comments:`` skipped the assignment on empty lists,
     leaving stale data and silently breaking the rescore trigger."""
 
-    class EmptyCommentsClient(WorkableService):
+    class EmptyActivitiesClient(WorkableService):
         def __init__(self):
             super().__init__(access_token="x", subdomain="test")
 
         def get_candidate(self, cid):
             return {"id": cid, "name": "Alice"}
 
-        def get_candidate_comments(self, cid):
-            return []  # Recruiter cleared comments → empty list, NOT None
-
         def get_candidate_activities(self, cid):
-            return []
+            return []  # Recruiter cleared the candidate → empty feed (not None)
 
         def download_candidate_resume(self, p):
             return None
@@ -235,7 +237,7 @@ def test_empty_comments_response_overwrites_stale_stored_comments(db):
         {"body": "Initial comment", "member": {"name": "Recruiter"}}
     ]
 
-    service = WorkableSyncService(EmptyCommentsClient())
+    service = WorkableSyncService(EmptyActivitiesClient())
     service._sync_candidate_for_role(
         db=db, org=org, role=role,
         job={"id": role.workable_job_id, "shortcode": role.workable_job_id},
@@ -253,18 +255,15 @@ def test_none_comments_response_preserves_stale_stored_comments(db):
     keep the previously stored comments rather than clobber them with
     an empty list — that would lose data on every transient failure."""
 
-    class FailingCommentsClient(WorkableService):
+    class FailingActivitiesClient(WorkableService):
         def __init__(self):
             super().__init__(access_token="x", subdomain="test")
 
         def get_candidate(self, cid):
             return {"id": cid, "name": "Alice"}
 
-        def get_candidate_comments(self, cid):
-            return None  # Fetch failure
-
         def get_candidate_activities(self, cid):
-            return None
+            return None  # Fetch failure (rate-limit / 404 / transport)
 
         def download_candidate_resume(self, p):
             return None
@@ -282,7 +281,7 @@ def test_none_comments_response_preserves_stale_stored_comments(db):
     )
     original_comments = candidate.workable_comments
 
-    service = WorkableSyncService(FailingCommentsClient())
+    service = WorkableSyncService(FailingActivitiesClient())
     service._sync_candidate_for_role(
         db=db, org=org, role=role,
         job={"id": role.workable_job_id, "shortcode": role.workable_job_id},
@@ -293,6 +292,80 @@ def test_none_comments_response_preserves_stale_stored_comments(db):
     assert candidate.workable_comments == original_comments, (
         "fetch failure must not clobber stored comments"
     )
+
+
+def test_activities_split_into_comments_and_non_comments(db):
+    """The activities feed is the only source for both comments and
+    the rest of the timeline (Workable's API doesn't expose a GET on
+    /candidates/:id/comments). Sync must split ``action=='comment'``
+    entries into ``workable_comments`` and the rest into
+    ``workable_activities`` so the formatter renders them as distinct
+    <WORKABLE_*> blocks."""
+
+    class MixedActivitiesClient(WorkableService):
+        def __init__(self):
+            super().__init__(access_token="x", subdomain="test")
+
+        def get_candidate(self, cid):
+            return {"id": cid, "name": "Alice"}
+
+        def get_candidate_activities(self, cid):
+            return [
+                {
+                    "action": "comment",
+                    "body": "Phone screen: candidate asking for 65k.",
+                    "member": {"name": "Jade"},
+                    "created_at": "2026-02-13T08:57:45Z",
+                },
+                {
+                    "action": "applied",
+                    "stage_name": "Applied",
+                    "created_at": "2026-02-09T20:21:17Z",
+                },
+                {
+                    "action": "rating",
+                    "stage_name": "Applied",
+                    "body": "Auto-scored 92%",
+                    "created_at": "2026-02-10T10:00:00Z",
+                },
+                {
+                    "action": "comment",
+                    "body": "Confirmed UAE residency requirement.",
+                    "member": {"name": "Jade"},
+                    "created_at": "2026-02-14T09:00:00Z",
+                },
+            ]
+
+        def download_candidate_resume(self, p):
+            return None
+
+        def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
+            return None, None, None
+
+    org, role, candidate, _ = _build_org_role_candidate_app(
+        db,
+        org_slug="split-comments-activities",
+        agentic=False,
+        starred=True,
+        pre_screen_score=None,
+        cv_match_score=None,
+    )
+    service = WorkableSyncService(MixedActivitiesClient())
+    service._sync_candidate_for_role(
+        db=db, org=org, role=role,
+        job={"id": role.workable_job_id, "shortcode": role.workable_job_id},
+        candidate_ref={"id": _CANDIDATE_ID, "email": "a@x.test", "stage": "Phone Screen"},
+        now=datetime.now(timezone.utc), run=None, mode="full",
+    )
+    db.refresh(candidate)
+    assert candidate.workable_comments is not None
+    assert len(candidate.workable_comments) == 2
+    assert all(c.get("action") == "comment" for c in candidate.workable_comments)
+    assert "65k" in candidate.workable_comments[0]["body"]
+    # Non-comment activities land in the activities column.
+    assert candidate.workable_activities is not None
+    assert len(candidate.workable_activities) == 2
+    assert {a.get("action") for a in candidate.workable_activities} == {"applied", "rating"}
 
 
 def test_agent_on_role_skips_rescore_when_context_unchanged(db):
@@ -306,10 +379,15 @@ def test_agent_on_role_skips_rescore_when_context_unchanged(db):
         pre_screen_score=72.0,
         cv_match_score=85.0,
     )
-    # Pre-seed candidate with the comment the stub will return — same
-    # input twice, digest stable, no rescore.
+    # Pre-seed candidate with the same comment-shaped activity the stub
+    # will return (post-split shape, including the ``action`` field) so
+    # the before/after digests match exactly and no rescore fires.
     candidate.workable_comments = [
-        {"body": "Same comment", "member": {"name": "Recruiter"}}
+        {
+            "action": "comment",
+            "body": "Same comment",
+            "member": {"name": "Recruiter"},
+        }
     ]
     db.flush()
     with patch(
