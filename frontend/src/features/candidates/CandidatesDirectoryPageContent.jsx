@@ -2302,9 +2302,15 @@ export const CandidatesDirectoryPage = ({
                   const roleApplicationCount = Number(roleApplicationsByCandidateKey[candidateApplicationKey(application)] || 1);
                   const preScreenScore = resolvePreScreenScore(application);
                   const unifiedScore = resolveUnifiedScore(application);
-                  const cvMatchValue = Number.isFinite(Number(preScreenScore)) ? Math.round(Number(preScreenScore)) : null;
-                  const taaliScoreValue = Number.isFinite(Number(resolveTaaliScore(application)))
-                    ? Math.round(Number(resolveTaaliScore(application)))
+                  // ``Number(null) === 0`` and is finite — without an explicit
+                  // null/undefined guard, unscored candidates would render as
+                  // a literal "0" instead of "—".
+                  const cvMatchValue = preScreenScore != null && Number.isFinite(Number(preScreenScore))
+                    ? Math.round(Number(preScreenScore))
+                    : null;
+                  const taaliRaw = resolveTaaliScore(application);
+                  const taaliScoreValue = taaliRaw != null && Number.isFinite(Number(taaliRaw))
+                    ? Math.round(Number(taaliRaw))
                     : null;
                   const compositeMode = Boolean(application?.score_mode || application?.score_summary?.score_mode)
                     && (application?.score_mode || application?.score_summary?.score_mode) !== 'role_fit_only';
