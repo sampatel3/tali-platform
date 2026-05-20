@@ -177,9 +177,13 @@ const STATUS_TABS = [
   { id: 'all', label: 'All' },
 ];
 
+// 'advance' is a category — the backend expands it to advance_to_interview
+// + send_assessment + resend_assessment_invite. 'reject' and
+// 'skip_assessment_reject' map 1:1 to their decision_type so the Hub
+// distinguishes the pre-screen reject from a post-assessment reject.
 const TYPE_OPTIONS = [
   { id: '', label: 'All types' },
-  { id: 'advance_to_interview', label: 'Advance' },
+  { id: 'advance', label: 'Advance' },
   { id: 'reject', label: 'Reject' },
   { id: 'skip_assessment_reject', label: 'Reject (pre-screen)' },
 ];
@@ -196,7 +200,7 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction }) => (
       >
         <option value="">All roles</option>
         {roles.map((r) => (
-          <option key={r.role_id} value={r.role_id}>{r.short_name || r.name}</option>
+          <option key={r.role_id} value={r.role_id} title={r.name}>{r.name || r.short_name}</option>
         ))}
       </select>
       <select

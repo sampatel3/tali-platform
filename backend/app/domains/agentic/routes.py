@@ -39,6 +39,18 @@ from ...platform.database import get_db
 router = APIRouter(tags=["agentic"])
 
 
+# Filter shorthand: a single ``?type=advance`` lets the recruiter scope the
+# Hub to every forward-progress decision the agent emits (interview, send
+# assessment, resend assessment invite). Without this, the dropdown would
+# need three separate options for what reads as one concept. ``reject`` and
+# ``skip_assessment_reject`` stay 1:1 with their underlying decision_type —
+# the Hub draws a hard visual line between post- and pre-screen rejections,
+# and recruiters want to filter on that distinction.
+DECISION_TYPE_CATEGORIES: dict[str, list[str]] = {
+    "advance": ["advance_to_interview", "send_assessment", "resend_assessment_invite"],
+}
+
+
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
@@ -233,7 +245,8 @@ def list_agent_decisions(
             )
         )
     if decision_type:
-        query = query.filter(AgentDecision.decision_type == decision_type)
+        types = DECISION_TYPE_CATEGORIES.get(decision_type, [decision_type])
+        query = query.filter(AgentDecision.decision_type.in_(types))
     if since is not None:
         query = query.filter(AgentDecision.created_at >= since)
     if q:

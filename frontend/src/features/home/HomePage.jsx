@@ -124,18 +124,19 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     setLoadingDecisions(true);
     const ticket = ++reloadCounter.current;
     try {
-      // Pending sidebar always shows status=pending. The feed reflects
-      // the toolbar's status filter. When the user is on the default
-      // ('pending') view, both fetches would be identical — skip the
-      // duplicate and reuse the result.
-      const pendingParams = { status: 'pending', role_id: filters.role_id || undefined, limit: 100 };
+      // Pending sidebar always shows status=pending but honors the same
+      // role/type/search filters as the feed so the two columns describe
+      // the same slice. When the user is on the default ('pending') view,
+      // both fetches collapse into one — skip the duplicate.
+      const pendingParams = {
+        status: 'pending',
+        role_id: filters.role_id || undefined,
+        type: filters.type || undefined,
+        q: filters.q || undefined,
+        limit: 100,
+      };
       const feedParams = filtersToParams(filters);
-      const sameParams = (
-        feedParams.status === 'pending'
-        && (feedParams.role_id || undefined) === pendingParams.role_id
-        && !feedParams.type
-        && !feedParams.q
-      );
+      const sameParams = feedParams.status === 'pending';
       const [pendingRes, feedRes] = sameParams
         ? await (async () => {
           const res = await agentApi.listDecisions(pendingParams);
