@@ -235,6 +235,46 @@ def _render_role_intent(role: Role) -> str:
     return "\n".join(lines)
 
 
+def _render_recruiter_feedback_notes(role: Role) -> str:
+    """Render the recent recruiter feedback-note timeline for the role.
+
+    Distinct from ``role_intents``: these are append-only freeform
+    observations the recruiter writes when they notice a trend across
+    decisions. The agent reads them as standing guidance — alongside
+    structured intent, not in place of it. The full history lives in
+    Postgres + the role page UI; only the most-recent N are inlined
+    here (see ``role_feedback_notes.AGENT_VISIBLE_NOTE_LIMIT``).
+
+    Returns "" when no notes exist so the prompt shape stays stable
+    for roles that have never had feedback authored.
+    """
+    try:
+        from .role_feedback_notes import (
+            AGENT_VISIBLE_NOTE_BODY_CHARS,
+            list_for_agent,
+        )
+        from ..platform.database import SessionLocal
+        with SessionLocal() as db:
+            rows = list_for_agent(db, role_id=int(role.id))
+    except Exception:  # pragma: no cover — defensive
+        return ""
+    if not rows:
+        return ""
+    # Newest first — the recruiter's most recent observation is the
+    # one most likely to reflect the current cohort.
+    lines: list[str] = [
+        "RECRUITER FEEDBACK (newest first — standing guidance the recruiter",
+        "wrote about agent behaviour on this role; treat as policy hints):",
+    ]
+    for row in rows:
+        when = row.created_at.date() if row.created_at else "—"
+        body = (row.note or "").strip().replace("\n", " ")
+        if len(body) > AGENT_VISIBLE_NOTE_BODY_CHARS:
+            body = body[:AGENT_VISIBLE_NOTE_BODY_CHARS] + "…"
+        lines.append(f"- ({when}) {body}")
+    return "\n".join(lines)
+
+
 def build_system_prompt(
     *,
     role: Role,
@@ -248,6 +288,7 @@ def build_system_prompt(
     criteria_block = _render_bucketed_criteria(role)
     interview_focus = role.interview_focus or {}
     intent_block = _render_role_intent(role)
+    feedback_block = _render_recruiter_feedback_notes(role)
 
     role_block = (
         f"ROLE: {role.name} (id={role.id})\n"
@@ -255,6 +296,7 @@ def build_system_prompt(
         + (f"\n\n{criteria_block}" if criteria_block else "")
         + (f"\n\nINTERVIEW FOCUS HINTS: {interview_focus}" if interview_focus else "")
         + (f"\n\n{intent_block}" if intent_block else "")
+        + (f"\n\n{feedback_block}" if feedback_block else "")
     )
 
     calibration_block = (

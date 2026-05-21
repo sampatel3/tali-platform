@@ -22,6 +22,13 @@ export const roles = {
   syncCriteriaWithWorkspace: (roleId) => api.post(`/roles/${roleId}/criteria/sync`),
   resetCriteriaToWorkspace: (roleId) => api.post(`/roles/${roleId}/criteria/reset`),
   regenerateInterviewFocus: (roleId) => api.post(`/roles/${roleId}/regenerate-interview-focus`),
+  // Recruiter feedback notes — append-only freeform observations the
+  // recruiter writes about agent behaviour on this role. The agent
+  // inlines the most recent notes into its system prompt; the full
+  // history is the timeline UI's source of truth.
+  listFeedbackNotes: (roleId) => api.get(`/roles/${roleId}/feedback-notes`),
+  createFeedbackNote: (roleId, note) =>
+    api.post(`/roles/${roleId}/feedback-notes`, { note }),
   uploadJobSpec: (roleId, file) => {
     const form = new FormData();
     form.append('file', file);
