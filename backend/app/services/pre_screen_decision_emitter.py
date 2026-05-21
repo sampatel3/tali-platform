@@ -166,17 +166,33 @@ def backfill_existing_below_threshold(
     """One-shot: queue a pre-screen-reject decision for every application
     that's currently below threshold and doesn't already have one.
 
+    Two cohorts qualify:
+      * ``pre_screen_score_100 < 50`` with a numeric score — the original
+        case from the 270-stranded-candidates incident.
+      * ``pre_screen_recommendation = 'Below threshold'`` with NULL score
+        — covers candidates whose numeric score got invalidated (#209) or
+        who short-circuited on a must-have miss without an LLM call. The
+        recommendation is still authoritative; we shouldn't refuse to
+        surface them just because the cache-invalidation path nulled the
+        number.
+
     Intended to be invoked once after deploy so historical stranded
-    candidates (the 270 we found in prod) surface in the Review queue.
-    Idempotent — safe to re-run; each application gets at most one row
-    via the idempotency key.
+    candidates surface in the Review queue. Idempotent — safe to re-run;
+    each application gets at most one row via the idempotency key.
     """
+    from sqlalchemy import and_, or_
+
     q = (
         db.query(CandidateApplication, Role)
         .join(Role, Role.id == CandidateApplication.role_id)
         .filter(
-            CandidateApplication.pre_screen_score_100.isnot(None),
-            CandidateApplication.pre_screen_score_100 < 50,
+            or_(
+                and_(
+                    CandidateApplication.pre_screen_score_100.isnot(None),
+                    CandidateApplication.pre_screen_score_100 < 50,
+                ),
+                CandidateApplication.pre_screen_recommendation == "Below threshold",
+            ),
             CandidateApplication.application_outcome == "open",
             Role.deleted_at.is_(None),
             # Only agent-on roles. Agent-off roles aren't under agent

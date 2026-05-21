@@ -51,7 +51,22 @@ def evaluate_auto_reject_decision(
     snapshot = pre_screen_snapshot(app)
     config = resolved_auto_reject_config(org, role, db=db)
     score = snapshot["pre_screen_score"]
+    recommendation = snapshot.get("pre_screen_recommendation")
     threshold = config["threshold_100"]
+    # Two independent enabling paths:
+    #   1. Legacy Workable auto-disqualify — org-level workable_config
+    #      switch (``config['enabled']``). When on, the decider can route
+    #      to the Workable write-back path (caller gates on
+    #      ``role.auto_reject``).
+    #   2. Agent-driven HITL queueing — role-level ``agentic_mode_enabled``.
+    #      Even without org Workable config, the agent should surface
+    #      below-threshold candidates as Decision Hub cards. Without this,
+    #      orgs that haven't wired up the legacy Workable integration get
+    #      *zero* reject decisions queued — the exact failure mode we hit
+    #      in prod for DeepLight AI / role 31 (311 candidates stuck in
+    #      ``auto_reject_state='disabled'``).
+    agentic_eligible = bool(getattr(role, "agentic_mode_enabled", False)) if role is not None else False
+    enabled = bool(config["enabled"]) or agentic_eligible
 
     if app.application_outcome != "open":
         return {
@@ -61,7 +76,7 @@ def evaluate_auto_reject_decision(
             "config": config,
             "snapshot": snapshot,
         }
-    if not config["enabled"]:
+    if not enabled:
         return {
             "should_trigger": False,
             "state": "disabled",
@@ -69,7 +84,12 @@ def evaluate_auto_reject_decision(
             "config": config,
             "snapshot": snapshot,
         }
-    if threshold is None:
+    # ``recommendation`` already encodes the pre-screen verdict — when it
+    # says "Below threshold" we have a deterministic reject signal even if
+    # the numeric score was nulled by cache invalidation (#209) or the
+    # LLM short-circuited on a must-have miss. Don't require both.
+    rec_says_reject = isinstance(recommendation, str) and recommendation.strip().lower() == "below threshold"
+    if threshold is None and not rec_says_reject:
         return {
             "should_trigger": False,
             "state": "disabled",
@@ -77,7 +97,7 @@ def evaluate_auto_reject_decision(
             "config": config,
             "snapshot": snapshot,
         }
-    if score is None:
+    if score is None and not rec_says_reject:
         return {
             "should_trigger": False,
             "state": "pending_score",
@@ -85,7 +105,11 @@ def evaluate_auto_reject_decision(
             "config": config,
             "snapshot": snapshot,
         }
-    if not getattr(app, "workable_candidate_id", None):
+    # Workable link is only required for the legacy disqualify path. For
+    # the agent HITL queue, ``queue_pre_screen_reject`` writes a Decision
+    # Hub card; no Workable round-trip needed. Skip only when the org
+    # legacy path is the only enabling reason (= caller will try Workable).
+    if not getattr(app, "workable_candidate_id", None) and not agentic_eligible:
         return {
             "should_trigger": False,
             "state": "skipped",
@@ -94,7 +118,7 @@ def evaluate_auto_reject_decision(
             "snapshot": snapshot,
         }
 
-    if score >= threshold:
+    if score is not None and threshold is not None and score >= threshold:
         return {
             "should_trigger": False,
             "state": "not_triggered",
@@ -103,10 +127,15 @@ def evaluate_auto_reject_decision(
             "snapshot": snapshot,
         }
 
-    legacy_reason = (
-        f"Pre-screen score {score:.1f} is below configured threshold "
-        f"{threshold:.1f}"
-    )
+    if score is not None and threshold is not None:
+        legacy_reason = (
+            f"Pre-screen score {score:.1f} is below configured threshold "
+            f"{threshold:.1f}"
+        )
+    elif rec_says_reject:
+        legacy_reason = "Pre-screen recommendation: Below threshold"
+    else:
+        legacy_reason = "Below threshold"
     if db is None or role is None or org is None:
         return {
             "should_trigger": True,
@@ -121,7 +150,10 @@ def evaluate_auto_reject_decision(
             application_id=int(app.id),
             role_id=int(role.id),
             organization_id=int(org.id),
-            scores={"pre_screen_score": float(score)},
+            # Engine reads a numeric score; pass 0.0 when the deterministic
+            # path triggered via recommendation only so the policy rules
+            # still see the candidate as "below threshold".
+            scores={"pre_screen_score": float(score) if score is not None else 0.0},
             flags={
                 "pre_screen_auto_reject_eligible": True,
                 "no_pending_assessment": True,
