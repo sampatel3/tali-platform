@@ -10,7 +10,7 @@
 import React from 'react';
 import { Check, X } from 'lucide-react';
 
-import { Avatar, TypeBadge, formatRelativeAge, initialsFrom } from './atoms';
+import { Avatar, RolePill, TypeBadge, formatRelativeAge, initialsFrom } from './atoms';
 import { pathForPage } from '../../app/routing';
 
 // Import home.css here so any surface that renders <ActivityFeed />
@@ -84,16 +84,13 @@ export const ActivityFeed = ({
                       {row.candidate_name || `Application #${row.application_id}`}
                     </a>
                   </div>
-                  <div className="rq-stream-sub">
-                    <button
-                      type="button"
-                      className="rq-inline-link"
-                      style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer' }}
+                  <div className="rq-stream-sub" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <RolePill
+                      roleName={row.role_name}
+                      roleId={row.role_id}
                       onClick={(e) => { e.stopPropagation(); onNavigate?.('job-pipeline', { roleId: row.role_id }); }}
-                    >
-                      {row.role_name || `Role #${row.role_id}`}
-                    </button>
-                    {row.confidence != null ? <> · agent {Math.round(row.confidence * 100)}% confident</> : null}
+                    />
+                    {row.confidence != null ? <span>agent {Math.round(row.confidence * 100)}% confident</span> : null}
                   </div>
                   <div className="rq-stream-reason">{row.reasoning}</div>
                 </div>
@@ -131,6 +128,15 @@ export const ActivityFeed = ({
                   <span style={{ color: 'var(--mute)' }}> — {row.status} </span>
                   {row.resolution_note ? <span>· {row.resolution_note}</span> : null}
                 </div>
+                {(row.role_name || row.role_id != null) ? (
+                  <div style={{ marginTop: 4 }}>
+                    <RolePill
+                      roleName={row.role_name}
+                      roleId={row.role_id}
+                      onClick={() => onNavigate?.('job-pipeline', { roleId: row.role_id })}
+                    />
+                  </div>
+                ) : null}
               </div>
             </li>
           );
