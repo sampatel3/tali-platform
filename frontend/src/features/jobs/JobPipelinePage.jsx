@@ -2358,11 +2358,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 Sort: Score {tableSortBy === 'asc' ? '↑' : '↓'}
               </button>
               {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — primary
-                  recruiter action is the cascade Process flow (Fetch CVs
-                  → Pre-screen → Score → score), opened via
-                  ProcessCandidatesDialog. The label flips to a live
-                  status while the cascade is in flight, mirroring the
-                  BackgroundJobsToaster state. */}
+                  recruiter action: cascade Process opened via
+                  ProcessCandidatesDialog. Label flips live during runs. */}
               <button
                 type="button"
                 className="btn btn-purple btn-sm"
@@ -2374,23 +2371,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   const status = String(pj?.status || '').toLowerCase();
                   if (status === 'running') {
                     const step = pj?.current_step;
-                    const label = step === 'fetch' ? 'Fetching CVs'
-                      : step === 'pre_screen' ? 'Pre-screening'
-                      : step === 'score' ? 'Scoring'
-                      : 'Processing';
-                    return (
-                      <>
-                        <Loader2 size={12} className="animate-spin" />
-                        {label}…
-                      </>
-                    );
+                    const label = step === 'fetch' ? 'Fetching CVs' : step === 'pre_screen' ? 'Pre-screening' : step === 'score' ? 'Scoring' : 'Processing';
+                    return (<><Loader2 size={12} className="animate-spin" />{label}…</>);
                   }
-                  return (
-                    <>
-                      <Sparkles size={12} />
-                      Process {activeApplications.length} candidate{activeApplications.length === 1 ? '' : 's'}
-                    </>
-                  );
+                  const tabCount = tableStageFilter === 'rejected' ? rejectedApplications.length
+                    : tableStageFilter === 'all' ? activeApplications.length
+                    : activeApplications.filter((a) => String(a?.pipeline_stage || '').toLowerCase() === tableStageFilter).length;
+                  return (<><Sparkles size={12} />Process {tabCount} candidate{tabCount === 1 ? '' : 's'}</>);
                 })()}
               </button>
             </div>
@@ -2573,6 +2560,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         <ProcessCandidatesDialog
           open={processDialogOpen}
           roleId={numericRoleId}
+          stage={tableStageFilter}
+          stageLabel={tableStageFilter === 'all' ? null : tableStageFilter === 'rejected' ? 'Rejected' : (PIPELINE_STAGE_ORDER.find((s) => s.key === tableStageFilter)?.label || tableStageFilter)}
           onClose={() => setProcessDialogOpen(false)}
           onConfirm={async (body) => {
             try {

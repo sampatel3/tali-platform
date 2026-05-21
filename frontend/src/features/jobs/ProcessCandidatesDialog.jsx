@@ -26,6 +26,8 @@ export function ProcessCandidatesDialog({
   open,
   roleId,
   defaults,
+  stage,
+  stageLabel,
   onClose,
   onConfirm,
 }) {
@@ -82,6 +84,9 @@ export function ProcessCandidatesDialog({
           sync_graph: !!opts.sync_graph,
           refresh_graph: !!opts.refresh_graph,
         };
+        if (stage && stage !== 'all') {
+          body.stage = stage;
+        }
         const res = await rolesApi.processRole(roleId, body, { dry_run: true });
         setCounts(res?.data ?? null);
       } catch (err) {
@@ -92,7 +97,7 @@ export function ProcessCandidatesDialog({
       }
     }, 150);
     return () => clearTimeout(handle);
-  }, [open, opts, roleId, rolesApi]);
+  }, [open, opts, roleId, rolesApi, stage]);
 
   // If user picks Refresh pre-screen, force pre_screen on too (refresh implies running it).
   const setRefresh = (v) => {
@@ -141,7 +146,7 @@ export function ProcessCandidatesDialog({
       // supports. The earlier shape dropped sync_graph / refresh_graph
       // / refresh_cvs, which silently turned off the advanced toggles
       // the recruiter clicked.
-      await onConfirm?.({
+      const confirmBody = {
         fetch_cvs: !!opts.fetch_cvs,
         refresh_cvs: !!opts.refresh_cvs,
         pre_screen: !!opts.pre_screen,
@@ -149,7 +154,11 @@ export function ProcessCandidatesDialog({
         score: opts.score || 'none',
         sync_graph: !!opts.sync_graph,
         refresh_graph: !!opts.refresh_graph,
-      });
+      };
+      if (stage && stage !== 'all') {
+        confirmBody.stage = stage;
+      }
+      await onConfirm?.(confirmBody);
     } finally {
       setSubmitting(false);
     }
@@ -180,6 +189,22 @@ export function ProcessCandidatesDialog({
       <div className="process-dialog">
         {previewError ? (
           <div className="process-dialog__error" role="alert">{previewError}</div>
+        ) : null}
+        {stage && stage !== 'all' && stageLabel ? (
+          <div
+            className="process-dialog__scope"
+            style={{
+              padding: '8px 12px',
+              marginBottom: 12,
+              borderRadius: 6,
+              background: 'var(--purple-50, #f5f3ff)',
+              color: 'var(--purple-700, #6d28d9)',
+              fontSize: 12,
+              fontWeight: 500,
+            }}
+          >
+            Scoped to <strong>{stageLabel}</strong> only — other stages won't be touched.
+          </div>
         ) : null}
 
         {/* ── Fetch CVs ──────────────────────────────────────────────── */}
