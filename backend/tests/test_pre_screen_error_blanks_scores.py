@@ -109,6 +109,59 @@ def test_pre_screen_success_clears_prior_error_reason(db):
     assert app.pre_screen_score_100 > 0
 
 
+def test_pre_screen_error_does_not_stamp_run_at_so_retries_can_fire(db):
+    """Codex P1 #5: stamping ``pre_screen_run_at`` on error causes
+    ``application_needs_pre_screen`` to return False on the next
+    orchestrator pass — meaning transient Anthropic credit / network
+    failures become a stuck state until the candidate uploads a new
+    CV. The error path must NOT stamp the timestamp so the next tick
+    re-runs Stage-1 cleanly."""
+    from app.services.pre_screening_service import application_needs_pre_screen
+
+    org, role, _, app = make_full_application(db, cv_text=_CV, jd_text=_JD)
+    role.job_spec_text = _JD
+    # First attempt errors.
+    with patch(
+        "app.cv_matching.runner_pre_screen.run_pre_screen",
+        return_value=_ErroredLLMResult(),
+    ):
+        execute_pre_screen_only(app)
+
+    # The next orchestrator pass must see "needs pre-screen" — otherwise
+    # the candidate is stuck in the error state.
+    assert application_needs_pre_screen(app) is True
+    # And the score itself stays NULL (no leaked stale value).
+    assert app.pre_screen_score_100 is None
+    assert app.pre_screen_error_reason is not None
+
+
+def test_pre_screen_error_then_success_recovers_cleanly(db):
+    """End-to-end: error → retry succeeds → scores populated, error
+    reason cleared. This is the recovery path Codex P1 #1+#5 unlocks."""
+    org, role, _, app = make_full_application(db, cv_text=_CV, jd_text=_JD)
+    role.job_spec_text = _JD
+
+    # First attempt: error.
+    with patch(
+        "app.cv_matching.runner_pre_screen.run_pre_screen",
+        return_value=_ErroredLLMResult(),
+    ):
+        execute_pre_screen_only(app)
+    assert app.pre_screen_score_100 is None
+    assert app.pre_screen_error_reason is not None
+
+    # Second attempt: success.
+    with patch(
+        "app.cv_matching.runner_pre_screen.run_pre_screen",
+        return_value=_SuccessfulLLMResult(),
+    ):
+        result = execute_pre_screen_only(app)
+    assert result["status"] == "ok"
+    assert app.pre_screen_score_100 is not None
+    assert app.pre_screen_score_100 > 0
+    assert app.pre_screen_error_reason is None
+
+
 def test_pre_screen_none_score_treated_as_error(db):
     """``decision != "error"`` but ``score is None`` (malformed LLM JSON)
     must also be treated as an error, not a passthrough."""

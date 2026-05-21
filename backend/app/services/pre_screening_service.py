@@ -264,7 +264,12 @@ def _persist_pre_screen_error(
             "llm_score_100": None,
         }
     )
-    app.pre_screen_run_at = _utcnow()
+    # Deliberately DO NOT stamp ``pre_screen_run_at`` on error.
+    # ``application_needs_pre_screen`` keys off that timestamp to decide
+    # whether to re-run Stage-1; stamping on error would treat a failed
+    # attempt as "successfully screened" and prevent the next orchestrator
+    # pass from retrying (e.g. once Anthropic credits are restored). We
+    # want transient errors to self-heal on the next tick.
     # rank_score falls back to workable_score so the directory still
     # has *some* ordering signal — but never the stale agent score.
     app.rank_score = app.workable_score

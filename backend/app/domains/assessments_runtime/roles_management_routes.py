@@ -434,11 +434,17 @@ def _commit_role_criterion_change(
     db: Session,
     role: Role,
     *,
-    invalidate_scores: bool,
+    invalidate_scores: bool = True,
 ) -> None:
     """Commit a chip CRUD. Optionally NULLs every scored application's
     pre-screen + cv_match scores so the UI shows "needs rescore" until
     the agent re-evaluates against the new criteria.
+
+    ``invalidate_scores`` defaults to ``True`` (the historical, safe
+    behavior — invalidate on any change). Per-chip CRUD handlers
+    (create / update / delete) pass an explicit value computed from
+    the bucket transition; bulk workspace re-sync / reset handlers
+    pass nothing and get the safe default.
     """
     db.flush()
     if invalidate_scores:

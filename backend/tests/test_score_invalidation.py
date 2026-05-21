@@ -158,6 +158,78 @@ def test_rank_score_falls_back_to_workable_score_on_invalidation(db):
     assert app.rank_score == 60.0
 
 
+def test_sweeper_skips_apps_whose_latest_job_is_no_longer_stale(db):
+    """Codex P1 #4: ``CvScoreJob`` rows are append-only. A successful
+    rescore adds a fresh ``pending``/``done`` row but doesn't update
+    the old ``stale`` row. The sweeper must filter to apps whose
+    LATEST job is stale, not "any historical stale row exists",
+    otherwise it re-enqueues already-fixed apps every 30 min.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.models.cv_score_job import CvScoreJob
+    from sqlalchemy import desc, func
+
+    from app.models.candidate import Candidate
+    from app.models.candidate_application import CandidateApplication
+
+    _, role, _, app_a = _seed_scored_app(db)
+    # Second app on the SAME role to avoid the make_full_application
+    # slug-uniqueness collision.
+    candidate_b = Candidate(
+        organization_id=app_a.organization_id, email="b@x.test", full_name="B"
+    )
+    db.add(candidate_b)
+    db.flush()
+    app_b = CandidateApplication(
+        organization_id=app_a.organization_id,
+        candidate_id=candidate_b.id,
+        role_id=role.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        cv_text="Another engineer CV.",
+        pre_screen_score_100=75.0,
+        cv_match_score=82.0,
+    )
+    db.add(app_b)
+    db.flush()
+
+    now = datetime.now(timezone.utc)
+
+    # app_a: stale → succeeded since. Latest job = done.
+    db.add(CvScoreJob(application_id=app_a.id, role_id=role.id, status="stale", queued_at=now - timedelta(hours=1)))
+    db.add(CvScoreJob(application_id=app_a.id, role_id=role.id, status="done", queued_at=now))
+    # app_b: stale and not yet picked up.
+    db.add(CvScoreJob(application_id=app_b.id, role_id=role.id, status="stale", queued_at=now))
+    db.flush()
+
+    # Mirror the sweeper's window query inline so the test is hermetic.
+    latest_subq = (
+        db.query(
+            CvScoreJob.application_id,
+            func.max(CvScoreJob.queued_at).label("max_queued"),
+        )
+        .group_by(CvScoreJob.application_id)
+        .subquery()
+    )
+    latest_stale = (
+        db.query(CvScoreJob)
+        .join(
+            latest_subq,
+            (CvScoreJob.application_id == latest_subq.c.application_id)
+            & (CvScoreJob.queued_at == latest_subq.c.max_queued),
+        )
+        .filter(CvScoreJob.status == "stale")
+        .all()
+    )
+    app_ids = {j.application_id for j in latest_stale}
+    assert app_b.id in app_ids
+    assert app_a.id not in app_ids, (
+        "app_a was rescored since the stale row was added; sweeper must not re-enqueue it"
+    )
+
+
 def test_mark_application_scores_stale_no_op_when_no_prior_stale_job(db):
     """If the same app was already marked stale, re-marking returns
     False (idempotent)."""

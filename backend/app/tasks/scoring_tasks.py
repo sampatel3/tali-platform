@@ -373,17 +373,36 @@ def sweep_stale_scores(*, limit: int = 500) -> dict:
     skipped = 0
     examined = 0
     try:
-        # Case (a): app has a CvScoreJob with status='stale' that hasn't
-        # been picked up. Re-enqueue via the orchestrator so the worker
-        # runs pre-screen + cv_match end-to-end.
-        stale_app_ids = (
-            db.query(CvScoreJob.application_id)
+        # Find apps whose LATEST CvScoreJob row is ``status='stale'``.
+        # ``CvScoreJob`` rows are append-only — a successful rescore
+        # adds a new ``pending`` / ``running`` / ``done`` row instead
+        # of converting the old stale one — so naive
+        # ``status == "stale"`` queries would re-enqueue already-fixed
+        # apps every 30 min and burn token budget. The window query
+        # below scopes to the most-recent job per application.
+        from sqlalchemy import desc, func
+
+        latest_job_subq = (
+            db.query(
+                CvScoreJob.application_id,
+                func.max(CvScoreJob.queued_at).label("max_queued"),
+            )
+            .group_by(CvScoreJob.application_id)
+            .subquery()
+        )
+        latest_jobs = (
+            db.query(CvScoreJob)
+            .join(
+                latest_job_subq,
+                (CvScoreJob.application_id == latest_job_subq.c.application_id)
+                & (CvScoreJob.queued_at == latest_job_subq.c.max_queued),
+            )
             .filter(CvScoreJob.status == "stale")
-            .distinct()
+            .order_by(desc(CvScoreJob.queued_at))
             .limit(limit)
             .all()
         )
-        stale_app_ids = [row[0] for row in stale_app_ids if row[0]]
+        stale_app_ids = [j.application_id for j in latest_jobs if j.application_id]
 
         for app_id in stale_app_ids:
             examined += 1

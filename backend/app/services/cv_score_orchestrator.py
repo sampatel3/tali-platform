@@ -510,8 +510,14 @@ def _execute_scoring_v3(
             job.finished_at = now
             # Make sure no stale scores remain — pre-screen handler
             # already NULLs these, but defensive in case caller wired
-            # in via a different path.
+            # in via a different path. Critical: also clear
+            # ``cv_match_details`` so ``refresh_pre_screening_fields``
+            # (called downstream by the cache refresher) can't
+            # resurrect a stale pre-screen score from a prior run's
+            # ``cv_match_details['pre_screen_score_100']`` field — that
+            # would re-hide the error we're trying to surface.
             application.cv_match_score = None
+            application.cv_match_details = None
             application.cv_match_scored_at = None
             return
         # Only filter when we have a numeric score AND it's below threshold.
