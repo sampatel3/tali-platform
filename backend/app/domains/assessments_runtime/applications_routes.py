@@ -4219,6 +4219,19 @@ def _apply_stage_filter(query, stage_filter: str | None):
     return query
 
 
+def _apply_application_ids_filter(query, application_ids: list[int] | None):
+    """Narrow a CandidateApplication query to an explicit list of IDs.
+
+    Used when the recruiter ticks checkboxes on the candidate table and
+    clicks Process — the cascade only touches those rows. Overrides
+    stage_filter when both are present (the explicit selection wins).
+    ``None`` / empty list = no filter (callers apply stage_filter instead).
+    """
+    if not application_ids:
+        return query
+    return query.filter(CandidateApplication.id.in_(application_ids))
+
+
 def _process_dry_run(
     db: Session,
     *,
@@ -4232,6 +4245,7 @@ def _process_dry_run(
     sync_graph: bool = False,
     refresh_graph: bool = False,
     stage_filter: str | None = None,
+    application_ids: list[int] | None = None,
 ) -> dict:
     """Compute counts for each cascade step without starting the worker.
 
@@ -4243,7 +4257,8 @@ def _process_dry_run(
     ``stage_filter`` narrows the cascade to one segment of the candidate
     table (e.g. "advanced" to re-score only the 35 candidates the
     recruiter has already moved forward). ``None`` / ``"all"`` runs the
-    full role.
+    full role. ``application_ids`` is an explicit override — when set,
+    only those specific applications are processed (ignores stage_filter).
     """
     from ...services.pre_screening_service import application_needs_pre_screen
 
@@ -4256,7 +4271,10 @@ def _process_dry_run(
             CandidateApplication.deleted_at.is_(None),
         )
     )
-    apps_query = _apply_stage_filter(apps_query, stage_filter)
+    if application_ids:
+        apps_query = _apply_application_ids_filter(apps_query, application_ids)
+    else:
+        apps_query = _apply_stage_filter(apps_query, stage_filter)
     apps = apps_query.all()
 
     def has_cv(a):
@@ -4349,15 +4367,17 @@ def _process_dry_run(
                     and a.candidate_id is not None
                 ):
                     graph_targets.add(int(a.candidate_id))
-        # When the recruiter scoped the cascade to one stage, the graph
-        # sync count needs to match — otherwise the dialog claims it'll
-        # index hundreds of candidates that the cascade won't actually
-        # touch.
-        if stage_filter and stage_filter not in (None, "", "all"):
-            stage_candidate_ids = {
+        # When the recruiter scoped the cascade (via stage filter or
+        # explicit application_ids), the graph sync count needs to match
+        # — otherwise the dialog claims it'll index hundreds of
+        # candidates that the cascade won't actually touch. ``apps`` is
+        # already the scoped list, so we can derive the candidate-id
+        # ceiling from it.
+        if application_ids or (stage_filter and stage_filter not in (None, "", "all")):
+            scoped_candidate_ids = {
                 int(a.candidate_id) for a in apps if a.candidate_id is not None
             }
-            graph_targets = graph_targets & stage_candidate_ids
+            graph_targets = graph_targets & scoped_candidate_ids
         will_graph_sync = len(graph_targets)
 
     return {
@@ -4397,6 +4417,7 @@ def _run_process(
     sync_graph: bool = False,
     refresh_graph: bool = False,
     stage_filter: str | None = None,
+    application_ids: list[int] | None = None,
     user_id: int | None = None,
 ) -> None:
     """Background worker: cascade fetch → pre-screen → score → graph sync.
@@ -4407,7 +4428,9 @@ def _run_process(
 
     ``stage_filter`` narrows the cascade to one segment of the candidate
     table (``applied|invited|in_assessment|review|advanced|rejected``).
-    ``None`` / ``"all"`` runs the full role.
+    ``None`` / ``"all"`` runs the full role. ``application_ids`` is an
+    explicit override — when set, only those specific applications are
+    processed (stage_filter is ignored).
 
     Updates ``_process_progress[role_id]`` in real time so the status endpoint
     can report combined progress.
@@ -4447,7 +4470,10 @@ def _run_process(
                     CandidateApplication.source == "workable",
                 )
             )
-            fetch_query = _apply_stage_filter(fetch_query, stage_filter)
+            if application_ids:
+                fetch_query = _apply_application_ids_filter(fetch_query, application_ids)
+            else:
+                fetch_query = _apply_stage_filter(fetch_query, stage_filter)
             apps_to_fetch = fetch_query.all()
             # In refresh mode every Workable-sourced application gets re-
             # fetched regardless of whether a CV is already cached. The
@@ -4512,7 +4538,10 @@ def _run_process(
             apps = _select_pre_screen_targets(
                 db, role_id=role_id, organization_id=org_id, refresh=refresh_pre_screen
             )
-            if stage_filter and stage_filter != "all":
+            if application_ids:
+                _id_set = {int(i) for i in application_ids}
+                apps = [a for a in apps if a.id in _id_set]
+            elif stage_filter and stage_filter != "all":
                 apps = [a for a in apps if _matches_stage_filter(a, stage_filter)]
             progress["pre_screen"]["total"] = len(apps)
             _set_process_progress(role_id, progress)
@@ -4569,7 +4598,10 @@ def _run_process(
                     CandidateApplication.deleted_at.is_(None),
                 )
             )
-            apps_query = _apply_stage_filter(apps_query, stage_filter)
+            if application_ids:
+                apps_query = _apply_application_ids_filter(apps_query, application_ids)
+            else:
+                apps_query = _apply_stage_filter(apps_query, stage_filter)
             if not include_scored:
                 apps_query = apps_query.filter(CandidateApplication.cv_match_score.is_(None))
             apps = apps_query.all()
@@ -4655,12 +4687,12 @@ def _run_process(
                     refresh=refresh_graph,
                     role_id=role_id,
                 )
-                if stage_filter and stage_filter != "all":
-                    # Constrain to candidate_ids whose application is in the
-                    # selected stage — otherwise the recruiter who scoped
-                    # the cascade to "Advanced (35)" still pays for the
-                    # graph indexing of the other 308.
-                    stage_query = (
+                if application_ids or (stage_filter and stage_filter != "all"):
+                    # Constrain to candidate_ids whose application is in
+                    # the scoped selection — otherwise a recruiter who
+                    # ticked 5 boxes still pays for the graph indexing of
+                    # the other 300+.
+                    scope_query = (
                         db.query(CandidateApplication.candidate_id)
                         .filter(
                             CandidateApplication.role_id == role_id,
@@ -4669,9 +4701,12 @@ def _run_process(
                             CandidateApplication.candidate_id.isnot(None),
                         )
                     )
-                    stage_query = _apply_stage_filter(stage_query, stage_filter)
-                    stage_candidate_ids = {int(cid) for (cid,) in stage_query.all()}
-                    candidate_ids = [cid for cid in candidate_ids if int(cid) in stage_candidate_ids]
+                    if application_ids:
+                        scope_query = _apply_application_ids_filter(scope_query, application_ids)
+                    else:
+                        scope_query = _apply_stage_filter(scope_query, stage_filter)
+                    scoped_candidate_ids = {int(cid) for (cid,) in scope_query.all()}
+                    candidate_ids = [cid for cid in candidate_ids if int(cid) in scoped_candidate_ids]
                 progress["graph_sync"]["total"] = len(candidate_ids)
                 _set_process_progress(role_id, progress)
 
@@ -4781,6 +4816,37 @@ def process_role(
             detail="stage must be one of: all, applied, invited, in_assessment, review, advanced, rejected",
         )
     stage_filter = None if stage_filter_raw in (None, "all") else stage_filter_raw
+    # Optional explicit candidate selection — ticked checkboxes on the
+    # candidate table. Overrides stage_filter when both arrive. We
+    # validate ownership (role + org) here so a forged payload can't
+    # touch rows the recruiter doesn't own.
+    raw_ids = payload.get("application_ids")
+    application_ids: list[int] | None = None
+    if raw_ids:
+        if not isinstance(raw_ids, list):
+            raise HTTPException(status_code=400, detail="application_ids must be a list of integers")
+        try:
+            requested_ids = [int(x) for x in raw_ids]
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="application_ids must be integers")
+        if requested_ids:
+            owned = {
+                int(row.id)
+                for row in db.query(CandidateApplication.id)
+                .filter(
+                    CandidateApplication.id.in_(requested_ids),
+                    CandidateApplication.role_id == role_id,
+                    CandidateApplication.organization_id == current_user.organization_id,
+                    CandidateApplication.deleted_at.is_(None),
+                )
+                .all()
+            }
+            application_ids = [i for i in requested_ids if i in owned]
+            if not application_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail="None of the requested application_ids belong to this role",
+                )
     if score_mode not in ("none", "new", "all"):
         raise HTTPException(status_code=400, detail="score must be one of: none, new, all")
     if not (fetch_cvs or pre_screen or refresh_pre_screen or score_mode != "none" or sync_graph):
@@ -4802,9 +4868,11 @@ def process_role(
             sync_graph=sync_graph,
             refresh_graph=refresh_graph,
             stage_filter=stage_filter,
+            application_ids=application_ids,
         )
         counts["role_name"] = role.name
         counts["stage"] = stage_filter
+        counts["selected_count"] = len(application_ids) if application_ids else 0
         return counts
 
     # Already running for this role? Return the current state — UI can decide
@@ -4835,12 +4903,19 @@ def process_role(
             "sync_graph": sync_graph,
             "refresh_graph": refresh_graph,
             "stage_filter": stage_filter,
+            "application_ids": application_ids,
             "user_id": current_user.id,
         },
         daemon=True,
     )
     thread.start()
-    return {"status": "started", "role_name": role.name, "stage": stage_filter, **progress}
+    return {
+        "status": "started",
+        "role_name": role.name,
+        "stage": stage_filter,
+        "selected_count": len(application_ids) if application_ids else 0,
+        **progress,
+    }
 
 
 @router.get("/roles/{role_id}/process/status")

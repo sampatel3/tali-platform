@@ -28,6 +28,7 @@ export function ProcessCandidatesDialog({
   defaults,
   stage,
   stageLabel,
+  applicationIds,
   onClose,
   onConfirm,
 }) {
@@ -84,7 +85,9 @@ export function ProcessCandidatesDialog({
           sync_graph: !!opts.sync_graph,
           refresh_graph: !!opts.refresh_graph,
         };
-        if (stage && stage !== 'all') {
+        if (applicationIds && applicationIds.length > 0) {
+          body.application_ids = applicationIds;
+        } else if (stage && stage !== 'all') {
           body.stage = stage;
         }
         const res = await rolesApi.processRole(roleId, body, { dry_run: true });
@@ -97,7 +100,7 @@ export function ProcessCandidatesDialog({
       }
     }, 150);
     return () => clearTimeout(handle);
-  }, [open, opts, roleId, rolesApi, stage]);
+  }, [open, opts, roleId, rolesApi, stage, applicationIds]);
 
   // If user picks Refresh pre-screen, force pre_screen on too (refresh implies running it).
   const setRefresh = (v) => {
@@ -155,7 +158,9 @@ export function ProcessCandidatesDialog({
         sync_graph: !!opts.sync_graph,
         refresh_graph: !!opts.refresh_graph,
       };
-      if (stage && stage !== 'all') {
+      if (applicationIds && applicationIds.length > 0) {
+        confirmBody.application_ids = applicationIds;
+      } else if (stage && stage !== 'all') {
         confirmBody.stage = stage;
       }
       await onConfirm?.(confirmBody);
@@ -190,22 +195,15 @@ export function ProcessCandidatesDialog({
         {previewError ? (
           <div className="process-dialog__error" role="alert">{previewError}</div>
         ) : null}
-        {stage && stage !== 'all' && stageLabel ? (
-          <div
-            className="process-dialog__scope"
-            style={{
-              padding: '8px 12px',
-              marginBottom: 12,
-              borderRadius: 6,
-              background: 'var(--purple-50, #f5f3ff)',
-              color: 'var(--purple-700, #6d28d9)',
-              fontSize: 12,
-              fontWeight: 500,
-            }}
-          >
+        {applicationIds && applicationIds.length > 0 ? (
+          <div className="process-dialog__scope" style={{ padding: '8px 12px', marginBottom: 12, borderRadius: 6, background: 'var(--purple-50, #f5f3ff)', color: 'var(--purple-700, #6d28d9)', fontSize: 12, fontWeight: 500 }}>
+            Scoped to <strong>{applicationIds.length} selected candidate{applicationIds.length === 1 ? '' : 's'}</strong> — other rows won't be touched.
+          </div>
+        ) : (stage && stage !== 'all' && stageLabel ? (
+          <div className="process-dialog__scope" style={{ padding: '8px 12px', marginBottom: 12, borderRadius: 6, background: 'var(--purple-50, #f5f3ff)', color: 'var(--purple-700, #6d28d9)', fontSize: 12, fontWeight: 500 }}>
             Scoped to <strong>{stageLabel}</strong> only — other stages won't be touched.
           </div>
-        ) : null}
+        ) : null)}
 
         {/* ── Fetch CVs ──────────────────────────────────────────────── */}
         <label className="process-row">
