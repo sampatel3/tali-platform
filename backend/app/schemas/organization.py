@@ -19,6 +19,11 @@ class WorkableConfigBase(BaseModel):
     # that still send the field don't get rejected — it's a no-op.
     sync_interval_minutes: int = Field(default=15, ge=5, le=1440)
     invite_stage_name: str = Field(default="", min_length=0, max_length=200)
+    # Workable stage name to move candidates into when a recruiter approves
+    # ``advance_to_interview`` (post-assessment) or overrides to advance /
+    # skip-and-advance from the review queue. Empty = skip the Workable move
+    # and only update Tali's internal pipeline_stage.
+    advance_stage_name: str = Field(default="", min_length=0, max_length=200)
     auto_reject_enabled: bool = False
     workable_actor_member_id: Optional[str] = Field(default=None, max_length=200)
     workable_disqualify_reason_id: Optional[str] = Field(default=None, max_length=200)
@@ -34,6 +39,7 @@ class WorkableConfigUpdate(BaseModel):
     default_sync_mode: Optional[Literal["metadata", "full"]] = None
     sync_interval_minutes: Optional[int] = Field(default=None, ge=5, le=1440)
     invite_stage_name: Optional[str] = Field(default=None, min_length=0, max_length=200)
+    advance_stage_name: Optional[str] = Field(default=None, min_length=0, max_length=200)
     auto_reject_enabled: Optional[bool] = None
     workable_actor_member_id: Optional[str] = Field(default=None, max_length=200)
     workable_disqualify_reason_id: Optional[str] = Field(default=None, max_length=200)

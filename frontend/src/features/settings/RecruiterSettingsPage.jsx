@@ -426,6 +426,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     emailMode: 'manual_taali',
     defaultSyncMode: 'full',
     inviteStageName: '',
+    advanceStageName: '',
     autoRejectEnabled: false,
     workableActorMemberId: '',
     workableDisqualifyReasonId: '',
@@ -725,6 +726,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       emailMode: workableConfig.email_mode || 'manual_taali',
       defaultSyncMode: workableConfig.default_sync_mode || 'full',
       inviteStageName: workableConfig.invite_stage_name || '',
+      advanceStageName: workableConfig.advance_stage_name || '',
       autoRejectEnabled: Boolean(workableConfig.auto_reject_enabled),
       workableActorMemberId: workableConfig.workable_actor_member_id || '',
       workableDisqualifyReasonId: workableConfig.workable_disqualify_reason_id || '',
@@ -1147,6 +1149,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     const emailMode = workableForm.emailMode || 'manual_taali';
     const defaultSyncMode = workableForm.defaultSyncMode || 'full';
     const inviteStageName = String(workableForm.inviteStageName || '').trim();
+    const advanceStageName = String(workableForm.advanceStageName || '').trim();
     const autoRejectEnabled = Boolean(workableForm.autoRejectEnabled);
     const hasWriteScope = selectedWorkableScopes.includes('w_candidates');
     const workableActorMemberId = String(workableForm.workableActorMemberId || '').trim();
@@ -1176,6 +1179,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
           score_precedence: 'workable_first',
           default_sync_mode: defaultSyncMode,
           invite_stage_name: emailMode === 'workable_preferred_fallback_manual' ? inviteStageName : '',
+          advance_stage_name: advanceStageName,
           auto_reject_enabled: autoRejectEnabled,
           workable_actor_member_id: workableActorMemberId || null,
           workable_disqualify_reason_id: workableDisqualifyReasonId || null,
@@ -1704,6 +1708,18 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         onChange={(event) => setWorkableForm((prev) => ({ ...prev, inviteStageName: event.target.value }))}
                         placeholder="Assessment invited"
                       />
+                    </label>
+                    <label className="field">
+                      <span className="k">Advance stage name</span>
+                      <input
+                        list="workable-stage-options"
+                        value={workableForm.advanceStageName}
+                        onChange={(event) => setWorkableForm((prev) => ({ ...prev, advanceStageName: event.target.value }))}
+                        placeholder="Phone screen"
+                      />
+                      <span className="settings-inline-note">
+                        Where Tali should move candidates when you click <strong>Advance</strong> or <strong>Skip &amp; advance</strong> in the review queue. Leave empty to only update Tali&apos;s internal stage.
+                      </span>
                     </label>
                     <label className="field">
                       <span className="k">Workable actor member</span>

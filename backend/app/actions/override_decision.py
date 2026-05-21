@@ -25,7 +25,13 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..models.agent_decision import AgentDecision
+from ..models.candidate_application import CandidateApplication
+from ..models.organization import Organization
 from . import advance_stage, reject_application, send_assessment
+from ._workable_decision_summary import (
+    post_decision_summary_to_workable,
+    try_workable_advance,
+)
 from .types import ACTOR_RECRUITER, Actor
 
 
@@ -34,6 +40,12 @@ _OVERRIDE_DISPATCH_ACTIONS = {
     "advance",
     "skip_assessment_advance",
     "send_assessment",
+}
+_VERDICT_BY_OVERRIDE_ACTION = {
+    "reject": "rejected",
+    "advance": "advanced",
+    "skip_assessment_advance": "skip_advanced",
+    "send_assessment": "assessment_sent",
 }
 # Legacy override_action values that older clients pass — we still
 # accept them as no-op overrides (status=overridden, no side effect on
@@ -107,6 +119,28 @@ def run(
             idempotency_key=idempotency,
             metadata={**metadata, "override_action": override_action},
         )
+        _adv_app = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.id == int(decision.application_id),
+                CandidateApplication.organization_id == organization_id,
+            )
+            .first()
+        )
+        if _adv_app is not None:
+            _adv_org = (
+                db.query(Organization)
+                .filter(Organization.id == organization_id)
+                .first()
+            )
+            try_workable_advance(
+                db,
+                actor,
+                app=_adv_app,
+                org=_adv_org,
+                role=getattr(_adv_app, "role", None),
+                reason=(note or "").strip() or "Recruiter advanced via override",
+            )
     elif override_action == "send_assessment":
         send_result = send_assessment.run(
             db,
@@ -146,6 +180,44 @@ def run(
     decision.override_action = override_action
     decision.resolution_note = note
     decision.human_disposition = "overridden"
+
+    # Best-effort Workable activity note for any candidate-affecting
+    # override. No-op for the legacy hold / manual_review / None branch
+    # (those don't change candidate state, so they don't need a Workable
+    # audit entry).
+    verdict = _VERDICT_BY_OVERRIDE_ACTION.get(override_action or "")
+    if verdict:
+        _app = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.id == int(decision.application_id),
+                CandidateApplication.organization_id == organization_id,
+            )
+            .first()
+        )
+        if _app is not None:
+            _org = (
+                db.query(Organization)
+                .filter(Organization.id == organization_id)
+                .first()
+            )
+            try:
+                post_decision_summary_to_workable(
+                    db,
+                    actor,
+                    app=_app,
+                    org=_org,
+                    decision=decision,
+                    verdict=verdict,
+                    override_action=override_action,
+                    reason=note,
+                )
+            except Exception:
+                import logging
+                logging.getLogger("taali.actions.override_decision").warning(
+                    "decision-summary post raised for decision_id=%s",
+                    getattr(decision, "id", None),
+                )
 
     # Phase 2 §6.7: emit a recruiter-action episode. The override
     # action (what the recruiter manually did instead) rides in the
