@@ -22,6 +22,10 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from ..components.integrations.claude.model_fallback import (
+    candidate_models_for,
+    is_model_not_found_error,
+)
 from ..models.org_criterion import (
     BUCKET_CONSTRAINT,
     BUCKET_MUST,
@@ -118,27 +122,49 @@ def parse_intent_text_to_chips(
         existing_chip_texts=existing_chip_texts or [],
     )
 
-    try:
-        response = client.messages.create(
-            model=model_version,
-            max_tokens=512,
-            temperature=0,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
-            # The metered Anthropic wrapper auto-writes a usage_event from
-            # response.usage. Pass Feature.OTHER (not a custom string —
-            # record_event would raise on conversion) and tag the sub-agent
-            # in metadata for attribution.
-            metering={
-                "feature": Feature.OTHER,
-                "organization_id": int(organization_id),
-                "role_id": int(role.id),
-                "metadata": {"sub_agent": "intent_chip_parser"},
-                "db": db,
-            },
+    # The configured scoring model can resolve to a retired alias (e.g.
+    # `claude-3-5-haiku-latest`) on some orgs. Mirror interview_focus's
+    # fallback chain so a stale config doesn't silently drop chip parsing.
+    last_exc: Exception | None = None
+    response = None
+    for candidate_model in candidate_models_for(model_version):
+        try:
+            response = client.messages.create(
+                model=candidate_model,
+                max_tokens=512,
+                temperature=0,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_message}],
+                # The metered Anthropic wrapper auto-writes a usage_event
+                # from response.usage. Use Feature.OTHER (a custom string
+                # would raise inside record_event's Feature() conversion)
+                # and tag the sub-agent in metadata for attribution.
+                metering={
+                    "feature": Feature.OTHER,
+                    "organization_id": int(organization_id),
+                    "role_id": int(role.id),
+                    "metadata": {"sub_agent": "intent_chip_parser"},
+                    "db": db,
+                },
+            )
+            if candidate_model != model_version:
+                logger.warning(
+                    "intent_chip_parser fell back to model=%s after primary=%s was unavailable",
+                    candidate_model,
+                    model_version,
+                )
+            break
+        except Exception as exc:
+            if is_model_not_found_error(exc):
+                last_exc = exc
+                continue
+            logger.warning("intent_chip_parser Claude call failed: %s", exc)
+            return []
+    if response is None:
+        logger.warning(
+            "intent_chip_parser exhausted model fallbacks (last error: %s)",
+            last_exc,
         )
-    except Exception as exc:
-        logger.warning("intent_chip_parser Claude call failed: %s", exc)
         return []
 
     try:
