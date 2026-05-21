@@ -42,6 +42,7 @@ def run(
     organization_id: int,
     decision_id: int,
     note: Optional[str] = None,
+    workable_target_stage: Optional[str] = None,
 ) -> AgentDecision:
     if actor.type != ACTOR_RECRUITER:
         raise HTTPException(status_code=403, detail="approve is recruiter-only")
@@ -98,7 +99,13 @@ def run(
         )
         if app is not None:
             try_workable_advance(
-                db, actor, app=app, org=org, role=role, reason=reason
+                db,
+                actor,
+                app=app,
+                org=org,
+                role=role,
+                target_stage=workable_target_stage,
+                reason=reason,
             )
     elif decision.decision_type in _REJECT_DECISION_TYPES:
         reject_application.run(

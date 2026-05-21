@@ -65,6 +65,7 @@ def run(
     decision_id: int,
     override_action: Optional[str] = None,
     note: Optional[str] = None,
+    workable_target_stage: Optional[str] = None,
 ) -> AgentDecision:
     if actor.type != ACTOR_RECRUITER:
         raise HTTPException(status_code=403, detail="override is recruiter-only")
@@ -139,6 +140,7 @@ def run(
                 app=_adv_app,
                 org=_adv_org,
                 role=getattr(_adv_app, "role", None),
+                target_stage=workable_target_stage,
                 reason=(note or "").strip() or "Recruiter advanced via override",
             )
     elif override_action == "send_assessment":

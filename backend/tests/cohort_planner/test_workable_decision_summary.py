@@ -54,14 +54,13 @@ def _make_decision(db, org, role, app, decision_type: str = "send_assessment") -
     return d
 
 
-def _enable_workable(db, org, *, advance_stage: str = "") -> None:
+def _enable_workable(db, org) -> None:
     org.workable_connected = True
     org.workable_access_token = "tok"
     org.workable_subdomain = "acme"
     org.workable_config = {
         "granted_scopes": ["r_jobs", "r_candidates", "w_candidates"],
         "workable_actor_member_id": "member-1",
-        "advance_stage_name": advance_stage,
     }
     db.flush()
 
@@ -255,11 +254,11 @@ def test_post_summary_records_failure_event_on_api_error(db, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_try_advance_skips_silently_when_advance_stage_unset(db, monkeypatch):
-    """No advance_stage_name → log an event, don't call the move API."""
+def test_try_advance_skips_silently_when_target_stage_empty(db, monkeypatch):
+    """Recruiter didn't pick a stage → no Workable call, returns False."""
     org, role, _, app = make_world(db)
     user = _make_user(db, org)
-    _enable_workable(db, org, advance_stage="")
+    _enable_workable(db, org)
     app.workable_candidate_id = "wc-123"
     db.flush()
     monkeypatch.setattr(platform_config.settings, "MVP_DISABLE_WORKABLE", False)
@@ -268,17 +267,24 @@ def test_try_advance_skips_silently_when_advance_stage_unset(db, monkeypatch):
         "app.services.workable_actions_service.move_candidate_in_workable"
     ) as mock_move:
         ok = wds.try_workable_advance(
-            db, Actor.recruiter(user), app=app, org=org, role=role, reason="r"
+            db,
+            Actor.recruiter(user),
+            app=app,
+            org=org,
+            role=role,
+            target_stage=None,
+            reason="r",
         )
 
     assert ok is False
     assert not mock_move.called
 
 
-def test_try_advance_calls_move_when_configured(db, monkeypatch):
+def test_try_advance_calls_move_with_recruiter_pick(db, monkeypatch):
+    """Recruiter passes a target_stage → move_candidate_in_workable gets it."""
     org, role, _, app = make_world(db)
     user = _make_user(db, org)
-    _enable_workable(db, org, advance_stage="Phone screen")
+    _enable_workable(db, org)
     app.workable_candidate_id = "wc-123"
     db.flush()
     monkeypatch.setattr(platform_config.settings, "MVP_DISABLE_WORKABLE", False)
@@ -298,6 +304,7 @@ def test_try_advance_calls_move_when_configured(db, monkeypatch):
             app=app,
             org=org,
             role=role,
+            target_stage="Phone screen",
             reason="Advanced via override",
         )
 
@@ -323,7 +330,7 @@ def test_approve_advance_to_interview_invokes_advance_and_summary(db, monkeypatc
     org, role, _, app = make_world(db, pre_screen=85.0)
     decision = _make_decision(db, org, role, app, decision_type="advance_to_interview")
     user = _make_user(db, org)
-    _enable_workable(db, org, advance_stage="Phone screen")
+    _enable_workable(db, org)
     app.workable_candidate_id = "wc-123"
     db.flush()
     monkeypatch.setattr(platform_config.settings, "MVP_DISABLE_WORKABLE", False)
@@ -347,12 +354,15 @@ def test_approve_advance_to_interview_invokes_advance_and_summary(db, monkeypatc
                 organization_id=int(org.id),
                 decision_id=int(decision.id),
                 note="Strong fit",
+                workable_target_stage="Phone screen",
             )
     finally:
         advance_stage_action.run = original_advance
 
     assert mock_advance.called, "advance_to_interview must trigger Workable move"
     assert mock_summary.called, "advance_to_interview must post Workable comment"
+    advance_kwargs = mock_advance.call_args.kwargs
+    assert advance_kwargs["target_stage"] == "Phone screen"
     summary_kwargs = mock_summary.call_args.kwargs
     assert summary_kwargs["verdict"] == "advanced"
     assert summary_kwargs["reason"] == "Strong fit"
@@ -370,7 +380,7 @@ def test_approve_reject_decision_invokes_summary_without_advance(
     org, role, _, app = make_world(db, pre_screen=42.0)
     decision = _make_decision(db, org, role, app, decision_type="reject")
     user = _make_user(db, org)
-    _enable_workable(db, org, advance_stage="Phone screen")
+    _enable_workable(db, org)
     app.workable_candidate_id = "wc-123"
     db.flush()
     monkeypatch.setattr(platform_config.settings, "MVP_DISABLE_WORKABLE", False)
@@ -410,7 +420,7 @@ def test_override_skip_assessment_advance_invokes_advance_and_summary(
     org, role, _, app = make_world(db, pre_screen=78.0)
     decision = _make_decision(db, org, role, app, decision_type="send_assessment")
     user = _make_user(db, org)
-    _enable_workable(db, org, advance_stage="Phone screen")
+    _enable_workable(db, org)
     app.workable_candidate_id = "wc-123"
     db.flush()
     monkeypatch.setattr(platform_config.settings, "MVP_DISABLE_WORKABLE", False)
@@ -431,11 +441,14 @@ def test_override_skip_assessment_advance_invokes_advance_and_summary(
                 decision_id=int(decision.id),
                 override_action="skip_assessment_advance",
                 note="Internal referral",
+                workable_target_stage="Phone screen",
             )
     finally:
         advance_stage_action.run = original_advance
 
     assert mock_advance.called, "skip & advance must call try_workable_advance"
+    advance_kwargs = mock_advance.call_args.kwargs
+    assert advance_kwargs["target_stage"] == "Phone screen"
     assert mock_summary.called
     kwargs = mock_summary.call_args.kwargs
     assert kwargs["verdict"] == "skip_advanced"
@@ -451,7 +464,7 @@ def test_override_legacy_no_op_skips_summary(db, monkeypatch):
     org, role, _, app = make_world(db)
     decision = _make_decision(db, org, role, app)
     user = _make_user(db, org)
-    _enable_workable(db, org, advance_stage="Phone screen")
+    _enable_workable(db, org)
     app.workable_candidate_id = "wc-123"
     db.flush()
     monkeypatch.setattr(platform_config.settings, "MVP_DISABLE_WORKABLE", False)

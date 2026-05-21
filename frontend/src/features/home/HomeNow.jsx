@@ -21,7 +21,7 @@ import {
   X,
 } from 'lucide-react';
 
-import { agent as agentApi } from '../../shared/api';
+import { agent as agentApi, organizations as orgsApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import { pathForPage } from '../../app/routing';
 import {
@@ -70,16 +70,31 @@ const DECISION_ACTIONS = {
         icon: ArrowRight,
         kicker: 'SKIP ASSESSMENT',
         headline: 'Skip the assessment and advance {name}?',
-        body: 'Moves them to the next Workable stage without sending the assessment email.',
+        body: 'Pick the Workable stage to move them into. Skips the assessment email.',
         confirmLabel: 'Advance',
         confirmClass: 'rq-approve',
         placeholder: 'e.g. Internal referral — pre-vetted, no need for an assessment',
+        requireStagePick: true,
       },
     ],
   },
   advance_to_interview: {
     primaryLabel: 'Advance to next stage',
     primaryIcon: ArrowRight,
+    // The primary "Advance" no longer fires immediately — it opens the
+    // shared OverrideModal in ``approve`` mode so the recruiter picks the
+    // target Workable stage (and can add an optional note). This matches
+    // the candidate-drawer flow on the Jobs page.
+    primary: {
+      mode: 'approve',
+      kicker: 'ADVANCE',
+      headline: 'Advance {name} to the next stage?',
+      body: 'Pick the Workable stage to move them into. A short summary + 30-day report link is posted to Workable.',
+      confirmLabel: 'Advance',
+      confirmClass: 'rq-approve',
+      placeholder: 'Optional note for the audit trail',
+      requireStagePick: true,
+    },
     alternatives: [
       {
         action: 'reject',
@@ -114,9 +129,10 @@ const DECISION_ACTIONS = {
         icon: ArrowRight,
         kicker: 'OVERRIDE TO ADVANCE',
         headline: 'Advance {name} instead?',
-        body: "Moves them to the next Workable stage without sending the rejection email.",
+        body: "Pick the Workable stage to move them into. Skips the rejection email.",
         confirmLabel: 'Advance',
         confirmClass: 'rq-approve',
+        requireStagePick: true,
       },
     ],
   },
@@ -155,9 +171,10 @@ const DECISION_ACTIONS = {
         icon: ArrowRight,
         kicker: 'SKIP ASSESSMENT',
         headline: 'Skip the assessment and advance {name}?',
-        body: 'Moves them to the next Workable stage without resending the invite.',
+        body: 'Pick the Workable stage to move them into. Skips resending the invite.',
         confirmLabel: 'Advance',
         confirmClass: 'rq-approve',
+        requireStagePick: true,
       },
     ],
   },
@@ -520,15 +537,53 @@ export const HomeNow = ({
   const [busyId, setBusyId] = useState(null);
   const [teachFor, setTeachFor] = useState(null);
   // Alternative-action confirmation modal target. When set, OverrideModal
-  // is rendered with the decision + the chosen alternative spec.
+  // is rendered with the decision + the chosen alternative spec. Used for
+  // both override flows (Reject / Skip & advance / Advance instead) AND
+  // the primary Advance-to-interview confirmation (mode: 'approve').
   const [alternativeFor, setAlternativeFor] = useState(null);
+  // Workable stages keyed by role shortcode. Loaded lazily once per role
+  // so the picker is ready when the modal opens. Failures fall back to
+  // an empty list — the modal shows a "no stages found" placeholder.
+  const [stagesByShortcode, setStagesByShortcode] = useState({});
 
   const selected = useMemo(
     () => decisions.find((d) => d.id === selectedId) || pendingOrdered[0] || null,
     [decisions, selectedId, pendingOrdered],
   );
 
+  // Lazy-fetch the selected decision's role stages when it's an advance-
+  // flavored decision. Cached by shortcode so switching between two
+  // decisions on the same role only fetches once.
+  useEffect(() => {
+    const shortcode = selected?.workable_job_id;
+    if (!shortcode) return undefined;
+    if (stagesByShortcode[shortcode] !== undefined) return undefined;
+    let cancelled = false;
+    setStagesByShortcode((prev) => ({ ...prev, [shortcode]: [] })); // optimistic placeholder to dedupe in-flight
+    orgsApi
+      .getWorkableStages({ shortcode })
+      .then((res) => {
+        if (cancelled) return;
+        const list = Array.isArray(res?.data?.stages) ? res.data.stages : [];
+        setStagesByShortcode((prev) => ({ ...prev, [shortcode]: list }));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setStagesByShortcode((prev) => ({ ...prev, [shortcode]: [] }));
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.workable_job_id]);
+
   const handleApprove = async (decision) => {
+    // ``advance_to_interview`` opens the same confirmation modal as the
+    // overrides — the recruiter picks the Workable target stage there.
+    // Every other decision_type still fires immediately on click.
+    const spec = DECISION_ACTIONS[decision.decision_type];
+    if (spec?.primary) {
+      setAlternativeFor({ decision, alternative: spec.primary });
+      return;
+    }
     setBusyId(decision.id);
     try {
       await agentApi.approveDecision(decision.id, {});
@@ -714,6 +769,7 @@ export const HomeNow = ({
         <OverrideModal
           decision={alternativeFor.decision}
           alternative={alternativeFor.alternative}
+          workableStages={stagesByShortcode[alternativeFor.decision?.workable_job_id] || []}
           onClose={() => setAlternativeFor(null)}
           onSubmitted={async () => {
             showToast?.(
