@@ -619,6 +619,36 @@ def admin_cancel_all_scoring(request: Request):
         db.close()
 
 
+@app.post("/admin/pre-screen-rejects/backfill")
+def admin_backfill_pre_screen_rejects(request: Request, organization_id: int | None = None):
+    """Surface stranded below-threshold candidates as Decision Hub cards.
+
+    Calls ``backfill_existing_below_threshold`` (idempotent — re-running
+    creates at most one decision per application). Optional
+    ``organization_id`` query param scopes to a single org; omit to run
+    org-wide. Auth via ``X-Admin-Secret``.
+
+    Returns ``{created, skipped_existing, failed}``.
+    """
+    from .platform.config import settings as _settings
+    from .platform.database import SessionLocal
+    from .services.pre_screen_decision_emitter import backfill_existing_below_threshold
+
+    admin_secret = getattr(_settings, "ADMIN_SECRET", "") or ""
+    provided = request.headers.get("X-Admin-Secret", "")
+    if not admin_secret or provided != admin_secret:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    db = SessionLocal()
+    try:
+        result = backfill_existing_below_threshold(
+            db, organization_id=organization_id
+        )
+        return {"ok": True, **result}
+    finally:
+        db.close()
+
+
 @app.get("/admin/graphiti/search-debug")
 def graphiti_search_debug(request: Request):
     """Raw Graphiti search result shape for debugging the graph view."""

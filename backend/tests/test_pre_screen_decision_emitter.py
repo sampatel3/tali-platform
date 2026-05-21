@@ -191,3 +191,164 @@ def test_backfill_creates_decisions_for_existing_below_threshold(db):
     summary2 = backfill_existing_below_threshold(db, organization_id=int(org.id))
     assert summary2["created"] == 0
     assert summary2["skipped_existing"] == 3
+
+
+def test_backfill_picks_up_null_score_below_threshold_recommendation(db):
+    """Cache invalidation (#209) nulled ``pre_screen_score_100`` for some
+    apps but left ``pre_screen_recommendation='Below threshold'`` set.
+    The backfill must surface these — that's the bug that left 250
+    candidates stuck in the DeepLight AI / role 31 incident.
+    """
+    org = Organization(name="NullScore Org", slug=f"ns-{id(db)}")
+    db.add(org); db.flush()
+    role = Role(organization_id=org.id, name="R", source="manual", auto_reject=False, agentic_mode_enabled=True)
+    db.add(role); db.flush()
+    # Two apps: one with NULL score + "Below threshold" rec (should be
+    # caught), one with NULL score + None rec (should be skipped — could
+    # be a candidate that hasn't been pre-screened at all yet).
+    for idx, (rec, expected_caught) in enumerate(
+        [("Below threshold", True), (None, False)]
+    ):
+        cand = Candidate(organization_id=org.id, email=f"n{idx}@x.test", full_name=f"N{idx}")
+        db.add(cand); db.flush()
+        db.add(
+            CandidateApplication(
+                organization_id=org.id,
+                candidate_id=cand.id,
+                role_id=role.id,
+                status="applied",
+                pipeline_stage="review",
+                pipeline_stage_source="recruiter",
+                application_outcome="open",
+                source="manual",
+                pre_screen_score_100=None,
+                pre_screen_recommendation=rec,
+            )
+        )
+    db.commit()
+
+    summary = backfill_existing_below_threshold(db, organization_id=int(org.id))
+    assert summary["created"] == 1  # only the "Below threshold" rec row
+    assert summary["failed"] == 0
+
+
+def test_evaluate_auto_reject_triggers_on_agentic_mode_without_org_workable_flag(db):
+    """The legacy org-level ``workable_config.auto_reject_enabled`` flag
+    used to be the only enabling gate, so orgs that never wired up
+    Workable auto-disqualify got *zero* reject decisions even with
+    ``role.agentic_mode_enabled=True``. The HITL queue path must work
+    independently of the legacy flag.
+    """
+    from app.decision_policy.auto_reject import evaluate_auto_reject_decision
+
+    org = Organization(name="No Workable", slug=f"nw-{id(db)}")
+    org.workable_config = {}  # auto_reject_enabled absent / falsy
+    db.add(org); db.flush()
+    role = Role(
+        organization_id=org.id,
+        name="R",
+        source="manual",
+        auto_reject=False,
+        agentic_mode_enabled=True,
+        score_threshold=50,
+    )
+    db.add(role); db.flush()
+    cand = Candidate(organization_id=org.id, email="x@x.test", full_name="X", workable_candidate_id="wid-1")
+    db.add(cand); db.flush()
+    app = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=cand.id,
+        role_id=role.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+        pre_screen_score_100=20.0,
+        cv_match_score=20.0,
+        pre_screen_recommendation="Below threshold",
+    )
+    db.add(app); db.commit()
+
+    verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
+    assert verdict["should_trigger"] is True, verdict
+    assert verdict["state"] == "eligible"
+
+
+def test_evaluate_auto_reject_triggers_on_null_score_with_below_threshold_rec(db):
+    """Cache-invalidated rows (NULL score, but recommendation says 'Below
+    threshold') must still trigger so the recruiter gets the card.
+    """
+    from app.decision_policy.auto_reject import evaluate_auto_reject_decision
+
+    org = Organization(name="O", slug=f"o-{id(db)}")
+    db.add(org); db.flush()
+    role = Role(
+        organization_id=org.id,
+        name="R",
+        source="manual",
+        auto_reject=False,
+        agentic_mode_enabled=True,
+        score_threshold=50,
+    )
+    db.add(role); db.flush()
+    cand = Candidate(organization_id=org.id, email="x@x.test", full_name="X", workable_candidate_id="wid-1")
+    db.add(cand); db.flush()
+    app = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=cand.id,
+        role_id=role.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+        pre_screen_score_100=None,
+        pre_screen_recommendation="Below threshold",
+    )
+    db.add(app); db.commit()
+
+    verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
+    assert verdict["should_trigger"] is True, verdict
+    assert verdict["state"] == "eligible"
+
+
+def test_evaluate_auto_reject_does_not_trigger_when_score_above_threshold(db):
+    """Sanity: a strong match (score above threshold) must NOT trigger
+    even though ``agentic_mode_enabled`` is on.
+    """
+    from app.decision_policy.auto_reject import evaluate_auto_reject_decision
+
+    org = Organization(name="O", slug=f"o-{id(db)}")
+    db.add(org); db.flush()
+    role = Role(
+        organization_id=org.id,
+        name="R",
+        source="manual",
+        auto_reject=False,
+        agentic_mode_enabled=True,
+        score_threshold=50,
+    )
+    db.add(role); db.flush()
+    cand = Candidate(organization_id=org.id, email="x@x.test", full_name="X", workable_candidate_id="wid-1")
+    db.add(cand); db.flush()
+    app = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=cand.id,
+        role_id=role.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+        pre_screen_score_100=75.0,
+        # ``pre_screen_snapshot`` reads ``cv_match_score`` first; mirror
+        # the score there so the evaluator sees a numeric value.
+        cv_match_score=75.0,
+        pre_screen_recommendation="Proceed to screening",
+    )
+    db.add(app); db.commit()
+
+    verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
+    assert verdict["should_trigger"] is False
+    assert verdict["state"] == "not_triggered"
