@@ -22,10 +22,6 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from ..components.integrations.claude.model_fallback import (
-    candidate_models_for,
-    is_model_not_found_error,
-)
 from ..models.org_criterion import (
     BUCKET_CONSTRAINT,
     BUCKET_MUST,
@@ -33,9 +29,17 @@ from ..models.org_criterion import (
 )
 from ..models.organization import Organization
 from ..models.role import Role
-from ..platform.config import settings
 from .claude_client_resolver import get_client_for_org
 from .pricing_service import Feature
+
+
+# Match the other Tali services that hit Claude directly
+# (cv_matching, cv_parsing, candidate_search). ``resolved_claude_scoring_model``
+# routes through CLAUDE_SCORING_BATCH_MODEL which on some orgs still
+# resolves to retired Haiku aliases — and the official fallback chain is
+# Haiku-3.5 only. Hard-pinning to the current Haiku 4.5 build avoids the
+# trap.
+INTENT_CHIP_MODEL = "claude-haiku-4-5-20251001"
 
 
 logger = logging.getLogger("taali.intent_chip_parser")
@@ -110,11 +114,6 @@ def parse_intent_text_to_chips(
         logger.warning("intent_chip_parser client init failed: %s", exc)
         return []
 
-    model_version = (
-        (getattr(role, "agent_model", None) or "").strip()
-        or settings.resolved_claude_scoring_model
-    )
-
     user_message = _build_user_message(
         role_name=str(role.name or ""),
         agent_question=agent_question,
@@ -122,49 +121,27 @@ def parse_intent_text_to_chips(
         existing_chip_texts=existing_chip_texts or [],
     )
 
-    # The configured scoring model can resolve to a retired alias (e.g.
-    # `claude-3-5-haiku-latest`) on some orgs. Mirror interview_focus's
-    # fallback chain so a stale config doesn't silently drop chip parsing.
-    last_exc: Exception | None = None
-    response = None
-    for candidate_model in candidate_models_for(model_version):
-        try:
-            response = client.messages.create(
-                model=candidate_model,
-                max_tokens=512,
-                temperature=0,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_message}],
-                # The metered Anthropic wrapper auto-writes a usage_event
-                # from response.usage. Use Feature.OTHER (a custom string
-                # would raise inside record_event's Feature() conversion)
-                # and tag the sub-agent in metadata for attribution.
-                metering={
-                    "feature": Feature.OTHER,
-                    "organization_id": int(organization_id),
-                    "role_id": int(role.id),
-                    "metadata": {"sub_agent": "intent_chip_parser"},
-                    "db": db,
-                },
-            )
-            if candidate_model != model_version:
-                logger.warning(
-                    "intent_chip_parser fell back to model=%s after primary=%s was unavailable",
-                    candidate_model,
-                    model_version,
-                )
-            break
-        except Exception as exc:
-            if is_model_not_found_error(exc):
-                last_exc = exc
-                continue
-            logger.warning("intent_chip_parser Claude call failed: %s", exc)
-            return []
-    if response is None:
-        logger.warning(
-            "intent_chip_parser exhausted model fallbacks (last error: %s)",
-            last_exc,
+    try:
+        response = client.messages.create(
+            model=INTENT_CHIP_MODEL,
+            max_tokens=512,
+            temperature=0,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+            # Metered Anthropic wrapper auto-writes a usage_event from
+            # response.usage. Use Feature.OTHER (a custom string would
+            # raise inside record_event's Feature() conversion) and tag
+            # the sub-agent in metadata for attribution.
+            metering={
+                "feature": Feature.OTHER,
+                "organization_id": int(organization_id),
+                "role_id": int(role.id),
+                "metadata": {"sub_agent": "intent_chip_parser"},
+                "db": db,
+            },
         )
+    except Exception as exc:
+        logger.warning("intent_chip_parser Claude call failed: %s", exc)
         return []
 
     try:
