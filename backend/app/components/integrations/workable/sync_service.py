@@ -1795,7 +1795,16 @@ class WorkableSyncService:
                 )
             ):
                 try:
-                    from ....services.cv_score_orchestrator import enqueue_score
+                    from ....services.cv_score_orchestrator import (
+                        enqueue_score,
+                        mark_application_scores_stale,
+                    )
+                    # Clear scores BEFORE enqueueing the rescore so the
+                    # UI shows "needs rescore" during the window
+                    # between invalidation and the worker landing the
+                    # new score — instead of a stale "Strong match" the
+                    # recruiter could act on.
+                    mark_application_scores_stale(db, app.id)
                     enqueue_score(db, app, force=True)
                 except Exception:  # pragma: no cover — never block a sync
                     logger.exception(
