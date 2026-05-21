@@ -258,7 +258,16 @@ def search_applications(
             return value or datetime.min.replace(tzinfo=timezone.utc)
         return value if value is not None else float("-inf")
 
-    apps.sort(key=_key, reverse=reverse)
+    # Agent should evaluate candidates the recruiter has already moved
+    # forward (pipeline_stage='advanced') BEFORE fresh applied rows —
+    # those carry hard recruiter signal and tend to be the ones a
+    # decision is actually waiting on. We split-then-sort instead of
+    # using a tuple key so the ordering survives sort_order='asc' too.
+    advanced_apps = [a for a in apps if (a.pipeline_stage or "").lower() == "advanced"]
+    other_apps = [a for a in apps if (a.pipeline_stage or "").lower() != "advanced"]
+    advanced_apps.sort(key=_key, reverse=reverse)
+    other_apps.sort(key=_key, reverse=reverse)
+    apps = advanced_apps + other_apps
     return [application_summary(a) for a in apps[:limit]]
 
 

@@ -199,3 +199,116 @@ def test_process_dry_run_unknown_stage_no_filter(session_factory):
         db.close()
 
     assert counts["total_candidates"] == 6
+
+
+def test_process_dry_run_explicit_application_ids(session_factory):
+    """Ticked checkboxes → only those IDs are processed, regardless of stage.
+
+    application_ids overrides stage_filter when both arrive (the explicit
+    selection wins).
+    """
+    from app.domains.assessments_runtime.applications_routes import _process_dry_run
+    from app.models import CandidateApplication
+
+    org_id, role_id = _seed_role_with_mixed_stages(session_factory)
+    db = session_factory()
+    try:
+        applied_id = (
+            db.query(CandidateApplication.id)
+            .filter(CandidateApplication.role_id == role_id)
+            .filter(CandidateApplication.pipeline_stage == "applied")
+            .first()
+        )[0]
+        advanced_id = (
+            db.query(CandidateApplication.id)
+            .filter(CandidateApplication.role_id == role_id)
+            .filter(CandidateApplication.pipeline_stage == "advanced")
+            .filter(CandidateApplication.application_outcome == "open")
+            .first()
+        )[0]
+
+        counts = _process_dry_run(
+            db,
+            role_id=role_id,
+            organization_id=org_id,
+            fetch_cvs=False,
+            refresh_cvs=False,
+            pre_screen=False,
+            refresh_pre_screen=False,
+            score_mode="all",
+            application_ids=[applied_id, advanced_id],
+        )
+        counts_override = _process_dry_run(
+            db,
+            role_id=role_id,
+            organization_id=org_id,
+            fetch_cvs=False,
+            refresh_cvs=False,
+            pre_screen=False,
+            refresh_pre_screen=False,
+            score_mode="all",
+            stage_filter="rejected",
+            application_ids=[applied_id, advanced_id],
+        )
+    finally:
+        db.close()
+
+    assert counts["total_candidates"] == 2
+    assert counts["score"]["will_run"] == 2
+    # application_ids takes precedence over stage_filter
+    assert counts_override["total_candidates"] == 2
+
+
+def test_search_applications_advanced_first(session_factory):
+    """The MCP search_applications helper must surface candidates in
+    pipeline_stage='advanced' before applied/etc., regardless of score.
+
+    Recruiter has already moved Advanced candidates forward — those
+    carry hard signal and the agent should re-evaluate them before
+    fresh-applied rows that haven't been triaged yet.
+    """
+    from app.mcp.handlers import search_applications
+    from app.models import CandidateApplication, User
+
+    org_id, role_id = _seed_role_with_mixed_stages(session_factory)
+    db = session_factory()
+    try:
+        apps = (
+            db.query(CandidateApplication)
+            .filter(CandidateApplication.role_id == role_id)
+            .all()
+        )
+        # Bias scores so applied has the HIGHEST score — without
+        # Advanced-first ordering, score-desc would put applied first.
+        for a in apps:
+            if a.pipeline_stage == "applied":
+                a.taali_score_cache_100 = 90
+            elif a.pipeline_stage == "advanced":
+                a.taali_score_cache_100 = 40
+        db.commit()
+
+        user = User(
+            email="r@x.com",
+            hashed_password="x",
+            full_name="R",
+            organization_id=org_id,
+        )
+        db.add(user)
+        db.commit()
+
+        results = search_applications(
+            db,
+            user,
+            role_id=role_id,
+            limit=10,
+        )
+    finally:
+        db.close()
+
+    # All 5 open rows (3 applied + 2 advanced) come back
+    assert len(results) == 5
+    # First entries must be the advanced ones — recruiter signal beats raw score
+    first_two_stages = [r.get("pipeline_stage") for r in results[:2]]
+    assert all(s == "advanced" for s in first_two_stages), (
+        f"Expected first 2 to be 'advanced', got {first_two_stages}"
+    )

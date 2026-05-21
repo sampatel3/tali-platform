@@ -1138,6 +1138,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // Sort direction for the candidates table. ``'desc'`` (default) puts
   // the strongest scores first; ``'asc'`` flips it.
   const [tableSortBy, setTableSortBy] = useState('desc');
+  // Per-row Process selection. Non-empty → Process sends just these IDs
+  // and ignores stage_filter. Reset on tab switch so off-screen ticks
+  // don't silently fire when the recruiter jumps tabs.
+  const [selectedAppIds, setSelectedAppIds] = useState(() => new Set());
+  useEffect(() => { setSelectedAppIds(new Set()); }, [tableStageFilter]);
   const [roleSheetOpen, setRoleSheetOpen] = useState(false);
   const [candidateSheetOpen, setCandidateSheetOpen] = useState(false);
   const [roleSheetError, setRoleSheetError] = useState('');
@@ -2374,6 +2379,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                     const label = step === 'fetch' ? 'Fetching CVs' : step === 'pre_screen' ? 'Pre-screening' : step === 'score' ? 'Scoring' : 'Processing';
                     return (<><Loader2 size={12} className="animate-spin" />{label}…</>);
                   }
+                  const selCount = selectedAppIds.size;
+                  if (selCount > 0) return (<><Sparkles size={12} />Process {selCount} selected</>);
                   const tabCount = tableStageFilter === 'rejected' ? rejectedApplications.length
                     : tableStageFilter === 'all' ? activeApplications.length
                     : activeApplications.filter((a) => String(a?.pipeline_stage || '').toLowerCase() === tableStageFilter).length;
@@ -2416,11 +2423,16 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   </div>
                 );
               }
+              const visibleIds = sorted.map((a) => a.id);
+              const allSel = visibleIds.length > 0 && visibleIds.every((id) => selectedAppIds.has(id));
+              const someSel = visibleIds.some((id) => selectedAppIds.has(id));
+              const toggleAll = (checked) => { const next = new Set(selectedAppIds); visibleIds.forEach((id) => { if (checked) next.add(id); else next.delete(id); }); setSelectedAppIds(next); };
               return (
                 <div className="ctable-wrap">
                   <table className="ctable">
                     <thead>
                       <tr>
+                        <th aria-label="Select" style={{ width: 28 }}><input type="checkbox" aria-label="Select all visible candidates" checked={allSel} ref={(el) => { if (el) el.indeterminate = !allSel && someSel; }} onChange={(e) => toggleAll(e.target.checked)} /></th>
                         <th>Candidate</th>
                         <th>Score</th>
                         <th>Stage</th>
@@ -2452,6 +2464,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                           triageApplication
                           && Number(triageApplication.id) === Number(application.id)
                         );
+                        const isSelected = selectedAppIds.has(application.id);
                         return (
                           <React.Fragment key={application.id}>
                             <tr
@@ -2460,6 +2473,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                               onMouseEnter={() => prefetchDocumentBlob({ applicationId: application.id, docType: 'cv' })}
                               style={{ cursor: 'pointer' }}
                             >
+                              <td onClick={(e) => e.stopPropagation()} style={{ width: 28 }}><input type="checkbox" aria-label={`Select ${buildApplicationTitle(application)}`} checked={isSelected} onChange={() => { const next = new Set(selectedAppIds); if (next.has(application.id)) next.delete(application.id); else next.add(application.id); setSelectedAppIds(next); }} /></td>
                               <td>
                                 <div className="name">{buildApplicationTitle(application)}</div>
                                 <div className="sub">
@@ -2505,7 +2519,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                             </tr>
                             {isTriageRow ? (
                               <tr className="ctable-triage-row">
-                                <td colSpan={7} className="ctable-triage-cell">
+                                <td colSpan={8} className="ctable-triage-cell">
                                   <CandidateTriageDrawer {...triageDrawerProps} />
                                 </td>
                               </tr>
@@ -2562,6 +2576,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           roleId={numericRoleId}
           stage={tableStageFilter}
           stageLabel={tableStageFilter === 'all' ? null : tableStageFilter === 'rejected' ? 'Rejected' : (PIPELINE_STAGE_ORDER.find((s) => s.key === tableStageFilter)?.label || tableStageFilter)}
+          applicationIds={selectedAppIds.size > 0 ? Array.from(selectedAppIds) : null}
           onClose={() => setProcessDialogOpen(false)}
           onConfirm={async (body) => {
             try {
@@ -2574,6 +2589,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 // already shows the cascade progress in the bottom-right.
                 // Two surfaces for the same event was visual noise.
                 trackRoleProcess?.(numericRoleId);
+                // Clear selection now that the cascade has been launched
+                // — leaving it ticked would suggest the next click still
+                // targets the same rows when actually they're now mid-run.
+                setSelectedAppIds(new Set());
               }
               setProcessDialogOpen(false);
             } catch (error) {
