@@ -3,7 +3,8 @@
 // rates. Rows deep-link to /jobs/:id. Paused or over-budget roles are
 // flagged inline so a recruiter can spot a stuck role at a glance.
 
-import React from 'react';
+import React, { useState } from 'react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 
 import { formatUsd } from './atoms';
 
@@ -14,14 +15,15 @@ const humanizePausedReason = (reason) => {
   if (!reason) return null;
   const r = String(reason).toLowerCase();
   if (r.startsWith('monthly usd cap')) return 'Monthly budget reached';
-  if (r.startsWith('role paused')) return null; // already pause-on-pause; redundant
-  if (r.includes('decision budget')) return 'Cycle limit reached'; // shouldn't auto-pause anymore but keep safe fallback
-  // Unknown reason: show a short, properly-cased prefix instead of SHOUTING
-  // the raw value.
+  if (r.startsWith('role paused')) return null;
+  if (r.includes('decision budget')) return 'Cycle limit reached';
   return String(reason).slice(0, 32);
 };
 
-export const HomeRoles = ({ rows, loading, onNavigate }) => (
+export const HomeRoles = ({ rows, loading, onNavigate }) => {
+  const [open, setOpen] = useState(false);
+  const totalPending = rows.reduce((sum, r) => sum + (Number(r.pending) || 0), 0);
+  return (
   <section className="home-section">
     <div className="home-section-head">
       <div>
@@ -31,9 +33,18 @@ export const HomeRoles = ({ rows, loading, onNavigate }) => (
           Live counts per role: what's pending, what landed today, where humans are correcting the agent.
         </p>
       </div>
+      <button
+        type="button"
+        className="home-section-toggle"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <span>{open ? 'Hide' : 'Show'} roles ({rows.length}{totalPending > 0 ? ` · ${totalPending} pending` : ''})</span>
+        {open ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+      </button>
     </div>
 
-    {loading ? (
+    {!open ? null : loading ? (
       <div className="home-empty">Loading…</div>
     ) : rows.length === 0 ? (
       <div className="home-empty">No roles configured yet — create one from the Jobs tab.</div>
@@ -121,6 +132,7 @@ export const HomeRoles = ({ rows, loading, onNavigate }) => (
       </div>
     )}
   </section>
-);
+  );
+};
 
 export default HomeRoles;

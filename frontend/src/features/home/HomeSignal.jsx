@@ -12,8 +12,8 @@
 // Improving the agent's scoring is a separate workstream — see
 // docs/HOME_HUB_DESIGN.md §8.
 
-import React from 'react';
-import { Award, Brain, CheckCircle2, ShieldCheck, Undo2, X } from 'lucide-react';
+import React, { useState } from 'react';
+import { Award, Brain, CheckCircle2, ChevronDown, ChevronUp, ShieldCheck, Undo2, X } from 'lucide-react';
 
 import { agent as agentApi } from '../../shared/api';
 import { useAuth } from '../../context/AuthContext';
@@ -185,6 +185,7 @@ export const HomeSignal = ({ feedback, outcomes, loading, reload }) => {
   const cosignPending = (feedback || []).filter(
     (f) => f.cosign_required && !f.cosigned_at && !f.reverted_at,
   );
+  const [open, setOpen] = useState(cosignPending.length > 0);
 
   const handleCosign = async (id) => {
     try {
@@ -206,6 +207,12 @@ export const HomeSignal = ({ feedback, outcomes, loading, reload }) => {
     }
   };
 
+  const summary = [
+    feedback?.length ? `${feedback.length} teach` : null,
+    outcomes?.length ? `${outcomes.length} outcome${outcomes.length === 1 ? '' : 's'}` : null,
+    cosignPending.length ? `${cosignPending.length} awaiting co-sign` : null,
+  ].filter(Boolean).join(' · ');
+
   return (
     <section className="home-section">
       <div className="home-section-head">
@@ -216,24 +223,37 @@ export const HomeSignal = ({ feedback, outcomes, loading, reload }) => {
             Every "send back &amp; teach" click ends up here. When a batch fires, you see the rubric revision it produced. This is the loop made visible.
           </p>
         </div>
+        <button
+          type="button"
+          className="home-section-toggle"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+        >
+          <span>{open ? 'Hide' : 'Show'} signal{summary ? ` (${summary})` : ''}</span>
+          {open ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+        </button>
       </div>
 
-      <PendingCosignTray
-        rows={cosignPending}
-        currentUserId={user?.id}
-        onCosign={handleCosign}
-      />
+      {open ? (
+        <>
+          <PendingCosignTray
+            rows={cosignPending}
+            currentUserId={user?.id}
+            onCosign={handleCosign}
+          />
 
-      <div className="signal-grid">
-        <div>
-          <div className="kicker" style={{ marginBottom: 8 }}>RECENT FEEDBACK · WHAT HUMANS CORRECTED</div>
-          {loading ? <div className="signal-empty">Loading…</div> : <FeedbackList rows={feedback} currentUserId={user?.id} onRevert={handleRevert} />}
-        </div>
-        <div>
-          <div className="kicker" style={{ marginBottom: 8 }}>REALISED OUTCOMES · WHAT REALITY CONFIRMED</div>
-          {loading ? <div className="signal-empty">Loading…</div> : <OutcomesList rows={outcomes} />}
-        </div>
-      </div>
+          <div className="signal-grid">
+            <div>
+              <div className="kicker" style={{ marginBottom: 8 }}>RECENT FEEDBACK · WHAT HUMANS CORRECTED</div>
+              {loading ? <div className="signal-empty">Loading…</div> : <FeedbackList rows={feedback} currentUserId={user?.id} onRevert={handleRevert} />}
+            </div>
+            <div>
+              <div className="kicker" style={{ marginBottom: 8 }}>REALISED OUTCOMES · WHAT REALITY CONFIRMED</div>
+              {loading ? <div className="signal-empty">Loading…</div> : <OutcomesList rows={outcomes} />}
+            </div>
+          </div>
+        </>
+      ) : null}
     </section>
   );
 };

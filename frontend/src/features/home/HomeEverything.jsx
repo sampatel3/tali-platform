@@ -23,7 +23,6 @@ const safeNumber = (v, fb = 0) => (Number.isFinite(Number(v)) ? Number(v) : fb);
 const HistoryTable = ({ rows, onSelect, onNavigate }) => (
   <div className="rq-history">
     <div className="rq-history-head">
-      <span></span>
       <span>Decision</span>
       <span>Status</span>
       <span>Score</span>
@@ -50,22 +49,24 @@ const HistoryTable = ({ rows, onSelect, onNavigate }) => (
             }
           }}
         >
-          <span><TypeBadge type={row.decision_type} size="sm" /></span>
-          <span style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              <button
-                type="button"
-                className="rq-inline-link"
-                style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', fontWeight: 500 }}
-                onClick={(e) => { e.stopPropagation(); onNavigate?.('candidate-report', { candidateApplicationId: row.application_id }); }}
-                title="Open candidate report"
-              >
-                {row.candidate_name || `Application #${row.application_id}`}
-              </button>
-            </div>
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--mute)', letterSpacing: '.04em', marginTop: 2 }}>
-              D-{row.id}
-            </div>
+          <span className="rq-history-decision">
+            <TypeBadge type={row.decision_type} size="sm" />
+            <span className="rq-history-decision-text">
+              <div style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <button
+                  type="button"
+                  className="rq-inline-link"
+                  style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', fontWeight: 500 }}
+                  onClick={(e) => { e.stopPropagation(); onNavigate?.('candidate-report', { candidateApplicationId: row.application_id }); }}
+                  title="Open candidate report"
+                >
+                  {row.candidate_name || `Application #${row.application_id}`}
+                </button>
+              </div>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--mute)', letterSpacing: '.04em' }}>
+                D-{row.id}
+              </div>
+            </span>
           </span>
           <span style={{ fontSize: 12, color: row.status === 'pending' ? 'var(--purple)' : 'var(--ink-2)', fontWeight: row.status === 'pending' ? 600 : 400 }}>
             {row.status}
@@ -174,12 +175,13 @@ const AnalyticsDrillIns = ({ summary }) => {
 };
 
 export const HomeEverything = ({ rows, onSelect, onNavigate }) => {
-  const [open, setOpen] = useState(false);
+  const [sectionOpen, setSectionOpen] = useState(false);
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [analytics, setAnalytics] = useState(null);
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
 
   useEffect(() => {
-    if (!open) return undefined;
+    if (!analyticsOpen) return undefined;
     let cancelled = false;
     setLoadingAnalytics(true);
     analyticsApi.reportingSummary({})
@@ -194,7 +196,7 @@ export const HomeEverything = ({ rows, onSelect, onNavigate }) => {
         if (!cancelled) setLoadingAnalytics(false);
       });
     return () => { cancelled = true; };
-  }, [open]);
+  }, [analyticsOpen]);
 
   return (
     <section className="home-section">
@@ -206,26 +208,39 @@ export const HomeEverything = ({ rows, onSelect, onNavigate }) => {
             Every decision the agent has made, who reviewed it, what they did. The score histogram and funnel live in the panel below — they used to be on /reporting.
           </p>
         </div>
-      </div>
-
-      <HistoryTable rows={rows} onSelect={onSelect} onNavigate={onNavigate} />
-
-      <div className="home-analytics-accordion">
         <button
           type="button"
-          className="home-analytics-toggle"
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
+          className="home-section-toggle"
+          onClick={() => setSectionOpen((v) => !v)}
+          aria-expanded={sectionOpen}
         >
-          <span>Score distribution &amp; funnel</span>
-          {open ? <ChevronUp size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}
+          <span>{sectionOpen ? 'Hide' : 'Show'} history ({rows.length})</span>
+          {sectionOpen ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
         </button>
-        {open ? (
-          loadingAnalytics
-            ? <div className="signal-empty" style={{ padding: 24, textAlign: 'center' }}>Loading analytics…</div>
-            : <AnalyticsDrillIns summary={analytics} />
-        ) : null}
       </div>
+
+      {sectionOpen ? (
+        <>
+          <HistoryTable rows={rows} onSelect={onSelect} onNavigate={onNavigate} />
+
+          <div className="home-analytics-accordion">
+            <button
+              type="button"
+              className="home-analytics-toggle"
+              onClick={() => setAnalyticsOpen((v) => !v)}
+              aria-expanded={analyticsOpen}
+            >
+              <span>Score distribution &amp; funnel</span>
+              {analyticsOpen ? <ChevronUp size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}
+            </button>
+            {analyticsOpen ? (
+              loadingAnalytics
+                ? <div className="signal-empty" style={{ padding: 24, textAlign: 'center' }}>Loading analytics…</div>
+                : <AnalyticsDrillIns summary={analytics} />
+            ) : null}
+          </div>
+        </>
+      ) : null}
     </section>
   );
 };
