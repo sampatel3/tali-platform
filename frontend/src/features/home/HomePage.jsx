@@ -212,7 +212,12 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
         if (cancelled) return;
         setOrgStatus(statusRes?.data || null);
         setRolesBreakdown(Array.isArray(rolesRes?.data) ? rolesRes.data : []);
-      } catch { /* silent */ }
+      } catch { /* silent */ } finally {
+        // The dedicated loadRoles() useEffect was retired in favour of this
+        // poll; clear loadingRoles here so the "By role" section doesn't
+        // stay stuck on "Loading…" forever.
+        if (!cancelled) setLoadingRoles(false);
+      }
     };
     void tick();
     const id = window.setInterval(tick, ORG_STATUS_POLL_MS);
