@@ -186,6 +186,45 @@ export const FeedbackPill = ({ kind = 'teach' }) => (
   </span>
 );
 
+// A muted purple pill that names the role a decision belongs to. Used in
+// the pending sidebar (display-only — the whole row is the click target)
+// and the decision feed (clickable, jumps to the role pipeline). Role
+// names can be long so we cap width and ellipsis with a title tooltip.
+export const RolePill = ({ roleName, roleId, onClick }) => {
+  if (!roleName && roleId == null) return null;
+  const label = roleName || `Role #${roleId}`;
+  const baseStyle = {
+    display: 'inline-block',
+    maxWidth: '100%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    padding: '2px 8px',
+    borderRadius: 6,
+    background: 'color-mix(in oklab, var(--purple) 12%, transparent)',
+    color: 'var(--purple)',
+    fontFamily: 'var(--font-mono)',
+    fontSize: 10.5,
+    fontWeight: 600,
+    letterSpacing: '.04em',
+    lineHeight: 1.4,
+    verticalAlign: 'middle',
+  };
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        title={label}
+        style={{ ...baseStyle, border: 0, cursor: 'pointer', font: 'inherit', textAlign: 'left' }}
+      >
+        {label}
+      </button>
+    );
+  }
+  return <span style={baseStyle} title={label}>{label}</span>;
+};
+
 export const formatUsd = (cents) => {
   const n = Number(cents || 0) / 100;
   if (!Number.isFinite(n)) return '$0';

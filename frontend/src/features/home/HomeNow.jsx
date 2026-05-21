@@ -30,6 +30,7 @@ import {
   DeepLinkRow,
   formatRelativeAge,
   initialsFrom,
+  RolePill,
   TypeBadge,
 } from './atoms';
 import { TeachModal } from './TeachModal';
@@ -301,6 +302,11 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
                 {p.candidate_name || `Application #${p.application_id}`}
               </a>
             </div>
+            {(p.role_name || p.role_id != null) ? (
+              <div style={{ marginTop: 5, minWidth: 0 }}>
+                <RolePill roleName={p.role_name} roleId={p.role_id} />
+              </div>
+            ) : null}
             <div style={{ fontSize: 11, color: 'var(--mute)', marginTop: 5, display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontFamily: 'var(--font-mono)', letterSpacing: '.04em' }}>#{p.id}</span>
               {p.confidence != null ? (
