@@ -24,6 +24,11 @@ export const agent = {
   // Per-role agent status
   status: (roleId) => api.get(`/roles/${roleId}/agent/status`),
 
+  // Per-role activity feed — merged stream of runs, decisions, stage moves,
+  // and recruiter-input prompts. Backs the collapsible "Activity" section
+  // on the role Agent settings tab.
+  activity: (roleId, params = {}) => api.get(`/roles/${roleId}/agent/activity`, { params }),
+
   // Per-feature spend breakdown for the role this calendar month — backs
   // the Role budget panel so recruiters see where their cap is going.
   usageBreakdown: (roleId) => api.get(`/roles/${roleId}/usage/breakdown`),
