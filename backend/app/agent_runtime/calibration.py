@@ -29,12 +29,22 @@ _DEFAULT: dict[str, Any] = {
     # happened to the candidate after approval." See outcome_learning.py.
     # Each entry: {decision_type, outcome, observed_at (ISO), application_id, decision_id?}
     "outcomes": [],
+    # Agent-authored breadcrumbs for the next cycle. Each entry:
+    # {note, kind, recorded_at (ISO), agent_run_id}. Written via the
+    # record_observation tool; rendered in the system prompt so the
+    # agent picks up where it left off instead of re-deriving context.
+    "notes": [],
+    # Summary of the most recent cycle (whether it completed cleanly or
+    # aborted). Written by the orchestrator at every terminal path. Read
+    # next cycle so the agent knows what just happened.
+    "last_cycle": {},
 }
 
 _MAX_OBSERVATIONS = 50
 _MAX_RECENT_DECISIONS = 20
 _MAX_OVERRIDE_PATTERNS = 10
 _MAX_OUTCOMES = 50
+_MAX_NOTES = 10
 
 
 def load(role: Role) -> dict[str, Any]:
@@ -71,6 +81,10 @@ def save(db: Session, *, role: Role, updates: dict[str, Any]) -> None:
             existing[key] = list(buf)
         elif key == "outcomes" and isinstance(value, list):
             buf = deque(existing.get(key, []), maxlen=_MAX_OUTCOMES)
+            buf.extend(value)
+            existing[key] = list(buf)
+        elif key == "notes" and isinstance(value, list):
+            buf = deque(existing.get(key, []), maxlen=_MAX_NOTES)
             buf.extend(value)
             existing[key] = list(buf)
         else:
@@ -112,7 +126,51 @@ def render_summary(calibration: dict[str, Any]) -> str:
     outcomes = calibration.get("outcomes") or []
     track_record_line = _render_track_record(outcomes)
 
-    return f"{agreement}\n{score_line}\n{pattern_line}\n{track_record_line}"
+    last_cycle_line = _render_last_cycle(calibration.get("last_cycle") or {})
+    notes_block = _render_notes(calibration.get("notes") or [])
+
+    parts = [agreement, score_line, pattern_line, track_record_line, last_cycle_line]
+    if notes_block:
+        parts.append(notes_block)
+    return "\n".join(parts)
+
+
+def _render_last_cycle(last_cycle: dict[str, Any]) -> str:
+    """One line describing the previous cycle's outcome so the agent knows
+    whether to resume vs. start fresh."""
+    if not last_cycle:
+        return "last cycle: none on record"
+    status = last_cycle.get("status") or "unknown"
+    rounds = last_cycle.get("rounds_used")
+    decisions = last_cycle.get("decisions_emitted", 0)
+    finished_via_complete = last_cycle.get("finished_via_complete")
+    bits = [f"status={status}"]
+    if rounds is not None:
+        bits.append(f"rounds={rounds}")
+    bits.append(f"decisions={decisions}")
+    if finished_via_complete is False:
+        bits.append("did NOT call agent_run_complete")
+    err = last_cycle.get("error")
+    if err:
+        bits.append(f"error={err[:80]}")
+    return "last cycle: " + ", ".join(bits)
+
+
+def _render_notes(notes: list[dict[str, Any]]) -> str:
+    """Render agent-authored breadcrumbs from prior cycles. Capped to 10
+    entries already; rendered most-recent first so the freshest context
+    is at the top of the section."""
+    if not notes:
+        return ""
+    lines = ["NOTES FROM PRIOR CYCLES (most recent first):"]
+    for entry in reversed(notes[-10:]):
+        text = str(entry.get("note") or "").strip()
+        if not text:
+            continue
+        kind = str(entry.get("kind") or "context")
+        recorded_at = str(entry.get("recorded_at") or "")[:10]  # YYYY-MM-DD
+        lines.append(f"- [{kind} @ {recorded_at}] {text}")
+    return "\n".join(lines) if len(lines) > 1 else ""
 
 
 def _render_track_record(outcomes: list[dict[str, Any]]) -> str:

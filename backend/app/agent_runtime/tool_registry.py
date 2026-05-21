@@ -36,7 +36,7 @@ from ..models.assessment import Assessment
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..services import cohort_signals_service
-from . import cohort_tools, policy_evaluator
+from . import calibration, cohort_tools, policy_evaluator
 
 
 # Cohort signals are recomputed when older than this. The full pool query
@@ -638,6 +638,42 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                 },
             },
             "required": ["application_id"],
+        },
+    },
+    # ------------------------------------------------------------------
+    # MEMORY — cross-cycle breadcrumbs
+    # ------------------------------------------------------------------
+    {
+        "name": "record_observation",
+        "description": (
+            "Persist a short note that survives across cycles. Use this when "
+            "you notice something worth carrying forward — e.g. 'cohort "
+            "clusters around score 60-65 on must-haves; threshold may be too "
+            "high', or 'recruiter has 3 open ask_recruiter cards from last "
+            "cycle — wait before queueing new decisions'. Notes are rendered "
+            "into the system prompt of the NEXT cycle. Capped at 10 (FIFO). "
+            "Cheaper than re-deriving the observation next cycle and the only "
+            "way to leave durable context for yourself."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "note": {
+                    "type": "string",
+                    "description": "Short observation, <200 chars.",
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": ["pattern", "blocker", "todo", "context"],
+                    "description": (
+                        "pattern = something about the cohort. "
+                        "blocker = work stuck waiting on something. "
+                        "todo = work to pick up next cycle. "
+                        "context = anything else worth remembering."
+                    ),
+                },
+            },
+            "required": ["note"],
         },
     },
     # ------------------------------------------------------------------
@@ -1426,6 +1462,40 @@ def _tool_agent_run_complete(
     }
 
 
+def _tool_record_observation(
+    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
+) -> Any:
+    """Append a breadcrumb to role.agent_calibration.notes (capped 10, FIFO).
+
+    Commits immediately rather than waiting for cycle end so the note
+    survives an abort. Returns the note id (sequence within cycle) and
+    the current note count so the agent can see whether the budget is
+    spent.
+    """
+    note_text = str(args.get("note") or "").strip()
+    if not note_text:
+        return {"status": "skipped", "reason": "empty note"}
+    if len(note_text) > 280:
+        note_text = note_text[:277] + "..."
+    kind = str(args.get("kind") or "context").strip().lower()
+    if kind not in {"pattern", "blocker", "todo", "context"}:
+        kind = "context"
+    entry = {
+        "note": note_text,
+        "kind": kind,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "agent_run_id": int(agent_run.id),
+    }
+    calibration.save(db, role=role, updates={"notes": [entry]})
+    db.flush()
+    current_count = len((role.agent_calibration or {}).get("notes") or [])
+    return {
+        "status": "saved",
+        "kind": kind,
+        "current_note_count": current_count,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Cohort tools
 # ---------------------------------------------------------------------------
@@ -1563,6 +1633,7 @@ _HANDLER_BY_NAME: dict[str, Callable[..., Any]] = {
     "read_pending_recruiter_inputs": _tool_read_pending_recruiter_inputs,
     "batch_score_cv": _tool_batch_score_cv,
     "ask_recruiter": _tool_ask_recruiter,
+    "record_observation": _tool_record_observation,
     "agent_run_complete": _tool_agent_run_complete,
 }
 

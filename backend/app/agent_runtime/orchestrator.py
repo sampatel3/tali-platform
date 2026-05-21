@@ -32,11 +32,14 @@ from .tool_registry import AGENT_TOOLS, QUEUE_DECISION_TOOL_NAMES, dispatch, is_
 logger = logging.getLogger("taali.agent_runtime")
 
 
-# Tool surface in v3 has 13 tools. Bumping rounds up gives the agent enough
+# Tool surface has 14 tools. Bumping rounds up gives the agent enough
 # headroom to chain a cohort search → compare → decision sequence. Each round
 # is still capped to MAX_TOKENS_PER_ROUND, and the per-cycle token + decision
 # budgets in budget_guard.py provide hard ceilings independent of round count.
-MAX_TOOL_ROUNDS = 10
+# 10 was producing aborts mid-deliberation on roles with rich cohorts — see
+# the agent_runs table on roles 31/112. 18 leaves headroom for survey →
+# read → batch_score → 2-3 evaluate_policy → queue → complete.
+MAX_TOOL_ROUNDS = 18
 MAX_TOKENS_PER_ROUND = 2048
 
 
@@ -257,8 +260,11 @@ def run_cycle(
 
     tools_called_summary: dict[str, int] = {}
     finished_via_complete_tool = False
+    run_complete_observations: dict[str, Any] = {}
+    rounds_used = 0
 
     for round_idx in range(MAX_TOOL_ROUNDS):
+        rounds_used = round_idx + 1
         system = build_system_prompt(
             role=role,
             trigger_context=trigger_context,
@@ -354,14 +360,8 @@ def run_cycle(
         if run_complete_payload is not None:
             finished_via_complete_tool = True
             observations = run_complete_payload.get("observations") or {}
-            calibration.save(
-                db,
-                role=role,
-                updates={
-                    "decisions_total": run.decisions_emitted,
-                    **(observations if isinstance(observations, dict) else {}),
-                },
-            )
+            if isinstance(observations, dict):
+                run_complete_observations = observations
             break
 
     else:
@@ -375,28 +375,62 @@ def run_cycle(
     if run.status == "running":
         run.status = "succeeded" if finished_via_complete_tool else "aborted"
 
-    # Persist the per-cycle decisions_total even when the cycle didn't
-    # call agent_run_complete — otherwise aborted / failed cycles lose
-    # their feedback signal and calibration drifts over time. Only the
-    # complete-tool branch carries observations; on other paths we save
-    # the bare decisions count.
-    if not finished_via_complete_tool:
-        try:
-            calibration.save(
-                db,
-                role=role,
-                updates={"decisions_total": run.decisions_emitted},
-            )
-        except Exception:  # pragma: no cover — calibration save must never break the cycle
-            logger.exception(
-                "calibration.save on non-complete terminal failed role=%s run=%s",
-                role.id,
-                getattr(run, "id", None),
-            )
+    # Persist calibration on every terminal path, not just on
+    # agent_run_complete. An aborted cycle still produced observations
+    # (scores enqueued, tools tried, rounds spent); not saving them means
+    # the next cycle has no memory of what happened. The notes-via-
+    # record_observation tool already commits per-call; this is the
+    # cycle-summary writeback. Wrapped because calibration.save must
+    # never break the cycle's ability to record a finished_at row.
+    try:
+        calibration.save(
+            db,
+            role=role,
+            updates={
+                "decisions_total": run.decisions_emitted,
+                **run_complete_observations,
+                "last_cycle": {
+                    "status": run.status,
+                    "rounds_used": rounds_used,
+                    "decisions_emitted": int(run.decisions_emitted),
+                    "finished_via_complete": finished_via_complete_tool,
+                    "error": run.error,
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                },
+            },
+        )
+    except Exception:  # pragma: no cover — defensive
+        logger.exception(
+            "calibration.save on cycle end failed role=%s run=%s",
+            role.id,
+            getattr(run, "id", None),
+        )
 
     run.tools_called = [{"name": n, "count": c} for n, c in tools_called_summary.items()]
     run.finished_at = datetime.now(timezone.utc)
     role.agent_last_run_at = run.finished_at
     db.add(role)
     db.flush()
+
+    # Structured cycle summary — picked up by Railway log aggregation so
+    # abort rate, rounds-to-completion and $-per-decision are observable
+    # without a new metrics table.
+    cost_usd = float(run.total_cost_micro_usd or 0) / 1_000_000.0
+    logger.info(
+        "agent_runtime.cycle_complete "
+        "role_id=%s org_id=%s status=%s rounds=%d/%d decisions=%d "
+        "input_tokens=%d output_tokens=%d cost_usd=%.4f "
+        "finished_via_complete=%s error=%r",
+        role.id,
+        role.organization_id,
+        run.status,
+        rounds_used,
+        MAX_TOOL_ROUNDS,
+        run.decisions_emitted,
+        run.input_tokens,
+        run.output_tokens,
+        cost_usd,
+        finished_via_complete_tool,
+        run.error,
+    )
     return run
