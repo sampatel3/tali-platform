@@ -15,11 +15,24 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..models.agent_decision import AgentDecision
+from ..models.candidate_application import CandidateApplication
+from ..models.organization import Organization
 from . import advance_stage, reject_application, resend_assessment_invite, send_assessment
+from ._workable_decision_summary import (
+    post_decision_summary_to_workable,
+    try_workable_advance,
+)
 from .types import ACTOR_RECRUITER, Actor
 
 
 _REJECT_DECISION_TYPES = ("reject", "skip_assessment_reject")
+_VERDICT_BY_DECISION_TYPE = {
+    "advance_to_interview": "advanced",
+    "reject": "rejected",
+    "skip_assessment_reject": "rejected",
+    "send_assessment": "assessment_sent",
+    "resend_assessment_invite": "invite_resent",
+}
 
 
 def run(
@@ -57,6 +70,20 @@ def run(
         "prompt_version": decision.prompt_version,
     }
     reason = (note or "").strip() or f"Approved agent recommendation #{decision.id}"
+    app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == int(decision.application_id),
+            CandidateApplication.organization_id == organization_id,
+        )
+        .first()
+    )
+    org = (
+        db.query(Organization).filter(Organization.id == organization_id).first()
+        if app is not None
+        else None
+    )
+    role = getattr(app, "role", None) if app is not None else None
 
     if decision.decision_type == "advance_to_interview":
         advance_stage.run(
@@ -69,6 +96,10 @@ def run(
             idempotency_key=f"approve_decision:{decision.id}",
             metadata=metadata,
         )
+        if app is not None:
+            try_workable_advance(
+                db, actor, app=app, org=org, role=role, reason=reason
+            )
     elif decision.decision_type in _REJECT_DECISION_TYPES:
         reject_application.run(
             db,
@@ -120,6 +151,28 @@ def run(
     decision.resolved_by_user_id = actor.user_id
     decision.resolution_note = note
     decision.human_disposition = "approved"
+
+    # Best-effort Workable activity note so the recruiter's Workable view
+    # records who/why/score + a 30-day share link to the full Tali report.
+    # No-op when Workable isn't connected or the application isn't linked.
+    verdict = _VERDICT_BY_DECISION_TYPE.get(decision.decision_type)
+    if app is not None and verdict:
+        try:
+            post_decision_summary_to_workable(
+                db,
+                actor,
+                app=app,
+                org=org,
+                decision=decision,
+                verdict=verdict,
+                reason=note,
+            )
+        except Exception:
+            import logging
+            logging.getLogger("taali.actions.approve_decision").warning(
+                "decision-summary post raised for decision_id=%s",
+                getattr(decision, "id", None),
+            )
 
     # Phase 2 §6.7: emit a recruiter-action episode (low volume — one
     # per resolved decision). Never blocks the response.
