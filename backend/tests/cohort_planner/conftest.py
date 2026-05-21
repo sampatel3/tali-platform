@@ -11,12 +11,14 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.role_intent import RoleIntent
 
 
 _BIG_PK_COUNTERS: dict[str, int] = {
     "agent_runs": 0,
     "agent_needs_input": 0,
     "agent_decisions": 0,
+    "role_intents": 0,
 }
 
 
@@ -27,7 +29,7 @@ def _assign_big_pk(mapper, connection, target):  # pragma: no cover — SQLA hoo
         target.id = _BIG_PK_COUNTERS[table]
 
 
-for _model in (AgentRun, AgentNeedsInput, AgentDecision):
+for _model in (AgentRun, AgentNeedsInput, AgentDecision, RoleIntent):
     event.listen(_model, "before_insert", _assign_big_pk)
 
 
