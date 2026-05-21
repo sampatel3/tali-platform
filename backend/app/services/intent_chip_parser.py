@@ -32,7 +32,6 @@ from ..models.role import Role
 from ..platform.config import settings
 from .claude_client_resolver import get_client_for_org
 from .pricing_service import Feature
-from .usage_metering_service import record_event
 
 
 logger = logging.getLogger("taali.intent_chip_parser")
@@ -126,32 +125,21 @@ def parse_intent_text_to_chips(
             temperature=0,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
+            # The metered Anthropic wrapper auto-writes a usage_event from
+            # response.usage. Pass Feature.OTHER (not a custom string —
+            # record_event would raise on conversion) and tag the sub-agent
+            # in metadata for attribution.
             metering={
-                "feature": "intent_chip_parser",
+                "feature": Feature.OTHER,
                 "organization_id": int(organization_id),
                 "role_id": int(role.id),
+                "metadata": {"sub_agent": "intent_chip_parser"},
+                "db": db,
             },
         )
     except Exception as exc:
         logger.warning("intent_chip_parser Claude call failed: %s", exc)
         return []
-
-    usage = getattr(response, "usage", None)
-    in_tok = int(getattr(usage, "input_tokens", 0) or 0)
-    out_tok = int(getattr(usage, "output_tokens", 0) or 0)
-    try:
-        record_event(
-            db,
-            organization_id=int(organization_id),
-            feature=Feature.OTHER,
-            model=model_version,
-            input_tokens=in_tok,
-            output_tokens=out_tok,
-            role_id=int(role.id),
-            metadata={"sub_agent": "intent_chip_parser"},
-        )
-    except Exception:
-        logger.exception("intent_chip_parser metering record_event failed")
 
     try:
         raw = response.content[0].text  # type: ignore[attr-defined]
