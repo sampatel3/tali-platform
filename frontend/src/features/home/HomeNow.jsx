@@ -264,11 +264,23 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
         </div>
       ) : (
         pending.map((p) => (
-          <button
+          // role="button" instead of a real <button> so the inline <a>
+          // candidate-name link below isn't an interactive child of an
+          // interactive parent (invalid HTML, breaks click + keyboard
+          // semantics in some browsers / AT). Same pattern HomeEverything
+          // uses for its history rows.
+          <div
             key={p.id}
-            type="button"
+            role="button"
+            tabIndex={0}
             className={`rq-split-row ${selectedId === p.id ? 'on' : ''}`.trim()}
             onClick={() => onSelect(p.id)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onSelect(p.id);
+              }
+            }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <TypeBadge type={p.decision_type} size="sm" />
@@ -302,7 +314,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
                 </>
               ) : null}
             </div>
-          </button>
+          </div>
         ))
       )}
     </div>

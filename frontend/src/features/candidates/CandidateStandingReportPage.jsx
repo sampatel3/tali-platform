@@ -1181,18 +1181,35 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   // user feedback was "just click share internally / share with client
   // and have a link copied." If revoke / manage-links is needed later
   // the backend endpoints (POST/GET/DELETE share-links) are untouched.
+  //
+  // Mint and clipboard-copy are deliberately separate try/catch blocks:
+  // if the link is minted but the clipboard write fails (permission
+  // denied, non-secure context, no clipboard API), we still surface the
+  // URL so the user can copy manually. Treating clipboard errors as
+  // mint errors would cause repeated retries to spawn orphan active
+  // links on the backend (one per click).
   const handleMintAndCopyShareLink = useCallback(async (mode, successMessage) => {
     if (!application?.id || !rolesApi?.createApplicationShareLink) return;
     setSharingMode(mode);
+    let url = '';
     try {
       const res = await rolesApi.createApplicationShareLink(application.id, { mode, expiry: '7d' });
       const token = res?.data?.token;
       if (!token || typeof window === 'undefined') throw new Error('Share link unavailable.');
-      const url = `${window.location.origin}/share/${token}`;
-      await navigator.clipboard.writeText(url);
-      showToast(successMessage, 'success');
+      url = `${window.location.origin}/share/${token}`;
     } catch (err) {
       showToast(getErrorMessage(err, 'Failed to create share link.'), 'error');
+      setSharingMode('');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast(successMessage, 'success');
+    } catch {
+      // Clipboard API unavailable / blocked — surface the URL so the
+      // user can copy it manually instead of silently throwing away a
+      // minted link.
+      showToast(`Link ready, copy failed: ${url}`, 'info');
     } finally {
       setSharingMode('');
     }
