@@ -197,14 +197,21 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     }
   }, []);
 
-  // Org-status poll — the live KPI strip and tab badge.
+  // Org-status + roles-breakdown poll — keeps the KPI strip, tab badge,
+  // and the "By role" pending column in lockstep. Polling both together
+  // avoids the stale per-role counts users saw when actions resolved
+  // decisions outside this page's review queue.
   useEffect(() => {
     let cancelled = false;
     const tick = async () => {
       try {
-        const res = await agentApi.orgStatus();
+        const [statusRes, rolesRes] = await Promise.all([
+          agentApi.orgStatus(),
+          agentApi.rolesBreakdown(),
+        ]);
         if (cancelled) return;
-        setOrgStatus(res?.data || null);
+        setOrgStatus(statusRes?.data || null);
+        setRolesBreakdown(Array.isArray(rolesRes?.data) ? rolesRes.data : []);
       } catch { /* silent */ }
     };
     void tick();
@@ -216,7 +223,6 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   }, []);
 
   useEffect(() => { void loadDecisions(); }, [loadDecisions]);
-  useEffect(() => { void loadRoles(); }, [loadRoles]);
   useEffect(() => { void loadSignal(); }, [loadSignal]);
 
   const reloadAll = useCallback(async () => {

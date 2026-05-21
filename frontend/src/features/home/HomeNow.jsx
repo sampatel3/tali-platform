@@ -203,15 +203,19 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction }) => (
           <option key={r.role_id} value={r.role_id} title={r.name}>{r.name || r.short_name}</option>
         ))}
       </select>
-      <select
-        className="rq-select"
-        value={filters.type || ''}
-        onChange={(e) => setFilters((f) => ({ ...f, type: e.target.value || null }))}
-        aria-label="Filter by decision type"
-      >
-        {TYPE_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-      </select>
-      <div className="rq-tabset" style={{ marginLeft: 6 }}>
+      <div className="rq-tabset" role="group" aria-label="Filter by decision type">
+        {TYPE_OPTIONS.map((o) => (
+          <button
+            key={o.id || 'all'}
+            type="button"
+            className={(filters.type || '') === o.id ? 'on' : ''}
+            onClick={() => setFilters((f) => ({ ...f, type: o.id || null }))}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+      <div className="rq-tabset" role="group" aria-label="Filter by decision status">
         {STATUS_TABS.map((t) => (
           <button
             key={t.id}
