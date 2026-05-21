@@ -650,44 +650,94 @@ def _record_usage_safe(db: Session, *, organization_id, **kwargs) -> None:
 
 
 def _clear_application_scores(app: CandidateApplication) -> None:
-    """NULL out every score-related field on an application.
+    """Mark application scores as stale WITHOUT wiping the numeric values.
 
-    Used by every invalidation path (role intent change, candidate
-    input change, error recovery) so the UI surfaces "needs rescore"
-    instead of a stale numeric score that no longer reflects the
-    agent's current view of the candidate.
+    The previous version NULL'd every score field on invalidation so the
+    UI would show "needs rescore" instead of the old number. In
+    practice that broke recruiter trust badly: roles where 400+ scored
+    candidates suddenly all showed blank, with no indication of WHY
+    the system had forgotten them. Agent decisions on the Home page
+    were also orphaned from their backing scores.
 
-    Resets ``pre_screen_run_at`` to None so
-    ``application_needs_pre_screen`` correctly returns True on the
-    next orchestrator pass — otherwise the timestamp gates Stage-1
-    re-run and the orchestrator falls through to v3 cv_match scoring
-    without ever re-evaluating the updated must/constraint criteria
-    against the candidate.
+    The honest UX is to keep the old score visible AND flag it as
+    stale. The caller adds a ``CvScoreJob(status="stale")`` row (via
+    ``_enqueue_stale_job``); the frontend renders that as a "stale"
+    badge alongside the existing number so the recruiter sees:
+       "Strong match — 87 ⓘ stale: re-evaluating against updated salary cap"
+    until the rescore lands and atomically replaces the value.
 
-    Also wipes the aggregate cache columns (``taali_score_cache_100``,
-    ``assessment_score_cache_100``, ``role_fit_score_cache_100``,
-    ``score_mode_cache``) so list / detail endpoints that read from
-    the cache for performance don't keep returning stale numbers a
-    recruiter could act on during the rescore window.
+    What this helper now DOES clear:
+    - ``pre_screen_run_at`` so ``application_needs_pre_screen``
+      correctly returns True on the next orchestrator pass and
+      Stage-1 actually re-runs.
+    - ``pre_screen_error_reason`` so the next successful attempt
+      doesn't get masked by a leftover error reason from a previous
+      attempt (a credit-exhaustion error from yesterday shouldn't
+      block today's retry).
+
+    What it deliberately KEEPS (so the UI keeps showing them with a
+    stale badge):
+    - ``pre_screen_score_100``, ``requirements_fit_score_100``
+    - ``cv_match_score``, ``cv_match_details``, ``cv_match_scored_at``
+    - ``pre_screen_recommendation``
+    - ``taali_score_cache_100``, ``assessment_score_cache_100``,
+      ``role_fit_score_cache_100``, ``score_mode_cache``,
+      ``score_cached_at``
+    - ``rank_score`` (preserves directory ordering)
+
+    Pending agent decisions that reference this application are
+    superseded separately by ``supersede_pending_decisions_for_app``;
+    the agent's next cohort tick generates fresh decisions once the
+    rescore lands.
     """
-    app.pre_screen_score_100 = None
-    app.requirements_fit_score_100 = None
-    app.cv_match_score = None
-    app.cv_match_details = None
-    app.cv_match_scored_at = None
-    app.pre_screen_recommendation = None
     app.pre_screen_run_at = None
-    # Aggregate score caches — these are what list/detail endpoints
-    # render for performance, so they MUST clear or the UI shows a
-    # number that no longer reflects the agent's current opinion.
-    app.taali_score_cache_100 = None
-    app.assessment_score_cache_100 = None
-    app.role_fit_score_cache_100 = None
-    app.score_mode_cache = None
-    app.score_cached_at = None
-    # Rank falls back to workable_score so the directory still has
-    # *some* ordering signal during the rescore window.
-    app.rank_score = app.workable_score
+    app.pre_screen_error_reason = None
+
+
+def supersede_pending_decisions_for_app(
+    db: Session,
+    application_id: int,
+    *,
+    reason: str = "score_invalidated",
+) -> int:
+    """Discard any ``pending`` ``AgentDecision`` rows for an application
+    whose backing score has just been invalidated.
+
+    Without this, the Home review queue would keep showing the agent's
+    old recommendation (e.g. "advance to interview") even though that
+    recommendation was based on a score that no longer reflects current
+    role criteria. The recruiter would approve a decision the agent
+    itself would reverse on its next cohort tick.
+
+    Setting status to ``discarded`` is the cleanest exit:
+    - Removes the row from the Home queue immediately
+    - Preserves the audit trail (resolved_at + resolution_note)
+    - Lets the agent's next cohort tick generate a fresh decision
+      based on the new score once it lands
+
+    Returns the number of decisions superseded.
+    """
+    from ..models.agent_decision import AgentDecision
+
+    now = datetime.now(timezone.utc)
+    pending = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.application_id == application_id,
+            AgentDecision.status == "pending",
+        )
+        .all()
+    )
+    for decision in pending:
+        decision.status = "discarded"
+        decision.resolved_at = now
+        decision.resolution_note = (
+            f"superseded: {reason}; "
+            "agent will re-decide once the new score lands"
+        )[:500]
+    if pending:
+        db.flush()
+    return len(pending)
 
 
 def _enqueue_stale_job(
@@ -716,19 +766,18 @@ def _enqueue_stale_job(
     return True
 
 
-def mark_role_scores_stale(db: Session, role_id: int) -> int:
+def mark_role_scores_stale(db: Session, role_id: int, *, reason: str = "role_intent_changed") -> int:
     """Invalidate every scored application for a role.
 
     Called when the role's must-have / constraint criteria or its job
     spec change (preferred-criteria edits don't trigger because
-    pre-screen ignores nice-to-haves). NULLs every score field on
-    affected applications AND enqueues a stale CvScoreJob row so the
-    background worker picks them back up. Returns the number of
-    applications invalidated.
+    pre-screen ignores nice-to-haves). Marks each scored app as stale:
+    keeps the numeric score visible so the UI can show "Strong match
+    — 87 (stale)" until the rescore lands, enqueues a stale
+    CvScoreJob row, and discards any pending agent decisions that
+    were based on the old score.
 
-    The score fields are cleared (not just job-row-tagged) because the
-    UI's "Strong match — 87" is the recruiter's primary signal; a
-    stale numeric is worse than no numeric until rescore lands.
+    Returns the number of applications invalidated.
     """
     apps = (
         db.query(CandidateApplication)
@@ -752,11 +801,17 @@ def mark_role_scores_stale(db: Session, role_id: int) -> int:
         if not _enqueue_stale_job(db, app=app, role_id=role_id, now=now):
             continue
         _clear_application_scores(app)
+        supersede_pending_decisions_for_app(db, app.id, reason=reason)
         marked += 1
     return marked
 
 
-def mark_application_scores_stale(db: Session, application_id: int) -> bool:
+def mark_application_scores_stale(
+    db: Session,
+    application_id: int,
+    *,
+    reason: str = "candidate_data_changed",
+) -> bool:
     """Invalidate a single application's scores (e.g. on CV upload or
     Workable-context change for that one candidate). Mirror of
     ``mark_role_scores_stale`` scoped to one app. Returns True if the
@@ -776,4 +831,5 @@ def mark_application_scores_stale(db: Session, application_id: int) -> bool:
     if not _enqueue_stale_job(db, app=app, role_id=app.role_id, now=now):
         return False
     _clear_application_scores(app)
+    supersede_pending_decisions_for_app(db, app.id, reason=reason)
     return True

@@ -109,6 +109,58 @@ export const getPrimaryScorePayload = (application) => {
   return { score: null, details: null };
 };
 
+// Renders the JobPipelinePage's Score column pill.
+// score_status surfaces the latest CvScoreJob.status. When the recruiter
+// edits a must-have / constraint criterion (or a candidate's Workable
+// data changes), the score stays visible but flagged ``stale`` until the
+// rescore lands — better than blanking the number out from under the
+// recruiter, which orphans Home-page decisions.
+//
+// pending/running/stale all keep the prior score visible (dimmed + with
+// a contextual label) — only no-prior-score apps render text-only
+// ``Scoring…``. Otherwise the score disappears the moment a rescore
+// enqueues, reintroducing the exact "where did my numbers go?" UX the
+// honest-stale change is designed to avoid.
+//
+// React.createElement to avoid JSX (file is .js, not .jsx).
+import React from 'react';
+export const renderJobPipelineScoreCell = (score, scoreClass, status) => {
+  const isInFlight = status === 'pending' || status === 'running';
+  const isStale = status === 'stale';
+  if (score == null) {
+    if (isInFlight) {
+      return React.createElement(
+        'span',
+        { className: 'score-pill mid', title: 'Scoring in progress' },
+        'Scoring…',
+      );
+    }
+    return React.createElement(
+      'span',
+      { className: 'score-pill mid', style: { opacity: 0.5 } },
+      '—',
+    );
+  }
+  const dim = isInFlight || isStale ? { opacity: 0.55 } : undefined;
+  const label = isInFlight
+    ? ` · rescoring`
+    : isStale
+      ? ` · stale`
+      : '';
+  const title = isInFlight
+    ? 'Rescore in progress — number will refresh when it lands'
+    : isStale
+      ? 'Out of date — rescore pending'
+      : undefined;
+  return React.createElement(
+    'span',
+    { className: `score-pill ${scoreClass}`, style: dim, title },
+    score,
+    label,
+  );
+};
+
+
 // Renders the cell text shown in the "Pre-screen" column. Active scoring
 // jobs (pending/running) take precedence over a stale prior score so the
 // recruiter visibly sees an in-flight rescore rather than an old number.
