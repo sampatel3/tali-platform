@@ -486,8 +486,35 @@ def _execute_scoring_v3(
         threshold = settings.PRE_SCREEN_THRESHOLD
         evidence = application.pre_screen_evidence if isinstance(application.pre_screen_evidence, dict) else {}
         fraud_capped = bool(evidence.get("fraud_capped", False))
+        # Pre-screen errored (Anthropic credit exhaustion, network
+        # timeout, JSON parse failure, etc.) — DON'T fall through to v3
+        # cv_match. Previously we did, and the v3 score got mirrored
+        # into ``pre_screen_score_100`` via the refresh helpers, hiding
+        # the error from the recruiter. Now we surface a clear error
+        # state and bail; the next sweeper tick (or manual rescore)
+        # picks the application back up.
+        pre_screen_errored = (
+            (evidence.get("decision") == "error")
+            or bool(application.pre_screen_error_reason)
+        )
+        if pre_screen_errored:
+            now = datetime.now(timezone.utc)
+            reason = (
+                application.pre_screen_error_reason
+                or evidence.get("summary")
+                or "pre_screen_unknown_error"
+            )
+            job.status = SCORE_JOB_ERROR
+            job.error_message = f"pre_screen_errored: {reason}"[:500]
+            job.cache_hit = "pre_screen_errored"
+            job.finished_at = now
+            # Make sure no stale scores remain — pre-screen handler
+            # already NULLs these, but defensive in case caller wired
+            # in via a different path.
+            application.cv_match_score = None
+            application.cv_match_scored_at = None
+            return
         # Only filter when we have a numeric score AND it's below threshold.
-        # None score (parse failure/error) always falls through to v3.
         if gated_score is not None and gated_score < threshold:
             now = datetime.now(timezone.utc)
             if fraud_capped:

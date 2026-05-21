@@ -226,6 +226,50 @@ def render_auto_reject_note(
     )[:256]
 
 
+def _persist_pre_screen_error(
+    app: CandidateApplication,
+    *,
+    reason: str,
+    trace_id: str | None = None,
+    prompt_version: str | None = None,
+) -> None:
+    """Record a pre-screen LLM failure on the application.
+
+    Leaves both ``pre_screen_score_100`` and ``cv_match_score`` as NULL
+    so the UI surfaces "needs rescore" instead of a fabricated score.
+    Populates ``pre_screen_error_reason`` so the recruiter can see why
+    the agent couldn't decide, and writes an evidence row with
+    ``decision: 'error'`` for the existing rendering logic.
+    """
+    app.pre_screen_score_100 = None
+    app.requirements_fit_score_100 = None
+    app.cv_match_score = None
+    app.cv_match_details = None
+    app.cv_match_scored_at = None
+    app.pre_screen_recommendation = None
+    app.pre_screen_error_reason = sanitize_text_for_storage(reason or "")[:500] or None
+    app.pre_screen_evidence = sanitize_json_for_storage(
+        {
+            "summary": sanitize_text_for_storage(reason or "")[:240] or None,
+            "matching_skills": [],
+            "missing_skills": [],
+            "concerns": [],
+            "score_rationale_bullets": [],
+            "requirements_coverage": {},
+            "requirements_assessment": [],
+            "decision": "error",
+            "trace_id": trace_id,
+            "prompt_version": prompt_version,
+            "cache_hit": False,
+            "llm_score_100": None,
+        }
+    )
+    app.pre_screen_run_at = _utcnow()
+    # rank_score falls back to workable_score so the directory still
+    # has *some* ordering signal — but never the stale agent score.
+    app.rank_score = app.workable_score
+
+
 def mark_auto_reject_state(
     app: CandidateApplication,
     *,
@@ -339,7 +383,28 @@ def execute_pre_screen_only(
             workable_context=workable_context or None,
         )
     except Exception as exc:  # noqa: BLE001 — guard the LLM call
+        _persist_pre_screen_error(app, reason=f"pre_screen_failed: {exc}"[:500])
         return {"status": "error", "reason": f"pre_screen_failed: {exc}"[:200]}
+
+    # When the LLM call itself returned ``decision == "error"`` (credit
+    # exhaustion, network timeout, JSON parse failure, etc.) we MUST NOT
+    # fall through to v3 cv_match scoring. Doing so used to mirror a
+    # high CV-fit score into ``pre_screen_score_100`` via the refresh
+    # helpers, hiding the error from the recruiter and making it look
+    # like pre-screen passed when it never ran.
+    if pre.decision == "error" or pre.score is None:
+        _persist_pre_screen_error(
+            app,
+            reason=(pre.reason or "pre_screen_unknown_error")[:500],
+            trace_id=pre.trace_id,
+            prompt_version=pre.prompt_version,
+        )
+        return {
+            "status": "error",
+            "reason": (pre.reason or "pre_screen_unknown_error")[:200],
+            "trace_id": pre.trace_id,
+            "prompt_version": pre.prompt_version,
+        }
 
     # Record usage metering when a session is available. Telemetry must
     # never break pre-screen, so swallow any failure.
@@ -394,10 +459,12 @@ def execute_pre_screen_only(
         decision = pre.decision
 
     # Persist on the application. We deliberately do NOT touch cv_match_*
-    # so a subsequent score job can still run.
+    # so a subsequent score job can still run. Any prior error reason is
+    # cleared because the LLM call succeeded this time.
     app.pre_screen_score_100 = score
     app.requirements_fit_score_100 = score  # parity with snapshot fallback
     app.pre_screen_recommendation = recommendation
+    app.pre_screen_error_reason = None
     app.pre_screen_evidence = sanitize_json_for_storage(
         {
             "summary": summary,

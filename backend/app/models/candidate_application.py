@@ -73,6 +73,13 @@ class CandidateApplication(Base):
     requirements_fit_score_100 = Column(Float, nullable=True)
     pre_screen_recommendation = Column(String, nullable=True)
     pre_screen_evidence = Column(JSON, nullable=True)
+    # Populated when the most recent pre-screen attempt errored
+    # (Anthropic credit exhaustion, network timeout, JSON parse failure,
+    # etc.). When set, ``pre_screen_score_100`` + ``cv_match_score`` are
+    # kept NULL and the UI surfaces "agent couldn't score — retry
+    # needed" instead of falling through to v3 cv_match (which would
+    # silently mirror an unrelated CV-fit score into the gate field).
+    pre_screen_error_reason = Column(Text, nullable=True)
     # Set whenever the pre-screen LLM completes (whether passed or "Below
     # threshold"). Used by batch actions to skip already-pre-screened apps
     # whose CV hasn't changed since.
