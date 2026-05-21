@@ -77,6 +77,10 @@ class AgentDecisionPayload(BaseModel):
     candidate_name: Optional[str] = None
     candidate_email: Optional[str] = None
     role_name: Optional[str] = None
+    # Workable shortcode (= role.workable_job_id) so the home-page modal
+    # can fetch this role's Workable stages for the Advance / Skip & advance
+    # stage <select> without a second round-trip.
+    workable_job_id: Optional[str] = None
 
 
 class AgentRunPayload(BaseModel):
@@ -98,11 +102,16 @@ class AgentRunPayload(BaseModel):
 
 class ApproveBody(BaseModel):
     note: Optional[str] = Field(default=None, max_length=2000)
+    # Recruiter's Workable stage pick for advance verdicts (sent from the
+    # home-page modal's <select>). Optional — when absent, only Tali's
+    # internal pipeline_stage updates.
+    workable_target_stage: Optional[str] = Field(default=None, max_length=200)
 
 
 class OverrideBody(BaseModel):
     override_action: Optional[str] = Field(default=None, max_length=64)
     note: Optional[str] = Field(default=None, max_length=2000)
+    workable_target_stage: Optional[str] = Field(default=None, max_length=200)
 
 
 class DiscardBody(BaseModel):
@@ -183,6 +192,7 @@ def _decision_to_payload(
         candidate_name=getattr(candidate, "full_name", None) if candidate else None,
         candidate_email=getattr(candidate, "email", None) if candidate else None,
         role_name=getattr(role, "name", None) if role else None,
+        workable_job_id=getattr(role, "workable_job_id", None) if role else None,
     )
 
 
@@ -285,6 +295,7 @@ def approve(
             organization_id=current_user.organization_id,
             decision_id=decision_id,
             note=body.note,
+            workable_target_stage=body.workable_target_stage,
         )
         db.commit()
         db.refresh(decision)
@@ -325,6 +336,7 @@ def override(
             decision_id=decision_id,
             override_action=body.override_action,
             note=body.note,
+            workable_target_stage=body.workable_target_stage,
         )
         db.commit()
         db.refresh(decision)
