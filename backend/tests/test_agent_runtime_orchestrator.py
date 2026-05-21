@@ -441,3 +441,223 @@ def test_run_cycle_finishes_on_end_turn_without_complete(db):
 
     assert run.status == "aborted"
     assert run.finished_at is not None
+
+
+# ---------------------------------------------------------------------------
+# Cross-cycle memory — calibration writebacks
+# ---------------------------------------------------------------------------
+
+
+def test_aborted_cycle_persists_last_cycle_to_calibration(db):
+    """An aborted run must still write a last_cycle summary so the next
+    cycle's system prompt can render 'last cycle: aborted, rounds=18'."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+
+    # Spin forever.
+    spinning = _response(
+        blocks=[
+            _block_tool_use(
+                tool_use_id="tu_spin",
+                name="get_application",
+                input_={"application_id": int(app.id)},
+            ),
+        ],
+        stop_reason="tool_use",
+    )
+    client = MagicMock()
+    client.messages.create = MagicMock(return_value=spinning)
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+    db.commit()
+    db.refresh(role)
+
+    assert run.status == "aborted"
+    cal = role.agent_calibration or {}
+    assert "last_cycle" in cal
+    assert cal["last_cycle"]["status"] == "aborted"
+    assert cal["last_cycle"]["finished_via_complete"] is False
+    assert cal["last_cycle"]["rounds_used"] == orchestrator.MAX_TOOL_ROUNDS
+
+
+def test_successful_cycle_persists_last_cycle_with_finished_via_complete(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+
+    client = _scripted_client([
+        _response(
+            blocks=[
+                _block_tool_use(
+                    tool_use_id="tu_done",
+                    name="agent_run_complete",
+                    input_={"summary": "Nothing to do."},
+                ),
+            ],
+            stop_reason="tool_use",
+        ),
+    ])
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+    db.commit()
+    db.refresh(role)
+
+    assert run.status == "succeeded"
+    cal = role.agent_calibration or {}
+    assert cal["last_cycle"]["status"] == "succeeded"
+    assert cal["last_cycle"]["finished_via_complete"] is True
+    assert cal["last_cycle"]["rounds_used"] == 1
+
+
+def test_record_observation_tool_appends_to_calibration_notes(db):
+    """The record_observation tool must persist a note that survives the
+    cycle and would show up in the next cycle's system prompt."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+
+    client = _scripted_client([
+        _response(
+            blocks=[
+                _block_tool_use(
+                    tool_use_id="tu_note",
+                    name="record_observation",
+                    input_={
+                        "note": "cohort clusters around taali_score 60-65; threshold may be too high",
+                        "kind": "pattern",
+                    },
+                ),
+            ],
+            stop_reason="tool_use",
+        ),
+        _response(
+            blocks=[
+                _block_tool_use(
+                    tool_use_id="tu_done",
+                    name="agent_run_complete",
+                    input_={"summary": "Noted a pattern, no action this cycle."},
+                ),
+            ],
+            stop_reason="tool_use",
+        ),
+    ])
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+    db.commit()
+    db.refresh(role)
+
+    assert run.status == "succeeded"
+    notes = (role.agent_calibration or {}).get("notes") or []
+    assert len(notes) == 1
+    assert notes[0]["kind"] == "pattern"
+    assert "60-65" in notes[0]["note"]
+    assert notes[0]["agent_run_id"] == int(run.id)
+
+
+def test_record_observation_empty_note_is_skipped(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+
+    client = _scripted_client([
+        _response(
+            blocks=[
+                _block_tool_use(
+                    tool_use_id="tu_empty",
+                    name="record_observation",
+                    input_={"note": "   ", "kind": "pattern"},
+                ),
+            ],
+            stop_reason="tool_use",
+        ),
+        _response(
+            blocks=[
+                _block_tool_use(
+                    tool_use_id="tu_done",
+                    name="agent_run_complete",
+                    input_={"summary": "done"},
+                ),
+            ],
+            stop_reason="tool_use",
+        ),
+    ])
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+    db.commit()
+    db.refresh(role)
+
+    notes = (role.agent_calibration or {}).get("notes") or []
+    assert notes == []
+
+
+def test_record_observation_survives_aborted_cycle(db):
+    """A note written mid-cycle must persist even when the cycle later aborts.
+
+    This is the whole point of record_observation: aborts no longer
+    erase the agent's mid-cycle learning.
+    """
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+
+    # First response: record an observation. Subsequent responses: spin
+    # on get_application so we never hit agent_run_complete and abort.
+    note_response = _response(
+        blocks=[
+            _block_tool_use(
+                tool_use_id="tu_note",
+                name="record_observation",
+                input_={"note": "must remember this", "kind": "todo"},
+            ),
+        ],
+        stop_reason="tool_use",
+    )
+    spin_response = _response(
+        blocks=[
+            _block_tool_use(
+                tool_use_id="tu_spin",
+                name="get_application",
+                input_={"application_id": int(app.id)},
+            ),
+        ],
+        stop_reason="tool_use",
+    )
+
+    responses = [note_response] + [spin_response] * (orchestrator.MAX_TOOL_ROUNDS - 1)
+    client = _scripted_client(responses)
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+    db.commit()
+    db.refresh(role)
+
+    assert run.status == "aborted"
+    notes = (role.agent_calibration or {}).get("notes") or []
+    assert len(notes) == 1
+    assert notes[0]["note"] == "must remember this"
+    assert notes[0]["kind"] == "todo"

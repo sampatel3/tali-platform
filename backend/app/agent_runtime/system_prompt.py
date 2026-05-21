@@ -19,7 +19,7 @@ from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 from . import calibration as calibration_mod
 
 
-PROMPT_VERSION = "agent.v8.cohort-planner.bucketed.advanced-bucket.2026-05-12"
+PROMPT_VERSION = "agent.v9.cross-cycle-memory.2026-05-21"
 
 
 def _render_bucketed_criteria(role: Role) -> str:
@@ -127,6 +127,13 @@ ALLOWLIST — you may ONLY call tools in this list:
     Idempotent on (role_id, kind) — re-calling refreshes the existing
     open card. Always pair with read_pending_recruiter_inputs first.
 
+  MEMORY (use to carry context across cycles):
+  - record_observation: persist a short note (<200 chars) onto
+    role.agent_calibration.notes. Notes are rendered into the NEXT
+    cycle's system prompt. Capped at 10 entries (FIFO). Use this when
+    you notice a cohort pattern, a blocker you can't resolve this cycle,
+    or a todo for next cycle. Commits immediately — survives aborts.
+
   POLICY (ALWAYS call before any queue_* tool):
   - evaluate_policy: deterministic verdict for one application. Returns
     decision_type, rule_path, policy_revision_id, intent_overrode,
@@ -184,10 +191,16 @@ EFFICIENCY:
   turn so they ship in one round-trip.
 - Prefer batch tools over individual ones when you have an id list.
 - Cycles run on a tight per-role budget. Be cheap with tool calls.
+- If you find yourself about to deliberate the same cohort the next
+  cycle will see, record_observation NOW so future-you skips the
+  re-derivation.
 
 OUTPUT CONTRACT:
 - Each cycle MUST end with agent_run_complete and a 1-2 sentence summary
   of what changed and what's blocking the next step.
+- Before agent_run_complete, if anything you learned this cycle would
+  help future-you decide faster, call record_observation. The next
+  cycle will see your notes in the system prompt's CALIBRATION block.
 """
 
 
