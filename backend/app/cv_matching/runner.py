@@ -180,14 +180,14 @@ def _parse_and_validate(
 
 
 def _resolve_anthropic_client():
-    from anthropic import Anthropic
+    # Always return a ``MeteredAnthropicClient`` so a metering wrapper is
+    # always available. v3 scoring sets ``metering={"skip": True}`` because
+    # cv_score_orchestrator records the event post-call from the typed
+    # CVMatchOutput, but going through the wrapper means a future
+    # direct-invocation path can't accidentally bypass metering.
+    from ..services.claude_client_resolver import get_shared_client
 
-    from ..platform.config import settings
-
-    api_key = settings.ANTHROPIC_API_KEY
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY is not configured")
-    return Anthropic(api_key=api_key)
+    return get_shared_client()
 
 
 def run_cv_match(

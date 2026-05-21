@@ -3,14 +3,23 @@ Anthropic Claude AI service for code analysis and conversational assistance.
 
 Provides chat-based interactions and automated code quality analysis
 powered by Claude for use during candidate assessments.
+
+All three call sites (``chat``, ``analyze_code_quality``,
+``analyze_prompt_session``) flow through ``MeteredAnthropicClient`` so
+every Anthropic call writes a ``UsageEvent`` row. This used to be a bare
+``Anthropic()`` client — invisible to the meter, ~73% of Haiku spend on
+2026-05-20 came through here unaccounted for.
 """
 
 import json
 import logging
+from typing import Optional
 
 from anthropic import Anthropic
-from .model_fallback import candidate_models_for, is_model_not_found_error
+
+from ....services.metered_anthropic_client import MeteredAnthropicClient
 from ....platform.config import settings
+from .model_fallback import candidate_models_for, is_model_not_found_error
 
 logger = logging.getLogger(__name__)
 
@@ -20,21 +29,72 @@ DEFAULT_SYSTEM_PROMPT = (
 
 
 class ClaudeService:
-    """Service for interacting with the Anthropic Claude API."""
+    """Service for interacting with the Anthropic Claude API.
 
-    def __init__(self, api_key: str):
+    Constructed with an org-scoped api_key (per-workspace where Anthropic
+    Admin API provisioned one, otherwise the shared Taali key). The
+    ``organization_id`` is passed through to ``MeteredAnthropicClient`` so
+    each Anthropic call lands a properly attributed ``UsageEvent``.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        organization_id: Optional[int] = None,
+        feature: str = "assessment",
+    ):
         """
-        Initialise the Claude service.
-
         Args:
-            api_key: Anthropic API key.
+            api_key: Anthropic API key (per-workspace or shared).
+            organization_id: The org that owns this call's spend.
+                If None, the meter logs a warning but still records the
+                event (attributed to "unknown org"). Callers that have
+                an org context MUST pass it.
+            feature: ``Feature`` enum value (string form) for cost
+                attribution. Defaults to "assessment"; pass a more
+                specific value (e.g. "assessment_code_quality") when
+                the caller wants finer-grained dashboards. Currently
+                the only known caller is candidate assessment chat
+                + code analysis + prompt-session scoring.
         """
-        self.client = Anthropic(api_key=api_key)
+        self.client = MeteredAnthropicClient(
+            inner=Anthropic(api_key=api_key),
+            organization_id=organization_id,
+        )
         self.model = settings.resolved_claude_model
         self.max_tokens_per_response = settings.MAX_TOKENS_PER_RESPONSE
-        logger.info("ClaudeService initialised with model=%s", self.model)
+        self._organization_id = organization_id
+        self._feature = feature
+        logger.info(
+            "ClaudeService initialised model=%s org=%s feature=%s",
+            self.model,
+            organization_id,
+            feature,
+        )
 
-    def _create_with_model_fallback(self, *, max_tokens: int, system: str, messages: list):
+    def _metering_kwargs(self, *, sub_feature: Optional[str] = None) -> dict:
+        """Build the ``metering=`` kwarg threaded through to the wrapper.
+
+        ``sub_feature`` is metadata, not a Feature enum value — used to
+        differentiate chat vs. code-quality vs. prompt-session inside the
+        same Feature so we can break it down on the Usage tab later.
+        """
+        meta = {"feature": self._feature}
+        if self._organization_id is not None:
+            meta["organization_id"] = self._organization_id
+        if sub_feature:
+            meta["sub_feature"] = sub_feature
+        return meta
+
+    def _create_with_model_fallback(
+        self,
+        *,
+        max_tokens: int,
+        system: str,
+        messages: list,
+        sub_feature: Optional[str] = None,
+    ):
         last_model_error: Exception | None = None
         for candidate_model in candidate_models_for(self.model):
             try:
@@ -43,6 +103,7 @@ class ClaudeService:
                     max_tokens=max_tokens,
                     system=system,
                     messages=messages,
+                    metering=self._metering_kwargs(sub_feature=sub_feature),
                 )
                 if candidate_model != self.model:
                     logger.warning(
@@ -88,6 +149,7 @@ class ClaudeService:
                 max_tokens=self.max_tokens_per_response,
                 system=system_prompt,
                 messages=messages,
+                sub_feature="assessment_chat",
             )
 
             content = response.content[0].text
@@ -150,6 +212,7 @@ class ClaudeService:
                 max_tokens=2048,
                 system="You are an expert code reviewer. Respond only with valid JSON.",
                 messages=[{"role": "user", "content": analysis_prompt}],
+                sub_feature="assessment_code_quality",
             )
 
             analysis_text = response.content[0].text
@@ -277,6 +340,7 @@ class ClaudeService:
                 max_tokens=4096,
                 system="You are an expert technical interviewer. Respond ONLY with valid JSON, no markdown.",
                 messages=[{"role": "user", "content": analysis_prompt}],
+                sub_feature="assessment_prompt_session",
             )
 
             raw_text = response.content[0].text

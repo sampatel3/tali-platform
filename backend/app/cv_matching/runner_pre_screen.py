@@ -91,14 +91,15 @@ def _normalize_decision(value: str) -> PreScreenDecision:
 
 
 def _resolve_anthropic_client():
-    from anthropic import Anthropic
+    # Always return a ``MeteredAnthropicClient`` so the metering wrapper
+    # is available — even when the caller passed nothing. Pre-screen calls
+    # set ``metering={"skip": True}`` because cv_score_orchestrator records
+    # the event post-call, but going through the wrapper means any caller
+    # that *doesn't* set skip (e.g. a future direct-invocation path) is
+    # auto-metered instead of going to /dev/null.
+    from ..services.claude_client_resolver import get_shared_client
 
-    from ..platform.config import settings
-
-    api_key = settings.ANTHROPIC_API_KEY
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY is not configured")
-    return Anthropic(api_key=api_key)
+    return get_shared_client()
 
 
 def _cache_get(cache_key: str) -> PreScreenResult | None:

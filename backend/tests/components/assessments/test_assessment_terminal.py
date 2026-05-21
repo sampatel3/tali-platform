@@ -304,8 +304,9 @@ def test_claude_endpoint_returns_cursor_style_wrapper_response(client, monkeypat
             return None
 
     class FakeClaudeService:
-        def __init__(self, _api_key):
-            pass
+        def __init__(self, _api_key, *, organization_id=None, feature="assessment"):
+            self._organization_id = organization_id
+            self._feature = feature
 
         def chat(self, messages, system=None):
             assert messages[-1]["role"] == "user"
@@ -391,8 +392,9 @@ def test_claude_endpoint_strips_internal_tool_markup_from_response(client, monke
             return None
 
     class FakeClaudeService:
-        def __init__(self, _api_key):
-            pass
+        def __init__(self, _api_key, *, organization_id=None, feature="assessment"):
+            self._organization_id = organization_id
+            self._feature = feature
 
         def chat(self, messages, system=None):
             assert messages[-1]["role"] == "user"
