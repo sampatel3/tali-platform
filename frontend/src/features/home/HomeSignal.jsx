@@ -12,7 +12,7 @@
 // Improving the agent's scoring is a separate workstream — see
 // docs/HOME_HUB_DESIGN.md §8.
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Award, Brain, CheckCircle2, ChevronDown, ChevronUp, ShieldCheck, Undo2, X } from 'lucide-react';
 
 import { agent as agentApi } from '../../shared/api';
@@ -185,7 +185,14 @@ export const HomeSignal = ({ feedback, outcomes, loading, reload }) => {
   const cosignPending = (feedback || []).filter(
     (f) => f.cosign_required && !f.cosigned_at && !f.reverted_at,
   );
-  const [open, setOpen] = useState(cosignPending.length > 0);
+  const [open, setOpen] = useState(false);
+
+  // feedback arrives async after first render, so the initial useState
+  // value can't see co-sign items. Auto-open when any show up; once
+  // opened, leave the user in control of closing it.
+  useEffect(() => {
+    if (cosignPending.length > 0) setOpen(true);
+  }, [cosignPending.length]);
 
   const handleCosign = async (id) => {
     try {
