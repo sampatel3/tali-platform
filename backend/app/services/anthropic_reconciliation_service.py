@@ -128,6 +128,22 @@ def reconcile_recent(
         .all()
     }
 
+    # Anthropic's admin API attributes calls under the shared (non-
+    # workspace-scoped) API key to ``workspace_id=None`` (the "Default"
+    # workspace in the console). Without an explicit mapping, those
+    # rows would have ``org_id=None`` below and the internal aggregate
+    # would be forced to zero — masking the entire shared-key spend as
+    # a -100% drift. Collect every Tali org that *doesn't* have its own
+    # workspace key provisioned: those orgs use the shared key, so
+    # their UsageEvent rows are the right aggregate to compare against
+    # Anthropic's Default-workspace totals.
+    _shared_key_org_ids: list[int] = [
+        int(o.id)
+        for o in db.query(Organization)
+        .filter(Organization.anthropic_workspace_id.is_(None))
+        .all()
+    ]
+
     # Aggregate Anthropic rows per (date, workspace, model). The Admin
     # API already returns rows at this granularity (we group_by
     # workspace + model), but service_tier / context_window can split
@@ -155,20 +171,32 @@ def reconcile_recent(
         org_id = workspace_to_org.get(workspace_id) if workspace_id else None
         anthropic_cost = cost_by_key.get((usage_day, workspace_id, model), 0)
 
-        # Pull the matching internal aggregate. Match by org_id when we
-        # can resolve the workspace; otherwise leave internal at 0
-        # (drift will be 100% under-counted, surfacing the unrecognised
-        # workspace in the UI).
-        internal = (
-            _aggregate_internal(
+        # Pull the matching internal aggregate.
+        # - Workspace-scoped key (org_id resolved): aggregate that one org.
+        # - Default workspace (workspace_id is None): aggregate across every
+        #   org that uses the shared key — that's what produced the
+        #   Anthropic-side total. Previously this branch returned zero, so
+        #   100% of shared-key spend showed as -100% drift even when the
+        #   meter was working correctly.
+        # - Unrecognised workspace_id (provisioned outside Tali, never
+        #   linked): still zero, surfacing it as drift so we notice the
+        #   orphan workspace.
+        if org_id is not None:
+            internal = _aggregate_internal(
                 db,
                 organization_id=org_id,
                 model=model,
                 usage_day=usage_day,
             )
-            if org_id is not None
-            else _zero_internal()
-        )
+        elif workspace_id is None and _shared_key_org_ids:
+            internal = _aggregate_internal_multi(
+                db,
+                organization_ids=_shared_key_org_ids,
+                model=model,
+                usage_day=usage_day,
+            )
+        else:
+            internal = _zero_internal()
 
         tokens_drift = _percent_drift(
             internal=internal["input"] + internal["output"],
@@ -297,7 +325,80 @@ def _aggregate_internal(
         UsageEvent.created_at < day_end,
     )
     if model:
-        q = q.filter(UsageEvent.model == model)
+        q = q.filter(_model_match_filter(UsageEvent.model, model))
+    row = q.one()
+    return {
+        "input": int(row.input_tokens or 0),
+        "output": int(row.output_tokens or 0),
+        "cache_read": int(row.cache_read_tokens or 0),
+        "cache_creation": int(row.cache_creation_tokens or 0),
+        "cost_usd_micro": int(row.cost_usd_micro or 0),
+        "event_count": int(row.event_count or 0),
+    }
+
+
+def _model_match_filter(stored_col, anthropic_model: Optional[str]):
+    """Build a SQL filter that matches ``stored_col`` against an Anthropic
+    model id whether or not the stored event includes the ``-YYYYMMDD``
+    snapshot suffix.
+
+    Anthropic's admin API always returns the dated snapshot
+    (``claude-sonnet-4-5-20250929``). Internal events sometimes store the
+    short alias (``claude-sonnet-4-5``) because callers pass
+    ``settings.resolved_claude_model`` which resolves to the alias. The
+    exact-match join missed those rows entirely — Sonnet 4.5 reconciled
+    to $0 internal on 2026-05-20 even though we recorded $9.08 of it.
+    """
+    if not anthropic_model:
+        return stored_col == anthropic_model
+    candidates = [anthropic_model]
+    # If the Anthropic id ends in ``-8-digit-snapshot``, also accept the
+    # snapshot-stripped base id.
+    if (
+        len(anthropic_model) > 9
+        and anthropic_model[-9] == "-"
+        and anthropic_model[-8:].isdigit()
+    ):
+        candidates.append(anthropic_model[:-9])
+    return stored_col.in_(candidates)
+
+
+def _aggregate_internal_multi(
+    db: Session,
+    *,
+    organization_ids: list[int],
+    model: Optional[str],
+    usage_day: date,
+) -> dict[str, int]:
+    """Sum ``usage_events`` across multiple orgs for the same (model, day).
+
+    Used when Anthropic attributes spend to ``workspace_id=None`` (the
+    Default workspace) — that single bucket on the Anthropic side is the
+    sum of every Tali org using the shared API key, so the comparable
+    internal aggregate is the union of those orgs' UsageEvent rows.
+    """
+    if not organization_ids:
+        return _zero_internal()
+    day_start = datetime.combine(usage_day, time(0, 0), tzinfo=timezone.utc)
+    day_end = day_start + timedelta(days=1)
+    q = db.query(
+        func.count(UsageEvent.id).label("event_count"),
+        func.coalesce(func.sum(UsageEvent.input_tokens), 0).label("input_tokens"),
+        func.coalesce(func.sum(UsageEvent.output_tokens), 0).label("output_tokens"),
+        func.coalesce(
+            func.sum(UsageEvent.cache_read_tokens), 0
+        ).label("cache_read_tokens"),
+        func.coalesce(
+            func.sum(UsageEvent.cache_creation_tokens), 0
+        ).label("cache_creation_tokens"),
+        func.coalesce(func.sum(UsageEvent.cost_usd_micro), 0).label("cost_usd_micro"),
+    ).filter(
+        UsageEvent.organization_id.in_(organization_ids),
+        UsageEvent.created_at >= day_start,
+        UsageEvent.created_at < day_end,
+    )
+    if model:
+        q = q.filter(_model_match_filter(UsageEvent.model, model))
     row = q.one()
     return {
         "input": int(row.input_tokens or 0),
