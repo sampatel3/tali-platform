@@ -16,10 +16,23 @@ Per-candidate HITL gates that used to live here as
 ``send_assessment_approval`` / ``resend_assessment_invite_approval``
 now flow through ``agent_decisions`` (see PR #176) — the
 ``consume_resolved`` helper that bridged the old flow is gone.
+
+Answer write-back
+-----------------
+When the recruiter answers a config-gap card, ``answer`` promotes the
+response into canonical role state so the agent settings tab reflects
+what the recruiter just told the agent:
+
+- ``threshold_ambiguous``    → ``role.score_threshold``
+- ``monthly_budget_missing`` → ``role.monthly_usd_budget_cents``
+- ``intent_slot_missing`` /
+  ``intent_clarification``   → ``RoleIntent.free_text`` (new version)
+                               + LLM-parsed chips into ``role_criteria``
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -27,8 +40,13 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..models.agent_needs_input import NEEDS_INPUT_KINDS, AgentNeedsInput
+from ..models.org_criterion import BUCKET_MUST
 from ..models.role import Role
+from ..models.role_criterion import CRITERION_SOURCE_RECRUITER, RoleCriterion
 from .types import ACTOR_AGENT, ACTOR_RECRUITER, ACTOR_SYSTEM, Actor
+
+
+logger = logging.getLogger("taali.actions.ask_recruiter")
 
 
 def open(
@@ -279,7 +297,183 @@ def answer(
     row.response = response
     row.resolved_by_user_id = actor.user_id
     db.flush()
+
+    # Promote the answer into canonical role state. Failures are logged
+    # but don't undo the answer — the recruiter sees their reply resolved
+    # either way, and a follow-up cycle can re-derive structure from the
+    # raw response if needed.
+    try:
+        _apply_recruiter_answer(
+            db,
+            row=row,
+            response=response,
+            user_id=actor.user_id,
+        )
+    except Exception:
+        logger.exception(
+            "recruiter answer write-back failed (kind=%s, row_id=%s)",
+            row.kind,
+            row.id,
+        )
+
     return row
+
+
+def _apply_recruiter_answer(
+    db: Session,
+    *,
+    row: AgentNeedsInput,
+    response: dict[str, Any],
+    user_id: Optional[int],
+) -> None:
+    """Promote the recruiter's answer to the canonical source of truth.
+
+    Dispatch on ``row.kind``:
+      - ``threshold_ambiguous`` writes ``role.score_threshold`` (always
+        overwrites — the card explicitly proposes a value, approving it
+        is consent to change the column).
+      - ``monthly_budget_missing`` writes ``role.monthly_usd_budget_cents``.
+      - ``intent_slot_missing`` / ``intent_clarification`` author a new
+        ``RoleIntent`` version with the answer appended to ``free_text``,
+        then LLM-parse the answer into ``role_criteria`` chips.
+
+    Best-effort: any failure here is swallowed by the caller so the
+    recruiter's resolution still sticks.
+    """
+    value = (response or {}).get("value") if isinstance(response, dict) else None
+    if value is None:
+        return
+    text_value = str(value).strip()
+    if not text_value:
+        return
+
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == row.role_id,
+            Role.organization_id == row.organization_id,
+        )
+        .one_or_none()
+    )
+    if role is None:
+        return
+
+    if row.kind == "threshold_ambiguous":
+        _writeback_threshold(role, text_value)
+        db.flush()
+        return
+
+    if row.kind == "monthly_budget_missing":
+        _writeback_budget(role, text_value)
+        db.flush()
+        return
+
+    if row.kind in ("intent_slot_missing", "intent_clarification"):
+        _writeback_intent(
+            db,
+            role=role,
+            row=row,
+            answer_text=text_value,
+            user_id=user_id,
+        )
+        db.flush()
+        return
+
+
+def _writeback_threshold(role: Role, raw: str) -> None:
+    try:
+        n = int(float(raw.strip()))
+    except (TypeError, ValueError):
+        return
+    role.score_threshold = max(0, min(100, n))
+
+
+def _writeback_budget(role: Role, raw: str) -> None:
+    cleaned = raw.strip().lstrip("$").replace(",", "")
+    try:
+        n = float(cleaned)
+    except (TypeError, ValueError):
+        return
+    # Heuristic mirrors ``cohort_tools._recent_resolved_answers``: a small
+    # number is dollars, a large number is cents. Recruiters typing "$50"
+    # mean fifty dollars per month, not fifty cents.
+    role.monthly_usd_budget_cents = int(n * 100) if n <= 1000 else int(n)
+
+
+def _writeback_intent(
+    db: Session,
+    *,
+    role: Role,
+    row: AgentNeedsInput,
+    answer_text: str,
+    user_id: Optional[int],
+) -> None:
+    from ..agent_runtime.contracts import StructuredIntent
+    from ..agent_runtime.role_intent import (
+        author_new_version,
+        fetch_active_intent,
+    )
+    from ..services.intent_chip_parser import parse_intent_text_to_chips
+
+    # 1. Append the answer onto RoleIntent.free_text so the agent prompt
+    #    picks it up next cycle via `_render_role_intent`.
+    active = fetch_active_intent(db, role_id=int(role.id))
+    prior_free = (active.free_text if active else None) or ""
+    prior_structured = active.structured if active else StructuredIntent()
+    next_free = (
+        f"{prior_free.strip()}\n\n{answer_text}".strip()
+        if prior_free.strip()
+        else answer_text
+    )
+    author_new_version(
+        db,
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+        structured=prior_structured,
+        free_text=next_free,
+        authored_by_user_id=user_id,
+    )
+
+    # 2. LLM-parse the new text into chips and add them. Best-effort —
+    #    if the call fails, the free-text version above still shapes the
+    #    agent's prompt.
+    existing_texts = [
+        (c.text or "").strip()
+        for c in (role.criteria or [])
+        if c.deleted_at is None and (c.text or "").strip()
+    ]
+    chips = parse_intent_text_to_chips(
+        db,
+        organization_id=int(role.organization_id),
+        role=role,
+        answer_text=answer_text,
+        agent_question=row.prompt,
+        existing_chip_texts=existing_texts,
+    )
+    if not chips:
+        return
+    existing_ordering = [
+        int(c.ordering)
+        for c in (role.criteria or [])
+        if c.deleted_at is None
+    ]
+    next_ordering = (max(existing_ordering) + 1) if existing_ordering else 0
+    now = datetime.now(timezone.utc)
+    for chip in chips:
+        db.add(
+            RoleCriterion(
+                role_id=int(role.id),
+                source=CRITERION_SOURCE_RECRUITER,
+                ordering=next_ordering,
+                weight=1.0,
+                must_have=(chip.bucket == BUCKET_MUST),
+                bucket=chip.bucket,
+                org_criterion_id=None,
+                customized_at=now,
+                text=chip.text,
+            )
+        )
+        next_ordering += 1
 
 
 def dismiss(
