@@ -693,7 +693,6 @@ export const HomeNow = ({
       if (selected.status !== 'pending' && selected.status !== 'reverted_for_feedback') return;
       const k = e.key.toLowerCase();
       if (k === 'a') { e.preventDefault(); handleApprove(selected); return; }
-      if (k === 'o') { e.preventDefault(); handleOverride(selected); return; }
       if (k === 't') { e.preventDefault(); setTeachFor(selected); return; }
       if (k === 's') { e.preventDefault(); handleSnooze(selected); return; }
     };
