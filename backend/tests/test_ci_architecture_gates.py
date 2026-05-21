@@ -192,3 +192,64 @@ def test_no_imports_of_removed_service_shims() -> None:
                 violations.append(str(path))
 
     assert not violations, f"Removed service shims must not be imported: {violations}"
+
+
+def test_no_bare_anthropic_client_construction() -> None:
+    """Anthropic API calls must flow through ``MeteredAnthropicClient``.
+
+    The wrapper is what writes ``UsageEvent`` rows. A bare
+    ``Anthropic(api_key=...)`` instantiation outside the approved
+    factory + adapter files = invisible spend = the
+    73% reconciliation gap that surfaced on 2026-05-20.
+
+    The four approved sites that construct the bare SDK client are:
+    - ``app/services/claude_client_resolver.py`` (the factory itself,
+      wraps it on the way out)
+    - ``app/services/metered_anthropic_client.py`` (defines the wrapper,
+      needs the bare class for typing)
+    - ``app/components/integrations/claude/service.py`` (constructs +
+      immediately hands to the wrapper inside the same file)
+    - ``app/components/integrations/anthropic_admin/*`` (admin API,
+      not the billable inference API)
+
+    Any other file containing either ``Anthropic(api_key`` or a literal
+    construction of ``Anthropic()`` must route through the resolver
+    instead.
+    """
+    approved = {
+        "app/services/claude_client_resolver.py",
+        "app/services/metered_anthropic_client.py",
+        "app/components/integrations/claude/service.py",
+    }
+    # Admin API client lives under anthropic_admin/* — uses a different
+    # SDK surface (admin endpoints), not billable inference. Allow the
+    # entire subtree.
+    approved_subtrees = (
+        "app/components/integrations/anthropic_admin/",
+    )
+
+    constructor_re = re.compile(r"\bAnthropic\s*\(\s*api_key\s*=")
+    # A file constructing the bare SDK is acceptable IFF it immediately
+    # wraps the result in ``MeteredAnthropicClient(inner=...)`` so the
+    # meter still fires. We treat the presence of that wrapper call in
+    # the same file as proof.
+    wrapper_re = re.compile(r"MeteredAnthropicClient\s*\(\s*inner\s*=")
+
+    violations: list[tuple[str, str]] = []
+    for path in _python_files(PROJECT_ROOT / "app"):
+        rel = path.relative_to(PROJECT_ROOT).as_posix()
+        if rel in approved:
+            continue
+        if any(rel.startswith(t) for t in approved_subtrees):
+            continue
+        content = path.read_text(encoding="utf-8")
+        if constructor_re.search(content) and not wrapper_re.search(content):
+            violations.append((rel, "constructs Anthropic(api_key=...) without wrapping in MeteredAnthropicClient(inner=...)"))
+
+    assert not violations, (
+        "Every Anthropic client must flow through MeteredAnthropicClient "
+        "so the meter writes a UsageEvent for each call. Direct "
+        "`Anthropic(api_key=...)` without wrapping produces invisible "
+        "spend (reconciliation gap on 2026-05-20 was 73% via this exact "
+        f"pattern). Violations: {violations}"
+    )

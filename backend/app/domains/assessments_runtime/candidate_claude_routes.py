@@ -226,7 +226,11 @@ def chat_with_claude(
         history.append({"role": "user", "content": message})
 
     system_prompt = _build_system_prompt(task, data)
-    claude = ClaudeService(api_key)
+    # organization_id passed so every Anthropic call lands a metered
+    # UsageEvent attributed to this org. Previously bare Anthropic client →
+    # invisible to the meter; 84% of Haiku spend on 2026-05-20 came through
+    # here unaccounted for.
+    claude = ClaudeService(api_key, organization_id=int(assessment.organization_id))
     started_at = time.perf_counter()
     result = claude.chat(messages=history, system=system_prompt)
     latency_ms = int((time.perf_counter() - started_at) * 1000)

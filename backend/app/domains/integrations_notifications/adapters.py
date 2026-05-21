@@ -33,8 +33,16 @@ class StripeAdapter(Protocol):
     def create_customer(self, email: str, name: str) -> dict: ...
 
 
-def build_claude_adapter() -> ClaudeService:
-    return ClaudeService(settings.ANTHROPIC_API_KEY)
+def build_claude_adapter(*, organization_id: int, feature: str = "assessment") -> ClaudeService:
+    """Build a ClaudeService bound to an org so every Anthropic call is
+    metered. Required keyword arg ``organization_id`` prevents callers
+    from accidentally constructing an unattributed client (the
+    pre-metering default that produced a 73% reconciliation gap)."""
+    return ClaudeService(
+        settings.ANTHROPIC_API_KEY,
+        organization_id=int(organization_id),
+        feature=feature,
+    )
 
 
 def build_sandbox_adapter() -> E2BService:
