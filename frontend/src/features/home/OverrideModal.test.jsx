@@ -61,7 +61,7 @@ describe('OverrideModal', () => {
     agentApi.approveDecision.mockResolvedValue({ data: { ok: true } });
   });
 
-  it('blocks submit until a Workable stage is picked (override mode)', () => {
+  it('blocks submit until a Workable stage pill is clicked (override mode)', () => {
     const onSubmitted = vi.fn();
     render(
       <OverrideModal
@@ -82,10 +82,8 @@ describe('OverrideModal', () => {
     });
     expect(confirm).toBeDisabled();
 
-    // Pick a stage — now enabled.
-    fireEvent.change(screen.getByLabelText(/Move to which Workable stage/i), {
-      target: { value: 'phone-screen' },
-    });
+    // Click a stage pill — now enabled.
+    fireEvent.click(screen.getByRole('radio', { name: /Phone screen/i }));
     expect(confirm).not.toBeDisabled();
   });
 
@@ -100,9 +98,7 @@ describe('OverrideModal', () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText(/Move to which Workable stage/i), {
-      target: { value: 'tech-interview' },
-    });
+    fireEvent.click(screen.getByRole('radio', { name: /Technical interview/i }));
     fireEvent.change(screen.getByLabelText(/Why\?/i), {
       target: { value: 'Internal referral — pre-vetted' },
     });
@@ -132,9 +128,7 @@ describe('OverrideModal', () => {
     // Primary advance: the "why" textarea is optional (no required hint).
     expect(screen.getByText(/Note \(optional\)/i)).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText(/Move to which Workable stage/i), {
-      target: { value: 'phone-screen' },
-    });
+    fireEvent.click(screen.getByRole('radio', { name: /Phone screen/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Advance' }));
 
     await waitFor(() => {
@@ -145,6 +139,22 @@ describe('OverrideModal', () => {
     expect(decisionId).toBe(42);
     expect(payload.workable_target_stage).toBe('phone-screen');
     expect(payload.override_action).toBeUndefined();
+  });
+
+  it('marks the candidate\'s current Workable stage pill as disabled', () => {
+    render(
+      <OverrideModal
+        decision={{ ...baseDecision, workable_stage: 'phone-screen' }}
+        alternative={skipAndAdvanceAlt}
+        workableStages={stages}
+        onClose={vi.fn()}
+        onSubmitted={vi.fn()}
+      />,
+    );
+    const currentPill = screen.getByRole('radio', { name: /Phone screen.*Current/i });
+    expect(currentPill).toBeDisabled();
+    const otherPill = screen.getByRole('radio', { name: /Technical interview/i });
+    expect(otherPill).not.toBeDisabled();
   });
 
   it('shows a "no stages found" hint when the role has no Workable stages', () => {

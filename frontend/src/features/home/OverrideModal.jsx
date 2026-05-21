@@ -10,9 +10,10 @@
 //   - "override"  → calls /override with override_action + note (default)
 //   - "approve"   → calls /approve with note (no override_action)
 //
-// ``alternative.requireStagePick`` opts the modal into rendering the
-// Workable stage `<select>`. The selected stage is sent as
-// ``workable_target_stage`` on both endpoints.
+// ``alternative.requireStagePick`` opts the modal into rendering a row
+// of chip-style stage buttons (mirrors the candidate-drawer pattern on
+// Jobs). The selected stage is sent as ``workable_target_stage`` on both
+// endpoints.
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ArrowRight, X } from 'lucide-react';
@@ -130,31 +131,44 @@ export const OverrideModal = ({
         <div className="rq-modal-body">
           {requireStagePick ? (
             <div className="rq-modal-section">
-              <label className="rq-modal-label" htmlFor="rq-target-stage">
+              <span className="rq-modal-label" id="rq-target-stage-label">
                 Move to which Workable stage? (required)
-              </label>
-              <select
-                id="rq-target-stage"
-                className="rq-modal-select"
-                value={targetStage}
-                onChange={(e) => setTargetStage(e.target.value)}
-                disabled={submitting}
-                autoFocus
-              >
-                <option value="">
-                  {stageOptions.length === 0 ? 'Loading Workable stages…' : 'Pick a stage…'}
-                </option>
-                {stageOptions.map((stage) => (
-                  <option key={stage.value} value={stage.value}>
-                    {stage.label}
-                  </option>
-                ))}
-              </select>
+              </span>
               {stageOptions.length === 0 ? (
                 <span style={{ fontSize: 12, color: 'var(--mute)' }}>
                   No Workable stages found for this role. The candidate's internal stage will still update; nothing posts to Workable until stages load.
                 </span>
-              ) : null}
+              ) : (
+                <div
+                  className="rq-modal-pills"
+                  role="radiogroup"
+                  aria-labelledby="rq-target-stage-label"
+                >
+                  {stageOptions.map((stage) => {
+                    const isCurrent =
+                      String(decision?.workable_stage || '').toLowerCase() ===
+                      stage.value.toLowerCase();
+                    const isOn = targetStage === stage.value;
+                    return (
+                      <button
+                        key={stage.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={isOn}
+                        className={`rq-modal-pill ${isOn ? 'on' : ''}`}
+                        disabled={submitting || isCurrent}
+                        onClick={() => setTargetStage(stage.value)}
+                        title={isCurrent ? 'Candidate is already at this stage' : undefined}
+                      >
+                        <span>{stage.label}</span>
+                        {isCurrent ? (
+                          <span className="rq-modal-pill-sub">Current</span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           ) : null}
 
