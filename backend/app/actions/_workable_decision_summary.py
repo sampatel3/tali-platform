@@ -70,11 +70,6 @@ def _workable_writeback_ready(
     )
 
 
-def _resolve_advance_stage_name(org: Organization) -> str:
-    config = org.workable_config if isinstance(org.workable_config, dict) else {}
-    return str(config.get("advance_stage_name") or "").strip()
-
-
 def try_workable_advance(
     db: Session,
     actor: Actor,
@@ -82,30 +77,24 @@ def try_workable_advance(
     app: CandidateApplication,
     org: Optional[Organization],
     role: Optional[Role],
+    target_stage: Optional[str],
     reason: Optional[str] = None,
 ) -> bool:
-    """Move the candidate in Workable to the org's ``advance_stage_name``.
+    """Move the candidate in Workable to ``target_stage``.
 
-    Returns True iff the move succeeded. Skips silently (returns False)
-    when Workable isn't connected, the application isn't linked, or no
-    ``advance_stage_name`` is configured. Failures record a
-    ``workable_writeback_failed`` event and return False.
+    ``target_stage`` is the recruiter's pick (sent in the approve / override
+    request body from the Workable stage `<select>` rendered in the home-
+    page modal). When unset / empty, the Workable move is skipped; only
+    Tali's internal pipeline_stage changes. Returns True iff the move
+    succeeded. Failures record a ``workable_writeback_failed`` event and
+    return False — the underlying stage change has already committed.
     """
+    target = (target_stage or "").strip()
+    if not target:
+        return False
     if not _workable_writeback_ready(app=app, org=org):
         return False
     assert org is not None  # narrowed by _workable_writeback_ready
-    target_stage = _resolve_advance_stage_name(org)
-    if not target_stage:
-        append_application_event(
-            db,
-            app=app,
-            event_type="workable_advance_skipped",
-            actor_type=actor.type,
-            actor_id=actor.event_actor_id,
-            reason="No advance_stage_name configured on org.workable_config",
-            metadata={"source": "decision_summary"},
-        )
-        return False
 
     from ..services.workable_actions_service import move_candidate_in_workable
 
@@ -113,7 +102,7 @@ def try_workable_advance(
         result = move_candidate_in_workable(
             org=org,
             candidate_id=str(app.workable_candidate_id),
-            target_stage=target_stage,
+            target_stage=target,
             role=role,
         )
     except Exception:  # pragma: no cover — defensive
@@ -135,7 +124,7 @@ def try_workable_advance(
                 "action": result.get("action"),
                 "code": result.get("code"),
                 "workable_candidate_id": app.workable_candidate_id,
-                "target_stage": target_stage,
+                "target_stage": target,
                 "source": "decision_summary",
             },
         )
@@ -147,7 +136,7 @@ def try_workable_advance(
         )
         return False
 
-    app.workable_stage = target_stage
+    app.workable_stage = target
     append_application_event(
         db,
         app=app,
@@ -156,7 +145,7 @@ def try_workable_advance(
         actor_id=actor.event_actor_id,
         reason=reason or "Advanced by recruiter (decision resolution)",
         metadata={
-            "target_stage": target_stage,
+            "target_stage": target,
             "workable_candidate_id": app.workable_candidate_id,
             "workable_actor_member_id": config.get("actor_member_id"),
             "source": "decision_summary",

@@ -346,52 +346,6 @@ describe('SettingsPage recruiter surface', () => {
     });
   });
 
-  it('saves advance_stage_name + invite_stage_name through the Workable form', async () => {
-    // Recruiter sets the Workable stage to move candidates into when they
-    // click Advance / Skip & advance on a review-queue card. Empty value
-    // is OK (Tali falls back to only updating its internal pipeline).
-    orgsApi.get.mockResolvedValueOnce({
-      data: {
-        ...baseOrgData,
-        workable_connected: true,
-        workable_subdomain: 'acme',
-        workable_config: {
-          email_mode: 'manual_taali',
-          default_sync_mode: 'full',
-          granted_scopes: ['r_jobs', 'r_candidates', 'w_candidates'],
-          workable_actor_member_id: 'member-1',
-          workable_disqualify_reason_id: '',
-          auto_reject_enabled: false,
-          auto_reject_note_template: '',
-          invite_stage_name: '',
-          advance_stage_name: '',
-        },
-      },
-    });
-    orgsApi.getWorkableMembers.mockResolvedValueOnce({
-      data: { members: [{ id: 'member-1', name: 'Hiring Lead' }] },
-    });
-
-    renderSettingsRoute('/settings/workable');
-
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /Workable integration/i })).toBeInTheDocument();
-    });
-
-    const advanceLabel = await screen.findByText('Advance stage name');
-    const advanceInput = advanceLabel.parentElement.querySelector('input');
-    expect(advanceInput).toBeTruthy();
-    fireEvent.change(advanceInput, { target: { value: 'Phone screen' } });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Save Workable Settings' }));
-
-    await waitFor(() => {
-      expect(orgsApi.update).toHaveBeenCalled();
-    });
-    const callArg = orgsApi.update.mock.calls[0][0];
-    expect(callArg.workable_config.advance_stage_name).toBe('Phone screen');
-  });
-
   it('renders the Security tab with SAML, 2FA and audit log entry', async () => {
     renderSettingsRoute('/settings/security');
 
