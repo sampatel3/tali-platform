@@ -1155,6 +1155,54 @@
   grid-row: 2;
 }
 
+/* Workable stage picker on the Advance / Skip & advance modal. A row of
+   chip-style buttons that wraps — matches the candidate-drawer card grid
+   in spirit but compacted to fit the modal. */
+.rq-modal-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rq-modal-pill {
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink-2);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.2;
+}
+
+.rq-modal-pill:hover:not([disabled]):not(.on) {
+  border-color: color-mix(in oklab, var(--purple) 40%, var(--line));
+  color: var(--ink);
+}
+
+.rq-modal-pill.on {
+  border-color: var(--purple);
+  background: var(--purple-soft);
+  color: var(--purple);
+}
+
+.rq-modal-pill[disabled] {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.rq-modal-pill .rq-modal-pill-sub {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
 .rq-modal-impact {
   background: var(--bg);
   border: 1px solid var(--line);
