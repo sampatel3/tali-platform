@@ -16,7 +16,6 @@ import {
   WorkableComparisonCard,
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
-import { ShareModal } from './ShareModal';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
 import { RadarChart } from '../../shared/ui/RadarChart';
@@ -792,11 +791,9 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [busyAction, setBusyAction] = useState('');
-  const [shareModalOpen, setShareModalOpen] = useState(false);
-  // 'interview' = internal panel link · 'client' = external client link.
-  // Pre-set when the candidate header opens the modal so the right tab
-  // is active (HANDOFF v2 §3).
-  const [shareInitialMode, setShareInitialMode] = useState('client');
+  // Tracks which share button is mid-mint so we can disable it + show a
+  // "Copying…" label. '' when idle, 'recruiter' or 'client' when busy.
+  const [sharingMode, setSharingMode] = useState('');
   const [applicationEvents, setApplicationEvents] = useState([]);
   // Notes & timeline tab — local note draft + a tick that lets us refetch
   // the events feed after a successful save without a full page reload.
@@ -820,6 +817,10 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     ? CLIENT_HIDDEN_TABS
     : (isInterviewView ? INTERNAL_TABS : new Set());
   const requestedTab = searchParams.get('tab') || 'overview';
+  // Back-link source of truth is ?from. ?from=jobs/<id> → role pipeline;
+  // anything else (including ?from=home or absent) → /home. Using
+  // application.role_id here would always go to the job pipeline since
+  // every application has a role, even when the user arrived from /home.
   const backFromRoleId = useMemo(() => {
     const match = (searchParams.get('from') || '').match(/^jobs\/(\d+)$/);
     return match ? Number(match[1]) : null;
@@ -1174,6 +1175,46 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     }
   }, [assessmentId, assessmentsApi, showToast]);
 
+  // One-click share: mint a fresh 7-day share-link of the requested mode
+  // and copy the URL to the clipboard. Replaces the previous ShareModal
+  // (which still exposed expiry presets, revoke, and audit history) —
+  // user feedback was "just click share internally / share with client
+  // and have a link copied." If revoke / manage-links is needed later
+  // the backend endpoints (POST/GET/DELETE share-links) are untouched.
+  //
+  // Mint and clipboard-copy are deliberately separate try/catch blocks:
+  // if the link is minted but the clipboard write fails (permission
+  // denied, non-secure context, no clipboard API), we still surface the
+  // URL so the user can copy manually. Treating clipboard errors as
+  // mint errors would cause repeated retries to spawn orphan active
+  // links on the backend (one per click).
+  const handleMintAndCopyShareLink = useCallback(async (mode, successMessage) => {
+    if (!application?.id || !rolesApi?.createApplicationShareLink) return;
+    setSharingMode(mode);
+    let url = '';
+    try {
+      const res = await rolesApi.createApplicationShareLink(application.id, { mode, expiry: '7d' });
+      const token = res?.data?.token;
+      if (!token || typeof window === 'undefined') throw new Error('Share link unavailable.');
+      url = `${window.location.origin}/share/${token}`;
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to create share link.'), 'error');
+      setSharingMode('');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast(successMessage, 'success');
+    } catch {
+      // Clipboard API unavailable / blocked — surface the URL so the
+      // user can copy it manually instead of silently throwing away a
+      // minted link.
+      showToast(`Link ready, copy failed: ${url}`, 'info');
+    } finally {
+      setSharingMode('');
+    }
+  }, [application?.id, rolesApi, showToast]);
+
   if (loading) {
     return (
       <div>
@@ -1200,7 +1241,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     );
   }
 
-  const targetRoleId = application?.role_id ?? backFromRoleId ?? null;
+  // Back-link destination is driven by ?from (where the user came from),
+  // NOT by the application's role_id — every candidate has a role, so
+  // using role_id as the signal made every back click go to the job
+  // pipeline regardless of where the user actually came from.
+  //   ?from=jobs/<id> → "Back to job: <role_name>"
+  //   ?from=home       → "Back to home"
+  //   (no from)        → "Back to home" (the Hub is the canonical landing)
+  const backTargetRoleId = backFromRoleId;
   const targetRoleName = application?.role_name || 'job';
   const candidateLabel = application?.candidate_name || application?.candidate_email || 'Candidate';
   const candidateInitials = (() => {
@@ -1228,13 +1276,13 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           period={false}
           subtitle={metaParts.length ? metaParts.join(' · ') : 'Candidate standing report'}
           backLink={{
-            label: targetRoleId != null ? `Back to job: ${targetRoleName}` : 'Back to candidates',
+            label: backTargetRoleId != null ? `Back to job: ${targetRoleName}` : 'Back to home',
             onClick: () => {
-              if (targetRoleId != null) {
-                onNavigate('job-pipeline', { roleId: targetRoleId });
+              if (backTargetRoleId != null) {
+                onNavigate('job-pipeline', { roleId: backTargetRoleId });
                 return;
               }
-              onNavigate('candidates');
+              onNavigate('home');
             },
           }}
           preTitle={(
@@ -1257,25 +1305,19 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               <button
                 type="button"
                 className="btn btn-outline btn-sm"
-                onClick={() => {
-                  setShareInitialMode('interview');
-                  setShareModalOpen(true);
-                }}
-                disabled={!application?.id}
+                onClick={() => handleMintAndCopyShareLink('recruiter', 'Internal share link copied (expires in 7 days).')}
+                disabled={!application?.id || sharingMode === 'recruiter'}
               >
                 <Copy size={13} />
-                Share internally
+                {sharingMode === 'recruiter' ? 'Copying…' : 'Share internally'}
               </button>
               <button
                 type="button"
                 className="btn btn-purple btn-sm"
-                onClick={() => {
-                  setShareInitialMode('client');
-                  setShareModalOpen(true);
-                }}
-                disabled={!application?.id}
+                onClick={() => handleMintAndCopyShareLink('client', 'Client share link copied (expires in 7 days).')}
+                disabled={!application?.id || sharingMode === 'client'}
               >
-                Share with client
+                {sharingMode === 'client' ? 'Copying…' : 'Share with client'}
               </button>
             </>
           ) : null}
@@ -1935,12 +1977,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           })()}
         </div>
       </div>
-      <ShareModal
-        open={shareModalOpen}
-        onClose={() => setShareModalOpen(false)}
-        applicationId={application?.id}
-        initialMode={shareInitialMode}
-      />
     </div>
   );
 };

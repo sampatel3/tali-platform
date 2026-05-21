@@ -23,6 +23,7 @@ import {
 
 import { agent as agentApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
+import { pathForPage } from '../../app/routing';
 import {
   Avatar,
   ConfBar,
@@ -263,11 +264,23 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
         </div>
       ) : (
         pending.map((p) => (
-          <button
+          // role="button" instead of a real <button> so the inline <a>
+          // candidate-name link below isn't an interactive child of an
+          // interactive parent (invalid HTML, breaks click + keyboard
+          // semantics in some browsers / AT). Same pattern HomeEverything
+          // uses for its history rows.
+          <div
             key={p.id}
-            type="button"
+            role="button"
+            tabIndex={0}
             className={`rq-split-row ${selectedId === p.id ? 'on' : ''}`.trim()}
             onClick={() => onSelect(p.id)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onSelect(p.id);
+              }
+            }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <TypeBadge type={p.decision_type} size="sm" />
@@ -276,23 +289,17 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
               </span>
             </div>
             <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink)', lineHeight: 1.35 }}>
-              <span
-                role="link"
-                tabIndex={0}
+              <a
+                href={pathForPage('candidate-report', { candidateApplicationId: p.application_id, fromHome: true })}
+                target="_blank"
+                rel="noopener noreferrer"
                 className="rq-inline-link"
-                style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer' }}
-                onClick={(e) => { e.stopPropagation(); onNavigate?.('candidate-report', { candidateApplicationId: p.application_id }); }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onNavigate?.('candidate-report', { candidateApplicationId: p.application_id });
-                  }
-                }}
-                title="Open candidate report"
+                style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', textDecoration: 'none' }}
+                onClick={(e) => e.stopPropagation()}
+                title="Open candidate report in a new tab"
               >
                 {p.candidate_name || `Application #${p.application_id}`}
-              </span>
+              </a>
             </div>
             <div style={{ fontSize: 11, color: 'var(--mute)', marginTop: 5, display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontFamily: 'var(--font-mono)', letterSpacing: '.04em' }}>#{p.id}</span>
@@ -307,7 +314,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
                 </>
               ) : null}
             </div>
-          </button>
+          </div>
         ))
       )}
     </div>
@@ -359,15 +366,16 @@ const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze,
         <Avatar initials={initialsFrom(decision.candidate_name)} size={48} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <h2 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 600, letterSpacing: '-.02em', lineHeight: 1.2, color: 'var(--ink)' }}>
-            <button
-              type="button"
+            <a
+              href={pathForPage('candidate-report', { candidateApplicationId: decision.application_id, fromHome: true })}
+              target="_blank"
+              rel="noopener noreferrer"
               className="rq-inline-link"
-              style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', textAlign: 'left' }}
-              onClick={() => onNavigate?.('candidate-report', { candidateApplicationId: decision.application_id })}
-              title="Open candidate report"
+              style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', textAlign: 'left', textDecoration: 'none' }}
+              title="Open candidate report in a new tab"
             >
               {decision.candidate_name || `Application #${decision.application_id}`}
-            </button>
+            </a>
           </h2>
           <div style={{ fontSize: 13, color: 'var(--mute)', marginTop: 2 }}>
             {decision.candidate_email || ''}
@@ -384,7 +392,7 @@ const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze,
           Icon={FileText}
           label="Open candidate report"
           value="Six dimensions + evidence"
-          onClick={() => onNavigate?.('candidate-report', { candidateApplicationId: decision.application_id })}
+          href={pathForPage('candidate-report', { candidateApplicationId: decision.application_id, fromHome: true })}
         />
         <DeepLinkRow
           Icon={Eye}

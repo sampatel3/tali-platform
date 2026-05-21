@@ -578,8 +578,8 @@ describe('CandidatesPage', () => {
     expect(await screen.findByText('Candidate standing report', {}, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.getAllByText(/Standing Candidate/i).length).toBeGreaterThan(0);
     // Header now exposes one Share-internally + one Share-with-client
-    // button instead of the legacy "Shareable link" panel + 4-button row.
-    // Both buttons open the same ShareModal pre-set to the right tab.
+    // button. Each mints a fresh 7-day share link and copies the URL
+    // to the clipboard — no modal in between.
     expect(screen.getByRole('button', { name: /Share with client/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Share internally/i })).toBeInTheDocument();
   });

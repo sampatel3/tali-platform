@@ -11,6 +11,7 @@ import React from 'react';
 import { Check, X } from 'lucide-react';
 
 import { Avatar, TypeBadge, formatRelativeAge, initialsFrom } from './atoms';
+import { pathForPage } from '../../app/routing';
 
 // Import home.css here so any surface that renders <ActivityFeed />
 // (the Hub today, marketing landing tomorrow, anywhere else later)
@@ -71,15 +72,17 @@ export const ActivityFeed = ({
                     </span>
                   </div>
                   <div className="rq-stream-title">
-                    <button
-                      type="button"
+                    <a
+                      href={pathForPage('candidate-report', { candidateApplicationId: row.application_id, fromHome: true })}
+                      target="_blank"
+                      rel="noopener noreferrer"
                       className="rq-inline-link"
-                      style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', fontWeight: 600 }}
-                      onClick={(e) => { e.stopPropagation(); onNavigate?.('candidate-report', { candidateApplicationId: row.application_id }); }}
-                      title="Open candidate report"
+                      style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', fontWeight: 600, textDecoration: 'none' }}
+                      onClick={(e) => e.stopPropagation()}
+                      title="Open candidate report in a new tab"
                     >
                       {row.candidate_name || `Application #${row.application_id}`}
-                    </button>
+                    </a>
                   </div>
                   <div className="rq-stream-sub">
                     <button
@@ -115,15 +118,16 @@ export const ActivityFeed = ({
                   </span>
                 </div>
                 <div className="rq-stream-resolved-line">
-                  <button
-                    type="button"
+                  <a
+                    href={pathForPage('candidate-report', { candidateApplicationId: row.application_id, fromHome: true })}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className="rq-inline-link"
-                    style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'var(--ink)', fontWeight: 600, cursor: 'pointer' }}
-                    onClick={() => onNavigate?.('candidate-report', { candidateApplicationId: row.application_id })}
-                    title="Open candidate report"
+                    style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'var(--ink)', fontWeight: 600, cursor: 'pointer', textDecoration: 'none' }}
+                    title="Open candidate report in a new tab"
                   >
                     {row.candidate_name || `Application #${row.application_id}`}
-                  </button>
+                  </a>
                   <span style={{ color: 'var(--mute)' }}> — {row.status} </span>
                   {row.resolution_note ? <span>· {row.resolution_note}</span> : null}
                 </div>
