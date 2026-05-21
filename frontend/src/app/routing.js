@@ -52,6 +52,9 @@ export const pathForPage = (page, options = {}) => {
       if (Number.isFinite(Number(options.fromRoleId))) {
         return `${base}?from=jobs/${encodeURIComponent(options.fromRoleId)}`;
       }
+      if (options.fromHome) {
+        return `${base}?from=home`;
+      }
       return base;
     }
     case 'candidate-detail':

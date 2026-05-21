@@ -17,6 +17,7 @@ import {
 
 import { analytics as analyticsApi } from '../../shared/api';
 import { formatRelativeAge, FeedbackPill, TypeBadge } from './atoms';
+import { pathForPage } from '../../app/routing';
 
 const safeNumber = (v, fb = 0) => (Number.isFinite(Number(v)) ? Number(v) : fb);
 
@@ -53,15 +54,17 @@ const HistoryTable = ({ rows, onSelect, onNavigate }) => (
             <TypeBadge type={row.decision_type} size="sm" />
             <span className="rq-history-decision-text">
               <div style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                <button
-                  type="button"
+                <a
+                  href={pathForPage('candidate-report', { candidateApplicationId: row.application_id, fromHome: true })}
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="rq-inline-link"
-                  style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', fontWeight: 500 }}
-                  onClick={(e) => { e.stopPropagation(); onNavigate?.('candidate-report', { candidateApplicationId: row.application_id }); }}
-                  title="Open candidate report"
+                  style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', fontWeight: 500, textDecoration: 'none' }}
+                  onClick={(e) => e.stopPropagation()}
+                  title="Open candidate report in a new tab"
                 >
                   {row.candidate_name || `Application #${row.application_id}`}
-                </button>
+                </a>
               </div>
               <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--mute)', letterSpacing: '.04em' }}>
                 D-{row.id}
