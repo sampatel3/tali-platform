@@ -29,7 +29,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import desc
+from sqlalchemy import desc, or_
 from sqlalchemy.orm import Session
 
 from ..models.candidate_application import CandidateApplication
@@ -486,8 +486,41 @@ def _execute_scoring_v3(
         threshold = settings.PRE_SCREEN_THRESHOLD
         evidence = application.pre_screen_evidence if isinstance(application.pre_screen_evidence, dict) else {}
         fraud_capped = bool(evidence.get("fraud_capped", False))
+        # Pre-screen errored (Anthropic credit exhaustion, network
+        # timeout, JSON parse failure, etc.) — DON'T fall through to v3
+        # cv_match. Previously we did, and the v3 score got mirrored
+        # into ``pre_screen_score_100`` via the refresh helpers, hiding
+        # the error from the recruiter. Now we surface a clear error
+        # state and bail; the next sweeper tick (or manual rescore)
+        # picks the application back up.
+        pre_screen_errored = (
+            (evidence.get("decision") == "error")
+            or bool(application.pre_screen_error_reason)
+        )
+        if pre_screen_errored:
+            now = datetime.now(timezone.utc)
+            reason = (
+                application.pre_screen_error_reason
+                or evidence.get("summary")
+                or "pre_screen_unknown_error"
+            )
+            job.status = SCORE_JOB_ERROR
+            job.error_message = f"pre_screen_errored: {reason}"[:500]
+            job.cache_hit = "pre_screen_errored"
+            job.finished_at = now
+            # Make sure no stale scores remain — pre-screen handler
+            # already NULLs these, but defensive in case caller wired
+            # in via a different path. Critical: also clear
+            # ``cv_match_details`` so ``refresh_pre_screening_fields``
+            # (called downstream by the cache refresher) can't
+            # resurrect a stale pre-screen score from a prior run's
+            # ``cv_match_details['pre_screen_score_100']`` field — that
+            # would re-hide the error we're trying to surface.
+            application.cv_match_score = None
+            application.cv_match_details = None
+            application.cv_match_scored_at = None
+            return
         # Only filter when we have a numeric score AND it's below threshold.
-        # None score (parse failure/error) always falls through to v3.
         if gated_score is not None and gated_score < threshold:
             now = datetime.now(timezone.utc)
             if fraud_capped:
@@ -616,35 +649,115 @@ def _record_usage_safe(db: Session, *, organization_id, **kwargs) -> None:
         )
 
 
-def mark_role_scores_stale(db: Session, role_id: int) -> int:
-    """Flag every application for a role as needing rescoring.
+def _clear_application_scores(app: CandidateApplication) -> None:
+    """NULL out every score-related field on an application.
 
-    Called when the role's criteria or job spec change. Adds a stale row to
-    each application's job history so the UI shows a "needs rescore" badge.
-    Returns the number of applications marked.
+    Used by every invalidation path (role intent change, candidate
+    input change, error recovery) so the UI surfaces "needs rescore"
+    instead of a stale numeric score that no longer reflects the
+    agent's current view of the candidate.
+
+    Keeps ``pre_screen_run_at`` (audit: when did pre-screen last
+    attempt) and the existing ``pre_screen_evidence`` blob (audit:
+    what was the last attempt's reasoning). Surfacing logic in the
+    UI / queues should check ``pre_screen_score_100 IS NULL`` to
+    detect "needs rescore" rather than reading ``pre_screen_evidence``.
+    """
+    app.pre_screen_score_100 = None
+    app.requirements_fit_score_100 = None
+    app.cv_match_score = None
+    app.cv_match_details = None
+    app.cv_match_scored_at = None
+    app.pre_screen_recommendation = None
+    # Rank falls back to workable_score so the directory still has
+    # *some* ordering signal during the rescore window.
+    app.rank_score = app.workable_score
+
+
+def _enqueue_stale_job(
+    db: Session,
+    *,
+    app: CandidateApplication,
+    role_id: int,
+    now: datetime,
+) -> bool:
+    """Add a ``status=stale`` CvScoreJob row if no active stale job
+    already exists. Returns True if a row was added. Flushes so the
+    row is visible to subsequent queries in the same session.
+    """
+    latest = _latest_job(db, app.id)
+    if latest is not None and latest.status == "stale":
+        return False
+    db.add(
+        CvScoreJob(
+            application_id=app.id,
+            role_id=role_id,
+            status="stale",
+            queued_at=now,
+        )
+    )
+    db.flush()
+    return True
+
+
+def mark_role_scores_stale(db: Session, role_id: int) -> int:
+    """Invalidate every scored application for a role.
+
+    Called when the role's must-have / constraint criteria or its job
+    spec change (preferred-criteria edits don't trigger because
+    pre-screen ignores nice-to-haves). NULLs every score field on
+    affected applications AND enqueues a stale CvScoreJob row so the
+    background worker picks them back up. Returns the number of
+    applications invalidated.
+
+    The score fields are cleared (not just job-row-tagged) because the
+    UI's "Strong match — 87" is the recruiter's primary signal; a
+    stale numeric is worse than no numeric until rescore lands.
     """
     apps = (
         db.query(CandidateApplication)
         .filter(
             CandidateApplication.role_id == role_id,
             CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.cv_match_score.isnot(None),
+            # Anything that was ever scored OR pre-screened — covers
+            # apps below the gate threshold (cv_match_score is NULL
+            # but pre_screen_score_100 is set) that still need a fresh
+            # decision against the new role intent.
+            or_(
+                CandidateApplication.pre_screen_score_100.isnot(None),
+                CandidateApplication.cv_match_score.isnot(None),
+            ),
         )
         .all()
     )
     marked = 0
     now = datetime.now(timezone.utc)
     for app in apps:
-        latest = _latest_job(db, app.id)
-        if latest is not None and latest.status == "stale":
+        if not _enqueue_stale_job(db, app=app, role_id=role_id, now=now):
             continue
-        db.add(
-            CvScoreJob(
-                application_id=app.id,
-                role_id=role_id,
-                status="stale",
-                queued_at=now,
-            )
-        )
+        _clear_application_scores(app)
         marked += 1
     return marked
+
+
+def mark_application_scores_stale(db: Session, application_id: int) -> bool:
+    """Invalidate a single application's scores (e.g. on CV upload or
+    Workable-context change for that one candidate). Mirror of
+    ``mark_role_scores_stale`` scoped to one app. Returns True if the
+    app was actually invalidated.
+    """
+    app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == application_id,
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if app is None:
+        return False
+    now = datetime.now(timezone.utc)
+    if not _enqueue_stale_job(db, app=app, role_id=app.role_id, now=now):
+        return False
+    _clear_application_scores(app)
+    return True

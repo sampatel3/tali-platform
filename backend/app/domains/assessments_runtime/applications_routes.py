@@ -88,6 +88,7 @@ from ...services.application_events import on_application_created
 from ...services.cv_score_orchestrator import (
     enqueue_score,
     latest_score_status,
+    mark_application_scores_stale,
     mark_role_scores_stale,
 )
 from ...services.interview_support_service import refresh_application_interview_support
@@ -1863,10 +1864,13 @@ def upload_application_cv(
         app.candidate.cv_filename = result["filename"]
         app.candidate.cv_text = sanitize_text_for_storage(result["extracted_text"])
         app.candidate.cv_uploaded_at = now
-    # Reset any prior score so the UI shows pending until the job completes.
-    app.cv_match_score = None
-    app.cv_match_details = None
-    app.cv_match_scored_at = None
+    # New CV invalidates the agent's prior view of this candidate. Clear
+    # both pre-screen and cv_match scores (the helper enqueues a stale
+    # CvScoreJob row too, so the worker picks it back up). Without this
+    # the old pre_screen_score_100 lingered in the UI until the new
+    # score landed, which made it look like the agent had decided
+    # against the new CV when it hadn't.
+    mark_application_scores_stale(db, app.id)
     _refresh_rank_score(app)
     refresh_application_score_cache(app, db=db)
     try:

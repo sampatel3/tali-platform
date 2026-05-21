@@ -114,6 +114,16 @@ celery_app.conf.update(
             "task": "app.tasks.agent_tasks.agent_expire_stuck_runs",
             "schedule": 300.0,  # every 5 min — fast enough to surface within one cohort tick
         },
+        # Safety net: find applications whose scores have been invalidated
+        # (NULL pre_screen_score with cv_text present + stale CvScoreJob
+        # row) and re-enqueue them. Hooks at the role-criteria, CV
+        # upload, and Workable-sync sites handle the common cases in
+        # real time; this catches anything that slips through (worker
+        # crash mid-batch, missed hook on a new mutation path, etc.).
+        "sweep-stale-scores-every-30-minutes": {
+            "task": "app.tasks.scoring_tasks.sweep_stale_scores",
+            "schedule": 1800.0,
+        },
     },
 )
 

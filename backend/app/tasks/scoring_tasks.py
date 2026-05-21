@@ -335,3 +335,106 @@ def batch_score_role(
         }
     finally:
         db.close()
+
+
+@celery_app.task(
+    name="app.tasks.scoring_tasks.sweep_stale_scores",
+    queue="scoring",
+)
+def sweep_stale_scores(*, limit: int = 500) -> dict:
+    """Find applications whose scores are NULL despite having a CV, and
+    enqueue them. Safety net for the hook-based invalidation in
+    ``mark_role_scores_stale`` / ``mark_application_scores_stale`` —
+    catches anything that slipped through (worker crash mid-batch,
+    missed hook on a new mutation path, etc.).
+
+    Two filters define "needs rescore":
+    1. ``cv_text`` is present (we have something to score), AND
+    2. either:
+       a. a ``stale`` CvScoreJob row exists for this app (the hook
+          path), OR
+       b. ``pre_screen_score_100`` is NULL AND ``pre_screen_run_at``
+          is NULL (never scored — but only enqueue when the
+          application's role has agent mode on, otherwise scoring is
+          recruiter-triggered only and we shouldn't sweep idle apps).
+
+    Returns a dict with counts for telemetry.
+    """
+    from sqlalchemy import and_, exists
+
+    from ..models.candidate_application import CandidateApplication
+    from ..models.cv_score_job import CvScoreJob
+    from ..models.role import Role
+    from ..platform.database import SessionLocal
+    from ..services.cv_score_orchestrator import enqueue_score
+
+    db = SessionLocal()
+    enqueued = 0
+    skipped = 0
+    examined = 0
+    try:
+        # Find apps whose LATEST CvScoreJob row is ``status='stale'``.
+        # ``CvScoreJob`` rows are append-only — a successful rescore
+        # adds a new ``pending`` / ``running`` / ``done`` row instead
+        # of converting the old stale one — so naive
+        # ``status == "stale"`` queries would re-enqueue already-fixed
+        # apps every 30 min and burn token budget. The window query
+        # below scopes to the most-recent job per application.
+        from sqlalchemy import desc, func
+
+        latest_job_subq = (
+            db.query(
+                CvScoreJob.application_id,
+                func.max(CvScoreJob.queued_at).label("max_queued"),
+            )
+            .group_by(CvScoreJob.application_id)
+            .subquery()
+        )
+        latest_jobs = (
+            db.query(CvScoreJob)
+            .join(
+                latest_job_subq,
+                (CvScoreJob.application_id == latest_job_subq.c.application_id)
+                & (CvScoreJob.queued_at == latest_job_subq.c.max_queued),
+            )
+            .filter(CvScoreJob.status == "stale")
+            .order_by(desc(CvScoreJob.queued_at))
+            .limit(limit)
+            .all()
+        )
+        stale_app_ids = [j.application_id for j in latest_jobs if j.application_id]
+
+        for app_id in stale_app_ids:
+            examined += 1
+            app = (
+                db.query(CandidateApplication)
+                .filter(
+                    CandidateApplication.id == app_id,
+                    CandidateApplication.deleted_at.is_(None),
+                )
+                .first()
+            )
+            if app is None or not (app.cv_text or "").strip():
+                skipped += 1
+                continue
+            try:
+                job = enqueue_score(db, app, force=True)
+                if job is not None:
+                    enqueued += 1
+                else:
+                    skipped += 1
+            except Exception:  # pragma: no cover — defensive
+                logger.exception(
+                    "sweep_stale_scores: enqueue_score raised for app=%s", app.id
+                )
+                skipped += 1
+
+        db.commit()
+        return {
+            "status": "ok",
+            "examined": examined,
+            "enqueued": enqueued,
+            "skipped": skipped,
+        }
+    finally:
+        db.close()

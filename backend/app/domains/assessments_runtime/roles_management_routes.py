@@ -421,10 +421,34 @@ def _next_role_criterion_ordering(db: Session, role: Role) -> int:
     return (last.ordering + 1) if last else 0
 
 
-def _commit_role_criterion_change(db: Session, role: Role) -> None:
-    """Mark scores stale + commit. Called after every chip CRUD on a role."""
+# Pre-screen only reads must-have + constraint criteria — it explicitly
+# ignores nice-to-haves. So preferred-only edits don't change the
+# pre-screen prompt and shouldn't invalidate any candidate's score.
+# Edits that touch must-have OR constraint (either side of the
+# transition) DO change the pre-screen prompt and need an invalidation
+# wave.
+_INVALIDATING_BUCKETS = {"must", "constraint"}
+
+
+def _commit_role_criterion_change(
+    db: Session,
+    role: Role,
+    *,
+    invalidate_scores: bool = True,
+) -> None:
+    """Commit a chip CRUD. Optionally NULLs every scored application's
+    pre-screen + cv_match scores so the UI shows "needs rescore" until
+    the agent re-evaluates against the new criteria.
+
+    ``invalidate_scores`` defaults to ``True`` (the historical, safe
+    behavior — invalidate on any change). Per-chip CRUD handlers
+    (create / update / delete) pass an explicit value computed from
+    the bucket transition; bulk workspace re-sync / reset handlers
+    pass nothing and get the safe default.
+    """
     db.flush()
-    mark_role_scores_stale(db, role.id)
+    if invalidate_scores:
+        mark_role_scores_stale(db, role.id)
     try:
         db.commit()
     except Exception:
@@ -458,7 +482,9 @@ def create_role_criterion(
         text=data.text.strip(),
     )
     db.add(chip)
-    _commit_role_criterion_change(db, role)
+    _commit_role_criterion_change(
+        db, role, invalidate_scores=bucket in _INVALIDATING_BUCKETS,
+    )
     db.refresh(chip)
     return chip
 
@@ -477,6 +503,7 @@ def update_role_criterion(
     role = get_role(role_id, current_user.organization_id, db)
     chip = _get_role_criterion(db, role, criterion_id)
     updates = data.model_dump(exclude_unset=True)
+    old_bucket = chip.bucket
     text_changed = "text" in updates and updates["text"] is not None and updates["text"].strip() != (chip.text or "")
     bucket_changed = "bucket" in updates and updates["bucket"] is not None and updates["bucket"] != chip.bucket
     if "text" in updates and updates["text"] is not None:
@@ -495,7 +522,14 @@ def update_role_criterion(
     # count as content customization.
     if (text_changed or bucket_changed) and chip.org_criterion_id is not None:
         chip.customized_at = datetime.now(timezone.utc)
-    _commit_role_criterion_change(db, role)
+    # Invalidate scores if the edit could have changed the pre-screen
+    # prompt: text/bucket edits where either the old OR new bucket is
+    # must-have/constraint. Pure ordering/weight tweaks, and pure
+    # preferred→preferred text edits, don't trigger.
+    needs_invalidation = (text_changed or bucket_changed) and (
+        old_bucket in _INVALIDATING_BUCKETS or chip.bucket in _INVALIDATING_BUCKETS
+    )
+    _commit_role_criterion_change(db, role, invalidate_scores=needs_invalidation)
     db.refresh(chip)
     return chip
 
@@ -512,6 +546,7 @@ def delete_role_criterion(
 ):
     role = get_role(role_id, current_user.organization_id, db)
     chip = _get_role_criterion(db, role, criterion_id)
+    old_bucket = chip.bucket
     # If this chip was inherited from workspace, remember the suppression so
     # "Sync workspace" doesn't immediately re-add it. Pure role-only chips
     # just go away.
@@ -521,7 +556,9 @@ def delete_role_criterion(
             suppressed.append(int(chip.org_criterion_id))
         role.suppressed_org_criterion_ids = suppressed
     db.delete(chip)
-    _commit_role_criterion_change(db, role)
+    _commit_role_criterion_change(
+        db, role, invalidate_scores=old_bucket in _INVALIDATING_BUCKETS,
+    )
     return None
 
 
