@@ -657,11 +657,18 @@ def _clear_application_scores(app: CandidateApplication) -> None:
     instead of a stale numeric score that no longer reflects the
     agent's current view of the candidate.
 
-    Keeps ``pre_screen_run_at`` (audit: when did pre-screen last
-    attempt) and the existing ``pre_screen_evidence`` blob (audit:
-    what was the last attempt's reasoning). Surfacing logic in the
-    UI / queues should check ``pre_screen_score_100 IS NULL`` to
-    detect "needs rescore" rather than reading ``pre_screen_evidence``.
+    Resets ``pre_screen_run_at`` to None so
+    ``application_needs_pre_screen`` correctly returns True on the
+    next orchestrator pass — otherwise the timestamp gates Stage-1
+    re-run and the orchestrator falls through to v3 cv_match scoring
+    without ever re-evaluating the updated must/constraint criteria
+    against the candidate.
+
+    Also wipes the aggregate cache columns (``taali_score_cache_100``,
+    ``assessment_score_cache_100``, ``role_fit_score_cache_100``,
+    ``score_mode_cache``) so list / detail endpoints that read from
+    the cache for performance don't keep returning stale numbers a
+    recruiter could act on during the rescore window.
     """
     app.pre_screen_score_100 = None
     app.requirements_fit_score_100 = None
@@ -669,6 +676,15 @@ def _clear_application_scores(app: CandidateApplication) -> None:
     app.cv_match_details = None
     app.cv_match_scored_at = None
     app.pre_screen_recommendation = None
+    app.pre_screen_run_at = None
+    # Aggregate score caches — these are what list/detail endpoints
+    # render for performance, so they MUST clear or the UI shows a
+    # number that no longer reflects the agent's current opinion.
+    app.taali_score_cache_100 = None
+    app.assessment_score_cache_100 = None
+    app.role_fit_score_cache_100 = None
+    app.score_mode_cache = None
+    app.score_cached_at = None
     # Rank falls back to workable_score so the directory still has
     # *some* ordering signal during the rescore window.
     app.rank_score = app.workable_score

@@ -158,6 +158,51 @@ def test_rank_score_falls_back_to_workable_score_on_invalidation(db):
     assert app.rank_score == 60.0
 
 
+def test_invalidation_resets_pre_screen_run_at_so_next_pass_reruns_stage1(db):
+    """Codex P1 (post-merge): if invalidation leaves ``pre_screen_run_at``
+    populated, ``application_needs_pre_screen`` returns False on the
+    next orchestrator pass — meaning Stage-1 is skipped and the
+    orchestrator falls through to v3 cv_match scoring without ever
+    re-evaluating the updated must/constraint criteria. Invalidation
+    must clear the timestamp."""
+    from datetime import datetime, timezone
+
+    from app.services.pre_screening_service import application_needs_pre_screen
+
+    _, role, _, app = _seed_scored_app(db)
+    # Seed a "previously screened" timestamp.
+    app.pre_screen_run_at = datetime.now(timezone.utc)
+    db.flush()
+    assert application_needs_pre_screen(app) is False
+
+    mark_role_scores_stale(db, role.id)
+
+    # After invalidation, the next orchestrator pass MUST re-run Stage-1.
+    assert app.pre_screen_run_at is None
+    assert application_needs_pre_screen(app) is True
+
+
+def test_invalidation_clears_aggregate_score_caches(db):
+    """Codex P2 (post-merge): list / detail endpoints read aggregate
+    score caches (taali_score_cache_100, assessment_score_cache_100,
+    role_fit_score_cache_100) for performance. If invalidation leaves
+    these populated, the UI keeps showing the stale number a recruiter
+    could act on during the rescore window."""
+    _, role, _, app = _seed_scored_app(db)
+    app.taali_score_cache_100 = 80.0
+    app.assessment_score_cache_100 = 70.0
+    app.role_fit_score_cache_100 = 82.0
+    app.score_mode_cache = "v3"
+    db.flush()
+
+    mark_role_scores_stale(db, role.id)
+
+    assert app.taali_score_cache_100 is None
+    assert app.assessment_score_cache_100 is None
+    assert app.role_fit_score_cache_100 is None
+    assert app.score_mode_cache is None
+
+
 def test_sweeper_skips_apps_whose_latest_job_is_no_longer_stale(db):
     """Codex P1 #4: ``CvScoreJob`` rows are append-only. A successful
     rescore adds a fresh ``pending``/``done`` row but doesn't update
