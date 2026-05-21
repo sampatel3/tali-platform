@@ -40,10 +40,11 @@ def _seed_scored_app(db):
     return org, role, candidate, app
 
 
-def test_mark_role_scores_stale_actually_nulls_score_fields(db):
-    """The headline behavior: invalidation NULLs the visible score
-    fields, not just adds a tracking row. UI then shows 'needs rescore'
-    instead of a stale numeric."""
+def test_mark_role_scores_stale_keeps_score_values_visible(db):
+    """Invalidation must keep the existing score values populated so
+    the UI can show "Strong match — 87 (stale)" until the rescore lands.
+    Blanking the score causes the recruiter to see hundreds of orphan
+    candidates after a single criterion edit, which destroys trust."""
     _, role, _, app = _seed_scored_app(db)
     assert app.pre_screen_score_100 == 75.0
     assert app.cv_match_score == 82.0
@@ -51,15 +52,19 @@ def test_mark_role_scores_stale_actually_nulls_score_fields(db):
     marked = mark_role_scores_stale(db, role.id)
     assert marked == 1
 
-    # All score-shaped fields wiped.
-    assert app.pre_screen_score_100 is None
-    assert app.requirements_fit_score_100 is None
-    assert app.cv_match_score is None
-    assert app.cv_match_details is None
-    assert app.cv_match_scored_at is None
-    assert app.pre_screen_recommendation is None
+    # Score values must still be visible.
+    assert app.pre_screen_score_100 == 75.0
+    assert app.cv_match_score == 82.0
+    assert app.requirements_fit_score_100 == 75.0
+    assert app.cv_match_details == {"summary": "Looks good"}
+    assert app.pre_screen_recommendation == "Proceed to screening"
+    assert app.rank_score == 75.0
+    # But pre_screen_run_at IS cleared so the next orchestrator pass
+    # re-runs Stage-1 against the updated criteria.
+    assert app.pre_screen_run_at is None
 
-    # And a stale CvScoreJob row exists for the worker to pick up.
+    # And a stale CvScoreJob row exists so the listing endpoint
+    # surfaces score_status="stale" → frontend renders the badge.
     stale = (
         db.query(CvScoreJob)
         .filter(CvScoreJob.application_id == app.id, CvScoreJob.status == "stale")
@@ -98,6 +103,62 @@ def test_mark_role_scores_stale_is_idempotent(db):
     assert len(stale) == 1
 
 
+def test_invalidation_supersedes_pending_agent_decisions(db):
+    """Pending agent decisions reference an underlying score. When that
+    score is invalidated, the decision is stale — the agent will likely
+    flip its mind once the rescore lands. Leaving the decision in
+    'pending' means the recruiter could approve a recommendation the
+    agent itself would reverse. Supersede on invalidation."""
+    from datetime import datetime, timezone
+    from app.models.agent_decision import AgentDecision
+
+    _, role, _, app = _seed_scored_app(db)
+    # Seed a pending decision (and an already-resolved one to prove the
+    # supersede only touches pending rows).
+    # BigInteger PKs don't autoincrement on SQLite test DB; set explicitly.
+    pending = AgentDecision(
+        id=1,
+        organization_id=app.organization_id,
+        role_id=role.id,
+        application_id=app.id,
+        decision_type="advance_to_interview",
+        recommendation="Strong match — advance to interview",
+        status="pending",
+        reasoning="Score 87, comfortably above threshold",
+        model_version="v3",
+        prompt_version="v3",
+        idempotency_key=f"pending-{app.id}",
+    )
+    resolved = AgentDecision(
+        id=2,
+        organization_id=app.organization_id,
+        role_id=role.id,
+        application_id=app.id,
+        decision_type="reject",
+        recommendation="Reject",
+        status="approved",
+        reasoning="Earlier attempt — recruiter approved",
+        model_version="v3",
+        prompt_version="v3",
+        resolved_at=datetime.now(timezone.utc),
+        idempotency_key=f"approved-{app.id}",
+    )
+    db.add(pending)
+    db.add(resolved)
+    db.flush()
+
+    mark_role_scores_stale(db, role.id, reason="salary_cap_lowered")
+
+    db.refresh(pending)
+    db.refresh(resolved)
+    # Pending → discarded with audit trail.
+    assert pending.status == "discarded"
+    assert pending.resolved_at is not None
+    assert "salary_cap_lowered" in (pending.resolution_note or "")
+    # Already-resolved decisions are NOT touched (audit history preserved).
+    assert resolved.status == "approved"
+
+
 def test_mark_application_scores_stale_scopes_to_single_app(db):
     """Per-candidate invalidation (used by CV upload + Workable digest
     changes) only touches that one application."""
@@ -132,30 +193,45 @@ def test_mark_application_scores_stale_scopes_to_single_app(db):
     assert ok is True
     db.flush()
 
-    # Re-read explicitly via fresh queries — the test's session is the
-    # same one ``mark_application_scores_stale`` mutated, but force a
-    # round-trip-shaped check to mirror what a downstream worker would
-    # see when it pulls the app.
     from app.models.candidate_application import CandidateApplication as CA
+    from app.models.cv_score_job import CvScoreJob
     fresh_a = db.query(CA).filter(CA.id == app_a.id).one()
     fresh_b = db.query(CA).filter(CA.id == app_b.id).one()
-    assert fresh_a.pre_screen_score_100 is None
-    assert fresh_a.cv_match_score is None
-    # Other app's scores untouched.
+    # app_a's scores stay VISIBLE (kept as stale numbers, badge from
+    # CvScoreJob status). pre_screen_run_at is cleared so Stage-1 reruns.
+    assert fresh_a.pre_screen_score_100 == 75.0
+    assert fresh_a.cv_match_score == 82.0
+    assert fresh_a.pre_screen_run_at is None
+    stale_jobs_a = (
+        db.query(CvScoreJob)
+        .filter(CvScoreJob.application_id == fresh_a.id, CvScoreJob.status == "stale")
+        .count()
+    )
+    assert stale_jobs_a == 1
+    # Other app's scores untouched AND no stale job row added for it.
     assert fresh_b.pre_screen_score_100 == 75.0
     assert fresh_b.cv_match_score == 82.0
+    stale_jobs_b = (
+        db.query(CvScoreJob)
+        .filter(CvScoreJob.application_id == fresh_b.id, CvScoreJob.status == "stale")
+        .count()
+    )
+    assert stale_jobs_b == 0
 
 
-def test_rank_score_falls_back_to_workable_score_on_invalidation(db):
-    """During the rescore window the directory still needs ordering;
-    rank_score falls back to workable_score (Workable's raw rating) so
-    the candidate doesn't drop to the bottom of the list."""
+def test_rank_score_preserved_on_invalidation(db):
+    """``rank_score`` powers the directory ordering. The old behavior
+    fell it back to workable_score on invalidation; the new "honest
+    stale" UX keeps the agent's rank visible (with a stale badge from
+    the CvScoreJob row) so the candidate stays in their familiar
+    position while the rescore lands."""
     _, role, _, app = _seed_scored_app(db)
     app.workable_score = 60.0
     db.flush()
 
     mark_role_scores_stale(db, role.id)
-    assert app.rank_score == 60.0
+    # rank_score stays at the prior agent score (75) — not 60.
+    assert app.rank_score == 75.0
 
 
 def test_invalidation_resets_pre_screen_run_at_so_next_pass_reruns_stage1(db):
@@ -182,12 +258,13 @@ def test_invalidation_resets_pre_screen_run_at_so_next_pass_reruns_stage1(db):
     assert application_needs_pre_screen(app) is True
 
 
-def test_invalidation_clears_aggregate_score_caches(db):
-    """Codex P2 (post-merge): list / detail endpoints read aggregate
-    score caches (taali_score_cache_100, assessment_score_cache_100,
-    role_fit_score_cache_100) for performance. If invalidation leaves
-    these populated, the UI keeps showing the stale number a recruiter
-    could act on during the rescore window."""
+def test_invalidation_preserves_aggregate_score_caches(db):
+    """Under the new "honest stale" UX the aggregate cache columns
+    (taali_score_cache_100, assessment_score_cache_100,
+    role_fit_score_cache_100) stay populated so list/detail endpoints
+    keep rendering the stale number alongside a stale badge — instead
+    of orphaning hundreds of candidates with no number at all whenever
+    a recruiter edits a must-have criterion."""
     _, role, _, app = _seed_scored_app(db)
     app.taali_score_cache_100 = 80.0
     app.assessment_score_cache_100 = 70.0
@@ -197,10 +274,12 @@ def test_invalidation_clears_aggregate_score_caches(db):
 
     mark_role_scores_stale(db, role.id)
 
-    assert app.taali_score_cache_100 is None
-    assert app.assessment_score_cache_100 is None
-    assert app.role_fit_score_cache_100 is None
-    assert app.score_mode_cache is None
+    # Cached aggregates stay visible. The UI uses the CvScoreJob
+    # status="stale" row (added by invalidation) to render the badge.
+    assert app.taali_score_cache_100 == 80.0
+    assert app.assessment_score_cache_100 == 70.0
+    assert app.role_fit_score_cache_100 == 82.0
+    assert app.score_mode_cache == "v3"
 
 
 def test_sweeper_skips_apps_whose_latest_job_is_no_longer_stale(db):

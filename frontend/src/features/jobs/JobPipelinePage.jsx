@@ -37,7 +37,7 @@ import { CandidateSheet } from '../candidates/CandidateSheet';
 import { CandidateTriageDrawer, candidateReportHref } from '../candidates/CandidateTriageDrawer';
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSheet } from '../candidates/RoleSheet';
-import { getErrorMessage, trimOrUndefined, formatStatusLabel } from '../candidates/candidatesUiUtils';
+import { getErrorMessage, trimOrUndefined, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
 
 const EMPTY_PROGRESS = { status: 'idle', total: 0, scored: 0, errors: 0, include_scored: false };
 const EMPTY_FETCH_PROGRESS = { status: 'idle', total: 0, fetched: 0, errors: 0 };
@@ -2492,11 +2492,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                                 </div>
                               </td>
                               <td>
-                                {score != null ? (
-                                  <span className={`score-pill ${scoreClass}`}>{score}</span>
-                                ) : (
-                                  <span className="score-pill mid" style={{ opacity: 0.5 }}>—</span>
-                                )}
+                                {renderJobPipelineScoreCell(score, scoreClass, application?.score_status)}
                               </td>
                               <td>
                                 <span className="stage-pill">{stageLabel}</span>

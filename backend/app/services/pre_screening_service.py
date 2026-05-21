@@ -515,7 +515,12 @@ def application_needs_pre_screen(app: CandidateApplication) -> bool:
 
     Logic:
     - No CV → not needed (and impossible).
-    - Never pre-screened → needed.
+    - ``pre_screen_run_at`` is NULL → needed. The score-invalidation
+      helpers explicitly NULL this field on every invalidation path
+      (criteria change, CV upload, Workable digest change, pre-screen
+      error), so a NULL timestamp is the canonical "needs rescore"
+      signal — regardless of whether the score field itself is still
+      populated (it is, in the new "honest stale" UX).
     - CV uploaded after the last pre-screen → needed (stale).
     - Otherwise → not needed.
     """
@@ -525,7 +530,7 @@ def application_needs_pre_screen(app: CandidateApplication) -> bool:
         return False
     last_run = getattr(app, "pre_screen_run_at", None)
     if last_run is None:
-        return app.pre_screen_recommendation is None
+        return True
     cv_uploaded = getattr(app, "cv_uploaded_at", None)
     if cv_uploaded is not None and cv_uploaded > last_run:
         return True

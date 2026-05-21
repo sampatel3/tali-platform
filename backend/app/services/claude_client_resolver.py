@@ -42,6 +42,29 @@ def _shared_api_key() -> str:
     return key
 
 
+# Anthropic's prompt-caching ``ttl`` parameter is currently in beta.
+# Requests that include ``cache_control={"type": "ephemeral", "ttl":
+# "1h"}`` are SILENTLY ignored unless the request also carries this
+# beta header — which manifested in prod as ``cache_read_tokens=0``
+# on every pre-screen call despite the prompt being structured for
+# caching, doubling token cost. The shorter (default 5m) cache works
+# without the header, but pre-screen batches that span >5 minutes
+# benefit from the longer window, and the header is harmless when
+# cache_control isn't set, so we send it on every client.
+# Docs: https://docs.anthropic.com/en/api/prompt-caching
+_ANTHROPIC_BETA_HEADER = "extended-cache-ttl-2025-04-11"
+
+
+def _build_inner_client(api_key: str) -> Anthropic:
+    """Construct an Anthropic SDK client with the prompt-caching beta
+    header set on every request.
+    """
+    return Anthropic(
+        api_key=api_key,
+        default_headers={"anthropic-beta": _ANTHROPIC_BETA_HEADER},
+    )
+
+
 def get_shared_client(
     *, organization_id: Optional[int] = None
 ) -> MeteredAnthropicClient:
@@ -54,7 +77,7 @@ def get_shared_client(
     the spend correctly. Otherwise the wrapper will skip recording with
     a logged warning.
     """
-    inner = Anthropic(api_key=_shared_api_key())
+    inner = _build_inner_client(_shared_api_key())
     return MeteredAnthropicClient(
         inner=inner, organization_id=organization_id
     )
@@ -67,7 +90,7 @@ def get_raw_shared_client() -> Anthropic:
     admin tools, the reconciliation service hitting the Admin API). Most
     code should use ``get_client_for_org`` or ``get_shared_client``.
     """
-    return Anthropic(api_key=_shared_api_key())
+    return _build_inner_client(_shared_api_key())
 
 
 def _decrypted_workspace_key(org: Organization) -> Optional[str]:
@@ -172,20 +195,20 @@ def get_client_for_org(org: Optional[Organization]) -> MeteredAnthropicClient:
         return MeteredAnthropicClient(inner=inner, organization_id=org_id)
 
     if org is None:
-        return _wrap(Anthropic(api_key=_shared_api_key()))
+        return _wrap(_build_inner_client(_shared_api_key()))
 
     existing = _decrypted_workspace_key(org)
     if existing:
-        return _wrap(Anthropic(api_key=existing))
+        return _wrap(_build_inner_client(existing))
 
     # Skip retry if a recent attempt failed — checked at the call site so
     # we don't hammer Admin API on every Claude call. A scheduled retry
     # task can clear the timestamp later.
     failed_at = getattr(org, "anthropic_workspace_provisioning_failed_at", None)
     if failed_at is not None:
-        return _wrap(Anthropic(api_key=_shared_api_key()))
+        return _wrap(_build_inner_client(_shared_api_key()))
 
     plaintext = _provision_for_org_safe(org)
     if plaintext:
-        return _wrap(Anthropic(api_key=plaintext))
-    return _wrap(Anthropic(api_key=_shared_api_key()))
+        return _wrap(_build_inner_client(plaintext))
+    return _wrap(_build_inner_client(_shared_api_key()))

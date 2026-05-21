@@ -109,6 +109,43 @@ export const getPrimaryScorePayload = (application) => {
   return { score: null, details: null };
 };
 
+// Renders the JobPipelinePage's Score column pill.
+// score_status surfaces the latest CvScoreJob.status. When the recruiter
+// edits a must-have / constraint criterion (or a candidate's Workable
+// data changes), the score stays visible but flagged ``stale`` until the
+// rescore lands — better than blanking the number out from under the
+// recruiter, which orphans Home-page decisions.
+// React.createElement to avoid JSX (file is .js, not .jsx).
+import React from 'react';
+export const renderJobPipelineScoreCell = (score, scoreClass, status) => {
+  if (status === 'pending' || status === 'running') {
+    return React.createElement(
+      'span',
+      { className: 'score-pill mid', title: 'Rescore in progress' },
+      'Scoring…',
+    );
+  }
+  if (score == null) {
+    return React.createElement(
+      'span',
+      { className: 'score-pill mid', style: { opacity: 0.5 } },
+      '—',
+    );
+  }
+  const isStale = status === 'stale';
+  return React.createElement(
+    'span',
+    {
+      className: `score-pill ${scoreClass}`,
+      style: isStale ? { opacity: 0.55 } : undefined,
+      title: isStale ? 'Out of date — rescore pending' : undefined,
+    },
+    score,
+    isStale ? ' · stale' : '',
+  );
+};
+
+
 // Renders the cell text shown in the "Pre-screen" column. Active scoring
 // jobs (pending/running) take precedence over a stale prior score so the
 // recruiter visibly sees an in-flight rescore rather than an old number.
