@@ -19,6 +19,7 @@ import { useJobStatus } from '../../contexts/JobStatusContext';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import CriteriaEditor from '../../shared/ui/CriteriaEditor';
+import RoleFeedbackNotes from './RoleFeedbackNotes';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
 import { useAgentStatus } from '../../shared/layout/AgentBar';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
@@ -711,6 +712,10 @@ const RoleAgentSettingsTab = ({
             onRestoreHidden={onRestoreHiddenCriterion}
           />
         </section>
+
+        {/* Standing recruiter feedback to the agent — append-only log;
+            recent entries inline into the agent's system prompt. */}
+        <RoleFeedbackNotes roleId={role?.id} />
 
         {/* Reject threshold */}
         <section className="mc-agent-settings-card">

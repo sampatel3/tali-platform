@@ -86,6 +86,7 @@ from .graph_writeback import (
 )
 from .capability_flag import CapabilityFlag
 from .role_intent import RoleIntent
+from .role_feedback_note import RoleFeedbackNote
 from .task_calibration import TaskCalibration
 from .agent_needs_input import NEEDS_INPUT_KINDS, AgentNeedsInput
 from .anthropic_usage_reconciliation import AnthropicUsageReconciliation

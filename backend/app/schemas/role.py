@@ -370,3 +370,18 @@ class FirefliesInterviewLinkCreate(BaseModel):
     stage: Literal["screening", "tech_stage_2"]
     fireflies_meeting_id: str = Field(min_length=1, max_length=200)
     provider_url: Optional[str] = Field(default=None, max_length=2000)
+
+
+class RoleFeedbackNoteCreate(BaseModel):
+    note: str = Field(min_length=1, max_length=4000)
+
+
+class RoleFeedbackNoteResponse(BaseModel):
+    id: int
+    role_id: int
+    author_user_id: Optional[int] = None
+    author_name: Optional[str] = None
+    note: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

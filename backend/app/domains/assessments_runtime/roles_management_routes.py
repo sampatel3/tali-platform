@@ -30,6 +30,8 @@ from ...schemas.role import (
     RoleCriterionCreate,
     RoleCriterionResponse,
     RoleCriterionUpdate,
+    RoleFeedbackNoteCreate,
+    RoleFeedbackNoteResponse,
     RoleResponse,
     RoleTaskLinkRequest,
     RoleUpdate,
@@ -816,3 +818,77 @@ def remove_role_task(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to unlink task from role")
     return None
+
+
+# ---------------------------------------------------------------------------
+# Recruiter feedback notes — freeform observations about agent behaviour on
+# this role. Append-only timeline; the most-recent N rows are inlined into
+# the agent's system prompt by ``system_prompt._render_recruiter_feedback_notes``
+# so the agent picks the feedback up on the next cycle.
+# ---------------------------------------------------------------------------
+
+
+def _serialize_feedback_note(row) -> dict:
+    author = row.author
+    return {
+        "id": int(row.id),
+        "role_id": int(row.role_id),
+        "author_user_id": int(row.author_user_id) if row.author_user_id else None,
+        "author_name": (
+            (author.full_name if getattr(author, "full_name", None) else author.email)
+            if author
+            else None
+        ),
+        "note": row.note,
+        "created_at": row.created_at,
+    }
+
+
+@router.get(
+    "/roles/{role_id}/feedback-notes",
+    response_model=list[RoleFeedbackNoteResponse],
+)
+def list_role_feedback_notes(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from ...agent_runtime.role_feedback_notes import list_notes
+
+    role = get_role(role_id, current_user.organization_id, db)
+    rows = list_notes(db, role_id=role.id, limit=200)
+    return [_serialize_feedback_note(r) for r in rows]
+
+
+@router.post(
+    "/roles/{role_id}/feedback-notes",
+    response_model=RoleFeedbackNoteResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_role_feedback_note(
+    role_id: int,
+    data: RoleFeedbackNoteCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from ...agent_runtime.role_feedback_notes import create_note
+
+    role = get_role(role_id, current_user.organization_id, db)
+    try:
+        row = create_note(
+            db,
+            organization_id=int(current_user.organization_id),
+            role_id=int(role.id),
+            note=data.note,
+            author_user_id=int(current_user.id),
+        )
+        db.commit()
+        db.refresh(row)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to create role feedback note for role_id=%s", role_id)
+        raise HTTPException(status_code=500, detail="Failed to create feedback note")
+    return _serialize_feedback_note(row)
