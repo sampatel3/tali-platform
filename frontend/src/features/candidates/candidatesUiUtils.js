@@ -115,33 +115,48 @@ export const getPrimaryScorePayload = (application) => {
 // data changes), the score stays visible but flagged ``stale`` until the
 // rescore lands — better than blanking the number out from under the
 // recruiter, which orphans Home-page decisions.
+//
+// pending/running/stale all keep the prior score visible (dimmed + with
+// a contextual label) — only no-prior-score apps render text-only
+// ``Scoring…``. Otherwise the score disappears the moment a rescore
+// enqueues, reintroducing the exact "where did my numbers go?" UX the
+// honest-stale change is designed to avoid.
+//
 // React.createElement to avoid JSX (file is .js, not .jsx).
 import React from 'react';
 export const renderJobPipelineScoreCell = (score, scoreClass, status) => {
-  if (status === 'pending' || status === 'running') {
-    return React.createElement(
-      'span',
-      { className: 'score-pill mid', title: 'Rescore in progress' },
-      'Scoring…',
-    );
-  }
+  const isInFlight = status === 'pending' || status === 'running';
+  const isStale = status === 'stale';
   if (score == null) {
+    if (isInFlight) {
+      return React.createElement(
+        'span',
+        { className: 'score-pill mid', title: 'Scoring in progress' },
+        'Scoring…',
+      );
+    }
     return React.createElement(
       'span',
       { className: 'score-pill mid', style: { opacity: 0.5 } },
       '—',
     );
   }
-  const isStale = status === 'stale';
+  const dim = isInFlight || isStale ? { opacity: 0.55 } : undefined;
+  const label = isInFlight
+    ? ` · rescoring`
+    : isStale
+      ? ` · stale`
+      : '';
+  const title = isInFlight
+    ? 'Rescore in progress — number will refresh when it lands'
+    : isStale
+      ? 'Out of date — rescore pending'
+      : undefined;
   return React.createElement(
     'span',
-    {
-      className: `score-pill ${scoreClass}`,
-      style: isStale ? { opacity: 0.55 } : undefined,
-      title: isStale ? 'Out of date — rescore pending' : undefined,
-    },
+    { className: `score-pill ${scoreClass}`, style: dim, title },
     score,
-    isStale ? ' · stale' : '',
+    label,
   );
 };
 

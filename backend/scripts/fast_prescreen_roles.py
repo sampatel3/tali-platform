@@ -44,20 +44,23 @@ def main() -> int:
 
     db = SessionLocal()
     try:
-        # Every app on the target roles that doesn't have a pre-screen
-        # score yet — covers the invalidated ones AND any new
-        # candidates from recent Workable syncs.
+        # Every app on the target roles that needs pre-screen — keyed
+        # on ``pre_screen_run_at IS NULL`` (the staleness signal under
+        # the new "honest stale" semantics, where invalidated apps
+        # keep their prior score value but null this timestamp). Old
+        # filter on ``pre_screen_score_100 IS NULL`` would silently
+        # skip every stale app and falsely report success.
         apps = (
             db.query(CandidateApplication)
             .filter(
                 CandidateApplication.role_id.in_(args.role_ids),
                 CandidateApplication.deleted_at.is_(None),
-                CandidateApplication.pre_screen_score_100.is_(None),
+                CandidateApplication.pre_screen_run_at.is_(None),
                 CandidateApplication.cv_text.isnot(None),
             )
             .all()
         )
-        log.info("Found %d blank apps across roles %s", len(apps), args.role_ids)
+        log.info("Found %d apps needing pre-screen across roles %s", len(apps), args.role_ids)
         if args.dry_run:
             return 0
 
