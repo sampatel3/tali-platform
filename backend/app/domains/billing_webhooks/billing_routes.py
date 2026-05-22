@@ -658,6 +658,136 @@ def admin_reconcile(
     return {"ok": True, "days": int(days), **summary}
 
 
+@router.get("/admin/metering-gap")
+def admin_metering_gap(
+    days: int = 7,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Summarise ``claude_call_log`` over the trailing ``days`` so the
+    user can see at a glance: total Anthropic calls, total $ recorded,
+    per-feature breakdown, attribution gap (calls without a UsageEvent),
+    and failure rate. This is the user-facing answer to "where is my
+    money going?" — now answerable without a multi-PR investigation.
+
+    The structural invariant from PR #237 (every Claude call writes a
+    call_log row, no exceptions) means these numbers are ground truth,
+    not best-effort accounting. Drift between the totals here and
+    Anthropic's admin API billing is now a metering-rate-table bug
+    (unlikely) or a model-pricing-config bug (catchable), not an
+    "application code forgot to record" bug (the historical leak).
+    """
+    if not getattr(current_user, "is_superuser", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+    if days < 1 or days > 90:
+        raise HTTPException(
+            status_code=422,
+            detail="days must be in [1, 90]",
+        )
+
+    from ...models.claude_call_log import ClaudeCallLog
+
+    org_id = current_user.organization_id
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    base = db.query(ClaudeCallLog).filter(
+        ClaudeCallLog.created_at >= since,
+        ClaudeCallLog.organization_id == org_id,
+    )
+
+    # Totals
+    total_calls = base.count()
+    total_cost_micro = (
+        base.with_entities(func.coalesce(func.sum(ClaudeCallLog.cost_usd_micro), 0)).scalar()
+        or 0
+    )
+
+    # Per-feature breakdown
+    feature_rows = (
+        db.query(
+            ClaudeCallLog.feature_hint,
+            func.count(ClaudeCallLog.id).label("calls"),
+            func.coalesce(func.sum(ClaudeCallLog.cost_usd_micro), 0).label("cost_micro"),
+        )
+        .filter(
+            ClaudeCallLog.created_at >= since,
+            ClaudeCallLog.organization_id == org_id,
+        )
+        .group_by(ClaudeCallLog.feature_hint)
+        .order_by(func.sum(ClaudeCallLog.cost_usd_micro).desc())
+        .all()
+    )
+
+    # Attribution gap (no usage_event FK — caller didn't enrich)
+    gap_rows = (
+        db.query(
+            ClaudeCallLog.feature_hint,
+            func.count(ClaudeCallLog.id).label("calls"),
+            func.coalesce(func.sum(ClaudeCallLog.cost_usd_micro), 0).label("cost_micro"),
+        )
+        .filter(
+            ClaudeCallLog.created_at >= since,
+            ClaudeCallLog.organization_id == org_id,
+            ClaudeCallLog.usage_event_id.is_(None),
+        )
+        .group_by(ClaudeCallLog.feature_hint)
+        .order_by(func.sum(ClaudeCallLog.cost_usd_micro).desc())
+        .all()
+    )
+    gap_total_calls = sum(int(r.calls or 0) for r in gap_rows)
+    gap_total_cost_micro = sum(int(r.cost_micro or 0) for r in gap_rows)
+
+    # Failure rate
+    status_rows = (
+        db.query(
+            ClaudeCallLog.status,
+            func.count(ClaudeCallLog.id).label("calls"),
+        )
+        .filter(
+            ClaudeCallLog.created_at >= since,
+            ClaudeCallLog.organization_id == org_id,
+        )
+        .group_by(ClaudeCallLog.status)
+        .all()
+    )
+
+    return {
+        "period_days": days,
+        "since": since.isoformat(),
+        "totals": {
+            "calls": int(total_calls),
+            "cost_usd": round(int(total_cost_micro) / 1_000_000, 6),
+        },
+        "by_feature": [
+            {
+                "feature": (r.feature_hint or "(unattributed)"),
+                "calls": int(r.calls or 0),
+                "cost_usd": round(int(r.cost_micro or 0) / 1_000_000, 6),
+            }
+            for r in feature_rows
+        ],
+        "attribution_gap": {
+            "calls": int(gap_total_calls),
+            "cost_usd": round(int(gap_total_cost_micro) / 1_000_000, 6),
+            "by_feature_hint": [
+                {
+                    "feature_hint": (r.feature_hint or "(none)"),
+                    "calls": int(r.calls or 0),
+                    "cost_usd": round(int(r.cost_micro or 0) / 1_000_000, 6),
+                }
+                for r in gap_rows
+            ],
+        },
+        "by_status": [
+            {"status": r.status, "calls": int(r.calls or 0)}
+            for r in status_rows
+        ],
+    }
+
+
 @router.post("/topup")
 def create_topup(
     body: TopupCreate,
