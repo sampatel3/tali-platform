@@ -86,6 +86,34 @@ class CvScoringSubAgent:
                 error=f"application {req.application_id} not found",
             )
 
+        # A6: resolved applications are frozen. The cached score (if any)
+        # from when they were open is still served — that's the snapshot.
+        # But we never spend on a fresh score for them.
+        from ..domains.assessments_runtime.role_support import is_resolved
+        if is_resolved(app):
+            cached = _from_cached_details(app) if not req.skip_cache else None
+            if cached is not None:
+                return SubAgentResult(
+                    sub_agent=self.name,
+                    ok=True,
+                    output=cached,
+                    confidence=1.0,
+                    cache_hit=True,
+                )
+            logger.info(
+                "resolved_app_skipped action=cv_scoring application_id=%s "
+                "pipeline_stage=%s application_outcome=%s",
+                app.id, app.pipeline_stage, app.application_outcome,
+            )
+            return SubAgentResult(
+                sub_agent=self.name,
+                ok=False,
+                error=(
+                    f"application {req.application_id} is resolved "
+                    f"(stage={app.pipeline_stage}, outcome={app.application_outcome})"
+                ),
+            )
+
         if not req.skip_cache:
             cached = _from_cached_details(app)
             if cached is not None:

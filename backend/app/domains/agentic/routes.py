@@ -25,6 +25,8 @@ from ...actions import override_decision as override_decision_action
 from ...actions.types import Actor
 from ...agent_runtime import budget_guard
 from ...deps import get_current_user
+from ...domains.assessments_runtime.role_support import is_resolved
+from ...services.cv_score_orchestrator import supersede_pending_decisions_for_app
 from ...models.agent_decision import AGENT_DECISION_STATUSES, AgentDecision
 from ...models.agent_needs_input import AgentNeedsInput
 from ...models.agent_run import AgentRun
@@ -81,6 +83,22 @@ class AgentDecisionPayload(BaseModel):
     # can fetch this role's Workable stages for the Advance / Skip & advance
     # stage <select> without a second round-trip.
     workable_job_id: Optional[str] = None
+    # A2 + C5: trust signals computed on every read so recruiters see
+    # input freshness, confidence, age and cost without opening the
+    # expand-out. ``is_stale`` is the boolean gate the Hub uses to
+    # disable Approve and prompt Re-evaluate; ``staleness_reasons``
+    # carries the machine codes (criteria_changed, cv_replaced, etc.);
+    # ``staleness_summary`` is the one-line human label.
+    is_stale: bool = False
+    staleness_reasons: list[str] = []
+    staleness_summary: Optional[str] = None
+    # C5: derived, presentational. ``age_seconds`` = now - created_at;
+    # ``confidence_band`` maps confidence into high/medium/low for the
+    # purple-tone chip; ``cost_usd_cents`` rolls up token_spend so the
+    # always-visible footer can show "$0.04" without a JSON dig.
+    age_seconds: int = 0
+    confidence_band: Optional[str] = None
+    cost_usd_cents: int = 0
 
 
 class AgentRunPayload(BaseModel):
@@ -190,11 +208,45 @@ def _confidence_to_float(value: Any) -> Optional[float]:
         return None
 
 
+def _confidence_band(value: Optional[float]) -> Optional[str]:
+    """C5: bucket the 0-1 confidence into purple-tone tiers for the chip.
+
+    No red/amber — house style is purple-only. Low confidence still
+    shows muted purple so the recruiter can spot it without colour
+    semantics implying urgency or danger.
+    """
+    if value is None:
+        return None
+    if value >= 0.8:
+        return "high"
+    if value >= 0.6:
+        return "medium"
+    return "low"
+
+
 def _decision_to_payload(
     decision: AgentDecision,
     candidate: Optional[Candidate],
     role: Optional[Role] = None,
+    *,
+    is_stale: bool = False,
+    staleness_reasons: Optional[list[str]] = None,
+    staleness_summary: Optional[str] = None,
 ) -> AgentDecisionPayload:
+    # C5: derive presentational fields here so the API answers "is this
+    # safe to approve, how old is it, how expensive was it" without
+    # forcing the UI to compute it from JSON.
+    confidence_value = _confidence_to_float(decision.confidence)
+    age_seconds = 0
+    if decision.created_at is not None:
+        delta = datetime.now(timezone.utc) - decision.created_at
+        age_seconds = max(0, int(delta.total_seconds()))
+    cost_micro = 0
+    token_spend = decision.token_spend or {}
+    if isinstance(token_spend, dict):
+        cost_micro = int(token_spend.get("total_micro_usd") or 0)
+    cost_cents = cost_micro // 10_000
+
     return AgentDecisionPayload(
         id=int(decision.id),
         role_id=int(decision.role_id),
@@ -205,7 +257,7 @@ def _decision_to_payload(
         status=str(decision.status),
         reasoning=str(decision.reasoning),
         evidence=decision.evidence,
-        confidence=_confidence_to_float(decision.confidence),
+        confidence=confidence_value,
         model_version=str(decision.model_version),
         prompt_version=str(decision.prompt_version),
         created_at=decision.created_at,
@@ -217,6 +269,12 @@ def _decision_to_payload(
         candidate_email=getattr(candidate, "email", None) if candidate else None,
         role_name=getattr(role, "name", None) if role else None,
         workable_job_id=getattr(role, "workable_job_id", None) if role else None,
+        is_stale=is_stale,
+        staleness_reasons=staleness_reasons or [],
+        staleness_summary=staleness_summary,
+        age_seconds=age_seconds,
+        confidence_band=_confidence_band(confidence_value),
+        cost_usd_cents=cost_cents,
     )
 
 
@@ -297,7 +355,58 @@ def list_agent_decisions(
         )
     query = query.order_by(desc(AgentDecision.created_at)).limit(limit)
     rows = query.all()
-    return [_decision_to_payload(decision, candidate, role) for decision, candidate, role in rows]
+
+    # A2: compute staleness per row. Only meaningful for ``pending``
+    # rows (resolved decisions are frozen snapshots per A6); for
+    # resolved/discarded/expired we skip the computation and return
+    # is_stale=False. Done in-loop because each row needs the
+    # application + role context; the staleness service handles
+    # caching internally and reuses already-loaded entities when
+    # callers pass them in.
+    from ...services import decision_staleness
+    from ...models.candidate_application import CandidateApplication
+
+    # Batch-load applications for the rows we're returning so we don't
+    # round-trip per decision in the staleness service.
+    pending_app_ids = [
+        int(decision.application_id)
+        for decision, _, _ in rows
+        if decision.status == "pending"
+    ]
+    apps_by_id: dict[int, CandidateApplication] = {}
+    if pending_app_ids:
+        for app in (
+            db.query(CandidateApplication)
+            .filter(CandidateApplication.id.in_(pending_app_ids))
+            .all()
+        ):
+            apps_by_id[int(app.id)] = app
+
+    payloads: list[AgentDecisionPayload] = []
+    for decision, candidate, role in rows:
+        is_stale = False
+        reasons: list[str] = []
+        summary: Optional[str] = None
+        if decision.status == "pending":
+            app = apps_by_id.get(int(decision.application_id))
+            try:
+                report = decision_staleness.evaluate(
+                    db, decision, application=app, role=role,
+                )
+                is_stale = report.is_stale
+                reasons = report.reasons
+                summary = report.summary
+            except Exception:  # pragma: no cover — defensive
+                pass
+        payloads.append(
+            _decision_to_payload(
+                decision, candidate, role,
+                is_stale=is_stale,
+                staleness_reasons=reasons,
+                staleness_summary=summary,
+            )
+        )
+    return payloads
 
 
 # ---------------------------------------------------------------------------
@@ -309,9 +418,46 @@ def list_agent_decisions(
 def approve(
     decision_id: int,
     body: ApproveBody = Body(default_factory=ApproveBody),
+    force: bool = Query(default=False, description="Approve even if the inputs are stale (A4)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # A4: refuse to approve a stale decision unless the recruiter
+    # explicitly forces it. The Hub disables Approve when is_stale=True
+    # and surfaces a Re-evaluate button; this 409 is the second line of
+    # defense for direct API consumers and copy-pasted URLs. Compute
+    # staleness on the row first; resolved/discarded decisions are
+    # handled by the existing status check inside approve_decision.run.
+    pre_decision = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.id == decision_id,
+            AgentDecision.organization_id == current_user.organization_id,
+        )
+        .first()
+    )
+    if pre_decision is not None and pre_decision.status == "pending" and not force:
+        from ...services import decision_staleness
+        try:
+            report = decision_staleness.evaluate(db, pre_decision)
+            if report.is_stale:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "decision_stale",
+                        "message": (
+                            "Inputs cited by this decision have changed since "
+                            "it was queued. Re-evaluate or approve with force=true."
+                        ),
+                        "reasons": report.reasons,
+                        "summary": report.summary,
+                    },
+                )
+        except HTTPException:
+            raise
+        except Exception:  # pragma: no cover — defensive
+            pass
+
     try:
         decision = approve_decision_action.run(
             db,
@@ -379,6 +525,119 @@ def override(
     )
     role = db.query(Role).filter(Role.id == decision.role_id).first()
     return _decision_to_payload(decision, candidate, role)
+
+
+# ---------------------------------------------------------------------------
+# POST /agent-decisions/{id}/re-evaluate
+# ---------------------------------------------------------------------------
+
+
+class ReEvaluateResult(BaseModel):
+    decision_id: int
+    role_id: int
+    application_id: int
+    superseded: int
+    queued: bool
+    task_id: Optional[str] = None
+    detail: Optional[str] = None
+
+
+@router.post("/agent-decisions/{decision_id}/re-evaluate", response_model=ReEvaluateResult)
+def re_evaluate(
+    decision_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """A4: discard a stale pending decision and ask the agent to decide
+    again on fresh inputs.
+
+    Surfaced by the Decision Hub when a decision's inputs have changed
+    (is_stale=True): the recruiter presses "Re-evaluate" instead of
+    approving a decision built on outdated criteria / CV / scores. We
+    discard the pending row (preserving its audit trail) and enqueue a
+    focused agent cycle for the candidate.
+
+    A6 invariant: resolved applications (rejected / hired / advanced) are
+    frozen — their decision snapshot is the permanent record and must not
+    be re-evaluated. Returns 409 in that case.
+    """
+    decision = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.id == decision_id,
+            AgentDecision.organization_id == current_user.organization_id,
+        )
+        .first()
+    )
+    if decision is None:
+        raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
+    if decision.status != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail=f"decision {decision_id} is {decision.status}, not pending — nothing to re-evaluate",
+        )
+
+    application = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.id == decision.application_id)
+        .first()
+    )
+    if application is not None and is_resolved(application):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "application_resolved",
+                "message": (
+                    "This candidate has left Tali's flow (rejected/hired/advanced). "
+                    "The decision is a frozen audit record and can't be re-evaluated."
+                ),
+            },
+        )
+
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == decision.role_id,
+            Role.organization_id == current_user.organization_id,
+        )
+        .first()
+    )
+
+    try:
+        superseded = supersede_pending_decisions_for_app(
+            db, int(decision.application_id), reason="recruiter_requested_re_evaluate",
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"re-evaluate failed: {exc}")
+
+    # Enqueue a focused cycle. If the role is paused we still discarded the
+    # stale decision (the recruiter asked for it) but report queued=False.
+    queued = False
+    task_id: Optional[str] = None
+    detail: Optional[str] = None
+    if role is not None and role.agent_paused_at is None and bool(role.agentic_mode_enabled):
+        from ...tasks.agent_tasks import agent_manual_run
+
+        async_result = agent_manual_run.delay(
+            role_id=int(decision.role_id),
+            application_id=int(decision.application_id),
+        )
+        queued = True
+        task_id = str(async_result.id)
+    else:
+        detail = "stale decision discarded; agent not re-run (role paused or agentic mode off)"
+
+    return ReEvaluateResult(
+        decision_id=decision_id,
+        role_id=int(decision.role_id),
+        application_id=int(decision.application_id),
+        superseded=superseded,
+        queued=queued,
+        task_id=task_id,
+        detail=detail,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -54,14 +54,31 @@ def _shared_api_key() -> str:
 # Docs: https://docs.anthropic.com/en/api/prompt-caching
 _ANTHROPIC_BETA_HEADER = "extended-cache-ttl-2025-04-11"
 
+# Default SDK timeout is 600s (10 min) with up to 2 silent retries, which
+# means one hung TCP/TLS connection can stall a worker for 15-20 min
+# producing zero observability. Real-world impact (2026-05-22, role 31):
+# 32 watchdog-killed cycles in one day, each averaging ~15 min, ALL with
+# zero tokens recorded — the call never returned and never errored.
+#
+# A 120s per-request timeout with 1 retry (= worst-case 240s) gives
+# transient hiccups room to recover while ensuring the worker breaks
+# out fast and surfaces a categorised ``timeout`` error in
+# claude_call_log. Hard ceiling stays well under the 10-min watchdog.
+_REQUEST_TIMEOUT_SECONDS = 120.0
+_MAX_RETRIES = 1
+
 
 def _build_inner_client(api_key: str) -> Anthropic:
     """Construct an Anthropic SDK client with the prompt-caching beta
-    header set on every request.
+    header set on every request, a 120s per-request timeout, and a
+    single retry. The timeout was added 2026-05-22 after production
+    cycles hung 15+ minutes on stuck connections — see module docstring.
     """
     return Anthropic(
         api_key=api_key,
         default_headers={"anthropic-beta": _ANTHROPIC_BETA_HEADER},
+        timeout=_REQUEST_TIMEOUT_SECONDS,
+        max_retries=_MAX_RETRIES,
     )
 
 

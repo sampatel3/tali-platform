@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
 from ..models.agent_run import AgentRun
+from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.organization import Organization
 from ..models.role import Role
 from ..platform.config import settings
@@ -41,6 +42,51 @@ logger = logging.getLogger("taali.agent_runtime")
 # read → batch_score → 2-3 evaluate_policy → queue → complete.
 MAX_TOOL_ROUNDS = 18
 MAX_TOKENS_PER_ROUND = 2048
+
+
+def _emit_cycle_abort_event(
+    db: Session,
+    *,
+    run: AgentRun,
+    application_id: Optional[int],
+    reason: str,
+) -> None:
+    """C6: emit a CandidateApplicationEvent so the recruiter sees the
+    abort in the candidate timeline. Without this signal, aborted /
+    budget_paused / failed cycles are invisible until the recruiter
+    digs into the AgentRun table — silent failure is the worst trust
+    killer.
+
+    Only emits when there's a focus application — cron triggers without
+    a specific candidate are surfaced via the role-level banner on the
+    Decision Hub (driven by AgentRun.status), not per-candidate events.
+    Failure here is logged and swallowed; never breaks the run path.
+    """
+    if application_id is None:
+        return
+    try:
+        idempotency_key = f"agent_cycle_aborted:run:{int(run.id) if run.id else 0}"
+        db.add(
+            CandidateApplicationEvent(
+                application_id=int(application_id),
+                organization_id=int(run.organization_id),
+                event_type="agent_cycle_aborted",
+                actor_type="agent",
+                actor_id=int(run.id) if run.id else None,
+                reason=reason,
+                idempotency_key=idempotency_key,
+                event_metadata={
+                    "agent_run_id": int(run.id) if run.id else None,
+                    "status": str(run.status),
+                    "trigger": str(run.trigger),
+                },
+            )
+        )
+    except Exception:  # pragma: no cover — defensive
+        logger.exception(
+            "agent_cycle_aborted event emit failed run_id=%s app_id=%s",
+            getattr(run, "id", None), application_id,
+        )
 
 
 def _block_to_dict(block: Any) -> dict[str, Any]:
@@ -191,6 +237,73 @@ def run_cycle(
     session — we ``flush`` at boundaries so ids populate, but never
     ``commit`` ourselves.
     """
+    # C1: prevent overlapping cycles for the same role across ALL trigger
+    # paths (cron tick, event-driven, manual). Two layers working together:
+    #   1. A Postgres TRANSACTION-scoped advisory lock serialises the
+    #      check-and-create critical section so two cycles racing in at the
+    #      same instant can't both pass the in-flight check (TOCTOU).
+    #      SQLite (tests) is single-threaded, so the lock is a no-op there.
+    #   2. An in-flight check: if a running AgentRun for this role started
+    #      in the last 15 min, abort. ``run_cycle`` commits the running row
+    #      early (so the watchdog can observe a crashed worker), which
+    #      RELEASES the xact lock — so it's this committed row, not the
+    #      lock, that guards subsequent cycles once the lock is gone. The
+    #      lock only has to hold long enough to make the check-and-create
+    #      atomic against a simultaneous racer.
+    # The 10-min watchdog (agent_expire_stuck_runs) reaps genuinely-stuck
+    # running rows so a crashed worker can't block the role forever.
+    is_postgres = db.bind is not None and db.bind.dialect.name == "postgresql"
+    lock_acquired = True
+    if is_postgres:
+        from sqlalchemy import text as _sql_text
+        # Lock key derived from a stable hash of ('agent_run', role_id)
+        # so concurrent cycles for the same role compete for the same
+        # lock without conflicting with other unrelated lock keys.
+        lock_acquired = bool(
+            db.execute(
+                _sql_text("SELECT pg_try_advisory_xact_lock(hashtext('agent_run'), :role_id)"),
+                {"role_id": int(role.id)},
+            ).scalar()
+        )
+
+    in_flight = None
+    if lock_acquired:
+        in_flight = (
+            db.query(AgentRun.id)
+            .filter(
+                AgentRun.role_id == role.id,
+                AgentRun.status == "running",
+                AgentRun.started_at > datetime.now(timezone.utc) - timedelta(minutes=15),
+            )
+            .first()
+        )
+
+    if not lock_acquired or in_flight is not None:
+        import logging
+        logging.getLogger("taali.agent_runtime.orchestrator").info(
+            "cycle_skipped_overlap role_id=%s trigger=%s lock_acquired=%s in_flight=%s",
+            role.id, trigger, lock_acquired,
+            int(in_flight[0]) if in_flight is not None else None,
+        )
+        run = AgentRun(
+            organization_id=role.organization_id,
+            role_id=role.id,
+            trigger=trigger,
+            trigger_event_id=trigger_event_id,
+            status="aborted",
+            error="skipped_overlap",
+            model_version=settings.resolved_claude_model,
+            prompt_version=PROMPT_VERSION,
+            finished_at=datetime.now(timezone.utc),
+        )
+        db.add(run)
+        db.flush()
+        _emit_cycle_abort_event(
+            db, run=run, application_id=application_id,
+            reason="Agent cycle skipped — another cycle was already running for this role.",
+        )
+        return run
+
     # Role has no `organization` backref defined on the model — fetch directly.
     org = db.query(Organization).filter(Organization.id == role.organization_id).first()
     if org is None:
@@ -218,6 +331,13 @@ def run_cycle(
         )
         db.add(run)
         db.flush()
+        _emit_cycle_abort_event(
+            db, run=run, application_id=application_id,
+            reason=(
+                f"Agent paused — monthly budget cap reached for this role. "
+                f"Will resume next month or after recruiter raises the cap."
+            ),
+        )
         return run
 
     snapshot = calibration.load(role)
@@ -385,6 +505,30 @@ def run_cycle(
     if run.status == "running":
         run.status = "succeeded" if finished_via_complete_tool else "aborted"
 
+    # C6: emit cycle-abort event for non-success terminal statuses so the
+    # candidate timeline shows "agent tried but didn't finish" instead of
+    # silent failure. Limited to the focus application; role-level aborts
+    # without a focus surface via the Hub banner reading AgentRun.status.
+    if run.status in ("aborted", "failed", "budget_paused") and application_id is not None:
+        reason_map = {
+            "aborted": (
+                f"Agent cycle aborted after {rounds_used} round(s) — "
+                f"did not reach a decision. Will retry on the next tick."
+            ),
+            "failed": (
+                f"Agent cycle failed with an error during deliberation. "
+                f"See agent_runs.error for details."
+            ),
+            "budget_paused": (
+                f"Agent paused mid-cycle — monthly budget cap was reached. "
+                f"Will resume next month or after recruiter raises the cap."
+            ),
+        }
+        _emit_cycle_abort_event(
+            db, run=run, application_id=application_id,
+            reason=reason_map[run.status],
+        )
+
     # Persist calibration on every terminal path, not just on
     # agent_run_complete. An aborted cycle still produced observations
     # (scores enqueued, tools tried, rounds spent); not saving them means
@@ -417,6 +561,9 @@ def run_cycle(
         )
 
     run.tools_called = [{"name": n, "count": c} for n, c in tools_called_summary.items()]
+    # B7 step 1: instrument round count so we can histogram p95
+    # post-deploy and tune MAX_TOOL_ROUNDS downward if appropriate.
+    run.rounds_executed = int(rounds_used)
     run.finished_at = datetime.now(timezone.utc)
     role.agent_last_run_at = run.finished_at
     db.add(role)
