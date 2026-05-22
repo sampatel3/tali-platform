@@ -25,10 +25,17 @@ def test_taali_normalize_does_not_inflate_single_digit_scores():
     assert normalize_score_100(8.27) == 8.3
 
 
-def test_taali_normalize_keeps_zero_to_one_auto_scale():
-    """0-1 fractions are still auto-scaled to 0-100 (legacy LLM outputs)."""
-    assert normalize_score_100(0.85) == 85.0
-    assert normalize_score_100(1.0) == 100.0
+def test_taali_normalize_does_not_inflate_sub_one_scores():
+    """A real aggregate role_fit of 0.4 stays 0.4 — not 40.
+
+    ``role_fit = 0.4·cv_fit + 0.6·requirements_match`` (both 0-100)
+    can legitimately produce values in (0, 1] for truly weak
+    candidates. The old ``<=1.0 → ×100`` auto-scale would have hidden
+    a near-zero fit as a moderate one.
+    """
+    assert normalize_score_100(0.4) == 0.4
+    assert normalize_score_100(0.85) == 0.8  # banker's rounding
+    assert normalize_score_100(1.0) == 1.0
 
 
 def test_taali_normalize_clamps_and_rejects():
@@ -60,5 +67,5 @@ def test_score_100_response_normalize_no_inflation():
     """The generic helper that feeds the ``*_cache_100`` columns."""
     assert _normalize_score_100_for_response(9.6) == 9.6
     assert _normalize_score_100_for_response(7) == 7.0
-    assert _normalize_score_100_for_response(0.4) == 40.0  # 0-1 fraction still scaled
+    assert _normalize_score_100_for_response(0.4) == 0.4
     assert _normalize_score_100_for_response(150) == 100.0

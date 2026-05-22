@@ -41,16 +41,23 @@ TAALI_WEIGHTS = _WeightView(_taali_weights)
 
 
 def normalize_score_100(value: Any) -> float | None:
-    """Coerce a score into the 0-100 range.
+    """Coerce a score into the 0-100 range. No implicit upscaling.
 
-    Auto-scales values in the (0, 1.0] range up to the 0-100 scale —
-    these are clearly 0-1 fractions. Everything else is treated as
-    already on 0-100 and just clamped. The previous heuristic auto-scaled
-    anything ``<= 10`` which silently inflated *real* weak 0-100 scores
-    (e.g. a candidate's ``role_fit_score`` of 9.6 became 96, masking a
-    weak-fit candidate as a top one). Pre-screen, cv_match, taali, and
-    role-fit columns are all documented 0-100 by column name, so the
-    auto-scale isn't needed at all for those — just clamp.
+    Every caller passes a value that's already on the 0-100 scale by
+    construction:
+      * ``app.cv_match_score`` = ``role_fit_score = 0.4*cv_fit +
+        0.6*requirements_match`` (both 0-100 in v3) — can legitimately
+        emit values in (0, 1] for truly weak candidates.
+      * ``requirements_match_score_100`` / ``pre_screen_score_100`` /
+        ``role_fit_score_cache_100`` / ``taali_score_cache_100`` — all
+        explicitly 0-100 by column name.
+      * Recruiter-set ``score_threshold`` — 0-100 in the UI slider.
+
+    The previous heuristic auto-scaled values ``<= 1.0`` by 100×, which
+    silently inflated *real* near-zero scores (e.g. a candidate with
+    ``role_fit = 0.4`` rendered as 40, hiding a near-miss as a moderate
+    fit). And the earlier ``<= 10`` heuristic did the same one decade
+    up — that's the bug this whole change is fixing. Just clamp.
     """
     try:
         numeric = float(value)
@@ -58,8 +65,6 @@ def normalize_score_100(value: Any) -> float | None:
         return None
     if numeric < 0:
         return None
-    if 0 < numeric <= 1.0:
-        numeric *= 100.0
     return round(max(0.0, min(100.0, numeric)), 1)
 
 
