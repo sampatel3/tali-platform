@@ -35,6 +35,7 @@ from .task import Task
 from .session import AssessmentSession
 from .billing_credit_ledger import BillingCreditLedger
 from .usage_event import UsageEvent
+from .claude_call_log import ClaudeCallLog
 from .usage_grant import (
     GRANT_FREE_TIER,
     GRANT_MANUAL,
