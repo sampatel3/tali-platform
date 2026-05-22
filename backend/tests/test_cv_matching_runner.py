@@ -264,3 +264,124 @@ def test_consistency_requires_evidence_for_met():
         assert "evidence_quotes" in str(exc)
         return
     raise AssertionError("expected ValidationFailure for empty evidence on met")
+
+
+# --------------------------------------------------------------------------- #
+# Partial-coverage handling — 2026-05-22 cost optimisation                     #
+# --------------------------------------------------------------------------- #
+#
+# Before: the validator raised ``ValidationFailure`` whenever ANY recruiter
+# requirement_id was missing from the assessment, forcing the runner to
+# retry (another Anthropic call) and, if the retry failed the same way,
+# error out the entire scoring run. On 2026-05-21 this fired on 3,281 of
+# 3,918 scoring attempts (84%), consuming roughly $41 of Haiku spend for
+# zero usable output. Most failures were 1-2 missing criteria out of
+# many — the model wasn't broken, the validator was too strict.
+#
+# After: if fewer than 50% of recruiter requirements are missing, the
+# validator SYNTHESISES UNKNOWN placeholders for the gaps. The recruiter
+# sees the partial assessment with un-assessed criteria flagged.
+# ValidationFailure still fires when more than half the criteria are
+# absent — that's a genuine model failure worth a retry.
+
+
+from app.cv_matching.schemas import (  # noqa: E402
+    Category,
+    Priority,
+    RequirementInput,
+)
+
+
+def _req(req_id: str, priority: str = "must_have") -> RequirementInput:
+    return RequirementInput(
+        id=req_id,
+        requirement="some requirement",
+        priority=Priority(priority),
+        category=Category.TECHNICAL_SKILL,
+    )
+
+
+def _payload_with_assessment_ids(ids: list[str]) -> dict:
+    """Build a CVMatchResult payload covering exactly the listed ids."""
+    return {
+        "prompt_version": PROMPT_VERSION,
+        "dimension_scores": {
+            "skills_coverage": 70.0,
+            "skills_depth": 70.0,
+            "title_trajectory": 70.0,
+            "seniority_alignment": 70.0,
+            "industry_match": 70.0,
+            "tenure_pattern": 70.0,
+        },
+        "skills_match_score": 70,
+        "experience_relevance_score": 70,
+        "requirements_assessment": [
+            {
+                "requirement_id": rid,
+                "requirement": "x",
+                "priority": "must_have",
+                "evidence_quotes": ["evidence"],
+                "evidence_start_char": 0,
+                "evidence_end_char": 8,
+                "reasoning": "ok",
+                "status": "met",
+                "match_tier": "exact",
+                "impact": "Core requirement.",
+                "confidence": "high",
+            }
+            for rid in ids
+        ],
+        "matching_skills": [],
+        "missing_skills": [],
+        "experience_highlights": [],
+        "concerns": [],
+        "summary": "Partial assessment.",
+    }
+
+
+def test_partial_missing_criteria_synthesises_unknown_placeholders():
+    """Model assessed 3 of 4 required criteria. Previously: hard reject
+    + retry. Now: validator fills the gap with an UNKNOWN placeholder so
+    the scoring run lands instead of burning a retry call."""
+    result = CVMatchResult.model_validate(_payload_with_assessment_ids(["r1", "r2", "r3"]))
+    requirements = [_req("r1"), _req("r2"), _req("r3"), _req("r4")]
+
+    # Should NOT raise.
+    validate_cross_field_consistency(result, requirements=requirements)
+
+    # The result now has all 4 assessments, with the missing one
+    # synthesised.
+    assessed_ids = {a.requirement_id for a in result.requirements_assessment}
+    assert assessed_ids == {"r1", "r2", "r3", "r4"}
+    synthesised = next(a for a in result.requirements_assessment if a.requirement_id == "r4")
+    assert synthesised.status == Status.UNKNOWN
+    assert synthesised.match_tier == "missing"
+    assert synthesised.evidence_quotes == []
+    assert "not assessed by model" in synthesised.reasoning
+
+
+def test_severe_missing_still_raises_for_retry():
+    """If the model omits more than 50% of criteria, the validator still
+    raises — that's a real model failure worth a retry, not just a
+    slightly forgetful response."""
+    result = CVMatchResult.model_validate(_payload_with_assessment_ids(["r1"]))
+    requirements = [_req(f"r{i}") for i in range(1, 5)]  # r1..r4, 3 missing
+
+    try:
+        validate_cross_field_consistency(result, requirements=requirements)
+    except ValidationFailure as exc:
+        assert "severe" in str(exc)
+        return
+    raise AssertionError("expected ValidationFailure for >50% missing criteria")
+
+
+def test_all_criteria_assessed_no_synthesis():
+    """Sanity: the happy path is unchanged when the model covered every
+    requirement."""
+    result = CVMatchResult.model_validate(_payload_with_assessment_ids(["r1", "r2"]))
+    requirements = [_req("r1"), _req("r2")]
+
+    validate_cross_field_consistency(result, requirements=requirements)
+    assert len(result.requirements_assessment) == 2
+    for a in result.requirements_assessment:
+        assert "not assessed" not in a.reasoning
