@@ -246,7 +246,11 @@ class ApplicationResponse(BaseModel):
     cv_match_score: Optional[float] = None
     cv_match_details: Optional[dict] = None
     cv_match_scored_at: Optional[datetime] = None
-    score_status: Optional[Literal["pending", "running", "done", "error", "stale"]] = None
+    # "cancelled" covers legacy CvScoreJob rows written before the score-
+    # invalidation rework (~370 rows across roles 110–113). The writer is
+    # gone from current code but the rows remain; rejecting them here
+    # 500s every /applications listing that touches them.
+    score_status: Optional[Literal["pending", "running", "done", "error", "stale", "cancelled"]] = None
     source: Optional[str] = "manual"
     workable_candidate_id: Optional[str] = None
     workable_stage: Optional[str] = None
