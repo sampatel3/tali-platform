@@ -45,4 +45,15 @@ export const Breadcrumbs = ({ items, className = '' }) => {
   );
 };
 
+// Common header layout used on detail pages: breadcrumbs on the left,
+// optional actions (e.g. CopyLinkButton) on the right.
+export const BreadcrumbsRow = ({ items, actions }) => (
+  <div className="page" style={{ paddingTop: 8, paddingBottom: 0 }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+      <Breadcrumbs items={items} className="mb-0" />
+      {actions}
+    </div>
+  </div>
+);
+
 export default Breadcrumbs;
