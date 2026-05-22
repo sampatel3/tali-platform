@@ -23,6 +23,7 @@ from ...services.taali_scoring import (
     TAALI_WEIGHTS,
     compute_role_fit_score,
     compute_taali_score,
+    normalize_score_100,
 )
 from .pipeline_service import (
     ensure_pipeline_fields,
@@ -68,36 +69,33 @@ def _graph_stale_for(app: CandidateApplication) -> bool | None:
 
 
 def _normalize_cv_match_score_for_response(score: float | None, details: dict | None) -> float | None:
+    """Coerce ``app.cv_match_score`` into 0-100 for the response.
+
+    The v3 CV-match runner writes ``cv_match_score`` as the aggregated
+    ``role_fit_score`` on a 0-100 scale. Legacy LLM paths only ever emit
+    0-100 too. The old fallback "if ``numeric <= 10`` multiply by 10"
+    silently inflated *real* weak scores — a candidate with
+    ``role_fit_score = 9.6`` displayed as 96, masking a weak-fit
+    candidate as a top one. Don't do that. The remaining ``"10" in
+    scale`` branch is kept for explicit legacy payloads that tag a
+    ``score_scale = "0-10"`` and really do need rescaling.
+    """
     if score is None:
         return None
-    try:
-        numeric = float(score)
-    except (TypeError, ValueError):
-        return None
-    if numeric < 0:
-        return None
     scale = str((details or {}).get("score_scale") or "").strip().lower()
-    if "100" in scale:
-        normalized = numeric
-    elif "10" in scale and "100" not in scale:
-        normalized = numeric * 10.0
-    elif numeric <= 10.0:
-        normalized = numeric * 10.0
-    else:
-        normalized = numeric
-    return round(max(0.0, min(100.0, normalized)), 1)
+    if "10" in scale and "100" not in scale:
+        try:
+            numeric = float(score)
+        except (TypeError, ValueError):
+            return None
+        if numeric < 0:
+            return None
+        return round(max(0.0, min(100.0, numeric * 10.0)), 1)
+    return normalize_score_100(score)
 
 
 def _normalize_score_100_for_response(value: float | int | None) -> float | None:
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    if numeric < 0:
-        return None
-    if numeric <= 10.0:
-        numeric = numeric * 10.0
-    return round(max(0.0, min(100.0, numeric)), 1)
+    return normalize_score_100(value)
 
 
 def role_has_job_spec(role: Role) -> bool:

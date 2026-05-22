@@ -17,7 +17,7 @@ from .fraud_detection import (
     detect_cv_copy_paste,
 )
 from .pricing_service import Feature
-from .taali_scoring import compute_role_fit_score
+from .taali_scoring import compute_role_fit_score, normalize_score_100 as _normalize_score_100
 from .usage_metering_service import record_event as _meter_record_event
 from .workable_actions_service import render_workable_note_template
 from .workable_context_service import format_workable_context
@@ -30,26 +30,19 @@ def _utcnow() -> datetime:
 
 
 def normalize_score_100(value: Any) -> float | None:
-    """Coerce a score into the 0-100 range.
+    """Coerce a score into the 0-100 range — delegates to the canonical
+    ``taali_scoring.normalize_score_100``. Kept as a re-export so the
+    existing import surface (and tests) stay stable.
 
-    Auto-scales values in the (0, 1.0] range up to the 0-100 scale —
-    these are clearly 0-1 fractions. Values above 1.0 are assumed to
-    already be on the 0-100 scale. The previous heuristic auto-scaled
-    anything ``<= 10`` which collided with the fraud cap (10.0) and
-    legitimate single-digit scores: a fraud-capped candidate stored
-    ``10`` got normalised to ``100`` and rendered as a top scorer.
-    Pre-screen and cv_match fields are always 0-100 by column name, so
-    the cv-match callers don't need the auto-scale at all.
+    No implicit ``<= 1.0 → ×100`` or ``<= 10 → ×10`` upscaling: every
+    caller passes a value that's already 0-100 by construction
+    (cv_match_score, pre_screen_score_100, fraud cap, etc.), and the old
+    heuristics silently inflated real weak scores (e.g. ``0.4`` aggregate
+    role_fit became ``40``, hiding near-zero candidates as moderate fits;
+    the fraud cap of ``10.0`` became ``100`` and pushed plagiarised CVs
+    to the top of the rank).
     """
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    if numeric < 0:
-        return None
-    if 0 < numeric <= 1.0:
-        numeric *= 100.0
-    return round(max(0.0, min(100.0, numeric)), 1)
+    return _normalize_score_100(value)
 
 
 def pre_screen_recommendation_label(score_100: float | None) -> str | None:

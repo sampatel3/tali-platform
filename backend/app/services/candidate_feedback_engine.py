@@ -20,7 +20,7 @@ from .candidate_interview_kit import (
 )
 from .document_service import load_stored_document_bytes
 from .interview_support_service import refresh_application_interview_support
-from .taali_scoring import compute_role_fit_score, compute_taali_score
+from .taali_scoring import compute_role_fit_score, compute_taali_score, normalize_score_100
 
 
 _DIMENSION_ALIASES = {
@@ -193,12 +193,14 @@ def _score_10(assessment: Assessment) -> float | None:
 
 
 def _normalize_score_100(value: Any) -> float | None:
+    # All callers below pass already-0-100 columns
+    # (cv_match_score, *_score_100, role_fit_score). The old
+    # ``<=10 → ×10`` heuristic silently inflated weak scores (e.g. a
+    # role_fit_score of 9.6 became 96) — masking weak-fit candidates
+    # as top scorers in client feedback letters and report PDFs.
     if not isinstance(value, (int, float)):
         return None
-    numeric = float(value)
-    if 0.0 <= numeric <= 10.0:
-        numeric *= 10.0
-    return round(max(0.0, min(100.0, numeric)), 1)
+    return normalize_score_100(value)
 
 
 def _extract_category_scores(assessment: Assessment) -> dict[str, float]:

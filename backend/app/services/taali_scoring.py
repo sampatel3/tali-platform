@@ -41,9 +41,29 @@ TAALI_WEIGHTS = _WeightView(_taali_weights)
 
 
 def normalize_score_100(value: Any) -> float | None:
+    """Coerce a score into the 0-100 range. No implicit upscaling.
+
+    Every caller passes a value that's already on the 0-100 scale by
+    construction:
+      * ``app.cv_match_score`` = ``role_fit_score = 0.4*cv_fit +
+        0.6*requirements_match`` (both 0-100 in v3) — can legitimately
+        emit values in (0, 1] for truly weak candidates.
+      * ``requirements_match_score_100`` / ``pre_screen_score_100`` /
+        ``role_fit_score_cache_100`` / ``taali_score_cache_100`` — all
+        explicitly 0-100 by column name.
+      * Recruiter-set ``score_threshold`` — 0-100 in the UI slider.
+
+    The previous heuristic auto-scaled values ``<= 1.0`` by 100×, which
+    silently inflated *real* near-zero scores (e.g. a candidate with
+    ``role_fit = 0.4`` rendered as 40, hiding a near-miss as a moderate
+    fit). And the earlier ``<= 10`` heuristic did the same one decade
+    up — that's the bug this whole change is fixing. Just clamp.
+    """
     try:
         numeric = float(value)
     except (TypeError, ValueError):
+        return None
+    if numeric < 0:
         return None
     return round(max(0.0, min(100.0, numeric)), 1)
 

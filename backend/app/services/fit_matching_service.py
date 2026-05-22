@@ -17,7 +17,7 @@ from ..components.integrations.claude.model_fallback import (
     is_model_not_found_error,
 )
 from ..platform.config import settings
-from .taali_scoring import TAALI_SCORING_RUBRIC_VERSION, compute_role_fit_score
+from .taali_scoring import TAALI_SCORING_RUBRIC_VERSION, compute_role_fit_score, normalize_score_100
 
 logger = logging.getLogger("taali.fit_matching")
 
@@ -177,17 +177,11 @@ def _safe_string_list(value: Any, *, max_items: int = 20, max_chars: int = 160) 
 
 
 def _score_to_100(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    if numeric < 0:
-        return None
-    if numeric <= 10:
-        numeric = numeric * 10.0
-    return round(max(0.0, min(100.0, numeric)), 1)
+    # Legacy v3 prompts ask for 0-100 match scores. The old
+    # ``numeric <= 10 → ×10`` fallback silently inflated weak scores
+    # (e.g. a 7/100 became 70), masking weak-fit candidates as decent
+    # ones. Delegate to the shared normalizer (0-1 auto-scale only).
+    return normalize_score_100(value)
 
 
 def _clamp_score(value: Any) -> float | None:
