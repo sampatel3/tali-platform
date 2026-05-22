@@ -719,7 +719,14 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         # AGENT_TOOLS array. Rounds 2-18 of each cycle (and subsequent
         # ticks within the TTL window) hit cache for the ~3-5K tokens
         # of tool schemas instead of paying full input price each time.
-        "cache_control": {"type": "ephemeral"},
+        #
+        # MUST be ttl="1h" to match the system-prompt blocks. Anthropic
+        # processes cache blocks in order (tools, system, messages) and
+        # rejects a 1h block that comes AFTER a 5m block. Tools come
+        # first, so a 5m here + 1h on the system prompt 400s every agent
+        # call ("a ttl='1h' cache_control block must not come after a
+        # ttl='5m' cache_control block"). Keep all agent cache blocks 1h.
+        "cache_control": {"type": "ephemeral", "ttl": "1h"},
     },
 ]
 

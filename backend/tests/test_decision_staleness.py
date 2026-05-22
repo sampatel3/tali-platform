@@ -268,6 +268,73 @@ def test_list_agent_decisions_route_returns_pending_with_staleness(db):
     assert p.is_stale is False  # fresh decision
 
 
+def test_approve_route_409s_on_stale_decision(db):
+    """A4: approving a stale decision returns 409 (unless force=true).
+    Exercises the route end-to-end — the class of bug (runtime error in
+    a route my isolation tests skipped) that took the queue down."""
+    from types import SimpleNamespace
+    from app.domains.agentic import routes as agentic_routes
+
+    org, role, crit, app = _seed(db)
+    decision = _queue(db, org, role, app)
+    crit.text = "changed materially"
+    db.add(crit); db.commit()
+
+    user = SimpleNamespace(organization_id=int(org.id), id=1)
+    with pytest.raises(HTTPException) as exc:
+        agentic_routes.approve(
+            decision_id=int(decision.id),
+            body=agentic_routes.ApproveBody(),
+            force=False,
+            db=db,
+            current_user=user,
+        )
+    assert exc.value.status_code == 409
+    assert exc.value.detail.get("code") == "decision_stale"
+
+
+def test_re_evaluate_route_discards_and_requeues(db, monkeypatch):
+    """A4: re-evaluate discards the pending decision and enqueues a fresh
+    cycle. Mock the Celery dispatch so we don't run a real cycle."""
+    from types import SimpleNamespace
+    from app.domains.agentic import routes as agentic_routes
+    from app.tasks import agent_tasks
+
+    org, role, _, app = _seed(db)
+    decision = _queue(db, org, role, app)
+
+    monkeypatch.setattr(
+        agent_tasks.agent_manual_run, "delay",
+        lambda **kw: SimpleNamespace(id="fake-task-id"),
+    )
+    user = SimpleNamespace(organization_id=int(org.id), id=1)
+    result = agentic_routes.re_evaluate(
+        decision_id=int(decision.id), db=db, current_user=user,
+    )
+    assert result.superseded >= 1
+    assert result.queued is True
+    db.refresh(decision)
+    assert decision.status == "discarded"
+
+
+def test_re_evaluate_route_409s_on_resolved_app(db):
+    """A6: a resolved candidate's decision is frozen — re-evaluate 409s."""
+    from types import SimpleNamespace
+    from app.domains.agentic import routes as agentic_routes
+
+    org, role, _, app = _seed(db)
+    decision = _queue(db, org, role, app)
+    app.application_outcome = "hired"  # resolved after queue
+    db.add(app); db.commit()
+
+    user = SimpleNamespace(organization_id=int(org.id), id=1)
+    with pytest.raises(HTTPException) as exc:
+        agentic_routes.re_evaluate(
+            decision_id=int(decision.id), db=db, current_user=user,
+        )
+    assert exc.value.status_code == 409
+
+
 def test_recently_discarded_decision_suppresses_reemit(db):
     org, role, _, app = _seed(db)
     decision = _queue(db, org, role, app)
