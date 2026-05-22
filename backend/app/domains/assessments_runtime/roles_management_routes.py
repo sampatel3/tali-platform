@@ -357,6 +357,24 @@ def update_role(
                 "activation" if agent_activated_now else "resume",
                 role.id,
             )
+    # Activation-only: scan for below-threshold pre-screens that landed
+    # while the agent was OFF. ``queue_pre_screen_reject`` is gated on
+    # ``agentic_mode_enabled`` so any pre-screen that scored below
+    # threshold during the off-window was silently dropped. Cohort SQL
+    # also doesn't surface scores < 50, so the immediate cycle above
+    # wouldn't catch them either. The backfill is idempotent and scoped
+    # to this role; resume doesn't need it (pre-screen emitter ran
+    # throughout pause since the gate is on ``agentic_mode_enabled``,
+    # not ``agent_paused_at``).
+    if agent_activated_now:
+        try:
+            from ...tasks.agent_tasks import agent_backfill_pre_screen_rejects
+            agent_backfill_pre_screen_rejects.delay(int(role.id))
+        except Exception:
+            logger.exception(
+                "Failed to enqueue pre-screen-reject backfill for role_id=%s",
+                role.id,
+            )
     return role_to_response(role)
 
 

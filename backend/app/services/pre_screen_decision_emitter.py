@@ -161,7 +161,10 @@ def queue_pre_screen_reject(
 
 
 def backfill_existing_below_threshold(
-    db: Session, *, organization_id: int | None = None
+    db: Session,
+    *,
+    organization_id: int | None = None,
+    role_id: int | None = None,
 ) -> dict:
     """One-shot: queue a pre-screen-reject decision for every application
     that's currently below threshold and doesn't already have one.
@@ -176,9 +179,17 @@ def backfill_existing_below_threshold(
         surface them just because the cache-invalidation path nulled the
         number.
 
-    Intended to be invoked once after deploy so historical stranded
-    candidates surface in the Review queue. Idempotent — safe to re-run;
-    each application gets at most one row via the idempotency key.
+    Originally a one-shot post-deploy backfill, now also called from the
+    agentic-mode toggle handler so candidates whose pre-screen landed
+    while the agent was OFF (and were therefore never emitted by
+    ``queue_pre_screen_reject``'s ``agentic_mode_enabled`` gate) surface
+    immediately on activation rather than sitting invisible until an
+    admin runs the admin endpoint. Idempotent — safe to re-run; each
+    application gets at most one row via the idempotency key.
+
+    ``role_id`` narrows the scan to a single role, which is what the
+    toggle handler wants: enabling role A shouldn't sweep role B's
+    applications too.
     """
     from sqlalchemy import and_, or_
 
@@ -204,6 +215,8 @@ def backfill_existing_below_threshold(
     )
     if organization_id is not None:
         q = q.filter(CandidateApplication.organization_id == int(organization_id))
+    if role_id is not None:
+        q = q.filter(CandidateApplication.role_id == int(role_id))
 
     created = 0
     skipped_existing = 0

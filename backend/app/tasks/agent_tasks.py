@@ -410,6 +410,62 @@ def agent_manual_run(self, role_id: int, application_id: Optional[int] = None) -
         db.close()
 
 
+@celery_app.task(
+    name="app.tasks.agent_tasks.agent_backfill_pre_screen_rejects",
+    bind=True,
+    max_retries=0,
+)
+def agent_backfill_pre_screen_rejects(
+    self, role_id: int
+) -> dict:
+    """Queue ``skip_assessment_reject`` decisions for any below-threshold
+    pre-screens that landed while the role was agent-OFF.
+
+    Triggered from the toggle handler on every ``agentic_mode_enabled``
+    false→true transition. Without this hook, candidates whose
+    pre-screen ran while the agent was off stay invisible: cohort SQL
+    only surfaces scores ≥ 50, and the emitter at
+    ``pre_screen_decision_emitter.queue_pre_screen_reject`` gates on the
+    agentic flag — so the emitter no-ops during off, the cohort hides
+    them after, and nothing in the normal cycle ever picks them up.
+
+    Scoped to a single role so enabling role A doesn't sweep role B.
+    Idempotent: ``backfill_existing_below_threshold`` checks for an
+    existing pending row on each application before queueing.
+    """
+    from ..models.role import Role
+    from ..platform.database import SessionLocal
+    from ..services.pre_screen_decision_emitter import (
+        backfill_existing_below_threshold,
+    )
+
+    db = SessionLocal()
+    try:
+        role = db.query(Role).filter(Role.id == role_id).first()
+        if role is None:
+            return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
+        # Re-check at task time: if the recruiter toggled the role back off
+        # between PATCH and worker pickup, don't surface rejects on what's
+        # now an agent-off role.
+        if not bool(role.agentic_mode_enabled):
+            return {"status": "skipped", "reason": "agentic_mode_disabled", "role_id": role_id}
+        try:
+            result = backfill_existing_below_threshold(
+                db,
+                organization_id=int(role.organization_id),
+                role_id=int(role.id),
+            )
+            return {"status": "ok", "role_id": role_id, **result}
+        except Exception:
+            db.rollback()
+            logger.exception(
+                "agent_backfill_pre_screen_rejects failed role_id=%s", role_id
+            )
+            return {"status": "error", "role_id": role_id}
+    finally:
+        db.close()
+
+
 # Stuck cycles. A worker crash mid-cycle (OOM, deploy restart, dyno reschedule)
 # leaves the AgentRun row in status='running' forever. That hides real
 # failures in /agent/status and prevents the next cohort tick from

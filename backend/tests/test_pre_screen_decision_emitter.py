@@ -131,6 +131,50 @@ def test_backfill_only_processes_agent_on_roles(db):
     assert off_rows == 0
 
 
+def test_backfill_scoped_to_role_id_ignores_other_roles_in_org(db):
+    """When ``role_id`` is passed, the backfill only touches candidates on
+    that role — even within the same org. This is what the toggle handler
+    needs: enabling role A shouldn't surface role B's candidates (role B
+    was either already on, in which case its rejects already surfaced via
+    the emitter, or still off, in which case surfacing decisions for it
+    would be wrong)."""
+    org = Organization(name="Two-Role Org", slug=f"tr-{id(db)}")
+    db.add(org); db.flush()
+    role_a = Role(organization_id=org.id, name="A", source="manual", auto_reject=False, agentic_mode_enabled=True)
+    role_b = Role(organization_id=org.id, name="B", source="manual", auto_reject=False, agentic_mode_enabled=True)
+    db.add_all([role_a, role_b]); db.flush()
+    for role in (role_a, role_b):
+        cand = Candidate(organization_id=org.id, email=f"c{role.id}@x.test", full_name=f"C{role.id}")
+        db.add(cand); db.flush()
+        db.add(
+            CandidateApplication(
+                organization_id=org.id,
+                candidate_id=cand.id,
+                role_id=role.id,
+                status="applied",
+                pipeline_stage="review",
+                pipeline_stage_source="recruiter",
+                application_outcome="open",
+                source="manual",
+                pre_screen_score_100=25.0,
+            )
+        )
+    db.commit()
+
+    summary = backfill_existing_below_threshold(
+        db, organization_id=int(org.id), role_id=int(role_a.id)
+    )
+    assert summary["created"] == 1
+    assert (
+        db.query(AgentDecision).filter(AgentDecision.role_id == role_a.id).count()
+        == 1
+    )
+    assert (
+        db.query(AgentDecision).filter(AgentDecision.role_id == role_b.id).count()
+        == 0
+    )
+
+
 def test_queue_pre_screen_reject_is_idempotent(db):
     org, role, app = _seed(db)
     a = queue_pre_screen_reject(db, organization_id=org.id, role=role, application=app, pre_screen_score=35.0, threshold=50.0)
