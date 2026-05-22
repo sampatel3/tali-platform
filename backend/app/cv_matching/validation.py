@@ -23,7 +23,13 @@ import logging
 import re
 from difflib import SequenceMatcher
 
-from .schemas import CVMatchResult, RequirementInput, Status
+from .schemas import (
+    Confidence,
+    CVMatchResult,
+    RequirementAssessment,
+    RequirementInput,
+    Status,
+)
 
 logger = logging.getLogger("taali.cv_match.validation")
 
@@ -221,9 +227,46 @@ def validate_cross_field_consistency(
         recruiter_ids = {r.id for r in requirements}
         missing = recruiter_ids - seen_ids
         if missing:
-            raise ValidationFailure(
-                f"Recruiter requirements missing from assessment: {sorted(missing)}"
-            )
+            # **2026-05-22 — cost-optimization**. Previously raised
+            # ValidationFailure for any missing criterion id, which on
+            # 2026-05-21 caused 3,281 cv_match runs to fail validation
+            # (84% of all scoring attempts) — each consuming Anthropic
+            # tokens for two attempts (original + retry) and producing
+            # zero usable output. ~$41 of Haiku spend that day was
+            # validator-rejected work.
+            #
+            # New behaviour: synthesize an ``UNKNOWN`` placeholder for
+            # each missing requirement (status=unknown, match_tier=missing,
+            # empty evidence) so the rest of the assessment is usable.
+            # The recruiter sees the partial result with un-assessed
+            # criteria flagged, instead of a hard error and no score.
+            # Only escalate to ValidationFailure if more than half the
+            # criteria are missing — that's a genuine model failure
+            # worth retrying.
+            severity = len(missing) / max(1, len(recruiter_ids))
+            if severity > 0.5:
+                raise ValidationFailure(
+                    f"Recruiter requirements missing from assessment "
+                    f"(severe: {len(missing)}/{len(recruiter_ids)}): "
+                    f"{sorted(missing)}"
+                )
+            # Partial miss → fill in placeholders, don't reject.
+            requirements_by_id = {r.id: r for r in requirements}
+            for missing_id in missing:
+                req = requirements_by_id[missing_id]
+                result.requirements_assessment.append(
+                    RequirementAssessment(
+                        requirement_id=missing_id,
+                        requirement=req.requirement,
+                        priority=req.priority,
+                        evidence_quotes=[],
+                        reasoning="(not assessed by model — synthesised by validator after partial response)",
+                        status=Status.UNKNOWN,
+                        match_tier="missing",
+                        impact="",
+                        confidence=Confidence.LOW,
+                    )
+                )
 
 
 def scan_for_injection(cv_text: str) -> bool:
