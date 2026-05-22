@@ -20,6 +20,7 @@ import {
   subscribeThemePreference,
 } from '../../lib/themePreference';
 import { TaaliTile } from '../ui/Branding';
+import { PageLink } from '../ui/PageLink';
 import { useAgentStatusOrg } from './AgentBar';
 import { GlobalSearch } from './GlobalSearch';
 import { formatHeaderOrgLabel, normalizeHeaderOrgName } from './headerIdentity';
@@ -175,7 +176,6 @@ export const Shell = ({ currentPage, onNavigate }) => {
     : (currentPage === 'reporting' || currentPage === 'analytics')
       ? 'home'
       : currentPage;
-  const handleNav = (id) => onNavigate?.(id);
   const handleLogout = () => {
     setMenuOpen(false);
     logout?.();
@@ -198,10 +198,9 @@ export const Shell = ({ currentPage, onNavigate }) => {
   return (
     <>
     <header className="mc-nav" role="banner">
-      <button
-        type="button"
+      <PageLink
+        page="jobs"
         className="mc-nav-logo"
-        onClick={() => handleNav('jobs')}
         aria-label="Taali home"
       >
         <TaaliTile
@@ -212,18 +211,17 @@ export const Shell = ({ currentPage, onNavigate }) => {
           cornerRadius={5.4}
         />
         <span>taali<em>.</em></span>
-      </button>
+      </PageLink>
       <nav className="mc-nav-tabs" aria-label="Primary">
         {NAV_TABS.map(({ id, label, Icon: TabIcon, badge }) => {
           // Live pending-count badge on Home — overrides the static badge.
           const liveBadge = (id === 'home' && homePending > 0) ? String(homePending) : null;
           const visibleBadge = liveBadge ?? badge;
           return (
-            <button
+            <PageLink
               key={id}
-              type="button"
+              page={id}
               className={`mc-nav-tab ${resolvedPage === id ? 'on' : ''}`.trim()}
-              onClick={() => handleNav(id)}
               aria-current={resolvedPage === id ? 'page' : undefined}
             >
               <TabIcon size={15} strokeWidth={1.8} aria-hidden="true" />
@@ -239,23 +237,22 @@ export const Shell = ({ currentPage, onNavigate }) => {
                   </span>
                 )
                 : null}
-            </button>
+            </PageLink>
           );
         })}
       </nav>
       <div className="mc-nav-grow" />
       <div className="mc-nav-right">
         {showAgentChip && agentChipOn ? (
-          <button
-            type="button"
+          <PageLink
+            page="jobs"
             className="mc-nav-agent-chip"
-            onClick={() => handleNav('jobs')}
             title="Agent mode is ON · click to manage on Jobs"
             aria-label="Agent mode is on"
           >
             <span className="dot" aria-hidden="true" />
             Agent running
-          </button>
+          </PageLink>
         ) : null}
         <GlobalSearch onNavigate={onNavigate} />
         <button type="button" className="mc-icon-btn" aria-label="Notifications">

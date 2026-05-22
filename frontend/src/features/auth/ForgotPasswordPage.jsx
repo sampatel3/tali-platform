@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 
 import { auth } from '../../shared/api';
+import { PageLink } from '../../shared/ui/PageLink';
 import { AuthShell, AuthField } from './AuthShell';
 
 export const ForgotPasswordPage = ({ onNavigate }) => {
@@ -36,9 +37,9 @@ export const ForgotPasswordPage = ({ onNavigate }) => {
         title="Check your email"
         sub="If an account exists for that email, we sent a link to reset your password."
       >
-        <button type="button" className="mc-auth-cta" onClick={() => onNavigate('login')}>
+        <PageLink page="login" className="mc-auth-cta">
           Back to sign in →
-        </button>
+        </PageLink>
       </AuthShell>
     );
   }
@@ -52,13 +53,12 @@ export const ForgotPasswordPage = ({ onNavigate }) => {
       topRight={(
         <span>
           Remembered?{' '}
-          <button
-            type="button"
-            onClick={() => onNavigate('login')}
-            style={{ background: 'none', border: 0, color: 'var(--purple)', fontWeight: 500, cursor: 'pointer', padding: 0, font: 'inherit' }}
+          <PageLink
+            page="login"
+            style={{ background: 'none', border: 0, color: 'var(--purple)', fontWeight: 500, cursor: 'pointer', padding: 0, font: 'inherit', textDecoration: 'none' }}
           >
             Back to sign in
-          </button>
+          </PageLink>
         </span>
       )}
     >

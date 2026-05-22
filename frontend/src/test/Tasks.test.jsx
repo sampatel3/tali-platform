@@ -159,12 +159,14 @@ const renderAppOnTasksPage = async () => {
 
   // Wait for the auth-gated nav to render (default landing is /jobs, but the
   // Tasks tab appears in the shared DashboardNav on every signed-in page).
+  // Nav tabs are now <Link> (role="link"), not <button>, so ctrl+click
+  // opens in a new tab.
   await waitFor(() => {
-    expect(screen.getByRole('button', { name: /^Tasks$/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /^Tasks$/ })).toBeInTheDocument();
   }, { timeout: 5000 });
 
   // Navigate to Tasks via nav
-  const tasksNav = screen.getByRole('button', { name: /^Tasks$/ });
+  const tasksNav = screen.getByRole('link', { name: /^Tasks$/ });
   await act(async () => {
     fireEvent.click(tasksNav);
   });

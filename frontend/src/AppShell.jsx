@@ -20,6 +20,9 @@ import {
 } from './shared/api';
 import { pathForPage } from './app/routing';
 import { ErrorBoundary } from './shared/ui/ErrorBoundary';
+import { ScrollToTop } from './shared/ui/ScrollToTop';
+import { KeyboardShortcutsModal } from './shared/ui/KeyboardShortcutsModal';
+import { useKeyboardShortcut } from './shared/hooks/useKeyboardShortcut';
 
 import { LandingPage } from './features/marketing/LandingPage';
 import {
@@ -178,6 +181,12 @@ function AppContent() {
   const [candidateDetailBackTo, setCandidateDetailBackTo] = useState({ page: 'assessments', label: 'Back to Assessments' });
   const [loadingCandidateDetail, setLoadingCandidateDetail] = useState(false);
   const [startedAssessmentData, setStartedAssessmentData] = useState(null);
+  const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
+
+  useKeyboardShortcut(
+    (e) => e.key === '?' && !e.metaKey && !e.ctrlKey && !e.altKey,
+    () => setShortcutsModalOpen(true),
+  );
 
   // The Hub (/home) is the agent-first landing — see docs/HOME_HUB_DESIGN.md.
   // Replaces /reporting as the default route after sign-in.
@@ -313,7 +322,8 @@ function AppContent() {
     if (nextPath) {
       navigate(nextPath, { replace: Boolean(options.replace) });
     }
-    window.scrollTo(0, 0);
+    // Scroll-to-top is handled by <ScrollToTop /> at the router level so
+    // that <Link>-driven navigations also reset scroll.
   };
 
   const handleCandidateStarted = (startData) => {
@@ -460,6 +470,11 @@ function AppContent() {
 
   return (
     <>
+      <ScrollToTop />
+      <KeyboardShortcutsModal
+        open={shortcutsModalOpen}
+        onClose={() => setShortcutsModalOpen(false)}
+      />
       <Routes>
       <Route path="/" element={<LandingPage onNavigate={navigateToPage} />} />
       {/* /demo is the showcase. /showcase kept as an alias. The legacy

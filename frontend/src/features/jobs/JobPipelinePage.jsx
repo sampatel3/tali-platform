@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import {
   ArrowUpDown,
   BriefcaseBusiness,
@@ -17,6 +17,9 @@ import { prefetchDocumentBlob } from '../../shared/api/documentCache';
 import { useToast } from '../../context/ToastContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
+import { useUrlState } from '../../shared/hooks/useUrlState';
+import { Breadcrumbs } from '../../shared/ui/Breadcrumbs';
+import { CopyLinkButton } from '../../shared/ui/CopyLinkButton';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 import RecruiterAnswersLog from './RecruiterAnswersLog';
@@ -1138,7 +1141,26 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [refreshTick, setRefreshTick] = useState(0);
   const [interviewFocusGenerating, setInterviewFocusGenerating] = useState(false);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
-  const [activeView, setActiveView] = useState('table');
+  // Tab selection is mirrored in `?view=` so the URL is shareable and
+  // ctrl/cmd+clicking a tab opens it in a new tab. Default (table) is
+  // implicit — no param means table.
+  const [activeViewParam, setActiveViewParam] = useUrlState('view', '');
+  const activeView = activeViewParam || 'table';
+  const setActiveView = useCallback(
+    (next) => setActiveViewParam(next === 'table' ? '' : next),
+    [setActiveViewParam],
+  );
+  const tabLocation = useLocation();
+  const viewTabHref = useCallback(
+    (target) => {
+      const params = new URLSearchParams(tabLocation.search);
+      if (target === 'table') params.delete('view');
+      else params.set('view', target);
+      const qs = params.toString();
+      return qs ? `${tabLocation.pathname}?${qs}` : tabLocation.pathname;
+    },
+    [tabLocation.pathname, tabLocation.search],
+  );
   // HANDOFF v2 §4 / canvas jobs-detail-candidates — primary stage filter
   // for the Candidates tab. The segmented row above the table toggles
   // this; the embedded directory re-mounts via key so its internal
@@ -1946,6 +1968,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
+      <div className="page" style={{ paddingTop: 8, paddingBottom: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <Breadcrumbs
+            items={[
+              { label: 'Jobs', page: 'jobs' },
+              { label: role?.name || 'Role' },
+            ]}
+            className="mb-0"
+          />
+          <CopyLinkButton label="Copy link to role" successMessage="Role link copied." />
+        </div>
+      </div>
       <AgentHeader
         kicker={`${role?.name || 'Role'} · #${role?.id || '—'}`}
         title={role?.name || 'Role'}
@@ -2015,10 +2049,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         <div className="mc-cockpit-main">
         <div className="sub-tabs sub-tabs-sticky">
           <div className="seg">
-            <button type="button" className={activeView === 'table' ? 'active' : ''} onClick={() => setActiveView('table')}>Candidates</button>
-            <button type="button" className={activeView === 'pipeline' ? 'active' : ''} onClick={() => setActiveView('pipeline')}>Pipeline</button>
-            <button type="button" className={activeView === 'activity' ? 'active' : ''} onClick={() => setActiveView('activity')}>Job spec</button>
-            <button type="button" className={activeView === 'role-fit' ? 'active' : ''} onClick={() => setActiveView('role-fit')}>Agent settings</button>
+            <Link to={viewTabHref('table')} className={activeView === 'table' ? 'active' : ''}>Candidates</Link>
+            <Link to={viewTabHref('pipeline')} className={activeView === 'pipeline' ? 'active' : ''}>Pipeline</Link>
+            <Link to={viewTabHref('activity')} className={activeView === 'activity' ? 'active' : ''}>Job spec</Link>
+            <Link to={viewTabHref('role-fit')} className={activeView === 'role-fit' ? 'active' : ''}>Agent settings</Link>
           </div>
         </div>
 

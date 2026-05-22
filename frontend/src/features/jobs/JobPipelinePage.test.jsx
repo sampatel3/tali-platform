@@ -146,7 +146,7 @@ describe('JobPipelinePage', () => {
   // Default view is the candidates table; pipeline kanban is opt-in. Tests
   // that assert on kanban cards switch to the Pipeline tab first.
   const switchToPipelineView = async () => {
-    fireEvent.click(await screen.findByRole('button', { name: /^Pipeline$/i }));
+    fireEvent.click(await screen.findByRole('link', { name: /^Pipeline$/i }));
   };
 
   // Per HANDOFF v2 §4.3 / canvas jobs-detail-settings — CV scoring criteria
@@ -154,7 +154,7 @@ describe('JobPipelinePage', () => {
   // above-tabs score-panel was retired). Tests that assert on those
   // controls open the tab first.
   const openAgentSettingsTab = async () => {
-    fireEvent.click(await screen.findByRole('button', { name: /^Agent settings$/i }));
+    fireEvent.click(await screen.findByRole('link', { name: /^Agent settings$/i }));
   };
 
   it('renders the reject-threshold slider on the Agent settings tab without a spinbutton', async () => {
@@ -256,7 +256,7 @@ Banking transformation experience
     expect(screen.queryByText(/\*\*Location:\*\*/)).not.toBeInTheDocument();
 
     // Open the Job spec tab to access the formatted description.
-    fireEvent.click(screen.getByRole('button', { name: /^Job spec$/i }));
+    fireEvent.click(screen.getByRole('link', { name: /^Job spec$/i }));
 
     expect(container.querySelector('.role-desc-summary')).toHaveTextContent(/The Portfolio Lead and Business Manager is a high-impact leadership position/i);
     expect(container.querySelector('.role-desc-summary')).not.toHaveTextContent(/DeepLight AI is a specialist AI and data consultancy/i);
@@ -380,7 +380,7 @@ Banking transformation experience
 
     await screen.findByRole('heading', { name: /AI Native Engineer/i });
 
-    fireEvent.click(screen.getByRole('button', { name: /^Agent settings$/i }));
+    fireEvent.click(screen.getByRole('link', { name: /^Agent settings$/i }));
     expect(await screen.findByRole('heading', { name: /Role criteria/i })).toBeInTheDocument();
     expect(screen.getByText(/HOW THE AGENT RUNS THIS ROLE/i)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /Reject threshold/i })).toBeInTheDocument();
@@ -390,7 +390,7 @@ Banking transformation experience
     // the formatted Workable-ingested description + "At a glance" sidebar.
     // The pipeline-activity timeline that previously lived under this label
     // was a leftover from the v1 5-tab layout and is gone in v2.
-    fireEvent.click(screen.getByRole('button', { name: /^Job spec$/i }));
+    fireEvent.click(screen.getByRole('link', { name: /^Job spec$/i }));
     expect(await screen.findByRole('button', { name: /Read full description/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /At a glance/i })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /Pipeline activity/i })).not.toBeInTheDocument();

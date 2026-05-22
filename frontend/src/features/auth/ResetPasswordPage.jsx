@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 
 import { auth } from '../../shared/api';
+import { PageLink } from '../../shared/ui/PageLink';
 import { AuthShell, AuthField } from './AuthShell';
 
 export const ResetPasswordPage = ({ onNavigate, token }) => {
@@ -40,9 +41,9 @@ export const ResetPasswordPage = ({ onNavigate, token }) => {
   if (!token) {
     return (
       <AuthShell onNavigate={onNavigate} kicker="SET A NEW PASSWORD" title="Invalid link" sub="This reset link is missing or invalid. Request a new one from the login page.">
-        <button type="button" className="mc-auth-cta" onClick={() => onNavigate('forgot-password')}>
+        <PageLink page="forgot-password" className="mc-auth-cta">
           Request new link →
-        </button>
+        </PageLink>
       </AuthShell>
     );
   }
@@ -50,9 +51,9 @@ export const ResetPasswordPage = ({ onNavigate, token }) => {
   if (success) {
     return (
       <AuthShell onNavigate={onNavigate} kicker="SET A NEW PASSWORD" title="Password updated" sub="You can now sign in with your new password.">
-        <button type="button" className="mc-auth-cta" onClick={() => onNavigate('login')}>
+        <PageLink page="login" className="mc-auth-cta">
           Sign in →
-        </button>
+        </PageLink>
       </AuthShell>
     );
   }
@@ -66,13 +67,12 @@ export const ResetPasswordPage = ({ onNavigate, token }) => {
       topRight={(
         <span>
           Back to{' '}
-          <button
-            type="button"
-            onClick={() => onNavigate('login')}
-            style={{ background: 'none', border: 0, color: 'var(--purple)', fontWeight: 500, cursor: 'pointer', padding: 0, font: 'inherit' }}
+          <PageLink
+            page="login"
+            style={{ background: 'none', border: 0, color: 'var(--purple)', fontWeight: 500, cursor: 'pointer', padding: 0, font: 'inherit', textDecoration: 'none' }}
           >
             sign in
-          </button>
+          </PageLink>
         </span>
       )}
     >

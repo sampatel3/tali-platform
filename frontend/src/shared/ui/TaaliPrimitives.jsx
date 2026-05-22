@@ -120,10 +120,11 @@ export const Button = ({
   className = '',
   variant = 'secondary',
   size = 'md',
+  as: As = 'button',
   children,
   ...props
 }) => (
-  <button
+  <As
     className={cx(
       'taali-btn inline-flex items-center justify-center gap-1.5',
       BUTTON_VARIANT_CLASS[variant] || BUTTON_VARIANT_CLASS.secondary,
@@ -133,7 +134,7 @@ export const Button = ({
     {...props}
   >
     {children}
-  </button>
+  </As>
 );
 
 export const Input = ({ className = '', ...props }) => (

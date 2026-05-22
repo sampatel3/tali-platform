@@ -159,10 +159,22 @@ export const GlobalSearch = ({ onNavigate }) => {
     return () => window.clearTimeout(handle);
   }, [query]);
 
-  // cmd/ctrl-K opens and focuses; Escape closes.
+  // cmd/ctrl-K opens and focuses; `/` does the same when not typing.
+  // Escape closes.
   useEffect(() => {
+    const isTypingTarget = (target) => {
+      if (!target) return false;
+      const tag = String(target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+      return target.isContentEditable === true;
+    };
     const onKey = (e) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setOpen(true);
+        void ensureStaticLoaded();
+        window.requestAnimationFrame(() => inputRef.current?.focus());
+      } else if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && !isTypingTarget(e.target)) {
         e.preventDefault();
         setOpen(true);
         void ensureStaticLoaded();
