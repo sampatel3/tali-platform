@@ -102,6 +102,24 @@ class PreScreenSubAgent:
                 error=f"application {req.application_id} not found in org {req.organization_id}",
             )
 
+        # A6: resolved applications are frozen. Refuse to run a fresh
+        # pre-screen on them — saves Anthropic spend on stragglers.
+        from ..domains.assessments_runtime.role_support import is_resolved
+        if is_resolved(app):
+            logger.info(
+                "resolved_app_skipped action=pre_screen application_id=%s "
+                "pipeline_stage=%s application_outcome=%s",
+                app.id, app.pipeline_stage, app.application_outcome,
+            )
+            return SubAgentResult(
+                sub_agent=self.name,
+                ok=False,
+                error=(
+                    f"application {req.application_id} is resolved "
+                    f"(stage={app.pipeline_stage}, outcome={app.application_outcome})"
+                ),
+            )
+
         # Fast path: cached pre-screen score on the application.
         if not req.skip_cache and app.pre_screen_score_100 is not None:
             score = float(app.pre_screen_score_100)

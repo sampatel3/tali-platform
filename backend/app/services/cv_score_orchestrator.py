@@ -207,6 +207,19 @@ def enqueue_score(
     if not settings.ANTHROPIC_API_KEY:
         return None
 
+    # A6: resolved applications are frozen — never spend on scoring them
+    # again. Catches the straggler case where a Workable webhook arrives
+    # after a manual reject, or a batch rescore loop iterates past the
+    # rejected/advanced filter. Zero-cost early return.
+    from ..domains.assessments_runtime.role_support import is_resolved as _is_resolved
+    if _is_resolved(application):
+        logger.info(
+            "resolved_app_skipped action=enqueue_score application_id=%s "
+            "pipeline_stage=%s application_outcome=%s",
+            application.id, application.pipeline_stage, application.application_outcome,
+        )
+        return None
+
     # Pre-flight credit gate. In shadow mode (USAGE_METER_LIVE=False) this
     # is a no-op. In live mode, orgs without enough balance get a silent
     # skip — the caller (batch loops or single-app routes) sees None and
@@ -805,9 +818,17 @@ def mark_role_scores_stale(db: Session, role_id: int, *, reason: str = "role_int
         )
         .all()
     )
+    # A6: resolved applications are frozen — invalidation hooks must
+    # never touch them. The decision snapshot stays as the immutable
+    # audit record. We do this filter inside the loop (rather than in
+    # the query) so other consumers of this code path can't accidentally
+    # drop the guard.
+    from ..domains.assessments_runtime.role_support import is_resolved as _is_resolved
     marked = 0
     now = datetime.now(timezone.utc)
     for app in apps:
+        if _is_resolved(app):
+            continue
         if not _enqueue_stale_job(db, app=app, role_id=role_id, now=now):
             continue
         _clear_application_scores(app)
@@ -858,6 +879,15 @@ def mark_application_scores_stale(
         .first()
     )
     if app is None:
+        return False
+    # A6: resolved applications are frozen — never invalidate.
+    from ..domains.assessments_runtime.role_support import is_resolved as _is_resolved
+    if _is_resolved(app):
+        logger.info(
+            "resolved_app_skipped action=mark_application_scores_stale "
+            "application_id=%s pipeline_stage=%s application_outcome=%s",
+            app.id, app.pipeline_stage, app.application_outcome,
+        )
         return False
     now = datetime.now(timezone.utc)
     if not _enqueue_stale_job(db, app=app, role_id=app.role_id, now=now):

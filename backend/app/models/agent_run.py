@@ -31,6 +31,12 @@ class AgentRun(Base):
     model_version = Column(String, nullable=True)
     prompt_version = Column(String, nullable=True)
     agent_state_snapshot = Column(JSON, nullable=True)
+    # B7 step 1: instrumentation. Count of tool-use rounds the cycle
+    # actually executed (vs the static MAX_TOOL_ROUNDS cap). Used post-
+    # deploy to histogram round counts and tune the cap downward if
+    # p95 is well below the limit — trims worst-case spend without
+    # losing functionality. NULL on pre-B7 rows.
+    rounds_executed = Column(Integer, nullable=True)
 
     role = relationship("Role")
     decisions = relationship("AgentDecision", back_populates="agent_run")

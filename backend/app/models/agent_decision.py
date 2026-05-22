@@ -109,6 +109,28 @@ class AgentDecision(Base):
     # queue time" (defensive default, never raises).
     token_spend = Column(JSON, nullable=False, default=dict, server_default="{}")
 
+    # A1: input fingerprint snapshot. Populated by
+    # ``queue_decision._capture_input_fingerprint`` from the live
+    # CandidateApplication + Role at queue time. Drives the read-time
+    # staleness service (A2) for pending decisions; preserved verbatim
+    # forever on resolved decisions as the immutable audit record.
+    # Shape: see ``alembic/versions/092_add_input_fingerprint_*.py``.
+    input_fingerprint = Column(JSON, nullable=False, default=dict, server_default="{}")
+    # Indexed scalar shortcut for the drift detector — comparing 64-char
+    # hex hashes is cheap; pulling JSON values is not.
+    criteria_fingerprint = Column(String(64), nullable=True, index=True)
+    cv_fingerprint = Column(String(64), nullable=True)
+
+    # C4: cross-cycle dedup key. Hash of
+    # ``(application_id, decision_type, criteria_fingerprint,
+    #   cv_fingerprint, pre_screen_bucket, cv_match_bucket)``.
+    # ``queue_decision.run`` blocks emit when a resolved decision with
+    # the same key was created within the last 7 days (approved) or
+    # 10 minutes (discarded). Intentional re-emit after inputs change
+    # changes the hash and is allowed through. Non-unique so the
+    # dedup window logic lives in code, not the schema.
+    decision_dedup_key = Column(String(64), nullable=True, index=True)
+
     idempotency_key = Column(String, nullable=False)
 
     agent_run = relationship("AgentRun", back_populates="decisions")

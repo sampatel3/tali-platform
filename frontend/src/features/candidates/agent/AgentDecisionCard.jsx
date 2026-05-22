@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowRight, Check, ChevronDown, ChevronRight, X } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, ChevronRight, RefreshCw, X } from 'lucide-react';
 
 import { Button, Card } from '../../../shared/ui/TaaliPrimitives';
 
@@ -7,12 +7,42 @@ const DECISION_LABEL = {
   advance_to_interview: 'Advance to technical interview',
   reject: 'Reject candidate',
   skip_assessment_reject: 'Reject without sending assessment',
+  send_assessment: 'Send assessment',
+  resend_assessment_invite: 'Resend assessment invite',
+  escalate_low_confidence: 'Escalate — low confidence',
 };
 
 const formatConfidence = (value) => {
   if (value === null || value === undefined) return null;
   const pct = Math.round(Number(value) * 100);
   return `${pct}% confident`;
+};
+
+// Purple-tone confidence bands — no red/amber per house style. Low
+// confidence is muted, not alarming; the recruiter can still spot it.
+const CONFIDENCE_BAND_CLASS = {
+  high: 'bg-taali-accent/20 text-taali-accent',
+  medium: 'bg-taali-accent/10 text-taali-accent',
+  low: 'bg-taali-bg-muted text-taali-fg-muted',
+};
+
+// Relative-age label from the backend-computed age_seconds. Keeps the
+// "how old is this decision" signal visible without a date library.
+const formatAge = (seconds) => {
+  const s = Number(seconds) || 0;
+  if (s < 60) return 'Queued just now';
+  const mins = Math.floor(s / 60);
+  if (mins < 60) return `Queued ${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `Queued ${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `Queued ${days}d ago`;
+};
+
+const formatCost = (cents) => {
+  const c = Number(cents) || 0;
+  if (c <= 0) return null;
+  return `$${(c / 100).toFixed(2)}`;
 };
 
 const renderEvidence = (evidence) => {
@@ -33,11 +63,18 @@ const renderEvidence = (evidence) => {
   );
 };
 
-export const AgentDecisionCard = ({ decision, onApprove, onOverride, busy = false }) => {
+export const AgentDecisionCard = ({ decision, onApprove, onOverride, onReEvaluate, busy = false }) => {
   const [expanded, setExpanded] = useState(false);
   const decisionLabel = DECISION_LABEL[decision.decision_type] || decision.decision_type;
   const confidenceLabel = formatConfidence(decision.confidence);
   const candidateLabel = decision.candidate_name || decision.candidate_email || `Application #${decision.application_id}`;
+
+  const isStale = Boolean(decision.is_stale);
+  const stalenessSummary = decision.staleness_summary;
+  const stalenessReasons = Array.isArray(decision.staleness_reasons) ? decision.staleness_reasons : [];
+  const bandClass = CONFIDENCE_BAND_CLASS[decision.confidence_band] || 'bg-taali-bg-muted text-taali-fg-muted';
+  const ageLabel = formatAge(decision.age_seconds);
+  const costLabel = formatCost(decision.cost_usd_cents);
 
   return (
     <Card className="flex flex-col gap-2 px-4 py-3">
@@ -48,11 +85,20 @@ export const AgentDecisionCard = ({ decision, onApprove, onOverride, busy = fals
             <ArrowRight size={14} className="text-taali-fg-muted" aria-hidden />
             <span className="font-medium text-taali-accent">{decisionLabel}</span>
             {confidenceLabel ? (
-              <span className="rounded bg-taali-bg-muted px-2 py-0.5 text-[11px] text-taali-fg-muted">
+              <span className={`rounded px-2 py-0.5 text-[11px] ${bandClass}`}>
                 {confidenceLabel}
               </span>
             ) : null}
+            <span className="text-[11px] text-taali-fg-muted">{ageLabel}</span>
           </div>
+
+          {isStale ? (
+            <div className="mt-1.5 inline-flex items-center gap-1.5 rounded-md bg-taali-accent/10 px-2 py-1 text-[11px] font-medium text-taali-accent">
+              <RefreshCw size={12} aria-hidden />
+              <span>Inputs changed{stalenessSummary ? ` · ${stalenessSummary}` : ''}</span>
+            </div>
+          ) : null}
+
           <p className="mt-1 text-sm text-taali-fg">{decision.reasoning}</p>
 
           <button
@@ -74,35 +120,55 @@ export const AgentDecisionCard = ({ decision, onApprove, onOverride, busy = fals
               {renderEvidence(decision.evidence) || (
                 <p className="text-xs text-taali-fg-muted">No structured evidence cited.</p>
               )}
+              {isStale && stalenessReasons.length ? (
+                <div className="mt-2 text-[11px] text-taali-accent">
+                  Stale because: {stalenessReasons.join(', ')}
+                </div>
+              ) : null}
               <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-taali-fg-muted">
                 <span>model: {decision.model_version}</span>
                 <span>prompt: {decision.prompt_version}</span>
                 {decision.agent_run_id ? <span>run #{decision.agent_run_id}</span> : null}
+                {costLabel ? <span>cost: {costLabel}</span> : null}
                 <span>queued: {new Date(decision.created_at).toLocaleString()}</span>
               </div>
             </div>
           ) : null}
         </div>
 
-        <div className="flex shrink-0 gap-2">
-          <Button
-            variant="primary"
-            size="xs"
-            onClick={onApprove}
-            disabled={busy}
-            aria-label={`Approve agent recommendation for ${candidateLabel}`}
-          >
-            <Check size={14} aria-hidden /> Approve
-          </Button>
-          <Button
-            variant="ghost"
-            size="xs"
-            onClick={onOverride}
-            disabled={busy}
-            aria-label={`Override agent recommendation for ${candidateLabel}`}
-          >
-            <X size={14} aria-hidden /> Override
-          </Button>
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <div className="flex gap-2">
+            <Button
+              variant="primary"
+              size="xs"
+              onClick={onApprove}
+              disabled={busy || isStale}
+              title={isStale ? 'Inputs changed since this decision — re-evaluate before approving' : undefined}
+              aria-label={`Approve agent recommendation for ${candidateLabel}`}
+            >
+              <Check size={14} aria-hidden /> Approve
+            </Button>
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={onOverride}
+              disabled={busy}
+              aria-label={`Override agent recommendation for ${candidateLabel}`}
+            >
+              <X size={14} aria-hidden /> Override
+            </Button>
+          </div>
+          {isStale && onReEvaluate ? (
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={onReEvaluate}
+              disabled={busy}
+              aria-label={`Re-evaluate agent recommendation for ${candidateLabel}`}
+            >
+              <RefreshCw size={14} aria-hidden /> Re-evaluate
+            </Button>
+          ) : null}
         </div>
       </div>
     </Card>

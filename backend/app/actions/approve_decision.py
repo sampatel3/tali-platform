@@ -47,14 +47,24 @@ def run(
     if actor.type != ACTOR_RECRUITER:
         raise HTTPException(status_code=403, detail="approve is recruiter-only")
 
-    decision = (
+    # C2: row-level lock on the decision. Two recruiters approving the
+    # same pending decision in the same second would otherwise both pass
+    # the ``status != "pending"`` check and both dispatch the underlying
+    # action — double Workable POST, double pipeline-stage event, double
+    # candidate email. ``with_for_update`` blocks the second request
+    # until the first commits; it then sees ``status='approved'`` and
+    # 409s. SQLite tests ignore the row lock (no NOWAIT support) which
+    # is fine since the race only matters in real production traffic.
+    decision_query = (
         db.query(AgentDecision)
         .filter(
             AgentDecision.id == decision_id,
             AgentDecision.organization_id == organization_id,
         )
-        .first()
     )
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        decision_query = decision_query.with_for_update()
+    decision = decision_query.first()
     if decision is None:
         raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
     if decision.status != "pending":

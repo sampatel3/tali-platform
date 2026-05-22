@@ -129,13 +129,22 @@ def _call_claude(client, *, messages: list[dict], ctx: _RunContext) -> str:
     # the auto-meter on the wrapper and avoid double-counting. If the
     # caller passes a bare anthropic.Anthropic (e.g. tests, evals) the
     # kwarg is forwarded as-is and ignored — the wrapper is a no-op.
+    # B1: thread retry_attempt + trace_id so claude_call_log rows for
+    # the original + retried call link together. parent_call_log_id is
+    # left None — the row IDs are only known post-write, so the trace_id
+    # is what associates retries across the same _RunContext.
     response = client.messages.create(
         model=MODEL_VERSION,
         max_tokens=OUTPUT_TOKEN_CEILING,
         temperature=TEMPERATURE,
         system=_SYSTEM_PROMPT,
         messages=messages,
-        metering={"skip": True, "metered_by": "cv_score_orchestrator.score_application"},
+        metering={
+            "skip": True,
+            "metered_by": "cv_score_orchestrator.score_application",
+            "retry_attempt": int(getattr(ctx, "retry_count", 0) or 0),
+            "trace_id": str(getattr(ctx, "trace_id", "") or "") or None,
+        },
     )
 
     usage = getattr(response, "usage", None)

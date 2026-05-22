@@ -345,6 +345,14 @@ def _state_query(
         CandidateApplication.deleted_at.is_(None),
     )
 
+    # A6: explicit exclusion of pipeline_stage='advanced' from every
+    # active-pipeline state. ``application_outcome == "open"`` doesn't
+    # cover advanced (an advanced candidate can still be outcome=open
+    # while they're awaiting downstream interview/offer in the customer's
+    # ATS). The later states (ready_for_*, in_assessment) list explicit
+    # pipeline_stage IN clauses that exclude 'advanced' implicitly, but
+    # the early states need the explicit guard so Workable sync surprises
+    # can't slip an advanced candidate back into the scoring pipeline.
     if state == "needs_cv_fetch":
         return base.filter(
             or_(
@@ -353,6 +361,7 @@ def _state_query(
             ),
             CandidateApplication.cv_file_url.isnot(None),
             CandidateApplication.application_outcome == "open",
+            CandidateApplication.pipeline_stage != "advanced",
         )
     if state == "needs_pre_screen":
         return base.filter(
@@ -360,6 +369,7 @@ def _state_query(
             CandidateApplication.cv_text != "",
             CandidateApplication.pre_screen_score_100.is_(None),
             CandidateApplication.application_outcome == "open",
+            CandidateApplication.pipeline_stage != "advanced",
         )
     if state == "needs_score":
         return base.filter(
@@ -367,6 +377,7 @@ def _state_query(
             CandidateApplication.pre_screen_score_100 >= 50,
             CandidateApplication.cv_match_score.is_(None),
             CandidateApplication.application_outcome == "open",
+            CandidateApplication.pipeline_stage != "advanced",
         )
     if state == "ready_for_assessment_decision":
         return base.filter(

@@ -57,6 +57,17 @@ class ClaudeCallLog(Base):
     )
     usage_event_id = Column(Integer, ForeignKey("usage_events.id"), nullable=True)
 
+    # B1: error categorization + retry visibility. ``status='sdk_error'``
+    # rows now carry an ``error_class`` so dashboards distinguish 429 vs
+    # 5xx vs context-length. Retries thread together via
+    # ``parent_call_log_id`` (when in-process) or ``trace_id`` (when the
+    # retry crosses process boundaries).
+    error_class = Column(String, nullable=True)  # rate_limit | overloaded | context_length | bad_request | server_error | timeout | network | validation | other
+    http_status = Column(Integer, nullable=True)
+    retry_attempt = Column(Integer, nullable=False, default=0, server_default="0")
+    parent_call_log_id = Column(BigInteger, ForeignKey("claude_call_log.id"), nullable=True)
+    trace_id = Column(String, nullable=True)
+
     organization = relationship("Organization")
     usage_event = relationship("UsageEvent")
 
@@ -64,4 +75,6 @@ class ClaudeCallLog(Base):
         Index("ix_claude_call_log_org_created", "organization_id", "created_at"),
         Index("ix_claude_call_log_model_created", "model", "created_at"),
         Index("ix_claude_call_log_usage_event_id", "usage_event_id"),
+        Index("ix_claude_call_log_error_class_created", "error_class", "created_at"),
+        Index("ix_claude_call_log_trace_id", "trace_id"),
     )

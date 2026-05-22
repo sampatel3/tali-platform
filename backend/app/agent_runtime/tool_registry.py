@@ -621,11 +621,25 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             "the verdict + reasoning trace + policy_revision_id. ALWAYS call "
             "this before queue_advance_decision / queue_reject_decision / "
             "queue_skip_assessment_reject_decision so the human-readable "
-            "reasoning + audit trail are anchored to the policy. If the "
-            "verdict says skipped_due_to_manual=true, do NOT queue — the "
-            "recruiter has already acted. If the verdict's decision_type is "
-            "queue_*, you may pass the same reasoning into the matching "
-            "queue tool."
+            "reasoning + audit trail are anchored to the policy.\n\n"
+            "How to react to the returned ``decision_type``:\n"
+            "- ``queue_advance_decision`` / ``queue_reject_decision`` / "
+            "``queue_skip_assessment_reject`` → call the matching queue tool "
+            "with the same reasoning.\n"
+            "- ``escalate_low_confidence`` → call ``queue_escalate_decision`` "
+            "with the verdict's reasoning so the recruiter adjudicates.\n"
+            "- ``no_action`` / ``skip`` → this candidate is not actionable "
+            "right now. Do NOT re-call evaluate_policy on the same candidate "
+            "this cycle. Move on: either pick a different candidate from your "
+            "earlier ``find_apps_in_state`` results, or call "
+            "``agent_run_complete`` if you've already tried the top candidates "
+            "from each state. Repeated ``no_action`` verdicts in one cycle "
+            "mean the cohort isn't ready — record an observation and end.\n"
+            "- ``skipped_due_to_manual=true`` (any decision_type) → the "
+            "recruiter has already acted; do NOT queue.\n\n"
+            "Hard rule: never call ``evaluate_policy`` more than ONCE per "
+            "(application_id, cycle). Calling it twice on the same candidate "
+            "in one cycle indicates you're spinning — end the cycle instead."
         ),
         "input_schema": {
             "type": "object",
@@ -701,6 +715,11 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             },
             "required": ["summary"],
         },
+        # B2: cache_control on the final tool entry caches the entire
+        # AGENT_TOOLS array. Rounds 2-18 of each cycle (and subsequent
+        # ticks within the TTL window) hit cache for the ~3-5K tokens
+        # of tool schemas instead of paying full input price each time.
+        "cache_control": {"type": "ephemeral"},
     },
 ]
 
@@ -1388,11 +1407,51 @@ def _tool_queue_skip_assessment_reject_decision(
 def _tool_evaluate_policy(
     db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
 ) -> Any:
-    """Bridge: gather sub-agent outputs and run the deterministic engine."""
+    """Bridge: gather sub-agent outputs and run the deterministic engine.
+
+    Production data 2026-05-21 showed cycles spinning on 3-6 sequential
+    ``evaluate_policy`` calls without ever queueing a decision (21 of 22
+    MAX_TOOL_ROUNDS aborts followed this pattern). Root cause: the engine
+    returns ``no_action`` for borderline candidates and the prompt didn't
+    tell the agent how to react. The tool description has been updated
+    to spell that out; this in-tool guard catches the repeat case anyway
+    by returning a sentinel response that prompts the agent to stop or
+    move on. Cheaper than re-running the full sub-agent fan-out for an
+    already-evaluated candidate.
+    """
     import logging
 
     application_id = int(args["application_id"])
     skip_cache = bool(args.get("skip_cache", False))
+
+    # Cycle-scoped already-evaluated tracker — keyed on the agent_run row
+    # so each cycle starts fresh. ``__evaluated_apps__`` is an attribute
+    # we attach to the AgentRun instance; it does NOT persist to the DB.
+    evaluated: set[int] = getattr(agent_run, "__evaluated_apps__", set())
+    if application_id in evaluated and not skip_cache:
+        logging.getLogger("taali.policy.evaluation").info(
+            "policy_evaluation_repeat_blocked role_id=%s app_id=%s run_id=%s",
+            role.id, application_id, agent_run.id,
+        )
+        return {
+            "decision_type": "already_evaluated_this_cycle",
+            "decision_point": "guard",
+            "confidence": 0.0,
+            "reasoning": (
+                f"Already called evaluate_policy on application {application_id} "
+                f"this cycle. Don't re-evaluate the same candidate — either pick "
+                f"a different candidate from your earlier find_apps_in_state "
+                f"results, or call agent_run_complete to end the cycle."
+            ),
+            "rule_path": ["repeat_blocked"],
+            "policy_revision_id": None,
+            "intent_overrode": False,
+            "skipped_due_to_manual": False,
+            "sub_agent_outputs": {},
+        }
+    evaluated.add(application_id)
+    agent_run.__evaluated_apps__ = evaluated  # type: ignore[attr-defined]
+
     metering_context = {
         "agent_run_id": int(agent_run.id),
         "feature": "evaluate_policy",

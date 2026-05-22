@@ -270,6 +270,33 @@ def agent_cohort_tick_role(self, role_id: int) -> dict:
         if not bool(role.agentic_mode_enabled) or role.agent_paused_at is not None:
             return {"status": "skipped", "reason": "not_eligible", "role_id": role_id}
 
+        # B4: concurrent cohort-tick guard. If a previous cycle for this
+        # role is still running (deploy restart, clock drift, slow LLM
+        # round, etc.), don't start a second one — every extra cycle is
+        # wasted Sonnet spend. The C1 advisory lock inside run_cycle
+        # would catch this too, but bailing here also skips the Phase-1
+        # auto-enqueue scoring (which would otherwise duplicate the
+        # in-flight tick's enqueues). The 10-min watchdog at
+        # agent_expire_stuck_runs catches genuinely-stuck runs.
+        from ..models.agent_run import AgentRun
+        from datetime import datetime, timedelta, timezone as _tz
+        in_flight = (
+            db.query(AgentRun.id)
+            .filter(
+                AgentRun.role_id == role_id,
+                AgentRun.status == "running",
+                AgentRun.started_at > datetime.now(_tz.utc) - timedelta(minutes=15),
+            )
+            .first()
+        )
+        if in_flight is not None:
+            return {
+                "status": "skipped",
+                "reason": "already_running",
+                "role_id": role_id,
+                "in_flight_run_id": int(in_flight[0]),
+            }
+
         # Phase 1: auto-enqueue scoring for unscored candidates.
         # enqueue_score is idempotent (returns the existing pending/running
         # job when one exists) and bounded by the role's monthly $ cap via

@@ -143,6 +143,31 @@ def get_application(application_id: int, org_id: int, db: Session) -> CandidateA
     return app
 
 
+# A6 core invariant: once a candidate is rejected, hired, or advanced
+# out of Tali, the agent never touches them again and the platform freezes
+# the snapshot for audit. Every agent-acting site checks this and short-
+# circuits if True. Candidates do not return to Tali post-handover.
+RESOLVED_APPLICATION_OUTCOMES = frozenset({"rejected", "hired"})
+RESOLVED_PIPELINE_STAGES = frozenset({"advanced"})
+
+
+def is_resolved(app: CandidateApplication) -> bool:
+    """True when an application is terminally resolved.
+
+    Resolved == ``application_outcome in {rejected, hired}`` OR
+    ``pipeline_stage == 'advanced'``. From this point forward the
+    decision snapshot is frozen, agent never re-evaluates, score
+    invalidation hooks no-op, and any re-evaluate request 409s.
+    """
+    outcome = (app.application_outcome or "").lower()
+    if outcome in RESOLVED_APPLICATION_OUTCOMES:
+        return True
+    stage = (app.pipeline_stage or "").lower()
+    if stage in RESOLVED_PIPELINE_STAGES:
+        return True
+    return False
+
+
 def _loaded_relationship_items(entity: Any, relationship_name: str) -> list[Any] | None:
     try:
         loaded = getattr(sa_inspect(entity).attrs, relationship_name).loaded_value
@@ -552,6 +577,19 @@ def refresh_application_score_cache(
     *,
     db: Session | None = None,
 ) -> dict[str, Any]:
+    # A3: capture the assessment score BEFORE we refresh so we can
+    # detect material swings (e.g. retake landed a much higher / lower
+    # score). When the delta crosses the SCORE_DRIFT_BAND (5 points),
+    # any pending decision cited the old score and is now stale — we
+    # supersede it so the agent re-deliberates next cycle. Below the
+    # band we let the staleness service flag it on the next Hub read
+    # without churning the queue.
+    prior_assessment_score = None
+    try:
+        prior_assessment_score = float(app.assessment_score_cache_100) if app.assessment_score_cache_100 is not None else None
+    except (TypeError, ValueError):
+        prior_assessment_score = None
+
     if db is not None:
         active_assessments = _load_active_assessments_for_application(app, db)
         score_summary = _score_summary_from_active_assessments(app, active_assessments)
@@ -559,6 +597,35 @@ def refresh_application_score_cache(
         score_summary = _score_summary_for_application(app)
     _apply_score_cache_from_summary(app, score_summary)
     refresh_pre_screening_fields(app)
+
+    # A3 assessment retake supersede: only for OPEN apps with a >=5pt
+    # swing and only when we have a DB session to act on. A6 invariant:
+    # never touch resolved candidates' decisions.
+    if (
+        db is not None
+        and not is_resolved(app)
+        and prior_assessment_score is not None
+        and app.assessment_score_cache_100 is not None
+    ):
+        try:
+            new_score = float(app.assessment_score_cache_100)
+            if abs(new_score - prior_assessment_score) >= 5.0:
+                # Lazy import to avoid circulars at module load.
+                from ...services.cv_score_orchestrator import supersede_pending_decisions_for_app
+                supersede_pending_decisions_for_app(
+                    db, int(app.id),
+                    reason=(
+                        f"assessment_score_shifted: "
+                        f"{prior_assessment_score:.1f} -> {new_score:.1f}"
+                    ),
+                )
+        except Exception:  # pragma: no cover — defensive
+            import logging
+            logging.getLogger("taali.role_support").warning(
+                "assessment-retake supersede failed for app=%s",
+                getattr(app, "id", None), exc_info=True,
+            )
+
     return score_summary
 
 

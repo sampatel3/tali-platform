@@ -117,16 +117,44 @@ class _MeteredMessages:
 
     # ----- public API -----------------------------------------------------
 
+    @staticmethod
+    def _retry_context(metering: Any) -> tuple[int, Optional[int], Optional[str]]:
+        """B1: pull retry threading hints off the metering dict.
+
+        Callers that orchestrate their own retries (cv_match's
+        validation loop, the agent orchestrator's per-round calls)
+        pass ``retry_attempt`` / ``parent_call_log_id`` / ``trace_id``
+        so claude_call_log rows can be chained. Defaults are
+        (0, None, None) — first try, no parent, no trace.
+        """
+        if not isinstance(metering, dict):
+            return (0, None, None)
+        try:
+            attempt = int(metering.get("retry_attempt") or 0)
+        except (TypeError, ValueError):
+            attempt = 0
+        parent = metering.get("parent_call_log_id")
+        if parent is not None:
+            try:
+                parent = int(parent)
+            except (TypeError, ValueError):
+                parent = None
+        trace = metering.get("trace_id")
+        trace = str(trace) if trace else None
+        return (attempt, parent, trace)
+
     def create(self, **kwargs: Any) -> Any:
         metering = self._extract_metering(kwargs)
         model = str(kwargs.get("model") or "")
         feature_hint = self._feature_hint_from(metering)
+        retry_attempt, parent_call_log_id, trace_id = self._retry_context(metering)
         try:
             response = self._inner.create(**kwargs)
         except Exception as exc:
             # Anthropic call failed (network, 4xx, 5xx). Tokens are zero
             # so no $ charge — but we still log the attempt so the user
             # can see the failure rate. NEVER suppress the exception.
+            error_class, http_status = self._classify_exception(exc)
             self._record_call_log_safe(
                 organization_id=self._call_org_id(metering),
                 model=model,
@@ -135,6 +163,11 @@ class _MeteredMessages:
                 status="sdk_error",
                 error_reason=str(exc)[:500],
                 anthropic_request_id=None,
+                error_class=error_class,
+                http_status=http_status,
+                retry_attempt=retry_attempt,
+                parent_call_log_id=parent_call_log_id,
+                trace_id=trace_id,
             )
             raise
 
@@ -164,6 +197,9 @@ class _MeteredMessages:
             error_reason=None,
             anthropic_request_id=request_id,
             usage_event_id=int(usage_event.id) if usage_event is not None else None,
+            retry_attempt=retry_attempt,
+            parent_call_log_id=parent_call_log_id,
+            trace_id=trace_id,
         )
         return response
 
@@ -277,6 +313,75 @@ class _MeteredMessages:
                 return str(val)
         return None
 
+    @staticmethod
+    def _classify_exception(exc: BaseException) -> tuple[Optional[str], Optional[int]]:
+        """B1: bucket SDK exceptions into a small set of machine-readable
+        categories.
+
+        Returns ``(error_class, http_status)``. ``error_class`` ∈
+          {rate_limit, overloaded, context_length, credit_exhausted,
+           bad_request, server_error, timeout, network, validation, other}
+        ``http_status`` is the numeric code when the SDK exposes one,
+        else None. Used by dashboards to distinguish "Anthropic is
+        slow / rate-limiting us" from "we sent garbage" without
+        scraping error_reason text.
+
+        ``credit_exhausted`` is broken out separately because real
+        production data (2026-05-20 through 2026-05-21) showed it as
+        the dominant failure mode — 122 of 172 failed agent_runs hit
+        "Your credit balance is too low to access the Anthropic API".
+        Switching models doesn't help (Haiku 400s the same way); the
+        only fix is to detect and stop firing wasted calls until the
+        org's Anthropic balance is topped up.
+
+        Pure dispatch — no imports of anthropic at module load (so
+        tests that stub the SDK don't need the real package).
+        """
+        try:
+            import anthropic  # type: ignore[import-not-found]
+        except Exception:
+            return (None, None)
+        status_code: Optional[int] = None
+        for attr in ("status_code", "http_status", "code"):
+            value = getattr(exc, attr, None)
+            if isinstance(value, int):
+                status_code = value
+                break
+        if isinstance(exc, getattr(anthropic, "RateLimitError", ())):
+            return ("rate_limit", status_code or 429)
+        if isinstance(exc, getattr(anthropic, "APITimeoutError", ())):
+            return ("timeout", status_code)
+        if isinstance(exc, getattr(anthropic, "APIConnectionError", ())):
+            return ("network", status_code)
+        if isinstance(exc, getattr(anthropic, "InternalServerError", ())):
+            return ("server_error", status_code or 500)
+        if isinstance(exc, getattr(anthropic, "BadRequestError", ())):
+            message = str(exc).lower()
+            # Anthropic returns 400 with this exact wording when the
+            # org's Anthropic billing balance is exhausted. Detect it
+            # specifically so the orchestrator can short-circuit
+            # instead of letting cohort ticks keep producing failed
+            # agent_runs indefinitely.
+            if "credit balance is too low" in message:
+                return ("credit_exhausted", status_code or 400)
+            if "context" in message and ("length" in message or "window" in message):
+                return ("context_length", status_code or 400)
+            return ("bad_request", status_code or 400)
+        if isinstance(exc, getattr(anthropic, "APIStatusError", ())):
+            if status_code == 529:
+                return ("overloaded", 529)
+            if status_code and status_code >= 500:
+                return ("server_error", status_code)
+            if status_code and status_code >= 400:
+                return ("bad_request", status_code)
+        # Last-resort string match — non-anthropic exception wrappers
+        # (e.g. tests that raise generic RuntimeError) can still carry
+        # the credit-balance message; we want the dashboard to count
+        # them correctly.
+        if "credit balance is too low" in str(exc).lower():
+            return ("credit_exhausted", 400)
+        return ("other", status_code)
+
     def _record_call_log_safe(
         self,
         *,
@@ -288,6 +393,11 @@ class _MeteredMessages:
         error_reason: Optional[str],
         anthropic_request_id: Optional[str],
         usage_event_id: Optional[int] = None,
+        error_class: Optional[str] = None,
+        http_status: Optional[int] = None,
+        retry_attempt: int = 0,
+        parent_call_log_id: Optional[int] = None,
+        trace_id: Optional[str] = None,
     ) -> None:
         """Write one ``ClaudeCallLog`` row. Never raises — call_log failures
         must not break Claude calls. Logs at WARNING so ops sees them.
@@ -327,6 +437,11 @@ class _MeteredMessages:
             error_reason=error_reason,
             anthropic_request_id=anthropic_request_id,
             usage_event_id=usage_event_id,
+            error_class=error_class,
+            http_status=http_status,
+            retry_attempt=int(retry_attempt or 0),
+            parent_call_log_id=parent_call_log_id,
+            trace_id=trace_id,
         )
         try:
             with SessionLocal() as session:

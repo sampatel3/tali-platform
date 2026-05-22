@@ -76,6 +76,30 @@ export const PendingAgentDecisionsPanel = ({ role, onAfterAction }) => {
     }
   }, [fetchDecisions, onAfterAction, showToast]);
 
+  const handleReEvaluate = useCallback(async (decision) => {
+    setResolvingId(decision.id);
+    try {
+      const response = await apiClient.agent.reEvaluateDecision(decision.id);
+      const queued = response?.data?.queued;
+      showToast?.({
+        type: queued ? 'success' : 'info',
+        message: queued
+          ? `Re-evaluating #${decision.id} — the agent will decide again on fresh inputs.`
+          : `Discarded stale decision #${decision.id}. ${response?.data?.detail || ''}`.trim(),
+      });
+      await fetchDecisions();
+      onAfterAction?.();
+    } catch (err) {
+      const detail = err?.response?.data?.detail;
+      showToast?.({
+        type: 'error',
+        message: (detail && (detail.message || detail)) || err.message || 'Failed to re-evaluate',
+      });
+    } finally {
+      setResolvingId(null);
+    }
+  }, [fetchDecisions, onAfterAction, showToast]);
+
   const pausedBanner = useMemo(() => {
     if (!role?.agent_paused_at) return null;
     return (
@@ -148,6 +172,7 @@ export const PendingAgentDecisionsPanel = ({ role, onAfterAction }) => {
               decision={decision}
               onApprove={() => handleApprove(decision)}
               onOverride={() => handleOverride(decision)}
+              onReEvaluate={() => handleReEvaluate(decision)}
               busy={resolvingId === decision.id}
             />
           ))}

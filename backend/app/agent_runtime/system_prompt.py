@@ -326,12 +326,18 @@ def build_system_prompt(
         {
             "type": "text",
             "text": _STATIC_HEADER,
-            "cache_control": {"type": "ephemeral"},
+            # B2: 1h TTL so cohort ticks 30 min apart land cache hits on
+            # the ~4KB static header. Default ephemeral TTL is 5 min,
+            # which would always miss between ticks.
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
         },
         {
             "type": "text",
             "text": role_block,
-            "cache_control": {"type": "ephemeral"},
+            # B2: 1h TTL on the role block (job spec + criteria + intent
+            # + recruiter notes — up to ~6K tokens). Recomputes only when
+            # the role itself changes; recovers cache across ticks.
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
         },
         {
             "type": "text",
