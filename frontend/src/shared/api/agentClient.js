@@ -5,6 +5,9 @@ export const agent = {
   listDecisions: (params = {}) => api.get('/agent-decisions', { params }),
   approveDecision: (decisionId, body = {}) => api.post(`/agent-decisions/${decisionId}/approve`, body),
   overrideDecision: (decisionId, body = {}) => api.post(`/agent-decisions/${decisionId}/override`, body),
+  // A4: discard a stale decision and re-run the agent on fresh inputs.
+  // Surfaced by the "Re-evaluate" button when a decision is_stale.
+  reEvaluateDecision: (decisionId) => api.post(`/agent-decisions/${decisionId}/re-evaluate`, {}),
   discardPending: (roleId) => api.post('/agent-decisions/discard', { role_id: roleId }),
   // Approve a batch of pending decisions in one request. Each is
   // executed independently server-side; the response carries a
