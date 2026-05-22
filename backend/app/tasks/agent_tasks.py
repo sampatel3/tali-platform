@@ -273,9 +273,29 @@ def agent_cohort_tick_role(self, role_id: int) -> dict:
         # Phase 1: auto-enqueue scoring for unscored candidates.
         # enqueue_score is idempotent (returns the existing pending/running
         # job when one exists) and bounded by the role's monthly $ cap via
-        # the role_budget_gate it checks internally, so this is safe to
-        # call on every unscored app every tick.
+        # the role_budget_gate it checks internally. Bounded to
+        # ``AUTO_SCORE_PER_TICK_CAP`` candidates per tick so a large
+        # backlog drains over the day instead of burst-firing thousands
+        # of API calls into a worker pool that can't keep up.
         auto_scored = _auto_enqueue_scoring(db, role=role)
+
+        # Phase 2: early-exit if there's nothing for the agent to do.
+        # Calling run_cycle when the survey shows zero actionable work
+        # burns ~$0.05 of Sonnet 4.5 per role per tick (4 roles × 48
+        # ticks = ~$10/day wasted on no-op cycles). Skip when:
+        # - no candidates in any decision-eligible state
+        # - no open recruiter questions to react to
+        # - no role-config gaps to surface
+        # Auto-scoring still ran above, so newly-enqueued work isn't
+        # blocked — the next tick (after scoring completes) will pick
+        # them up.
+        if _cycle_would_be_noop(db, role=role):
+            return {
+                "status": "skipped",
+                "reason": "no_actionable_work",
+                "role_id": role_id,
+                "auto_scored_enqueued": auto_scored,
+            }
 
         try:
             run = run_cycle(
@@ -301,10 +321,18 @@ def agent_cohort_tick_role(self, role_id: int) -> dict:
         db.close()
 
 
-def _auto_enqueue_scoring(db, *, role) -> int:
-    """Queue a scoring job for every unscored, scorable candidate on the
-    role. Returns the count of new/existing jobs touched (skipped apps
-    return 0).
+# How many candidates the auto-scoring helper queues per cohort tick.
+# Cohort ticks fire every 30 min. 50 candidates × 48 ticks = 2,400/day
+# per role — enough to keep up with steady-state Workable sync without
+# burst-firing thousands of API calls on a freshly-enabled role with a
+# long backlog. The first tick after agent activation gets a higher cap
+# via ``ACTIVATION_AUTO_SCORE_CAP`` (one-shot drain).
+AUTO_SCORE_PER_TICK_CAP = 50
+
+
+def _auto_enqueue_scoring(db, *, role, limit: int = AUTO_SCORE_PER_TICK_CAP) -> int:
+    """Queue a scoring job for up to ``limit`` unscored candidates on the
+    role. Returns the count of new/existing jobs touched.
 
     Skipping rules already live inside ``enqueue_score``:
     - no cv_text / no spec / no API key → returns None
@@ -312,14 +340,29 @@ def _auto_enqueue_scoring(db, *, role) -> int:
     - role monthly $ cap reached → returns None
     - existing pending/running job → returns that job (no duplicate)
 
-    We don't cap the per-tick volume: the worker pool naturally serializes
-    via Redis queue depth, and one tick per role per 30 minutes is the
-    realistic upper bound on how often we'd re-scan anyway.
+    Per-tick cap exists because the first version of this helper queued
+    every unscored candidate on every tick. On a role with 1,500 unscored
+    apps that meant burst-firing 1,500 Celery tasks every 30 min — far
+    faster than the worker pool could chew through them, and so wasteful
+    of Anthropic credits that the user's top-up ran out the same hour.
+    Cap is the *steady-state* throughput; for the burst-clear-the-backlog
+    case on agent activation the activation hook can pass a higher
+    ``limit`` for one tick.
+
+    We also filter out apps with a recent pre-screen error and no new
+    CV upload — they'd just error again immediately. The backoff lives
+    in ``application_needs_pre_screen``; we mirror it here at the SQL
+    level so we don't even enqueue.
     """
     try:
+        from datetime import datetime, timedelta, timezone
+        from sqlalchemy import and_, or_
+
         from ..models.candidate_application import CandidateApplication
         from ..services.cv_score_orchestrator import enqueue_score
+        from ..services.pre_screening_service import PRE_SCREEN_ERROR_BACKOFF
 
+        backoff_cutoff = datetime.now(timezone.utc) - PRE_SCREEN_ERROR_BACKOFF
         unscored = (
             db.query(CandidateApplication)
             .filter(
@@ -330,7 +373,22 @@ def _auto_enqueue_scoring(db, *, role) -> int:
                 CandidateApplication.deleted_at.is_(None),
                 CandidateApplication.cv_text.isnot(None),
                 CandidateApplication.cv_text != "",
+                # Skip recently-errored apps unless a fresh CV beats the
+                # backoff or there's no pre-screen attempt yet.
+                or_(
+                    CandidateApplication.pre_screen_error_reason.is_(None),
+                    CandidateApplication.pre_screen_run_at.is_(None),
+                    CandidateApplication.pre_screen_run_at < backoff_cutoff,
+                    and_(
+                        CandidateApplication.cv_uploaded_at.isnot(None),
+                        CandidateApplication.cv_uploaded_at > CandidateApplication.pre_screen_run_at,
+                    ),
+                ),
             )
+            # Oldest first so the backlog drains in a fair order. The
+            # next tick picks up where this one left off.
+            .order_by(CandidateApplication.id.asc())
+            .limit(int(limit))
             .all()
         )
         touched = 0
@@ -357,6 +415,52 @@ def _auto_enqueue_scoring(db, *, role) -> int:
         logger.exception("auto-enqueue scoring failed for role_id=%s", getattr(role, "id", None))
         db.rollback()
         return 0
+
+
+def _cycle_would_be_noop(db, *, role) -> bool:
+    """Return True if running ``orchestrator.run_cycle`` right now would
+    produce no work — survey shows nothing actionable, no open recruiter
+    questions, no role-config gaps. Used by ``agent_cohort_tick_role``
+    to skip cycles that would just call Claude for the survey + a
+    "nothing to do" agent_run_complete (~$0.05 of Sonnet 4.5 per cycle).
+
+    Calls ``survey_role_state`` which is a handful of cheap COUNT
+    queries — no LLM, no Anthropic round-trip. If the survey itself
+    fails we fall back to running the cycle (safe default).
+    """
+    try:
+        from ..agent_runtime.cohort_tools import survey_role_state
+
+        survey = survey_role_state(
+            db,
+            organization_id=int(role.organization_id),
+            role_id=int(role.id),
+        )
+        if not isinstance(survey, dict) or survey.get("error"):
+            return False  # survey failed → run the cycle to be safe
+
+        # Anything actionable on the candidate side?
+        counts = survey.get("counts") or {}
+        actionable_states = (
+            "ready_for_assessment_decision",
+            "ready_for_advance_decision",
+        )
+        if any(int(counts.get(s) or 0) > 0 for s in actionable_states):
+            return False
+
+        # Anything to ask or answer about the role?
+        if survey.get("open_questions") or survey.get("intent_gaps"):
+            return False
+
+        # Backlog work the agent should kick off? auto_enqueue_scoring
+        # already handled the actual enqueue above; a non-empty
+        # needs_pre_screen / needs_score count doesn't require the
+        # agent itself to think (we don't want a noop summary cycle
+        # while scoring is in-flight).
+        return True
+    except Exception:
+        logger.exception("noop-check failed for role_id=%s — running cycle anyway", getattr(role, "id", None))
+        return False
 
 
 @celery_app.task(
