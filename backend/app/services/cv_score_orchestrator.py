@@ -813,6 +813,28 @@ def mark_role_scores_stale(db: Session, role_id: int, *, reason: str = "role_int
         _clear_application_scores(app)
         supersede_pending_decisions_for_app(db, app.id, reason=reason)
         marked += 1
+
+    # Role-level tech-screening questions are derived from job_spec +
+    # criteria — the same inputs that invalidate CV scoring. Null the
+    # signature so the cache surfaces as stale, then dispatch an async
+    # regen so the recruiter's PATCH / chip CRUD doesn't block on a
+    # ~3s Anthropic call. ``regenerate_role_tech_questions`` is
+    # idempotent against the signature so back-to-back chip edits
+    # collapse to one effective regen once they settle.
+    try:
+        role = db.query(Role).filter(Role.id == role_id).one_or_none()
+        if role is not None:
+            from .role_tech_questions_service import invalidate as _invalidate_tech_questions
+            _invalidate_tech_questions(role)
+            db.add(role)
+            try:
+                from ..tasks.automation_tasks import regenerate_role_tech_questions
+                regenerate_role_tech_questions.delay(int(role_id))
+            except Exception:
+                logger.exception("mark_role_scores_stale: failed to dispatch tech_questions regen role_id=%s", role_id)
+    except Exception:
+        logger.exception("mark_role_scores_stale: tech_questions invalidation failed role_id=%s", role_id)
+
     return marked
 
 

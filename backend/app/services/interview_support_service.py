@@ -10,7 +10,6 @@ from .role_criteria_service import render_role_intent_lines
 from .interview_tech_questions import (
     deterministic_tech_questions,
     format_evidence_anchor,
-    maybe_generate_tech_questions,
 )
 from .pre_screening_service import pre_screen_snapshot
 
@@ -386,15 +385,19 @@ def build_application_interview_support(
     tech_questions = list((templates.get("tech_stage_2") or {}).get("questions") or [])
     screening_summary = interview_summaries.get("screening") or {}
 
-    # LLM-driven tech-question generator runs first (CV evidence +
-    # transcript anchored). Falls back to the deterministic templates
-    # below when the call fails or returns nothing.
-    llm_tech_questions = maybe_generate_tech_questions(
-        application,
-        role,
-        details,
-        pre_screen.get("pre_screen_evidence") if isinstance(pre_screen, dict) else None,
+    # Read role-level cached tech screening questions. Regeneration happens
+    # at role-update sites (PATCH /roles when job_spec_text changes,
+    # criteria CRUD when chips change) — not here, because we don't want
+    # a candidate fetch to fire an LLM call. Was ~302 LLM calls/day on
+    # 2026-05-21 (one per candidate); now ~1-5/day total across all roles
+    # (one per role-edit). If the cache is missing, the fallback chain
+    # below handles it gracefully via the deterministic template.
+    cached_role_questions = (
+        role.tech_questions_cached
+        if role is not None and isinstance(role.tech_questions_cached, list)
+        else None
     )
+    llm_tech_questions = cached_role_questions
     use_llm = bool(llm_tech_questions)
     raw_pack = llm_tech_questions if use_llm else deterministic_tech_questions(
         missing_skills, screening_summary.get("summary"),

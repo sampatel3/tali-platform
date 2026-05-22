@@ -43,6 +43,16 @@ class Role(Base):
     interview_focus_generated_at = Column(DateTime(timezone=True), nullable=True)
     screening_pack_template = Column(JSON, nullable=True)
     tech_interview_pack_template = Column(JSON, nullable=True)
+    # Role-level cache of AI-generated tech screening questions. Generated
+    # once per role and reused across every candidate on that role — the
+    # previous per-candidate path was firing ~300 LLM calls/day with
+    # minimal benefit (most questions overlap across candidates on the
+    # same role). Invalidated on job_spec_text or criteria changes; the
+    # ``signature`` column lets the regenerator detect drift without
+    # walking the entire role state.
+    tech_questions_cached = Column(JSON, nullable=True)
+    tech_questions_cached_at = Column(DateTime(timezone=True), nullable=True)
+    tech_questions_signature = Column(String(length=64), nullable=True)
     # ``manual`` — recruiter sets the threshold by hand.
     # ``auto``   — agent computes a recommendation from the role's score
     # distribution + any advance/hire labels each time the threshold is

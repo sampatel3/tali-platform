@@ -23,6 +23,48 @@ logger = logging.getLogger(__name__)
 
 
 @celery_app.task(
+    name="app.tasks.automation_tasks.regenerate_role_tech_questions",
+    bind=True,
+    max_retries=0,
+)
+def regenerate_role_tech_questions(self, role_id: int) -> dict:
+    """Refresh the role-level cached tech screening questions.
+
+    Dispatched from ``mark_role_scores_stale`` after a job-spec or
+    criteria change. Async because the LLM call adds ~2-3s of latency
+    and we don't want to slow down the recruiter's PATCH /roles or the
+    chip-CRUD endpoints by that much.
+
+    Idempotent: ``get_or_regenerate`` checks the signature and skips the
+    LLM call if nothing changed since the previous run, so a burst of
+    chip edits collapses to one effective regen once they settle.
+    """
+    from ..models.role import Role
+    from ..platform.database import SessionLocal
+    from ..services.role_tech_questions_service import get_or_regenerate
+
+    db = SessionLocal()
+    try:
+        role = db.query(Role).filter(Role.id == role_id).first()
+        if role is None:
+            return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
+        result = get_or_regenerate(db, role)
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("regenerate_role_tech_questions commit failed role_id=%s", role_id)
+            return {"status": "error", "role_id": role_id}
+        return {
+            "status": "ok",
+            "role_id": role_id,
+            "questions_count": len(result) if isinstance(result, list) else 0,
+        }
+    finally:
+        db.close()
+
+
+@celery_app.task(
     name="app.tasks.automation_tasks.generate_role_interview_focus",
     bind=True,
     max_retries=0,
