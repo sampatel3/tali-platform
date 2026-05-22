@@ -384,29 +384,19 @@ def execute_pre_screen_only(
         _persist_pre_screen_error(app, reason=f"pre_screen_failed: {exc}"[:500])
         return {"status": "error", "reason": f"pre_screen_failed: {exc}"[:200]}
 
-    # When the LLM call itself returned ``decision == "error"`` (credit
-    # exhaustion, network timeout, JSON parse failure, etc.) we MUST NOT
-    # fall through to v3 cv_match scoring. Doing so used to mirror a
-    # high CV-fit score into ``pre_screen_score_100`` via the refresh
-    # helpers, hiding the error from the recruiter and making it look
-    # like pre-screen passed when it never ran.
-    if pre.decision == "error" or pre.score is None:
-        _persist_pre_screen_error(
-            app,
-            reason=(pre.reason or "pre_screen_unknown_error")[:500],
-            trace_id=pre.trace_id,
-            prompt_version=pre.prompt_version,
-        )
-        return {
-            "status": "error",
-            "reason": (pre.reason or "pre_screen_unknown_error")[:200],
-            "trace_id": pre.trace_id,
-            "prompt_version": pre.prompt_version,
-        }
-
-    # Record usage metering when a session is available. Telemetry must
-    # never break pre-screen, so swallow any failure.
-    if db is not None and getattr(app, "organization_id", None):
+    # Record usage metering BEFORE the error-path early-return below.
+    # Anthropic charges for tokens whether or not we managed to parse
+    # the response — a 200 OK whose body fails JSON.loads still consumed
+    # input + output tokens. Previously this block lived after the
+    # error guard, which meant every JSON-parse failure (7,668 of them
+    # on 2026-05-21 — the bulk of the Haiku reconciliation gap)
+    # vanished from the meter. Cache hits and exception paths return
+    # input_tokens=0 / output_tokens=0 so they're effectively no-ops.
+    if (
+        db is not None
+        and getattr(app, "organization_id", None)
+        and (pre.input_tokens or pre.output_tokens or pre.cache_read_tokens or pre.cache_creation_tokens)
+    ):
         try:
             _meter_record_event(
                 db,
@@ -426,6 +416,26 @@ def execute_pre_screen_only(
                 "usage_metering record_event failed for app=%s feature=prescreen",
                 app.id,
             )
+
+    # When the LLM call itself returned ``decision == "error"`` (credit
+    # exhaustion, network timeout, JSON parse failure, etc.) we MUST NOT
+    # fall through to v3 cv_match scoring. Doing so used to mirror a
+    # high CV-fit score into ``pre_screen_score_100`` via the refresh
+    # helpers, hiding the error from the recruiter and making it look
+    # like pre-screen passed when it never ran.
+    if pre.decision == "error" or pre.score is None:
+        _persist_pre_screen_error(
+            app,
+            reason=(pre.reason or "pre_screen_unknown_error")[:500],
+            trace_id=pre.trace_id,
+            prompt_version=pre.prompt_version,
+        )
+        return {
+            "status": "error",
+            "reason": (pre.reason or "pre_screen_unknown_error")[:200],
+            "trace_id": pre.trace_id,
+            "prompt_version": pre.prompt_version,
+        }
 
     # Deterministic fraud check — currently CV ↔ JD copy-paste only.
     # Always compute (so we can calibrate the threshold from real data

@@ -140,12 +140,18 @@ def _call_claude(client, *, messages: list[dict], ctx: _RunContext) -> str:
 
     usage = getattr(response, "usage", None)
     if usage is not None:
-        ctx.input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-        ctx.output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
-        ctx.cache_read_tokens = int(
+        # ACCUMULATE across retries — previously these were ``=`` which
+        # silently overwrote the first attempt's tokens whenever the
+        # validation loop fired a retry. Anthropic billed for both calls
+        # but cv_score_orchestrator only saw the last attempt's tokens
+        # → ~50% under-counting on every retried score, contributing to
+        # the 4× Haiku reconciliation gap observed on 2026-05-21.
+        ctx.input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
+        ctx.output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
+        ctx.cache_read_tokens += int(
             getattr(usage, "cache_read_input_tokens", 0) or 0
         )
-        ctx.cache_creation_tokens = int(
+        ctx.cache_creation_tokens += int(
             getattr(usage, "cache_creation_input_tokens", 0) or 0
         )
 

@@ -271,12 +271,22 @@ def run_cycle(
         )
 
         try:
+            # ``metering={"skip": True}`` so the MeteredAnthropicClient
+            # wrapper doesn't auto-record an event — the explicit
+            # ``record_event`` below carries richer context (role_id,
+            # entity_id, agent_run_id metadata) and is the canonical
+            # source. Without skip we get TWO UsageEvent rows per
+            # Anthropic call (one as Feature.OTHER from the wrapper
+            # fallback, one as Feature.AGENT_AUTONOMOUS here) — the
+            # platform metered Sonnet 4.5 at exactly 2× Anthropic billing
+            # for 2026-05-21 because of this exact bug.
             response = client.messages.create(
                 model=model,
                 max_tokens=MAX_TOKENS_PER_ROUND,
                 system=system,
                 tools=AGENT_TOOLS,
                 messages=messages,
+                metering={"skip": True, "metered_by": "agent_runtime.orchestrator.run_cycle"},
             )
         except Exception as exc:  # pragma: no cover — defensive
             logger.exception("agent_runtime: anthropic call failed role=%s", role.id)
