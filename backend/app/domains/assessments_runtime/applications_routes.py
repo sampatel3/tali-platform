@@ -93,6 +93,7 @@ from ...services.cv_score_orchestrator import (
 )
 from ...services.interview_support_service import refresh_application_interview_support
 from ...services.pre_screening_service import refresh_pre_screening_fields
+from ...services.taali_scoring import normalize_score_100
 from ...services.workable_actions_service import (
     disqualify_candidate_in_workable,
     move_candidate_in_workable,
@@ -351,16 +352,11 @@ def _apply_min_taali_score_filter(
 
 
 def _normalize_taali_score_for_filter(value: float | int | None) -> float | None:
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    if numeric < 0:
-        return None
-    # Legacy payloads can still surface 0-10 scale values.
-    if numeric <= 10:
-        numeric = numeric * 10.0
-    return round(max(0.0, min(100.0, numeric)), 1)
+    # Taali/Role-fit columns are 0-100 by definition. The old ``numeric
+    # <= 10 → ×10`` heuristic silently inflated real weak scores (e.g. 9.6
+    # → 96) so weak candidates passed ``min_taali_score`` filters they
+    # should have failed. Route through the shared normalizer instead.
+    return normalize_score_100(value)
 
 
 def _parse_csv_tokens(raw_value: str | None) -> list[str]:

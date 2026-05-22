@@ -448,6 +448,12 @@ class CVMatchOutput(BaseModel):
     requirements_match_score: float = Field(default=0.0, ge=0, le=100)
     cv_fit_score: float = Field(default=0.0, ge=0, le=100)
     role_fit_score: float = Field(default=0.0, ge=0, le=100)
+    # Belt-and-braces tag so downstream read-time normalizers can't
+    # mistake a legitimate weak 0-100 score (e.g. 9.6) for a 0-10
+    # value that needs to be multiplied. role_support's normalizer
+    # branches on this field and skips the ``<=10 → ×10`` heuristic
+    # when "100" is present.
+    score_scale: str = "0-100"
     # Recommendation is no longer auto-derived from a fixed score
     # threshold. The recruiter sets a per-role reject threshold on the
     # job page; the UI renders the recommendation dynamically by

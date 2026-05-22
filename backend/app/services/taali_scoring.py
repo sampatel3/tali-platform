@@ -41,10 +41,25 @@ TAALI_WEIGHTS = _WeightView(_taali_weights)
 
 
 def normalize_score_100(value: Any) -> float | None:
+    """Coerce a score into the 0-100 range.
+
+    Auto-scales values in the (0, 1.0] range up to the 0-100 scale —
+    these are clearly 0-1 fractions. Everything else is treated as
+    already on 0-100 and just clamped. The previous heuristic auto-scaled
+    anything ``<= 10`` which silently inflated *real* weak 0-100 scores
+    (e.g. a candidate's ``role_fit_score`` of 9.6 became 96, masking a
+    weak-fit candidate as a top one). Pre-screen, cv_match, taali, and
+    role-fit columns are all documented 0-100 by column name, so the
+    auto-scale isn't needed at all for those — just clamp.
+    """
     try:
         numeric = float(value)
     except (TypeError, ValueError):
         return None
+    if numeric < 0:
+        return None
+    if 0 < numeric <= 1.0:
+        numeric *= 100.0
     return round(max(0.0, min(100.0, numeric)), 1)
 
 

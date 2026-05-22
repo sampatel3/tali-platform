@@ -46,6 +46,7 @@ from ....services.fit_matching_service import (
 from ....services.spec_normalizer import normalize_spec
 from ....services.interview_support_service import build_role_interview_pack_templates
 from ....services.pre_screening_service import refresh_pre_screening_fields
+from ....services.taali_scoring import normalize_score_100
 from .service import WorkableRateLimitError, WorkableService
 
 logger = logging.getLogger(__name__)
@@ -499,22 +500,24 @@ def _rank_score_for_application(app: CandidateApplication) -> float | None:
 
 
 def _normalize_cv_match_score_100(score: float | int | None, details: dict | None = None) -> float | None:
+    """Coerce a freshly-computed CV-match score into 0-100 for persistence.
+
+    The v3 fit-matching path always emits 0-100. The legacy
+    ``numeric <= 10 → ×10`` fallback silently inflated real weak scores
+    (e.g. 9.6 → 96), so we route through the shared normalizer instead.
+    """
     if score is None:
         return None
-    try:
-        numeric = float(score)
-    except (TypeError, ValueError):
-        return None
-    if numeric < 0:
-        return None
     scale = str((details or {}).get("score_scale") or "").strip().lower()
-    if "100" in scale:
-        normalized = numeric
-    elif numeric <= 10.0:
-        normalized = numeric * 10.0
-    else:
-        normalized = numeric
-    return round(max(0.0, min(100.0, normalized)), 1)
+    if "10" in scale and "100" not in scale:
+        try:
+            numeric = float(score)
+        except (TypeError, ValueError):
+            return None
+        if numeric < 0:
+            return None
+        return round(max(0.0, min(100.0, numeric * 10.0)), 1)
+    return normalize_score_100(score)
 
 
 def _normalize_cv_match_details(details: dict | None, *, final_score_100: float | None) -> dict | None:
