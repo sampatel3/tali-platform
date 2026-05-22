@@ -484,3 +484,10 @@ class CVMatchOutput(BaseModel):
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
+    # Retry telemetry. Surfaced into ``UsageEvent.event_metadata`` by
+    # cv_score_orchestrator so the validation-failure rate is queryable
+    # from the same place as the cost (no separate telemetry pipeline).
+    # When validation_failures > 0, the runner made N+1 Anthropic calls
+    # for this score — that's compound spend, worth watching.
+    retry_count: int = 0
+    validation_failures: int = 0

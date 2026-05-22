@@ -407,6 +407,8 @@ def run_cv_match(
         output_tokens=ctx.output_tokens,
         cache_read_tokens=ctx.cache_read_tokens,
         cache_creation_tokens=ctx.cache_creation_tokens,
+        retry_count=ctx.retry_count,
+        validation_failures=ctx.validation_failures,
     )
 
     if not skip_cache:

@@ -586,6 +586,12 @@ def _execute_scoring_v3(
         metering_context=archetype_metering_context,
     )
     job.cache_hit = "hit" if getattr(output, "cache_hit", False) else "miss"
+    # Retry telemetry lands on the UsageEvent row so the rate is
+    # queryable from the same place as the cost. validation_failures > 0
+    # means cv_match v3 made N+1 Anthropic calls for this single score
+    # — compound spend, worth watching.
+    retry_count = int(getattr(output, "retry_count", 0) or 0)
+    validation_failures = int(getattr(output, "validation_failures", 0) or 0)
     _record_usage_safe(
         db,
         organization_id=getattr(application, "organization_id", None),
@@ -598,6 +604,10 @@ def _execute_scoring_v3(
         cache_creation_tokens=int(getattr(output, "cache_creation_tokens", 0) or 0),
         cache_hit=bool(getattr(output, "cache_hit", False)),
         entity_id=f"application:{application.id}",
+        metadata={
+            "retry_count": retry_count,
+            "validation_failures": validation_failures,
+        } if (retry_count or validation_failures) else None,
     )
 
     if output.scoring_status == ScoringStatus.FAILED:

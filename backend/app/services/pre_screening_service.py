@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -257,12 +257,17 @@ def _persist_pre_screen_error(
             "llm_score_100": None,
         }
     )
-    # Deliberately DO NOT stamp ``pre_screen_run_at`` on error.
-    # ``application_needs_pre_screen`` keys off that timestamp to decide
-    # whether to re-run Stage-1; stamping on error would treat a failed
-    # attempt as "successfully screened" and prevent the next orchestrator
-    # pass from retrying (e.g. once Anthropic credits are restored). We
-    # want transient errors to self-heal on the next tick.
+    # Stamp ``pre_screen_run_at`` even on error so the retry-backoff in
+    # ``application_needs_pre_screen`` knows when the last attempt was.
+    # Previously this was deliberately left NULL so transient errors
+    # would self-heal on the next tick — but that produced 7,668 burned
+    # Anthropic round-trips on 2026-05-21 (the cohort tick fires every
+    # 30 min and every failed app retried each tick). The backoff below
+    # gives the same self-heal property but bounded: errors retry after
+    # ``PRE_SCREEN_ERROR_BACKOFF`` (default 6h) instead of every 30 min.
+    # New-CV upload still beats the timestamp via the staleness check,
+    # so a re-uploaded CV always retries immediately.
+    app.pre_screen_run_at = _utcnow()
     # rank_score falls back to workable_score so the directory still
     # has *some* ordering signal — but never the stale agent score.
     app.rank_score = app.workable_score
@@ -513,18 +518,29 @@ def execute_pre_screen_only(
     }
 
 
+# How long to wait before retrying pre-screen after a failed attempt.
+# 6h is the sweet spot: short enough that transient Anthropic errors
+# (rate limits, 500s) self-heal within the same workday, long enough
+# that a hard error (credit exhaustion, persistently malformed CV) doesn't
+# burn 48 cohort ticks of API calls before someone notices.
+PRE_SCREEN_ERROR_BACKOFF = timedelta(hours=6)
+
+
 def application_needs_pre_screen(app: CandidateApplication) -> bool:
     """True if pre-screen should be (re-)run for this application.
 
     Logic:
     - No CV → not needed (and impossible).
-    - ``pre_screen_run_at`` is NULL → needed. The score-invalidation
-      helpers explicitly NULL this field on every invalidation path
-      (criteria change, CV upload, Workable digest change, pre-screen
-      error), so a NULL timestamp is the canonical "needs rescore"
-      signal — regardless of whether the score field itself is still
-      populated (it is, in the new "honest stale" UX).
-    - CV uploaded after the last pre-screen → needed (stale).
+    - ``pre_screen_run_at`` is NULL → needed (never attempted).
+    - CV uploaded after the last pre-screen → needed (stale). Always
+      beats the error backoff — a re-uploaded CV is the canonical signal
+      that the candidate wants another shot.
+    - **NEW**: most recent attempt ERRORED and was within
+      ``PRE_SCREEN_ERROR_BACKOFF`` → NOT needed. Previously errored
+      apps re-fired on every 30-min cohort tick, hitting Anthropic with
+      ~48 retries/day per failed candidate (7,668 burned round-trips on
+      2026-05-21 alone). Backoff lets transient errors self-heal on a
+      bounded cadence instead of immediately.
     - Otherwise → not needed.
     """
     if app is None:
@@ -537,6 +553,13 @@ def application_needs_pre_screen(app: CandidateApplication) -> bool:
     cv_uploaded = getattr(app, "cv_uploaded_at", None)
     if cv_uploaded is not None and cv_uploaded > last_run:
         return True
+    # Error backoff. Successful pre-screen on a current CV → already
+    # done, no retry. Errored pre-screen → retry only once the backoff
+    # window has elapsed (transient errors self-heal; persistent errors
+    # don't burn 48 ticks a day).
+    error_reason = getattr(app, "pre_screen_error_reason", None)
+    if error_reason:
+        return last_run <= _utcnow() - PRE_SCREEN_ERROR_BACKOFF
     return False
 
 
