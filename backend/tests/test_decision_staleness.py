@@ -232,6 +232,42 @@ def test_queue_decision_refuses_resolved_app(db):
 # C3: recently-discarded suppression
 # ---------------------------------------------------------------------------
 
+def test_list_agent_decisions_route_returns_pending_with_staleness(db):
+    """Regression: list_agent_decisions must execute end-to-end with a
+    pending decision in the queue. A function-local re-import of
+    CandidateApplication once shadowed the module-level name and raised
+    UnboundLocalError at runtime (prod queue went dark). This exercises
+    the exact path — the join + the staleness batch-load — so it can't
+    regress silently again.
+    """
+    from types import SimpleNamespace
+    from app.domains.agentic import routes as agentic_routes
+
+    org, role, _, app = _seed(db)
+    _queue(db, org, role, app)
+
+    current_user = SimpleNamespace(organization_id=int(org.id), id=1)
+    # Pass every param explicitly — calling the route fn directly bypasses
+    # FastAPI's Query(...) default resolution.
+    payloads = agentic_routes.list_agent_decisions(
+        role_id=int(role.id),
+        status="pending",
+        decision_type=None,
+        q=None,
+        since=None,
+        limit=50,
+        db=db,
+        current_user=current_user,
+    )
+    assert len(payloads) == 1
+    p = payloads[0]
+    assert p.status == "pending"
+    # Trust-signal fields the Hub renders are populated.
+    assert p.confidence_band in {"high", "medium", "low", None}
+    assert p.age_seconds >= 0
+    assert p.is_stale is False  # fresh decision
+
+
 def test_recently_discarded_decision_suppresses_reemit(db):
     org, role, _, app = _seed(db)
     decision = _queue(db, org, role, app)
