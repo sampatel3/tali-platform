@@ -67,9 +67,10 @@ from typing import Any, Iterator, Optional
 
 from anthropic import Anthropic
 
+from ..models.claude_call_log import ClaudeCallLog
 from ..models.usage_event import UsageEvent
 from ..platform.database import SessionLocal
-from .pricing_service import Feature
+from .pricing_service import Feature, raw_cost_usd_micro
 from .usage_metering_service import record_event
 
 logger = logging.getLogger("taali.metered_anthropic")
@@ -118,16 +119,51 @@ class _MeteredMessages:
 
     def create(self, **kwargs: Any) -> Any:
         metering = self._extract_metering(kwargs)
-        response = self._inner.create(**kwargs)
-
-        if metering is _SKIP:
-            return response
+        model = str(kwargs.get("model") or "")
+        feature_hint = self._feature_hint_from(metering)
+        try:
+            response = self._inner.create(**kwargs)
+        except Exception as exc:
+            # Anthropic call failed (network, 4xx, 5xx). Tokens are zero
+            # so no $ charge — but we still log the attempt so the user
+            # can see the failure rate. NEVER suppress the exception.
+            self._record_call_log_safe(
+                organization_id=self._call_org_id(metering),
+                model=model,
+                usage=None,
+                feature_hint=feature_hint,
+                status="sdk_error",
+                error_reason=str(exc)[:500],
+                anthropic_request_id=None,
+            )
+            raise
 
         usage = getattr(response, "usage", None)
-        self._record_from_usage(
+        request_id = self._extract_request_id(response)
+        usage_event: Optional[UsageEvent] = None
+
+        if metering is not _SKIP:
+            usage_event = self._record_from_usage(
+                usage=usage,
+                model=model,
+                metering=metering,
+            )
+
+        # Unconditional call_log write — the structural guarantee that
+        # every Claude call lands a row, even when the application-layer
+        # metering opted out (skip=True) or fell through to its own
+        # ``record_event`` path. ``usage_event_id`` is NULL when no
+        # UsageEvent was attached; that's the "metering attribution gap"
+        # signal we now surface.
+        self._record_call_log_safe(
+            organization_id=self._call_org_id(metering),
+            model=model,
             usage=usage,
-            model=str(kwargs.get("model") or ""),
-            metering=metering,
+            feature_hint=feature_hint,
+            status="ok" if usage is not None else "no_usage_on_response",
+            error_reason=None,
+            anthropic_request_id=request_id,
+            usage_event_id=int(usage_event.id) if usage_event is not None else None,
         )
         return response
 
@@ -197,18 +233,131 @@ class _MeteredMessages:
 
         return meter
 
+    # ----- claude_call_log helpers (P0 — source-of-truth log) ------------
+
+    def _feature_hint_from(self, metering) -> Optional[str]:
+        """Get the caller's intended feature label for the call_log row.
+
+        ``metering`` may be:
+        - a dict with ``feature`` key → record the string value
+        - ``_SKIP`` sentinel → record the ``metered_by`` hint if present
+        - None / no feature → NULL (surfaces as an attribution-gap signal)
+        """
+        if metering is _SKIP:
+            # _SKIP comes from ``{"skip": True, "metered_by": "..."}`` — we
+            # lost the ``metered_by`` hint when we collapsed to the sentinel.
+            # Best effort: record "skip" so analytics can group these.
+            return "skip"
+        if isinstance(metering, dict):
+            f = metering.get("feature")
+            if isinstance(f, Feature):
+                return f.value
+            if f is not None:
+                return str(f)
+        return None
+
+    def _call_org_id(self, metering) -> Optional[int]:
+        """Effective organization_id for this call. ``metering.organization_id``
+        overrides the client-bound org (for admin/shared flows that thread
+        the customer's org context per-call)."""
+        if isinstance(metering, dict):
+            override = metering.get("organization_id")
+            if override is not None:
+                return int(override)
+        return self._organization_id
+
+    @staticmethod
+    def _extract_request_id(response: Any) -> Optional[str]:
+        """Pull Anthropic's request_id from the response for cross-ref with
+        the Console Logs page during incident response. Best effort — the
+        SDK has put it in different places across versions."""
+        for path in ("id", "_request_id"):
+            val = getattr(response, path, None)
+            if val:
+                return str(val)
+        return None
+
+    def _record_call_log_safe(
+        self,
+        *,
+        organization_id: Optional[int],
+        model: str,
+        usage: Any,
+        feature_hint: Optional[str],
+        status: str,
+        error_reason: Optional[str],
+        anthropic_request_id: Optional[str],
+        usage_event_id: Optional[int] = None,
+    ) -> None:
+        """Write one ``ClaudeCallLog`` row. Never raises — call_log failures
+        must not break Claude calls. Logs at WARNING so ops sees them.
+
+        Unconditional by design. This is the structural guarantee that
+        every call lands a row, regardless of whether the application
+        layer's metering succeeded.
+        """
+        input_tokens = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
+        output_tokens = int(getattr(usage, "output_tokens", 0) or 0) if usage else 0
+        cache_read_tokens = (
+            int(getattr(usage, "cache_read_input_tokens", 0) or 0) if usage else 0
+        )
+        cache_creation_tokens = (
+            int(getattr(usage, "cache_creation_input_tokens", 0) or 0) if usage else 0
+        )
+        try:
+            cost_micro = raw_cost_usd_micro(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_read_tokens=cache_read_tokens,
+                cache_creation_tokens=cache_creation_tokens,
+            )
+        except Exception:
+            cost_micro = 0
+
+        row = ClaudeCallLog(
+            organization_id=organization_id,
+            model=model or "(unknown)",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_creation_tokens=cache_creation_tokens,
+            cost_usd_micro=int(cost_micro),
+            feature_hint=feature_hint,
+            status=status,
+            error_reason=error_reason,
+            anthropic_request_id=anthropic_request_id,
+            usage_event_id=usage_event_id,
+        )
+        try:
+            with SessionLocal() as session:
+                session.add(row)
+                session.commit()
+        except Exception:
+            logger.exception(
+                "metered_anthropic: claude_call_log write failed (model=%s, "
+                "status=%s) — Claude call already succeeded so we don't raise, "
+                "but reconciliation against Anthropic billing will undercount.",
+                model,
+                status,
+            )
+
+    # ----- usage_event recording (existing path) --------------------------
+
     def _record_from_usage(
         self,
         *,
         usage: Any,
         model: str,
         metering: dict[str, Any],
-    ) -> None:
+    ) -> Optional[UsageEvent]:
         """Pull token counts off ``response.usage`` and write a usage_event.
 
         Never raises — metering errors are logged but never propagate to
         the caller. A scoring run that succeeded but failed to write its
         meter event is still useful; raising here would be worse.
+
+        Returns the written event (so the call_log can FK to it) or None
+        when the org context was missing.
         """
         if self._organization_id is None and metering.get("organization_id") is None:
             logger.warning(
@@ -216,7 +365,7 @@ class _MeteredMessages:
                 "(client built without org context). Pass metering={'organization_id': ...} "
                 "for admin/shared-key flows that should still be billed."
             )
-            return
+            return None
 
         input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
         output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
@@ -232,7 +381,7 @@ class _MeteredMessages:
             else self._organization_id
         )
 
-        self._write_event(
+        return self._write_event(
             organization_id=org_id,
             feature=metering["feature"],
             model=model,
@@ -303,6 +452,11 @@ class _MeteredMessages:
                     metadata=metadata,
                 )
                 fresh.commit()
+                # Pull the id while the session is still open; the
+                # returned ORM object will be detached after the
+                # ``with`` block exits, but the int id stays valid for
+                # the call_log FK.
+                fresh.refresh(event)
                 return event
         except Exception:
             # Defensive: a metering write must never propagate to the
