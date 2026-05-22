@@ -17,6 +17,9 @@ import { prefetchDocumentBlob } from '../../shared/api/documentCache';
 import { useToast } from '../../context/ToastContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
+import { BreadcrumbsRow } from '../../shared/ui/Breadcrumbs';
+import { CopyLinkButton } from '../../shared/ui/CopyLinkButton';
+import { RoleViewTabs, useRoleView } from './RoleViewTabs';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 import RecruiterAnswersLog from './RecruiterAnswersLog';
@@ -1138,7 +1141,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [refreshTick, setRefreshTick] = useState(0);
   const [interviewFocusGenerating, setInterviewFocusGenerating] = useState(false);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
-  const [activeView, setActiveView] = useState('table');
+  const [activeView, setActiveView] = useRoleView();
   // HANDOFF v2 §4 / canvas jobs-detail-candidates — primary stage filter
   // for the Candidates tab. The segmented row above the table toggles
   // this; the embedded directory re-mounts via key so its internal
@@ -1946,6 +1949,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
+      <BreadcrumbsRow
+        items={[{ label: 'Jobs', page: 'jobs' }, { label: role?.name || 'Role' }]}
+        actions={<CopyLinkButton label="Copy link to role" successMessage="Role link copied." />}
+      />
       <AgentHeader
         kicker={`${role?.name || 'Role'} · #${role?.id || '—'}`}
         title={role?.name || 'Role'}
@@ -2013,14 +2020,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       />
       <div className="page">
         <div className="mc-cockpit-main">
-        <div className="sub-tabs sub-tabs-sticky">
-          <div className="seg">
-            <button type="button" className={activeView === 'table' ? 'active' : ''} onClick={() => setActiveView('table')}>Candidates</button>
-            <button type="button" className={activeView === 'pipeline' ? 'active' : ''} onClick={() => setActiveView('pipeline')}>Pipeline</button>
-            <button type="button" className={activeView === 'activity' ? 'active' : ''} onClick={() => setActiveView('activity')}>Job spec</button>
-            <button type="button" className={activeView === 'role-fit' ? 'active' : ''} onClick={() => setActiveView('role-fit')}>Agent settings</button>
-          </div>
-        </div>
+        <RoleViewTabs activeView={activeView} />
 
         {activeView === 'pipeline' ? (
           <div className="pipeline-layout">

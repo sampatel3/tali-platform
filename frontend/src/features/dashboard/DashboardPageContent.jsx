@@ -7,6 +7,8 @@ import { getDocumentTitle } from '../../config/brand';
 import { formatScale100Score } from '../../lib/scoreDisplay';
 import * as apiClient from '../../shared/api';
 import { Button, PageContainer, PageHeader, Panel, Select, Spinner, TableShell } from '../../shared/ui/TaaliPrimitives';
+import { PageLink } from '../../shared/ui/PageLink';
+import { useUrlState } from '../../shared/hooks/useUrlState';
 
 const PAGE_SIZE = 10;
 const ONBOARDING_DISMISSED_KEY = 'taali_onboarding_dismissed';
@@ -82,12 +84,17 @@ export const DashboardPage = ({
   const [loading, setLoading] = useState(true);
   const [loadingViewId, setLoadingViewId] = useState(null);
   const [loadingResendId, setLoadingResendId] = useState(null);
-  const [statusFilter, setStatusFilter] = useState('');
-  const [taskFilter, setTaskFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useUrlState('status', '');
+  const [taskFilter, setTaskFilter] = useUrlState('task', '');
   const [tasksForFilter, setTasksForFilter] = useState([]);
   const [rolesForFilter, setRolesForFilter] = useState([]);
-  const [roleFilter, setRoleFilter] = useState('');
-  const [page, setPage] = useState(0);
+  const [roleFilter, setRoleFilter] = useUrlState('role', '');
+  const [pageParam, setPageParam] = useUrlState('p', '');
+  const page = Math.max(0, parseInt(pageParam, 10) || 0);
+  const setPage = (next) => {
+    const nextValue = typeof next === 'function' ? next(page) : next;
+    setPageParam(nextValue > 0 ? String(nextValue) : '');
+  };
   const [rolesCount, setRolesCount] = useState(0);
   const [candidatesCount, setCandidatesCount] = useState(0);
   const [onboardingDismissed, setOnboardingDismissed] = useState(
@@ -295,7 +302,7 @@ export const DashboardPage = ({
               </li>
             </ol>
             <div className="mt-3">
-              <Button variant="secondary" size="sm" onClick={() => onNavigate('candidates')}>Go to Candidates</Button>
+              <Button as={PageLink} page="candidates" variant="secondary" size="sm">Go to Candidates</Button>
             </div>
           </div>
         ) : null}
@@ -311,40 +318,28 @@ export const DashboardPage = ({
               label="Invited"
               value={String(invitedCount)}
               change="Assessment links sent"
-              onClick={() => {
-                setStatusFilter('pending');
-                setPage(0);
-              }}
+              to="/assessments?status=pending"
             />
             <StatsCardComponent
               icon={Timer}
               label="In Progress"
               value={String(inProgressCount)}
               change="Candidates currently working"
-              onClick={() => {
-                setStatusFilter('in_progress');
-                setPage(0);
-              }}
+              to="/assessments?status=in_progress"
             />
             <StatsCardComponent
               icon={CheckCircle}
               label="Completed Awaiting Review"
               value={String(completedCount)}
               change="Open results and review"
-              onClick={() => {
-                setStatusFilter('completed');
-                setPage(0);
-              }}
+              to="/assessments?status=completed"
             />
             <StatsCardComponent
               icon={TriangleAlert}
               label="Expiring Soon"
               value={String(expiringSoonCount)}
               change="Pending invites expiring in 3 days"
-              onClick={() => {
-                setStatusFilter('pending');
-                setPage(0);
-              }}
+              to="/assessments?status=pending"
             />
           </div>
         )}

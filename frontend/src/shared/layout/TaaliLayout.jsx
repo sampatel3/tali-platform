@@ -10,6 +10,7 @@ import {
 } from '../../lib/themePreference';
 import { navigateToMarketingSection } from '../../lib/marketingScroll';
 import { TaaliTile } from '../ui/Branding';
+import { PageLink } from '../ui/PageLink';
 import { formatHeaderOrgLabel, normalizeHeaderOrgName } from './headerIdentity';
 
 // The standalone Candidates directory was deprecated 2026-05-09 — the
@@ -60,20 +61,34 @@ const resolveOrgName = (user) => String(
 // `stroke="white"` — kept here historically so existing `.logo-mark` CSS
 // could supply the purple backdrop. Now we let `TaaliTile` render the
 // backdrop too so there's exactly one source of truth.
-export const TaaliLogo = ({ onClick, wordmarkClassName = '' }) => (
-  <button type="button" className="logo" onClick={onClick} aria-label="Taali home">
-    <TaaliTile
-      className="h-7 w-7 rounded-[7px]"
-      fillClassName="text-[var(--purple)]"
-      lineClassName="text-white"
-      strokeWidth={2.4}
-      cornerRadius={5.4}
-    />
-    <span className={`logo-word ${wordmarkClassName}`.trim()}>
-      taali<em>.</em>
-    </span>
-  </button>
-);
+export const TaaliLogo = ({ onClick, page, wordmarkClassName = '' }) => {
+  const inner = (
+    <>
+      <TaaliTile
+        className="h-7 w-7 rounded-[7px]"
+        fillClassName="text-[var(--purple)]"
+        lineClassName="text-white"
+        strokeWidth={2.4}
+        cornerRadius={5.4}
+      />
+      <span className={`logo-word ${wordmarkClassName}`.trim()}>
+        taali<em>.</em>
+      </span>
+    </>
+  );
+  if (page) {
+    return (
+      <PageLink page={page} className="logo" onClick={onClick} aria-label="Taali home">
+        {inner}
+      </PageLink>
+    );
+  }
+  return (
+    <button type="button" className="logo" onClick={onClick} aria-label="Taali home">
+      {inner}
+    </button>
+  );
+};
 
 export const ThemeToggleButton = ({ title = 'Toggle theme' }) => {
   const [darkMode, setDarkMode] = useState(() => readDarkModePreference());
@@ -195,7 +210,7 @@ export const MarketingNav = ({ onNavigate }) => {
   return (
     <div className="app-nav">
       <div className="app-nav-inner">
-        <TaaliLogo onClick={() => { closeMenu(); onNavigate('landing'); }} />
+        <TaaliLogo page="landing" onClick={closeMenu} />
         <div className="row !hidden md:!flex" style={{ gap: 22 }}>
           {MARKETING_TABS.map((tab) => (
             <button
@@ -209,12 +224,12 @@ export const MarketingNav = ({ onNavigate }) => {
           ))}
         </div>
         <div className="row" style={{ gap: 10 }}>
-          <button type="button" className="btn btn-ghost btn-sm !hidden sm:!inline-flex" onClick={() => onNavigate('login')}>
+          <PageLink page="login" className="btn btn-ghost btn-sm !hidden sm:!inline-flex">
             Sign in
-          </button>
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => { closeMenu(); onNavigate('demo-lead'); }}>
+          </PageLink>
+          <PageLink page="demo-lead" className="btn btn-primary btn-sm" onClick={closeMenu}>
             Book a demo <span className="arrow">→</span>
-          </button>
+          </PageLink>
           <div className="!hidden md:!block">
             <ThemeToggleButton />
           </div>
@@ -252,13 +267,13 @@ export const MarketingNav = ({ onNavigate }) => {
             ))}
           </div>
           <div className="mt-3 flex items-center gap-3 border-t border-[var(--line)] pt-4">
-            <button
-              type="button"
+            <PageLink
+              page="login"
               className="btn btn-outline btn-sm flex-1 justify-center"
-              onClick={() => { closeMenu(); onNavigate('login'); }}
+              onClick={closeMenu}
             >
               Sign in
-            </button>
+            </PageLink>
             <ThemeToggleButton />
           </div>
         </div>

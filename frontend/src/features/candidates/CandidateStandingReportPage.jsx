@@ -16,6 +16,8 @@ import {
   WorkableComparisonCard,
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
+import { Breadcrumbs } from '../../shared/ui/Breadcrumbs';
+import { CopyLinkButton } from '../../shared/ui/CopyLinkButton';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
 import { RadarChart } from '../../shared/ui/RadarChart';
@@ -1266,9 +1268,30 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       : null,
   ].filter(Boolean);
 
+  const breadcrumbItems = !isInterviewView
+    ? (backTargetRoleId != null
+        ? [
+            { label: 'Jobs', page: 'jobs' },
+            { label: targetRoleName, page: 'job-pipeline', options: { roleId: backTargetRoleId } },
+            { label: candidateLabel },
+          ]
+        : [
+            { label: 'Home', page: 'home' },
+            { label: candidateLabel },
+          ])
+    : null;
+
   return (
     <div>
       {NavComponent && !isInterviewView ? <NavComponent currentPage="candidates" onNavigate={onNavigate} /> : null}
+      {breadcrumbItems ? (
+        <div className="page" style={{ paddingTop: 8, paddingBottom: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <Breadcrumbs items={breadcrumbItems} className="mb-0" />
+            <CopyLinkButton label="Copy link to report" successMessage="Candidate report link copied." />
+          </div>
+        </div>
+      ) : null}
       {!isInterviewView ? (
         <AgentHeader
           kicker="Candidate standing report"

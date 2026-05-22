@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, Mail } from 'lucide-react';
 import * as apiClient from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
+import { Breadcrumbs } from '../../shared/ui/Breadcrumbs';
+import { CopyLinkButton } from '../../shared/ui/CopyLinkButton';
 import { getMetricMeta, buildGlossaryFromMetadata } from '../../lib/scoringGlossary';
 import { normalizeScores } from '../../scoring/scoringDimensions';
 import { ComparisonRadar } from '../../shared/ui/ComparisonRadar';
@@ -1088,10 +1090,28 @@ export const AssessmentResultsPage = ({
     </div>
   );
 
+  const candidateBreadcrumbName = candidate?.name || 'Candidate';
+  const breadcrumbItems = (() => {
+    const backPage = backTo?.page || 'assessments';
+    const parentLabel = backPage === 'jobs'
+      ? 'Jobs'
+      : backPage === 'candidates'
+        ? 'Candidates'
+        : 'Assessments';
+    return [
+      { label: parentLabel, page: backPage },
+      { label: candidateBreadcrumbName },
+    ];
+  })();
+
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="candidates" onNavigate={onNavigate} /> : null}
       <div className="page">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <Breadcrumbs items={breadcrumbItems} className="mb-0" />
+          <CopyLinkButton label="Copy link to assessment" successMessage="Assessment link copied." />
+        </div>
         <button
           type="button"
           className="candidate-detail-back"

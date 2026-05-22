@@ -1,6 +1,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 
 import { TaaliTile } from '../../shared/ui/Branding';
+import { PageLink } from '../../shared/ui/PageLink';
 
 // DemoShowcasePage — v4 redesign (HANDOFF chat.md §1).
 // Sells AI-first via 5 tabs that each embed a REAL product page in an
@@ -158,10 +159,9 @@ export const DemoShowcasePage = ({ onNavigate }) => {
     <div className="mc-show">
       {/* TOP BAR */}
       <div className="mc-show-topbar">
-        <button
-          type="button"
+        <PageLink
+          page="landing"
           className="mc-show-logo"
-          onClick={() => onNavigate?.('landing')}
           aria-label="Taali home"
         >
           <TaaliTile
@@ -172,12 +172,12 @@ export const DemoShowcasePage = ({ onNavigate }) => {
             cornerRadius={6.5}
           />
           <span>taali<em>.</em></span>
-        </button>
+        </PageLink>
         <span className="mc-show-topbar-meta">· LIVE WALKTHROUGH · ACME / SR. BACKEND</span>
         <span className="mc-show-spacer" />
         <span className="mc-show-chip green">Demo data · resets daily</span>
-        <button type="button" className="mc-show-btn" onClick={() => onNavigate?.('landing')}>Skip the tour</button>
-        <button type="button" className="mc-show-btn primary" onClick={() => onNavigate?.('demo-lead')}>Start with free credits →</button>
+        <PageLink page="landing" className="mc-show-btn">Skip the tour</PageLink>
+        <PageLink page="demo-lead" className="mc-show-btn primary">Start with free credits →</PageLink>
       </div>
 
       {/* HERO */}
@@ -281,9 +281,9 @@ export const DemoShowcasePage = ({ onNavigate }) => {
               Next: {next.label} <span>→</span>
             </button>
           ) : (
-            <button type="button" className="mc-show-btn primary" onClick={() => onNavigate?.('demo-lead')}>
+            <PageLink page="demo-lead" className="mc-show-btn primary">
               Book a demo <span>→</span>
-            </button>
+            </PageLink>
           )}
         </div>
 
@@ -298,9 +298,9 @@ export const DemoShowcasePage = ({ onNavigate }) => {
             </p>
           </div>
           <div className="mc-show-cta-side">
-            <button type="button" className="mc-show-btn primary tall" onClick={() => onNavigate?.('demo-lead')}>
+            <PageLink page="demo-lead" className="mc-show-btn primary tall">
               Start with free credits →
-            </button>
+            </PageLink>
             <div className="mc-show-cta-foot">SOC 2 · GDPR · NEVER USED FOR TRAINING</div>
           </div>
         </div>

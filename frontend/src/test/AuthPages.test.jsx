@@ -162,8 +162,8 @@ describe('Auth page redesign', () => {
       expect(auth.verifyEmail).toHaveBeenCalledWith('verify-token');
       expect(screen.getByRole('heading', { name: /Welcome to Taali/i })).toBeInTheDocument();
       expect(screen.getByText('Email verified.')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Create your first role/i })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Connect Workable/i })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Create your first role/i })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Connect Workable/i })).toBeInTheDocument();
     });
   });
 });

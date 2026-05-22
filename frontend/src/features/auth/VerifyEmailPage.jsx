@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle } from 'lucide-react';
 
 import { auth } from '../../shared/api';
+import { PageLink } from '../../shared/ui/PageLink';
 import { AuthShell } from './AuthShell';
 
 export const VerifyEmailPage = ({ onNavigate, token }) => {
@@ -67,15 +68,15 @@ export const VerifyEmailPage = ({ onNavigate, token }) => {
             </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 18 }}>
-            <button type="button" className="mc-auth-cta" onClick={() => onNavigate('jobs')}>
+            <PageLink page="jobs" className="mc-auth-cta">
               Create your first role →
-            </button>
-            <button type="button" className="mc-auth-cta mc-auth-cta-outline" onClick={() => onNavigate('settings-workable')}>
+            </PageLink>
+            <PageLink page="settings-workable" className="mc-auth-cta mc-auth-cta-outline">
               Connect Workable →
-            </button>
-            <button type="button" className="mc-auth-cta mc-auth-cta-outline" onClick={() => onNavigate('showcase')}>
+            </PageLink>
+            <PageLink page="showcase" className="mc-auth-cta mc-auth-cta-outline">
               Take the 2-min tour →
-            </button>
+            </PageLink>
           </div>
         </>
       ) : status === 'error' ? (
@@ -89,9 +90,9 @@ export const VerifyEmailPage = ({ onNavigate, token }) => {
               </div>
             </div>
           </div>
-          <button type="button" className="mc-auth-cta" onClick={() => onNavigate('login')}>
+          <PageLink page="login" className="mc-auth-cta">
             Go to sign in →
-          </button>
+          </PageLink>
         </>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
