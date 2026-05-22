@@ -239,7 +239,13 @@ def _decision_to_payload(
     confidence_value = _confidence_to_float(decision.confidence)
     age_seconds = 0
     if decision.created_at is not None:
-        delta = datetime.now(timezone.utc) - decision.created_at
+        created = decision.created_at
+        # Defensive: prod Postgres returns tz-aware datetimes, but guard
+        # against a naive value so a single odd row can't 500 the whole
+        # decisions list (this is the recruiter's primary queue).
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - created
         age_seconds = max(0, int(delta.total_seconds()))
     cost_micro = 0
     token_spend = decision.token_spend or {}
@@ -364,7 +370,10 @@ def list_agent_decisions(
     # caching internally and reuses already-loaded entities when
     # callers pass them in.
     from ...services import decision_staleness
-    from ...models.candidate_application import CandidateApplication
+    # NOTE: CandidateApplication is already imported at module scope. Do
+    # NOT re-import it here — a function-local import makes Python treat
+    # the name as a local for the WHOLE function, so the earlier query
+    # reference (the join above) raises UnboundLocalError at runtime.
 
     # Batch-load applications for the rows we're returning so we don't
     # round-trip per decision in the staleness service.
