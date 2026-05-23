@@ -23,11 +23,10 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from dataclasses import dataclass
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from typing import Any, Iterator
 
-from anthropic import Anthropic
 from sqlalchemy.orm import Session
 
 from ..models.organization import Organization
@@ -43,8 +42,9 @@ from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
 from ..services.usage_metering_service import record_event
 from . import streaming
+from .stream_round import _RunningUsage, _stream_one_round
 from .system_prompt import build_system_blocks
-from .tool_registry import TAALI_CHAT_TOOLS, dispatch_tool
+from .tool_registry import dispatch_tool
 
 logger = logging.getLogger("taali.taali_chat")
 
@@ -53,10 +53,6 @@ logger = logging.getLogger("taali.taali_chat")
 # anything past this is almost certainly a runaway loop. 8 rounds is enough
 # headroom for "search → compare → drill into one CV" multi-step flows.
 MAX_TOOL_ROUNDS = 8
-
-# Cap on tokens per turn — protects against runaway responses; 4k is large
-# enough for a comparison table + commentary.
-MAX_TOKENS_PER_TURN = 4096
 
 # Tools whose results must stay scoped to the conversation's role. The
 # system prompt tells the model it may omit role_id for these in a
@@ -80,14 +76,6 @@ class ChatTurnInput:
     # TaaliChatConversation row) — passing a different role_id on a
     # follow-up turn is ignored.
     role_id: int | None = None
-
-
-@dataclass
-class _RunningUsage:
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_read_tokens: int = 0
-    cache_creation_tokens: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -381,131 +369,6 @@ def run_chat_turn(
     }
     yield streaming.finish_step(stop_reason=final_stop_reason, usage=aisdk_usage)
     yield streaming.finish_message(stop_reason=final_stop_reason, usage=aisdk_usage)
-
-
-# ---------------------------------------------------------------------------
-# One Anthropic streaming round
-# ---------------------------------------------------------------------------
-
-
-def _stream_one_round(
-    *,
-    client: Anthropic,
-    model: str,
-    messages: list[dict[str, Any]],
-    system: list[dict[str, Any]],
-) -> Iterator[streaming.Frame]:
-    """Stream one Anthropic call. Yields frames; returns (blocks, stop, usage)."""
-    with client.messages.stream(
-        model=model,
-        max_tokens=MAX_TOKENS_PER_TURN,
-        system=system,
-        tools=TAALI_CHAT_TOOLS,
-        messages=messages,
-    ) as stream:
-        # Per-block accumulator for tool_use input JSON (Anthropic streams
-        # arguments as ``input_json`` partial deltas; we have to glue them
-        # back into a dict for the AI-SDK ``b`` frame).
-        tool_args_buffer: dict[str, str] = {}
-        tool_names: dict[str, str] = {}
-
-        for event in stream:
-            etype = getattr(event, "type", None)
-
-            if etype == "content_block_start":
-                block = getattr(event, "content_block", None)
-                if block is None:
-                    continue
-                if getattr(block, "type", None) == "tool_use":
-                    tool_id = block.id
-                    tool_args_buffer[tool_id] = ""
-                    tool_names[tool_id] = block.name
-                    yield streaming.tool_call_streaming_start(
-                        tool_call_id=tool_id, tool_name=block.name
-                    )
-
-            elif etype == "content_block_delta":
-                delta = getattr(event, "delta", None)
-                if delta is None:
-                    continue
-                dtype = getattr(delta, "type", None)
-                if dtype == "text_delta":
-                    yield streaming.text_delta(delta.text)
-                elif dtype == "input_json_delta":
-                    block_index = getattr(event, "index", None)
-                    # Match the running tool_use block by index → id.
-                    tool_id = _tool_id_at_index(stream, block_index)
-                    if tool_id is None:
-                        continue
-                    partial = delta.partial_json or ""
-                    tool_args_buffer[tool_id] = tool_args_buffer.get(tool_id, "") + partial
-                    yield streaming.tool_call_delta(
-                        tool_call_id=tool_id, args_text_delta=partial
-                    )
-
-            elif etype == "content_block_stop":
-                block_index = getattr(event, "index", None)
-                tool_id = _tool_id_at_index(stream, block_index)
-                if tool_id is not None and tool_id in tool_args_buffer:
-                    raw = tool_args_buffer.get(tool_id, "")
-                    try:
-                        args = json.loads(raw) if raw else {}
-                    except json.JSONDecodeError:
-                        args = {}
-                    name = tool_names.get(tool_id, "")
-                    yield streaming.tool_call(
-                        tool_call_id=tool_id, tool_name=name, args=args
-                    )
-
-        # Final message snapshot.
-        final = stream.get_final_message()
-
-    blocks = [_block_to_dict(b) for b in final.content]
-    usage = _RunningUsage(
-        input_tokens=int(getattr(final.usage, "input_tokens", 0) or 0),
-        output_tokens=int(getattr(final.usage, "output_tokens", 0) or 0),
-        cache_read_tokens=int(getattr(final.usage, "cache_read_input_tokens", 0) or 0),
-        cache_creation_tokens=int(
-            getattr(final.usage, "cache_creation_input_tokens", 0) or 0
-        ),
-    )
-    return blocks, final.stop_reason, usage
-
-
-def _tool_id_at_index(stream, index: int | None) -> str | None:
-    """Look up the running tool_use block id by its position in the stream."""
-    if index is None:
-        return None
-    try:
-        message = stream.current_message_snapshot
-    except Exception:  # pragma: no cover — older SDKs
-        return None
-    blocks = getattr(message, "content", []) or []
-    if 0 <= index < len(blocks):
-        block = blocks[index]
-        if getattr(block, "type", None) == "tool_use":
-            return getattr(block, "id", None)
-    return None
-
-
-def _block_to_dict(block: Any) -> dict[str, Any]:
-    """Anthropic SDK content blocks → plain JSON-safe dicts for persistence."""
-    btype = getattr(block, "type", None)
-    if btype == "text":
-        return {"type": "text", "text": block.text}
-    if btype == "tool_use":
-        return {
-            "type": "tool_use",
-            "id": block.id,
-            "name": block.name,
-            "input": block.input or {},
-        }
-    if btype == "thinking":
-        return {"type": "thinking", "thinking": getattr(block, "thinking", "")}
-    # Fallback: model_dump if pydantic, else str()
-    if hasattr(block, "model_dump"):
-        return block.model_dump()
-    return {"type": btype or "unknown", "raw": str(block)}
 
 
 __all__ = ["ChatTurnInput", "run_chat_turn"]
