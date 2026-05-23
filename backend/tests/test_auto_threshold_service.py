@@ -135,49 +135,51 @@ def test_send_threshold_fallback_no_scored(db):
     org, role = _make_world(db)
     rec = compute_role_fit_send_threshold(db, role=role)
     assert rec.source == "fallback"
-    assert rec.value == 60
+    assert rec.value == 55
 
 
-def test_send_threshold_caps_volume_to_5_10pct(db):
+def test_send_threshold_targets_about_top_fifth(db):
     org, role = _make_world(db)
-    # Realistic shape: 90 weak (30), 10 strong (70). No interview labels.
-    for _ in range(90):
+    # Graded pool so ~20% is achievable: 60 low, 20 mid, 20 high.
+    for _ in range(60):
         _add_scored(db, org=org, role=role, cv=30.0)
-    for _ in range(10):
+    for _ in range(20):
+        _add_scored(db, org=org, role=role, cv=50.0)
+    for _ in range(20):
         _add_scored(db, org=org, role=role, cv=70.0)
     db.flush()
     rec = compute_role_fit_send_threshold(db, role=role)
-    pool = [30.0] * 90 + [70.0] * 10
+    pool = [30.0] * 60 + [50.0] * 20 + [70.0] * 20
     pct = _pct_above(pool, rec.value)
-    assert 5.0 <= pct <= 12.0, f"sent {pct}% (threshold {rec.value}, source {rec.source})"
-    # 30 is far too low a bar here; the dynamic value must be well above it.
+    assert 12.0 <= pct <= 28.0, f"sent {pct}% (threshold {rec.value}, source {rec.source})"
+    # 30 (the old floor) is far too low; the dynamic value must be well above it.
     assert rec.value > 30
 
 
 def test_send_threshold_anchors_on_strong_stage_but_respects_volume(db):
     org, role = _make_world(db)
-    # 80 weak applied, 20 mid; 5 reached Technical Interview (the strong signal).
-    for _ in range(80):
+    # 70 weak applied, 20 mid; 10 reached Technical Interview (the strong signal).
+    for _ in range(70):
         _add_scored(db, org=org, role=role, cv=25.0)
-    for _ in range(15):
-        _add_scored(db, org=org, role=role, cv=45.0)
-    for _ in range(5):
-        _add_scored(db, org=org, role=role, cv=60.0, workable_stage="Technical Interview")
+    for _ in range(20):
+        _add_scored(db, org=org, role=role, cv=50.0)
+    for _ in range(10):
+        _add_scored(db, org=org, role=role, cv=65.0, workable_stage="Technical Interview")
     db.flush()
     rec = compute_role_fit_send_threshold(db, role=role)
     assert rec.source == "labelled_volume_balanced"
-    pool = [25.0] * 80 + [45.0] * 15 + [60.0] * 5
+    pool = [25.0] * 70 + [50.0] * 20 + [65.0] * 10
     pct = _pct_above(pool, rec.value)
-    assert 4.0 <= pct <= 12.0, f"sent {pct}% (threshold {rec.value})"
+    assert 10.0 <= pct <= 28.0, f"sent {pct}% (threshold {rec.value})"
 
 
 def test_resolve_role_fit_threshold_auto_uses_send_calibrator(db):
     org, role = _make_world(db)
     role.auto_reject_threshold_mode = "auto"
     role.score_threshold = 30  # stale manual value must be ignored in auto mode
-    for _ in range(90):
+    for _ in range(80):
         _add_scored(db, org=org, role=role, cv=30.0)
-    for _ in range(10):
+    for _ in range(20):
         _add_scored(db, org=org, role=role, cv=70.0)
     db.flush()
     eff = resolve_role_fit_threshold(db, role=role)

@@ -66,6 +66,91 @@ def _role_fit_score(app: CandidateApplication) -> float | None:
     return float(val) if val is not None else None
 
 
+def _inputs_for(app, *, role_id, org_id, eff, has_task):
+    """Build the deterministic DecisionInputs from an application's stored
+    scores — no sub-agents, no LLM. Shared by the decide loop and the
+    threshold-shift reconcile so both evaluate identically."""
+    role_fit = _role_fit_score(app)
+    pre_screen = float(app.pre_screen_score_100) if app.pre_screen_score_100 is not None else None
+    if role_fit is None or pre_screen is None:
+        return None
+    return DecisionInputs(
+        application_id=int(app.id),
+        role_id=int(role_id),
+        organization_id=int(org_id),
+        scores={"role_fit_score": role_fit, "pre_screen_score": pre_screen},
+        flags={
+            # applied/review + open => no assessment in flight, so the
+            # assessment-gate rules (priority 90/85) don't fire and we reach
+            # the threshold band.
+            "no_pending_assessment": True,
+            "has_pending_assessment": False,
+            "assessment_completed": False,
+            "must_have_blocked": False,
+            "has_assessment_task": has_task,
+        },
+        effective_role_fit_threshold=eff,
+    )
+
+
+def _reconcile_stale_pending(db: Session, *, role: Role, eff, has_task: bool) -> int:
+    """Re-evaluate this role's bulk-created PENDING decisions against the
+    current (recalibrated) threshold; discard any whose band has flipped so
+    the main pass re-decides them with the new bar. This is what makes a
+    threshold change actually move existing decisions.
+
+    Only touches ``model_version='bulk-deterministic'`` pending rows — LLM
+    decisions are the agent's to manage, and pre-screen rejects are
+    reconciled separately. Resolved/advanced candidates are never pending,
+    so they stay frozen. Discarding only on a genuine flip (not equal)
+    plus the queue's recently-discarded guard bounds churn."""
+    pendings = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == int(role.id),
+            AgentDecision.status == "pending",
+            AgentDecision.model_version == "bulk-deterministic",
+            AgentDecision.decision_type.in_(
+                ["reject", "send_assessment", "advance_to_interview"]
+            ),
+        )
+        .all()
+    )
+    if not pendings:
+        return 0
+    discarded = 0
+    now = datetime.now(timezone.utc)
+    for d in pendings:
+        app = (
+            db.query(CandidateApplication)
+            .filter(CandidateApplication.id == d.application_id)
+            .one_or_none()
+        )
+        if app is None:
+            continue
+        inputs = _inputs_for(app, role_id=role.id, org_id=role.organization_id, eff=eff, has_task=has_task)
+        if inputs is None:
+            continue
+        try:
+            verdict = evaluate(inputs, db=db)
+        except Exception:
+            continue
+        new_type = resolve_persisted_decision_type(
+            verdict.decision_type, has_assessment_task=has_task
+        )
+        if new_type is not None and new_type != d.decision_type:
+            d.status = "discarded"
+            d.resolved_at = now
+            d.resolution_note = (
+                f"threshold recalibrated to {round(eff) if eff is not None else 'n/a'}; "
+                f"re-deciding ({d.decision_type} → {new_type})"
+            )[:500]
+            discarded += 1
+    if discarded:
+        db.commit()
+    return discarded
+
+
 def decide_role_cohort(
     db: Session, *, role: Role, limit: int = DEFAULT_PER_TICK_LIMIT
 ) -> dict:
@@ -77,6 +162,18 @@ def decide_role_cohort(
     org_id = int(role.organization_id)
     eff = resolve_role_fit_threshold(db, role=role)
     has_task = bool(getattr(role, "tasks", None))
+
+    summary: Counter = Counter()
+    # First, re-flow existing bulk decisions against the (possibly
+    # recalibrated) threshold — discard ones whose band flipped so they're
+    # re-decided below with the current bar.
+    try:
+        summary["reconciled_discarded"] = _reconcile_stale_pending(
+            db, role=role, eff=eff, has_task=has_task
+        )
+    except Exception:
+        logger.exception("threshold reconcile failed role=%s", role.id)
+        db.rollback()
 
     candidates = (
         db.query(CandidateApplication)
@@ -101,7 +198,6 @@ def decide_role_cohort(
         .all()
     )
 
-    summary: Counter = Counter()
     summary["candidates"] = len(candidates)
     if not candidates:
         _maybe_raise_volume_guard(db, role=role, org_id=org_id)
@@ -121,29 +217,12 @@ def decide_role_cohort(
     actor = Actor.agent(int(run.id))
 
     for app in candidates:
-        role_fit = _role_fit_score(app)
-        pre_screen = float(app.pre_screen_score_100) if app.pre_screen_score_100 is not None else None
-        if role_fit is None or pre_screen is None:
+        inputs = _inputs_for(app, role_id=role.id, org_id=org_id, eff=eff, has_task=has_task)
+        if inputs is None:
             summary["skipped_missing_score"] += 1
             continue
-
-        inputs = DecisionInputs(
-            application_id=int(app.id),
-            role_id=int(role.id),
-            organization_id=org_id,
-            scores={"role_fit_score": role_fit, "pre_screen_score": pre_screen},
-            flags={
-                # In applied/review with an open outcome there is no
-                # assessment in flight, so the assessment-gate rules
-                # (priority 90/85) don't fire and we reach the threshold band.
-                "no_pending_assessment": True,
-                "has_pending_assessment": False,
-                "assessment_completed": False,
-                "must_have_blocked": False,
-                "has_assessment_task": has_task,
-            },
-            effective_role_fit_threshold=eff,
-        )
+        role_fit = inputs.scores["role_fit_score"]
+        pre_screen = inputs.scores["pre_screen_score"]
         try:
             verdict = evaluate(inputs, db=db)
         except Exception:

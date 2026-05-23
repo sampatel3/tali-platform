@@ -44,24 +44,25 @@ _DEFAULT_FALLBACK = 50
 
 # --- Role-fit SEND threshold (the post-pre-screen send/advance bar) ----------
 # Different intent from the pre-screen reject floor above: this gates the
-# detailed role-fit (CV-match) score and decides who reaches HITL review
-# (send_assessment / advance). Two signals, balanced:
+# detailed role-fit (CV-match) score and decides who, OF THE PRE-SCREEN
+# SURVIVORS, reaches HITL review (send_assessment / advance). Two signals,
+# balanced:
 #   (a) quality — role-fit scores of candidates the recruiter actually
 #       progressed to interview / offer / hire (strong signals), and
-#   (b) volume — keep HITL review to ~5–10% of the scored pool.
-# 5–10% above the bar maps to the 90th–95th percentile of role-fit, so the
-# volume band is the hard guardrail; the quality anchor positions the bar
-# inside it. Strong-signal scores are noisy (some interviewees score low),
-# so volume dominates when they'd drag the bar too low.
+#   (b) volume — send roughly the top ~20% of the pre-screen-pass pool.
+# Pre-screen already culls the obviously-weak (often 80–95% of applicants),
+# so this bar should be inclusive of the survivors, not another harsh cut —
+# ~20% of the pool maps to the 75th–85th percentile of role-fit. The volume
+# band is the guardrail; the quality anchor positions the bar inside it.
 _SEND_STRONG_STAGES = ("Technical Interview", "Final Interview", "Offer", "Hired")
 _SEND_STRONG_STAGES_NORM = ("technical_interview", "final_interview", "offer", "hired")
-_SEND_VOLUME_TARGET_PCT = 7.5   # midpoint of the 5–10% review band
-_SEND_VOLUME_CAP_PCT = 10.0     # never send more than ~this share -> p90
-_SEND_VOLUME_FLOOR_PCT = 5.0    # never send fewer than ~this share -> p95
+_SEND_VOLUME_TARGET_PCT = 20.0  # send ~top fifth of the pre-screen-pass pool
+_SEND_VOLUME_CAP_PCT = 25.0     # never send more than ~this share -> p75
+_SEND_VOLUME_FLOOR_PCT = 15.0   # never send fewer than ~this share -> p85
 _SEND_MIN_STRONG_SAMPLES = 3
 _SEND_FLOOR = 45                # absolute safety floor for a SEND bar
 _SEND_CEILING = 85
-_SEND_FALLBACK = 60             # no scored candidates yet
+_SEND_FALLBACK = 55             # no scored candidates yet
 
 
 @dataclass
@@ -255,11 +256,12 @@ def compute_role_fit_send_threshold(
     """Dynamic send/advance bar on the role-fit score.
 
     Balances (a) the role-fit scores of recruiter-progressed candidates
-    (interview/offer/hire) with (b) a 5–10% HITL-review volume cap. The
-    volume band maps to the 90th–95th percentile of the scored pool and is
-    the hard guardrail; the strong-signal median positions the bar inside
-    it. Recomputed live each evaluation, so it tracks the data daily with
-    no separate job. Clamped to [45, 85]."""
+    (interview/offer/hire) with (b) sending roughly the top ~20% of the
+    pre-screen-pass pool. Pre-screen already removed the obviously-weak, so
+    this bar is inclusive of the survivors. The volume band maps to the
+    75th–85th percentile of the pool and is the guardrail; the strong-signal
+    median positions the bar inside it. Recomputed live each evaluation, so
+    it tracks the data with no separate job. Clamped to [45, 85]."""
     pool = _role_fit_pool(db, role=role)
     if not pool:
         return ThresholdRecommendation(
@@ -271,24 +273,25 @@ def compute_role_fit_send_threshold(
             sample_size=0,
         )
 
-    p_cap = _percentile(pool, 100 - _SEND_VOLUME_CAP_PCT)     # ~p90 -> at most ~10% above
-    p_floor = _percentile(pool, 100 - _SEND_VOLUME_FLOOR_PCT)  # ~p95 -> at least ~5% above
-    target = _percentile(pool, 100 - _SEND_VOLUME_TARGET_PCT)  # ~p92.5 -> ~7.5%
+    p_cap = _percentile(pool, 100 - _SEND_VOLUME_CAP_PCT)     # ~p75 -> at most ~25% above
+    p_floor = _percentile(pool, 100 - _SEND_VOLUME_FLOOR_PCT)  # ~p85 -> at least ~15% above
+    target = _percentile(pool, 100 - _SEND_VOLUME_TARGET_PCT)  # ~p80 -> ~20%
 
     strong = _strong_signal_role_fit(db, role=role)
     if len(strong) >= _SEND_MIN_STRONG_SAMPLES:
         strong_med = statistics.median(strong)
         # Don't set the bar above the median progressed candidate (we still
         # want to surface candidates as strong as those interviewed), but
-        # keep volume inside the 5–10% band.
+        # keep volume inside the ~15–25% band.
         value = min(target, strong_med)
-        value = max(value, p_cap)   # cap volume at ~10%
-        value = min(value, p_floor)  # ensure at least ~5% flow
+        value = max(value, p_cap)   # cap volume at ~25%
+        value = min(value, p_floor)  # ensure at least ~15% flow
         source = "labelled_volume_balanced"
         rationale = (
             f"{len(strong)} candidates reached interview/offer/hire (median "
-            f"role-fit {strong_med:.0f}); balanced against a 5–10% review-volume "
-            f"cap over {len(pool)} scored candidates → send bar {round(value)}."
+            f"role-fit {strong_med:.0f}); set to send roughly the top "
+            f"{_SEND_VOLUME_TARGET_PCT:.0f}% of {len(pool)} pre-screen-pass "
+            f"candidates → send bar {round(value)}."
         )
     else:
         value = target
@@ -297,7 +300,7 @@ def compute_role_fit_send_threshold(
         source = "volume"
         rationale = (
             f"No interview/offer/hire labels yet; targeting ~{_SEND_VOLUME_TARGET_PCT:.0f}% "
-            f"of {len(pool)} scored candidates for review → send bar {round(value)}."
+            f"of {len(pool)} pre-screen-pass candidates for review → send bar {round(value)}."
         )
 
     value = int(max(_SEND_FLOOR, min(_SEND_CEILING, round(value))))
