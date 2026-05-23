@@ -1,8 +1,6 @@
 from .celery_app import celery_app
 from .assessment_tasks import (
-    send_assessment_email,
     send_candidate_feedback_ready_email,
-    send_results_email,
     post_results_to_workable,
     cleanup_expired_assessments,
     sync_workable_jobs,
@@ -11,6 +9,12 @@ from .assessment_tasks import (
     sync_workable_daily_candidates,
     reap_stuck_workable_sync_runs,
 )
+# Eager-import the canonical email-task module so Celery registers
+# send_assessment_email / send_results_email / send_application_rejected_email
+# on the worker. Imported as a module (not by name) on purpose: notifications.
+# tasks imports celery_app from this package, so a name-level import here would
+# re-enter while that module is half-loaded and raise ImportError.
+from ..components.notifications import tasks as _notification_email_tasks  # noqa: F401
 # Eager-import scoring_tasks so Celery autodiscover registers the
 # score_application_job + batch_score_role tasks on the worker. Without
 # this, dispatched scoring jobs land in the queue but the worker drops
@@ -64,9 +68,7 @@ from .calibration_tasks import (
 
 __all__ = [
     "celery_app",
-    "send_assessment_email",
     "send_candidate_feedback_ready_email",
-    "send_results_email",
     "post_results_to_workable",
     "cleanup_expired_assessments",
     "sync_workable_jobs",

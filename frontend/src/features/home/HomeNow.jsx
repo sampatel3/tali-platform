@@ -111,9 +111,11 @@ const DECISION_ACTIONS = {
     ],
   },
   reject: {
-    primaryLabel: 'Reject',
-    primaryIcon: X,
-    primaryClass: 'rq-override',
+    // Primary = approve the agent's reject (fires immediately). Labeled
+    // "Approve" to match the bulk action and avoid colliding with the
+    // REJECT type badge — the recruiter is approving a decision, not
+    // independently rejecting. Outcome is conveyed by the badge + body.
+    primaryLabel: 'Approve',
     alternatives: [
       {
         action: 'send_assessment',
@@ -148,9 +150,9 @@ const DECISION_ACTIONS = {
     // the right path is ``Send back & teach`` — that produces a
     // learning signal and re-runs the agent with the new context. The
     // universals (teach + snooze) are appended by the renderer.
-    primaryLabel: 'Reject',
-    primaryIcon: X,
-    primaryClass: 'rq-override',
+    // Primary = approve the agent's reject; labeled "Approve" to match the
+    // bulk action and the REJECT (PRE-SCREEN) badge carries the outcome.
+    primaryLabel: 'Approve',
     alternatives: [],
   },
   resend_assessment_invite: {

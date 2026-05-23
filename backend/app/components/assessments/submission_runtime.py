@@ -876,7 +876,7 @@ def submit_assessment_impl(
     # --- 5. Notifications ---
     notify_user = db.query(User).filter(User.organization_id == assessment.organization_id).first()
     if notify_user:
-        from ...tasks.assessment_tasks import send_results_email
+        from ...components.notifications.tasks import send_results_email
 
         candidate_name = (
             (assessment.candidate.full_name or assessment.candidate.email)
