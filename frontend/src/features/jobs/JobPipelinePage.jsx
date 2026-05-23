@@ -1077,12 +1077,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     try {
       await apiClient.agent.approveDecision(decisionId);
       showToast(`Approved agent recommendation #${decisionId}`, 'success');
-      // Clear the now-resolved decision from the per-row payload snapshot too,
-      // not just the polled map — otherwise application.pending_decision keeps
-      // rendering the chip (and re-arming resolve) until a full reload.
-      setRoleApplications((apps) => apps.map((a) => (
-        a?.pending_decision?.id === decisionId ? { ...a, pending_decision: null } : a
-      )));
+      setRoleApplications((apps) => apps.map((a) => (a?.pending_decision?.id === decisionId ? { ...a, pending_decision: null } : a)));
       await fetchPendingDecisions();
     } catch (err) {
       showToast(getErrorMessage(err, 'Failed to approve recommendation.'), 'error');
@@ -1096,9 +1091,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     try {
       await apiClient.agent.overrideDecision(decisionId, { override_action: 'manual_review' });
       showToast(`Overrode agent recommendation #${decisionId}`, 'info');
-      setRoleApplications((apps) => apps.map((a) => (
-        a?.pending_decision?.id === decisionId ? { ...a, pending_decision: null } : a
-      )));
+      setRoleApplications((apps) => apps.map((a) => (a?.pending_decision?.id === decisionId ? { ...a, pending_decision: null } : a)));
       await fetchPendingDecisions();
     } catch (err) {
       showToast(getErrorMessage(err, 'Failed to override recommendation.'), 'error');
