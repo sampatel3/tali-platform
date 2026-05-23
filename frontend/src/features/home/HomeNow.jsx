@@ -304,7 +304,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <TypeBadge type={p.decision_type} size="sm" />
-              <ScoreChip score={p.role_fit_score} size="sm" />
+              <ScoreChip score={p.taali_score} size="sm" />
               <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--mute)', letterSpacing: '.06em', marginLeft: 'auto' }}>
                 {formatRelativeAge(p.created_at)}
               </span>
@@ -407,8 +407,8 @@ const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze,
             {decision.candidate_email || ''}
           </div>
         </div>
-        {decision.role_fit_score != null ? (
-          <ScoreRing score={decision.role_fit_score} size={72} label="TALI" />
+        {decision.taali_score != null ? (
+          <ScoreRing score={decision.taali_score} size={72} label="TALI" />
         ) : null}
       </div>
 

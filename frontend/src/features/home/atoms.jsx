@@ -96,18 +96,17 @@ export const ConfBar = ({ value }) => {
   );
 };
 
-// Compact chip surfacing a candidate's role-fit (Tali) score, 0–100, on the
-// decision list rows. Takes the numeric score directly and renders nothing
-// when it's absent — pre-screen rejects have no role-fit score (rejected
-// before scoring runs), so they show no chip. Purple tones only; the
-// TypeBadge already carries the decision's red/green signal.
+// Compact chip surfacing a candidate's Tali score, 0–100, on the decision
+// list rows. Takes the numeric score directly and renders nothing when it's
+// absent — pre-screen rejects aren't scored, so they show no chip. Purple
+// tones only; the TypeBadge already carries the decision's red/green signal.
 export const ScoreChip = ({ score, size = 'md' }) => {
   if (score == null || !Number.isFinite(Number(score))) return null;
   const value = Math.round(Number(score));
   const small = size === 'sm';
   return (
     <span
-      title={`Tali role-fit score ${value} / 100`}
+      title={`Tali score ${value} / 100`}
       style={{
         display: 'inline-flex',
         alignItems: 'baseline',
