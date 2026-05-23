@@ -2142,18 +2142,14 @@ html[data-theme="dark"] {
 }
 
 /* Filled / closed / draft Workable postings — not actively recruiting.
-   De-emphasised so live (published) roles stand out on the grid. Still
-   fully clickable; the dimming lifts on hover/focus. */
+   Persistently de-emphasised so live (published) roles stand out, regardless
+   of hover, focus, or whether the recruiter has starred it. "Not active" is a
+   state, independent of sync: a filled star on a greyed card means the role is
+   not live but is still kept in continuous sync. Still fully clickable. */
 .job-card.not-live {
   opacity: 0.55;
   filter: grayscale(0.3);
   box-shadow: none;
-}
-
-.job-card.not-live:hover,
-.job-card.not-live:focus-within {
-  opacity: 1;
-  filter: none;
 }
 
 .job-star.is-locked {
