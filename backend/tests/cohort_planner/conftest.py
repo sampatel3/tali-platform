@@ -12,6 +12,7 @@ from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.role_intent import RoleIntent
+from app.models.task import Task
 
 
 _BIG_PK_COUNTERS: dict[str, int] = {
@@ -43,6 +44,7 @@ def make_world(
     pipeline_stage: str = "review",
     cv_file_url: str | None = "https://example.com/cv.pdf",
     send_requires_approval: bool = True,
+    with_task: bool = False,
 ):
     org = Organization(name="Cohort Org", slug=f"cohort-org-{id(db)}")
     db.add(org)
@@ -59,6 +61,14 @@ def make_world(
     )
     db.add(role)
     db.flush()
+    # send_assessment now advances directly to interview when the role has no
+    # assessment task configured. Tests exercising the send path must attach one.
+    if with_task:
+        task = Task(organization_id=org.id, name=f"Assessment for {role.name}")
+        db.add(task)
+        db.flush()
+        role.tasks.append(task)
+        db.flush()
     candidate = Candidate(organization_id=org.id, email=f"c{id(db)}@x.test", full_name="C")
     db.add(candidate)
     db.flush()
