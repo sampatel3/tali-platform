@@ -120,6 +120,18 @@ def test_compose_note_skip_advance_does_not_mark_override(db):
     assert "override" not in body.lower()
 
 
+def test_compose_note_uses_plain_verdict_not_raw_decision_type(db):
+    """The Workable note must not leak the Taali-internal decision_type
+    string (e.g. skip_assessment_reject) — show a plain verdict instead."""
+    org, role, _, app = make_world(db, pre_screen=20.0)
+    decision = _make_decision(db, org, role, app, decision_type="skip_assessment_reject")
+    body = wds.compose_decision_summary_note(
+        decision, app, verdict="rejected", share_url=None,
+    )
+    assert "skip_assessment_reject" not in body
+    assert "Agent recommended: reject —" in body
+
+
 # ---------------------------------------------------------------------------
 # post_decision_summary_to_workable — orchestrator
 # ---------------------------------------------------------------------------
