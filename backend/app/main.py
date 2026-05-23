@@ -861,6 +861,28 @@ def admin_normalize_recommendation_labels(
         db.close()
 
 
+@app.post("/admin/scores/sample-prescreen-calibration")
+def admin_sample_prescreen_calibration(
+    request: Request, organization_id: int | None = None, limit: int = 50
+):
+    """Backend-only: shadow-score a random sample of pre-screen rejects with
+    full cv_match to build reject-inference training data. Results go to
+    prescreen_calibration_samples — never to the application or the UI. This
+    is the manual trigger for the weekly job."""
+    from .platform.database import SessionLocal
+    from .services.prescreen_calibration import sample_and_shadow_score_rejects
+
+    _require_admin(request)
+    db = SessionLocal()
+    try:
+        result = sample_and_shadow_score_rejects(
+            db, limit=int(limit), organization_id=organization_id
+        )
+        return {"ok": True, **result}
+    finally:
+        db.close()
+
+
 @app.post("/admin/scores/rescore-wrongly-filtered")
 def admin_rescore_wrongly_filtered(
     request: Request, organization_id: int | None = None, dry_run: bool = False

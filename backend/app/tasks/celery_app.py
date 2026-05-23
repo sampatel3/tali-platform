@@ -23,6 +23,9 @@ _TASK_ROUTES = {
     # Recalibration writes snapshots read by apply_calibrator during scoring —
     # keep it on the scoring worker so they're co-located.
     "app.tasks.calibration_tasks.recalibrate_cv_match": {"queue": "scoring"},
+    # Pre-screen reject shadow-scoring is Anthropic-heavy — keep it off the
+    # default queue too.
+    "app.tasks.calibration_tasks.sample_prescreen_for_calibration": {"queue": "scoring"},
 }
 
 celery_app.conf.update(
@@ -146,6 +149,14 @@ celery_app.conf.update(
         "recalibrate-cv-match-nightly": {
             "task": "app.tasks.calibration_tasks.recalibrate_cv_match",
             "schedule": crontab(hour=4, minute=30),
+        },
+        # Weekly reject-inference sampling: shadow-score a random sample of
+        # pre-screen rejects (backend-only) so the pre-screen calibrator has
+        # unbiased labels below the gate. Weekly (not nightly) to bound the
+        # extra Anthropic spend; bounded per run.
+        "sample-prescreen-for-calibration-weekly": {
+            "task": "app.tasks.calibration_tasks.sample_prescreen_for_calibration",
+            "schedule": crontab(hour=2, minute=30, day_of_week=0),
         },
     },
 )
