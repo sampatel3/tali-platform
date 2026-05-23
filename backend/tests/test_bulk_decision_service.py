@@ -56,7 +56,7 @@ def _seed_role(db, *, score_threshold=50, with_task=False):
     return org, role
 
 
-def _add_app(db, org, role, *, role_fit, pre_screen=70.0):
+def _add_app(db, org, role, *, role_fit, pre_screen=70.0, cv_match_details=None):
     cand = Candidate(
         organization_id=org.id,
         email=f"c{role_fit}-{id(db)}@x.test",
@@ -69,6 +69,7 @@ def _add_app(db, org, role, *, role_fit, pre_screen=70.0):
         status="applied", pipeline_stage="applied", pipeline_stage_source="recruiter",
         application_outcome="open", source="manual", cv_text="cv text",
         cv_match_score=role_fit, pre_screen_score_100=pre_screen,
+        cv_match_details=cv_match_details,
     )
     db.add(app)
     db.commit()
@@ -99,6 +100,42 @@ def test_every_candidate_decided_no_task_advances_strong(db):
     assert summary["created"] == 4
     # No LLM: the deterministic pass writes zero usage_events.
     assert db.query(UsageEvent).count() == 0
+
+
+def test_reasoning_sourced_from_cv_match_summary(db):
+    """Recruiter-facing reasoning is the CV-match narrative (same source as
+    the report hero), with the threshold mechanics demoted to evidence."""
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    summary = "Strong backend depth; ships production Python and owns CI."
+    _add_app(
+        db, org, role, role_fit=80.0,
+        cv_match_details={"summary": summary, "score_rationale_bullets": ["x"]},
+    )
+
+    decide_role_cohort(db, role=role)
+
+    dec = _pending(db, role)[0]
+    assert dec.reasoning == summary
+    # Audit basis lives in evidence, not the headline.
+    assert "role-fit 80 vs threshold" in dec.evidence["policy_basis"]
+    assert "Deterministic policy" not in dec.reasoning
+
+
+def test_reasoning_falls_back_to_rationale_then_policy(db):
+    """No summary -> first rationale bullet; nothing at all -> policy basis,
+    so reasoning is never blank (queue_decision rejects empty reasoning)."""
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    _add_app(
+        db, org, role, role_fit=80.0,
+        cv_match_details={"summary": "", "score_rationale_bullets": ["Clears the bar on core skills."]},
+    )
+    _add_app(db, org, role, role_fit=75.0, cv_match_details={"summary": ""})
+
+    decide_role_cohort(db, role=role)
+
+    reasons = {d.reasoning for d in _pending(db, role)}
+    assert "Clears the bar on core skills." in reasons
+    assert any(r.startswith("Deterministic policy:") for r in reasons)
 
 
 def test_strong_candidate_sends_assessment_when_task_assigned(db):

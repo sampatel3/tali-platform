@@ -66,6 +66,28 @@ def _role_fit_score(app: CandidateApplication) -> float | None:
     return float(val) if val is not None else None
 
 
+def _recruiter_reasoning(app: CandidateApplication) -> str | None:
+    """Recruiter-facing decision narrative, sourced from the CV-match
+    ``summary`` — the same field that drives the candidate report's
+    recommendation hero text and is quoted into the Workable note. Falls
+    back to the first score-rationale bullet. Returns None when no
+    qualitative narrative exists; the caller then substitutes the
+    audit-oriented policy basis so the reasoning is never blank."""
+    details = getattr(app, "cv_match_details", None)
+    if not isinstance(details, dict):
+        return None
+    summary = str(details.get("summary") or "").strip()
+    if summary:
+        return summary
+    bullets = details.get("score_rationale_bullets")
+    if isinstance(bullets, list):
+        for bullet in bullets:
+            text = str(bullet or "").strip()
+            if text:
+                return text
+    return None
+
+
 def _inputs_for(app, *, role_id, org_id, eff, has_task):
     """Build the deterministic DecisionInputs from an application's stored
     scores — no sub-agents, no LLM. Shared by the decide loop and the
@@ -240,12 +262,19 @@ def decide_role_cohort(
             summary["skipped"] += 1
             continue
 
-        reasoning = (
-            f"Deterministic policy: role-fit {role_fit:.0f} vs threshold "
+        # Audit basis: the threshold comparison that drove the verdict.
+        # Kept in evidence (not the recruiter-facing reasoning) so the
+        # headline reads like the candidate report, not policy mechanics.
+        policy_basis = (
+            f"role-fit {role_fit:.0f} vs threshold "
             f"{eff if eff is not None else 'default'} (pre-screen {pre_screen:.0f}) "
             f"→ {decision_type}"
             + ("" if has_task else "; role has no assessment task, advancing directly")
         )
+        # Recruiter headline = the CV-match narrative (same source as the
+        # report hero); fall back to the audit basis when none exists so
+        # queue_decision's non-blank guard always passes.
+        reasoning = _recruiter_reasoning(app) or f"Deterministic policy: {policy_basis}"
         evidence = {
             "role_fit_score": role_fit,
             "pre_screen_score": pre_screen,
@@ -253,6 +282,7 @@ def decide_role_cohort(
             "has_assessment_task": has_task,
             "rule_path": verdict.rule_path,
             "engine_verdict": verdict.decision_type,
+            "policy_basis": policy_basis,
             "source": "bulk_decision",
         }
         try:
