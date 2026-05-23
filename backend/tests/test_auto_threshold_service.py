@@ -135,52 +135,61 @@ def test_send_threshold_fallback_no_scored(db):
     org, role = _make_world(db)
     rec = compute_role_fit_send_threshold(db, role=role)
     assert rec.source == "fallback"
-    assert rec.value == 55
+    assert rec.value == 50  # the absolute floor
 
 
-def test_send_threshold_targets_about_top_fifth(db):
+def test_send_threshold_is_global_top_fifth(db):
     org, role = _make_world(db)
-    # Graded pool so ~20% is achievable: 60 low, 20 mid, 20 high.
+    # Org-wide graded pool: bar should land near the 80th percentile (~top 20%).
     for _ in range(60):
         _add_scored(db, org=org, role=role, cv=30.0)
     for _ in range(20):
-        _add_scored(db, org=org, role=role, cv=50.0)
+        _add_scored(db, org=org, role=role, cv=60.0)
     for _ in range(20):
-        _add_scored(db, org=org, role=role, cv=70.0)
+        _add_scored(db, org=org, role=role, cv=80.0)
     db.flush()
     rec = compute_role_fit_send_threshold(db, role=role)
-    pool = [30.0] * 60 + [50.0] * 20 + [70.0] * 20
+    assert rec.source == "global_absolute"
+    pool = [30.0] * 60 + [60.0] * 20 + [80.0] * 20
     pct = _pct_above(pool, rec.value)
-    assert 12.0 <= pct <= 28.0, f"sent {pct}% (threshold {rec.value}, source {rec.source})"
-    # 30 (the old floor) is far too low; the dynamic value must be well above it.
-    assert rec.value > 30
+    assert 12.0 <= pct <= 28.0, f"global pool sent {pct}% (bar {rec.value})"
 
 
-def test_send_threshold_anchors_on_strong_stage_but_respects_volume(db):
-    org, role = _make_world(db)
-    # 70 weak applied, 20 mid; 10 reached Technical Interview (the strong signal).
-    for _ in range(70):
-        _add_scored(db, org=org, role=role, cv=25.0)
-    for _ in range(20):
-        _add_scored(db, org=org, role=role, cv=50.0)
-    for _ in range(10):
-        _add_scored(db, org=org, role=role, cv=65.0, workable_stage="Technical Interview")
+def test_global_bar_sends_few_from_a_weak_role(db):
+    """The key property: the bar is org-wide absolute, so a role whose pool
+    is all weak sends few/none — it is NOT forced to surface its top 20%."""
+    org, role_strong = _make_world(db)
+    role_weak = Role(organization_id=org.id, name="Weak role", source="manual")
+    db.add(role_weak)
     db.flush()
-    rec = compute_role_fit_send_threshold(db, role=role)
-    assert rec.source == "labelled_volume_balanced"
-    pool = [25.0] * 70 + [50.0] * 20 + [65.0] * 10
-    pct = _pct_above(pool, rec.value)
-    assert 10.0 <= pct <= 28.0, f"sent {pct}% (threshold {rec.value})"
+    # Strong role: a healthy spread up to 80.
+    for _ in range(40):
+        _add_scored(db, org=org, role=role_strong, cv=40.0)
+    for _ in range(20):
+        _add_scored(db, org=org, role=role_strong, cv=75.0)
+    # Weak role: everyone is rubbish (<= 35).
+    for cv in (20.0, 25.0, 30.0, 35.0) * 10:
+        _add_scored(db, org=org, role=role_weak, cv=cv)
+    db.flush()
+
+    bar = compute_role_fit_send_threshold(db, role=role_weak).value
+    bar_strong = compute_role_fit_send_threshold(db, role=role_strong).value
+    assert bar == bar_strong, "the bar must be identical for every role (global)"
+
+    weak_scores = [20.0, 25.0, 30.0, 35.0] * 10
+    strong_scores = [40.0] * 40 + [75.0] * 20
+    assert _pct_above(weak_scores, bar) == 0.0, f"weak role should send ~none (bar {bar})"
+    assert _pct_above(strong_scores, bar) > 0.0, "strong role should still send some"
 
 
-def test_resolve_role_fit_threshold_auto_uses_send_calibrator(db):
+def test_resolve_role_fit_threshold_auto_uses_global_bar(db):
     org, role = _make_world(db)
     role.auto_reject_threshold_mode = "auto"
     role.score_threshold = 30  # stale manual value must be ignored in auto mode
     for _ in range(80):
-        _add_scored(db, org=org, role=role, cv=30.0)
+        _add_scored(db, org=org, role=role, cv=40.0)
     for _ in range(20):
-        _add_scored(db, org=org, role=role, cv=70.0)
+        _add_scored(db, org=org, role=role, cv=80.0)
     db.flush()
     eff = resolve_role_fit_threshold(db, role=role)
-    assert eff is not None and eff > 30, f"auto mode must use the dynamic bar, got {eff}"
+    assert eff is not None and eff >= 50, f"auto mode must use the global bar (>=floor), got {eff}"

@@ -767,7 +767,7 @@ const RoleAgentSettingsTab = ({
           </div>
           {thresholdMode === 'auto' ? (
             <p className="mc-agent-settings-card-help" style={{ marginTop: 4 }}>
-              Agent-managed — no fixed number. Recalibrates from your interview / offer / hire decisions and sends roughly the strongest ~20% of pre-screen survivors.
+              Agent-managed — no fixed number. A general quality bar (top candidates across all your roles), recalibrated as you hire; weak pipelines surface fewer.
             </p>
           ) : (
             <div className="mc-agent-settings-slider">
