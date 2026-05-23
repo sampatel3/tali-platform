@@ -5,14 +5,12 @@ from ..platform.config import settings
 logger = logging.getLogger(__name__)
 
 
-# send_assessment_email and send_results_email moved to
-# app.components.notifications.tasks (the canonical email-task module).
-# Re-export for backwards compatibility with importers that still reference
-# them at this path; safe to remove once those imports are migrated.
-from ..components.notifications.tasks import (  # noqa: F401
-    send_assessment_email,
-    send_results_email,
-)
+# Email tasks (send_assessment_email / send_results_email) live in
+# app.components.notifications.tasks. Do NOT re-export them here: that module
+# imports celery_app from this package, so a top-level back-import creates a
+# circular import that breaks request-time email dispatch (the importer hits
+# a partially-initialized notifications.tasks). Import them from the canonical
+# module instead.
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)

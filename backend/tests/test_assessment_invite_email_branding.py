@@ -278,7 +278,7 @@ def test_dispatch_resolves_candidate_facing_brand_from_workspace_settings(db, mo
     db.flush()
 
     with patch(
-        "app.tasks.assessment_tasks.send_assessment_email"
+        "app.components.notifications.tasks.send_assessment_email"
     ) as mock_celery:
         dispatch_assessment_invite(
             assessment=a,
@@ -343,7 +343,7 @@ def test_dispatch_passes_none_brand_when_workspace_setting_missing(db, monkeypat
     db.flush()
 
     with patch(
-        "app.tasks.assessment_tasks.send_assessment_email"
+        "app.components.notifications.tasks.send_assessment_email"
     ) as mock_celery:
         dispatch_assessment_invite(
             assessment=a,

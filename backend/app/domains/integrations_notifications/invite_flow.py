@@ -72,7 +72,7 @@ def _send_taali_invite_email(
     candidate_facing_brand: str | None,
     reply_to: str | None,
 ) -> None:
-    from ...tasks.assessment_tasks import send_assessment_email
+    from ...components.notifications.tasks import send_assessment_email
 
     send_assessment_email.delay(
         candidate_email=candidate_email,
