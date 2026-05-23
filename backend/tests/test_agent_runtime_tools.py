@@ -84,6 +84,17 @@ def _make_role(db, org: Organization) -> Role:
     return role
 
 
+def _attach_task(db, org: Organization, role: Role) -> Task:
+    """Link an assessment task to the role. Required for send_assessment:
+    with no task the tool now advances directly instead of sending."""
+    task = Task(organization_id=org.id, name=f"Assessment for {role.name}")
+    db.add(task)
+    db.flush()
+    role.tasks.append(task)
+    db.flush()
+    return task
+
+
 def _make_application(
     db,
     *,
@@ -344,6 +355,7 @@ def test_send_assessment_dispatch_hitl_queues_decision(db):
     approve_decision.run (covered in test_approve_decision_dispatches_*)."""
     org = _make_org(db)
     role = _make_role(db, org)
+    _attach_task(db, org, role)
     role.auto_promote = False
     db.flush()
     app = _make_application(db, org=org, role=role, name="A", email="a@x.test")
@@ -373,6 +385,7 @@ def test_send_assessment_dispatch_dedups_existing_pending_decision(db):
     recruiter's queue."""
     org = _make_org(db)
     role = _make_role(db, org)
+    _attach_task(db, org, role)
     role.auto_promote = False
     db.flush()
     app = _make_application(db, org=org, role=role, name="A", email="a@x.test")
@@ -666,6 +679,7 @@ def test_send_assessment_dispatch_invokes_action(db):
     """Agent tool wires through to the action and returns the action's payload shape."""
     org = _make_org(db)
     role = _make_role(db, org)
+    _attach_task(db, org, role)
     app = _make_application(db, org=org, role=role, name="A", email="a@x.test", taali=80.0)
     run = _make_agent_run(db, role)
 

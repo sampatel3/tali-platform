@@ -32,6 +32,7 @@ from ..decision_policy.engine import (
 from ..decision_policy.schema import PolicyJson
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
+from ..services.auto_threshold_service import resolve_role_fit_threshold
 from ..sub_agents.base import SubAgentRequest, SubAgentResult
 from ..sub_agents.registry import get_sub_agent
 from .manual_action_reader import read_recent_manual_actions
@@ -136,7 +137,7 @@ def _gather_sub_agent_outputs(
 
 
 def _flags_from_application(
-    app: CandidateApplication, scores: dict[str, float]
+    app: CandidateApplication, scores: dict[str, float], role: Role
 ) -> dict[str, bool]:
     """Build the boolean flags the engine's rules reference.
 
@@ -144,7 +145,10 @@ def _flags_from_application(
     is present without a final score. ``no_pending_assessment`` is the
     inverse, exposed positively because rule conditions read better.
     ``assessment_completed`` mirrors the assessment_scoring sub-agent's
-    output for engine convenience.
+    output for engine convenience. ``has_assessment_task`` — true when
+    the role has at least one assessment task linked; when False a
+    ``send_assessment`` verdict is translated to ``advance`` (there's
+    nothing to send, so a strong candidate goes straight to interview).
     """
     has_pending = False
     try:
@@ -175,6 +179,7 @@ def _flags_from_application(
         # set it True from intent_parser ``disqualifying_signals`` once
         # the matching pass is implemented (Phase 5+).
         "must_have_blocked": False,
+        "has_assessment_task": bool(getattr(role, "tasks", None)),
     }
 
 
@@ -257,7 +262,7 @@ def evaluate_for_application(
         skip_cache=skip_cache,
     )
     scores = _scores_from_outputs(outputs)
-    flags = _flags_from_application(app, scores)
+    flags = _flags_from_application(app, scores, role)
 
     # Resolve manual-action lookback window from the active policy
     # itself so a retune that widens / narrows it takes effect without
@@ -303,6 +308,7 @@ def evaluate_for_application(
         intent=parsed_intent or {},
         flags=flags,
         manual_actions=actions,
+        effective_role_fit_threshold=resolve_role_fit_threshold(db, role=role),
     )
 
     verdict = evaluate(inputs, db=db)

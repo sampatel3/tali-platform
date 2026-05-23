@@ -266,6 +266,7 @@ def run(
     prompt_version: str,
     recommendation: Optional[str] = None,
     idempotency_key_suffix: Optional[str] = None,
+    skip_episode: bool = False,
 ) -> AgentDecision:
     if actor.type != ACTOR_AGENT:
         raise HTTPException(
@@ -460,7 +461,13 @@ def run(
     # one LLM extraction pass per decision instead of one per score —
     # keeps Graphiti billing bounded to the decision volume. Failure
     # is logged and ignored; the Postgres row is the source of truth.
-    _emit_decision_episode_safe(db, decision=decision)
+    # ``skip_episode`` is set by the deterministic bulk-decision pass:
+    # it can emit hundreds of decisions in one go, and a per-decision
+    # Graphiti LLM extraction would blow the cost + Celery time budget.
+    # Threshold-application decisions aren't useful learning signal, and
+    # Postgres remains the source of truth, so the episode is skipped.
+    if not skip_episode:
+        _emit_decision_episode_safe(db, decision=decision)
 
     # CandidateApplicationEvent so the per-role /agent/status endpoint's
     # ``last_activity`` reflects this decision the moment it's queued
