@@ -96,3 +96,89 @@ def test_labelled_tier_anchors_on_advanced_median(db):
     assert rec.sample_size == 5
     # median(60,65,70,75,80) = 70; pstdev ≈ 7.07; 70 - 7 = 63.
     assert 55 <= rec.value <= 70
+
+
+# ---------------------------------------------------------------------------
+# Role-fit SEND threshold (dynamic send/advance bar)
+# ---------------------------------------------------------------------------
+
+from app.services.auto_threshold_service import (  # noqa: E402
+    compute_role_fit_send_threshold,
+    resolve_role_fit_threshold,
+)
+
+
+def _add_scored(db, *, org, role, cv, pre=70.0, workable_stage=None, outcome="open"):
+    candidate = Candidate(
+        organization_id=org.id,
+        email=f"rf{id(role)}-{cv}-{id(db)}-{workable_stage}-{outcome}-{cv*7%101}@x.test",
+        full_name=f"C {cv}",
+    )
+    db.add(candidate)
+    db.flush()
+    app = CandidateApplication(
+        organization_id=org.id, candidate_id=candidate.id, role_id=role.id,
+        status="applied", pipeline_stage="applied", pipeline_stage_source="recruiter",
+        application_outcome=outcome, source="manual", cv_text="x",
+        cv_match_score=cv, pre_screen_score_100=pre, workable_stage=workable_stage,
+    )
+    db.add(app)
+    db.flush()
+    return app
+
+
+def _pct_above(pool, threshold):
+    return 100.0 * sum(1 for s in pool if s >= threshold) / len(pool)
+
+
+def test_send_threshold_fallback_no_scored(db):
+    org, role = _make_world(db)
+    rec = compute_role_fit_send_threshold(db, role=role)
+    assert rec.source == "fallback"
+    assert rec.value == 60
+
+
+def test_send_threshold_caps_volume_to_5_10pct(db):
+    org, role = _make_world(db)
+    # Realistic shape: 90 weak (30), 10 strong (70). No interview labels.
+    for _ in range(90):
+        _add_scored(db, org=org, role=role, cv=30.0)
+    for _ in range(10):
+        _add_scored(db, org=org, role=role, cv=70.0)
+    db.flush()
+    rec = compute_role_fit_send_threshold(db, role=role)
+    pool = [30.0] * 90 + [70.0] * 10
+    pct = _pct_above(pool, rec.value)
+    assert 5.0 <= pct <= 12.0, f"sent {pct}% (threshold {rec.value}, source {rec.source})"
+    # 30 is far too low a bar here; the dynamic value must be well above it.
+    assert rec.value > 30
+
+
+def test_send_threshold_anchors_on_strong_stage_but_respects_volume(db):
+    org, role = _make_world(db)
+    # 80 weak applied, 20 mid; 5 reached Technical Interview (the strong signal).
+    for _ in range(80):
+        _add_scored(db, org=org, role=role, cv=25.0)
+    for _ in range(15):
+        _add_scored(db, org=org, role=role, cv=45.0)
+    for _ in range(5):
+        _add_scored(db, org=org, role=role, cv=60.0, workable_stage="Technical Interview")
+    db.flush()
+    rec = compute_role_fit_send_threshold(db, role=role)
+    assert rec.source == "labelled_volume_balanced"
+    pool = [25.0] * 80 + [45.0] * 15 + [60.0] * 5
+    pct = _pct_above(pool, rec.value)
+    assert 4.0 <= pct <= 12.0, f"sent {pct}% (threshold {rec.value})"
+
+
+def test_resolve_role_fit_threshold_auto_uses_send_calibrator(db):
+    org, role = _make_world(db)
+    role.auto_reject_threshold_mode = "auto"
+    role.score_threshold = 30  # stale manual value must be ignored in auto mode
+    for _ in range(90):
+        _add_scored(db, org=org, role=role, cv=30.0)
+    for _ in range(10):
+        _add_scored(db, org=org, role=role, cv=70.0)
+    db.flush()
+    eff = resolve_role_fit_threshold(db, role=role)
+    assert eff is not None and eff > 30, f"auto mode must use the dynamic bar, got {eff}"
