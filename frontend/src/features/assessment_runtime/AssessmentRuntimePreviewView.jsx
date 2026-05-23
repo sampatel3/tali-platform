@@ -161,15 +161,16 @@ export const AssessmentRuntimePreviewView = ({
         onSubmit={() => {}}
       />
 
-      <AssessmentContextWindow
-        taskName={taskName || 'Assessment workspace'}
-        taskRole={taskRole || 'Preview workspace'}
-        taskContext={taskContext || PREVIEW_TASK_CONTEXT}
-        repoFiles={previewRepoFiles}
-        cloneCommand={null}
-      />
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <AssessmentContextWindow
+          taskName={taskName || 'Assessment workspace'}
+          taskRole={taskRole || 'Preview workspace'}
+          taskContext={taskContext || PREVIEW_TASK_CONTEXT}
+          repoFiles={previewRepoFiles}
+          cloneCommand={null}
+        />
 
-      <AssessmentWorkspace
+        <AssessmentWorkspace
         hasRepoStructure
         repoFileTree={repoFileTree}
         repoPanelCollapsed={repoPanelCollapsed}
@@ -208,7 +209,8 @@ export const AssessmentRuntimePreviewView = ({
         claudePromptSending={false}
         claudePromptDisabled={false}
         lightMode={lightMode}
-      />
+        />
+      </div>
     </div>
   );
 };

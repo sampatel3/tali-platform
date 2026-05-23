@@ -63,6 +63,7 @@ class Organization(Base):
     allowed_email_domains = Column(JSON, nullable=True)  # ["company.com", "subsidiary.org"]
     sso_enforced = Column(Boolean, default=False)
     saml_enabled = Column(Boolean, default=False)
+    two_factor_required = Column(Boolean, default=False, nullable=False)
     saml_metadata_url = Column(String, nullable=True)
     candidate_feedback_enabled = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

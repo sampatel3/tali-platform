@@ -1420,10 +1420,21 @@ def _queue(
     # (send_assessment with existing decision; auto_promote=True direct
     # dispatch; queue_* IntegrityError-retry). Anchoring the counter
     # here means it tracks what's truly in the queue. (Codex #179)
-    if getattr(decision, "_just_created", True):
+    just_created = bool(getattr(decision, "_just_created", True))
+    if just_created:
         agent_run.decisions_emitted = int(agent_run.decisions_emitted or 0) + 1
     auto_attr = _AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type)
-    if auto_attr and bool(getattr(role, auto_attr, False)):
+    # Only auto-execute a freshly-created, still-pending decision. A dedup
+    # return (existing pending, recently-discarded, or a prior_approved C4
+    # match) carries _just_created=False and may already be resolved —
+    # re-dispatching it would re-fire the side effect (resend invite, stage
+    # change, reject) for an already-handled decision. (Codex #241)
+    if (
+        auto_attr
+        and bool(getattr(role, auto_attr, False))
+        and just_created
+        and str(decision.status) == "pending"
+    ):
         _auto_execute_decision(
             db, role=role, decision=decision, decision_type=decision_type
         )

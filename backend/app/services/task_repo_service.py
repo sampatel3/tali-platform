@@ -116,7 +116,16 @@ def _write_repo_files(repo_dir: Path, repo_structure: Dict[str, Any] | None) -> 
 def task_main_repo_path(task: Any) -> str:
     key = getattr(task, "task_key", None) or f"task-{getattr(task, 'id', 'unknown')}"
     name = getattr(task, "name", None) or "assessment-task"
-    repo_dir = _repo_root() / f"{_slug(key)}-{_slug(name)}"
+    task_id = getattr(task, "id", None)
+    org_id = getattr(task, "organization_id", None)
+    # Two tasks (possibly in different orgs) can share the same key+name —
+    # qualify the directory with the task id and org id so distinct tasks
+    # never share a snapshot dir and recreate_task_main_repo can't rmtree
+    # another task's repo out from under it.
+    identity = "-".join(
+        str(part) for part in (org_id, task_id) if part is not None
+    ) or "x"
+    repo_dir = _repo_root() / f"{_slug(key)}-{_slug(name)}-{_slug(identity)}"
     return str(repo_dir)
 
 

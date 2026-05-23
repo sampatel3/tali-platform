@@ -21,9 +21,11 @@ from ...components.assessments.claude_budget import (
 from ...components.assessments.terminal_runtime import terminal_capabilities, terminal_env
 from ...components.integrations.claude.service import ClaudeService
 from ...models.organization import Organization
+from ...models.role import Role
 from ...models.task import Task
 from ...platform.database import get_db
 from ...schemas.assessment import ClaudeRequest
+from ...services.role_budget_gate import can_spend_on_role
 from ...services.task_repo_service import normalize_repo_files
 
 router = APIRouter()
@@ -218,6 +220,21 @@ def chat_with_claude(
             },
         )
 
+    # Universal role-level monthly USD cap. Enforce BEFORE spending — when
+    # the recruiter set a cap (typically with agentic mode), every Anthropic
+    # call on the role must check it first. resolve_effective_budget_limit_usd
+    # above is only a display snapshot; this is the hard pre-spend gate.
+    role = (
+        db.query(Role).filter(Role.id == assessment.role_id).first()
+        if getattr(assessment, "role_id", None)
+        else None
+    )
+    if not can_spend_on_role(db, role=role):
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={"message": "Claude budget for this role has been reached."},
+        )
+
     history = _normalize_history(data.conversation_history)
     message = str(data.message or "").strip()
     if not message:
@@ -297,32 +314,10 @@ def chat_with_claude(
         prompts=prompts,
     )
 
-    # Record usage event (shadow mode in Phase 2; ledger-debiting in Phase 6).
-    # Wrapped in try/except so a metering failure can't break a candidate's
-    # active assessment session.
-    try:
-        import logging as _logging
-
-        from ...services.pricing_service import Feature
-        from ...services.usage_metering_service import record_event as _meter_record_event
-
-        if assessment.organization_id:
-            _meter_record_event(
-                db,
-                organization_id=int(assessment.organization_id),
-                role_id=getattr(assessment, "role_id", None),
-                feature=Feature.ASSESSMENT,
-                model=getattr(claude, "model", "") or "",
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                entity_id=f"assessment:{assessment.id}",
-            )
-    except Exception:
-        import logging as _logging
-        _logging.getLogger("taali.usage_metering").exception(
-            "usage_metering record_event failed for assessment=%s",
-            getattr(assessment, "id", None),
-        )
+    # Usage is metered inside claude.chat() — MeteredAnthropicClient writes
+    # exactly one UsageEvent per Anthropic call from the metering= kwarg
+    # threaded by ClaudeService. No manual record_event here (it would
+    # double-bill).
 
     db.commit()
 

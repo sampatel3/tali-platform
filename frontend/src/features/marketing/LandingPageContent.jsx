@@ -385,7 +385,7 @@ export const LandingPage = ({ onNavigate }) => {
                 </div>
                 <aside
                   className={`agent-panel agent-${agentOn ? 'on' : 'off'}`}
-                  style={{ width: 300, minHeight: 215 }}
+                  style={{ width: '100%', maxWidth: 300, minHeight: 215 }}
                 >
                   <div className="agent-panel-head">
                     <div className="agent-pulse-wrap">

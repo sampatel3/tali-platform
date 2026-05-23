@@ -451,8 +451,23 @@ export const SingleSelect = ({
   const currentKey = value === undefined || value === null ? '' : String(value);
   const currentOption = normalizedOptions.find((option) => option.value === currentKey) || null;
   const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const optionRefs = useRef([]);
   const floatingMenuStyle = useFloatingMenuStyle(open, triggerRef);
   const resolvedMenuStyle = floatingMenuStyle || _buildFloatingMenuStyle(triggerRef.current);
+
+  const firstEnabledIndex = useCallback(
+    (from, direction) => {
+      const count = normalizedOptions.length;
+      if (count === 0) return -1;
+      for (let step = 0; step < count; step += 1) {
+        const index = ((from + direction * step) % count + count) % count;
+        if (!normalizedOptions[index].disabled) return index;
+      }
+      return -1;
+    },
+    [normalizedOptions],
+  );
 
   useEffect(() => {
     if (!open) return undefined;
@@ -477,9 +492,55 @@ export const SingleSelect = ({
     };
   }, [open]);
 
+  // When the menu opens, seed the active option (selected, else first
+  // enabled) and move keyboard focus into it so arrow navigation works.
+  useEffect(() => {
+    if (!open) {
+      setActiveIndex(-1);
+      return;
+    }
+    const selectedIndex = normalizedOptions.findIndex((option) => option.value === currentKey);
+    const next = selectedIndex >= 0 && !normalizedOptions[selectedIndex].disabled
+      ? selectedIndex
+      : firstEnabledIndex(0, 1);
+    setActiveIndex(next);
+  }, [open, currentKey, normalizedOptions, firstEnabledIndex]);
+
+  useEffect(() => {
+    if (!open || activeIndex < 0) return;
+    optionRefs.current[activeIndex]?.focus();
+  }, [open, activeIndex]);
+
   const choose = (next) => {
     if (typeof onChange === 'function') onChange(next);
     setOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  const onMenuKeyDown = (event) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setActiveIndex((current) => firstEnabledIndex(current < 0 ? 0 : current + 1, 1));
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActiveIndex((current) => firstEnabledIndex(current < 0 ? normalizedOptions.length - 1 : current - 1, -1));
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      setActiveIndex(firstEnabledIndex(0, 1));
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      setActiveIndex(firstEnabledIndex(normalizedOptions.length - 1, -1));
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      const option = normalizedOptions[activeIndex];
+      if (option && !option.disabled) choose(option.value);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      setOpen(false);
+      triggerRef.current?.focus();
+    } else if (event.key === 'Tab') {
+      setOpen(false);
+    }
   };
 
   return (
@@ -517,22 +578,33 @@ export const SingleSelect = ({
               className="taali-select-menu"
               style={resolvedMenuStyle}
               role="listbox"
+              tabIndex={-1}
               id={`taali-singleselect-listbox-${controlId}`}
+              aria-activedescendant={
+                activeIndex >= 0
+                  ? `${controlId}-option-${normalizedOptions[activeIndex]?.value}`
+                  : undefined
+              }
+              onKeyDown={onMenuKeyDown}
             >
-              {normalizedOptions.map((option) => {
+              {normalizedOptions.map((option, index) => {
                 const isSelected = option.value === currentKey;
                 return (
                   <button
                     key={`${controlId}-${option.value}`}
+                    id={`${controlId}-option-${option.value}`}
+                    ref={(node) => { optionRefs.current[index] = node; }}
                     type="button"
                     role="option"
                     aria-selected={isSelected}
+                    tabIndex={index === activeIndex ? 0 : -1}
                     className={cx(
                       'taali-select-option',
                       isSelected ? 'taali-select-option-selected' : ''
                     )}
                     disabled={option.disabled}
                     onClick={() => { if (!option.disabled) choose(option.value); }}
+                    onMouseEnter={() => { if (!option.disabled) setActiveIndex(index); }}
                   >
                     <span className="truncate">
                       {typeof renderOption === 'function' ? renderOption(option.raw) : option.label}

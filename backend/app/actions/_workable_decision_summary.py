@@ -165,18 +165,23 @@ def _mint_30d_share_link(
     Returns None when the row insert fails — the caller falls back to a
     note without a link rather than failing the whole summary.
     """
+    link = ShareLink(
+        organization_id=app.organization_id,
+        application_id=app.id,
+        created_by_user_id=created_by_user_id,
+        token=f"shr_{secrets.token_urlsafe(24)}",
+        mode=SHARE_LINK_MODE_RECRUITER,
+        expiry_preset="30d",
+        expires_at=_utcnow() + _SHARE_LINK_TTL,
+    )
+    # Insert inside a SAVEPOINT so a failed flush only rolls back this
+    # share-link insert — without it the outer transaction is left in a
+    # failed state and the caller's commit() raises PendingRollbackError,
+    # losing the stage/outcome change that already succeeded.
     try:
-        link = ShareLink(
-            organization_id=app.organization_id,
-            application_id=app.id,
-            created_by_user_id=created_by_user_id,
-            token=f"shr_{secrets.token_urlsafe(24)}",
-            mode=SHARE_LINK_MODE_RECRUITER,
-            expiry_preset="30d",
-            expires_at=_utcnow() + _SHARE_LINK_TTL,
-        )
-        db.add(link)
-        db.flush()
+        with db.begin_nested():
+            db.add(link)
+            db.flush()
     except Exception:  # pragma: no cover — defensive
         logger.exception(
             "share-link mint failed for application_id=%s", app.id

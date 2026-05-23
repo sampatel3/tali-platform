@@ -89,8 +89,9 @@ def _overall_score(
     }
     if not flat_scores:
         return None
-    # Converts weighted grade scale (1..3) into recruiter-visible 0..10 range.
-    return round(calculate_weighted_rubric_score(flat_scores, evaluation_rubric) * (10.0 / 3.0), 2)
+    # Converts weighted grade scale (1..3) into the candidate-facing 0..100
+    # range (the UI renders this value as "/100").
+    return round(calculate_weighted_rubric_score(flat_scores, evaluation_rubric) * (100.0 / 3.0), 2)
 
 
 def build_evaluation_result(

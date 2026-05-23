@@ -19,6 +19,7 @@ decision_feedback) are the source of truth; the graph is a derived index.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -106,19 +107,31 @@ def build_decision_episode(
     policy_revision_id: int | None,
     reasoning: str,
     created_at: datetime,
+    features_json: dict[str, Any] | None = None,
 ) -> Episode | None:
     if organization_id <= 0:
         return None
     group_id = graph_client.group_id_for_org(organization_id)
     name = candidate_full_name or f"Candidate {candidate_taali_id}"
-    body = "\n".join(
+    body_lines = [
+        f"Subject candidate: {name} (taali_id={candidate_taali_id})",
+        f"{schema.NODE_DECISION}: decision id D-{decision_id} on application "
+        f"taali_id={application_id} for role taali_id={role_id}.",
+        f"Recommended action: {recommended_action}.",
+        f"Policy revision id: {policy_revision_id}.",
+        f"Confidence: {confidence:.3f}.",
+    ]
+    # Serialise the decision's feature vector as a stable ``features_json``
+    # property so the nightly fitter's Graphiti collector
+    # (``_collect_from_graphiti``) can read it back off the DecisionEvent
+    # node. Without this the graph outcomes are dropped and only the
+    # Postgres fallback contributes training rows.
+    if features_json:
+        body_lines.append(
+            f"features_json: {json.dumps(features_json, sort_keys=True)}"
+        )
+    body_lines.extend(
         [
-            f"Subject candidate: {name} (taali_id={candidate_taali_id})",
-            f"{schema.NODE_DECISION}: decision id D-{decision_id} on application "
-            f"taali_id={application_id} for role taali_id={role_id}.",
-            f"Recommended action: {recommended_action}.",
-            f"Policy revision id: {policy_revision_id}.",
-            f"Confidence: {confidence:.3f}.",
             (
                 f"All {schema.NODE_AGENT_SCORE_EVENT} entries for application "
                 f"{application_id} {schema.EDGE_FED_INTO} this "
@@ -129,6 +142,7 @@ def build_decision_episode(
             (reasoning or "")[:1500],
         ]
     )
+    body = "\n".join(body_lines)
     return Episode(
         name=f"agent-decision-{decision_id}",
         body=body,

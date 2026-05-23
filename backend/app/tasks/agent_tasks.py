@@ -474,11 +474,19 @@ def _auto_enqueue_scoring(db, *, role, limit: int = AUTO_SCORE_PER_TICK_CAP) -> 
         from datetime import datetime, timedelta, timezone
         from sqlalchemy import and_, or_
 
+        from ..platform.config import settings
         from ..models.candidate_application import CandidateApplication
         from ..services.cv_score_orchestrator import enqueue_score
         from ..services.pre_screening_service import PRE_SCREEN_ERROR_BACKOFF
 
         backoff_cutoff = datetime.now(timezone.utc) - PRE_SCREEN_ERROR_BACKOFF
+        # Re-screen is only worthwhile when the candidate uploaded a newer
+        # CV after the last pre-screen run.
+        fresh_cv = and_(
+            CandidateApplication.cv_uploaded_at.isnot(None),
+            CandidateApplication.pre_screen_run_at.isnot(None),
+            CandidateApplication.cv_uploaded_at > CandidateApplication.pre_screen_run_at,
+        )
         unscored = (
             db.query(CandidateApplication)
             .filter(
@@ -495,10 +503,20 @@ def _auto_enqueue_scoring(db, *, role, limit: int = AUTO_SCORE_PER_TICK_CAP) -> 
                     CandidateApplication.pre_screen_error_reason.is_(None),
                     CandidateApplication.pre_screen_run_at.is_(None),
                     CandidateApplication.pre_screen_run_at < backoff_cutoff,
-                    and_(
-                        CandidateApplication.cv_uploaded_at.isnot(None),
-                        CandidateApplication.cv_uploaded_at > CandidateApplication.pre_screen_run_at,
-                    ),
+                    fresh_cv,
+                ),
+                # Skip candidates already pre-screened OUT (below threshold,
+                # no error). The orchestrator NULLs cv_match_score on a
+                # below-threshold complete, so without this they match the
+                # cv_match_score IS NULL filter and earn a fresh CvScoreJob
+                # every tick — re-running pre-screen to the same below-
+                # threshold verdict (churn). Re-screen only when a newer CV
+                # was uploaded.
+                or_(
+                    CandidateApplication.pre_screen_score_100.is_(None),
+                    CandidateApplication.pre_screen_score_100 >= settings.PRE_SCREEN_THRESHOLD,
+                    CandidateApplication.pre_screen_error_reason.isnot(None),
+                    fresh_cv,
                 ),
             )
             # Oldest first so the backlog drains in a fair order. The
@@ -564,8 +582,11 @@ def _cycle_would_be_noop(db, *, role) -> bool:
         if any(int(counts.get(s) or 0) > 0 for s in actionable_states):
             return False
 
-        # Anything to ask or answer about the role?
-        if survey.get("open_questions") or survey.get("intent_gaps"):
+        # Anything to ask or answer about the role? survey_role_state
+        # emits the list under ``open_recruiter_questions`` — reading the
+        # wrong key here treated roles with unresolved recruiter questions
+        # as no-ops and skipped their cycle.
+        if survey.get("open_recruiter_questions") or survey.get("intent_gaps"):
             return False
 
         # Backlog work the agent should kick off? auto_enqueue_scoring

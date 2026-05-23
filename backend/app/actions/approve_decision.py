@@ -67,10 +67,13 @@ def run(
     decision = decision_query.first()
     if decision is None:
         raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
-    if decision.status != "pending":
+    # ``reverted_for_feedback`` is a taught-but-not-yet-resolved decision —
+    # the whole point of "teach" is that the corrected row can then be
+    # approved/overridden, so it must remain actionable alongside ``pending``.
+    if decision.status not in ("pending", "reverted_for_feedback"):
         raise HTTPException(
             status_code=409,
-            detail=f"agent_decision {decision_id} is {decision.status}, not pending",
+            detail=f"agent_decision {decision_id} is {decision.status}, not actionable",
         )
 
     metadata = {

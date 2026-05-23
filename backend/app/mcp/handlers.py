@@ -11,7 +11,6 @@ Org-scoping is enforced inside every handler via ``user.organization_id``.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from sqlalchemy import func, or_
@@ -238,8 +237,6 @@ def search_applications(
             )
         )
 
-    apps = query.all()
-
     sort_column_map = {
         "taali_score": "taali_score_cache_100",
         "pre_screen_score": "pre_screen_score_100",
@@ -249,26 +246,24 @@ def search_applications(
     }
     if sort_by not in sort_column_map:
         raise ValueError(f"sort_by must be one of {sorted(sort_column_map)}, got {sort_by!r}")
-    sort_attr = sort_column_map[sort_by]
-    reverse = sort_order != "asc"
-
-    def _key(app: CandidateApplication) -> Any:
-        value = getattr(app, sort_attr, None)
-        if sort_by == "created_at":
-            return value or datetime.min.replace(tzinfo=timezone.utc)
-        return value if value is not None else float("-inf")
+    sort_col = getattr(CandidateApplication, sort_column_map[sort_by])
+    ascending = sort_order == "asc"
 
     # Agent should evaluate candidates the recruiter has already moved
     # forward (pipeline_stage='advanced') BEFORE fresh applied rows —
     # those carry hard recruiter signal and tend to be the ones a
-    # decision is actually waiting on. We split-then-sort instead of
-    # using a tuple key so the ordering survives sort_order='asc' too.
-    advanced_apps = [a for a in apps if (a.pipeline_stage or "").lower() == "advanced"]
-    other_apps = [a for a in apps if (a.pipeline_stage or "").lower() != "advanced"]
-    advanced_apps.sort(key=_key, reverse=reverse)
-    other_apps.sort(key=_key, reverse=reverse)
-    apps = advanced_apps + other_apps
-    return [application_summary(a) for a in apps[:limit]]
+    # decision is actually waiting on. Express that ordering in SQL — an
+    # "is advanced" flag first, then the chosen sort column — so we can
+    # push .limit() to the DB instead of materializing the whole org's
+    # filtered set and slicing in Python.
+    is_advanced = func.lower(func.coalesce(CandidateApplication.pipeline_stage, "")) == "advanced"
+    # NULL scores sort as the smallest value (matches the previous
+    # float("-inf") key): last on desc, first on asc.
+    score_order = sort_col.asc().nullsfirst() if ascending else sort_col.desc().nullslast()
+    query = query.order_by(is_advanced.desc(), score_order)
+
+    apps = query.limit(limit).all()
+    return [application_summary(a) for a in apps]
 
 
 def get_application(

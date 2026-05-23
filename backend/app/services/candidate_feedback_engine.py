@@ -1663,7 +1663,11 @@ def _assessment_score_components_100(assessment: Assessment) -> dict[str, float 
         if getattr(assessment, "assessment_score", None) is not None
         else getattr(assessment, "final_score", None)
         if getattr(assessment, "final_score", None) is not None
-        else getattr(assessment, "score", None)
+        # Legacy ``score`` is the 0-10 column; rescale to 0-100 since
+        # ``_normalize_score_100`` only clamps and no longer upscales.
+        else getattr(assessment, "score", None) * 10.0
+        if isinstance(getattr(assessment, "score", None), (int, float))
+        else None
     )
     taali_score = _normalize_score_100(
         score_components.get("taali_score")
@@ -2180,7 +2184,7 @@ def _debrief_markdown(payload: dict[str, Any]) -> str:
     for item in payload.get("probing_questions", []):
         lines.extend(
             [
-                f"### {item.get('dimension')} ({item.get('score')}/10)",
+                f"### {item.get('dimension')} ({item.get('score')}/100)",
                 item.get("pattern", ""),
                 f"- Question: {item.get('question')}",
                 f"- What to listen for: {item.get('what_to_listen_for')}",
@@ -2207,7 +2211,9 @@ def build_interview_debrief_payload_for_application(application: CandidateApplic
     role_focus = application.role.interview_focus if getattr(application, "role", None) and isinstance(application.role.interview_focus, dict) else {}
     role_questions = role_focus.get("questions") if isinstance(role_focus.get("questions"), list) else []
     role_fit_score = _application_score_components_100(application).get("role_fit_score")
-    role_score_10 = round(role_fit_score / 10.0, 1) if isinstance(role_fit_score, (int, float)) else None
+    # Candidate/UI-facing structured score is rendered "/100"; role_fit_score
+    # is already on the 0-100 scale.
+    role_score_100 = round(role_fit_score, 1) if isinstance(role_fit_score, (int, float)) else None
     candidate_name = _application_candidate_name(application)
     role_name = application.role.name if getattr(application, "role", None) else "this role"
     matching_skills = [str(item).strip() for item in details.get("matching_skills", []) if str(item).strip()]
@@ -2227,7 +2233,7 @@ def build_interview_debrief_payload_for_application(application: CandidateApplic
             {
                 "dimension_id": "screening_transcript",
                 "dimension": "Stage 1 screening",
-                "score": role_score_10,
+                "score": role_score_100,
                 "pattern": fireflies_context.get("latest_summary") or "Stage 1 Fireflies transcript is linked.",
                 "question": (
                     f"Follow up on the strongest claim and unresolved risk from the Stage 1 screening call for {role_name}."
@@ -2245,7 +2251,7 @@ def build_interview_debrief_payload_for_application(application: CandidateApplic
             {
                 "dimension_id": requirement.lower().replace(" ", "_"),
                 "dimension": requirement,
-                "score": role_score_10,
+                "score": role_score_100,
                 "pattern": evidence or "Requirement gap surfaced from CV-to-role analysis.",
                 "question": f"Tell me about a recent project where you demonstrated {requirement.lower()} for {role_name}.",
                 "what_to_listen_for": "Recent ownership, tool fluency, concrete tradeoffs, and measurable outcomes.",
@@ -2266,7 +2272,7 @@ def build_interview_debrief_payload_for_application(application: CandidateApplic
             {
                 "dimension_id": "role_validation",
                 "dimension": "Role validation",
-                "score": role_score_10,
+                "score": role_score_100,
                 "pattern": "; ".join(str(signal).strip() for signal in concerning_signals[:2] if str(signal).strip()) or "Role-specific validation prompt.",
                 "question": question,
                 "what_to_listen_for": ", ".join(str(signal).strip() for signal in listen_for[:3] if str(signal).strip()) or "Concrete examples and clear technical reasoning.",
@@ -2279,7 +2285,7 @@ def build_interview_debrief_payload_for_application(application: CandidateApplic
             {
                 "dimension_id": "role_fit",
                 "dimension": "Role fit",
-                "score": role_score_10,
+                "score": role_score_100,
                 "pattern": "Generated from CV and recruiter role-fit evidence because no completed assessment exists yet.",
                 "question": f"Walk me through a recent example that validates {fallback_topic} for {role_name}.",
                 "what_to_listen_for": "Specific delivery ownership, practical tradeoffs, and evidence that the candidate can ramp quickly.",
@@ -2291,7 +2297,7 @@ def build_interview_debrief_payload_for_application(application: CandidateApplic
         strengths.append(
             {
                 "dimension_id": "role_fit",
-                "score": role_score_10,
+                "score": role_score_100,
                 "text": f"Validate delivery depth in {skill} with a recent concrete example.",
             }
         )
@@ -2309,7 +2315,7 @@ def build_interview_debrief_payload_for_application(application: CandidateApplic
         red_flags.append(
             {
                 "dimension_id": "role_gap",
-                "score": role_score_10,
+                "score": role_score_100,
                 "text": f"Skill gap surfaced in role-fit review: {skill}.",
                 "follow_up_question": f"What direct experience do you have with {skill}, and where would you need support?",
             }
@@ -2320,7 +2326,7 @@ def build_interview_debrief_payload_for_application(application: CandidateApplic
         red_flags.append(
             {
                 "dimension_id": "role_risk",
-                "score": role_score_10,
+                "score": role_score_100,
                 "text": concern,
                 "follow_up_question": "Ask for a recent example that addresses this concern directly.",
             }
@@ -2421,7 +2427,9 @@ def build_interview_debrief_payload(assessment: Assessment) -> dict[str, Any]:
             {
                 "dimension_id": key,
                 "dimension": meta.get("label", key),
-                "score": round(score, 1),
+                # Candidate/UI-facing structured score is rendered "/100";
+                # category scores are on a 0-10 scale, so rescale to 0-100.
+                "score": round(score * 10.0, 1),
                 "pattern": pattern,
                 "question": question,
                 "what_to_listen_for": meta.get(

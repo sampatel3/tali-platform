@@ -434,11 +434,17 @@ def run(
         cv_fingerprint=cv_fp,
         decision_dedup_key=dedup_key,
     )
-    db.add(decision)
+    # Scope the insert in a savepoint so an idempotency-key collision rolls
+    # back only this nested transaction, not the whole session — a full
+    # ``db.rollback()`` here would abort the outer agent-cycle transaction
+    # and discard every prior write in the cycle. (Codex #42)
+    nested = db.begin_nested()
     try:
+        db.add(decision)
         db.flush()
+        nested.commit()
     except IntegrityError:
-        db.rollback()
+        nested.rollback()
         existing = (
             db.query(AgentDecision)
             .filter(AgentDecision.idempotency_key == idempotency_key)
@@ -512,6 +518,12 @@ def _emit_decision_episode_safe(db: Session, *, decision: AgentDecision) -> None
         )
         full_name = candidate.full_name if candidate is not None else None
         candidate_id = int(candidate.id) if candidate is not None else int(app.candidate_id)
+        # Serialise the decision's feature vector into the episode so the
+        # nightly policy fitter can recover graph-side training examples;
+        # without this the graph collector has no features and silently
+        # falls back to weaker Postgres labels.
+        from ..decision_policy.nightly_policy_fit import _features_for_decision
+
         agent_episodes.emit_decision_event(
             organization_id=int(decision.organization_id),
             candidate_full_name=full_name,
@@ -524,6 +536,7 @@ def _emit_decision_episode_safe(db: Session, *, decision: AgentDecision) -> None
             policy_revision_id=None,
             reasoning=str(decision.reasoning or ""),
             created_at=decision.created_at or _now(),
+            features_json=_features_for_decision(decision) or None,
         )
     except Exception:
         import logging

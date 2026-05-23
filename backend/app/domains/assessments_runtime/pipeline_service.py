@@ -72,10 +72,15 @@ _SYSTEM_STAGE_TRANSITIONS = {
     ("in_assessment", "review"),
 }
 _LEGACY_COMPAT_EDGES: dict[str, list[tuple[str, str]]] = {
-    "applied": [("invited", "recruiter")],
-    "invited": [("in_assessment", "system")],
-    "in_assessment": [("review", "system")],
-    "review": [("invited", "recruiter")],
+    # Direct edges to "advanced" mirror the recruiter hand-back flow
+    # (see _RECRUITER_STAGE_TRANSITIONS): a legacy status that maps to
+    # "advanced" (hired / offer_accepted / any post-handover Workable
+    # stage) must be able to actually reach it, otherwise
+    # apply_legacy_status_update raises 409 "cannot reach stage 'advanced'".
+    "applied": [("invited", "recruiter"), ("advanced", "recruiter")],
+    "invited": [("in_assessment", "system"), ("advanced", "recruiter")],
+    "in_assessment": [("review", "system"), ("advanced", "recruiter")],
+    "review": [("invited", "recruiter"), ("advanced", "recruiter")],
 }
 
 

@@ -61,7 +61,7 @@ def run_auto_reject_if_needed(
     if role is not None and not bool(getattr(role, "auto_reject", False)):
         snapshot = decision.get("snapshot") if isinstance(decision.get("snapshot"), dict) else {}
         config = decision.get("config") if isinstance(decision.get("config"), dict) else {}
-        queue_pre_screen_reject(
+        queued = queue_pre_screen_reject(
             db,
             organization_id=int(app.organization_id),
             role=role,
@@ -73,6 +73,19 @@ def run_auto_reject_if_needed(
                 "requirements_fit_score": snapshot.get("requirements_fit_score"),
             },
         )
+        # Only claim Decision Hub review when a card was actually created.
+        # ``queue_pre_screen_reject`` returns None for agent-off roles (or
+        # on emit failure) — in that case nothing surfaces in the Hub, so
+        # reporting "awaiting_recruiter_approval" would be a silent lie.
+        # Fall back to "skipped" so the state reflects the true outcome.
+        if queued is None:
+            reason = (
+                "Below pre-screen threshold; auto_reject is off and no "
+                "Decision Hub card was created (role not under agent "
+                "management)."
+            )
+            mark_auto_reject_state(app, state="skipped", reason=reason, triggered=False)
+            return {**decision, "performed": False, "state": "skipped", "reason": reason}
         mark_auto_reject_state(
             app,
             state="awaiting_recruiter_approval",
@@ -90,6 +103,49 @@ def run_auto_reject_if_needed(
                 "Below pre-screen threshold; auto_reject is off — leaving "
                 "open for Decision Hub review."
             ),
+        }
+
+    # Candidate-linkage gate. The Workable write-back below disqualifies by
+    # ``workable_candidate_id``; an unlinked candidate hits a guaranteed
+    # ``missing_candidate_id`` failure. ``evaluate_auto_reject_decision``
+    # lets unlinked candidates through when the role is agentic_eligible, so
+    # don't attempt the Workable round-trip — surface a Decision Hub card
+    # instead (or skip cleanly if no card can be created). (Codex #229)
+    if role is not None and not getattr(app, "workable_candidate_id", None):
+        snapshot = decision.get("snapshot") if isinstance(decision.get("snapshot"), dict) else {}
+        config = decision.get("config") if isinstance(decision.get("config"), dict) else {}
+        queued = queue_pre_screen_reject(
+            db,
+            organization_id=int(app.organization_id),
+            role=role,
+            application=app,
+            pre_screen_score=snapshot.get("pre_screen_score"),
+            threshold=config.get("threshold_100"),
+            evidence={
+                "cv_fit_score": snapshot.get("cv_fit_score"),
+                "requirements_fit_score": snapshot.get("requirements_fit_score"),
+            },
+        )
+        if queued is None:
+            reason = (
+                "Below pre-screen threshold but candidate is not linked to "
+                "Workable and no Decision Hub card was created; skipping "
+                "auto-reject write-back."
+            )
+            mark_auto_reject_state(app, state="skipped", reason=reason, triggered=False)
+            return {**decision, "performed": False, "state": "skipped", "reason": reason}
+        reason = (
+            "Below pre-screen threshold; candidate not linked to Workable — "
+            "surfaced for Decision Hub review instead of write-back."
+        )
+        mark_auto_reject_state(
+            app, state="awaiting_recruiter_approval", reason=reason, triggered=False
+        )
+        return {
+            **decision,
+            "performed": False,
+            "state": "awaiting_recruiter_approval",
+            "reason": reason,
         }
 
     if not org or not org.workable_connected or not org.workable_access_token or not org.workable_subdomain:

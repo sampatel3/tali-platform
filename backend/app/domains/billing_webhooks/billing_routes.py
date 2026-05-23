@@ -66,7 +66,10 @@ def _duration_hours(assessment: Assessment) -> float:
         delta = assessment.completed_at - assessment.started_at
         return max(delta.total_seconds() / 3600.0, 0.0)
     if assessment.started_at and assessment.status == AssessmentStatus.IN_PROGRESS:
-        delta = datetime.now(timezone.utc) - assessment.started_at
+        started_at = assessment.started_at
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - started_at
         return max(delta.total_seconds() / 3600.0, 0.0)
     return 0.0
 

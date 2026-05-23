@@ -134,10 +134,13 @@ def subgraph_for_candidates(
     # Cap to 50 candidates per call so the prefix list (and the resulting
     # Cypher) stays bounded even if a caller asks for a huge set.
     capped_ids = ids[:50]
-    prefixes = _episode_prefixes_for_candidates(db, capped_ids)
+    selectors = _episode_prefixes_for_candidates(db, capped_ids)
+    prefixes, exact_names = _split_episode_selectors(selectors)
     try:
         result = graph_client.run_async(
-            _cypher_subgraph_by_prefixes(graphiti.driver, group_id, prefixes),
+            _cypher_subgraph_by_prefixes(
+                graphiti.driver, group_id, prefixes, exact_names
+            ),
             timeout=8.0,
         )
         _merge_neo4j_records(result, nodes, edges, seen_edge_keys=seen_edge_keys)
@@ -151,7 +154,7 @@ def _episode_prefixes_for_candidates(
     db: "Session | None",  # type: ignore[name-defined]
     candidate_ids: list[int],
 ) -> list[str]:
-    """Build the full set of Graphiti episode-name prefixes for these
+    """Build the full set of Graphiti episode-name selectors for these
     candidates.
 
     Always includes ``candidate-{id}-`` (covers profile / skills-education
@@ -161,6 +164,12 @@ def _episode_prefixes_for_candidates(
       the candidates' applications (transcript + summary episodes).
     - ``event-{eid}`` for every CandidateApplicationEvent on those
       applications (pipeline transitions + recruiter notes).
+
+    ``candidate-`` / ``interview-`` selectors carry a trailing ``-`` and
+    are matched with ``STARTS WITH``; ``event-`` selectors have no
+    terminator and are matched by EXACT name (see
+    ``_split_episode_selectors`` / ``_cypher_subgraph_by_prefixes``) so
+    ``event-20`` can't bleed into ``event-201`` from another candidate.
 
     Without ``db`` we degrade gracefully to candidate-only prefixes —
     callers like the runner always have ``db`` so this is just a safety
@@ -202,7 +211,10 @@ def _episode_prefixes_for_candidates(
         for (eid,) in event_ids:
             if eid is not None:
                 # Event episodes are named exactly "event-{id}" (no trailing
-                # dash, no suffix) — STARTS WITH still matches.
+                # dash, no suffix). Carried in the same list but matched by
+                # EXACT name downstream — a STARTS WITH prefix would let
+                # "event-20" also match "event-201" etc., polluting one
+                # candidate's subgraph with another's events.
                 prefixes.append(f"event-{int(eid)}")
     except Exception as exc:
         logger.warning(
@@ -211,6 +223,24 @@ def _episode_prefixes_for_candidates(
             exc,
         )
     return prefixes
+
+
+def _split_episode_selectors(selectors: list[str]) -> tuple[list[str], list[str]]:
+    """Partition raw episode selectors into ``(prefixes, exact_names)``.
+
+    Selectors ending in ``-`` (``candidate-N-``, ``interview-N-``) are
+    prefix matches; everything else (``event-N``) is an exact-name match.
+    Keeping the split here means callers/tests can still treat the selector
+    list as one flat thing while the Cypher applies the right operator.
+    """
+    prefixes: list[str] = []
+    exact_names: list[str] = []
+    for selector in selectors:
+        if selector.endswith("-"):
+            prefixes.append(selector)
+        else:
+            exact_names.append(selector)
+    return prefixes, exact_names
 
 
 def subgraph_for_query(*, organization_id: int, query: str) -> GraphPayload:
@@ -275,40 +305,49 @@ async def _cypher_subgraph_by_query(
 
 
 async def _cypher_subgraph_by_prefixes(
-    driver, group_id: str, prefixes: list[str]
+    driver, group_id: str, prefixes: list[str], exact_names: list[str] | None = None
 ):
     """Edges introduced by every episode whose name starts with one of
-    ``prefixes`` (covers ``candidate-{id}-*``, ``interview-{iid}-*``,
-    ``event-{eid}`` for one or more candidates).
+    ``prefixes`` (covers ``candidate-{id}-*``, ``interview-{iid}-*``) OR
+    exactly equals one of ``exact_names`` (``event-{eid}`` for one or more
+    candidates).
 
     Uses string formatting instead of parameterized queries (same reason as
     _cypher_subgraph_by_query above).
 
     Safety:
     - ``prefixes`` are server-built strings of the form ``"candidate-N-"``
-      / ``"interview-N-"`` / ``"event-N"`` where N is a Python int — safe
-      to interpolate. We still single-quote-escape defensively.
+      / ``"interview-N-"`` and ``exact_names`` ``"event-N"`` where N is a
+      Python int — safe to interpolate. We still single-quote-escape
+      defensively.
     - ``group_id`` is always ``org-{int}`` — no user-controlled chars.
+
+    Event episodes are matched by EXACT name (not prefix) because they are
+    named ``event-{id}`` with no terminator, so a prefix match would let
+    ``event-20`` also pull ``event-201`` from a different candidate.
 
     We do NOT filter Episode nodes by group_id property because it may not
     be stored on Episode nodes in this Graphiti version. Instead we rely on:
-    - The episode-name prefix on ``ep.name`` (candidate-scoped).
+    - The episode-name selector on ``ep.name`` (candidate-scoped).
     - The ``e.group_id`` filter on the RELATES_TO edge (org-scoped).
     """
-    if not prefixes:
+    exact_names = exact_names or []
+    if not prefixes and not exact_names:
         return None
     safe_prefixes = [p.replace("'", "\\'") for p in prefixes]
+    safe_exact = [n.replace("'", "\\'") for n in exact_names]
     prefix_list = ", ".join(f"'{p}'" for p in safe_prefixes)
+    exact_list = ", ".join(f"'{n}'" for n in safe_exact)
     # Graphiti's episode nodes carry the label ``:Episodic`` (see
     # graphiti_core.nodes.EpisodicNode). Earlier this query used
     # ``:Episode``, which silently matches nothing and produces a Neo4j
     # UnknownLabelWarning rather than an error — the per-candidate
     # subgraph fetch was a no-op until this was corrected.
     cypher = f"""
-        WITH [{prefix_list}] AS prefixes
-        UNWIND prefixes AS prefix
+        WITH [{prefix_list}] AS prefixes, [{exact_list}] AS exact_names
         MATCH (ep:Episodic)
-        WHERE ep.name STARTS WITH prefix
+        WHERE any(prefix IN prefixes WHERE ep.name STARTS WITH prefix)
+           OR ep.name IN exact_names
         MATCH (ep)-[:MENTIONS]->(s:Entity)-[e:RELATES_TO]->(t:Entity)
         WHERE e.group_id = '{group_id}'
         RETURN

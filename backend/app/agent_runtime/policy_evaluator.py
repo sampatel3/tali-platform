@@ -347,11 +347,17 @@ def _maybe_escalate(
         if not result.ok:
             continue
         per_agent_names.append(name)
-        # Normalise [0, 100] → [0, 1] so the disagreement spread is
-        # meaningful regardless of the original signal scale.
-        raw_score = result.confidence
+        # Disagreement is measured over each agent's *predicted score*, not
+        # its confidence metadata. ``SubAgentResult.confidence`` defaults to
+        # 0.0 (never None), so reading it first collapsed the spread to zeros;
+        # use the agent's output["score"] and only fall back to confidence
+        # when no score was emitted. Normalise [0, 100] → [0, 1] so the
+        # spread is meaningful regardless of the original signal scale.
+        output = result.output or {}
+        raw_score = output.get("score")
         if raw_score is None:
-            raw_score = float((result.output or {}).get("score") or 0.0)
+            raw_score = result.confidence
+        raw_score = float(raw_score or 0.0)
         if raw_score > 1.0:
             raw_score = raw_score / 100.0
         per_agent_scores.append(float(raw_score))

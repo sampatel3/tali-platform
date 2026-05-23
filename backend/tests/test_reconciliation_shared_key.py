@@ -46,23 +46,23 @@ def _seed_event(
     when: datetime,
     feature: str = "score",
 ):
-    db.add(
-        UsageEvent(
-            organization_id=org_id,
-            feature=feature,
-            model=model,
-            input_tokens=100,
-            output_tokens=50,
-            cache_read_tokens=0,
-            cache_creation_tokens=0,
-            cost_usd_micro=cost_micro,
-            markup_multiplier=1,
-            credits_charged=cost_micro,
-            cache_hit=0,
-            created_at=when,
-        )
+    ev = UsageEvent(
+        organization_id=org_id,
+        feature=feature,
+        model=model,
+        input_tokens=100,
+        output_tokens=50,
+        cache_read_tokens=0,
+        cache_creation_tokens=0,
+        cost_usd_micro=cost_micro,
+        markup_multiplier=1,
+        credits_charged=cost_micro,
+        cache_hit=0,
+        created_at=when,
     )
+    db.add(ev)
     db.flush()
+    return ev
 
 
 def test_model_match_filter_accepts_dated_snapshot_and_short_alias(db):
@@ -162,8 +162,8 @@ def _assign_big_pk(mapper, connection, target):  # pragma: no cover
 _sa_event.listen(ClaudeCallLog, "before_insert", _assign_big_pk)
 
 
-def _seed_call_log(db, *, org_id, model, cost_micro, when, status="ok"):
-    db.add(ClaudeCallLog(
+def _seed_call_log(db, *, org_id, model, cost_micro, when, status="ok", usage_event_id=None):
+    row = ClaudeCallLog(
         organization_id=org_id,
         model=model,
         input_tokens=100,
@@ -174,26 +174,47 @@ def _seed_call_log(db, *, org_id, model, cost_micro, when, status="ok"):
         feature_hint="score",
         status=status,
         created_at=when,
-    ))
+        usage_event_id=usage_event_id,
+    )
+    db.add(row)
     db.flush()
+    return row
 
 
-def test_prefers_call_log_when_present(db):
-    """When claude_call_log has rows for the day, it wins over usage_events
-    — even if usage_events shows a different (lower, leaky) number."""
+def test_dedupes_usage_events_linked_to_call_log(db):
+    """A usage_event already represented by a call_log row (via
+    usage_event_id) must not be double-counted on top of call_log."""
     org = Organization(name="O", slug=f"o-{id(db)}")
     db.add(org); db.commit()
     when = datetime(2026, 5, 22, 10, 0, tzinfo=timezone.utc)
-    # usage_events undercounts (the leak): $2
-    _seed_event(db, org_id=org.id, model="claude-haiku-4-5-20251001", cost_micro=2_000_000, when=when)
-    # call_log has the truth: $10 across 5 calls
+    # 5 calls, each wrote BOTH a usage_event ($2) and a linked call_log row ($2).
     for _ in range(5):
-        _seed_call_log(db, org_id=org.id, model="claude-haiku-4-5-20251001", cost_micro=2_000_000, when=when)
+        ev = _seed_event(db, org_id=org.id, model="claude-haiku-4-5-20251001", cost_micro=2_000_000, when=when)
+        _seed_call_log(db, org_id=org.id, model="claude-haiku-4-5-20251001", cost_micro=2_000_000, when=when, usage_event_id=int(ev.id))
     db.commit()
 
     agg = _aggregate_internal(db, organization_id=int(org.id), model="claude-haiku-4-5-20251001", usage_day=date(2026, 5, 22))
-    assert agg["cost_usd_micro"] == 10_000_000  # call_log, not the $2 usage_events
+    assert agg["cost_usd_micro"] == 10_000_000  # call_log only — linked usage_events deduped
     assert agg["event_count"] == 5
+
+
+def test_combines_unlinked_usage_events_on_partial_day(db):
+    """Partial coverage: some calls wrote only a usage_event (no call_log
+    row). Those must be ADDED to call_log totals, not dropped."""
+    org = Organization(name="O", slug=f"o-{id(db)}")
+    db.add(org); db.commit()
+    when = datetime(2026, 5, 22, 10, 0, tzinfo=timezone.utc)
+    # 4 calls via the metered client: usage_event ($2) + linked call_log ($2).
+    for _ in range(4):
+        ev = _seed_event(db, org_id=org.id, model="claude-haiku-4-5-20251001", cost_micro=2_000_000, when=when)
+        _seed_call_log(db, org_id=org.id, model="claude-haiku-4-5-20251001", cost_micro=2_000_000, when=when, usage_event_id=int(ev.id))
+    # 1 call metered via record_event only — no call_log row, unlinked ($3).
+    _seed_event(db, org_id=org.id, model="claude-haiku-4-5-20251001", cost_micro=3_000_000, when=when)
+    db.commit()
+
+    agg = _aggregate_internal(db, organization_id=int(org.id), model="claude-haiku-4-5-20251001", usage_day=date(2026, 5, 22))
+    assert agg["cost_usd_micro"] == 11_000_000  # $8 call_log + $3 unlinked usage_event
+    assert agg["event_count"] == 5  # 4 call_log + 1 unlinked usage_event
 
 
 def test_falls_back_to_usage_events_when_call_log_empty(db):
