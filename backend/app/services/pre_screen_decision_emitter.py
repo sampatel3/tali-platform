@@ -163,12 +163,19 @@ def queue_pre_screen_reject(
                 .first()
             )
             # Only revive a *system-discarded* card (what the reconcile /
-            # supersede paths set). Never reopen a recruiter resolution
-            # (``overridden`` / ``approved`` / ``reverted_for_feedback``) or
-            # an ``expired`` row: the cohort tick re-runs reconcile every
-            # cycle, so reviving those would undo the human decision on every
-            # tick. Leave them untouched and return as-is.
-            if existing is not None and existing.status == "discarded":
+            # supersede paths set: status='discarded' with NO human resolver).
+            # Never reopen a recruiter resolution — that includes ``overridden``
+            # / ``approved`` / ``reverted_for_feedback`` AND a recruiter
+            # *discard* (the toggle-off bulk discard also sets
+            # status='discarded' but stamps ``resolved_by_user_id``). The
+            # cohort tick re-runs reconcile every cycle, so reviving any of
+            # these would undo the human decision on every tick. Leave them
+            # untouched and return as-is.
+            if (
+                existing is not None
+                and existing.status == "discarded"
+                and existing.resolved_by_user_id is None
+            ):
                 existing.status = "pending"
                 existing.resolved_at = None
                 existing.resolution_note = None
@@ -468,6 +475,8 @@ def rederive_pre_screen_recommendations(
     # Lazy imports: the emitter is imported by application_automation_service
     # alongside pre_screening_service, so importing the latter at module load
     # would risk a cycle. Inside the function it's safe.
+    from sqlalchemy import func
+
     from .pre_screening_service import resolved_auto_reject_config
     from .pre_screening_snapshot import pre_screen_recommendation_label
 
@@ -476,7 +485,11 @@ def rederive_pre_screen_recommendations(
         .join(Role, Role.id == CandidateApplication.role_id)
         .filter(
             CandidateApplication.pre_screen_score_100.isnot(None),
-            CandidateApplication.pre_screen_recommendation == "Below threshold",
+            # Case/space-insensitive — the decider normalizes too, so
+            # non-canonical stored labels ("below threshold", trailing space)
+            # must be corrected here as well or the self-heal never converges.
+            func.lower(func.trim(func.coalesce(CandidateApplication.pre_screen_recommendation, "")))
+            == "below threshold",
             CandidateApplication.deleted_at.is_(None),
             Role.deleted_at.is_(None),
         )

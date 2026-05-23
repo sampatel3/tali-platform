@@ -551,6 +551,29 @@ def test_rederive_relabels_above_cutoff_below_threshold_rows(db):
     assert null_rec.pre_screen_recommendation == "Below threshold"
 
 
+def test_rederive_corrects_non_canonical_below_threshold_label(db):
+    """Stale labels stored non-canonically ('below threshold ' lowercase +
+    space) must still be scanned and corrected, or the self-heal never
+    converges on dirty data.
+    """
+    from app.services.pre_screen_decision_emitter import rederive_pre_screen_recommendations
+
+    org = Organization(name="Norm", slug=f"nm-{id(db)}")
+    db.add(org); db.flush()
+    role = Role(
+        organization_id=org.id, name="R", source="manual",
+        auto_reject=False, agentic_mode_enabled=True, score_threshold=30,
+    )
+    db.add(role); db.flush()
+    app = _add_app(db, org, role, score=40.0, rec="below threshold ", email="nc@x.test")
+    db.commit()
+
+    summary = rederive_pre_screen_recommendations(db, role_id=int(role.id))
+    assert summary["updated"] == 1
+    db.refresh(app)
+    assert app.pre_screen_recommendation == "Manual review recommended"
+
+
 def test_queue_pre_screen_reject_revives_discarded_card(db):
     """The per-app idempotency key blocks a 2nd insert, so re-queueing after
     a discard must REVIVE the existing row to pending — not leave the
@@ -601,6 +624,35 @@ def test_queue_pre_screen_reject_does_not_revive_recruiter_resolution(db):
     assert result.status == "overridden"  # left as-is, NOT revived to pending
     n = db.query(AgentDecision).filter(AgentDecision.application_id == app.id).count()
     assert n == 1
+
+
+def test_queue_pre_screen_reject_does_not_revive_recruiter_discard(db):
+    """A recruiter *discard* (toggle-off bulk discard) also sets
+    status='discarded' but stamps resolved_by_user_id. That must NOT be
+    revived — only system supersede (no human resolver) is revivable.
+    """
+    from app.models.user import User
+
+    org, role, app = _seed(db, score=20.0, threshold=50.0)
+    user = User(email=f"r{id(db)}@x.test", hashed_password="x", organization_id=org.id)
+    db.add(user); db.flush()
+    first = queue_pre_screen_reject(
+        db, organization_id=org.id, role=role, application=app,
+        pre_screen_score=20.0, threshold=50.0,
+    )
+    db.commit()
+    first.status = "discarded"
+    first.resolved_by_user_id = user.id  # recruiter discarded it
+    db.commit()
+
+    result = queue_pre_screen_reject(
+        db, organization_id=org.id, role=role, application=app,
+        pre_screen_score=20.0, threshold=50.0,
+    )
+    assert result is not None
+    assert result.id == first.id
+    assert result.status == "discarded"  # NOT revived — human discard respected
+    assert result.resolved_by_user_id == user.id
 
 
 def test_reconcile_threshold_replay_revives_after_discard(db):
