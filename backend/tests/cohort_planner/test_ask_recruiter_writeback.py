@@ -187,6 +187,33 @@ def test_budget_answer_overwrites_existing(db):
     assert role.monthly_usd_budget_cents == 10000
 
 
+def test_budget_answer_large_dollar_amount_is_dollars_not_cents(db):
+    """A budget over $1000 must be read as dollars. The old heuristic
+    ("large number is cents") stored $2,000/mo as 2000 cents = $20."""
+    org, role, _, _ = make_world(db)
+    role.monthly_usd_budget_cents = None
+    db.flush()
+    agent = _agent_actor(db, role)
+    row = ask_recruiter.open(
+        db,
+        agent,
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        kind="monthly_budget_missing",
+        prompt="x",
+    )
+    rec, _ = _recruiter_actor(db, int(org.id))
+    ask_recruiter.answer(
+        db,
+        rec,
+        organization_id=int(org.id),
+        needs_input_id=int(row.id),
+        response={"value": "$2,000"},
+    )
+    db.refresh(role)
+    assert role.monthly_usd_budget_cents == 200_000
+
+
 # ---------------------------------------------------------------------------
 # intent_slot_missing → RoleIntent + chips
 # ---------------------------------------------------------------------------

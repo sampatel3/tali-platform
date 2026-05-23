@@ -212,6 +212,31 @@ def test_token_spend_aggregator_rolls_up_events(db):
     assert out["by_agent"]["cv_scoring"]["input"] == 3200
 
 
+def test_token_spend_aggregator_exact_agent_run_id_no_substring_collision(db):
+    """Run 12 must not absorb run 123's spend. A bare substring
+    ``LIKE '%"agent_run_id": 12%'`` over the serialised JSON also matches
+    120/123, folding other runs' usage into this roll-up."""
+    s = _seed_run(db)
+    db.add(UsageEvent(
+        organization_id=s.org.id, feature="cv_scoring", model="claude-sonnet-4-6",
+        input_tokens=100, output_tokens=10,
+        cache_read_tokens=0, cache_creation_tokens=0,
+        cost_usd_micro=1_000, markup_multiplier=1.0,
+        event_metadata={"agent_run_id": 12, "feature": "cv_scoring"},
+    ))
+    db.add(UsageEvent(
+        organization_id=s.org.id, feature="cv_scoring", model="claude-sonnet-4-6",
+        input_tokens=999, output_tokens=99,
+        cache_read_tokens=0, cache_creation_tokens=0,
+        cost_usd_micro=9_000, markup_multiplier=1.0,
+        event_metadata={"agent_run_id": 123, "feature": "cv_scoring"},
+    ))
+    db.commit()
+    out = token_spend_aggregator.aggregate(db, agent_run_id=12)
+    assert out["input_tokens"] == 100  # only run 12, not run 123
+    assert out["total_micro_usd"] == 1_000
+
+
 def test_queue_decision_persists_token_spend_on_decision(db):
     s = _seed_run(db)
     db.add(UsageEvent(

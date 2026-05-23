@@ -31,6 +31,7 @@ raises.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import defaultdict
 from typing import Any
@@ -52,10 +53,8 @@ def aggregate(
     anything raises. The caller stuffs the result onto
     ``AgentDecision.token_spend``.
 
-    Lookup uses two strategies:
-    1. ``event_metadata @> '{"agent_run_id": <id>}'`` (Postgres JSON contains).
-    2. Fallback to a string match on the JSON column for SQLite tests
-       where the operator isn't available.
+    Lookup is a broad ``LIKE`` prefilter narrowed by an exact match on
+    the parsed ``agent_run_id`` (see ``_fetch_events``).
     """
     if agent_run_id is None:
         return {}
@@ -95,33 +94,17 @@ def aggregate(
 def _fetch_events(
     db: Session, *, agent_run_id: int
 ) -> list[UsageEvent]:
-    """SQLite-safe lookup over ``event_metadata.agent_run_id``.
+    """Lookup ``usage_events`` for exactly this ``agent_run_id``.
 
-    On Postgres production this uses JSON containment via SQLAlchemy
-    text(); on SQLite test it falls back to a substring match (which is
-    safe because the metadata field is JSON-serialised by SQLAlchemy
-    and the lookup is keyed on a numeric id).
+    A broad ``LIKE`` over the serialised JSON narrows the scan (works on
+    both Postgres and the SQLite test DB), then each candidate is matched
+    on its parsed ``agent_run_id``. The exact post-filter is essential: a
+    substring ``LIKE '%"agent_run_id": 12%'`` alone also matches ``120``
+    and ``123``, folding other runs' spend into this roll-up.
     """
-    bind = db.get_bind()
-    dialect = bind.dialect.name if bind is not None else "sqlite"
-    if dialect == "postgresql":
-        from sqlalchemy import cast, String
-        # The JSON column is named "metadata" on disk but mapped to
-        # event_metadata in the model. We compare the serialised string
-        # representation — pre-pilot volumes don't justify the
-        # JSON-contains operator complexity here.
-        return (
-            db.query(UsageEvent)
-            .filter(
-                cast(UsageEvent.event_metadata, String).like(
-                    f'%"agent_run_id": {agent_run_id}%'
-                )
-            )
-            .all()
-        )
-    # SQLite (and anything else): use the same substring approach.
     from sqlalchemy import cast, String
-    return (
+
+    candidates = (
         db.query(UsageEvent)
         .filter(
             cast(UsageEvent.event_metadata, String).like(
@@ -130,6 +113,24 @@ def _fetch_events(
         )
         .all()
     )
+    return [r for r in candidates if _event_run_id(r) == agent_run_id]
+
+
+def _event_run_id(row: UsageEvent) -> int | None:
+    """Parse ``agent_run_id`` off a usage event's metadata, or None."""
+    meta = row.event_metadata
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(meta, dict):
+        return None
+    raw = meta.get("agent_run_id")
+    try:
+        return int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 __all__ = ["aggregate"]
