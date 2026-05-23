@@ -1243,14 +1243,18 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     );
   }
 
-  // Back-link destination is driven by ?from (where the user came from),
-  // NOT by the application's role_id — every candidate has a role, so
-  // using role_id as the signal made every back click go to the job
-  // pipeline regardless of where the user actually came from.
+  // Back-link destination prefers the explicit ?from tag, then falls back
+  // to the candidate's own role. Many entry points (the role board, the
+  // triage drawer's new-tab link, search, deep links, …) don't attach
+  // ?from, and defaulting those to "home" sent recruiters who opened a
+  // candidate from a job back to the Hub. The role fallback only kicks in
+  // when there is no origin tag, so explicit ?from=home still wins.
   //   ?from=jobs/<id> → "Back to job: <role_name>"
-  //   ?from=home       → "Back to home"
-  //   (no from)        → "Back to home" (the Hub is the canonical landing)
-  const backTargetRoleId = backFromRoleId;
+  //   ?from=home       → "Back to home" (explicit Hub origin)
+  //   (no from)        → "Back to job: <role_name>" via application.role_id
+  const cameFromHome = (searchParams.get('from') || '').trim() === 'home';
+  const backTargetRoleId = backFromRoleId
+    ?? (cameFromHome ? null : (application?.role_id ?? null));
   const targetRoleName = application?.role_name || 'job';
   const candidateLabel = application?.candidate_name || application?.candidate_email || 'Candidate';
   const candidateInitials = (() => {

@@ -156,6 +156,7 @@ export function useCandidateTriage({
 
   const drawerProps = useMemo(() => ({
     application: triageApplication,
+    roleId: role?.id ?? null,
     roleTasks,
     mode: 'inline',
     stageBusy,
@@ -172,6 +173,7 @@ export function useCandidateTriage({
     onViewFullReport: viewCandidateReport,
   }), [
     triageApplication,
+    role?.id,
     roleTasks,
     stageBusy,
     assessmentBusy,

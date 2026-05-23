@@ -35,7 +35,10 @@ const formatWorkableStageOption = (stage) => {
 export const candidateReportHref = (application, fromRoleId = null) => {
   if (!application?.id) return '/jobs';
   const base = `/candidates/${encodeURIComponent(application.id)}`;
-  if (Number.isFinite(Number(fromRoleId))) {
+  // Guard against null/undefined explicitly: Number(null) === 0 is finite,
+  // so the old check happily produced "?from=jobs/null", which the report's
+  // back-link parser then rejected and fell back to "Back to home".
+  if (fromRoleId != null && Number.isFinite(Number(fromRoleId))) {
     return `${base}?from=jobs/${encodeURIComponent(fromRoleId)}`;
   }
   return base;
@@ -86,6 +89,7 @@ const REJECT_VALUE = '__reject__';
 
 export function CandidateTriageDrawer({
   application,
+  roleId = null,
   roleTasks = [],
   mode = 'inline',
   activityLabel = '',
@@ -172,7 +176,7 @@ export function CandidateTriageDrawer({
 
   if (!application) return null;
 
-  const reportHref = candidateReportHref(application);
+  const reportHref = candidateReportHref(application, roleId);
   const sendLabel = assessmentId ? 'Send retake' : 'Send invite';
   const isRejectSelected = selectedMoveAction === REJECT_VALUE;
   const moveBusy = isRejectSelected ? rejectBusy : workableMoveBusy;
