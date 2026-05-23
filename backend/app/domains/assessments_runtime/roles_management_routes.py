@@ -234,6 +234,28 @@ def get_role_endpoint(
     return role_to_response(role, tasks_count=len(role.tasks or []), applications_count=int(app_count))
 
 
+def _effective_pre_screen_threshold(db: Session, role: Role) -> float | None:
+    """The 0-100 cutoff the deterministic pre-screen reject actually uses
+    for this role — the same value ``resolved_auto_reject_config`` feeds the
+    auto-reject decider (``score_threshold`` in manual mode, the computed
+    value in auto mode). ``org`` isn't needed for the threshold itself, so
+    we pass None to avoid an extra load.
+    """
+    from ...services.pre_screening_service import resolved_auto_reject_config
+
+    try:
+        return resolved_auto_reject_config(None, role, db=db)["threshold_100"]
+    except Exception:
+        logger.exception("Failed to resolve pre-screen threshold for role_id=%s", role.id)
+        return None
+
+
+def _thresholds_equal(a: float | None, b: float | None) -> bool:
+    if a is None or b is None:
+        return a is None and b is None
+    return abs(float(a) - float(b)) < 0.05
+
+
 @router.patch("/roles/{role_id}", response_model=RoleResponse)
 def update_role(
     role_id: int,
@@ -243,6 +265,15 @@ def update_role(
 ):
     role = get_role(role_id, current_user.organization_id, db)
     updates = data.model_dump(exclude_unset=True)
+    # A pre-screen threshold change (the per-role override or the
+    # manual/auto mode) moves the deterministic reject verdict for every
+    # candidate without touching any score. Snapshot the *effective*
+    # threshold before mutating so we can tell afterwards whether it
+    # actually moved and, if so, reconcile the reject queue (below).
+    _threshold_may_change = (
+        "score_threshold" in updates or "auto_reject_threshold_mode" in updates
+    )
+    _threshold_before = _effective_pre_screen_threshold(db, role) if _threshold_may_change else None
     if "name" in updates and updates["name"] is not None:
         role.name = updates["name"].strip()
     if "description" in updates:
@@ -357,6 +388,32 @@ def update_role(
                 "activation" if agent_activated_now else "resume",
                 role.id,
             )
+    # When the effective pre-screen threshold actually moved, re-align the
+    # deterministic skip_assessment_reject queue so the Decision Hub, the
+    # role's pending count, and the "below threshold" stat all agree with
+    # the new cutoff. No re-scoring — scores are unchanged; only the
+    # verdict moves (contrast mark_role_scores_stale for criteria/job-spec
+    # edits, which DO change scores). Failures are logged, never fatal to
+    # the PATCH.
+    if _threshold_may_change:
+        _threshold_after = _effective_pre_screen_threshold(db, role)
+        if not _thresholds_equal(_threshold_before, _threshold_after):
+            try:
+                from ...services.pre_screen_decision_emitter import (
+                    reconcile_pre_screen_reject_decisions,
+                )
+                reconcile_pre_screen_reject_decisions(
+                    db,
+                    role=role,
+                    organization_id=int(current_user.organization_id),
+                    threshold=_threshold_after,
+                )
+                db.commit()
+            except Exception:
+                logger.exception(
+                    "Pre-screen reject reconcile failed for role_id=%s", role.id
+                )
+                db.rollback()
     return role_to_response(role)
 
 

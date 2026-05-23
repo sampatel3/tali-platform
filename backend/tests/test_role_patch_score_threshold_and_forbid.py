@@ -60,6 +60,58 @@ def test_patch_role_can_clear_score_threshold(db, client):
     assert role.score_threshold is None
 
 
+def test_patch_role_threshold_change_reconciles_reject_queue(db, client):
+    """Lowering the threshold through the PATCH endpoint must retire reject
+    cards the new cutoff no longer justifies — the end-to-end wiring of
+    ``reconcile_pre_screen_reject_decisions`` into ``update_role``.
+    """
+    from app.models.agent_decision import AgentDecision
+    from app.models.candidate import Candidate
+    from app.models.candidate_application import CandidateApplication
+    from app.services.pre_screen_decision_emitter import queue_pre_screen_reject
+
+    headers, _ = auth_headers(client, organization_name="ReconcileOrg")
+    me = _current_user(db)
+    role = Role(
+        organization_id=me.organization_id,
+        name=f"Agent role {id(db)}",
+        source="manual",
+        score_threshold=50,
+        agentic_mode_enabled=True,
+        auto_reject=False,
+    )
+    db.add(role); db.flush()
+    cand = Candidate(organization_id=me.organization_id, email="r@x.test", full_name="R")
+    db.add(cand); db.flush()
+    app = CandidateApplication(
+        organization_id=me.organization_id,
+        candidate_id=cand.id,
+        role_id=role.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+        pre_screen_score_100=40.0,
+    )
+    db.add(app); db.flush()
+    card = queue_pre_screen_reject(
+        db, organization_id=me.organization_id, role=role, application=app,
+        pre_screen_score=40.0, threshold=50.0,
+    )
+    db.commit()
+    assert card.status == "pending"
+
+    # 40 was below 50, but is at/above the new cutoff of 30 → card retired.
+    resp = client.patch(
+        f"/api/v1/roles/{role.id}", json={"score_threshold": 30}, headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+
+    db.expire(card)
+    assert db.query(AgentDecision).filter(AgentDecision.id == card.id).one().status == "discarded"
+
+
 def test_patch_role_rejects_unknown_field(db, client):
     headers, _ = auth_headers(client, organization_name="ForbidOrg")
     me = _current_user(db)

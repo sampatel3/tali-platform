@@ -328,6 +328,33 @@ def agent_cohort_tick_role(self, role_id: int) -> dict:
         # of API calls into a worker pool that can't keep up.
         auto_scored = _auto_enqueue_scoring(db, role=role)
 
+        # Phase 1.5: keep the deterministic pre-screen reject queue aligned
+        # with the role's current threshold. Pure DB, no LLM, idempotent —
+        # after it converges each tick is a near-no-op. This is what makes a
+        # threshold change "stick" across every surface without a manual
+        # backfill: the tick discards reject cards the current cutoff no
+        # longer justifies and emits any that are now missing. Runs before
+        # the no-op early-exit so the queue self-heals even on ticks where
+        # the LLM cycle has nothing to do. Failures never abort the tick.
+        try:
+            from ..services.pre_screen_decision_emitter import (
+                reconcile_pre_screen_reject_decisions,
+            )
+            from ..services.pre_screening_service import resolved_auto_reject_config
+
+            _thr = resolved_auto_reject_config(None, role, db=db)["threshold_100"]
+            reconcile_pre_screen_reject_decisions(
+                db,
+                role=role,
+                organization_id=int(role.organization_id),
+                threshold=_thr,
+            )
+        except Exception:
+            logger.exception(
+                "pre-screen reject reconcile failed in cohort tick role_id=%s", role_id
+            )
+            db.rollback()
+
         # Phase 2: early-exit if there's nothing for the agent to do.
         # Calling run_cycle when the survey shows zero actionable work
         # burns ~$0.05 of Sonnet 4.5 per role per tick (4 roles × 48

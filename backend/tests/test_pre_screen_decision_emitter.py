@@ -14,6 +14,7 @@ from app.models.role import Role
 from app.services.pre_screen_decision_emitter import (
     backfill_existing_below_threshold,
     queue_pre_screen_reject,
+    reconcile_pre_screen_reject_decisions,
 )
 
 
@@ -352,3 +353,158 @@ def test_evaluate_auto_reject_does_not_trigger_when_score_above_threshold(db):
     verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
     assert verdict["should_trigger"] is False
     assert verdict["state"] == "not_triggered"
+
+
+# ---------------------------------------------------------------------------
+# reconcile_pre_screen_reject_decisions — keep the deterministic reject queue
+# in sync with the role's threshold when it changes (no re-scoring).
+# ---------------------------------------------------------------------------
+
+
+def _add_app(db, org, role, *, score, email, rec=None, outcome="open"):
+    cand = Candidate(organization_id=org.id, email=email, full_name=email[:1].upper())
+    db.add(cand); db.flush()
+    app = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=cand.id,
+        role_id=role.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome=outcome,
+        source="manual",
+        pre_screen_score_100=score,
+        pre_screen_recommendation=rec,
+    )
+    db.add(app); db.flush()
+    return app
+
+
+def _latest_status(db, app):
+    row = (
+        db.query(AgentDecision)
+        .filter(AgentDecision.application_id == app.id)
+        .order_by(AgentDecision.id.desc())
+        .first()
+    )
+    return row.status if row is not None else None
+
+
+def test_reconcile_lowered_threshold_is_score_authoritative(db):
+    """Lowering the threshold (50 → 30) retires cards for candidates now
+    at/above 30 — the numeric score wins, even when the candidate carries a
+    'Below threshold' recommendation (that label is a hard-coded ``< 50``,
+    not a role-threshold verdict). The recommendation only keeps a card
+    alive when there's NO numeric score (a genuine must-have miss).
+    """
+    org, role, app_above = _seed(db, score=40.0, threshold=50.0)  # 40 >= 30 → discard
+    app_below = _add_app(db, org, role, score=20.0, email="b@x.test")  # 20 < 30 → keep
+    # Numeric 40 + 'Below threshold' rec → still discarded (score authoritative).
+    app_numeric_rec = _add_app(db, org, role, score=40.0, rec="Below threshold", email="c@x.test")
+    # NULL score + 'Below threshold' rec → kept (must-have miss).
+    app_null_rec = _add_app(db, org, role, score=None, rec="Below threshold", email="d@x.test")
+    for app in (app_above, app_below, app_numeric_rec, app_null_rec):
+        queue_pre_screen_reject(
+            db, organization_id=org.id, role=role, application=app,
+            pre_screen_score=app.pre_screen_score_100, threshold=50.0,
+        )
+    db.commit()
+
+    summary = reconcile_pre_screen_reject_decisions(
+        db, role=role, organization_id=int(org.id), threshold=30.0
+    )
+    assert summary["discarded"] == 2  # app_above + app_numeric_rec
+    assert summary["created"] == 0
+    assert _latest_status(db, app_above) == "discarded"
+    assert _latest_status(db, app_numeric_rec) == "discarded"
+    assert _latest_status(db, app_below) == "pending"
+    assert _latest_status(db, app_null_rec) == "pending"
+
+
+def test_reconcile_raised_threshold_emits_new_cards(db):
+    """Raising the threshold (30 → 50) should surface candidates who are
+    now below the cutoff but had no card before.
+    """
+    org, role, app = _seed(db, score=40.0, threshold=30.0)  # 40 was above 30, no card
+    db.commit()
+    assert _latest_status(db, app) is None
+
+    summary = reconcile_pre_screen_reject_decisions(
+        db, role=role, organization_id=int(org.id), threshold=50.0
+    )
+    assert summary["created"] == 1
+    assert summary["discarded"] == 0
+    card = (
+        db.query(AgentDecision)
+        .filter(AgentDecision.application_id == app.id, AgentDecision.status == "pending")
+        .one()
+    )
+    assert card.decision_type == "skip_assessment_reject"
+
+
+def test_reconcile_no_op_for_agent_off_role(db):
+    org, role, app = _seed(db, score=40.0, threshold=50.0)
+    card = queue_pre_screen_reject(
+        db, organization_id=org.id, role=role, application=app,
+        pre_screen_score=40.0, threshold=50.0,
+    )
+    db.commit()
+    role.agentic_mode_enabled = False
+    db.flush()
+
+    summary = reconcile_pre_screen_reject_decisions(
+        db, role=role, organization_id=int(org.id), threshold=30.0
+    )
+    assert summary == {"discarded": 0, "created": 0, "skipped_existing": 0}
+    assert db.query(AgentDecision).filter(AgentDecision.id == card.id).one().status == "pending"
+
+
+def test_reconcile_no_op_when_auto_reject_on(db):
+    """auto_reject=on disqualifies in Workable directly rather than carding;
+    the reconcile must not touch the queue for those roles.
+    """
+    org, role, app = _seed(db, score=40.0, threshold=50.0)
+    card = queue_pre_screen_reject(
+        db, organization_id=org.id, role=role, application=app,
+        pre_screen_score=40.0, threshold=50.0,
+    )
+    db.commit()
+    role.auto_reject = True
+    db.flush()
+
+    summary = reconcile_pre_screen_reject_decisions(
+        db, role=role, organization_id=int(org.id), threshold=30.0
+    )
+    assert summary == {"discarded": 0, "created": 0, "skipped_existing": 0}
+    assert db.query(AgentDecision).filter(AgentDecision.id == card.id).one().status == "pending"
+
+
+def test_reconcile_leaves_non_pre_screen_decisions_untouched(db):
+    """Only ``skip_assessment_reject`` cards are threshold-driven. A pending
+    full-pipeline ``reject`` on the same app must survive a reconcile.
+    """
+    org, role, app = _seed(db, score=40.0, threshold=50.0)
+    other = AgentDecision(
+        organization_id=org.id,
+        role_id=role.id,
+        application_id=app.id,
+        agent_run_id=None,
+        decision_type="reject",
+        recommendation="reject",
+        status="pending",
+        reasoning="full-pipeline reject",
+        evidence={},
+        confidence=None,
+        model_version="m",
+        prompt_version="p",
+        idempotency_key=f"reject:{app.id}",
+        active_capabilities={},
+        token_spend={},
+    )
+    db.add(other); db.commit()
+
+    summary = reconcile_pre_screen_reject_decisions(
+        db, role=role, organization_id=int(org.id), threshold=30.0
+    )
+    assert summary["discarded"] == 0
+    assert db.query(AgentDecision).filter(AgentDecision.id == other.id).one().status == "pending"
