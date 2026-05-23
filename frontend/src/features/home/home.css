@@ -79,7 +79,11 @@
   background: var(--bg-3);
 }
 
-.kicker {
+/* Scoped to the Hub container (`.home-body` wraps every Hub surface) so
+   this bare `.kicker` rule no longer leaks globally and override the
+   marketing landing's index.css `.kicker { color: var(--purple) }` when
+   ActivityFeed is rendered standalone outside the Hub. */
+.home-body .kicker {
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.1em;
@@ -87,7 +91,7 @@
   text-transform: uppercase;
 }
 
-.kicker.mute {
+.home-body .kicker.mute {
   color: var(--mute-2);
 }
 

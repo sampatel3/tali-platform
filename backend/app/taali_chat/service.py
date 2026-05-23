@@ -58,6 +58,16 @@ MAX_TOOL_ROUNDS = 8
 # enough for a comparison table + commentary.
 MAX_TOKENS_PER_TURN = 4096
 
+# Tools whose results must stay scoped to the conversation's role. The
+# system prompt tells the model it may omit role_id for these in a
+# role-scoped chat ("the conversation's role scope applies"); the handlers
+# only filter when role_id is not None, so we inject the conversation's
+# role_id here when the model leaves it out — otherwise an omitted role_id
+# leaks org-wide results.
+_ROLE_SCOPED_TOOLS = frozenset(
+    {"list_recent_agent_decisions", "list_recent_agent_runs"}
+)
+
 
 @dataclass
 class ChatTurnInput:
@@ -284,6 +294,16 @@ def run_chat_turn(
             tool_call_id = str(block["id"])
             name = str(block["name"])
             args = block.get("input") or {}
+            # Enforce role scope: when the chat is role-scoped and the model
+            # omitted role_id for a role-scoped tool, inject the
+            # conversation's role_id so the handler doesn't fall back to
+            # org-wide results.
+            if (
+                name in _ROLE_SCOPED_TOOLS
+                and conversation.role_id is not None
+                and args.get("role_id") is None
+            ):
+                args = {**args, "role_id": int(conversation.role_id)}
             try:
                 result = dispatch_tool(name, args, db=db, user=user)
                 is_error = False

@@ -166,11 +166,39 @@ def reconcile_recent(
         agg["cache_read"] += ub.cache_read_input_tokens
         agg["cache_creation"] += ub.cache_creation_input_tokens
 
+    # De-dup base-alias attribution. Internal rows often store the short
+    # alias (``claude-sonnet-4-5``) rather than the dated snapshot. When two
+    # dated snapshots share one base alias on the same (day, workspace), the
+    # permissive ``_model_match_filter`` would let BOTH Anthropic buckets sum
+    # the same alias-stored internal rows → double-count. Designate exactly
+    # one dated bucket per (day, workspace, base_alias) to claim the alias
+    # rows; the rest match only their exact dated id.
+    alias_owner: dict[tuple[date, Optional[str], str], tuple[date, Optional[str], Optional[str]]] = {}
+    for (usage_day, workspace_id, model) in by_key:
+        base_alias = _base_alias_for(model)
+        if base_alias is None:
+            continue
+        alias_key = (usage_day, workspace_id, base_alias)
+        owner = alias_owner.get(alias_key)
+        # Deterministic owner: the lexicographically smallest dated id so the
+        # choice is stable across runs (upsert idempotency).
+        if owner is None or str(model) < str(owner[2]):
+            alias_owner[alias_key] = (usage_day, workspace_id, model)
+
     rows_written = 0
     rows_skipped = 0
     for (usage_day, workspace_id, model), tokens in by_key.items():
         org_id = workspace_to_org.get(workspace_id) if workspace_id else None
         anthropic_cost = cost_by_key.get((usage_day, workspace_id, model), 0)
+
+        # This bucket claims base-alias internal rows only if it's the
+        # designated owner for its (day, workspace, base_alias).
+        base_alias = _base_alias_for(model)
+        include_alias = (
+            base_alias is None
+            or alias_owner.get((usage_day, workspace_id, base_alias))
+            == (usage_day, workspace_id, model)
+        )
 
         # Pull the matching internal aggregate.
         # - Workspace-scoped key (org_id resolved): aggregate that one org.
@@ -188,6 +216,7 @@ def reconcile_recent(
                 organization_id=org_id,
                 model=model,
                 usage_day=usage_day,
+                include_alias=include_alias,
             )
         elif workspace_id is None and _shared_key_org_ids:
             internal = _aggregate_internal_multi(
@@ -195,6 +224,7 @@ def reconcile_recent(
                 organization_ids=_shared_key_org_ids,
                 model=model,
                 usage_day=usage_day,
+                include_alias=include_alias,
             )
         else:
             internal = _zero_internal()
@@ -297,6 +327,7 @@ def _aggregate_internal(
     organization_id: int,
     model: Optional[str],
     usage_day: date,
+    include_alias: bool = True,
 ) -> dict[str, int]:
     """Internal aggregate for one org / model / UTC day. Delegates to the
     multi-org helper, which prefers ``claude_call_log`` (ground truth)
@@ -306,10 +337,26 @@ def _aggregate_internal(
         organization_ids=[organization_id],
         model=model,
         usage_day=usage_day,
+        include_alias=include_alias,
     )
 
 
-def _sum_table(db, table, *, organization_ids, model, day_start, day_end) -> dict[str, int]:
+def _base_alias_for(anthropic_model: Optional[str]) -> Optional[str]:
+    """Return the snapshot-stripped base alias for a dated Anthropic id
+    (``claude-sonnet-4-5-20250929`` → ``claude-sonnet-4-5``), or None when
+    the id carries no ``-YYYYMMDD`` snapshot suffix."""
+    if not anthropic_model:
+        return None
+    if (
+        len(anthropic_model) > 9
+        and anthropic_model[-9] == "-"
+        and anthropic_model[-8:].isdigit()
+    ):
+        return anthropic_model[:-9]
+    return None
+
+
+def _sum_table(db, table, *, organization_ids, model, day_start, day_end, include_alias=True) -> dict[str, int]:
     """Sum the token/cost columns of either ``ClaudeCallLog`` or
     ``UsageEvent`` (same column names) for the org set / model / day.
 
@@ -330,7 +377,7 @@ def _sum_table(db, table, *, organization_ids, model, day_start, day_end) -> dic
         table.created_at < day_end,
     )
     if model:
-        q = q.filter(_model_match_filter(table.model, model))
+        q = q.filter(_model_match_filter(table.model, model, include_alias=include_alias))
     row = q.one()
     return {
         "input": int(row.input_tokens or 0),
@@ -342,7 +389,7 @@ def _sum_table(db, table, *, organization_ids, model, day_start, day_end) -> dic
     }
 
 
-def _model_match_filter(stored_col, anthropic_model: Optional[str]):
+def _model_match_filter(stored_col, anthropic_model: Optional[str], *, include_alias: bool = True):
     """Build a SQL filter that matches ``stored_col`` against an Anthropic
     model id whether or not the stored event includes the ``-YYYYMMDD``
     snapshot suffix.
@@ -353,18 +400,21 @@ def _model_match_filter(stored_col, anthropic_model: Optional[str]):
     ``settings.resolved_claude_model`` which resolves to the alias. The
     exact-match join missed those rows entirely — Sonnet 4.5 reconciled
     to $0 internal on 2026-05-20 even though we recorded $9.08 of it.
+
+    ``include_alias=False`` matches only the exact dated id. The caller sets
+    this for every dated bucket except the one designated to own the base
+    alias on a given (day, workspace), so alias-stored internal rows are
+    counted into exactly one bucket instead of every snapshot that shares
+    the alias.
     """
     if not anthropic_model:
         return stored_col == anthropic_model
     candidates = [anthropic_model]
     # If the Anthropic id ends in ``-8-digit-snapshot``, also accept the
-    # snapshot-stripped base id.
-    if (
-        len(anthropic_model) > 9
-        and anthropic_model[-9] == "-"
-        and anthropic_model[-8:].isdigit()
-    ):
-        candidates.append(anthropic_model[:-9])
+    # snapshot-stripped base id (unless this bucket isn't the alias owner).
+    base_alias = _base_alias_for(anthropic_model)
+    if include_alias and base_alias is not None:
+        candidates.append(base_alias)
     return stored_col.in_(candidates)
 
 
@@ -374,6 +424,7 @@ def _aggregate_internal_multi(
     organization_ids: list[int],
     model: Optional[str],
     usage_day: date,
+    include_alias: bool = True,
 ) -> dict[str, int]:
     """Internal aggregate across multiple orgs for one (model, day).
 
@@ -400,6 +451,7 @@ def _aggregate_internal_multi(
         db, ClaudeCallLog,
         organization_ids=organization_ids, model=model,
         day_start=day_start, day_end=day_end,
+        include_alias=include_alias,
     )
     if call_log["event_count"] > 0:
         return call_log
@@ -410,6 +462,7 @@ def _aggregate_internal_multi(
         db, UsageEvent,
         organization_ids=organization_ids, model=model,
         day_start=day_start, day_end=day_end,
+        include_alias=include_alias,
     )
 
 

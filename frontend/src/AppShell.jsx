@@ -273,11 +273,11 @@ function AppContent() {
     // miss and bounces the iframe to /login. Looking at the live browser
     // URL is the only thing that's consistently correct on first paint.
     if (typeof window !== 'undefined') {
-      const liveSearch = window.location.search || '';
+      const liveParams = new URLSearchParams(window.location.search || '');
       const livePath = window.location.pathname || '';
       if (
-        liveSearch.includes('showcase=1')
-        && liveSearch.includes('demo=1')
+        liveParams.get('showcase') === '1'
+        && liveParams.get('demo') === '1'
         && (livePath === '/jobs' || livePath === '/candidates')
       ) {
         return;

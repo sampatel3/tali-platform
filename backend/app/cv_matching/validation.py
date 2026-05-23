@@ -225,6 +225,22 @@ def validate_cross_field_consistency(
 
     if requirements:
         recruiter_ids = {r.id for r in requirements}
+        # Drop model-emitted assessments whose id isn't a recruiter id. A
+        # typo'd / case-drifted requirement_id would otherwise survive in
+        # ``requirements_assessment`` *and* get a synthesised placeholder
+        # for the genuine id below — yielding extra/duplicate criteria.
+        extra = seen_ids - recruiter_ids
+        if extra:
+            for stray_id in sorted(extra):
+                logger.info(
+                    "Dropped assessment for unknown requirement_id: %r",
+                    stray_id,
+                )
+            result.requirements_assessment = [
+                a for a in result.requirements_assessment
+                if a.requirement_id in recruiter_ids
+            ]
+            seen_ids = seen_ids & recruiter_ids
         missing = recruiter_ids - seen_ids
         if missing:
             # **2026-05-22 — cost-optimization**. Previously raised

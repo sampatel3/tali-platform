@@ -69,7 +69,14 @@ export const OverrideModal = ({
   if (!decision || !alternative) return null;
 
   const mode = alternative.mode || 'override';
-  const requireStagePick = Boolean(alternative.requireStagePick);
+  // `showStageSection` keeps the stage row (incl. the "no stages found"
+  // notice) visible whenever the caller asked for a pick. But a pick can
+  // only be *required* when there are stages to pick from — when
+  // stageOptions is empty (load failed / no workable_job_id) the advance
+  // proceeds on the internal stage, so don't gate confirm on an
+  // impossible pick.
+  const showStageSection = Boolean(alternative.requireStagePick);
+  const requireStagePick = showStageSection && stageOptions.length > 0;
   const requireReason = mode === 'override';
   const stagePicked = !requireStagePick || Boolean(targetStage);
   const reasonOk = !requireReason || reason.trim().length > 0;
@@ -129,7 +136,7 @@ export const OverrideModal = ({
         </div>
 
         <div className="rq-modal-body">
-          {requireStagePick ? (
+          {showStageSection ? (
             <div className="rq-modal-section">
               <span className="rq-modal-label" id="rq-target-stage-label">
                 Move to which Workable stage? (required)

@@ -481,6 +481,16 @@ def _decisions_in_window(
     return q.order_by(desc(AgentDecision.created_at)).all()
 
 
+# Decision statuses that mean the decision is still in the recruiter's
+# queue and was NOT actually carried out — they must not count toward the
+# "auto-advanced" / "auto-rejected" automation KPIs.
+_NON_RESOLVED_DECISION_STATUSES = {"pending", "reverted_for_feedback"}
+
+
+def _is_resolved_decision(decision: AgentDecision) -> bool:
+    return str(decision.status or "").lower() not in _NON_RESOLVED_DECISION_STATUSES
+
+
 def _decision_kind(decision: AgentDecision) -> str:
     t = str(decision.decision_type or "").lower()
     if "advance" in t:
@@ -570,8 +580,16 @@ def get_reporting_summary(
         db, org_id, role_id=role_id, parsed_from=prior_from, parsed_to=prior_to,
     )
 
-    auto_advanced_count = sum(1 for d in decisions if _decision_kind(d) == "advance")
-    auto_rejected_count = sum(1 for d in decisions if _decision_kind(d) == "reject")
+    # Auto-advance / auto-reject KPIs count only decisions the agent
+    # actually carried out — pending (and sent-back-for-teaching) decisions
+    # are still in the recruiter's queue and must not be reported as
+    # completed automations.
+    auto_advanced_count = sum(
+        1 for d in decisions if _is_resolved_decision(d) and _decision_kind(d) == "advance"
+    )
+    auto_rejected_count = sum(
+        1 for d in decisions if _is_resolved_decision(d) and _decision_kind(d) == "reject"
+    )
     flagged_count = sum(1 for d in decisions if _decision_kind(d) == "flag")
     paused_count = sum(1 for d in decisions if _decision_kind(d) == "pause")
 
@@ -594,7 +612,7 @@ def get_reporting_summary(
     assessments = asmnt_q.all()
     completed = [a for a in assessments if _is_completed(a) and a.completed_at]
     decisions_made = len(decisions) + len(assessments)
-    prior_assessments = (
+    prior_asmnt_q = (
         db.query(Assessment)
         .filter(
             Assessment.organization_id == org_id,
@@ -602,8 +620,14 @@ def get_reporting_summary(
             Assessment.created_at >= prior_from,
             Assessment.created_at <= prior_to,
         )
-        .count()
     )
+    # Apply the SAME role_id/task_id filters as the current window so the
+    # delta isn't skewed (prior counted org-wide while current was scoped).
+    if role_id is not None:
+        prior_asmnt_q = prior_asmnt_q.filter(Assessment.role_id == role_id)
+    if task_id is not None:
+        prior_asmnt_q = prior_asmnt_q.filter(Assessment.task_id == task_id)
+    prior_assessments = prior_asmnt_q.count()
     prior_decisions_made = len(prior_decisions) + prior_assessments
 
     # ── Org spend rollup across agent-enabled roles ────────────────────

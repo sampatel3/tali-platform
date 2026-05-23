@@ -58,4 +58,5 @@ def record_episode_cost(
             metadata={"episode": episode_name, "estimate": True},
         )
     except Exception:
+        db.rollback()
         logger.exception("Failed to record graph_sync usage for %s", episode_name)

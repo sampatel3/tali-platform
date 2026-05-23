@@ -960,8 +960,12 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
   const handleSaveSpendCap = async () => {
     setSpendCapSaving(true);
-    const usd = Number(spendCapForm.usd);
-    const cents = Number.isFinite(usd) && usd >= 0 ? Math.round(usd * 100) : 0;
+    // A blank input means "no cap" (Number('') === 0 would otherwise send a
+    // hard $0 cap). Send null to clear the cap; only send cents for a real
+    // value entered.
+    const raw = String(spendCapForm.usd ?? '').trim();
+    const usd = Number(raw);
+    const cents = raw !== '' && Number.isFinite(usd) && usd >= 0 ? Math.round(usd * 100) : null;
     try {
       const res = await orgsApi.update({ monthly_spend_cap_cents: cents });
       setOrgData(res?.data || null);

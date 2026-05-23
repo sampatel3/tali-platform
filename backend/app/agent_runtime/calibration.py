@@ -203,7 +203,16 @@ def _render_track_record(outcomes: list[dict[str, Any]]) -> str:
     parts: list[str] = []
 
     if advances:
-        n = len(advances)
+        # outcome_learning appends SEPARATE "interviewed" and "hired" entries
+        # for the same advance (same decision_id), so a single advance would
+        # otherwise be counted twice. ``n`` is the number of *distinct*
+        # advances; entries without a decision_id (legacy rows) count
+        # individually. The per-outcome tallies stay label-scoped, which is
+        # already double-count-free since "interviewed" and "hired" are
+        # distinct labels.
+        distinct_ids = {o.get("decision_id") for o in advances if o.get("decision_id") is not None}
+        loose = sum(1 for o in advances if o.get("decision_id") is None)
+        n = len(distinct_ids) + loose
         interviewed = sum(1 for o in advances if o.get("outcome") == "interviewed")
         hired = sum(1 for o in advances if o.get("outcome") == "hired")
         parts.append(

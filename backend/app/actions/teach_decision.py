@@ -206,6 +206,13 @@ def _features_and_agent_score_from_decision(
     agent_score = float(
         blob.get("score") or blob.get("confidence") or decision.confidence or 0.0
     )
+    # Normalise to the [0, 1] scale that ``_corrected_score_from_direction``
+    # (delta 0.15, clamps to 0.0/1.0) operates on. Sub-agent scores are
+    # sometimes stored on a [0, 100] percentage scale; left un-normalised a
+    # value like 75 collapses to 1.0 under "under" and barely moves under
+    # "over". Anything already in [0, 1] is passed through untouched.
+    if agent_score > 1.0:
+        agent_score = agent_score / 100.0
     # Build a flat feature dict via the store helper.
     from ..agent_runtime.exemplar_store import features_from_sub_agent_output
     features = features_from_sub_agent_output(blob, agent_name=agent_name)

@@ -82,7 +82,7 @@ def _gather_pairs(
         db.query(Assessment, CandidateApplication, Role)
         .join(
             CandidateApplication,
-            CandidateApplication.candidate_id == Assessment.candidate_id,
+            CandidateApplication.id == Assessment.application_id,
         )
         .join(Role, Role.id == CandidateApplication.role_id)
         .filter(
@@ -201,7 +201,7 @@ def recompute_all(db: Session) -> dict[str, int]:
                 .join(CandidateApplication, CandidateApplication.role_id == Role.id)
                 .join(
                     Assessment,
-                    Assessment.candidate_id == CandidateApplication.candidate_id,
+                    Assessment.application_id == CandidateApplication.id,
                 )
                 .filter(
                     Assessment.organization_id == template.organization_id,

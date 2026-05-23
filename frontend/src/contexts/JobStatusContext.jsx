@@ -8,6 +8,7 @@ import React, {
 } from 'react';
 
 import * as apiClient from '../shared/api';
+import { useAuth } from '../context/AuthContext';
 
 // How often to poll each tracked role's status.
 const ROLE_POLL_MS = 4000;
@@ -55,6 +56,10 @@ const JobStatusContext = createContext(null);
 
 export function JobStatusProvider({ children }) {
   const rolesApi = apiClient.roles ?? null;
+  // Re-key auth-gated effects (discovery polling) on login state so they
+  // re-run after a load-then-login — the provider is mounted at app root
+  // and never remounts on authentication.
+  const { isAuthenticated } = useAuth();
 
   // jobs / fetchJobs / preScreenJobs are keyed by role_id.
   // Each job kind has its own polling loop because they have different
@@ -407,7 +412,9 @@ export function JobStatusProvider({ children }) {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [rolesApi, bumpVersion]);
+    // isAuthenticated re-runs this after a load-then-login so discovery,
+    // gated on the access token above, actually starts once signed in.
+  }, [rolesApi, bumpVersion, isAuthenticated]);
 
   // ── One-shot discovery on mount: pick up an in-flight workable sync ───────
   useEffect(() => {

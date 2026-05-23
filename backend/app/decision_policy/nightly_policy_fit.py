@@ -20,6 +20,7 @@ another candidate row. The promotion gate evaluates the newest one.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -232,6 +233,15 @@ def _collect_from_graphiti(
             # Pending / withdrawn / interview-only — not a strong label.
             continue
         feats = r.get("features_json") or {}
+        # ``features_json`` is serialised into the decision episode body
+        # (see agent_episodes.build_decision_episode) and comes back off the
+        # graph node as a JSON string — parse it before use so rows that
+        # legitimately carry features aren't dropped.
+        if isinstance(feats, str):
+            try:
+                feats = json.loads(feats)
+            except (ValueError, TypeError):
+                feats = {}
         if not isinstance(feats, dict) or not feats:
             # No features serialised on the graph node — caller's
             # Postgres pass will pick this decision up via its

@@ -1676,9 +1676,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     if (!Number.isFinite(numericRoleId)) return;
     // Optimistic remove. If the chip is workspace-derived, mirror the backend
     // and append its org_criterion_id to the suppressed list.
-    let previousRole = null;
     setRole((cur) => {
-      previousRole = cur;
       if (!cur) return cur;
       const target = (cur.criteria || []).find((c) => c.id === criterionId);
       const orgId = target?.org_criterion_id;
@@ -1694,10 +1692,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     try {
       await rolesApi.deleteCriterion(numericRoleId, criterionId);
     } catch (error) {
-      if (previousRole) setRole(previousRole);
+      // Refetch authoritative state; a stale snapshot restore would clobber
+      // concurrent successful deletes of other criteria.
+      await loadRoleWorkspace();
       showToast(getErrorMessage(error, 'Failed to remove criterion.'), 'error');
     }
-  }, [numericRoleId, rolesApi, showToast]);
+  }, [numericRoleId, rolesApi, showToast, loadRoleWorkspace]);
 
   const handleSyncRoleCriteria = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
@@ -1937,13 +1937,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // itself communicates the new state.
   const patchAgentMode = (nextRoleFields, errorFallback) => {
     if (!Number.isFinite(numericRoleId)) return;
-    const prevRole = role;
     setRole((cur) => (cur ? { ...cur, ...nextRoleFields } : cur));
     rolesApi
       .update(numericRoleId, nextRoleFields)
       .then(() => { void loadRoleWorkspace(); })
       .catch((error) => {
-        setRole(prevRole);
+        // Refetch authoritative state so overlapping toggles can't clobber.
+        void loadRoleWorkspace();
         showToast(getErrorMessage(error, errorFallback), 'error');
       });
   };

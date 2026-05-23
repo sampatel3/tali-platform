@@ -885,7 +885,13 @@ def mark_role_scores_stale(db: Session, role_id: int, *, reason: str = "role_int
             db.add(role)
             try:
                 from ..tasks.automation_tasks import regenerate_role_tech_questions
-                regenerate_role_tech_questions.delay(int(role_id))
+                # Dispatch with a short countdown so the nulled signature is
+                # committed by the caller's outer transaction before a worker
+                # picks the task up — otherwise the signature-gated regen can
+                # read the still-old committed signature and skip itself.
+                regenerate_role_tech_questions.apply_async(
+                    args=[int(role_id)], countdown=10
+                )
             except Exception:
                 logger.exception("mark_role_scores_stale: failed to dispatch tech_questions regen role_id=%s", role_id)
     except Exception:

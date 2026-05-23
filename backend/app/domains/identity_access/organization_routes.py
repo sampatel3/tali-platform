@@ -181,6 +181,8 @@ def update_my_org(
     if data.saml_metadata_url is not None:
         metadata_url = (data.saml_metadata_url or "").strip()
         org.saml_metadata_url = metadata_url or None
+    if data.two_factor_required is not None:
+        org.two_factor_required = bool(data.two_factor_required)
     if data.candidate_feedback_enabled is not None:
         org.candidate_feedback_enabled = bool(data.candidate_feedback_enabled)
     if data.default_assessment_duration_minutes is not None:
@@ -192,8 +194,14 @@ def update_my_org(
         org.default_role_budget_cents = max(0, int(data.default_role_budget_cents))
     if data.default_score_threshold is not None:
         org.default_score_threshold = max(0, min(100, int(data.default_score_threshold)))
-    if data.monthly_spend_cap_cents is not None:
-        org.monthly_spend_cap_cents = max(0, int(data.monthly_spend_cap_cents))
+    if "monthly_spend_cap_cents" in data.model_fields_set:
+        # Explicit null clears the cap (NULL = no cap); a number sets it.
+        # Absent field leaves the existing cap untouched.
+        org.monthly_spend_cap_cents = (
+            None
+            if data.monthly_spend_cap_cents is None
+            else max(0, int(data.monthly_spend_cap_cents))
+        )
     if org.saml_enabled and not org.saml_metadata_url:
         raise HTTPException(status_code=400, detail="saml_metadata_url is required when saml_enabled is true")
     try:

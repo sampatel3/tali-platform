@@ -456,8 +456,11 @@ def backfill_existing_below_threshold(
     that's currently below threshold and doesn't already have one.
 
     Two cohorts qualify:
-      * ``pre_screen_score_100 < 50`` with a numeric score — the original
-        case from the 270-stranded-candidates incident.
+      * ``pre_screen_score_100`` below the role's configured cutoff
+        (``role.score_threshold``) with a numeric score — the original
+        case from the 270-stranded-candidates incident. Anchoring to the
+        role's real cutoff (not a flat 50) keeps the backfill consistent
+        with live auto-reject eligibility (#201).
       * ``pre_screen_recommendation = 'Below threshold'`` with NULL score
         — covers candidates whose numeric score got invalidated (#209) or
         who short-circuited on a must-have miss without an LLM call. The
@@ -469,7 +472,16 @@ def backfill_existing_below_threshold(
     candidates surface in the Review queue. Idempotent — safe to re-run;
     each application gets at most one row via the idempotency key.
     """
-    from sqlalchemy import and_, or_
+    from sqlalchemy import and_, func, or_
+
+    from .pre_screening_service import resolved_auto_reject_config
+
+    # Roles without an explicit cutoff fall back to the documented default
+    # of 50 (same number the legacy backfill hard-coded), so unconfigured
+    # roles keep surfacing below-threshold candidates instead of silently
+    # selecting nothing. Roles WITH a cutoff use their own value (#201).
+    _DEFAULT_CUTOFF = 50
+    effective_cutoff = func.coalesce(Role.score_threshold, _DEFAULT_CUTOFF)
 
     q = (
         db.query(CandidateApplication, Role)
@@ -478,7 +490,7 @@ def backfill_existing_below_threshold(
             or_(
                 and_(
                     CandidateApplication.pre_screen_score_100.isnot(None),
-                    CandidateApplication.pre_screen_score_100 < 50,
+                    CandidateApplication.pre_screen_score_100 < effective_cutoff,
                 ),
                 CandidateApplication.pre_screen_recommendation == "Below threshold",
             ),
@@ -513,6 +525,9 @@ def backfill_existing_below_threshold(
         if existing_pending is not None:
             skipped_existing += 1
             continue
+        role_threshold = resolved_auto_reject_config(None, role, db=db).get("threshold_100")
+        if role_threshold is None:
+            role_threshold = float(_DEFAULT_CUTOFF)
         result = queue_pre_screen_reject(
             db,
             organization_id=int(app.organization_id),
@@ -521,7 +536,7 @@ def backfill_existing_below_threshold(
             pre_screen_score=float(app.pre_screen_score_100)
             if app.pre_screen_score_100 is not None
             else None,
-            threshold=50.0,
+            threshold=role_threshold,
         )
         if result is None:
             failed += 1

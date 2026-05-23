@@ -116,21 +116,25 @@ def main() -> int:
                     )
                     continue
                 try:
-                    transition_stage(
-                        db,
-                        app=app,
-                        to_stage="advanced",
-                        source="sync",
-                        actor_type="sync",
-                        reason="Backfill: Workable already past handover point",
-                        metadata={"workable_stage": app.workable_stage},
-                        idempotency_key=f"backfill_advance:{app.id}",
-                    )
+                    # Per-row SAVEPOINT: a failing row rolls back only its
+                    # own transition, not the earlier successful rows in this
+                    # batch (a plain db.rollback() would discard the whole
+                    # uncommitted batch, so those advances were lost forever).
+                    with db.begin_nested():
+                        transition_stage(
+                            db,
+                            app=app,
+                            to_stage="advanced",
+                            source="sync",
+                            actor_type="sync",
+                            reason="Backfill: Workable already past handover point",
+                            metadata={"workable_stage": app.workable_stage},
+                            idempotency_key=f"backfill_advance:{app.id}",
+                        )
                     advanced += 1
                 except Exception as exc:  # pragma: no cover — best-effort
                     failed += 1
                     print(f"  FAIL app_id={app.id}: {exc}")
-                    db.rollback()
                     continue
             if not args.dry_run:
                 db.commit()

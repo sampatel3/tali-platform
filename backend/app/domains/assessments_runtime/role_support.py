@@ -984,6 +984,14 @@ def application_detail_payload(
         payload["notes"] = None
         payload["candidate_interview_kit"] = None
         payload["assessment_history"] = []
+        # Recruiter-internal interview prep / transcripts must never reach an
+        # external client share.
+        payload["screening_pack"] = None
+        payload["tech_interview_pack"] = None
+        payload["screening_interview_summary"] = None
+        payload["tech_interview_summary"] = None
+        payload["interview_evidence_summary"] = None
+        payload["interviews"] = []
         if isinstance(payload.get("score_summary"), dict):
             ss = dict(payload["score_summary"])
             for k in (

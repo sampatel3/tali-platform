@@ -209,6 +209,7 @@ class OrgResponse(BaseModel):
     sso_enforced: bool = False
     saml_enabled: bool = False
     saml_metadata_url: Optional[str] = None
+    two_factor_required: bool = False
     candidate_feedback_enabled: bool = True
     created_at: datetime
 
@@ -227,6 +228,7 @@ class OrgUpdate(BaseModel):
     sso_enforced: Optional[bool] = None
     saml_enabled: Optional[bool] = None
     saml_metadata_url: Optional[str] = None
+    two_factor_required: Optional[bool] = None
     candidate_feedback_enabled: Optional[bool] = None
     default_assessment_duration_minutes: Optional[int] = Field(default=None, ge=15, le=180)
     invite_email_template: Optional[str] = Field(default=None, max_length=10000)
