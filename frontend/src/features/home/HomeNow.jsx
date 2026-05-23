@@ -408,7 +408,7 @@ const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze,
             {decision.candidate_email || ''}
           </div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0, width: 210 }}>
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0, alignItems: 'center' }}>
           <DeepLinkRow
             Icon={FileText}
             label="Open candidate report"

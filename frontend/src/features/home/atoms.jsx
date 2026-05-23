@@ -186,7 +186,7 @@ export const DeepLinkRow = ({ Icon, label, value, onClick, href }) => {
       alignItems: 'center',
       gap: 10,
       padding: '8px 10px',
-      width: '100%',
+      width: value ? '100%' : 'auto',
       border: '1px solid var(--line)',
       background: 'var(--bg)',
       borderRadius: 8,
@@ -210,7 +210,7 @@ export const DeepLinkRow = ({ Icon, label, value, onClick, href }) => {
         </span>
       </span>
     ) : (
-      <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+      <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 500, whiteSpace: 'nowrap' }}>
         {label}
       </span>
     )}
