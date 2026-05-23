@@ -17,7 +17,8 @@ import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
 import { RadarChart } from '../../shared/ui/RadarChart';
 import { ScoreRing } from '../../shared/ui/ScoreRing';
-import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES } from './assessmentViewModels';
+import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAssessmentToCandidateView } from './assessmentViewModels';
+import { AssessmentEvidencePanels, EvaluatePanel, InterviewTranscriptCapture } from './CandidateAssessmentDetailPanels';
 import { CandidateSnapshotCard } from './CandidateSnapshotCard';
 import {
   getErrorMessage,
@@ -40,12 +41,14 @@ const resolveAssessmentStatus = (application) => (
   String(application?.score_summary?.assessment_status || application?.valid_assessment_status || '').toLowerCase()
 );
 
-// HANDOFF v2 §5.1: candidate file is exactly 4 tabs.
-// Overview · CV & match · Interview prep · Notes & timeline
-// (the standalone "Assessment" tab was dropped — its content surfaces on
-// Overview now.)
+// Candidate file is the single canonical candidate page. Base tabs are
+// always present; assessment-only tabs (requiresAssessment) reveal once a
+// completed assessment is linked — replacing the separate /assessments/:id
+// page. internalOnly tabs are recruiter-only (hidden from client shares).
 const REPORT_TABS = [
   { id: 'overview', label: 'Overview' },
+  { id: 'assessment', label: 'Assessment', internalOnly: true, requiresAssessment: true },
+  { id: 'evaluate', label: 'Evaluate', internalOnly: true, requiresAssessment: true },
   { id: 'cv', label: 'CV' },
   { id: 'prep', label: 'Interview prep', recruiterPrep: true },
   { id: 'notes', label: 'Notes & timeline', internalOnly: true },
@@ -56,6 +59,10 @@ const CLIENT_HIDDEN_TABS = new Set(
   REPORT_TABS.filter((tab) => tab.internalOnly || tab.recruiterPrep).map((tab) => tab.id),
 );
 const REPORT_TAB_IDS = new Set(REPORT_TABS.map((tab) => tab.id));
+
+// Stable empty-rubric reference so the Evaluate panel's draft-init effect
+// (keyed on the rubric identity) doesn't reset recruiter input every render.
+const EMPTY_RUBRIC = Object.freeze({});
 
 const CV_TEXT_PREVIEW_LIMIT = 18000;
 
@@ -786,6 +793,17 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     REPORT_TAB_IDS.has(requestedTab) ? requestedTab : 'overview'
   );
 
+  // Assessment-only tabs reveal once a completed assessment is linked.
+  // `completedAssessment` is only fetched when the latest attempt is in a
+  // completed status (see loadStandingReport), so this mirrors "appears on
+  // completion" without an extra flag.
+  const hasAssessmentDetail = Boolean(completedAssessment);
+  const availableTabIds = useMemo(() => new Set(
+    REPORT_TABS
+      .filter((tab) => !hiddenTabs.has(tab.id) && (!tab.requiresAssessment || hasAssessmentDetail))
+      .map((tab) => tab.id)
+  ), [hiddenTabs, hasAssessmentDetail]);
+
   useEffect(() => {
     document.body.classList.toggle('interview-view', isInterviewView);
     return () => {
@@ -795,11 +813,11 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
 
   useEffect(() => {
     const nextTab = REPORT_TAB_IDS.has(requestedTab) ? requestedTab : 'overview';
-    setActiveTab(hiddenTabs.has(nextTab) ? 'overview' : nextTab);
-  }, [hiddenTabs, requestedTab]);
+    setActiveTab(availableTabIds.has(nextTab) ? nextTab : 'overview');
+  }, [availableTabIds, requestedTab]);
 
   const activateTab = useCallback((tabId) => {
-    const safeTab = hiddenTabs.has(tabId) ? 'overview' : tabId;
+    const safeTab = availableTabIds.has(tabId) ? tabId : 'overview';
     setActiveTab(safeTab);
     const nextParams = new URLSearchParams(searchParams);
     if (safeTab === 'overview') {
@@ -808,7 +826,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       nextParams.set('tab', safeTab);
     }
     setSearchParams(nextParams, { replace: true });
-  }, [hiddenTabs, searchParams, setSearchParams]);
+  }, [availableTabIds, searchParams, setSearchParams]);
 
   const loadStandingReport = useCallback(async () => {
     if (routeApplicationKey === 'demo') {
@@ -912,6 +930,16 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
 
   const assessmentId = completedAssessment?.id || resolveAssessmentId(application);
   const canOpenAssessmentDetail = Boolean(completedAssessment?.id);
+  // Mapped assessment view for the Assessment + Evaluate tabs (shared shape
+  // with the legacy /assessments page). Memoized so the leaf components and
+  // the Evaluate draft-init effect see a stable `candidate` reference.
+  const candidateView = useMemo(
+    () => mapAssessmentToCandidateView(completedAssessment),
+    [completedAssessment]
+  );
+  const evaluationRubric = (completedAssessment?.evaluation_rubric && typeof completedAssessment.evaluation_rubric === 'object')
+    ? completedAssessment.evaluation_rubric
+    : EMPTY_RUBRIC;
   const workableConnected = Boolean(orgData?.workable_connected);
   const workableSource = Boolean(application?.workable_sourced || application?.workable_score_raw != null || application?.workable_profile_url);
   // Strengths and risks are now derived from the same
@@ -1172,6 +1200,62 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     }
   }, [application?.id, rolesApi, showToast]);
 
+  // Recruiter lifecycle actions migrated from the legacy /assessments page.
+  // Rendered in the (recruiter-only) Assessment pane, so they never reach a
+  // share route. `resend` doubles as the candidate CV-request trigger.
+  const normalizedAssessmentStatus = String(
+    completedAssessment?.status || resolveAssessmentStatus(application) || ''
+  ).toLowerCase();
+  const canResendInvite = Boolean(assessmentId)
+    && (normalizedAssessmentStatus === 'pending' || normalizedAssessmentStatus === 'expired');
+  const hasCvOnFile = Boolean(
+    application?.cv_filename || completedAssessment?.candidate_cv_filename || application?.cv_uploaded_at
+  );
+  const canRequestCvUpload = Boolean(
+    assessmentId && !hasCvOnFile && (application?.candidate_email || completedAssessment?.candidate_email)
+  );
+
+  const handleResendInvite = useCallback(async () => {
+    if (!assessmentId || !assessmentsApi?.resend) return;
+    setBusyAction('resend');
+    try {
+      await assessmentsApi.resend(assessmentId);
+      showToast('Assessment invite resent.', 'success');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to resend invite.'), 'error');
+    } finally {
+      setBusyAction('');
+    }
+  }, [assessmentId, assessmentsApi, showToast]);
+
+  const handleRequestCvUpload = useCallback(async () => {
+    if (!assessmentId || !assessmentsApi?.resend) return;
+    setBusyAction('request-cv');
+    try {
+      await assessmentsApi.resend(assessmentId);
+      showToast('CV request sent. The candidate can upload from the assessment link.', 'success');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to send CV request.'), 'error');
+    } finally {
+      setBusyAction('');
+    }
+  }, [assessmentId, assessmentsApi, showToast]);
+
+  const handleDeleteAssessment = useCallback(async () => {
+    if (!assessmentId || !assessmentsApi?.remove) return;
+    if (typeof window !== 'undefined'
+      && !window.confirm('Delete this assessment? This cannot be undone.')) return;
+    setBusyAction('delete');
+    try {
+      await assessmentsApi.remove(assessmentId);
+      showToast('Assessment deleted.', 'success');
+      onNavigate('jobs');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to delete assessment.'), 'error');
+      setBusyAction('');
+    }
+  }, [assessmentId, assessmentsApi, showToast, onNavigate]);
+
   if (loading) {
     return (
       <div>
@@ -1355,7 +1439,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         ) : null}
 
         <div className="tabs report-tabs" role="tablist" aria-label="Candidate report sections">
-          {REPORT_TABS.filter((tab) => !hiddenTabs.has(tab.id)).map((tab) => (
+          {REPORT_TABS.filter((tab) => availableTabIds.has(tab.id)).map((tab) => (
             <button
               key={tab.id}
               type="button"
@@ -1543,6 +1627,28 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         </div>
 
         <div className={`pane ${activeTab === 'assessment' ? 'active' : ''}`} data-p="assessment">
+          {assessmentId ? (
+            <div className="report-recruiter-actions mb-3 flex flex-wrap gap-2" data-internal-only>
+              {canResendInvite ? (
+                <button type="button" className="btn btn-outline btn-sm" onClick={handleResendInvite} disabled={busyAction !== ''}>
+                  {busyAction === 'resend' ? 'Resending…' : 'Resend invite'}
+                </button>
+              ) : null}
+              {canRequestCvUpload ? (
+                <button type="button" className="btn btn-outline btn-sm" onClick={handleRequestCvUpload} disabled={busyAction !== ''}>
+                  {busyAction === 'request-cv' ? 'Sending…' : 'Request CV upload'}
+                </button>
+              ) : null}
+              {workableConnected && workableSource && !completedAssessment?.posted_to_workable ? (
+                <button type="button" className="btn btn-outline btn-sm" onClick={handlePostToWorkable} disabled={busyAction !== ''}>
+                  {busyAction === 'workable' ? 'Posting…' : 'Post to Workable'}
+                </button>
+              ) : null}
+              <button type="button" className="btn btn-outline btn-sm" onClick={handleDeleteAssessment} disabled={busyAction !== ''}>
+                {busyAction === 'delete' ? 'Deleting…' : 'Delete assessment'}
+              </button>
+            </div>
+          ) : null}
           <div className="two-col">
             <div className="panel">
               <h2>Scored <em>dimensions</em></h2>
@@ -1602,6 +1708,29 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               ) : null}
             </div>
           </div>
+
+          {/* Full assessment evidence migrated from the legacy /assessments
+              page: AI-usage analytics, code/git, and the prompt-by-prompt
+              timeline. Recruiter-only (this pane is internalOnly). */}
+          {candidateView ? (
+            <AssessmentEvidencePanels candidate={candidateView} />
+          ) : null}
+        </div>
+
+        <div className={`pane ${activeTab === 'evaluate' ? 'active' : ''}`} data-p="evaluate" data-internal-only>
+          {candidateView ? (
+            <EvaluatePanel
+              candidate={candidateView}
+              evaluationRubric={evaluationRubric}
+              assessmentId={assessmentId}
+              assessmentsApi={assessmentsApi}
+              roleFitCriteria={reportModel?.roleFitModel?.requirementsAssessment || []}
+              recommendation={reportModel?.recommendation}
+              recruiterSummary={reportModel?.recruiterSummaryText || ''}
+            />
+          ) : (
+            <div className="mc-notes-empty">Evaluation opens once a completed assessment is linked.</div>
+          )}
         </div>
 
         <div className={`pane ${activeTab === 'cv' ? 'active' : ''}`} data-p="cv">
@@ -1697,6 +1826,21 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               ))}
             </div>
           </div>
+
+          {/* Screening transcript capture (Fireflies link / manual paste),
+              migrated from the legacy /assessments page. Recruiter-only —
+              not mounted on unauth share routes (it calls authed APIs). */}
+          {!isShareRoute ? (
+            <div className="mc-prep-stage" data-internal-only>
+              <div className="mc-kicker">SCREENING TRANSCRIPT</div>
+              <InterviewTranscriptCapture
+                application={application}
+                firefliesConnected={Boolean(orgData?.fireflies_config?.connected)}
+                rolesApi={rolesApi}
+                onRefresh={loadStandingReport}
+              />
+            </div>
+          ) : null}
         </div>
 
         <div className={`pane ${activeTab === 'notes' ? 'active' : ''}`} data-p="notes" data-internal-only>
