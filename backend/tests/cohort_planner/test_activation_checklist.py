@@ -131,3 +131,14 @@ def test_surface_intent_slot_carries_settings_link(db):
     assert intent_row.response_schema is not None
     assert intent_row.response_schema.get("link_url") == f"/jobs/{int(role.id)}?tab=agent-settings"
     assert intent_row.response_schema.get("link_label") == "Open agent settings"
+
+
+def test_auto_mode_skips_threshold_question(db):
+    """In agent-managed (auto) mode the threshold is dynamic, so the
+    checklist must NOT ask the recruiter to set a number."""
+    org = _make_org(db)
+    role = _make_role(db, org, score_threshold=None, auto_reject_threshold_mode="auto")
+    surface_activation_questions(db, role=role)
+    db.flush()
+    kinds = _open_kinds(db, role)
+    assert "threshold_ambiguous" not in kinds, "auto mode is dynamic — don't ask for a threshold"
