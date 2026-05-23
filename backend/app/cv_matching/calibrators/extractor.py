@@ -94,21 +94,28 @@ def extract_records(
     role_family_mapper: Callable[[str | None], str] | None = None,
     role_family_filter: str | None = None,
     since: datetime | None = None,
+    include_outcomes: bool = True,
 ) -> list[CalibrationRecord]:
-    """Read overrides from the DB and emit calibration records.
+    """Read training records from the DB and emit calibration records.
+
+    Two label sources:
+      * recruiter **overrides** of the LLM recommendation (``cv_match_overrides``)
+      * realized **outcomes** (``include_outcomes``): ``advanced`` candidates
+        with a score whose Workable result is decided — offer/hired = positive,
+        reject/disqualify = negative. This is the stronger ground-truth label,
+        so when a candidate has both, the outcome record wins.
 
     ``role_family_mapper`` maps a role title to a stable role_family.
     Defaults to slugify. ``role_family_filter`` (when set) restricts
-    output to that role_family only. ``since`` filters by override
-    ``created_at``.
+    output to that role_family only. ``since`` filters by event time.
 
     Returns ``[]`` when the DB is unavailable (lightweight test mode).
     """
     try:
-        from ..models.candidate_application import CandidateApplication
-        from ..models.cv_match_override import CvMatchOverride
-        from ..models.role import Role
-        from ..platform.database import SessionLocal
+        from ...models.candidate_application import CandidateApplication
+        from ...models.cv_match_override import CvMatchOverride
+        from ...models.role import Role
+        from ...platform.database import SessionLocal
     except Exception as exc:
         logger.debug("Calibration extractor: DB unavailable, returning []: %s", exc)
         return []
@@ -128,7 +135,7 @@ def extract_records(
         if since is not None:
             q = q.filter(CvMatchOverride.created_at >= since)
 
-        records: list[CalibrationRecord] = []
+        override_records: list[CalibrationRecord] = []
         for override, app, role in q.all():
             role_family = mapper(getattr(role, "title", None))
             if role_family_filter and role_family != role_family_filter:
@@ -143,7 +150,7 @@ def extract_records(
                 override.original_recommendation,
                 override.override_recommendation,
             )
-            records.append(
+            override_records.append(
                 CalibrationRecord(
                     application_id=int(override.application_id),
                     role_family=role_family,
@@ -154,18 +161,121 @@ def extract_records(
                     notes=override.recruiter_notes or "",
                 )
             )
-        return records
+
+        if not include_outcomes:
+            return override_records
+
+        # Realized-outcome records are the stronger label: when a candidate has
+        # both an override and a decided outcome, keep the outcome and drop the
+        # override to avoid double-counting.
+        outcome_records = _extract_outcome_records(
+            session,
+            candidate_application_cls=CandidateApplication,
+            role_cls=Role,
+            mapper=mapper,
+            role_family_filter=role_family_filter,
+            since=since,
+        )
+        covered = {r.application_id for r in outcome_records}
+        deduped_overrides = [r for r in override_records if r.application_id not in covered]
+        return outcome_records + deduped_overrides
     finally:
         session.close()
 
 
+# Workable terminal stages that mean "chosen" (positive label), independent of
+# application_outcome (offer keeps outcome=open until the candidate accepts).
+_POSITIVE_TERMINAL_STAGES = {"offer", "offer_extended", "offer_accepted", "hired"}
+
+
+def _norm_stage(value: str | None) -> str:
+    return (value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _outcome_action(app) -> _RecruiterAction | None:
+    """Derive the binary advance/reject label from a candidate's realized
+    outcome. Returns None when the outcome isn't a usable label yet (e.g. an
+    advanced-by-handback candidate still awaiting a downstream result)."""
+    if getattr(app, "workable_disqualified", None) is True:
+        return "reject"
+    outcome = (getattr(app, "application_outcome", None) or "").lower()
+    if outcome == "hired":
+        return "advance"
+    if outcome == "rejected":
+        return "reject"
+    if _norm_stage(getattr(app, "workable_stage", None)) in _POSITIVE_TERMINAL_STAGES:
+        return "advance"
+    return None
+
+
+def _extract_outcome_records(
+    session,
+    *,
+    candidate_application_cls,
+    role_cls,
+    mapper: Callable[[str | None], str],
+    role_family_filter: str | None,
+    since: datetime | None,
+) -> list[CalibrationRecord]:
+    """Emit calibration records from realized hiring outcomes — the ground truth
+    the loop is meant to learn from. Only `advanced` (decided) candidates that
+    already have a score (cv_match_details → raw_scores) qualify."""
+    from sqlalchemy import or_
+
+    q = (
+        session.query(candidate_application_cls, role_cls)
+        .outerjoin(role_cls, role_cls.id == candidate_application_cls.role_id)
+        .filter(
+            candidate_application_cls.pipeline_stage == "advanced",
+            candidate_application_cls.cv_match_score.isnot(None),
+            candidate_application_cls.deleted_at.is_(None),
+        )
+    )
+    if since is not None:
+        q = q.filter(
+            or_(
+                candidate_application_cls.application_outcome_updated_at >= since,
+                candidate_application_cls.pipeline_stage_updated_at >= since,
+            )
+        )
+
+    records: list[CalibrationRecord] = []
+    for app, role in q.all():
+        action = _outcome_action(app)
+        if action is None:
+            continue
+        role_family = mapper(getattr(role, "title", None))
+        if role_family_filter and role_family != role_family_filter:
+            continue
+        details = getattr(app, "cv_match_details", {}) or {}
+        raw_scores = _extract_raw_scores(details, None)
+        if not raw_scores:
+            continue
+        records.append(
+            CalibrationRecord(
+                application_id=int(app.id),
+                role_family=role_family,
+                raw_scores=raw_scores,
+                original_recommendation="",
+                recruiter_action=action,
+                created_at=(
+                    app.application_outcome_updated_at
+                    or app.pipeline_stage_updated_at
+                    or app.created_at
+                ),
+                notes="realized_outcome",
+            )
+        )
+    return records
+
+
 def _extract_raw_scores(details: dict, override) -> dict[str, float]:
-    """Pull raw dimension scores out of cv_match_details + override row."""
+    """Pull raw dimension scores out of cv_match_details (+ optional override row)."""
     scores: dict[str, float] = {}
     role_fit = details.get("role_fit_score")
     if role_fit is not None:
         scores["role_fit"] = float(role_fit)
-    elif override.original_score is not None:
+    elif override is not None and override.original_score is not None:
         scores["role_fit"] = float(override.original_score)
 
     if details.get("cv_fit_score") is not None:

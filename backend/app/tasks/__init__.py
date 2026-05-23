@@ -52,6 +52,15 @@ from .agent_tasks import (
 # trap as above — the beat schedule references this task name, but
 # without the import the worker drops the run.
 from .decision_policy_tasks import nightly_retune_sweep
+# Eager-import calibration_tasks for the nightly model-refinement beats
+# (terminal-scoring + recalibration). Same trap — beat references these task
+# names, but without this import the worker NotRegistered's them and drops the
+# runs. (autodiscover_tasks(["app.tasks"]) does NOT cover these — it looks for
+# an app.tasks.tasks module, which doesn't exist.)
+from .calibration_tasks import (
+    recalibrate_cv_match,
+    score_terminal_for_calibration,
+)
 
 __all__ = [
     "celery_app",
@@ -80,4 +89,6 @@ __all__ = [
     "agent_cohort_tick_role",
     "agent_expire_stuck_runs",
     "nightly_retune_sweep",
+    "score_terminal_for_calibration",
+    "recalibrate_cv_match",
 ]

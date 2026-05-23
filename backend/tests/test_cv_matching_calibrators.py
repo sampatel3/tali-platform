@@ -169,3 +169,72 @@ def test_save_calibrator_writes_timestamped_and_latest():
     names = {f.name for f in files}
     assert any(n.endswith("_latest.json") for n in names)
     _cleanup_snapshot(role_family, dimension)
+
+
+# ---------------------------------------------------------------------------
+# Realized-outcome label extraction (model-refinement loop)
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+from app.cv_matching.calibrators.extractor import (  # noqa: E402
+    _outcome_action,
+    _extract_raw_scores,
+)
+
+
+def _app(**kw):
+    base = {"workable_disqualified": False, "application_outcome": "open", "workable_stage": None}
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+class TestOutcomeAction:
+    def test_disqualified_is_reject(self):
+        assert _outcome_action(_app(workable_disqualified=True, workable_stage="technical interview")) == "reject"
+
+    def test_hired_is_advance(self):
+        assert _outcome_action(_app(application_outcome="hired", workable_stage="hired")) == "advance"
+
+    def test_rejected_is_reject(self):
+        assert _outcome_action(_app(application_outcome="rejected", workable_stage="rejected")) == "reject"
+
+    def test_offer_open_is_advance(self):
+        # offer keeps outcome=open but is a positive label via workable_stage.
+        assert _outcome_action(_app(workable_stage="Offer")) == "advance"
+        assert _outcome_action(_app(workable_stage="Offer Extended")) == "advance"
+
+    def test_in_funnel_is_none(self):
+        assert _outcome_action(_app(workable_stage="technical interview")) is None
+        assert _outcome_action(_app(workable_stage=None)) is None
+
+
+def test_extract_raw_scores_handles_no_override():
+    details = {
+        "role_fit_score": 73.0,
+        "cv_fit_score": 70.0,
+        "requirements_match_score": 75.0,
+        "dimension_scores": {"skills_coverage": 80.0},
+    }
+    scores = _extract_raw_scores(details, None)
+    assert scores["role_fit"] == 73.0
+    assert scores["cv_fit"] == 70.0
+    assert scores["requirements_match"] == 75.0
+    assert scores["skills_coverage"] == 80.0
+
+
+def test_calibration_beat_tasks_registered_and_scheduled():
+    """Regression guard: both nightly calibration tasks must be (a) registered
+    on the worker (eager-imported in app/tasks/__init__.py) and (b) referenced
+    by the beat schedule. Otherwise beat fires names the worker drops as
+    unregistered and the model-refinement loop silently never runs."""
+    import app.tasks  # noqa: F401 — triggers the eager task imports
+    from app.tasks.celery_app import celery_app
+
+    scheduled = {entry["task"] for entry in celery_app.conf.beat_schedule.values()}
+    for name in (
+        "app.tasks.calibration_tasks.score_terminal_for_calibration",
+        "app.tasks.calibration_tasks.recalibrate_cv_match",
+    ):
+        assert name in celery_app.tasks, f"{name} not registered on the worker"
+        assert name in scheduled, f"{name} missing from beat_schedule"

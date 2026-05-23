@@ -394,7 +394,14 @@ def _format_job_spec_from_api(job_data: dict) -> str:
     return sanitize_text_for_storage(result.strip())
 
 
-TERMINAL_STAGES = {"hired", "rejected", "withdrawn", "disqualified", "declined", "archived"}
+# Workable stages where the hiring decision is effectively made and Tali has
+# nothing left to actively do → park in `advanced`. Covers negatives
+# (rejected/disqualified/declined) AND positives (offer/hired). "offer" is
+# terminal-but-pending: it parks the candidate in `advanced` with outcome left
+# `open` (not hired yet) — it's a POSITIVE training label via workable_stage,
+# captured by the cv_match calibrator. Mid-interview stages (phone/technical/
+# final interview) are deliberately NOT here — they stay in Tali's funnel.
+TERMINAL_STAGES = {"hired", "rejected", "withdrawn", "disqualified", "declined", "archived", "offer"}
 
 
 def _normalize_stage_for_terminal(value: str | None) -> str | None:

@@ -8,6 +8,7 @@ from app.components.integrations.workable.sync_service import (
     _is_terminal_candidate,
     _is_disqualified,
     _disqualified_at_from_payload,
+    _terminal_outcome,
     _candidate_email,
     _normalize_stage_for_terminal,
     WorkableSyncService,
@@ -138,6 +139,17 @@ class TestIsTerminalCandidate:
         assert _is_terminal_candidate({"stage": "interview"}) is False
         assert _is_terminal_candidate({}) is False
 
+    def test_offer_is_terminal(self):
+        # offer = hiring decision made → terminal/advanced.
+        assert _is_terminal_candidate({"stage": "offer"}) is True
+        assert _is_terminal_candidate({"stage": "Offer Extended"}) is True
+
+    def test_interview_stages_not_terminal(self):
+        # mid-interview stays in Tali's funnel, NOT terminal.
+        assert _is_terminal_candidate({"stage": "technical interview"}) is False
+        assert _is_terminal_candidate({"stage": "final interview"}) is False
+        assert _is_terminal_candidate({"stage": "phone screen"}) is False
+
     def test_disqualified_flag(self):
         assert _is_terminal_candidate({"disqualified": True}) is True
 
@@ -156,6 +168,24 @@ class TestIsDisqualified:
         assert _is_disqualified({"stage": "interview"}) is False
         assert _is_disqualified({"disqualified": False}, {"disqualified": False}) is False
         assert _is_disqualified({}) is False
+
+
+class TestTerminalOutcome:
+    def test_hired_and_rejected(self):
+        assert _terminal_outcome({"stage": "hired"}) == "hired"
+        assert _terminal_outcome({"hired_at": "2026-01-01"}) == "hired"
+        assert _terminal_outcome({"stage": "rejected"}) == "rejected"
+        assert _terminal_outcome({}, disqualified=True) == "rejected"
+
+    def test_offer_has_no_outcome(self):
+        # offer is terminal/advanced but the candidate isn't hired yet, so the
+        # application_outcome stays open (the calibrator labels offer positive
+        # via workable_stage, not via application_outcome).
+        assert _terminal_outcome({"stage": "offer"}) is None
+        assert _terminal_outcome({"stage": "Offer Extended"}) is None
+
+    def test_non_terminal_none(self):
+        assert _terminal_outcome({"stage": "technical interview"}) is None
 
 
 class TestDisqualifiedAt:
@@ -554,6 +584,73 @@ def test_terminal_outcome_is_captured_for_existing_candidate(db):
     assert rejected is not None
     assert rejected.application_outcome == "rejected"
     assert rejected.pipeline_stage == "advanced"
+
+
+def test_offer_is_parked_advanced_outcome_open(db):
+    """An existing candidate moved to Workable 'Offer' is terminal → parked in
+    `advanced`, but the outcome stays `open` (not hired yet). Positive label for
+    the calibrator comes via workable_stage."""
+    from app.models.candidate_application import CandidateApplication
+
+    org = _make_org(db, "offer-terminal-org")
+    MockClient, state = _client_returning([
+        [{"id": "cand_offer", "email": "offer@example.com", "name": "Offer Person", "stage": "Review"}],
+        [{"id": "cand_offer", "email": "offer@example.com", "name": "Offer Person", "stage": "Offer"}],
+    ])
+    service = WorkableSyncService(MockClient())
+    service.sync_org(db, org)
+    state["calls"] = 1
+    service.sync_org(db, org)
+
+    app = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org.id,
+        CandidateApplication.workable_candidate_id == "cand_offer",
+    ).first()
+    assert app is not None
+    assert app.pipeline_stage == "advanced"
+    assert app.application_outcome == "open"  # offer != hired yet
+    assert (app.workable_stage or "").lower() == "offer"
+
+
+def test_score_advanced_for_training_selects_unscored_advanced(db):
+    """The calibration scorer targets ALL `advanced` candidates lacking a score
+    (any stage/outcome incl. rejects), skips already-scored ones, and honors
+    the limit. Dry-run, so no Anthropic calls."""
+    from app.scripts.score_advanced_for_training import score_advanced_for_training
+    from app.models.role import Role
+    from app.models.candidate import Candidate
+    from app.models.candidate_application import CandidateApplication
+
+    org = _make_org(db, "calib-select-org")
+    role = Role(organization_id=org.id, name="Calib Role", job_spec_text="Need an engineer.")
+    db.add(role)
+    db.flush()
+
+    def _mk(email, stage, outcome, scored, cv):
+        c = Candidate(organization_id=org.id, email=email, full_name="X", cv_text=cv)
+        db.add(c)
+        db.flush()
+        a = CandidateApplication(
+            organization_id=org.id, candidate_id=c.id, role_id=role.id,
+            pipeline_stage=stage, pipeline_stage_source="sync",
+            application_outcome=outcome, cv_text=cv,
+            cv_match_score=(70.0 if scored else None),
+        )
+        db.add(a)
+        db.flush()
+        return a
+
+    _mk("a@x.com", "advanced", "open", scored=False, cv="cv text")        # match (offer-ish)
+    _mk("b@x.com", "advanced", "rejected", scored=False, cv=None)         # match (reject negative, needs CV)
+    _mk("c@x.com", "advanced", "open", scored=True, cv="cv text")         # skip — already scored
+    _mk("d@x.com", "applied", "open", scored=False, cv="cv text")         # skip — not advanced
+    db.commit()
+
+    summary = score_advanced_for_training(db, target_stages=None, apply=False)
+    assert summary["matched"] == 2
+
+    summary_limited = score_advanced_for_training(db, target_stages=None, apply=False, limit=1)
+    assert summary_limited["matched"] == 1
 
 
 def test_outcome_flip_back_is_recorded(db):
