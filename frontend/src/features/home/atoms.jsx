@@ -200,14 +200,20 @@ export const DeepLinkRow = ({ Icon, label, value, onClick, href }) => {
     <span style={{ display: 'inline-grid', placeItems: 'center', color: 'var(--purple)' }}>
       <Icon size={14} strokeWidth={1.8} />
     </span>
-    <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-      <span style={{ fontSize: 12, color: 'var(--mute)', fontFamily: 'var(--font-mono)', letterSpacing: '.04em' }}>
+    {value ? (
+      <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+        <span style={{ fontSize: 12, color: 'var(--mute)', fontFamily: 'var(--font-mono)', letterSpacing: '.04em' }}>
+          {label}
+        </span>
+        <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {value}
+        </span>
+      </span>
+    ) : (
+      <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
         {label}
       </span>
-      <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {value}
-      </span>
-    </span>
+    )}
     <ArrowUpRight size={14} strokeWidth={1.8} aria-hidden="true" style={{ color: 'var(--mute)' }} />
   </Tag>
   );
