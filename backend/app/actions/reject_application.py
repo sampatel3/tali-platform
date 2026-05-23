@@ -175,6 +175,56 @@ def _try_workable_disqualify(
     return False
 
 
+def notify_rejection(
+    db: Session,
+    *,
+    app: CandidateApplication,
+    actor: Actor,
+    reason: Optional[str] = None,
+    send_email: bool = True,
+) -> None:
+    """Notify the candidate of a rejection — Workable-first, email fallback.
+
+    Disqualify the candidate in Workable when the org has write capability
+    and the application is linked; otherwise (or on failure) send the
+    Taali-branded rejection email. Best-effort: never raises. Extracted so
+    the decision-resolution path can run it off the request thread via the
+    deferred ``apply_decision_side_effects`` Celery task — the Workable HTTP
+    call adds seconds the recruiter shouldn't wait on.
+    """
+    candidate = app.candidate
+    candidate_email = (
+        (getattr(candidate, "email", "") or "").strip() if candidate else ""
+    )
+    org = db.query(Organization).filter(Organization.id == app.organization_id).first()
+    # Workable-first: when the org has Workable connected and the
+    # application is linked, disqualify there regardless of whether the
+    # local candidate row has an email. ``Candidate.email`` is nullable for
+    # imported / partially-populated records, but those candidates still
+    # need their Workable status moved to rejected. Only the fallback
+    # Taali-branded email requires a local email.
+    workable_handled = _try_workable_disqualify(
+        db,
+        app=app,
+        org=org,
+        actor=actor,
+        reason=reason,
+    )
+    if not workable_handled and send_email and candidate_email:
+        role = app.role
+        position = (
+            getattr(role, "name", None)
+            or getattr(candidate, "position", None)
+            or "the role you applied for"
+        )
+        _dispatch_rejection_email(
+            candidate_email=candidate_email,
+            candidate_name=(candidate.full_name or candidate.email),
+            org_name=(org.name if org else "the hiring team"),
+            position=position,
+        )
+
+
 def run(
     db: Session,
     actor: Actor,
@@ -186,6 +236,7 @@ def run(
     expected_version: Optional[int] = None,
     metadata: Optional[dict[str, Any]] = None,
     send_email: bool = True,
+    defer_notify: bool = False,
 ) -> CandidateApplication:
     if actor.type == ACTOR_AGENT:
         raise HTTPException(
@@ -216,42 +267,16 @@ def run(
 
     # Notify the candidate, but only on a fresh rejection (not idempotent
     # re-reject — transition_outcome is a no-op on the second call).
+    # ``defer_notify`` lets the decision-resolution path skip the inline
+    # Workable HTTP call and run it via a background task instead; the
+    # caller computes the same freshness check and dispatches notify_rejection.
     notify = (
         send_email
+        and not defer_notify
         and previous_outcome != "rejected"
         and app.application_outcome == "rejected"
     )
     if notify:
-        candidate = app.candidate
-        candidate_email = (getattr(candidate, "email", "") or "").strip() if candidate else ""
-        org = (
-            db.query(Organization).filter(Organization.id == organization_id).first()
-        )
-        # Workable-first: when the org has Workable connected and the
-        # application is linked, disqualify there regardless of whether
-        # the local candidate row has an email. ``Candidate.email`` is
-        # nullable for imported / partially-populated records, but those
-        # candidates still need their Workable status moved to rejected.
-        # Only the fallback Taali-branded email requires a local email.
-        workable_handled = _try_workable_disqualify(
-            db,
-            app=app,
-            org=org,
-            actor=actor,
-            reason=reason,
-        )
-        if not workable_handled and candidate_email:
-            role = app.role
-            position = (
-                getattr(role, "name", None)
-                or getattr(candidate, "position", None)
-                or "the role you applied for"
-            )
-            _dispatch_rejection_email(
-                candidate_email=candidate_email,
-                candidate_name=(candidate.full_name or candidate.email),
-                org_name=(org.name if org else "the hiring team"),
-                position=position,
-            )
+        notify_rejection(db, app=app, actor=actor, reason=reason, send_email=send_email)
 
     return app

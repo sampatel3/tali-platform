@@ -28,10 +28,7 @@ from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from . import advance_stage, reject_application, send_assessment
-from ._workable_decision_summary import (
-    post_decision_summary_to_workable,
-    try_workable_advance,
-)
+from ._decision_side_effects import apply_decision_side_effects
 from .types import ACTOR_RECRUITER, Actor
 
 
@@ -40,12 +37,6 @@ _OVERRIDE_DISPATCH_ACTIONS = {
     "advance",
     "skip_assessment_advance",
     "send_assessment",
-}
-_VERDICT_BY_OVERRIDE_ACTION = {
-    "reject": "rejected",
-    "advance": "advanced",
-    "skip_assessment_advance": "skip_advanced",
-    "send_assessment": "assessment_sent",
 }
 # Legacy override_action values that older clients pass — we still
 # accept them as no-op overrides (status=overridden, no side effect on
@@ -66,6 +57,7 @@ def run(
     override_action: Optional[str] = None,
     note: Optional[str] = None,
     workable_target_stage: Optional[str] = None,
+    collect_side_effects: Optional[dict] = None,
 ) -> AgentDecision:
     if actor.type != ACTOR_RECRUITER:
         raise HTTPException(status_code=403, detail="override is recruiter-only")
@@ -102,10 +94,32 @@ def run(
     }
     idempotency = f"override_decision:{decision.id}"
 
+    app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == int(decision.application_id),
+            CandidateApplication.organization_id == organization_id,
+        )
+        .first()
+    )
+    org = (
+        db.query(Organization).filter(Organization.id == organization_id).first()
+        if app is not None
+        else None
+    )
+    role = getattr(app, "role", None) if app is not None else None
+
+    # "Did this override freshly reject the candidate?" — gates the deferred
+    # Workable disqualify / rejection email. Set in the reject branch below.
+    reject_notify = False
+
     # Dispatch the alternative action the recruiter picked. None / "hold"
     # are no-ops (legacy "just disagree" branch — kept for back-compat
     # while the UI rolls out).
     if override_action == "reject":
+        prev_outcome = (
+            getattr(app, "application_outcome", None) if app is not None else None
+        )
         reject_application.run(
             db,
             actor,
@@ -114,6 +128,12 @@ def run(
             reason=(note or "").strip() or f"Override reject on agent decision #{decision.id}",
             idempotency_key=idempotency,
             metadata={**metadata, "override_action": override_action},
+            defer_notify=True,
+        )
+        reject_notify = bool(
+            app is not None
+            and prev_outcome != "rejected"
+            and getattr(app, "application_outcome", None) == "rejected"
         )
     elif override_action in ("advance", "skip_assessment_advance"):
         advance_stage.run(
@@ -126,29 +146,6 @@ def run(
             idempotency_key=idempotency,
             metadata={**metadata, "override_action": override_action},
         )
-        _adv_app = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.id == int(decision.application_id),
-                CandidateApplication.organization_id == organization_id,
-            )
-            .first()
-        )
-        if _adv_app is not None:
-            _adv_org = (
-                db.query(Organization)
-                .filter(Organization.id == organization_id)
-                .first()
-            )
-            try_workable_advance(
-                db,
-                actor,
-                app=_adv_app,
-                org=_adv_org,
-                role=getattr(_adv_app, "role", None),
-                target_stage=workable_target_stage,
-                reason=(note or "").strip() or "Recruiter advanced via override",
-            )
     elif override_action == "send_assessment":
         send_result = send_assessment.run(
             db,
@@ -189,66 +186,27 @@ def run(
     decision.resolution_note = note
     decision.human_disposition = "overridden"
 
-    # Best-effort Workable activity note for any candidate-affecting
-    # override. No-op for the legacy hold / manual_review / None branch
-    # (those don't change candidate state, so they don't need a Workable
-    # audit entry).
-    verdict = _VERDICT_BY_OVERRIDE_ACTION.get(override_action or "")
-    if verdict:
-        _app = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.id == int(decision.application_id),
-                CandidateApplication.organization_id == organization_id,
-            )
-            .first()
+    # Best-effort side effects (Workable writeback + recruiter-action graph
+    # episode). Run inline by default; deferred to a Celery task when the
+    # route passes ``collect_side_effects`` so the recruiter's click returns
+    # without waiting on slow Workable / LLM calls. The Workable summary note
+    # is a no-op for the legacy hold / manual_review / None branch (verdict is
+    # None) but the graph episode still fires for every override.
+    if collect_side_effects is None:
+        apply_decision_side_effects(
+            db,
+            actor,
+            decision=decision,
+            app=app,
+            org=org,
+            role=role,
+            disposition="overridden",
+            override_action=override_action,
+            note=note,
+            workable_target_stage=workable_target_stage,
+            reject_notify=reject_notify,
         )
-        if _app is not None:
-            _org = (
-                db.query(Organization)
-                .filter(Organization.id == organization_id)
-                .first()
-            )
-            try:
-                post_decision_summary_to_workable(
-                    db,
-                    actor,
-                    app=_app,
-                    org=_org,
-                    decision=decision,
-                    verdict=verdict,
-                    override_action=override_action,
-                    reason=note,
-                )
-            except Exception:
-                import logging
-                logging.getLogger("taali.actions.override_decision").warning(
-                    "decision-summary post raised for decision_id=%s",
-                    getattr(decision, "id", None),
-                )
+    else:
+        collect_side_effects["reject_notify"] = reject_notify
 
-    # Phase 2 §6.7: emit a recruiter-action episode. The override
-    # action (what the recruiter manually did instead) rides in the
-    # reason so the graph extractor can pick it up.
-    try:
-        from ..candidate_graph import agent_episodes
-        reason_parts = []
-        if override_action:
-            reason_parts.append(f"override_action={override_action}")
-        if note:
-            reason_parts.append(note)
-        agent_episodes.emit_recruiter_action_event(
-            organization_id=int(organization_id),
-            decision_id=int(decision.id),
-            recruiter_id=int(actor.user_id) if actor.user_id else 0,
-            action="override",
-            reason=" | ".join(reason_parts) if reason_parts else None,
-            happened_at=decision.resolved_at,
-        )
-    except Exception:
-        import logging
-        logging.getLogger("taali.actions.override_decision").warning(
-            "recruiter-action episode emit failed for decision_id=%s",
-            getattr(decision, "id", None),
-        )
     return decision

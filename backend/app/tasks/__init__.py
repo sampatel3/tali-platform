@@ -66,6 +66,11 @@ from .calibration_tasks import (
     sample_prescreen_for_calibration,
     score_terminal_for_calibration,
 )
+# Eager-import decision_tasks so the worker registers the deferred
+# decision side-effects task. The approve / override / bulk-approve routes
+# enqueue it after commit; without this import the worker NotRegistered's it
+# and the Workable writeback + graph episode silently never run.
+from .decision_tasks import apply_decision_side_effects
 
 __all__ = [
     "celery_app",
@@ -95,4 +100,5 @@ __all__ = [
     "score_terminal_for_calibration",
     "sample_prescreen_for_calibration",
     "recalibrate_cv_match",
+    "apply_decision_side_effects",
 ]

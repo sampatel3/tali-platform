@@ -12,6 +12,7 @@ All endpoints are org-scoped via ``get_current_user``.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -44,6 +45,34 @@ from ._activity_feed import (
 
 
 router = APIRouter(tags=["agentic"])
+
+logger = logging.getLogger("taali.agentic.routes")
+
+
+def _enqueue_decision_side_effects(
+    decision_id: int,
+    *,
+    workable_target_stage: Optional[str],
+    reject_notify: bool,
+) -> None:
+    """Fire-and-forget the deferred Workable / graph side effects for a
+    resolved decision (see app.tasks.decision_tasks). Best-effort: an
+    enqueue failure must never turn a successful approve / override into an
+    error for the recruiter — the state change already committed."""
+    try:
+        from ...tasks.decision_tasks import apply_decision_side_effects
+
+        apply_decision_side_effects.delay(
+            int(decision_id),
+            workable_target_stage=workable_target_stage,
+            reject_notify=bool(reject_notify),
+        )
+    except Exception:  # pragma: no cover — defensive
+        logger.warning(
+            "failed to enqueue decision side effects decision_id=%s",
+            decision_id,
+            exc_info=True,
+        )
 
 
 # Filter shorthand: a single ``?type=advance`` lets the recruiter scope the
@@ -492,6 +521,7 @@ def approve(
         except Exception:  # pragma: no cover — defensive
             pass
 
+    side_effects: dict = {}
     try:
         decision = approve_decision_action.run(
             db,
@@ -500,6 +530,7 @@ def approve(
             decision_id=decision_id,
             note=body.note,
             workable_target_stage=body.workable_target_stage,
+            collect_side_effects=side_effects,
         )
         db.commit()
         db.refresh(decision)
@@ -509,6 +540,14 @@ def approve(
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"approve failed: {exc}")
+
+    # Slow best-effort side effects (Workable writeback + graph episode) run
+    # off the request path so the recruiter's click returns immediately.
+    _enqueue_decision_side_effects(
+        decision.id,
+        workable_target_stage=body.workable_target_stage,
+        reject_notify=bool(side_effects.get("reject_notify", False)),
+    )
 
     candidate = (
         db.query(Candidate)
@@ -537,6 +576,7 @@ def override(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    side_effects: dict = {}
     try:
         decision = override_decision_action.run(
             db,
@@ -546,6 +586,7 @@ def override(
             override_action=body.override_action,
             note=body.note,
             workable_target_stage=body.workable_target_stage,
+            collect_side_effects=side_effects,
         )
         db.commit()
         db.refresh(decision)
@@ -555,6 +596,13 @@ def override(
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"override failed: {exc}")
+
+    # Slow best-effort side effects run off the request path (see approve).
+    _enqueue_decision_side_effects(
+        decision.id,
+        workable_target_stage=body.workable_target_stage,
+        reject_notify=bool(side_effects.get("reject_notify", False)),
+    )
 
     candidate = (
         db.query(Candidate)
@@ -784,6 +832,7 @@ def bulk_approve(
     failures: list[BulkApproveFailure] = []
     actor = Actor.recruiter(current_user)
     for decision_id in requested:
+        side_effects: dict = {}
         try:
             approve_decision_action.run(
                 db,
@@ -791,9 +840,15 @@ def bulk_approve(
                 organization_id=current_user.organization_id,
                 decision_id=decision_id,
                 note=note,
+                collect_side_effects=side_effects,
             )
             db.commit()
             approved += 1
+            _enqueue_decision_side_effects(
+                decision_id,
+                workable_target_stage=None,
+                reject_notify=bool(side_effects.get("reject_notify", False)),
+            )
         except HTTPException as exc:
             db.rollback()
             failures.append(

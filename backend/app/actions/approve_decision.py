@@ -18,21 +18,11 @@ from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from . import advance_stage, reject_application, resend_assessment_invite, send_assessment
-from ._workable_decision_summary import (
-    post_decision_summary_to_workable,
-    try_workable_advance,
-)
+from ._decision_side_effects import apply_decision_side_effects
 from .types import ACTOR_RECRUITER, Actor
 
 
 _REJECT_DECISION_TYPES = ("reject", "skip_assessment_reject")
-_VERDICT_BY_DECISION_TYPE = {
-    "advance_to_interview": "advanced",
-    "reject": "rejected",
-    "skip_assessment_reject": "rejected",
-    "send_assessment": "assessment_sent",
-    "resend_assessment_invite": "invite_resent",
-}
 
 
 def run(
@@ -43,6 +33,7 @@ def run(
     decision_id: int,
     note: Optional[str] = None,
     workable_target_stage: Optional[str] = None,
+    collect_side_effects: Optional[dict] = None,
 ) -> AgentDecision:
     if actor.type != ACTOR_RECRUITER:
         raise HTTPException(status_code=403, detail="approve is recruiter-only")
@@ -99,6 +90,11 @@ def run(
     )
     role = getattr(app, "role", None) if app is not None else None
 
+    # "Did this approval freshly reject the candidate?" — gates the
+    # background Workable disqualify / rejection email so an already-rejected
+    # candidate isn't notified twice. Set in the reject branch below.
+    reject_notify = False
+
     if decision.decision_type == "advance_to_interview":
         advance_stage.run(
             db,
@@ -110,17 +106,10 @@ def run(
             idempotency_key=f"approve_decision:{decision.id}",
             metadata=metadata,
         )
-        if app is not None:
-            try_workable_advance(
-                db,
-                actor,
-                app=app,
-                org=org,
-                role=role,
-                target_stage=workable_target_stage,
-                reason=reason,
-            )
     elif decision.decision_type in _REJECT_DECISION_TYPES:
+        prev_outcome = (
+            getattr(app, "application_outcome", None) if app is not None else None
+        )
         reject_application.run(
             db,
             actor,
@@ -129,6 +118,12 @@ def run(
             reason=reason,
             idempotency_key=f"approve_decision:{decision.id}",
             metadata={**metadata, "decision_type": decision.decision_type},
+            defer_notify=True,
+        )
+        reject_notify = bool(
+            app is not None
+            and prev_outcome != "rejected"
+            and getattr(app, "application_outcome", None) == "rejected"
         )
     elif decision.decision_type == "send_assessment":
         # Evidence (set when the agent queued the decision) may carry the
@@ -172,44 +167,26 @@ def run(
     decision.resolution_note = note
     decision.human_disposition = "approved"
 
-    # Best-effort Workable activity note so the recruiter's Workable view
-    # records who/why/score + a 30-day share link to the full Tali report.
-    # No-op when Workable isn't connected or the application isn't linked.
-    verdict = _VERDICT_BY_DECISION_TYPE.get(decision.decision_type)
-    if app is not None and verdict:
-        try:
-            post_decision_summary_to_workable(
-                db,
-                actor,
-                app=app,
-                org=org,
-                decision=decision,
-                verdict=verdict,
-                reason=note,
-            )
-        except Exception:
-            import logging
-            logging.getLogger("taali.actions.approve_decision").warning(
-                "decision-summary post raised for decision_id=%s",
-                getattr(decision, "id", None),
-            )
+    # Best-effort side effects (Workable writeback + recruiter-action graph
+    # episode). By default they run inline (agent runs, tests). When the
+    # caller passes ``collect_side_effects`` — the approve / bulk-approve
+    # routes do — we skip the inline work and hand the route what it needs to
+    # enqueue the deferred Celery task post-commit, so the recruiter's click
+    # returns immediately instead of waiting on slow Workable / LLM calls.
+    if collect_side_effects is None:
+        apply_decision_side_effects(
+            db,
+            actor,
+            decision=decision,
+            app=app,
+            org=org,
+            role=role,
+            disposition="approved",
+            note=note,
+            workable_target_stage=workable_target_stage,
+            reject_notify=reject_notify,
+        )
+    else:
+        collect_side_effects["reject_notify"] = reject_notify
 
-    # Phase 2 §6.7: emit a recruiter-action episode (low volume — one
-    # per resolved decision). Never blocks the response.
-    try:
-        from ..candidate_graph import agent_episodes
-        agent_episodes.emit_recruiter_action_event(
-            organization_id=int(organization_id),
-            decision_id=int(decision.id),
-            recruiter_id=int(actor.user_id) if actor.user_id else 0,
-            action="approve",
-            reason=note,
-            happened_at=decision.resolved_at,
-        )
-    except Exception:
-        import logging
-        logging.getLogger("taali.actions.approve_decision").warning(
-            "recruiter-action episode emit failed for decision_id=%s",
-            getattr(decision, "id", None),
-        )
     return decision
