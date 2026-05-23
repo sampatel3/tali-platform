@@ -208,6 +208,14 @@ class TestOutcomeAction:
         assert _outcome_action(_app(workable_stage="technical interview")) is None
         assert _outcome_action(_app(workable_stage=None)) is None
 
+    def test_positive_outcome_wins_over_disqualified(self):
+        # A candidate disqualified for a non-reject reason (e.g. role filled)
+        # after reaching a positive outcome/stage must NOT be mislabeled reject.
+        assert _outcome_action(_app(workable_disqualified=True, application_outcome="hired", workable_stage="hired")) == "advance"
+        assert _outcome_action(_app(workable_disqualified=True, workable_stage="Offer")) == "advance"
+        # Explicit rejected outcome still rejects even if not disqualified.
+        assert _outcome_action(_app(application_outcome="rejected")) == "reject"
+
 
 def test_extract_raw_scores_handles_no_override():
     details = {

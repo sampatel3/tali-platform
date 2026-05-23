@@ -196,8 +196,6 @@ def _outcome_action(app) -> _RecruiterAction | None:
     """Derive the binary advance/reject label from a candidate's realized
     outcome. Returns None when the outcome isn't a usable label yet (e.g. an
     advanced-by-handback candidate still awaiting a downstream result)."""
-    if getattr(app, "workable_disqualified", None) is True:
-        return "reject"
     outcome = (getattr(app, "application_outcome", None) or "").lower()
     if outcome == "hired":
         return "advance"
@@ -205,6 +203,13 @@ def _outcome_action(app) -> _RecruiterAction | None:
         return "reject"
     if _norm_stage(getattr(app, "workable_stage", None)) in _POSITIVE_TERMINAL_STAGES:
         return "advance"
+    # ``workable_disqualified`` is only a reject signal once the clearer
+    # outcome/stage checks above have ruled out an advance — otherwise a
+    # candidate disqualified for a non-reject reason (e.g. role filled, or an
+    # administrative close after reaching offer/hired) is mislabeled a reject,
+    # poisoning the calibration ground truth.
+    if getattr(app, "workable_disqualified", None) is True:
+        return "reject"
     return None
 
 

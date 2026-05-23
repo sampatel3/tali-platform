@@ -2486,7 +2486,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         const scoreClass = score == null ? '' : score >= 80 ? 'hi' : score >= 60 ? 'mid' : 'lo';
                         const stageLabel = (PIPELINE_STAGE_ORDER.find((s) => s.key === stage)?.label) || (stage ? stage.replace(/_/g, ' ') : '—');
                         const statusText = resolvePipelineCardFooterStatus(application);
-                        const pendingDecision = pendingAgentDecisions[application?.id] || application?.pending_decision || null;
+                        // Use only the freshly-polled map, not the per-row
+                        // snapshot — the snapshot isn't refreshed by the poll,
+                        // so it keeps showing a decision after it's resolved.
+                        const pendingDecision = pendingAgentDecisions[application?.id] || null;
                         const agentLabel = pendingDecision?.recommendation
                           || (stage === 'review' && score != null && score >= 75 ? 'Advance recommended'
                             : stage === 'review' && score != null && score < 50 ? 'Reject recommended'
