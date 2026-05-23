@@ -65,9 +65,6 @@ const DemoLeadPage = lazy(() =>
 const DemoShowcasePage = lazy(() =>
   import('./features/marketing/DemoShowcasePage').then((m) => ({ default: m.DemoShowcasePage }))
 );
-const LazyAssessmentResultsPage = lazy(() =>
-  import('./features/assessments/AssessmentResultsPage').then((m) => ({ default: m.AssessmentResultsPage }))
-);
 const AssessmentsPage = lazy(() =>
   import('./features/assessments/AssessmentsPage').then((m) => ({ default: m.AssessmentsPage }))
 );
@@ -691,19 +688,21 @@ function AppContent() {
               to={`/candidates/${selectedCandidate._raw.application_id}?tab=assessment`}
             />
           ) : (
-            <Suspense fallback={lazyFallback}>
-              <LazyAssessmentResultsPage
-                candidate={selectedCandidate}
-                assessmentId={candidateDetailAssessmentId}
-                onNavigate={navigateToPage}
-                backTo={candidateDetailBackTo}
-                onDeleted={() => setSelectedCandidate(null)}
-                onNoteAdded={(timeline) =>
-                  setSelectedCandidate((prev) => (prev ? { ...prev, timeline } : prev))
-                }
-                NavComponent={DashboardNavWithMode}
-              />
-            </Suspense>
+            <div>
+              <DashboardNavWithMode currentPage="candidates" onNavigate={navigateToPage} />
+              <div className="page">
+                <div className="panel" style={{ padding: 24, marginTop: 16 }}>
+                  <h2>Assessment unavailable</h2>
+                  <p>
+                    This assessment couldn’t be opened in the candidate file — it isn’t linked to a
+                    candidate application, or it no longer exists.
+                  </p>
+                  <button type="button" className="btn btn-outline btn-sm" onClick={() => navigateToPage('jobs')}>
+                    Back to Jobs
+                  </button>
+                </div>
+              </div>
+            </div>
           )
         }
       />
@@ -838,4 +837,3 @@ function App() {
 }
 
 export default App;
-export { CandidateDetailPage, AssessmentResultsPage } from './features/candidates/CandidateDetailPage';

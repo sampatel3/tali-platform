@@ -702,27 +702,37 @@ describe('AssessmentsPage', () => {
     });
   });
 
-  it('loads candidate detail from URL deep-link by assessment id', async () => {
+  it('redirects an /assessments deep-link to the consolidated candidate file', async () => {
+    // Post-consolidation: the standalone assessment-detail page is retired.
+    // A deep-link by assessment id resolves the linked application and
+    // redirects to /candidates/:applicationId?tab=assessment.
     window.history.pushState({}, '', '/candidate-detail?assessmentId=1');
     assessmentsApi.get.mockResolvedValue({
       data: {
         ...mockAssessments[0],
+        application_id: 7,
         final_score: 85,
         role_name: 'Backend Engineer',
         application_status: 'applied',
       },
     });
+    rolesApi.getApplication.mockResolvedValue({
+      data: {
+        id: 7,
+        candidate_name: 'Alice Johnson',
+        role_name: 'Backend Engineer',
+        status: 'applied',
+      },
+    });
     renderApp();
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/assessments/1');
       expect(assessmentsApi.get).toHaveBeenCalledWith(1);
     });
 
     await waitFor(() => {
-      expect(screen.getAllByText('Alice Johnson').length).toBeGreaterThan(0);
-      expect(screen.getByText('Role: Backend Engineer')).toBeInTheDocument();
-      expect(screen.getByText('Application: applied')).toBeInTheDocument();
+      expect(window.location.pathname).toBe('/candidates/7');
+      expect(window.location.search).toContain('tab=assessment');
     });
   });
 
