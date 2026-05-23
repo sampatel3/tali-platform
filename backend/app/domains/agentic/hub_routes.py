@@ -15,7 +15,7 @@ All endpoints are org-scoped via ``get_current_user``.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -80,11 +80,15 @@ def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> 
     )
     pending = int(pending_decisions) + int(pending_questions)
     oldest_pending_row = pending_decisions_q.order_by(AgentDecision.created_at.asc()).first()
-    oldest_pending_age = (
-        int((now - oldest_pending_row.created_at).total_seconds())
-        if oldest_pending_row is not None and oldest_pending_row.created_at is not None
-        else None
-    )
+    oldest_pending_age = None
+    if oldest_pending_row is not None and oldest_pending_row.created_at is not None:
+        # Postgres returns tz-aware; the SQLite test DB returns naive. Coerce
+        # so a single naive row can't 500 the KPI strip (mirrors the guard in
+        # routes._decision_to_payload).
+        created = oldest_pending_row.created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        oldest_pending_age = max(0, int((now - created).total_seconds()))
 
     # Decisions today (created_at >= start of day).
     today = (

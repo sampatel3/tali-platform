@@ -36,6 +36,11 @@ from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.role import Role
 from ...models.user import User
 from ...platform.database import get_db
+from ._activity_feed import (
+    AgentActivityPayload,
+    build_activity_feed,
+    confidence_to_float,
+)
 
 
 router = APIRouter(tags=["agentic"])
@@ -170,42 +175,9 @@ class AgentStatusPayload(BaseModel):
     last_activity: Optional[AgentStatusActivity] = None
 
 
-class AgentActivityEntry(BaseModel):
-    # Unified shape for the role-scoped activity feed. ``kind`` discriminates
-    # the source (run / decision / event / needs_input) so the UI can pick
-    # the right icon + verb without each row carrying a switchful payload.
-    kind: str
-    id: int
-    created_at: datetime
-    title: str
-    detail: Optional[str] = None
-    actor_type: Optional[str] = None
-    application_id: Optional[int] = None
-    candidate_name: Optional[str] = None
-    status: Optional[str] = None
-    decision_type: Optional[str] = None
-    confidence: Optional[float] = None
-    cost_micro_usd: Optional[int] = None
-
-
-class AgentActivityPayload(BaseModel):
-    role_id: int
-    entries: list[AgentActivityEntry]
-    has_more: bool
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _confidence_to_float(value: Any) -> Optional[float]:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _confidence_band(value: Optional[float]) -> Optional[str]:
@@ -236,7 +208,7 @@ def _decision_to_payload(
     # C5: derive presentational fields here so the API answers "is this
     # safe to approve, how old is it, how expensive was it" without
     # forcing the UI to compute it from JSON.
-    confidence_value = _confidence_to_float(decision.confidence)
+    confidence_value = confidence_to_float(decision.confidence)
     age_seconds = 0
     if decision.created_at is not None:
         created = decision.created_at
@@ -958,177 +930,14 @@ def agent_activity(
     if role is None:
         raise HTTPException(status_code=404, detail=f"role {role_id} not found")
 
-    org_id = current_user.organization_id
-    fetch_n = limit  # over-fetch from each source then trim after merge
-
-    # 1. Agent runs ---------------------------------------------------------
-    runs_q = db.query(AgentRun).filter(
-        AgentRun.organization_id == org_id,
-        AgentRun.role_id == role_id,
-    )
-    if before is not None:
-        runs_q = runs_q.filter(AgentRun.started_at < before)
-    runs = runs_q.order_by(desc(AgentRun.started_at)).limit(fetch_n).all()
-
-    # 2. Agent decisions (with candidate name) ------------------------------
-    decisions_q = (
-        db.query(AgentDecision, Candidate)
-        .join(CandidateApplication, CandidateApplication.id == AgentDecision.application_id)
-        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
-        .filter(
-            AgentDecision.organization_id == org_id,
-            AgentDecision.role_id == role_id,
-        )
-    )
-    if before is not None:
-        decisions_q = decisions_q.filter(AgentDecision.created_at < before)
-    decisions = decisions_q.order_by(desc(AgentDecision.created_at)).limit(fetch_n).all()
-
-    # 3. Agent-authored stage events ---------------------------------------
-    events_q = (
-        db.query(CandidateApplicationEvent, Candidate)
-        .join(
-            CandidateApplication,
-            CandidateApplication.id == CandidateApplicationEvent.application_id,
-        )
-        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
-        .filter(
-            CandidateApplicationEvent.organization_id == org_id,
-            CandidateApplication.role_id == role_id,
-            CandidateApplicationEvent.actor_type == "agent",
-        )
-    )
-    if before is not None:
-        events_q = events_q.filter(CandidateApplicationEvent.created_at < before)
-    events = events_q.order_by(desc(CandidateApplicationEvent.created_at)).limit(fetch_n).all()
-
-    # 4. Recruiter input prompts -------------------------------------------
-    needs_q = db.query(AgentNeedsInput).filter(
-        AgentNeedsInput.organization_id == org_id,
-        AgentNeedsInput.role_id == role_id,
-    )
-    if before is not None:
-        needs_q = needs_q.filter(AgentNeedsInput.created_at < before)
-    needs = needs_q.order_by(desc(AgentNeedsInput.created_at)).limit(fetch_n).all()
-
-    entries: list[AgentActivityEntry] = []
-
-    for run in runs:
-        if run.status == "running":
-            title = f"Cycle started ({run.trigger})"
-        elif run.status == "succeeded":
-            n = int(run.decisions_emitted or 0)
-            title = f"Cycle finished — {n} decision{'s' if n != 1 else ''}"
-        elif run.status == "budget_paused":
-            title = "Cycle paused — budget"
-        elif run.status == "failed":
-            title = "Cycle failed"
-        elif run.status == "aborted":
-            title = "Cycle aborted"
-        else:
-            title = f"Cycle · {run.status}"
-        detail = (run.error or None) if run.status in ("failed", "aborted") else None
-        entries.append(
-            AgentActivityEntry(
-                kind="run",
-                id=int(run.id),
-                created_at=run.started_at,
-                title=title,
-                detail=detail,
-                actor_type="agent",
-                status=str(run.status),
-                cost_micro_usd=int(run.total_cost_micro_usd or 0),
-            )
-        )
-
-    for decision, candidate in decisions:
-        cand_name = getattr(candidate, "full_name", None) if candidate else None
-        verb = {
-            "advance_to_interview": "Recommended advance",
-            "reject": "Recommended reject",
-            "skip_assessment_reject": "Recommended skip-assessment reject",
-        }.get(str(decision.decision_type), str(decision.decision_type))
-        if cand_name:
-            title = f"{verb} · {cand_name}"
-        else:
-            title = verb
-        entries.append(
-            AgentActivityEntry(
-                kind="decision",
-                id=int(decision.id),
-                created_at=decision.created_at,
-                title=title,
-                detail=(decision.reasoning or "")[:240] or None,
-                actor_type="agent",
-                application_id=int(decision.application_id),
-                candidate_name=cand_name,
-                status=str(decision.status),
-                decision_type=str(decision.decision_type),
-                confidence=_confidence_to_float(decision.confidence),
-            )
-        )
-
-    for event, candidate in events:
-        cand_name = getattr(candidate, "full_name", None) if candidate else None
-        parts: list[str] = []
-        if event.from_stage and event.to_stage:
-            parts.append(f"{event.from_stage} → {event.to_stage}")
-        elif event.to_stage:
-            parts.append(f"→ {event.to_stage}")
-        if event.to_outcome and event.to_outcome != event.from_outcome:
-            parts.append(event.to_outcome)
-        moved = ", ".join(parts) if parts else str(event.event_type)
-        title = f"{moved} · {cand_name}" if cand_name else moved
-        entries.append(
-            AgentActivityEntry(
-                kind="event",
-                id=int(event.id),
-                created_at=event.created_at,
-                title=title,
-                detail=event.reason or None,
-                actor_type=str(event.actor_type),
-                application_id=int(event.application_id),
-                candidate_name=cand_name,
-                status=str(event.event_type),
-            )
-        )
-
-    for need in needs:
-        if need.resolved_at is not None:
-            title_prefix = "Question answered"
-        elif need.dismissed_at is not None:
-            title_prefix = "Question dismissed"
-        else:
-            title_prefix = "Needs your input"
-        title = f"{title_prefix} · {need.kind}"
-        entries.append(
-            AgentActivityEntry(
-                kind="needs_input",
-                id=int(need.id),
-                created_at=need.created_at,
-                title=title,
-                detail=(need.prompt or "")[:240] or None,
-                actor_type="agent",
-                status=(
-                    "resolved" if need.resolved_at is not None
-                    else "dismissed" if need.dismissed_at is not None
-                    else "open"
-                ),
-            )
-        )
-
-    entries.sort(key=lambda e: e.created_at, reverse=True)
-    has_more = (
-        len(runs) >= fetch_n
-        or len(decisions) >= fetch_n
-        or len(events) >= fetch_n
-        or len(needs) >= fetch_n
-    )
-    return AgentActivityPayload(
+    entries, has_more = build_activity_feed(
+        db,
+        organization_id=current_user.organization_id,
         role_id=role_id,
-        entries=entries[:limit],
-        has_more=has_more,
+        limit=limit,
+        before=before,
     )
+    return AgentActivityPayload(role_id=role_id, entries=entries, has_more=has_more)
 
 
 @router.post("/roles/{role_id}/agent/run-now", response_model=RunNowResult)

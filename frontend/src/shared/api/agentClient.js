@@ -43,6 +43,11 @@ export const agent = {
   kpis: (params = {}) => api.get('/agent/kpis', { params }),
   // Per-role table on the Hub.
   rolesBreakdown: () => api.get('/agent/roles/breakdown'),
+  // Settings → Background jobs "Agents" view: one round-trip with pulse,
+  // KPIs, per-agent cards, 24h time-series, decisions-by-type, decision log.
+  panel: () => api.get('/agent/panel'),
+  // Org-wide merged activity feed (runs / decisions / stage moves / questions).
+  orgActivity: (params = {}) => api.get('/agent/activity', { params }),
 
   // ---- Teach loop ("Send back & teach") ----
   // body: { decision_id, failure_mode, correction_text, scope, role_id? }
