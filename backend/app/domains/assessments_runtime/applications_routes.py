@@ -618,6 +618,40 @@ _SORT_COLUMN_MAP = {
 }
 
 
+def _latest_score_status_map(db: Session, application_ids: list[int]) -> dict[int, str | None]:
+    """Latest ``CvScoreJob.status`` per application, in one grouped query.
+
+    The list view only needs each application's most recent score-job status,
+    not its full job history. Rather than eager-load the whole ``score_jobs``
+    collection (~19 rows/app — 6,444 for one role), we return a single row per
+    application: ``ROW_NUMBER`` partitioned by application, ordered to mirror
+    the relationship's ``queued_at desc`` with an ``id`` tiebreaker for
+    determinism. A window function (not Postgres ``DISTINCT ON``) keeps this
+    portable to the SQLite test backend.
+    """
+    if not application_ids:
+        return {}
+    row_num = (
+        func.row_number()
+        .over(
+            partition_by=CvScoreJob.application_id,
+            order_by=(CvScoreJob.queued_at.desc(), CvScoreJob.id.desc()),
+        )
+        .label("rn")
+    )
+    ranked = (
+        db.query(CvScoreJob.application_id, CvScoreJob.status, row_num)
+        .filter(CvScoreJob.application_id.in_(application_ids))
+        .subquery()
+    )
+    rows = (
+        db.query(ranked.c.application_id, ranked.c.status)
+        .filter(ranked.c.rn == 1)
+        .all()
+    )
+    return {app_id: status for app_id, status in rows}
+
+
 @router.get("/roles/{role_id}/applications")
 def list_role_applications(
     role_id: int,
@@ -655,8 +689,13 @@ def list_role_applications(
             # loaded (without the task join, which list mode doesn't read):
             # _last_activity_at iterates them for the "Last updated" column, so
             # dropping them would reintroduce a per-row lazy-load N+1.
+            #
+            # score_jobs is deliberately NOT loaded: the list only needs each
+            # row's latest job status, but the full collection is ~19 rows/app
+            # (6,444 for one role). We fetch just the latest status per app in
+            # one grouped query below instead of hydrating thousands of ORM
+            # objects we'd immediately discard.
             selectinload(CandidateApplication.interviews),
-            selectinload(CandidateApplication.score_jobs),
             selectinload(CandidateApplication.assessments),
         )
         .filter(
@@ -697,13 +736,26 @@ def list_role_applications(
 
     apps = query.offset(offset).limit(limit).all()
 
+    # Latest score-job status per application, in one grouped query (DISTINCT
+    # ON picks the freshest row per app, matching the score_jobs relationship's
+    # ``queued_at desc`` ordering with an id tiebreaker for determinism). This
+    # replaces eager-loading the whole score_jobs collection — the list only
+    # needs each row's latest status, not its full job history.
+    status_map = _latest_score_status_map(db, [app.id for app in apps])
+
     # List context: use the cached-score payload to avoid per-row Anthropic
     # calls (interview-pack regeneration). Detail-only fields (cv_sections,
     # assessment_preview, assessment_history, candidate_interview_kit) stay
     # absent and the schema treats them as optional. The dedicated detail
     # endpoint below still uses application_detail_payload.
     return [
-        ApplicationDetailResponse(**application_list_payload(app, include_cv_text=include_cv_text))
+        ApplicationDetailResponse(
+            **application_list_payload(
+                app,
+                include_cv_text=include_cv_text,
+                score_status=status_map.get(app.id),
+            )
+        )
         for app in apps
     ]
 
