@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { AlertCircle, Check, Copy, Download, ExternalLink, Eye, X } from 'lucide-react';
+import { Copy, Download, ExternalLink, Eye } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
 import { viewShareLink } from '../../shared/api';
@@ -49,7 +49,7 @@ const resolveAssessmentStatus = (application) => (
 // Overview now.)
 const REPORT_TABS = [
   { id: 'overview', label: 'Overview' },
-  { id: 'cv', label: 'CV & match' },
+  { id: 'cv', label: 'CV' },
   { id: 'prep', label: 'Interview prep', recruiterPrep: true },
   { id: 'notes', label: 'Notes & timeline', internalOnly: true },
 ];
@@ -611,7 +611,28 @@ const CvDocumentViewer = ({
   );
 };
 
-const CvMatchRail = ({
+// Status order for the unified, gaps-first requirement list: missing first
+// (where the recruiter's attention is needed), then partial, then met.
+const REQ_STATUS_RANK = { missing: 0, partially_met: 1, unknown: 2, met: 3 };
+
+const reqStatusKey = (status) => {
+  const value = String(status || '').toLowerCase();
+  if (value === 'met') return 'met';
+  if (value === 'partially_met') return 'partially_met';
+  if (value === 'unknown') return 'unknown';
+  return 'missing';
+};
+
+// Purple-forward, not traffic-light: "met" reads as brand purple so a strong
+// candidate isn't a wall of green ticks. Only true gaps go amber.
+const REQ_STATUS_META = {
+  met: { label: 'Met', dot: 'var(--purple)' },
+  partially_met: { label: 'Partial', dot: 'color-mix(in oklab, var(--purple) 45%, var(--bg-2))' },
+  missing: { label: 'Gap', dot: 'var(--amber)' },
+  unknown: { label: 'Unclear', dot: 'var(--mute)' },
+};
+
+const CvMatchReview = ({
   application,
   reportModel,
   cvMatchDetails,
@@ -620,71 +641,43 @@ const CvMatchRail = ({
   onJumpToPrep,
 }) => {
   const roleFitScore = reportModel?.summaryModel?.roleFitScore;
-  // Don't truncate — the user explicitly wants every recruiter
-  // requirement visible on their own report. Lists are pre-sorted by
-  // recruiter-first then priority.
-  const matchedItems = (
-    matchedRequirements.length
-      ? matchedRequirements
-      : asArray(cvMatchDetails?.matching_skills).map((skill) => ({
-        requirement: skill,
-        evidence_quote: 'Skill matched in the candidate profile.',
-      }))
+
+  // Build one list, scored requirements preferred. Fall back to raw skill
+  // strings when the role hasn't been scored against criteria yet.
+  const hasRequirements = Array.isArray(cvMatchDetails?.requirements_assessment)
+    && cvMatchDetails.requirements_assessment.length > 0;
+  const items = hasRequirements
+    ? [...missingRequirements, ...matchedRequirements]
+    : [
+      ...asArray(cvMatchDetails?.missing_skills).map((skill) => ({
+        requirement: skill, status: 'missing', evidence_quote: 'Probe this in the interview loop.',
+      })),
+      ...asArray(cvMatchDetails?.matching_skills).map((skill) => ({
+        requirement: skill, status: 'met', evidence_quote: 'Skill matched in the candidate profile.',
+      })),
+    ];
+  // Stable sort keeps the existing recruiter-first / priority order within a status.
+  const ordered = [...items].sort(
+    (a, b) => REQ_STATUS_RANK[reqStatusKey(a?.status)] - REQ_STATUS_RANK[reqStatusKey(b?.status)]
   );
-  const gapItems = (
-    missingRequirements.length
-      ? missingRequirements
-      : asArray(cvMatchDetails?.missing_skills).map((skill) => ({
-        requirement: skill,
-        evidence_quote: 'Probe this in the interview loop.',
-      }))
-  );
-  // Split gaps into "partial" (some evidence on file but incomplete) and
-  // "missing" (no evidence found, or contradicted). Skill-string fallbacks
-  // have no status so they default to missing.
-  const partialItems = gapItems.filter((item) => (
-    String(item?.status || '').toLowerCase() === 'partially_met'
-  ));
-  const missingItems = gapItems.filter((item) => (
-    String(item?.status || '').toLowerCase() !== 'partially_met'
-  ));
-  const requirementTotal = Array.isArray(cvMatchDetails?.requirements_assessment)
-    ? cvMatchDetails.requirements_assessment.length
-    : matchedItems.length + gapItems.length;
+  const counts = ordered.reduce((acc, item) => {
+    const key = reqStatusKey(item?.status);
+    if (key === 'met') acc.met += 1;
+    else if (key === 'partially_met') acc.partial += 1;
+    else acc.missing += 1;
+    return acc;
+  }, { met: 0, partial: 0, missing: 0 });
+  const total = ordered.length;
+
   const scoredAt = application?.cv_match_scored_at || application?.updated_at || null;
+  const roleName = application?.role_name || application?.candidate_position || 'target role';
   const summaryText = String(cvMatchDetails?.summary || '').trim();
   const summaryParagraphs = summaryText
     ? summaryText.split(/\n{2,}|\r\n{2,}/).map((p) => p.trim()).filter(Boolean)
     : [];
 
-  const renderPartialItem = (item, index) => {
-    const evidence = item?.impact || extractRequirementEvidence(item) || item?.evidence_quote || 'Probe this live.';
-    return (
-      <div key={extractRequirementKey(item, index)} className="rail-item gap">
-        <span className="ic"><AlertCircle size={10} strokeWidth={3} /></span>
-        <span>
-          <span className="t">{item.requirement || item}</span>
-          <span className="ev">{evidence}</span>
-        </span>
-      </div>
-    );
-  };
-
-  const renderMissingItem = (item, index) => {
-    const evidence = item?.impact || extractRequirementEvidence(item) || item?.evidence_quote || 'Probe this live.';
-    return (
-      <div key={extractRequirementKey(item, index)} className="rail-item bad">
-        <span className="ic"><X size={10} strokeWidth={3} /></span>
-        <span>
-          <span className="t">{item.requirement || item}</span>
-          <span className="ev">{evidence}</span>
-        </span>
-      </div>
-    );
-  };
-
   return (
-    <section className="cv-rail cv-match-summary" aria-label="CV match summary">
+    <section className="cv-rail cv-match-summary cv-match-review" aria-label="CV match summary">
       <div className="rail-card cv-summary-bar">
         <div className="rail-score">
           {roleFitScore != null ? (
@@ -694,15 +687,15 @@ const CvMatchRail = ({
           )}
           <div>
             <div className="mc-kicker" style={{ marginBottom: 6 }}>CV MATCH</div>
-            <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 600, letterSpacing: '-0.015em', color: 'var(--ink)', lineHeight: 1.2 }}>
-              {requirementTotal
-                ? <>{matchedItems.length} of {requirementTotal} requirements <em style={{ fontStyle: 'normal', color: 'var(--purple)' }}>evidenced</em></>
+            <div className="cvm-headline">
+              {total
+                ? <>{counts.met} of {total} requirements <em>evidenced</em></>
                 : <>CV evidence summary</>}
             </div>
             <div className="meta" style={{ marginTop: 4 }}>
-              vs. <b>{application?.role_name || application?.candidate_position || 'target role'}</b>
+              vs. <b>{roleName}</b>
             </div>
-            <div className="rail-meta" style={{ marginTop: '4px', fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--mute)' }}>
+            <div className="rail-meta" style={{ marginTop: '4px' }}>
               {scoredAt ? `Scored ${new Date(scoredAt).toLocaleDateString()}` : 'Awaiting CV score'}
             </div>
           </div>
@@ -716,58 +709,57 @@ const CvMatchRail = ({
         ) : null}
       </div>
 
-      <div className="cv-rail-columns">
-        <div className="rail-card">
-          <div className="rail-section">
-            <div className="rail-head">
-              <span className="lbl">Matched · <b>{matchedItems.length}</b></span>
-              <span className="dot ok" aria-hidden="true" />
+      {total ? (
+        <div className="rail-card cvm-body">
+          <div className="cvm-coverage">
+            <div className="cvm-bar" aria-hidden="true">
+              {counts.met ? <span style={{ flex: counts.met, background: 'var(--purple)' }} /> : null}
+              {counts.partial ? <span style={{ flex: counts.partial, background: REQ_STATUS_META.partially_met.dot }} /> : null}
+              {counts.missing ? <span style={{ flex: counts.missing, background: 'var(--amber)' }} /> : null}
             </div>
-            {matchedItems.length ? matchedItems.map((item, index) => {
-              const evidence = extractRequirementEvidence(item) || item?.evidence_quote || 'Matched evidence on file.';
+            <div className="cvm-legend">
+              <span><i style={{ background: 'var(--purple)' }} /><b>{counts.met}</b> met</span>
+              <span><i style={{ background: REQ_STATUS_META.partially_met.dot }} /><b>{counts.partial}</b> partial</span>
+              <span><i style={{ background: 'var(--amber)' }} /><b>{counts.missing}</b> {counts.missing === 1 ? 'gap' : 'gaps'}</span>
+            </div>
+          </div>
+
+          <div className="cvm-list">
+            {ordered.map((item, index) => {
+              const key = reqStatusKey(item?.status);
+              const meta = REQ_STATUS_META[key] || REQ_STATUS_META.missing;
+              const evidence = item?.impact
+                || extractRequirementEvidence(item)
+                || item?.evidence_quote
+                || (key === 'met' ? 'Matched evidence on file.' : 'Probe this live.');
+              const isRecruiter = String(item?.requirement_id || '').startsWith('crit_');
               return (
-                <div key={extractRequirementKey(item, index)} className="rail-item ok">
-                  <span className="ic"><Check size={10} strokeWidth={3} /></span>
-                  <span>
-                    <span className="t">{item.requirement || item}</span>
-                    <span className="ev">{evidence}</span>
+                <div key={extractRequirementKey(item, index)} className={`cvm-row is-${key}`}>
+                  <span className="cvm-status" data-s={key}>
+                    <i style={{ background: meta.dot }} />
+                    {meta.label}
                   </span>
+                  <div className="cvm-req">
+                    <div className="cvm-req-top">
+                      <span className="cvm-req-name">{item.requirement || item}</span>
+                      {isRecruiter ? <span className="cvm-tag">Recruiter</span> : null}
+                    </div>
+                    <span className="cvm-ev">{evidence}</span>
+                  </div>
                 </div>
               );
-            }) : (
-              <div className="rail-empty">No matched requirements are attached yet.</div>
-            )}
-          </div>
-        </div>
-
-        <div className="rail-card">
-          <div className="rail-section">
-            <div className="rail-head">
-              <span className="lbl">Partial · <b>{partialItems.length}</b></span>
-              <span className="dot gap" aria-hidden="true" />
-            </div>
-            {partialItems.length ? partialItems.map(renderPartialItem) : (
-              <div className="rail-empty">No partial matches.</div>
-            )}
-          </div>
-        </div>
-
-        <div className="rail-card">
-          <div className="rail-section">
-            <div className="rail-head">
-              <span className="lbl">Missing · <b>{missingItems.length}</b></span>
-              <span className="dot bad" aria-hidden="true" />
-            </div>
-            {missingItems.length ? missingItems.map(renderMissingItem) : (
-              <div className="rail-empty">No missing requirements.</div>
-            )}
+            })}
           </div>
 
           <button type="button" className="rail-jump" onClick={onJumpToPrep}>
             View interview prep →
           </button>
         </div>
-      </div>
+      ) : (
+        <div className="rail-card">
+          <div className="rail-empty">No requirements have been scored against this role yet.</div>
+        </div>
+      )}
     </section>
   );
 };
@@ -1460,14 +1452,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               }))
             : [];
 
-          const topRisk = riskItems[0] || null;
-          const topStrength = strengthItems[0] || null;
-          const strongestTitle = reportModel?.strongestSignalTitle && reportModel.strongestSignalTitle !== '—'
-            ? reportModel.strongestSignalTitle
-            : (topStrength?.label || 'Signal building');
-          const strongestDesc = reportModel?.strongestSignalDescription
-            || 'Strongest evidence will appear once the candidate has been scored against this role.';
-
           return (
             <>
               {/* (0) At-a-glance snapshot strip — years exp, tech stack, recent roles.
@@ -1524,24 +1508,15 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 </div>
               </div>
 
-              {/* (2) Strongest signal + Worth probing */}
-              <div className="mc-overview-signals">
-                <div className="mc-overview-signal-card">
-                  <div className="mc-kicker">STRONGEST SIGNAL</div>
-                  <div className="mc-overview-signal-card-title">{strongestTitle}</div>
-                  <p className="mc-overview-signal-card-body">{strongestDesc}</p>
-                </div>
-                <div className="mc-overview-signal-card">
-                  <div className="mc-kicker">WORTH PROBING</div>
-                  <div className="mc-overview-signal-card-title">
-                    {topRisk?.title || 'No probes flagged'}
-                  </div>
-                  <p className="mc-overview-signal-card-body">
-                    {topRisk?.description
-                      || 'No high-priority gaps surfaced. Run the panel against the strongest evidence to validate the recommendation.'}
-                  </p>
-                </div>
-              </div>
+              {/* (2) CV match review — full requirement breakdown, gaps first */}
+              <CvMatchReview
+                application={application}
+                reportModel={reportModel}
+                cvMatchDetails={cvMatchDetails}
+                matchedRequirements={matchedRequirements}
+                missingRequirements={missingRequirements}
+                onJumpToPrep={() => activateTab('prep')}
+              />
 
               {/* (3) Dimension scores — six bars */}
               {dimensions.length ? (
@@ -1733,14 +1708,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             ) : null}
           </div>
           <div className="cv-layout">
-            <CvMatchRail
-              application={application}
-              reportModel={reportModel}
-              cvMatchDetails={cvMatchDetails}
-              matchedRequirements={matchedRequirements}
-              missingRequirements={missingRequirements}
-              onJumpToPrep={() => activateTab('prep')}
-            />
             <CvDocumentViewer
               applicationId={application?.id || null}
               candidateId={application?.candidate_id || completedAssessment?.candidate_id || null}
