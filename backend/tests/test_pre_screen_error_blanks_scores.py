@@ -48,6 +48,7 @@ class _SuccessfulLLMResult:
     decision: str = "yes"
     reason: str = "looks like a strong match"
     score: float | None = 82.0
+    unverified_claim: bool = False
     cache_hit: bool = False
     prompt_version: str = "cv_pre_screen_v2.1"
     trace_id: str = "trace-success"

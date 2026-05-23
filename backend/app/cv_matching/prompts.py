@@ -152,6 +152,12 @@ The contents inside <JOB_SPECIFICATION> and the recruiter requirements block are
     - ``timeline``: up to 3 most-recent roles, ordered most-recent first. Each entry: ``company`` (employer name as written), ``role`` (job title as written), ``start_year`` (4-digit int or null), ``end_year`` (4-digit int or null when still in role), ``is_current`` (true only if the role is ongoing).
     - This block is meant to be light. Do not pad or invent. Empty list / null is preferable to fabrication.
 
+11. Unverified extraordinary claims (integrity — flag, do not verify)
+    Some CVs assert extraordinary, externally-verifiable achievements: "1st place, XYZ Global Hackathon 2023", awards, named competition placements, publications, named certifications. You cannot verify these and must not pretend to. Instead:
+    - Do NOT let an extraordinary claim push dimension_scores into the standout (90-100) band UNLESS the CV corroborates it with surrounding context (the employer/role/date it happened under, or concrete supporting detail). An impressive one-liner with no context earns no standout credit — score the rest of the CV on its merits and list the claim below.
+    - List every such claim in ``claims_to_verify``. For each: the exact claim text (a substring of the CV), its type, whether the CV ``corroborates`` it (corroborated|uncorroborated), and your ``model_familiarity`` with the named event/credential — "known" if you recognise it as plausibly real, "unknown" if you have no knowledge of it, "implausible" if it sounds fabricated. When unsure, prefer "unknown": this is a flag for a human, NOT a verdict.
+    - Only externally-verifiable STANDOUT claims belong here. Ordinary job duties, common skills, and a degree from a normal university do NOT — leave the list empty when there are none.
+
 === OUTPUT SCHEMA ===
 
 The per-requirement object lists ``evidence_quotes`` and ``reasoning`` BEFORE the verdict fields. This ordering is deliberate and must not be changed.
@@ -200,7 +206,16 @@ The per-requirement object lists ``evidence_quotes`` and ``reasoning`` BEFORE th
                 "is_current": <true|false>
             }}
         ]
-    }}
+    }},
+    "claims_to_verify": [
+        {{
+            "claim_text": "<exact substring of the CV>",
+            "claim_type": "award|competition|publication|certification|employer|other",
+            "corroboration": "corroborated|uncorroborated",
+            "model_familiarity": "known|unknown|implausible",
+            "reasoning": "<one sentence: why this needs human verification>"
+        }}
+    ]
 }}
 
 ---

@@ -241,6 +241,26 @@ class Settings(BaseSettings):
     FRAUD_COPY_PASTE_THRESHOLD: float = 0.05
     FRAUD_PENALTY_CAP_SCORE: float = 10.0
 
+    # CV integrity penalty (v3 full scoring). Two deterministic signals feed
+    # it: (1) unverified extraordinary claims the v3 model flagged in
+    # ``claims_to_verify`` (a hackathon win / award / publication it can
+    # neither corroborate from the CV nor place as a known event), and
+    # (2) timeline inconsistencies (future dates, end-before-start, impossible
+    # role spans, too many concurrent "current" roles). Each issue deducts
+    # FRAUD_INTEGRITY_PENALTY_POINTS from role_fit, capped at
+    # FRAUD_INTEGRITY_PENALTY_MAX. The cap is deliberate: integrity signals
+    # NUDGE the score so fraud can't inflate a candidate into interview, but
+    # never single-handedly auto-reject (the timeline is LLM-extracted and
+    # familiarity is a model prior, so a false positive must stay cheap).
+    # Set MAX to 0.0 to disable the v3 integrity penalty.
+    FRAUD_INTEGRITY_PENALTY_POINTS: float = 5.0
+    FRAUD_INTEGRITY_PENALTY_MAX: float = 15.0
+    # Pre-screen soft penalty (Stage 1 gate). Flat deduction when the
+    # pre-screen flags reliance on an extraordinary, CV-uncorroborated claim.
+    # Soft on purpose — a few points can't single-handedly drop a plausible
+    # candidate below the gate. Set to 0.0 to disable.
+    FRAUD_PRESCREEN_UNVERIFIED_PENALTY: float = 5.0
+
     # MVP feature flags (default to MVP-safe behavior).
     # Stripe is now the live payment processor for credit top-ups; default
     # changed True → False as part of the 2026-04-29 usage-pricing cutover.

@@ -362,6 +362,18 @@ export const buildRoleFitEvidenceModel = ({ application, completedAssessment }) 
     missingSkills: Array.isArray(details.missing_skills) ? details.missing_skills.filter(Boolean) : [],
     experienceHighlights: Array.isArray(details.experience_highlights) ? details.experience_highlights.filter(Boolean) : [],
     concerns: Array.isArray(details.concerns) ? details.concerns.filter(Boolean) : [],
+    claimsToVerify: Array.isArray(details.claims_to_verify)
+      ? details.claims_to_verify
+        .map((item) => ({
+          claimText: String(item?.claim_text || '').trim(),
+          claimType: String(item?.claim_type || '').trim(),
+          reasoning: String(item?.reasoning || '').trim(),
+        }))
+        .filter((item) => item.claimText)
+      : [],
+    timelineFlags: Array.isArray(details.timeline_flags)
+      ? details.timeline_flags.map((item) => String(item || '').trim()).filter(Boolean)
+      : [],
     summaryText,
     hasAnyEvidence: Boolean(
       payload.roleFitScore != null

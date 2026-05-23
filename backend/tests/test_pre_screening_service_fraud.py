@@ -33,6 +33,7 @@ class _StubLLMResult:
     decision = "yes"
     reason = "looks like a strong match"
     score = 82.0
+    unverified_claim = False
     cache_hit = False
     prompt_version = "cv_pre_screen_v2.0"
     trace_id = "trace-test"
