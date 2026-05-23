@@ -51,17 +51,22 @@ def test_copy_paste_cv_persists_capped_score_and_evidence(db):
     with patch(
         "app.cv_matching.runner_pre_screen.run_pre_screen",
         return_value=_StubLLMResult(),
-    ):
+    ) as mock_llm:
         result = execute_pre_screen_only(app)
 
     assert result["status"] == "ok"
     assert result["fraud_capped"] is True
+    # #2: the deterministic fraud gate fires BEFORE the LLM, so the Haiku
+    # call is skipped entirely (cost saving) — hence llm_score_100 is None
+    # and the LLM was never invoked.
+    mock_llm.assert_not_called()
+    assert result["gated_by"] == "fraud"
+    assert app.pre_screen_evidence["llm_score_100"] is None
     # Persisted state on the application — capped + tagged + evidence stored.
     assert app.pre_screen_score_100 <= 10.0
     assert app.pre_screen_recommendation == "Below threshold"
     assert "copied verbatim" in (app.pre_screen_evidence["summary"] or "").lower()
     assert app.pre_screen_evidence["fraud_capped"] is True
-    assert app.pre_screen_evidence["llm_score_100"] == 82.0
     cp = app.pre_screen_evidence["fraud_signals"]["cv_copy_paste"]
     assert cp["triggered"] is True
     assert cp["evidence"], "expected evidence snippets stored"

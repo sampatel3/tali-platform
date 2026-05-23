@@ -176,6 +176,66 @@ def build_fraud_signals_payload(fraud: CopyPasteResult) -> dict[str, Any]:
     return {"cv_copy_paste": fraud.to_dict()}
 
 
+def persist_fraud_filtered_prescreen(app, fraud: CopyPasteResult, *, cap_score: float) -> dict[str, Any]:
+    """Persist a deterministic fraud-gate filter on ``app`` (no LLM ran) and
+    return the ``execute_pre_screen_only`` result dict.
+
+    Used when the CV↔JD copy-paste gate fires before the pre-screen LLM —
+    the candidate is filtered for free. Mirrors the post-LLM fraud-capped
+    persistence, but ``llm_score_100`` is ``None`` (no model call) and the
+    evidence is tagged ``gated_by="fraud"``.
+    """
+    from datetime import datetime, timezone
+
+    from .document_service import sanitize_json_for_storage
+
+    cap = float(cap_score)
+    fraud_signals = build_fraud_signals_payload(fraud)
+    summary = (
+        f"Pre-screen filtered: CV contains {fraud.score:.0%} text copied "
+        f"verbatim from the job description (threshold {fraud.threshold:.0%})."
+    )
+    app.pre_screen_score_100 = cap
+    app.requirements_fit_score_100 = cap
+    app.pre_screen_recommendation = "Below threshold"
+    app.pre_screen_error_reason = None
+    app.pre_screen_evidence = sanitize_json_for_storage(
+        {
+            "summary": summary,
+            "matching_skills": [],
+            "missing_skills": [],
+            "concerns": [],
+            "score_rationale_bullets": [],
+            "requirements_coverage": {},
+            "requirements_assessment": [],
+            "decision": "no",
+            "trace_id": None,
+            "prompt_version": None,
+            "cache_hit": False,
+            "fraud_signals": fraud_signals,
+            "fraud_capped": True,
+            "llm_score_100": None,
+            "gated_by": "fraud",
+        }
+    )
+    app.pre_screen_run_at = datetime.now(timezone.utc)
+    app.rank_score = cap
+    return {
+        "status": "ok",
+        "score": cap,
+        "recommendation": "Below threshold",
+        "decision": "no",
+        "reason": summary,
+        "cache_hit": False,
+        "fraud_capped": True,
+        "prompt_version": None,
+        "trace_id": None,
+        "fraud_signals": fraud_signals,
+        "llm_score_100": None,
+        "gated_by": "fraud",
+    }
+
+
 def apply_unverified_claim_prescreen_penalty(
     score: float | None,
     flagged: bool,
