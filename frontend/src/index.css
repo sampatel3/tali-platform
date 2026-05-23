@@ -14394,6 +14394,32 @@ button.eng-badge-button:focus-visible {
   font-weight: 500;
 }
 
+/* Clickable sort headers (Score / Last updated). The button inherits the
+   header's mono-uppercase styling so the column reads identically whether
+   or not it's the active sort; the arrow only appears on the active one. */
+.ctable thead th .ctable-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.ctable thead th .ctable-sort:hover {
+  color: var(--ink);
+}
+
+.ctable thead th .ctable-sort-arrow {
+  color: var(--purple);
+  font-size: 11px;
+}
+
 .ctable tbody tr {
   border-bottom: 1px solid var(--line-2);
   transition: background 0.12s ease;

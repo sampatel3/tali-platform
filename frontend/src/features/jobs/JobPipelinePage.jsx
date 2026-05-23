@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
-  ArrowUpDown,
   BriefcaseBusiness,
   Check,
   ChevronDown,
@@ -1147,9 +1146,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // this; the embedded directory re-mounts via key so its internal
   // `stageFilters` re-seeds from the new initial value.
   const [tableStageFilter, setTableStageFilter] = useState('all');
-  // Sort direction for the candidates table. ``'desc'`` (default) puts
-  // the strongest scores first; ``'asc'`` flips it.
+  // Candidates-table sort: which column (`tableSortField`) and direction
+  // (`tableSortBy`, default desc → strongest score / most-recent first).
   const [tableSortBy, setTableSortBy] = useState('desc');
+  const [tableSortField, setTableSortField] = useState('score');
+  // Click a sortable header → sort on it (desc), or flip direction if active.
+  const handleTableSort = useCallback((field) => {
+    setTableSortBy((dir) => (tableSortField === field ? (dir === 'asc' ? 'desc' : 'asc') : 'desc'));
+    setTableSortField(field);
+  }, [tableSortField]);
   // Per-row Process selection. Non-empty → Process sends just these IDs
   // and ignores stage_filter. Reset on tab switch so off-screen ticks
   // don't silently fire when the recruiter jumps tabs.
@@ -2356,21 +2361,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 ))}
               </div>
               <div className="ctable-toolbar-grow" />
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                onClick={() => {
-                  // Single sort dimension: score, ascending or descending.
-                  // ``tableSortBy === 'asc'`` means low-to-high; anything
-                  // else (the default) sorts high-to-low.
-                  setTableSortBy((prev) => (prev === 'asc' ? 'desc' : 'asc'));
-                }}
-                aria-label="Sort table by score"
-                title="Sort by score"
-              >
-                <ArrowUpDown size={12} />
-                Sort: Score {tableSortBy === 'asc' ? '↑' : '↓'}
-              </button>
+              {/* Sorting lives on the column headers (Score / Last updated). */}
               {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — primary
                   recruiter action: cascade Process opened via
                   ProcessCandidatesDialog. Label flips live during runs. */}
@@ -2420,8 +2411,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 // raw == null guard: Number(null) === 0 IS finite, so unscored sorts as a real zero without it.
                 return raw != null && Number.isFinite(Number(raw)) ? Number(raw) : -1;
               };
+              // Last-activity sort key — server-computed last_activity_at, with fallbacks.
+              const cmpLastUpdated = (a) => {
+                const raw = a?.last_activity_at || a?.updated_at || a?.created_at;
+                const ms = raw ? new Date(raw).getTime() : NaN;
+                return Number.isFinite(ms) ? ms : -Infinity;
+              };
+              const sortKey = tableSortField === 'last_updated' ? cmpLastUpdated : cmpScore;
               const sorted = [...filteredApps].sort((a, b) => (
-                tableSortBy === 'asc' ? cmpScore(a) - cmpScore(b) : cmpScore(b) - cmpScore(a)
+                tableSortBy === 'asc' ? sortKey(a) - sortKey(b) : sortKey(b) - sortKey(a)
               ));
               if (sorted.length === 0) {
                 return (
@@ -2443,11 +2441,16 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                       <tr>
                         <th aria-label="Select" style={{ width: 28 }}><input type="checkbox" aria-label="Select all visible candidates" checked={allSel} ref={(el) => { if (el) el.indeterminate = !allSel && someSel; }} onChange={(e) => toggleAll(e.target.checked)} /></th>
                         <th>Candidate</th>
-                        <th>Score</th>
+                        <th aria-sort={tableSortField === 'score' ? (tableSortBy === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                          <button type="button" className="ctable-sort" onClick={() => handleTableSort('score')} aria-label="Sort by score" title="Sort by score">Score{tableSortField === 'score' ? <span className="ctable-sort-arrow">{tableSortBy === 'asc' ? '↑' : '↓'}</span> : null}</button>
+                        </th>
                         <th>Stage</th>
                         <th>Workable</th>
                         <th>Status</th>
                         <th>Agent</th>
+                        <th aria-sort={tableSortField === 'last_updated' ? (tableSortBy === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                          <button type="button" className="ctable-sort" onClick={() => handleTableSort('last_updated')} aria-label="Sort by last updated" title="Sort by last updated">Last updated{tableSortField === 'last_updated' ? <span className="ctable-sort-arrow">{tableSortBy === 'asc' ? '↑' : '↓'}</span> : null}</button>
+                        </th>
                         <th aria-label="Open" />
                       </tr>
                     </thead>
@@ -2509,6 +2512,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                                   <span className="ctable-em">—</span>
                                 )}
                               </td>
+                              <td className="ctable-status" title={(application?.last_activity_at || application?.updated_at || application?.created_at) ? new Date(application.last_activity_at || application.updated_at || application.created_at).toLocaleString() : undefined}>{formatRelativeShort(application?.last_activity_at || application?.updated_at || application?.created_at)}</td>
                               <td>
                                 <a
                                   href={candidateReportHref(application, numericRoleId)}
@@ -2524,7 +2528,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                             </tr>
                             {isTriageRow ? (
                               <tr className="ctable-triage-row">
-                                <td colSpan={8} className="ctable-triage-cell">
+                                <td colSpan={9} className="ctable-triage-cell">
                                   <CandidateTriageDrawer {...triageDrawerProps} />
                                 </td>
                               </tr>

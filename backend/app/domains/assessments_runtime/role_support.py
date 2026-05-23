@@ -292,6 +292,44 @@ def _sort_dt(value: datetime | None) -> datetime:
     return value
 
 
+def _last_activity_at(app: CandidateApplication) -> datetime | None:
+    """Most recent moment any meaningful activity touched this application.
+
+    Spans the application row itself — CV upload, every scoring pass
+    (CV-match, pre-screen, cached composite), and stage / outcome / notes
+    edits (all of which bump ``updated_at``) — plus linked assessments,
+    whose ``updated_at`` is bumped when a recruiter appends a note/comment
+    to the timeline. Drives the pipeline "Last updated" column + sort.
+
+    Relies only on columns + the ``assessments`` relationship that the list
+    endpoint already eager-loads, so it adds no per-row queries. Events are
+    intentionally excluded (not eager-loaded → would be N+1); the activity
+    they record also bumps one of the timestamps below.
+    """
+    candidates: list[datetime | None] = [
+        app.created_at,
+        app.updated_at,
+        app.pipeline_stage_updated_at,
+        app.application_outcome_updated_at,
+        app.cv_uploaded_at,
+        app.cv_match_scored_at,
+        app.pre_screen_run_at,
+        app.score_cached_at,
+        app.auto_reject_triggered_at,
+    ]
+    for assessment in (app.assessments or []):
+        candidates.append(getattr(assessment, "updated_at", None))
+        candidates.append(getattr(assessment, "scored_at", None))
+        candidates.append(getattr(assessment, "completed_at", None))
+        candidates.append(getattr(assessment, "created_at", None))
+    present = [value for value in candidates if value is not None]
+    if not present:
+        return None
+    # ``key=_sort_dt`` normalizes naive→UTC so mixed tz datetimes compare
+    # cleanly; the original (tz-preserving) value is returned.
+    return max(present, key=_sort_dt)
+
+
 def _requirements_fit_score(details: dict | None) -> float | None:
     if not isinstance(details, dict):
         return None
@@ -882,6 +920,7 @@ def application_to_response(
         score_summary=score_summary,
         created_at=app.created_at,
         updated_at=app.updated_at,
+        last_activity_at=_last_activity_at(app),
     )
 
 

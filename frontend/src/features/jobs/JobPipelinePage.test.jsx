@@ -100,6 +100,9 @@ const baseApplications = [
     status: 'applied',
     created_at: '2026-04-26T02:00:00Z',
     updated_at: '2026-04-26T02:00:00Z',
+    // Lower score (63) but the most recent activity — used to prove the
+    // Last updated sort orders independently of score.
+    last_activity_at: '2026-05-22T00:00:00Z',
   },
   {
     id: 2,
@@ -113,6 +116,8 @@ const baseApplications = [
     status: 'completed',
     created_at: '2026-04-26T01:00:00Z',
     updated_at: '2026-04-26T01:00:00Z',
+    // Higher score (64) but older activity than Sam.
+    last_activity_at: '2026-04-20T00:00:00Z',
     score_summary: {
       taali_score: 64,
       assessment_id: 32,
@@ -394,5 +399,27 @@ Banking transformation experience
     expect(await screen.findByRole('button', { name: /Read full description/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /At a glance/i })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /Pipeline activity/i })).not.toBeInTheDocument();
+  });
+
+  it('renders a Last updated column and sorts by it (independent of score) via the header', async () => {
+    renderPipeline();
+
+    // Default candidates table carries a sortable Last updated header.
+    const lastUpdatedHeader = await screen.findByRole('button', { name: /Sort by last updated/i });
+    expect(lastUpdatedHeader).toBeInTheDocument();
+
+    const firstRowName = () => document.querySelector('.ctable tbody tr .name')?.textContent;
+
+    // Default sort is score desc → Priya (64) ahead of Sam (63).
+    await waitFor(() => expect(firstRowName()).toBe('Priya Anand'));
+
+    // Sort by Last updated (desc) → Sam (2026-05-22) ahead of Priya (2026-04-20),
+    // i.e. the opposite of the score order — proving the new dimension works.
+    fireEvent.click(lastUpdatedHeader);
+    await waitFor(() => expect(firstRowName()).toBe('Sam Patel'));
+
+    // Clicking the active header again flips to ascending → Priya first.
+    fireEvent.click(lastUpdatedHeader);
+    await waitFor(() => expect(firstRowName()).toBe('Priya Anand'));
   });
 });
