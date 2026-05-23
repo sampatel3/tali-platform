@@ -354,9 +354,9 @@ def test_approve_advance_to_interview_invokes_advance_and_summary(db, monkeypatc
 
     try:
         with patch(
-            "app.actions.approve_decision.try_workable_advance"
+            "app.actions._decision_side_effects.try_workable_advance"
         ) as mock_advance, patch(
-            "app.actions.approve_decision.post_decision_summary_to_workable"
+            "app.actions._decision_side_effects.post_decision_summary_to_workable"
         ) as mock_summary:
             mock_advance.return_value = True
             mock_summary.return_value = True
@@ -402,9 +402,9 @@ def test_approve_reject_decision_invokes_summary_without_advance(
 
     try:
         with patch(
-            "app.actions.approve_decision.try_workable_advance"
+            "app.actions._decision_side_effects.try_workable_advance"
         ) as mock_advance, patch(
-            "app.actions.approve_decision.post_decision_summary_to_workable"
+            "app.actions._decision_side_effects.post_decision_summary_to_workable"
         ) as mock_summary:
             approve_decision.run(
                 db,
@@ -442,9 +442,9 @@ def test_override_skip_assessment_advance_invokes_advance_and_summary(
 
     try:
         with patch(
-            "app.actions.override_decision.try_workable_advance"
+            "app.actions._decision_side_effects.try_workable_advance"
         ) as mock_advance, patch(
-            "app.actions.override_decision.post_decision_summary_to_workable"
+            "app.actions._decision_side_effects.post_decision_summary_to_workable"
         ) as mock_summary:
             override_decision.run(
                 db,
@@ -482,7 +482,7 @@ def test_override_legacy_no_op_skips_summary(db, monkeypatch):
     monkeypatch.setattr(platform_config.settings, "MVP_DISABLE_WORKABLE", False)
 
     with patch(
-        "app.actions.override_decision.post_decision_summary_to_workable"
+        "app.actions._decision_side_effects.post_decision_summary_to_workable"
     ) as mock_summary:
         override_decision.run(
             db,
@@ -494,3 +494,104 @@ def test_override_legacy_no_op_skips_summary(db, monkeypatch):
         )
 
     assert not mock_summary.called
+
+
+# ---------------------------------------------------------------------------
+# Deferral contract: routes pass collect_side_effects so the slow Workable +
+# graph work runs in a background task instead of on the request thread.
+# ---------------------------------------------------------------------------
+
+
+def test_approve_with_collect_side_effects_defers_inline_work(db, monkeypatch):
+    """When the caller passes ``collect_side_effects``, run() must NOT run
+    the side effects inline — it hands the route what it needs to enqueue
+    the deferred task — while still committing the state change."""
+    from app.actions import advance_stage as advance_stage_action
+    from app.actions import approve_decision
+
+    org, role, _, app = make_world(db, pre_screen=85.0)
+    decision = _make_decision(db, org, role, app, decision_type="advance_to_interview")
+    user = _make_user(db, org)
+    _enable_workable(db, org)
+    app.workable_candidate_id = "wc-123"
+    db.flush()
+    monkeypatch.setattr(platform_config.settings, "MVP_DISABLE_WORKABLE", False)
+
+    original_advance = advance_stage_action.run
+    advance_stage_action.run = lambda *a, **kw: None
+
+    sink: dict = {}
+    try:
+        with patch(
+            "app.actions.approve_decision.apply_decision_side_effects"
+        ) as mock_apply:
+            result = approve_decision.run(
+                db,
+                Actor.recruiter(user),
+                organization_id=int(org.id),
+                decision_id=int(decision.id),
+                note="Strong fit",
+                workable_target_stage="Phone screen",
+                collect_side_effects=sink,
+            )
+    finally:
+        advance_stage_action.run = original_advance
+
+    assert not mock_apply.called, "deferred path must not run side effects inline"
+    assert result.status == "approved", "state change still applies synchronously"
+    assert sink == {"reject_notify": False}
+
+
+def test_approve_reject_reports_reject_notify_for_deferral(db):
+    """A reject approval reports reject_notify=True so the deferred task
+    knows this resolution freshly rejected the candidate (gates the
+    Workable disqualify / rejection email)."""
+    from app.actions import approve_decision
+
+    org, role, _, app = make_world(db, pre_screen=30.0)
+    decision = _make_decision(db, org, role, app, decision_type="reject")
+    user = _make_user(db, org)
+
+    sink: dict = {}
+    with patch(
+        "app.actions.approve_decision.apply_decision_side_effects"
+    ) as mock_apply:
+        approve_decision.run(
+            db,
+            Actor.recruiter(user),
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+            note="Missing must-have",
+            collect_side_effects=sink,
+        )
+
+    assert not mock_apply.called
+    assert sink.get("reject_notify") is True
+    assert app.application_outcome == "rejected", "state change applies inline"
+
+
+def test_apply_decision_side_effects_task_runs_on_committed_decision(db):
+    """The deferred Celery task re-loads a committed, resolved decision and
+    runs the shared side-effect applier without error (Workable disabled in
+    tests, so the writeback is a no-op — this guards the task wiring:
+    re-load, Actor reconstruction, apply call)."""
+    from datetime import datetime, timezone
+
+    from app.tasks.decision_tasks import apply_decision_side_effects
+
+    org, role, _, app = make_world(db, pre_screen=85.0)
+    decision = _make_decision(db, org, role, app, decision_type="advance_to_interview")
+    user = _make_user(db, org)
+    decision.status = "approved"
+    decision.human_disposition = "approved"
+    decision.resolved_by_user_id = user.id
+    decision.resolved_at = datetime.now(timezone.utc)
+    db.commit()
+
+    result = apply_decision_side_effects.apply(
+        args=[int(decision.id)],
+        kwargs={"workable_target_stage": None, "reject_notify": False},
+    ).result
+
+    assert result["status"] == "ok"
+    assert result["decision_id"] == int(decision.id)
