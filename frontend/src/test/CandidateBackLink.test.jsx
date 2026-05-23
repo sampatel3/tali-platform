@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 // Mirrors the api surface the standing report touches. Kept in sync with
@@ -176,18 +176,30 @@ describe('Candidate report back link', () => {
     localStorage.clear();
   });
 
+  // The back-link button was unified into the AgentHeader breadcrumb trail
+  // (no more "Back to job"/"Back to home" buttons). The origin logic is
+  // unchanged and now surfaces as the breadcrumb: ?from=jobs/<id> or a
+  // role-bearing application → "Jobs / <role> / <candidate>"; explicit
+  // ?from=home → "Home / <candidate>". Assertions are scoped to the
+  // breadcrumb <nav> so they don't collide with the dashboard nav's own
+  // Jobs/Home links.
   it('falls back to the candidate role when ?from is absent (job-opened report)', async () => {
     // Reaching the report from a job board without the ?from tag must not
-    // strand the recruiter on "Back to home" — the candidate belongs to a
-    // role, so the back link offers that role.
+    // strand the recruiter on "Home" — the candidate belongs to a role, so
+    // the breadcrumb offers that role.
     rolesApi.getApplication.mockResolvedValue({ data: roleBearingApplication });
 
     renderAppAt('/candidates/77');
 
-    expect(
-      await screen.findByRole('button', { name: /Back to job/i }, { timeout: 5000 }),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Back to home/i })).not.toBeInTheDocument();
+    const crumb = await screen.findByRole('navigation', { name: /breadcrumb/i }, { timeout: 5000 });
+    // Wait for the application to load (candidate name lands in the trail).
+    await waitFor(
+      () => expect(within(crumb).getByText('Rami Reddy')).toBeInTheDocument(),
+      { timeout: 5000 },
+    );
+    expect(within(crumb).getByRole('link', { name: /^Jobs$/ })).toBeInTheDocument();
+    expect(within(crumb).getByRole('link', { name: /^AI Engineer$/ })).toBeInTheDocument();
+    expect(within(crumb).queryByText(/^Home$/)).not.toBeInTheDocument();
   });
 
   it('still honours an explicit ?from=home (Hub-opened report)', async () => {
@@ -195,9 +207,12 @@ describe('Candidate report back link', () => {
 
     renderAppAt('/candidates/77?from=home');
 
-    expect(
-      await screen.findByRole('button', { name: /Back to home/i }, { timeout: 5000 }),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Back to job/i })).not.toBeInTheDocument();
+    const crumb = await screen.findByRole('navigation', { name: /breadcrumb/i }, { timeout: 5000 });
+    await waitFor(
+      () => expect(within(crumb).getByText('Rami Reddy')).toBeInTheDocument(),
+      { timeout: 5000 },
+    );
+    expect(within(crumb).getByRole('link', { name: /^Home$/ })).toBeInTheDocument();
+    expect(within(crumb).queryByRole('link', { name: /^Jobs$/ })).not.toBeInTheDocument();
   });
 });
