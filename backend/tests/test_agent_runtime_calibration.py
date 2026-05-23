@@ -66,6 +66,32 @@ def test_render_summary_no_notes_omits_section():
     assert "NOTES FROM PRIOR CYCLES" not in rendered
 
 
+def test_render_summary_notes_is_bare_string_does_not_crash():
+    """Regression: prod role 31 had ``agent_calibration['notes']`` stored
+    as a bare string, not a list. The old code iterated it char-by-char
+    and crashed run_cycle with ``'str' object has no attribute 'get'``,
+    silently blocking the agent for that role. A malformed shape must be
+    tolerated (section omitted), never raise."""
+    rendered = calibration.render_summary(
+        {"decisions_total": 0, "notes": "Large scoring backlog. No task assigned."}
+    )
+    assert "NOTES FROM PRIOR CYCLES" not in rendered
+
+
+def test_render_summary_notes_list_with_bare_string_entry():
+    """A list whose entries are bare strings (legacy shape) renders them
+    as plain context notes instead of crashing on ``str.get``."""
+    rendered = calibration.render_summary(
+        {
+            "decisions_total": 0,
+            "notes": ["just a string breadcrumb", {"note": "structured", "kind": "todo"}],
+        }
+    )
+    assert "NOTES FROM PRIOR CYCLES" in rendered
+    assert "just a string breadcrumb" in rendered
+    assert "structured" in rendered
+
+
 def test_save_notes_caps_at_max_fifo():
     """Notes list must cap at _MAX_NOTES (10) with FIFO eviction."""
     role = type("R", (), {"agent_calibration": None})()

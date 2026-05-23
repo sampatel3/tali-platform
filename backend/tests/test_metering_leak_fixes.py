@@ -116,63 +116,95 @@ def test_call_claude_accumulates_tokens_across_retries():
 # Bug 3: pre-screen error path still records tokens
 # ---------------------------------------------------------------------------
 
-def test_pre_screen_error_with_tokens_still_writes_event(db):
-    """When Anthropic returned a 200 OK but JSON parsing failed, the
-    response carries real token counts. The function used to early-
-    return on the error guard before recording the event — losing the
-    charged tokens. Now metering happens BEFORE the guard."""
-    from app.services.pre_screening_service import execute_pre_screen_only
+def test_pre_screen_error_with_tokens_still_meters_via_wrapper(db, monkeypatch):
+    """Anthropic returned 200 OK with real token counts but the JSON was
+    unparseable, so the runner returns decision="error". Those tokens
+    were still billed, so a usage_event (FK-linked to claude_call_log)
+    must be written.
+
+    #253 moved this recording out of the pre-screen service and into the
+    MeteredAnthropicClient wrapper, which meters every real call
+    regardless of how the caller later parses the body. This pins the
+    behaviour at that layer: a parse failure must NOT drop the row."""
+    from dataclasses import dataclass, field
+
+    from app.cv_matching.runner_pre_screen import run_pre_screen
+    from app.cv_matching.schemas import Priority, RequirementInput
+    from app.models.claude_call_log import ClaudeCallLog
+    from app.services import metered_anthropic_client as mac
+    from app.services.metered_anthropic_client import MeteredAnthropicClient
+    from tests.conftest import TestingSessionLocal
+
+    # Wrapper's fresh-session writes go to the test DB.
+    monkeypatch.setattr(mac, "SessionLocal", TestingSessionLocal)
+
+    @dataclass
+    class _Usage:
+        input_tokens: int = 2400
+        output_tokens: int = 300
+        cache_read_input_tokens: int = 0
+        cache_creation_input_tokens: int = 0
+
+    @dataclass
+    class _Resp:
+        @property
+        def content(self):
+            @dataclass
+            class _B:
+                text: str
+            return [_B(text="not valid json {{")]  # 200 OK, unparseable body
+
+        @property
+        def usage(self):
+            return _Usage()
+
+        id = "req_stub_err"
+
+    @dataclass
+    class _Msgs:
+        calls: list = field(default_factory=list)
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            return _Resp()
+
+    @dataclass
+    class _Inner:
+        messages: _Msgs
 
     org = Organization(name="O", slug=f"o-{id(db)}")
-    db.add(org); db.flush()
-    role = Role(
-        organization_id=org.id, name="R", source="manual",
-        job_spec_text="hire backend", agentic_mode_enabled=True,
-        monthly_usd_budget_cents=5000,
-    )
-    db.add(role); db.flush()
-    cand = Candidate(organization_id=org.id, email="c@x.test", full_name="C")
-    db.add(cand); db.flush()
-    app = CandidateApplication(
-        organization_id=org.id, candidate_id=cand.id, role_id=role.id,
-        status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
-        application_outcome="open", source="manual",
-        cv_text="real cv text" * 50,
-    )
-    db.add(app); db.commit()
+    db.add(org); db.commit()
 
-    # Force run_pre_screen to return an error decision but with tokens
-    # populated — same shape the runner returns on JSON parse failure.
-    fake_pre = SimpleNamespace(
-        decision="error",
-        reason="json_parse_failed: ...",
-        prompt_version="pre_screen_v2.0",
-        model_version="claude-haiku-4-5-20251001",
-        trace_id="t-1",
-        cache_hit=False,
-        score=None,
-        input_tokens=2400,
-        output_tokens=300,
-        cache_read_tokens=0,
-        cache_creation_tokens=0,
+    wrapped = MeteredAnthropicClient(inner=_Inner(messages=_Msgs()), organization_id=int(org.id))
+    pre = run_pre_screen(
+        "real cv text",
+        "hire backend",
+        [RequirementInput(id="r1", requirement="python", priority=Priority.MUST_HAVE)],
+        client=wrapped,
+        skip_cache=True,
+        metering_context={"organization_id": int(org.id), "role_id": None, "entity_id": "application:7"},
     )
-    with patch("app.cv_matching.runner_pre_screen.run_pre_screen", return_value=fake_pre):
-        result = execute_pre_screen_only(app, db=db)
+    assert pre.decision == "error"
 
-    assert result["status"] == "error"
-    # The error guard ran. But metering should still have written a row
-    # for the tokens the LLM call actually consumed.
-    events = db.query(UsageEvent).filter(
-        UsageEvent.organization_id == org.id,
-        UsageEvent.feature == "prescreen",
-    ).all()
-    assert len(events) == 1, (
-        "pre-screen error with non-zero tokens must still write a UsageEvent "
-        "— Anthropic billed for those tokens. Found {len(events)} events."
-    )
-    ev = events[0]
-    assert ev.input_tokens == 2400
-    assert ev.output_tokens == 300
+    # Read via a fresh session so we see the wrapper's committed rows.
+    check = TestingSessionLocal()
+    try:
+        events = check.query(UsageEvent).filter(
+            UsageEvent.organization_id == org.id,
+            UsageEvent.feature == "prescreen",
+        ).all()
+        assert len(events) == 1, (
+            "pre-screen 200-OK-but-unparseable call must still write a "
+            "UsageEvent — Anthropic billed for those tokens"
+        )
+        assert events[0].input_tokens == 2400
+        assert events[0].output_tokens == 300
+
+        logs = check.query(ClaudeCallLog).filter(ClaudeCallLog.organization_id == org.id).all()
+        assert len(logs) == 1
+        assert logs[0].usage_event_id == events[0].id
+    finally:
+        check.close()
 
 
 def test_pre_screen_zero_token_path_does_not_write_event(db):

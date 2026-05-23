@@ -588,11 +588,15 @@ def _execute_scoring_v3(
     # context. That captures errored/retried calls the old post-call
     # record missed (usage_event was ~73% short of actual spend on
     # 2026-05-22; claude_call_log proved it).
+    # No ``db`` here: the wrapper self-manages fresh, committed sessions
+    # for both the usage_event and the FK-linked claude_call_log row.
+    # Passing the caller's open transaction left the usage_event
+    # uncommitted and invisible to call_log's separate session, which
+    # raised a FK violation and silently dropped every score call_log row.
     score_metering_context = {
         "organization_id": getattr(application, "organization_id", None),
         "role_id": getattr(application, "role_id", None),
         "entity_id": f"application:{application.id}",
-        "db": db,
     }
     output = run_cv_match(
         cv_text,

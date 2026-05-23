@@ -34,15 +34,15 @@ top of the underlying SDK; everything else passes through unchanged.
 DB session policy
 -----------------
 
-If ``metering["db"]`` is supplied, the usage_event is written using that
-session and committed when the caller commits. This preserves
-transactional coupling — if the scoring write rolls back, the meter event
-also rolls back.
-
-If ``metering["db"]`` is absent, the wrapper opens a fresh ``SessionLocal()``
-just for the metering write and commits it independently. This means
-metering is recorded even if the caller never holds a request session
-(e.g. background workers calling Anthropic ad-hoc).
+The wrapper always writes its rows in fresh, independently-committed
+``SessionLocal()`` sessions — first the usage_event, then the FK-linked
+claude_call_log row. It deliberately does NOT join the caller's open
+transaction: doing so left the usage_event uncommitted and invisible to
+the (separate) call_log session, which raised a FK violation and
+silently dropped every call_log row for the score + pre-screen paths.
+Independent commit is also the right meter semantic — a call we actually
+made and paid for must be recorded even if the caller later rolls back.
+A ``metering["db"]`` key, if present, is ignored.
 
 Default-feature policy
 ----------------------
@@ -509,7 +509,6 @@ class _MeteredMessages:
             role_id=metering.get("role_id"),
             entity_id=metering.get("entity_id"),
             metadata=metering.get("metadata"),
-            db=metering.get("db"),
         )
 
     def _write_event(
@@ -527,29 +526,19 @@ class _MeteredMessages:
         role_id: Optional[int],
         entity_id: Optional[str],
         metadata: Optional[dict],
-        db: Any,
     ) -> Optional[UsageEvent]:
-        """Write a usage_event row using the caller's session (transactional
-        coupling) or a fresh session (independent commit). Always swallows
-        errors — metering must never break a Claude call."""
-        try:
-            if db is not None:
-                return record_event(
-                    db,
-                    organization_id=organization_id,
-                    feature=feature,
-                    model=model,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    cache_read_tokens=cache_read_tokens,
-                    cache_creation_tokens=cache_creation_tokens,
-                    cache_hit=cache_hit,
-                    user_id=user_id,
-                    role_id=role_id,
-                    entity_id=entity_id,
-                    metadata=metadata,
-                )
+        """Write a usage_event row in a fresh, independently-committed
+        session and return it with a populated id. Always swallows errors
+        — metering must never break a Claude call.
 
+        The fresh session is committed here, *before* the caller writes
+        the FK-linked claude_call_log row, so that row's
+        ``usage_event_id`` references a visible, committed parent. Joining
+        the caller's still-open transaction (the old ``metering["db"]``
+        path) left the usage_event invisible to call_log's separate
+        session and raised a FK violation that silently dropped the row.
+        """
+        try:
             with SessionLocal() as fresh:
                 event = record_event(
                     fresh,
