@@ -295,6 +295,49 @@ def test_run_cycle_aborts_when_max_rounds_exceeded(db):
     assert client.messages.create.call_count == orchestrator.MAX_TOOL_ROUNDS
 
 
+def test_build_system_prompt_called_once_per_cycle(db):
+    """Perf regression guard: the system prompt is static within a cycle,
+    so it must be built ONCE — not once per round. Building it inside the
+    round loop re-ran ~4s of slow DB queries (role intent + recruiter
+    notes, each opening a fresh SessionLocal) up to 18× per cycle, which
+    under connection-pool contention caused the 600s+ pre-LLM hangs on
+    role 31. This pins the build to a single call regardless of rounds.
+    """
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+
+    # Spin for the full round cap with no termination signal.
+    spinning = _response(
+        blocks=[
+            _block_tool_use(
+                tool_use_id="tu_x",
+                name="get_application",
+                input_={"application_id": int(app.id)},
+            ),
+        ],
+        stop_reason="tool_use",
+    )
+    client = MagicMock()
+    client.messages.create = MagicMock(return_value=spinning)
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ), patch(
+        "app.agent_runtime.orchestrator.build_system_prompt",
+        wraps=orchestrator.build_system_prompt,
+    ) as spy_build:
+        orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+    db.commit()
+
+    # Many rounds executed...
+    assert client.messages.create.call_count == orchestrator.MAX_TOOL_ROUNDS
+    # ...but the system prompt was built exactly once.
+    assert spy_build.call_count == 1
+
+
 def test_run_cycle_pauses_role_on_monthly_budget_exhausted(db):
     org = _make_org(db)
     role = _make_role(db, org)

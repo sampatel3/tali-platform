@@ -383,12 +383,24 @@ def run_cycle(
     run_complete_observations: dict[str, Any] = {}
     rounds_used = 0
 
+    # Build the system prompt ONCE per cycle, not per round. Its content
+    # (role spec, criteria, intent, recruiter notes, calibration) is fixed
+    # for the duration of a cycle — the agent's mid-cycle observations land
+    # in the message history, not the system blocks. Rebuilding it every
+    # round re-ran ~4s of slow queries (_render_role_intent ~2s +
+    # _render_recruiter_feedback_notes ~2s on role 31's data) up to 18×,
+    # i.e. ~70s+ of pure DB work per cycle that, under connection
+    # contention, ballooned into the 600s+ pre-LLM "0-token" hangs that the
+    # Anthropic timeout couldn't catch (the stall isn't in the LLM call).
+    # Building once also makes the prompt-cache blocks (B2) genuinely
+    # static across rounds, so rounds 2-18 hit cache cleanly.
+    system = build_system_prompt(
+        role=role,
+        trigger_context=trigger_context,
+    )
+
     for round_idx in range(MAX_TOOL_ROUNDS):
         rounds_used = round_idx + 1
-        system = build_system_prompt(
-            role=role,
-            trigger_context=trigger_context,
-        )
 
         try:
             # ``metering={"skip": True}`` so the MeteredAnthropicClient
