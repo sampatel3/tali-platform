@@ -14857,9 +14857,7 @@ button.eng-badge-button:focus-visible {
 
 .mc-overview-hero {
   display: grid;
-  grid-template-columns: minmax(0, 560px) auto;
-  justify-content: start;
-  gap: 32px;
+  grid-template-columns: minmax(0, 560px) minmax(48px, 1fr) auto minmax(0, 1fr);
   align-items: center;
   padding: 24px;
   border-radius: 16px;
@@ -14869,6 +14867,7 @@ button.eng-badge-button:focus-visible {
 }
 
 .mc-overview-hero-rings {
+  grid-column: 3;
   display: grid;
   grid-template-columns: repeat(2, auto);
   gap: 14px 18px;
@@ -14881,6 +14880,10 @@ button.eng-badge-button:focus-visible {
 @media (max-width: 960px) {
   .mc-overview-hero {
     grid-template-columns: 1fr;
+  }
+  .mc-overview-hero-body,
+  .mc-overview-hero-rings {
+    grid-column: 1;
   }
   .mc-overview-hero-rings {
     border-left: 0;
@@ -14899,6 +14902,7 @@ button.eng-badge-button:focus-visible {
 
 .mc-overview-hero-body {
   min-width: 0;
+  grid-column: 1;
 }
 
 .mc-overview-hero-recommendation {
