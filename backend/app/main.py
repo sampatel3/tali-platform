@@ -861,6 +861,26 @@ def admin_normalize_recommendation_labels(
         db.close()
 
 
+@app.post("/admin/scores/rescore-wrongly-filtered")
+def admin_rescore_wrongly_filtered(
+    request: Request, organization_id: int | None = None, dry_run: bool = False
+):
+    """Re-score apps the pre-screen gate wrongly filtered (passed pre-screen
+    but skipped full scoring on a contaminated score)."""
+    from .platform.database import SessionLocal
+    from .services.cv_score_orchestrator import rescore_wrongly_filtered_prescreen
+
+    _require_admin(request)
+    db = SessionLocal()
+    try:
+        result = rescore_wrongly_filtered_prescreen(
+            db, organization_id=organization_id, dry_run=dry_run
+        )
+        return {"ok": True, "dry_run": dry_run, **result}
+    finally:
+        db.close()
+
+
 @app.get("/admin/graphiti/search-debug")
 def graphiti_search_debug(request: Request):
     """Raw Graphiti search result shape for debugging the graph view."""
