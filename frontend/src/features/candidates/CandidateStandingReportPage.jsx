@@ -1449,39 +1449,32 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                       || 'Recommendation copy will populate once role-fit and assessment evidence are scored.'}
                   </p>
                 </div>
-                <div className="mc-overview-hero-signal">
-                  <div className="mc-kicker">SIGNAL</div>
-                  <div className="mc-overview-signal-row">
-                    <span>TAALI</span>
-                    <span className="mc-overview-signal-val">
-                      {fmtScore(taaliScore) ?? '—'}
-                      <span className="mc-overview-signal-suffix">/ 100</span>
-                    </span>
-                  </div>
-                  <div className="mc-overview-signal-row">
-                    <span>Role fit</span>
-                    <span className="mc-overview-signal-val">
-                      {fmtScore(roleFitScoreVal) ?? '—'}
-                      <span className="mc-overview-signal-suffix">/ 100</span>
-                    </span>
-                  </div>
-                  <div className="mc-overview-signal-row">
-                    <span>Assessment</span>
-                    <span className="mc-overview-signal-val">
-                      {fmtScore(assessmentScore) ?? '—'}
-                      <span className="mc-overview-signal-suffix">/ 100</span>
-                    </span>
-                  </div>
-                  {reqTotal ? (
-                    <div className="mc-overview-signal-row">
-                      <span>Requirements</span>
-                      <span className="mc-overview-signal-val">
-                        {reqMet}
-                        <span className="mc-overview-signal-suffix">/ {reqTotal} met</span>
-                      </span>
-                    </div>
-                  ) : null}
+              </div>
+
+              {/* Signal stat cards — visual, separate from the recommendation copy */}
+              <div className="mc-overview-stats">
+                <div className="mc-overview-stat">
+                  <div className="lbl">TAALI</div>
+                  <div className="val">{fmtScore(taaliScore) ?? '—'}<span className="sfx">/ 100</span></div>
+                  <div className="bar"><i style={{ width: `${Math.max(0, Math.min(100, Number(taaliScore) || 0))}%` }} /></div>
                 </div>
+                <div className="mc-overview-stat">
+                  <div className="lbl">Role fit</div>
+                  <div className="val">{fmtScore(roleFitScoreVal) ?? '—'}<span className="sfx">/ 100</span></div>
+                  <div className="bar"><i style={{ width: `${Math.max(0, Math.min(100, Number(roleFitScoreVal) || 0))}%` }} /></div>
+                </div>
+                <div className="mc-overview-stat">
+                  <div className="lbl">Assessment</div>
+                  <div className="val">{fmtScore(assessmentScore) ?? '—'}<span className="sfx">/ 100</span></div>
+                  <div className="bar"><i style={{ width: `${Math.max(0, Math.min(100, Number(assessmentScore) || 0))}%` }} /></div>
+                </div>
+                {reqTotal ? (
+                  <div className="mc-overview-stat">
+                    <div className="lbl">Requirements</div>
+                    <div className="val">{reqMet}<span className="sfx">/ {reqTotal} met</span></div>
+                    <div className="bar"><i style={{ width: `${Math.round((reqMet / reqTotal) * 100)}%` }} /></div>
+                  </div>
+                ) : null}
               </div>
 
               {/* (2) CV match review — full requirement breakdown, gaps first */}
