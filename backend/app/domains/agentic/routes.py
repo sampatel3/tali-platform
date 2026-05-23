@@ -409,6 +409,11 @@ def list_agent_decisions(
         ):
             apps_by_id[int(app.id)] = app
 
+    # One cache for the whole page: pending rows in a queue typically share
+    # a handful of roles, so this collapses the per-role criteria/note
+    # lookups from O(rows) to O(distinct roles).
+    staleness_cache = decision_staleness.StalenessCache()
+
     payloads: list[AgentDecisionPayload] = []
     for decision, candidate, role in rows:
         app = apps_by_id.get(int(decision.application_id))
@@ -419,6 +424,7 @@ def list_agent_decisions(
             try:
                 report = decision_staleness.evaluate(
                     db, decision, application=app, role=role,
+                    cache=staleness_cache,
                 )
                 is_stale = report.is_stale
                 reasons = report.reasons

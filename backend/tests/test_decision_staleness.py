@@ -209,6 +209,51 @@ def test_pre_a1_decision_not_stale(db):
     assert report.is_stale is False
 
 
+def test_staleness_cache_collapses_per_role_queries(db):
+    """N+1 guard: evaluating a batch of decisions that share a role must
+    look up role_criteria / role_feedback_notes once per distinct role,
+    not once per decision, when a shared StalenessCache is passed.
+
+    Without the cache the Decision Hub list endpoint issued 2 queries per
+    pending row; this locks in the collapse so a future refactor that
+    drops the ``cache`` arg can't silently reintroduce the N+1.
+    """
+    org, role, _, app1 = _seed(db)
+    decision1 = _queue(db, org, role, app1)
+
+    # Second candidate + application on the SAME role → both decisions
+    # share its criteria and feedback notes.
+    cand2 = Candidate(organization_id=org.id, email="c2@x.test", full_name="C2")
+    db.add(cand2); db.flush()
+    app2 = CandidateApplication(
+        organization_id=org.id, candidate_id=cand2.id, role_id=role.id,
+        status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
+        application_outcome="open", source="manual", cv_text="some cv text",
+        pre_screen_score_100=72.0, cv_match_score=80.0,
+    )
+    db.add(app2); db.flush()
+    decision2 = _queue(db, org, role, app2)
+
+    bind = db.get_bind()
+    counts = {"role_criteria": 0, "role_feedback_notes": 0}
+
+    def _on_exec(conn, cursor, statement, params, context, executemany):
+        for table in counts:
+            if f"FROM {table}" in statement:
+                counts[table] += 1
+
+    event.listen(bind, "after_cursor_execute", _on_exec)
+    try:
+        cache = decision_staleness.StalenessCache()
+        decision_staleness.evaluate(db, decision1, cache=cache)
+        decision_staleness.evaluate(db, decision2, cache=cache)
+    finally:
+        event.remove(bind, "after_cursor_execute", _on_exec)
+
+    assert counts["role_criteria"] == 1
+    assert counts["role_feedback_notes"] == 1
+
+
 # ---------------------------------------------------------------------------
 # A6: queue_decision refuses resolved candidates
 # ---------------------------------------------------------------------------
