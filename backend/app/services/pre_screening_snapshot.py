@@ -34,16 +34,33 @@ def normalize_score_100(value: Any) -> float | None:
     return _normalize_score_100(value)
 
 
-def pre_screen_recommendation_label(score_100: float | None) -> str | None:
+def pre_screen_recommendation_label(
+    score_100: float | None, threshold: float | None = None
+) -> str | None:
+    """Map a 0-100 pre-screen score to a recruiter-facing recommendation.
+
+    ``threshold`` is the role's reject cutoff. When supplied, "Below
+    threshold" means *below the role's actual cutoff* — not the legacy
+    hard-coded ``< 50``. A role that rejects at 30 must not label a
+    40-scorer "Below threshold": they're above the bar and just need a
+    look ("Manual review recommended"). When ``threshold`` is omitted the
+    legacy ``< 50`` boundary is preserved for callers that don't have the
+    role in hand (e.g. the bulk directory snapshot fallback).
+    """
     if score_100 is None:
         return None
+    if threshold is not None and score_100 < float(threshold):
+        return "Below threshold"
     if score_100 >= 80.0:
         return "Strong match"
     if score_100 >= 65.0:
         return "Proceed to screening"
     if score_100 >= 50.0:
         return "Manual review recommended"
-    return "Below threshold"
+    # Below the generic review band but at/above the role's reject cutoff:
+    # surface for review rather than as a reject verdict. With no threshold
+    # in hand, fall back to the legacy "Below threshold" label.
+    return "Manual review recommended" if threshold is not None else "Below threshold"
 
 
 def build_pre_screen_evidence(details: dict[str, Any] | None) -> dict[str, Any]:

@@ -25,6 +25,7 @@ no agent run produced them (the column is already nullable).
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy.exc import IntegrityError
@@ -45,6 +46,27 @@ _MODEL_VERSION = "pre_screen_v1"  # deterministic; not an LLM
 
 def _idempotency_key(application_id: int) -> str:
     return f"pre_screen_reject:{int(application_id)}"
+
+
+def _below_threshold(
+    score: float | None, recommendation: str | None, threshold: float | None
+) -> bool:
+    """Whether this candidate is a pre-screen reject under ``threshold`` —
+    mirrors the deterministic gate in ``evaluate_auto_reject_decision``.
+
+    A numeric score is authoritative AND only meaningful against a configured
+    cutoff: with a numeric score we reject iff ``score < threshold`` and
+    ``threshold is not None``. With no threshold there is no score-based
+    reject — the ``'Below threshold'`` recommendation is a hard-coded ``< 50``
+    label, not a role verdict, so it must NOT keep a numeric-score card alive
+    after the cutoff is cleared.
+
+    The recommendation only justifies a reject when there is *no* numeric
+    score (must-have miss / invalidated score), with or without a threshold.
+    """
+    if score is not None:
+        return threshold is not None and float(score) < float(threshold)
+    return (recommendation or "").strip().lower() == "below threshold"
 
 
 def _format_reasoning(score: float | None, threshold: float | None) -> str:
@@ -125,13 +147,53 @@ def queue_pre_screen_reject(
         try:
             db.flush()
         except IntegrityError:
-            # Race: another path inserted it between our SELECT and our INSERT.
+            # A row with this app's idempotency key already exists. Two cases:
+            #   1. Race — a concurrent path inserted a *pending* row.
+            #   2. Replay — a prior card for this app was discarded (e.g. a
+            #      threshold 50→30 reconcile), and now we want one again
+            #      (30→50). The key is per-application, so we can't insert a
+            #      second row; the existing row is non-pending.
+            # In case 2 we must REVIVE the existing row to pending, otherwise
+            # the candidate is left with no pending card while ``created`` is
+            # incremented — the silent-miss the reconcile replay path hit.
             db.rollback()
-            return (
+            existing = (
                 db.query(AgentDecision)
                 .filter(AgentDecision.idempotency_key == key)
                 .first()
             )
+            # Revive a previously system-discarded card only when ALL hold:
+            #  1. status == 'discarded' with NO human resolver. A recruiter
+            #     resolution (``overridden`` / ``approved`` /
+            #     ``reverted_for_feedback``, or the toggle-off bulk discard
+            #     which sets ``resolved_by_user_id``) must never be reopened.
+            #  2. the candidate is STILL below the current threshold by the
+            #     same deterministic rule reconcile discards on. Without this,
+            #     a card discarded because the threshold was *cleared*
+            #     (threshold=None ⇒ no score-based reject) would be flipped
+            #     back to pending by a later ``run_auto_reject_if_needed``
+            #     (whose decider still treats a stale 'Below threshold' label
+            #     as eligible), and the next cohort tick would re-discard it —
+            #     churning pending↔discarded every cycle. Gating revival on
+            #     ``_below_threshold`` keeps revive and discard in agreement.
+            if (
+                existing is not None
+                and existing.status == "discarded"
+                and existing.resolved_by_user_id is None
+                and _below_threshold(
+                    pre_screen_score,
+                    getattr(application, "pre_screen_recommendation", None),
+                    threshold,
+                )
+            ):
+                existing.status = "pending"
+                existing.resolved_at = None
+                existing.resolution_note = None
+                existing.agent_run_id = None
+                existing.reasoning = _format_reasoning(pre_screen_score, threshold)
+                existing.evidence = body
+                db.flush()
+            return existing
 
         db.add(
             CandidateApplicationEvent(
@@ -241,3 +303,231 @@ def backfill_existing_below_threshold(
             db.commit()  # commit each row so a single failure doesn't roll back the batch
 
     return {"created": created, "skipped_existing": skipped_existing, "failed": failed}
+
+
+def reconcile_pre_screen_reject_decisions(
+    db: Session,
+    *,
+    role: Role,
+    organization_id: int,
+    threshold: float | None,
+) -> dict:
+    """Re-align the ``skip_assessment_reject`` queue with a role's new
+    pre-screen threshold. Call this when the role's *effective* threshold
+    changes (the ``score_threshold`` override or ``auto_reject_threshold_mode``).
+
+    Moving the threshold changes the reject *verdict* for every candidate
+    without changing any *score*. So — unlike ``mark_role_scores_stale`` —
+    this does NOT invalidate or re-score anything. It only reconciles the
+    deterministic reject cards:
+
+    - **Discard** pending cards for candidates now at/above the new
+      threshold. Asking the recruiter to approve a reject the current
+      cutoff wouldn't produce is exactly the stale-card problem this
+      fixes. Cards whose ``pre_screen_recommendation == 'Below threshold'``
+      are kept — that verdict is independent of the numeric cutoff
+      (must-have miss / invalidated score), same carve-out the emitter and
+      backfill already honour.
+    - **Emit** a card for every open candidate now below the new threshold
+      that doesn't already have a pending decision (reuses
+      ``queue_pre_screen_reject`` and its one-pending-per-app invariant).
+
+    No-op for agent-off roles (we don't manage cards there) and for roles
+    with ``auto_reject`` on (those disqualify in Workable directly rather
+    than carding — that path is the auto-reject task's job, not the Hub).
+
+    Returns ``{"discarded": int, "created": int, "skipped_existing": int}``.
+    """
+    from sqlalchemy import and_, func, or_
+
+    if not bool(getattr(role, "agentic_mode_enabled", False)):
+        return {"discarded": 0, "created": 0, "skipped_existing": 0}
+    if bool(getattr(role, "auto_reject", False)):
+        return {"discarded": 0, "created": 0, "skipped_existing": 0}
+
+    now = datetime.now(timezone.utc)
+
+    # --- Discard cards the new threshold no longer justifies -------------
+    if threshold is not None:
+        discard_note = f"superseded: pre-screen threshold changed to {threshold:.1f}"
+    else:
+        discard_note = "superseded: pre-screen threshold cleared"
+    pending_cards = (
+        db.query(AgentDecision, CandidateApplication)
+        .join(
+            CandidateApplication,
+            CandidateApplication.id == AgentDecision.application_id,
+        )
+        .filter(
+            AgentDecision.role_id == int(role.id),
+            AgentDecision.status == "pending",
+            AgentDecision.decision_type == _DECISION_TYPE,
+        )
+        .all()
+    )
+    discarded = 0
+    for decision, app in pending_cards:
+        if _below_threshold(
+            app.pre_screen_score_100, app.pre_screen_recommendation, threshold
+        ):
+            continue  # still a valid reject under the new cutoff — keep
+        decision.status = "discarded"
+        decision.resolved_at = now
+        decision.resolution_note = discard_note[:500]
+        discarded += 1
+    if discarded:
+        # Commit the discards before the emit loop. ``queue_pre_screen_reject``
+        # issues a full ``db.rollback()`` if it loses an insert race, which
+        # would otherwise drop these discards along with the racing row.
+        db.commit()
+
+    # --- Emit cards for candidates now below the new threshold -----------
+    created = 0
+    skipped_existing = 0
+    # Case/space-insensitive match — the decider and the discard path both
+    # normalize ``pre_screen_recommendation``, so non-canonical stored values
+    # ("below threshold", trailing space) must count here too or they'd be
+    # treated as below-threshold by policy yet never get a reconciled card.
+    rec_below = (
+        func.lower(func.trim(func.coalesce(CandidateApplication.pre_screen_recommendation, "")))
+        == "below threshold"
+    )
+    # No numeric score → the 'Below threshold' recommendation (must-have miss
+    # / invalidated score) is the reject signal. This branch holds even when
+    # ``threshold`` is None (a cleared/auto-fallback threshold), so rec-only
+    # rejects aren't stranded.
+    below_conditions = [
+        and_(CandidateApplication.pre_screen_score_100.is_(None), rec_below)
+    ]
+    if threshold is not None:
+        # Numeric score is authoritative against the cutoff.
+        below_conditions.append(
+            and_(
+                CandidateApplication.pre_screen_score_100.isnot(None),
+                CandidateApplication.pre_screen_score_100 < float(threshold),
+            )
+        )
+    below = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.role_id == int(role.id),
+            CandidateApplication.organization_id == int(organization_id),
+            CandidateApplication.application_outcome == "open",
+            or_(*below_conditions),
+        )
+        .all()
+    )
+    for app in below:
+            existing_pending = (
+                db.query(AgentDecision)
+                .filter(
+                    AgentDecision.application_id == int(app.id),
+                    AgentDecision.status == "pending",
+                )
+                .first()
+            )
+            if existing_pending is not None:
+                skipped_existing += 1
+                continue
+            result = queue_pre_screen_reject(
+                db,
+                organization_id=int(app.organization_id),
+                role=role,
+                application=app,
+                pre_screen_score=float(app.pre_screen_score_100)
+                if app.pre_screen_score_100 is not None
+                else None,
+                threshold=float(threshold) if threshold is not None else None,
+            )
+            if result is not None:
+                created += 1
+                db.commit()  # per-row so one race doesn't roll back the batch
+
+    return {
+        "discarded": discarded,
+        "created": created,
+        "skipped_existing": skipped_existing,
+    }
+
+
+def rederive_pre_screen_recommendations(
+    db: Session,
+    *,
+    role_id: int | None = None,
+    organization_id: int | None = None,
+) -> dict:
+    """Correct stored ``pre_screen_recommendation`` labels that the old
+    hard-coded ``< 50`` rule over-flagged as "Below threshold".
+
+    Rows scored before the label became threshold-aware keep a stale
+    "Below threshold" even when the candidate is *above* the role's actual
+    cutoff (e.g. a 40-scorer on a role that rejects at 30). This relabels
+    them in place — no LLM re-run — so the displayed verdict matches the
+    threshold the agent actually rejects on.
+
+    Deliberately **relax-only**: it only touches rows currently labelled
+    "Below threshold" whose score is at/above the role's cutoff, and only
+    ever moves them *off* the reject label. It never introduces a new
+    "Below threshold" (which could trip the label-keyed auto-reject hooks
+    in applications_routes). The reject *decisions* are reconciled
+    separately and score-authoritatively by
+    ``reconcile_pre_screen_reject_decisions``.
+
+    Skips:
+    - NULL-score rows — their "Below threshold" is a must-have-miss /
+      invalidated verdict, not score-derivable.
+    - fraud-capped rows — "Below threshold" there is a fraud verdict
+      forced independently of the score band.
+    - roles with no configured threshold — nothing to compare against.
+
+    Returns ``{"updated": int, "scanned": int}``.
+    """
+    # Lazy imports: the emitter is imported by application_automation_service
+    # alongside pre_screening_service, so importing the latter at module load
+    # would risk a cycle. Inside the function it's safe.
+    from sqlalchemy import func
+
+    from .pre_screening_service import resolved_auto_reject_config
+    from .pre_screening_snapshot import pre_screen_recommendation_label
+
+    q = (
+        db.query(CandidateApplication, Role)
+        .join(Role, Role.id == CandidateApplication.role_id)
+        .filter(
+            CandidateApplication.pre_screen_score_100.isnot(None),
+            # Case/space-insensitive — the decider normalizes too, so
+            # non-canonical stored labels ("below threshold", trailing space)
+            # must be corrected here as well or the self-heal never converges.
+            func.lower(func.trim(func.coalesce(CandidateApplication.pre_screen_recommendation, "")))
+            == "below threshold",
+            CandidateApplication.deleted_at.is_(None),
+            Role.deleted_at.is_(None),
+        )
+    )
+    if role_id is not None:
+        q = q.filter(CandidateApplication.role_id == int(role_id))
+    if organization_id is not None:
+        q = q.filter(CandidateApplication.organization_id == int(organization_id))
+
+    threshold_cache: dict[int, float | None] = {}
+    updated = 0
+    scanned = 0
+    for app, role in q.all():
+        scanned += 1
+        evidence = app.pre_screen_evidence if isinstance(app.pre_screen_evidence, dict) else {}
+        if evidence.get("fraud_capped"):
+            continue
+        if role.id not in threshold_cache:
+            threshold_cache[role.id] = resolved_auto_reject_config(None, role, db=db)["threshold_100"]
+        threshold = threshold_cache[role.id]
+        if threshold is None:
+            continue
+        if float(app.pre_screen_score_100) < float(threshold):
+            continue  # genuinely below the cutoff — keep the reject label
+        new_label = pre_screen_recommendation_label(app.pre_screen_score_100, threshold)
+        if new_label and new_label != "Below threshold":
+            app.pre_screen_recommendation = new_label
+            updated += 1
+    if updated:
+        db.commit()
+    return {"updated": updated, "scanned": scanned}
