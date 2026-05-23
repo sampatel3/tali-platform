@@ -42,7 +42,7 @@ export const ScoreRing = ({ score = 0, size = 110, label = 'SCORE', strokeWidth 
         fontFamily="var(--font-mono)"
         fontSize={Math.max(8, size * 0.085)}
         fill="var(--mute)"
-        letterSpacing=".1em"
+        letterSpacing=".05em"
       >
         {label}
       </text>
