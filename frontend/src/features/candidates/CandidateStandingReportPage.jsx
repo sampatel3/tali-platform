@@ -16,7 +16,6 @@ import {
   WorkableComparisonCard,
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
-import { Breadcrumbs } from '../../shared/ui/Breadcrumbs';
 import { CopyLinkButton } from '../../shared/ui/CopyLinkButton';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
@@ -1288,30 +1287,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   return (
     <div>
       {NavComponent && !isInterviewView ? <NavComponent currentPage="candidates" onNavigate={onNavigate} /> : null}
-      {breadcrumbItems ? (
-        <div className="page" style={{ paddingTop: 8, paddingBottom: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-            <Breadcrumbs items={breadcrumbItems} className="mb-0" />
-            <CopyLinkButton label="Copy link to report" successMessage="Candidate report link copied." />
-          </div>
-        </div>
-      ) : null}
       {!isInterviewView ? (
         <AgentHeader
           kicker="Candidate standing report"
           title={candidateLabel}
           period={false}
           subtitle={metaParts.length ? metaParts.join(' · ') : 'Candidate standing report'}
-          backLink={{
-            label: backTargetRoleId != null ? `Back to job: ${targetRoleName}` : 'Back to home',
-            onClick: () => {
-              if (backTargetRoleId != null) {
-                onNavigate('job-pipeline', { roleId: backTargetRoleId });
-                return;
-              }
-              onNavigate('home');
-            },
-          }}
+          breadcrumbs={breadcrumbItems}
+          breadcrumbActions={<CopyLinkButton label="Copy link to report" successMessage="Candidate report link copied." />}
           preTitle={(
             <div className="ah-cand-pre">
               <div className="ah-cand-avatar" aria-hidden="true">{candidateInitials}</div>

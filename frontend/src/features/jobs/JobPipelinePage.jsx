@@ -16,7 +16,6 @@ import { prefetchDocumentBlob } from '../../shared/api/documentCache';
 import { useToast } from '../../context/ToastContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
-import { BreadcrumbsRow } from '../../shared/ui/Breadcrumbs';
 import { CopyLinkButton } from '../../shared/ui/CopyLinkButton';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
@@ -1954,14 +1953,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
-      <BreadcrumbsRow
-        items={[{ label: 'Jobs', page: 'jobs' }, { label: role?.name || 'Role' }]}
-        actions={<CopyLinkButton label="Copy link to role" successMessage="Role link copied." />}
-      />
       <AgentHeader
         kicker={`${role?.name || 'Role'} · #${role?.id || '—'}`}
         title={role?.name || 'Role'}
-        backLink={{ label: 'All roles', onClick: () => onNavigate('jobs') }}
+        breadcrumbs={[{ label: 'Jobs', page: 'jobs' }, { label: role?.name || 'Role' }]}
+        breadcrumbActions={<CopyLinkButton label="Copy link to role" successMessage="Role link copied." />}
         actions={(
           <>
             {/* Reverse deep-link to the Hub: when this role has pending

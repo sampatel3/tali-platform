@@ -282,6 +282,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     <div>
       {NavComponent ? <NavComponent currentPage="home" onNavigate={onNavigate} /> : null}
       <AgentHeader
+        breadcrumbs={[{ label: 'Home' }]}
         kicker={`HUB · ${kpis.pending} PENDING · ${kpis.active_role_count} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
         title={greetingFor(user)}
         subtitle="Every decision the agent makes that needs you. Approve, override, or teach it — your calls become its training signal. The long-term goal is full automation; this is where you keep the loop honest."

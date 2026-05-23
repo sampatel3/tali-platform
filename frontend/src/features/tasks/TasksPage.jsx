@@ -160,6 +160,7 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
     <div>
       {NavComponent ? <NavComponent currentPage="tasks" onNavigate={onNavigate} /> : null}
       <AgentHeader
+        breadcrumbs={[{ label: 'Tasks' }]}
         kicker="03 · TASKS"
         title={<>Task <em>catalogue</em></>}
         subtitle="Browse the assessment task library, preview the candidate workspace, and assign tasks to candidates from a role."

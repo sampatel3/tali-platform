@@ -142,6 +142,7 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
     <div>
       <NavComponent currentPage="reporting" onNavigate={onNavigate} />
       <AgentHeader
+        breadcrumbs={[{ label: 'Reporting' }]}
         kicker={`MISSION CONTROL · ${rangeLabel.toUpperCase()}${roleFilter ? '' : ' · ALL ROLES'}`}
         title={<>Your agent in <em>narrative</em></>}
         subtitle="What Taali did, what it skipped, and where it was unsure. Not a dashboard — a daily standup in retrospect."
