@@ -69,11 +69,35 @@ def _below_threshold(
     return (recommendation or "").strip().lower() == "below threshold"
 
 
-def _format_reasoning(score: float | None, threshold: float | None) -> str:
-    score_str = f"{score:.1f}" if isinstance(score, (int, float)) else "unknown"
-    thr_str = f"{threshold:.1f}" if isinstance(threshold, (int, float)) else "unknown"
+def _qualitative_reject_reason(application: CandidateApplication) -> str:
+    """A recruiter-facing, candidate-specific reason for the pre-screen
+    reject. We deliberately do NOT surface the numeric score/threshold —
+    those are internal calibration knobs, unhelpful and often "unknown" on
+    the card (a must-have miss has no score). Preference order:
+
+      1. Fraud cap — plagiarised CV; the most serious, specific verdict.
+      2. The stored pre-screen ``summary`` — the LLM's one-sentence rationale
+         naming the specific gap (e.g. a missing must-have). It's qualitative
+         prose by construction (the prompt forbids restating the score).
+      3. Generic fallback for must-have misses / invalidated scores that
+         carry a "Below threshold" verdict but no stored summary.
+    """
+    evidence = (
+        application.pre_screen_evidence
+        if isinstance(getattr(application, "pre_screen_evidence", None), dict)
+        else {}
+    )
+    if evidence.get("fraud_capped"):
+        return "Flagged for potential fraud — CV copies text verbatim from the job description."
+    summary = str(evidence.get("summary") or "").strip()
+    if summary:
+        return summary if summary[-1:] in ".!?" else f"{summary}."
+    return "Does not meet the role's requirements."
+
+
+def _format_reasoning(application: CandidateApplication) -> str:
     return (
-        f"Below pre-screen threshold (score: {score_str}, threshold: {thr_str}). "
+        f"{_qualitative_reject_reason(application)} "
         f"Surfaced for recruiter review — approve to reject, override to keep in pipeline."
     )
 
@@ -134,7 +158,7 @@ def queue_pre_screen_reject(
             decision_type=_DECISION_TYPE,
             recommendation=_DECISION_TYPE,
             status="pending",
-            reasoning=_format_reasoning(pre_screen_score, threshold),
+            reasoning=_format_reasoning(application),
             evidence=body,
             confidence=None,
             model_version=_MODEL_VERSION,
@@ -190,7 +214,7 @@ def queue_pre_screen_reject(
                 existing.resolved_at = None
                 existing.resolution_note = None
                 existing.agent_run_id = None
-                existing.reasoning = _format_reasoning(pre_screen_score, threshold)
+                existing.reasoning = _format_reasoning(application)
                 existing.evidence = body
                 db.flush()
             return existing
@@ -220,6 +244,48 @@ def queue_pre_screen_reject(
             getattr(application, "id", None),
         )
         return None
+
+
+def backfill_pre_screen_reject_reasoning(
+    db: Session, *, organization_id: int | None = None
+) -> dict:
+    """Rewrite the stored ``reasoning`` of existing *pending*
+    ``skip_assessment_reject`` cards to the qualitative format.
+
+    Cards created before the reasoning dropped the numeric
+    "(score: X, threshold: Y)" template keep that stale text until they're
+    revived or re-emitted. This one-shot rewrites them in place from the
+    candidate's current pre-screen evidence (fraud verdict / LLM summary /
+    generic role-requirements fallback) so the Review queue reads cleanly.
+    Idempotent — a card already on the new text is left untouched.
+
+    Returns ``{"updated": int, "scanned": int}``.
+    """
+    q = (
+        db.query(AgentDecision, CandidateApplication)
+        .join(
+            CandidateApplication,
+            CandidateApplication.id == AgentDecision.application_id,
+        )
+        .filter(
+            AgentDecision.status == "pending",
+            AgentDecision.decision_type == _DECISION_TYPE,
+        )
+    )
+    if organization_id is not None:
+        q = q.filter(AgentDecision.organization_id == int(organization_id))
+
+    updated = 0
+    scanned = 0
+    for decision, app in q.all():
+        scanned += 1
+        new_reasoning = _format_reasoning(app)
+        if (decision.reasoning or "") != new_reasoning:
+            decision.reasoning = new_reasoning
+            updated += 1
+    if updated:
+        db.commit()
+    return {"updated": updated, "scanned": scanned}
 
 
 def backfill_existing_below_threshold(

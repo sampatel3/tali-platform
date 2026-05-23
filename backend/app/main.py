@@ -649,6 +649,36 @@ def admin_backfill_pre_screen_rejects(request: Request, organization_id: int | N
         db.close()
 
 
+@app.post("/admin/pre-screen-rejects/rewrite-reasoning")
+def admin_rewrite_pre_screen_reject_reasoning(request: Request, organization_id: int | None = None):
+    """Rewrite stale pre-screen reject card text to the qualitative format.
+
+    Existing pending ``skip_assessment_reject`` cards created before the
+    reasoning dropped the numeric "(score: X, threshold: Y)" template keep
+    that text until revived. This rewrites them in place. Idempotent.
+    Optional ``organization_id`` scopes to one org. Auth via ``X-Admin-Secret``.
+
+    Returns ``{updated, scanned}``.
+    """
+    from .platform.config import settings as _settings
+    from .platform.database import SessionLocal
+    from .services.pre_screen_decision_emitter import backfill_pre_screen_reject_reasoning
+
+    admin_secret = getattr(_settings, "ADMIN_SECRET", "") or ""
+    provided = request.headers.get("X-Admin-Secret", "")
+    if not admin_secret or provided != admin_secret:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    db = SessionLocal()
+    try:
+        result = backfill_pre_screen_reject_reasoning(
+            db, organization_id=organization_id
+        )
+        return {"ok": True, **result}
+    finally:
+        db.close()
+
+
 @app.get("/admin/graphiti/search-debug")
 def graphiti_search_debug(request: Request):
     """Raw Graphiti search result shape for debugging the graph view."""

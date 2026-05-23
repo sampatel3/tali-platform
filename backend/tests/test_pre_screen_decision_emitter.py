@@ -11,6 +11,7 @@ from app.models.organization import Organization
 from app.models.role import Role
 from app.services.pre_screen_decision_emitter import (
     backfill_existing_below_threshold,
+    backfill_pre_screen_reject_reasoning,
     queue_pre_screen_reject,
     reconcile_pre_screen_reject_decisions,
 )
@@ -58,9 +59,69 @@ def test_queue_pre_screen_reject_creates_pending_decision(db):
     assert decision.agent_run_id is None  # system-emitted
     assert decision.application_id == app.id
     assert decision.role_id == role.id
-    # Reasoning string includes both numbers so the recruiter can see why.
-    assert "35" in (decision.reasoning or "")
-    assert "50" in (decision.reasoning or "")
+    # Reasoning is a qualitative reason only — the numeric score/threshold
+    # are internal and must NOT be surfaced on the card.
+    assert "35" not in (decision.reasoning or "")
+    assert "50" not in (decision.reasoning or "")
+    # No stored evidence summary on this app → generic role-requirements reason.
+    assert "Does not meet the role's requirements." in (decision.reasoning or "")
+
+
+def test_reasoning_uses_pre_screen_summary_when_present(db):
+    """A stored pre-screen ``summary`` (the LLM's one-sentence rationale) is
+    surfaced verbatim as the candidate-specific reason."""
+    org, role, app = _seed(db, score=20.0, threshold=50.0)
+    app.pre_screen_evidence = {
+        "summary": "Missing must-have Kubernetes and CI/CD experience the role requires"
+    }
+    db.flush()
+    decision = queue_pre_screen_reject(
+        db, organization_id=int(org.id), role=role, application=app,
+        pre_screen_score=20.0, threshold=50.0,
+    )
+    assert "Missing must-have Kubernetes and CI/CD experience the role requires." in (
+        decision.reasoning or ""
+    )
+    assert "20" not in (decision.reasoning or "")
+
+
+def test_reasoning_flags_fraud_capped(db):
+    """A fraud-capped candidate gets the fraud reason, not the LLM summary."""
+    org, role, app = _seed(db, score=10.0, threshold=50.0)
+    app.pre_screen_evidence = {"fraud_capped": True, "summary": "some skills summary"}
+    db.flush()
+    decision = queue_pre_screen_reject(
+        db, organization_id=int(org.id), role=role, application=app,
+        pre_screen_score=10.0, threshold=50.0,
+    )
+    assert "fraud" in (decision.reasoning or "").lower()
+    assert "some skills summary" not in (decision.reasoning or "")
+
+
+def test_backfill_rewrites_stale_numeric_reasoning(db):
+    """Existing pending cards carrying the old numeric template are rewritten
+    to the qualitative reason; already-clean cards are left untouched."""
+    org, role, app = _seed(db, score=30.0, threshold=50.0)
+    app.pre_screen_evidence = {"summary": "Lacks the required cloud security background"}
+    db.flush()
+    decision = queue_pre_screen_reject(
+        db, organization_id=int(org.id), role=role, application=app,
+        pre_screen_score=30.0, threshold=50.0,
+    )
+    # Simulate a legacy stored card with the old numeric template.
+    decision.reasoning = "Below pre-screen threshold (score: 30.0, threshold: 50.0). Surfaced for recruiter review."
+    db.flush()
+
+    result = backfill_pre_screen_reject_reasoning(db, organization_id=int(org.id))
+    assert result["updated"] == 1
+    assert result["scanned"] == 1
+    db.refresh(decision)
+    assert "Lacks the required cloud security background." in (decision.reasoning or "")
+    assert "30.0" not in (decision.reasoning or "")
+
+    # Re-running is a no-op now that the text is already correct.
+    result2 = backfill_pre_screen_reject_reasoning(db, organization_id=int(org.id))
+    assert result2 == {"updated": 0, "scanned": 1}
 
 
 def test_queue_pre_screen_reject_skips_agent_off_roles(db):
