@@ -14857,8 +14857,9 @@ button.eng-badge-button:focus-visible {
 
 .mc-overview-hero {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 24px;
+  grid-template-columns: minmax(0, 560px) auto;
+  justify-content: start;
+  gap: 32px;
   align-items: center;
   padding: 24px;
   border-radius: 16px;

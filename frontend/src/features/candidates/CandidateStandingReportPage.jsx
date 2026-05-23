@@ -1510,11 +1510,11 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   </p>
                 </div>
                 <div className="mc-overview-hero-rings">
-                  <ScoreRing score={Number(taaliScore) || 0} label="TAALI" size={108} />
-                  <ScoreRing score={Number(roleFitScoreVal) || 0} label="ROLE FIT" size={108} />
-                  <ScoreRing score={Number(assessmentScore) || 0} label="ASSESSMENT" size={108} />
+                  <ScoreRing score={Number(taaliScore) || 0} label="TAALI" size={120} />
+                  <ScoreRing score={Number(roleFitScoreVal) || 0} label="ROLE FIT" size={120} />
+                  <ScoreRing score={Number(assessmentScore) || 0} label="ASSESSMENT" size={120} />
                   {reqTotal ? (
-                    <ScoreRing score={(reqMet / reqTotal) * 100} display={`${reqMet}/${reqTotal}`} label="REQUIREMENTS" size={108} />
+                    <ScoreRing score={(reqMet / reqTotal) * 100} display={`${reqMet}/${reqTotal}`} label="REQUIREMENTS" size={120} />
                   ) : null}
                 </div>
               </div>
