@@ -654,6 +654,33 @@ def test_queue_pre_screen_reject_does_not_revive_recruiter_discard(db):
     assert result.resolved_by_user_id == user.id
 
 
+def test_queue_pre_screen_reject_does_not_revive_threshold_cleared_card(db):
+    """A card system-discarded because the threshold was *cleared*
+    (threshold=None ⇒ no score-based reject for a scored candidate) must NOT
+    be revived on a later re-queue — otherwise it churns pending↔discarded
+    each cohort tick. Revival is gated on current below-threshold eligibility.
+    """
+    org, role, app = _seed(db, score=40.0, threshold=50.0)
+    app.pre_screen_recommendation = "Below threshold"  # stale <50 label
+    first = queue_pre_screen_reject(
+        db, organization_id=org.id, role=role, application=app,
+        pre_screen_score=40.0, threshold=50.0,
+    )
+    db.commit()
+    first.status = "discarded"  # system supersede (no resolver) — threshold cleared
+    db.commit()
+
+    # Re-queue with threshold=None (cleared): a scored candidate is no longer
+    # a score-based reject, so the discarded card must stay discarded.
+    result = queue_pre_screen_reject(
+        db, organization_id=org.id, role=role, application=app,
+        pre_screen_score=40.0, threshold=None,
+    )
+    assert result is not None
+    assert result.id == first.id
+    assert result.status == "discarded"  # NOT revived
+
+
 def test_reconcile_threshold_replay_revives_after_discard(db):
     """Full replay: 50→30 discards a 40-scorer; 30→50 must put it back as a
     pending card (the silent-miss Codex flagged).

@@ -162,19 +162,29 @@ def queue_pre_screen_reject(
                 .filter(AgentDecision.idempotency_key == key)
                 .first()
             )
-            # Only revive a *system-discarded* card (what the reconcile /
-            # supersede paths set: status='discarded' with NO human resolver).
-            # Never reopen a recruiter resolution — that includes ``overridden``
-            # / ``approved`` / ``reverted_for_feedback`` AND a recruiter
-            # *discard* (the toggle-off bulk discard also sets
-            # status='discarded' but stamps ``resolved_by_user_id``). The
-            # cohort tick re-runs reconcile every cycle, so reviving any of
-            # these would undo the human decision on every tick. Leave them
-            # untouched and return as-is.
+            # Revive a previously system-discarded card only when ALL hold:
+            #  1. status == 'discarded' with NO human resolver. A recruiter
+            #     resolution (``overridden`` / ``approved`` /
+            #     ``reverted_for_feedback``, or the toggle-off bulk discard
+            #     which sets ``resolved_by_user_id``) must never be reopened.
+            #  2. the candidate is STILL below the current threshold by the
+            #     same deterministic rule reconcile discards on. Without this,
+            #     a card discarded because the threshold was *cleared*
+            #     (threshold=None ⇒ no score-based reject) would be flipped
+            #     back to pending by a later ``run_auto_reject_if_needed``
+            #     (whose decider still treats a stale 'Below threshold' label
+            #     as eligible), and the next cohort tick would re-discard it —
+            #     churning pending↔discarded every cycle. Gating revival on
+            #     ``_below_threshold`` keeps revive and discard in agreement.
             if (
                 existing is not None
                 and existing.status == "discarded"
                 and existing.resolved_by_user_id is None
+                and _below_threshold(
+                    pre_screen_score,
+                    getattr(application, "pre_screen_recommendation", None),
+                    threshold,
+                )
             ):
                 existing.status = "pending"
                 existing.resolved_at = None
