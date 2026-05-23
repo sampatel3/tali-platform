@@ -14,6 +14,8 @@ from app.services.pre_screen_decision_emitter import (
     backfill_pre_screen_reject_reasoning,
     queue_pre_screen_reject,
     reconcile_pre_screen_reject_decisions,
+    supersede_mislabeled_pre_screen_rejects,
+    supersede_pre_screen_reject_on_full_score,
 )
 
 # The SQLite BigInteger-PK workaround for AgentDecision is registered
@@ -41,6 +43,118 @@ def _seed(db, *, score: float | None = 35.0, threshold: float | None = 50.0, out
     )
     db.add(app); db.flush()
     return org, role, app
+
+
+def _direct_card(db, org, role, app, threshold, resolved_by=None):
+    """Create a pending skip_assessment_reject row directly (the emitter now
+    refuses to create one for a fully-scored app, so tests build it here)."""
+    d = AgentDecision(
+        organization_id=int(org.id), role_id=int(role.id), application_id=int(app.id),
+        agent_run_id=None, decision_type="skip_assessment_reject",
+        recommendation="skip_assessment_reject", status="pending", reasoning="x",
+        evidence={"threshold_100": threshold}, confidence=None,
+        model_version="pre_screen_v1", prompt_version="pre_screen_threshold.v1",
+        idempotency_key=f"pre_screen_reject:{int(app.id)}",
+        active_capabilities={}, token_spend={}, resolved_by_user_id=resolved_by,
+    )
+    db.add(d); db.flush()
+    return d
+
+
+def test_emitter_defers_when_fully_scored(db):
+    """Once a candidate has a cv_match score, the pre-screen gate is moot —
+    the emitter must not create a pre-screen reject card (the agent owns it)."""
+    org, role, app = _seed(db, score=15.0, threshold=30.0)
+    app.cv_match_score = 15.0
+    db.flush()
+    result = queue_pre_screen_reject(
+        db, organization_id=int(org.id), role=role, application=app,
+        pre_screen_score=15.0, threshold=30.0,
+    )
+    assert result is None
+    assert db.query(AgentDecision).filter(AgentDecision.application_id == app.id).count() == 0
+
+
+def test_supersede_on_full_score_discards_when_cleared(db):
+    """A pre-screen reject card is discarded when the full score clears the bar."""
+    org, role, app = _seed(db, score=None, threshold=30.0)
+    d = queue_pre_screen_reject(
+        db, organization_id=int(org.id), role=role, application=app,
+        pre_screen_score=None, threshold=30.0,
+    )
+    assert d is not None and d.status == "pending"
+    app.cv_match_score = 80.0
+    db.flush()
+    n = supersede_pre_screen_reject_on_full_score(db, application=app, threshold=30.0)
+    assert n == 1
+    db.flush()  # helper defers commit to its caller (the scoring orchestrator)
+    db.refresh(d)
+    assert d.status == "discarded"
+
+
+def test_supersede_on_full_score_keeps_when_below(db):
+    """A full score that's also below the bar leaves the reject standing."""
+    org, role, app = _seed(db, score=None, threshold=30.0)
+    d = queue_pre_screen_reject(
+        db, organization_id=int(org.id), role=role, application=app,
+        pre_screen_score=None, threshold=30.0,
+    )
+    app.cv_match_score = 12.0
+    db.flush()
+    n = supersede_pre_screen_reject_on_full_score(db, application=app, threshold=30.0)
+    assert n == 0
+    db.refresh(d)
+    assert d.status == "pending"
+
+
+def test_supersede_mislabeled_discards_A_and_B_keeps_C(db):
+    """Bulk backfill: discard A (passed pre-screen) and B (cleared on full
+    score), keep C (genuine pre-screen reject), skip human-resolved rows."""
+    org = Organization(name="O", slug=f"o-{id(db)}m"); db.add(org); db.flush()
+    role = Role(organization_id=org.id, name="R", source="manual", auto_reject=False, agentic_mode_enabled=True)
+    db.add(role); db.flush()
+
+    def mkapp(email, llm, ps_score, cv):
+        c = Candidate(organization_id=org.id, email=email, full_name=email)
+        db.add(c); db.flush()
+        a = CandidateApplication(
+            organization_id=org.id, candidate_id=c.id, role_id=role.id,
+            status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
+            application_outcome="open", source="manual",
+            pre_screen_score_100=ps_score, cv_match_score=cv,
+            pre_screen_evidence={"llm_score_100": llm},
+        )
+        db.add(a); db.flush()
+        return a
+
+    thr = 30.0
+    a_app = mkapp("a@x.test", llm=72, ps_score=12, cv=12)   # A: passed pre-screen
+    b_app = mkapp("b@x.test", llm=28, ps_score=84, cv=84)   # B: cleared on full score
+    c_app = mkapp("c@x.test", llm=20, ps_score=15, cv=15)   # C: genuine reject
+    da = _direct_card(db, org, role, a_app, thr)
+    db_b = _direct_card(db, org, role, b_app, thr)
+    dc = _direct_card(db, org, role, c_app, thr)
+
+    res = supersede_mislabeled_pre_screen_rejects(db, organization_id=int(org.id))
+    assert res["discarded"] == 2
+    assert res["scanned"] == 3
+    for d in (da, db_b, dc):
+        db.refresh(d)
+    assert da.status == "discarded"   # A: passed pre-screen
+    assert db_b.status == "discarded" # B: full score cleared the bar
+    assert dc.status == "pending"     # C: genuine reject untouched
+
+
+def test_supersede_mislabeled_dry_run_does_not_write(db):
+    org, role, app = _seed(db, score=12.0, threshold=30.0)
+    app.cv_match_score = 12.0
+    app.pre_screen_evidence = {"llm_score_100": 72}  # A
+    db.flush()
+    card = _direct_card(db, org, role, app, 30.0)
+    res = supersede_mislabeled_pre_screen_rejects(db, organization_id=int(org.id), dry_run=True)
+    assert res["discarded"] == 1
+    db.refresh(card)
+    assert card.status == "pending"
 
 
 def test_queue_pre_screen_reject_creates_pending_decision(db):
@@ -314,7 +428,11 @@ def test_evaluate_auto_reject_triggers_on_agentic_mode_without_org_workable_flag
         application_outcome="open",
         source="manual",
         pre_screen_score_100=20.0,
-        cv_match_score=20.0,
+        # Not yet fully scored (cv_match_score is None): the pre-screen score
+        # lives in cv_match_details where the snapshot reads it. A *fully*
+        # scored candidate would defer to the agent (see the deferral test).
+        cv_match_score=None,
+        cv_match_details={"pre_screen_score_100": 20.0},
         pre_screen_recommendation="Below threshold",
     )
     db.add(app); db.commit()
@@ -322,6 +440,34 @@ def test_evaluate_auto_reject_triggers_on_agentic_mode_without_org_workable_flag
     verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
     assert verdict["should_trigger"] is True, verdict
     assert verdict["state"] == "eligible"
+
+
+def test_evaluate_auto_reject_defers_when_fully_scored(db):
+    """Once cv_match scoring has run, the pre-screen gate must defer to the
+    agent's cv_match decision rather than firing on the (overwritten) score."""
+    from app.decision_policy.auto_reject import evaluate_auto_reject_decision
+
+    org = Organization(name="O", slug=f"o-{id(db)}fs")
+    db.add(org); db.flush()
+    role = Role(
+        organization_id=org.id, name="R", source="manual",
+        auto_reject=False, agentic_mode_enabled=True, score_threshold=50,
+    )
+    db.add(role); db.flush()
+    cand = Candidate(organization_id=org.id, email="fs@x.test", full_name="FS", workable_candidate_id="wid-fs")
+    db.add(cand); db.flush()
+    app = CandidateApplication(
+        organization_id=org.id, candidate_id=cand.id, role_id=role.id,
+        status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
+        application_outcome="open", source="manual",
+        pre_screen_score_100=12.0, cv_match_score=12.0,  # fully scored, below bar
+        pre_screen_recommendation="Below threshold",
+    )
+    db.add(app); db.commit()
+
+    verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
+    assert verdict["should_trigger"] is False, verdict
+    assert verdict["state"] == "deferred_to_full_scoring"
 
 
 def test_evaluate_auto_reject_triggers_on_null_score_with_below_threshold_rec(db):
@@ -391,9 +537,11 @@ def test_evaluate_auto_reject_does_not_trigger_when_score_above_threshold(db):
         application_outcome="open",
         source="manual",
         pre_screen_score_100=75.0,
-        # ``pre_screen_snapshot`` reads ``cv_match_score`` first; mirror
-        # the score there so the evaluator sees a numeric value.
-        cv_match_score=75.0,
+        # Not yet fully scored; the pre-screen score is read from
+        # cv_match_details. (A fully-scored above-bar candidate would also
+        # not trigger, but via the deferral path.)
+        cv_match_score=None,
+        cv_match_details={"pre_screen_score_100": 75.0},
         pre_screen_recommendation="Proceed to screening",
     )
     db.add(app); db.commit()

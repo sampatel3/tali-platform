@@ -76,6 +76,22 @@ def evaluate_auto_reject_decision(
             "config": config,
             "snapshot": snapshot,
         }
+    # Defer to full scoring. Pre-screen auto-reject is a cheap gate that runs
+    # BEFORE full cv_match scoring to avoid paying for it. Once a candidate
+    # has a cv_match score, that score is authoritative and the agent's
+    # cv_match flow owns the reject/send decision. Re-firing the pre-screen
+    # gate here used to mislabel fully-scored candidates: the snapshot's
+    # ``pre_screen_score`` mirrors ``cv_match_score`` once scored, so this
+    # gate was effectively rejecting on the full score while typing it as a
+    # pre-screen reject — including candidates the full scorer rated strong.
+    if getattr(app, "cv_match_score", None) is not None:
+        return {
+            "should_trigger": False,
+            "state": "deferred_to_full_scoring",
+            "reason": "Candidate has a full cv_match score; reject/send is the agent's decision",
+            "config": config,
+            "snapshot": snapshot,
+        }
     if not enabled:
         return {
             "should_trigger": False,
