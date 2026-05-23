@@ -221,3 +221,20 @@ def test_extract_raw_scores_handles_no_override():
     assert scores["cv_fit"] == 70.0
     assert scores["requirements_match"] == 75.0
     assert scores["skills_coverage"] == 80.0
+
+
+def test_calibration_beat_tasks_registered_and_scheduled():
+    """Regression guard: both nightly calibration tasks must be (a) registered
+    on the worker (eager-imported in app/tasks/__init__.py) and (b) referenced
+    by the beat schedule. Otherwise beat fires names the worker drops as
+    unregistered and the model-refinement loop silently never runs."""
+    import app.tasks  # noqa: F401 — triggers the eager task imports
+    from app.tasks.celery_app import celery_app
+
+    scheduled = {entry["task"] for entry in celery_app.conf.beat_schedule.values()}
+    for name in (
+        "app.tasks.calibration_tasks.score_terminal_for_calibration",
+        "app.tasks.calibration_tasks.recalibrate_cv_match",
+    ):
+        assert name in celery_app.tasks, f"{name} not registered on the worker"
+        assert name in scheduled, f"{name} missing from beat_schedule"
