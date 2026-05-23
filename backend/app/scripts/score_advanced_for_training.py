@@ -150,6 +150,13 @@ def score_advanced_for_training(
             print(f"  would score {label}", flush=True)
             continue
 
+        # ``_execute_scoring_v3`` reads ``application.cv_text`` directly. When the
+        # CV only lives at the candidate level, copy the resolved text onto the
+        # application first, otherwise it's scored as "missing CV" despite the
+        # gate above passing on the candidate fallback.
+        if not (app.cv_text or "").strip() and cv_text:
+            app.cv_text = cv_text
+
         try:
             job = CvScoreJob(
                 application_id=app.id,
