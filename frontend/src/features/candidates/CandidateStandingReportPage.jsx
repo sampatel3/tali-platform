@@ -1382,24 +1382,9 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           const taaliScore = reportModel?.summaryModel?.taaliScore;
           const roleFitScoreVal = reportModel?.summaryModel?.roleFitScore;
           const assessmentScore = reportModel?.summaryModel?.assessmentScore;
-          // Composite score for the ScoreRing in the hero band — prefer
-          // completed-assessment composite, then taali summary, then
-          // application CV match. The ring is the page's loudest signal,
-          // so falling back through these keeps it from going empty when
-          // an assessment isn't linked yet.
-          const compositeScore = (() => {
-            if (Number.isFinite(Number(completedAssessment?.score))) {
-              const s = Number(completedAssessment.score);
-              return s <= 10 ? s * 10 : s;
-            }
-            if (Number.isFinite(Number(taaliScore))) return Number(taaliScore);
-            if (Number.isFinite(Number(application?.cv_match_score))) return Number(application.cv_match_score);
-            return null;
-          })();
           const recommendationLabel = reportModel?.recommendation?.label || 'Continue review';
           const reqMet = matchedRequirements.length;
           const reqTotal = matchedRequirements.length + missingRequirements.length;
-          const fmtScore = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v)) : null);
 
           // 6-dimension labels (long form, matches canvas DIMENSION SCORES)
           const DIM_LONG_LABELS = {
@@ -1430,17 +1415,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 </div>
               ) : null}
 
-              {/* (1) Hero band */}
+              {/* (1) Recommendation card — copy + highlighted signal rings */}
               <div className="mc-overview-hero">
-                <div className="mc-overview-hero-score">
-                  {compositeScore != null ? (
-                    <ScoreRing score={Math.round(compositeScore)} size={140} />
-                  ) : (
-                    <div className="mc-report-snapshot-score-empty" style={{ width: 140, height: 140 }}>
-                      Score pending
-                    </div>
-                  )}
-                </div>
                 <div className="mc-overview-hero-body">
                   <div className="mc-kicker">RECOMMENDATION</div>
                   <div className="mc-overview-hero-recommendation">{recommendationLabel}</div>
@@ -1449,32 +1425,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                       || 'Recommendation copy will populate once role-fit and assessment evidence are scored.'}
                   </p>
                 </div>
-              </div>
-
-              {/* Signal stat cards — visual, separate from the recommendation copy */}
-              <div className="mc-overview-stats">
-                <div className="mc-overview-stat">
-                  <div className="lbl">TAALI</div>
-                  <div className="val">{fmtScore(taaliScore) ?? '—'}<span className="sfx">/ 100</span></div>
-                  <div className="bar"><i style={{ width: `${Math.max(0, Math.min(100, Number(taaliScore) || 0))}%` }} /></div>
+                <div className="mc-overview-hero-rings">
+                  <ScoreRing score={Number(taaliScore) || 0} label="TAALI" size={88} />
+                  <ScoreRing score={Number(roleFitScoreVal) || 0} label="ROLE FIT" size={88} />
+                  <ScoreRing score={Number(assessmentScore) || 0} label="ASSESS" size={88} />
+                  {reqTotal ? (
+                    <ScoreRing score={(reqMet / reqTotal) * 100} display={`${reqMet}/${reqTotal}`} label="REQS" size={88} />
+                  ) : null}
                 </div>
-                <div className="mc-overview-stat">
-                  <div className="lbl">Role fit</div>
-                  <div className="val">{fmtScore(roleFitScoreVal) ?? '—'}<span className="sfx">/ 100</span></div>
-                  <div className="bar"><i style={{ width: `${Math.max(0, Math.min(100, Number(roleFitScoreVal) || 0))}%` }} /></div>
-                </div>
-                <div className="mc-overview-stat">
-                  <div className="lbl">Assessment</div>
-                  <div className="val">{fmtScore(assessmentScore) ?? '—'}<span className="sfx">/ 100</span></div>
-                  <div className="bar"><i style={{ width: `${Math.max(0, Math.min(100, Number(assessmentScore) || 0))}%` }} /></div>
-                </div>
-                {reqTotal ? (
-                  <div className="mc-overview-stat">
-                    <div className="lbl">Requirements</div>
-                    <div className="val">{reqMet}<span className="sfx">/ {reqTotal} met</span></div>
-                    <div className="bar"><i style={{ width: `${Math.round((reqMet / reqTotal) * 100)}%` }} /></div>
-                  </div>
-                ) : null}
               </div>
 
               {/* (2) CV match review — full requirement breakdown, gaps first */}

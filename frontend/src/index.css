@@ -14857,7 +14857,7 @@ button.eng-badge-button:focus-visible {
 
 .mc-overview-hero {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: 1fr auto;
   gap: 24px;
   align-items: center;
   padding: 24px;
@@ -14866,16 +14866,27 @@ button.eng-badge-button:focus-visible {
   background: var(--bg-2);
   margin-bottom: 18px;
 }
+
+.mc-overview-hero-rings {
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  gap: 14px 18px;
+  align-content: center;
+  justify-items: center;
+  border-left: 1px solid var(--line);
+  padding-left: 24px;
+}
+
 @media (max-width: 960px) {
   .mc-overview-hero {
-    grid-template-columns: auto 1fr;
+    grid-template-columns: 1fr;
   }
-  .mc-overview-hero-signal {
-    grid-column: 1 / -1;
+  .mc-overview-hero-rings {
     border-left: 0;
     border-top: 1px solid var(--line);
-    padding-top: 14px;
+    padding-top: 18px;
     padding-left: 0;
+    justify-content: center;
   }
 }
 
@@ -14938,68 +14949,6 @@ button.eng-badge-button:focus-visible {
   font-family: var(--font-mono);
   font-size: 11px;
   margin-left: 4px;
-}
-
-/* Signal stat cards — visual metric tiles below the recommendation hero */
-.mc-overview-stats {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  margin-bottom: 18px;
-}
-
-.mc-overview-stat {
-  padding: 16px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--bg-2);
-}
-
-.mc-overview-stat .lbl {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--mute);
-}
-
-.mc-overview-stat .val {
-  margin-top: 10px;
-  font-family: var(--font-display);
-  font-size: 30px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1;
-  color: var(--ink);
-}
-
-.mc-overview-stat .val .sfx {
-  margin-left: 5px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--mute);
-}
-
-.mc-overview-stat .bar {
-  margin-top: 12px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--line-2);
-  overflow: hidden;
-}
-
-.mc-overview-stat .bar i {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  background: var(--purple);
-}
-
-@media (max-width: 720px) {
-  .mc-overview-stats {
-    grid-template-columns: repeat(2, 1fr);
-  }
 }
 
 .mc-overview-signals {
