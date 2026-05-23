@@ -673,6 +673,11 @@ function AppContent() {
         element={<Navigate replace to={candidateDetailAssessmentId ? `/assessments/${candidateDetailAssessmentId}` : '/assessments'} />}
       />
 
+      {/* Consolidation cutover: /assessments/:id is retired in favour of the
+          canonical candidate file. Once the assessment is loaded we redirect
+          to /candidates/:applicationId?tab=assessment (the migrated Assessment
+          tab). Assessments with no linked application (legacy) fall back to the
+          old page so nothing 404s during the transition. */}
       <Route
         path="/assessments/:assessmentId"
         element={
@@ -680,6 +685,11 @@ function AppContent() {
             <div className="min-h-screen flex items-center justify-center">
               <Loader2 size={28} className="animate-spin" style={{ color: 'var(--purple)' }} />
             </div>
+          ) : selectedCandidate?._raw?.application_id ? (
+            <Navigate
+              replace
+              to={`/candidates/${selectedCandidate._raw.application_id}?tab=assessment`}
+            />
           ) : (
             <Suspense fallback={lazyFallback}>
               <LazyAssessmentResultsPage
