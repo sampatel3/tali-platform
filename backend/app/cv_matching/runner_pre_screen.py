@@ -22,8 +22,9 @@ from typing import Literal
 from . import MODEL_VERSION
 from .prompts_pre_screen import (
     PRE_SCREEN_PROMPT_VERSION,
-    build_pre_screen_messages,
     build_pre_screen_prompt,
+    build_pre_screen_system,
+    build_pre_screen_user_messages,
 )
 from .schemas import RequirementInput
 
@@ -241,9 +242,13 @@ def run_pre_screen(
                 cache_hit=False,
             )
 
-    messages = build_pre_screen_messages(
-        cv_text, jd_text, requirements, workable_context=workable_context
-    )
+    # Stable instructions + JD + must-haves live in a cached system block
+    # (identical for every candidate in a role batch); the per-candidate
+    # CV is the only uncached part. The old shape put the cacheable content
+    # in a user-message block and produced zero cache hits in prod — the
+    # system-param location is Anthropic's canonical, reliable spot.
+    system_blocks = build_pre_screen_system(jd_text, requirements)
+    messages = build_pre_screen_user_messages(cv_text, workable_context=workable_context)
     started = time.monotonic()
     try:
         # Pre-screen usage_event is recorded by cv_score_orchestrator.score_application
@@ -255,7 +260,7 @@ def run_pre_screen(
             model=MODEL_VERSION,
             max_tokens=256,
             temperature=0,
-            system="You are a fast hiring pre-screener. Respond ONLY with valid JSON.",
+            system=system_blocks,
             messages=messages,
             metering={
                 "skip": True,
