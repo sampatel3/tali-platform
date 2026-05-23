@@ -1754,6 +1754,12 @@ def update_application_outcome(
             actor_id=current_user.id,
             reason="Pipeline initialized before outcome patch",
         )
+        # The manual outcome PATCH keeps its stronger gated contract: the
+        # Workable writeback runs first and the local outcome closes only when
+        # it succeeds, so on a Workable failure the local state is preserved and
+        # the recruiter gets a real 502 (never a silent divergence). This is a
+        # single deliberate action, so synchronous gating is the right UX —
+        # unlike the Decision Hub batches, which go async via the runner.
         writeback_result = _sync_workable_outcome_change(
             db=db,
             app=app,
@@ -1845,7 +1851,6 @@ def move_application_in_workable(
         .filter(Organization.id == current_user.organization_id)
         .first()
     )
-    role = db.query(Role).filter(Role.id == app.role_id).first() if app.role_id else None
     target_stage = str(data.target_stage or "").strip()
     try:
         ensure_pipeline_fields(app)
@@ -1856,75 +1861,33 @@ def move_application_in_workable(
             actor_id=current_user.id,
             reason="Pipeline initialized before Workable hand-back",
         )
-        result = move_candidate_in_workable(
-            org=org,
-            candidate_id=str(app.workable_candidate_id),
-            target_stage=target_stage,
-            role=role,
-        )
-        if not result.get("success"):
-            append_application_event(
-                db,
-                app=app,
-                event_type="workable_move_stage_failed",
-                actor_type="recruiter",
-                actor_id=current_user.id,
-                reason=data.reason or result.get("message") or "Workable move failed",
-                metadata={
-                    "target_stage": target_stage,
-                    "code": result.get("code"),
-                    "workable_candidate_id": app.workable_candidate_id,
-                    "response": result.get("response"),
-                },
-            )
-            db.commit()
-            raise HTTPException(
-                status_code=502,
-                detail=result.get("message") or "Failed to move candidate in Workable",
-            )
-        # Reflect the new Workable stage on our row so the UI shows it
-        # straight away without waiting for the next sync cycle.
-        app.workable_stage = target_stage
-        append_application_event(
-            db,
-            app=app,
-            event_type="workable_moved",
-            actor_type="recruiter",
-            actor_id=current_user.id,
-            reason=data.reason or "Recruiter handed candidate back to Workable",
-            metadata={
-                "target_stage": target_stage,
-                "workable_candidate_id": app.workable_candidate_id,
-                "workable_actor_member_id": (result.get("config") or {}).get("actor_member_id"),
-            },
-        )
-        # If the target stage is post-handover, also advance Tali's
-        # pipeline_stage so the candidate leaves the active ``review``
-        # bucket. Forward-only — never demote.
-        target_mapped_stage, _ = map_legacy_status_to_pipeline(target_stage)
-        if (
-            target_mapped_stage == "advanced"
-            and should_auto_advance_to_advanced(app.pipeline_stage)
-        ):
-            transition_stage(
-                db,
-                app=app,
-                to_stage="advanced",
-                source="recruiter",
-                actor_type="recruiter",
-                actor_id=current_user.id,
-                reason=f"Handed back to Workable: {target_stage}",
-                metadata={"workable_target_stage": target_stage},
-                idempotency_key=f"workable_handback:{app.id}:{target_stage}",
-            )
         db.commit()
-        db.refresh(app)
     except HTTPException:
         db.rollback()
         raise
     except Exception:
         db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to move candidate in Workable")
+        raise HTTPException(status_code=500, detail="Failed to initialize pipeline for hand-back")
+
+    # Hand-back runs through the serialized Workable runner: it performs the
+    # move in the background (one per-org Workable conversation at a time),
+    # sets ``workable_stage`` + advances Tali's stage only after Workable
+    # confirms, retries on a transient 429, and records a
+    # ``workable_move_stage_failed`` event on terminal failure — never a silent
+    # drop. (Eager Celery in tests finishes inline.)
+    from ...services.workable_op_runner import OP_MOVE_STAGE, enqueue_workable_op
+
+    enqueue_workable_op(
+        organization_id=current_user.organization_id,
+        op_type=OP_MOVE_STAGE,
+        payload={
+            "application_id": int(app.id),
+            "user_id": current_user.id,
+            "target_stage": target_stage,
+            "reason": data.reason,
+        },
+    )
+    db.refresh(app)
     return application_to_response(app, use_cached_score_summary=True)
 
 
@@ -1937,23 +1900,28 @@ def post_workable_candidate_note(
 ):
     """Post a free-form note to the candidate's Workable activity feed.
 
-    Mirrors the agent's ``post_workable_note`` tool — both call the same
-    action so the audit trail and side effects are identical.
+    Routed through the serialized Workable runner so it shares the per-org
+    rate-limit budget with every other write and retries on a transient 429
+    instead of failing the request. Returns immediately; the note posts in the
+    background (eager Celery in tests finishes inline).
     """
-    from ...actions import Actor, post_workable_note as action
+    app = get_application(application_id, current_user.organization_id, db)
+    if not app.workable_candidate_id:
+        raise HTTPException(
+            status_code=400, detail="Application is not linked to a Workable candidate"
+        )
+    from ...services.workable_op_runner import OP_POST_NOTE, enqueue_workable_op
 
-    result = action.run(
-        db,
-        Actor.recruiter(current_user),
+    job_run_id = enqueue_workable_op(
         organization_id=int(current_user.organization_id),
-        application_id=application_id,
-        body=data.body,
+        op_type=OP_POST_NOTE,
+        payload={
+            "application_id": int(app.id),
+            "user_id": current_user.id,
+            "body": data.body,
+        },
     )
-    if result.status == "failed":
-        db.rollback()
-        raise HTTPException(status_code=502, detail=result.detail)
-    db.commit()
-    return result.as_dict()
+    return {"status": "queued", "application_id": int(app.id), "job_run_id": job_run_id}
 
 
 @router.get("/applications/{application_id}/events", response_model=list[ApplicationEventResponse])

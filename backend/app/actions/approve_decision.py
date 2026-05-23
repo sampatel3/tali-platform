@@ -102,32 +102,18 @@ def enqueue_batch(
 
     job_run_id = None
     if accepted:
-        from ..models.background_job_run import JOB_KIND_DECISION_BATCH
-        from ..services.background_job_runs import SCOPE_KIND_ORG, create_run
-        from ..tasks.workable_tasks import process_decision_batch_task
+        from ..services.workable_op_runner import OP_APPROVE_DECISIONS, enqueue_workable_op
 
-        job_run_id = create_run(
-            kind=JOB_KIND_DECISION_BATCH,
-            scope_kind=SCOPE_KIND_ORG,
-            scope_id=int(organization_id),
+        job_run_id = enqueue_workable_op(
             organization_id=int(organization_id),
-            counters={
-                "total": len(accepted),
-                "succeeded": 0,
-                "requeued": 0,
-                "failed": 0,
-            },
-            status="queued",
-        )
-        process_decision_batch_task.apply_async(
-            kwargs={
-                "job_run_id": job_run_id,
-                "organization_id": int(organization_id),
+            op_type=OP_APPROVE_DECISIONS,
+            payload={
                 "decision_ids": accepted,
                 "user_id": int(actor.user_id) if actor.user_id else None,
                 "note": note,
                 "workable_target_stage": workable_target_stage,
-            }
+            },
+            counters={"total": len(accepted), "succeeded": 0, "requeued": 0, "failed": 0},
         )
     return {"job_run_id": job_run_id, "accepted": accepted, "failures": failures}
 

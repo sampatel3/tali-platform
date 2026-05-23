@@ -5,9 +5,8 @@ from ..components.integrations.workable.sync_runner import execute_workable_sync
 
 logger = logging.getLogger(__name__)
 
-# Bounded exponential backoff for the disqualify retry. Workable rate limits
-# (429) clear within minutes; 60s → 120s → … capped at 15min over 5 attempts
-# spans ~30min of best-effort retries before we give up and email the candidate.
+# Bounded exponential backoff for transient Workable failures (429/5xx).
+# 60s → 120s → … capped at 15min over 5 attempts.
 _DISQUALIFY_MAX_RETRIES = 5
 _DISQUALIFY_BACKOFF_CAP_SECONDS = 900
 
@@ -16,212 +15,124 @@ def _disqualify_retry_countdown(retries: int) -> int:
     return min(_DISQUALIFY_BACKOFF_CAP_SECONDS, 60 * (2 ** max(0, retries)))
 
 
-# Decision types whose Workable write is a safely-replayable state change
-# (disqualify / stage move). These are gated: a Workable failure aborts the
-# local commit and re-queues the decision. send_assessment / resend_invite are
-# NOT gated — they fire an invite *email* that can't be un-sent, so re-queuing
-# would double-email; their Workable stage move stays best-effort.
-_GATED_DECISION_TYPES = frozenset(
-    {"reject", "skip_assessment_reject", "advance_to_interview"}
-)
-# Max times a batch task waits for the per-org Workable lock before giving up
-# and returning the batch to the queue.
+# Max times a Workable-op task waits for the per-org mutex before giving up.
 _DISPATCH_MAX_RETRIES = 12
 
 
 def _lock_wait_countdown() -> int:
     """Short, jittered wait when the per-org mutex is simply held by another
-    write. This is NOT a rate-limit backoff — the lock frees in seconds — so a
-    100-decision batch drains quickly instead of stretching over the long 429
-    backoff. Jitter spreads the herd so they don't all wake at once."""
+    Workable write. This is NOT a rate-limit backoff — the lock frees in
+    seconds — so a batch drains quickly. Jitter spreads the herd."""
     import random
 
     return random.randint(3, 9)
 
 
-def _requeue_decision(decision_id: int, organization_id: int, *, note: str) -> None:
-    """Flip a processing decision back to pending so it returns to the Hub
-    queue. Opens its own short session; idempotent (only acts on processing)."""
-    from ..models.agent_decision import AgentDecision
-    from ..platform.database import SessionLocal
-
-    db = SessionLocal()
-    try:
-        decision = (
-            db.query(AgentDecision)
-            .filter(
-                AgentDecision.id == decision_id,
-                AgentDecision.organization_id == organization_id,
-            )
-            .first()
-        )
-        if decision is None or decision.status != "processing":
-            return
-        decision.status = "pending"
-        decision.resolution_note = (note or "")[:500] or None
-        db.commit()
-    finally:
-        db.close()
-
-
-def _requeue_in_session(db, decision_id: int, organization_id: int, *, note: str) -> None:
-    """Return a processing decision to the queue using the caller's session
-    (after a rollback). Idempotent: only acts on a still-processing row."""
-    from ..models.agent_decision import AgentDecision
-
-    decision = (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.id == decision_id,
-            AgentDecision.organization_id == organization_id,
-        )
-        .first()
-    )
-    if decision is None or decision.status != "processing":
-        return
-    decision.status = "pending"
-    decision.resolution_note = (note or "")[:500] or None
-    db.commit()
-
-
 @celery_app.task(
     bind=True,
-    name="app.tasks.workable_tasks.process_decision_batch",
+    name="app.tasks.workable_tasks.run_workable_op",
     max_retries=_DISPATCH_MAX_RETRIES,
 )
-def process_decision_batch_task(
+def run_workable_op_task(
     self,
     job_run_id: int | None,
     organization_id: int,
-    decision_ids: list[int],
-    user_id: int | None = None,
-    note: str | None = None,
-    workable_target_stage: str | None = None,
+    op_type: str,
+    payload: dict,
 ) -> dict:
-    """Drain a batch of approved decisions in the background, serialized per org.
+    """Generic serialized runner shell for ALL Workable write-backs.
 
-    One row per recruiter request (single approve or a 100-row bulk approve).
-    We hold the per-org Workable mutex (shared with sync) for the whole batch so
-    the writebacks run strictly sequentially — no rate-limit bursts. Each
-    decision's local Tali change is committed only after its Workable write
-    succeeds (gated types: reject / advance); a decision whose writeback fails
-    is returned to the queue (status → pending) and the batch keeps going.
-    Progress is mirrored to the BackgroundJobRun for Settings → Background jobs.
+    Owns the cross-cutting concerns; the per-op work lives in
+    ``app.services.workable_op_runner``:
+    - Per-org mutex (shared with sync) so writes are strictly sequential — no
+      rate-limit bursts. Lock contention retries fast; on exhaustion the op is
+      surfaced and the job fails.
+    - BackgroundJobRun bookkeeping (Settings → Background jobs).
+    - Retry with backoff on a transient ``WorkableWritebackError`` (429/5xx);
+      on a terminal failure the op surfaces (re-queues the decision / records a
+      ``workable_*_failed`` event) so nothing silently drops.
     """
-    from ..actions import approve_decision as approve_decision_action
-    from ..actions.types import ACTOR_RECRUITER, Actor
-    from ..models.agent_decision import AgentDecision
     from ..platform.database import SessionLocal
     from ..services import background_job_runs
-    from ..services.workable_actions_service import (
-        WorkableWritebackError,
-        strict_workable_writes,
-    )
+    from ..services import workable_op_runner as runner
+    from ..services.workable_actions_service import WorkableWritebackError
     from .assessment_tasks import (
         _acquire_workable_org_mutex,
         _release_workable_org_mutex,
     )
 
-    ids = [int(x) for x in (decision_ids or [])]
-
-    # Serialize all Workable activity for this org. None == another task holds
-    # the lock (sync or another batch); wait our turn. False == no Redis (tests
-    # / Redis down) → run unguarded.
-    lock = _acquire_workable_org_mutex(int(organization_id), source="decision_batch")
+    eager = bool(getattr(self.request, "is_eager", False))
+    lock = _acquire_workable_org_mutex(int(organization_id), source=f"workable_op:{op_type}")
     if lock is None:
         if self.request.retries < self.max_retries:
-            raise self.retry(countdown=_lock_wait_countdown())
-        # Couldn't get the lock in the window — return the whole batch to the queue.
-        for did in ids:
-            _requeue_decision(
-                did, organization_id, note="Returned to queue: Workable was busy."
+            raise self.retry(countdown=0 if eager else _lock_wait_countdown())
+        # Couldn't get the lock in the window — surface + fail the job.
+        db = SessionLocal()
+        try:
+            err = WorkableWritebackError(
+                action=op_type, code="lock_timeout", message="Workable was busy", retriable=True
             )
+            runner.surface_op_failure(
+                db, organization_id=int(organization_id), op_type=op_type, payload=payload, error=err
+            )
+        finally:
+            db.close()
         background_job_runs.update_run(
-            job_run_id,
-            status="failed",
-            counters={"total": len(ids), "succeeded": 0, "requeued": len(ids), "failed": 0},
-            error="Could not acquire the Workable lock within the retry window.",
-            finished=True,
+            job_run_id, status="failed", error="Workable lock timeout", finished=True
         )
-        return {"status": "requeued_all", "reason": "lock_timeout", "count": len(ids)}
-
-    counters = {"total": len(ids), "succeeded": 0, "requeued": 0, "failed": 0}
-    background_job_runs.update_run(job_run_id, status="running", counters=counters)
-    actor = Actor(type=ACTOR_RECRUITER, user_id=int(user_id) if user_id else None)
+        return {"status": "lock_timeout", "op_type": op_type}
 
     db = SessionLocal()
     try:
-        for idx, decision_id in enumerate(ids, start=1):
-            decision = (
-                db.query(AgentDecision)
-                .filter(
-                    AgentDecision.id == decision_id,
-                    AgentDecision.organization_id == organization_id,
-                )
-                .first()
+        background_job_runs.update_run(job_run_id, status="running")
+        try:
+            result = runner.execute_op(
+                db, organization_id=int(organization_id), op_type=op_type, payload=payload
             )
-            # Idempotent: only a still-processing row is ours to act on.
-            if decision is None or decision.status != "processing":
-                continue
-            gated = decision.decision_type in _GATED_DECISION_TYPES
-            try:
-                if gated:
-                    with strict_workable_writes():
-                        approve_decision_action.run(
-                            db,
-                            actor,
-                            organization_id=int(organization_id),
-                            decision_id=int(decision_id),
-                            note=note,
-                            workable_target_stage=workable_target_stage,
-                        )
-                else:
-                    approve_decision_action.run(
-                        db,
-                        actor,
-                        organization_id=int(organization_id),
-                        decision_id=int(decision_id),
-                        note=note,
-                        workable_target_stage=workable_target_stage,
-                    )
-                db.commit()
-                counters["succeeded"] += 1
-            except WorkableWritebackError as exc:
-                # Nothing committed — roll back so we never leave a Tali outcome
-                # applied without the Workable write, then return it to the queue.
-                db.rollback()
-                _requeue_in_session(
-                    db,
-                    decision_id,
-                    organization_id,
-                    note=f"Returned to queue: Workable writeback failed ({exc.code}). {exc.message}",
+        except WorkableWritebackError as exc:
+            db.rollback()
+            if exc.retriable and self.request.retries < self.max_retries:
+                raise self.retry(
+                    countdown=0 if eager else _disqualify_retry_countdown(self.request.retries)
                 )
-                counters["requeued"] += 1
-            except Exception as exc:  # noqa: BLE001 — one bad row must not halt the batch
-                db.rollback()
-                logger.exception(
-                    "decision batch: unexpected error decision_id=%s", decision_id
-                )
-                _requeue_in_session(
-                    db,
-                    decision_id,
-                    organization_id,
-                    note=f"Returned to queue after an unexpected error: {str(exc)[:180]}",
-                )
-                counters["failed"] += 1
-            # Flush progress periodically so Settings shows a moving bar.
-            if idx % 10 == 0:
-                background_job_runs.update_run(job_run_id, counters=counters)
+            runner.surface_op_failure(
+                db, organization_id=int(organization_id), op_type=op_type, payload=payload, error=exc
+            )
+            background_job_runs.update_run(
+                job_run_id,
+                status="failed",
+                counters={"op_type": op_type, "code": exc.code},
+                error=exc.message,
+                finished=True,
+            )
+            return {"status": "failed", "op_type": op_type, "code": exc.code}
+        except Exception as exc:  # noqa: BLE001 — never leave a decision stuck in 'processing'
+            db.rollback()
+            logger.exception("run_workable_op: unexpected error op_type=%s", op_type)
+            err = WorkableWritebackError(
+                action=op_type, code="unexpected", message=str(exc)[:200], retriable=False
+            )
+            runner.surface_op_failure(
+                db, organization_id=int(organization_id), op_type=op_type, payload=payload, error=err
+            )
+            background_job_runs.update_run(
+                job_run_id,
+                status="failed",
+                counters={"op_type": op_type, "code": "unexpected"},
+                error=str(exc)[:300],
+                finished=True,
+            )
+            return {"status": "failed", "op_type": op_type, "code": "unexpected"}
 
-        status = (
-            "completed"
-            if counters["requeued"] == 0 and counters["failed"] == 0
-            else "completed_with_errors"
-        )
+        result = result if isinstance(result, dict) else {}
+        status = "completed"
+        if result.get("requeued") or result.get("failed"):
+            status = "completed_with_errors"
         background_job_runs.update_run(
-            job_run_id, status=status, counters=counters, finished=True
+            job_run_id, status=status, counters={**result, "op_type": op_type}, finished=True
         )
-        return {"status": status, **counters}
+        # Shell's status/op_type win over any per-handler "status" key.
+        return {**result, "status": status, "op_type": op_type}
     finally:
         db.close()
         _release_workable_org_mutex(lock)

@@ -11,12 +11,16 @@ JOB_KIND_GRAPH_SYNC = "graph_sync"
 # (a 100-decision bulk approve is ONE job), draining the Workable writebacks
 # sequentially in the background.
 JOB_KIND_DECISION_BATCH = "decision_batch"
+# A single Workable write-back op (override, hand-back stage move, manual
+# outcome sync, note) run through the generic serialized runner.
+JOB_KIND_WORKABLE_OP = "workable_op"
 
 JOB_KINDS = (
     JOB_KIND_SCORING_BATCH,
     JOB_KIND_CV_FETCH,
     JOB_KIND_GRAPH_SYNC,
     JOB_KIND_DECISION_BATCH,
+    JOB_KIND_WORKABLE_OP,
 )
 
 SCOPE_KIND_ROLE = "role"

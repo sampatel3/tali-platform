@@ -39,7 +39,7 @@ from .automation_tasks import (
 from .workable_tasks import (
     run_workable_sync_run_task,
     retry_workable_disqualify_task,
-    process_decision_batch_task,
+    run_workable_op_task,
 )
 # Eager-import reconciliation_tasks so the daily Anthropic billing
 # reconciliation beat task lands in the worker registry. Same trap as
@@ -97,7 +97,7 @@ __all__ = [
     "run_application_auto_reject",
     "run_workable_sync_run_task",
     "retry_workable_disqualify_task",
-    "process_decision_batch_task",
+    "run_workable_op_task",
     "reconcile_anthropic_usage",
     "agent_react_to_event",
     "agent_manual_run",

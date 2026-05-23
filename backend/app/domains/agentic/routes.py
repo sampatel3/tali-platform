@@ -579,9 +579,12 @@ def override(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    side_effects: dict = {}
     try:
-        decision = override_decision_action.run(
+        # Optimistic + async: flip to 'processing' and run the override via the
+        # serialized Workable runner. State-change actions (reject/advance/
+        # skip-advance) are gated on Workable and re-queue on failure — no more
+        # silent 429 drops. (Eager Celery in tests finishes inline.)
+        decision = override_decision_action.enqueue(
             db,
             Actor.recruiter(current_user),
             organization_id=current_user.organization_id,
@@ -589,9 +592,7 @@ def override(
             override_action=body.override_action,
             note=body.note,
             workable_target_stage=body.workable_target_stage,
-            collect_side_effects=side_effects,
         )
-        db.commit()
         db.refresh(decision)
     except HTTPException:
         db.rollback()
@@ -599,13 +600,6 @@ def override(
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"override failed: {exc}")
-
-    # Slow best-effort side effects run off the request path (see approve).
-    _enqueue_decision_side_effects(
-        decision.id,
-        workable_target_stage=body.workable_target_stage,
-        reject_notify=bool(side_effects.get("reject_notify", False)),
-    )
 
     candidate = (
         db.query(Candidate)

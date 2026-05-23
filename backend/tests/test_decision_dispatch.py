@@ -28,7 +28,7 @@ from app.services.workable_actions_service import (
     disqualify_candidate_in_workable,
     strict_workable_writes,
 )
-from app.tasks.workable_tasks import process_decision_batch_task
+from app.tasks.workable_tasks import run_workable_op_task
 
 
 def _seed(db, *, workable_connected=False):
@@ -161,9 +161,9 @@ def test_batch_success_approves_and_records_job(db):
         scope_id=int(org.id), organization_id=int(org.id),
         counters={"total": 1}, status="queued",
     )
-    out = process_decision_batch_task.run(
-        job_run_id=job_id, organization_id=int(org.id),
-        decision_ids=[int(decision.id)], user_id=int(user.id),
+    out = run_workable_op_task.run(
+        job_run_id=job_id, organization_id=int(org.id), op_type="approve_decisions",
+        payload={"decision_ids": [int(decision.id)], "user_id": int(user.id)},
     )
     assert out["status"] == "completed" and out["succeeded"] == 1
     db.expire_all()
@@ -185,9 +185,9 @@ def test_batch_requeues_failed_decision_to_queue(db):
     )
     err = WorkableWritebackError(action="disqualify", code="not_writeable", message="no scope", retriable=False)
     with patch("app.actions.approve_decision.run", side_effect=err):
-        out = process_decision_batch_task.run(
-            job_run_id=job_id, organization_id=int(org.id),
-            decision_ids=[int(decision.id)], user_id=int(user.id),
+        out = run_workable_op_task.run(
+            job_run_id=job_id, organization_id=int(org.id), op_type="approve_decisions",
+            payload={"decision_ids": [int(decision.id)], "user_id": int(user.id)},
         )
     assert out["status"] == "completed_with_errors" and out["requeued"] == 1
     db.expire_all()
@@ -204,9 +204,9 @@ def test_batch_skips_non_processing(db):
     app, decision = _add_decision(db, org, role, status="approved")
     db.commit()
     with patch("app.actions.approve_decision.run") as mock_run:
-        out = process_decision_batch_task.run(
-            job_run_id=None, organization_id=int(org.id),
-            decision_ids=[int(decision.id)], user_id=int(user.id),
+        out = run_workable_op_task.run(
+            job_run_id=None, organization_id=int(org.id), op_type="approve_decisions",
+            payload={"decision_ids": [int(decision.id)], "user_id": int(user.id)},
         )
     assert out["succeeded"] == 0
     assert not mock_run.called
@@ -284,3 +284,61 @@ def test_enqueue_one_success_completes_eager(db):
     assert returned is not None
     db.expire_all()
     assert db.query(AgentDecision).get(decision.id).status == "approved"
+
+
+# --- other ops through the generic runner -----------------------------------
+
+
+def test_override_op_requeues_on_workable_failure(db):
+    """A gated override (advance) whose Workable move fails returns the decision
+    to the queue via the runner's surface step."""
+    org, role, user = _seed(db)
+    app, decision = _add_decision(
+        db, org, role, status="processing", decision_type="advance_to_interview"
+    )
+    db.commit()
+    err = WorkableWritebackError(action="move", code="not_writeable", message="no scope", retriable=False)
+    with patch("app.actions.override_decision.run", side_effect=err):
+        out = run_workable_op_task.run(
+            job_run_id=None, organization_id=int(org.id), op_type="override_decision",
+            payload={"decision_id": int(decision.id), "user_id": int(user.id), "override_action": "advance"},
+        )
+    assert out["status"] == "failed"
+    db.expire_all()
+    assert db.query(AgentDecision).get(decision.id).status == "pending"
+
+
+def test_move_stage_op_success_sets_stage(db):
+    org, role, user = _seed(db, workable_connected=True)
+    app, decision = _add_decision(db, org, role, workable_linked=True)
+    db.commit()
+    success = {"success": True, "action": "move", "config": {"actor_member_id": "m1"}}
+    with patch(
+        "app.services.workable_actions_service.move_candidate_in_workable", return_value=success
+    ) as mk:
+        out = run_workable_op_task.run(
+            job_run_id=None, organization_id=int(org.id), op_type="move_stage",
+            payload={"application_id": int(app.id), "user_id": int(user.id),
+                     "target_stage": "Technical Interview", "reason": None},
+        )
+    assert out["status"] == "completed" and mk.called
+    db.expire_all()
+    assert db.query(CandidateApplication).get(app.id).workable_stage == "Technical Interview"
+
+
+def test_post_note_op_raises_retriable_on_failure(db):
+    """A failed note post raises a retriable WorkableWritebackError so the shell
+    retries (tested at the handler level to avoid eager-retry recursion)."""
+    from app.services import workable_op_runner as runner
+
+    org, role, user = _seed(db, workable_connected=True)
+    app, decision = _add_decision(db, org, role, workable_linked=True)
+    db.commit()
+    with patch("app.domains.integrations_notifications.adapters.build_workable_adapter") as mk:
+        mk.return_value.post_candidate_comment.return_value = {"success": False, "error": "429"}
+        with pytest.raises(WorkableWritebackError) as ei:
+            runner.execute_op(
+                db, organization_id=int(org.id), op_type="post_note",
+                payload={"application_id": int(app.id), "user_id": int(user.id), "body": "hi"},
+            )
+    assert ei.value.retriable is True
