@@ -14,6 +14,7 @@ from ...components.assessments.repository import assessment_to_response, utcnow
 from ...components.assessments.service import get_assessment_creation_gate
 from ...deps import get_current_user
 from ...domains.integrations_notifications.adapters import build_workable_adapter
+from ...services.workable_actions_service import resolve_workable_actor_member_id
 from ...domains.integrations_notifications.invite_flow import dispatch_assessment_invite
 from ...models.assessment import Assessment
 from ...models.candidate import Candidate
@@ -426,12 +427,17 @@ def post_assessment_to_workable(
     if not assessment.workable_candidate_id:
         raise HTTPException(status_code=400, detail="Assessment is not linked to a Workable candidate")
 
+    member_id = resolve_workable_actor_member_id(org, getattr(assessment, "role", None))
+    if not member_id:
+        raise HTTPException(status_code=400, detail="Workable actor member is not configured")
+
     svc = build_workable_adapter(
         access_token=org.workable_access_token,
         subdomain=org.workable_subdomain,
     )
     result = svc.post_assessment_result(
         candidate_id=assessment.workable_candidate_id,
+        member_id=member_id,
         assessment_data={
             "score": assessment.score or 0,
             "tests_passed": assessment.tests_passed or 0,

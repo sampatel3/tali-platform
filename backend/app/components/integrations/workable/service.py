@@ -428,15 +428,30 @@ class WorkableService:
             logger.exception("Failed fetching candidate ratings")
             return {}
 
-    def post_candidate_activity(self, candidate_id: str, body: str) -> dict:
+    def post_candidate_comment(self, candidate_id: str, member_id: str, body: str) -> dict:
+        # Workable's only candidate write-back for free-text notes is
+        # POST /candidates/{id}/comments — it requires a member_id to
+        # attribute the comment. (/activities is read-only and 404s on POST.)
+        mid = str(member_id or "").strip()
+        if not mid:
+            return {
+                "success": False,
+                "error": "member_id is required to post a candidate comment",
+                "status_code": None,
+                "response": {"error": "member_id is required to post a candidate comment"},
+            }
         try:
-            payload = self._request("POST", f"/candidates/{candidate_id}/activities", json={"body": body})
+            payload = self._request(
+                "POST",
+                f"/candidates/{candidate_id}/comments",
+                json={"member_id": mid, "comment": {"body": body}},
+            )
             return {"success": True, "response": payload}
         except Exception as exc:
-            logger.exception("Failed posting candidate activity")
+            logger.exception("Failed posting candidate comment")
             return self._failure_result(exc)
 
-    def post_assessment_result(self, candidate_id: str, assessment_data: dict) -> dict:
+    def post_assessment_result(self, candidate_id: str, member_id: str, assessment_data: dict) -> dict:
         score = assessment_data.get("score", 0)
         tests_passed = assessment_data.get("tests_passed", 0)
         tests_total = assessment_data.get("tests_total", 0)
@@ -450,7 +465,7 @@ class WorkableService:
             f"Full recruiter report: {results_url}\n\n"
             "This result was posted automatically by TAALI."
         )
-        return self.post_candidate_activity(candidate_id, body)
+        return self.post_candidate_comment(candidate_id, member_id, body)
 
     def move_candidate(
         self,

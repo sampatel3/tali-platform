@@ -141,12 +141,19 @@ def _do_workable_handoff(
                 stage_result.get("message"),
             )
             return False
+        member_id = (stage_result.get("config") or {}).get("actor_member_id")
+        if not member_id:
+            logger.warning(
+                "workable actor member missing assessment_id=%s — skipping invite note",
+                assessment.id,
+            )
+            return False
         adapter = build_workable_adapter(
             access_token=org.workable_access_token,
             subdomain=org.workable_subdomain,
         )
-        activity_result = adapter.post_candidate_activity(
-            assessment.workable_candidate_id, activity
+        activity_result = adapter.post_candidate_comment(
+            assessment.workable_candidate_id, member_id, activity
         )
         if not activity_result.get("success"):
             logger.warning(
