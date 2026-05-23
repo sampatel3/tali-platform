@@ -2061,11 +2061,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         : null;
                       const isLive = String(application?.pipeline_stage || '').toLowerCase() === 'in_assessment';
                       const isReview = stage.key === 'review';
-                      // Real pending agent decision (if any) for this candidate.
-                      // When present, the agent block surfaces the actual
-                      // recommendation verb + reasoning + wires Approve /
-                      // Override to apiClient.agent.{approve,override}Decision.
-                      const pendingDecision = pendingAgentDecisions[application?.id] || application?.pending_decision || null;
+                      // Approve/Override act ONLY on the freshly-polled map, not
+                      // the per-row snapshot (which can go stale and expose
+                      // actions against an already-resolved decision).
+                      const pendingDecision = pendingAgentDecisions[application?.id] || null;
                       const decisionResolving = pendingDecision?.id != null
                         && resolvingDecisionId === pendingDecision.id;
                       const decisionVerb = pendingDecision?.recommendation
