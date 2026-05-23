@@ -265,14 +265,22 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction }) => (
   </div>
 );
 
-const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) => (
+const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) => {
+  // The list is sorted by score, so the oldest item is no longer at a fixed
+  // position — derive its age explicitly for the header label.
+  const oldestCreatedAt = pending.reduce((oldest, p) => {
+    if (!p?.created_at) return oldest;
+    if (!oldest || new Date(p.created_at) < new Date(oldest)) return p.created_at;
+    return oldest;
+  }, null);
+  return (
   <aside className="rq-split-list">
     <div className="rq-split-list-head">
       <span style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 600, color: 'var(--ink)' }}>
         Pending <span style={{ color: 'var(--purple)', marginLeft: 4 }}>{pending.length}</span>
       </span>
       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--mute)', letterSpacing: '.06em' }}>
-        {pending[0] ? `OLDEST ${formatRelativeAge(pending[pending.length - 1]?.created_at)}` : ''}
+        {oldestCreatedAt ? `OLDEST ${formatRelativeAge(oldestCreatedAt)}` : ''}
       </span>
     </div>
     <div className="rq-split-list-body">
@@ -354,7 +362,8 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
       <span>If queue empties, agent runs unattended.</span>
     </div>
   </aside>
-);
+  );
+};
 
 const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze, onNavigate, busy }) => {
   if (!decision) {

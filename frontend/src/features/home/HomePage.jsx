@@ -149,10 +149,15 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       if (reloadCounter.current !== ticket) return;
       const pendingRows = Array.isArray(pendingRes?.data) ? pendingRes.data : [];
       const feedRows = Array.isArray(feedRes?.data) ? feedRes.data : [];
-      // Pending sidebar: oldest-first so the top item is the most-aged.
-      const pending = [...pendingRows].sort(
-        (a, b) => new Date(a.created_at) - new Date(b.created_at),
-      );
+      // Pending sidebar: highest score first so the strongest candidates
+      // surface at the top. Unscored rows sink to the bottom; ties fall
+      // back to oldest-first.
+      const scoreOf = (d) => (Number.isFinite(Number(d?.taali_score)) ? Number(d.taali_score) : -Infinity);
+      const pending = [...pendingRows].sort((a, b) => {
+        const byScore = scoreOf(b) - scoreOf(a);
+        if (byScore !== 0) return byScore;
+        return new Date(a.created_at) - new Date(b.created_at);
+      });
       setPendingOrdered(pending);
       setDecisions(feedRows);
     } catch (err) {
