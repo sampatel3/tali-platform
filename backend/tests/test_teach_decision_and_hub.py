@@ -721,3 +721,86 @@ def test_list_feedback_route_returns_seeded_rows(client):
     assert len(rows) == 1
     assert rows[0]["decision_id"] == seeded["decision_id"]
     assert rows[0]["scope"] == "role"
+
+
+def _seed_two_scored_decisions(*, org_name: str) -> dict:
+    """Seed one org with two scored applications: an advance decision and a
+    pre-screen reject. BOTH applications carry a cached Tali score so the test
+    can prove the pre-screen card suppresses it regardless of cache state."""
+    from tests.conftest import TestingSessionLocal
+
+    sess = TestingSessionLocal()
+    try:
+        org = Organization(name=org_name, slug=f"twoscore-{id(sess)}")
+        sess.add(org)
+        sess.flush()
+        role = Role(
+            organization_id=org.id,
+            name="Sr. Backend",
+            source="manual",
+            agentic_mode_enabled=True,
+            monthly_usd_budget_cents=0,
+        )
+        sess.add(role)
+        sess.flush()
+        out = {"org_id": int(org.id)}
+        for dtype, score, key in (
+            ("advance_to_interview", 88.0, "adv"),
+            ("skip_assessment_reject", 72.0, "psr"),
+        ):
+            cand = Candidate(organization_id=org.id, email=f"{key}@x.test", full_name=key)
+            sess.add(cand)
+            sess.flush()
+            app = CandidateApplication(
+                organization_id=org.id,
+                candidate_id=cand.id,
+                role_id=role.id,
+                status="applied",
+                pipeline_stage="review",
+                pipeline_stage_source="recruiter",
+                application_outcome="open",
+                source="manual",
+                taali_score_cache_100=score,
+            )
+            sess.add(app)
+            sess.flush()
+            dec = AgentDecision(
+                organization_id=org.id,
+                role_id=role.id,
+                application_id=app.id,
+                decision_type=dtype,
+                recommendation=dtype,
+                status="pending",
+                reasoning="r",
+                model_version="m",
+                prompt_version="p",
+                idempotency_key=f"twoscore:{app.id}:{dtype}",
+            )
+            sess.add(dec)
+            sess.flush()
+            out[f"{key}_decision_id"] = int(dec.id)
+        sess.commit()
+        return out
+    finally:
+        sess.close()
+
+
+def test_taali_score_shown_on_advance_but_never_on_pre_screen_reject(client):
+    """Hub surfaces taali_score on a scored advance card, but NEVER on a
+    pre-screen reject (skip_assessment_reject) — even when the underlying
+    application carries a cached score."""
+    from tests.conftest import auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_two_scored_decisions(org_name="Two Score Org")
+    _attach_user_to_org(email, seeded["org_id"])
+
+    listing = client.get("/api/v1/agent-decisions?status=pending", headers=headers)
+    assert listing.status_code == 200, listing.text
+    by_id = {row["id"]: row for row in listing.json()}
+
+    adv = by_id[seeded["adv_decision_id"]]
+    assert adv["taali_score"] == 88.0, "scored advance card should expose the Tali score"
+
+    psr = by_id[seeded["psr_decision_id"]]
+    assert psr["taali_score"] is None, "pre-screen reject must never expose a score"

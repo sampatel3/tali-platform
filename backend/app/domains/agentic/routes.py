@@ -234,7 +234,13 @@ def _decision_to_payload(
     cost_cents = cost_micro // 10_000
 
     taali_score = None
-    if application is not None:
+    # Pre-screen rejects (skip_assessment_reject) are surfaced before the
+    # candidate is assessed — they have no meaningful Tali score, and the card
+    # must never show one. Gate on the decision type rather than on a null
+    # cache: an application can carry a stale cached score from another flow
+    # (e.g. a CV match) even though this decision is a pre-screen reject, and
+    # that score must not leak onto the card.
+    if application is not None and str(decision.decision_type) != "skip_assessment_reject":
         raw_score = getattr(application, "taali_score_cache_100", None)
         if raw_score is not None:
             taali_score = float(raw_score)
