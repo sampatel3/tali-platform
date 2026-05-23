@@ -5542,6 +5542,35 @@ body.interview-view .page {
   line-height: 1.5;
 }
 
+/* ── Consolidation polish ──────────────────────────────────────────────
+   The assessment / evaluate / interview-prep panes host widgets migrated
+   from the retired /assessments page. Those are built with the Tailwind
+   `taali-panel`/`taali-card` primitives (translucent surface + blur + softer
+   border). Inside the candidate report we want them to read as the report's
+   solid `.panel` cards so the page looks like one surface, not bolted-on.
+   Colours already match (the --taali-* tokens alias --ink/--line/--bg-2);
+   this only realigns the surface/shape. Scoped to the panes so the rest of
+   the app's taali-panel usage is untouched. */
+.pane[data-p="assessment"] .taali-panel,
+.pane[data-p="assessment"] .taali-card,
+.pane[data-p="evaluate"] .taali-panel,
+.pane[data-p="evaluate"] .taali-card,
+.pane[data-p="prep"] .taali-panel,
+.pane[data-p="prep"] .taali-card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Section kickers above each migrated evidence block (AI usage, code/git,
+   timeline) get a little breathing room so they don't crowd the card above. */
+.report-assessment-evidence > section > .mc-kicker {
+  margin-bottom: 10px;
+}
+
 .dim {
   padding: 10px 0;
   border-bottom: 1px solid var(--line-2);
