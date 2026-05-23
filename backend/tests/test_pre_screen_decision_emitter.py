@@ -508,3 +508,44 @@ def test_reconcile_leaves_non_pre_screen_decisions_untouched(db):
     )
     assert summary["discarded"] == 0
     assert db.query(AgentDecision).filter(AgentDecision.id == other.id).one().status == "pending"
+
+
+# ---------------------------------------------------------------------------
+# rederive_pre_screen_recommendations — fix stale "Below threshold" labels
+# left by the old hard-coded <50 rule (relax-only, display only).
+# ---------------------------------------------------------------------------
+
+
+def test_rederive_relabels_above_cutoff_below_threshold_rows(db):
+    """A 40-scorer on a role that rejects at 30 was branded 'Below
+    threshold' by the old <50 label. Re-derive moves it off the reject
+    label; genuinely-below rows and fraud-capped rows are left alone.
+    """
+    from app.services.pre_screen_decision_emitter import rederive_pre_screen_recommendations
+
+    org = Organization(name="Relabel", slug=f"rl-{id(db)}")
+    db.add(org); db.flush()
+    role = Role(
+        organization_id=org.id, name="R", source="manual",
+        auto_reject=False, agentic_mode_enabled=True, score_threshold=30,
+    )
+    db.add(role); db.flush()
+
+    # Above cutoff but stale-labelled — should be relabelled.
+    above = _add_app(db, org, role, score=40.0, rec="Below threshold", email="a@x.test")
+    # Genuinely below cutoff — keep.
+    below = _add_app(db, org, role, score=20.0, rec="Below threshold", email="b@x.test")
+    # Above cutoff but fraud-capped — keep the fraud verdict.
+    fraud = _add_app(db, org, role, score=40.0, rec="Below threshold", email="f@x.test")
+    fraud.pre_screen_evidence = {"fraud_capped": True}
+    # NULL score (must-have miss) — not score-derivable, keep.
+    null_rec = _add_app(db, org, role, score=None, rec="Below threshold", email="n@x.test")
+    db.commit()
+
+    summary = rederive_pre_screen_recommendations(db, role_id=int(role.id))
+    assert summary["updated"] == 1
+    db.refresh(above); db.refresh(below); db.refresh(fraud); db.refresh(null_rec)
+    assert above.pre_screen_recommendation == "Manual review recommended"
+    assert below.pre_screen_recommendation == "Below threshold"
+    assert fraud.pre_screen_recommendation == "Below threshold"
+    assert null_rec.pre_screen_recommendation == "Below threshold"

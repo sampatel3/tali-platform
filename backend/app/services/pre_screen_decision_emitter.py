@@ -398,3 +398,80 @@ def reconcile_pre_screen_reject_decisions(
         "created": created,
         "skipped_existing": skipped_existing,
     }
+
+
+def rederive_pre_screen_recommendations(
+    db: Session,
+    *,
+    role_id: int | None = None,
+    organization_id: int | None = None,
+) -> dict:
+    """Correct stored ``pre_screen_recommendation`` labels that the old
+    hard-coded ``< 50`` rule over-flagged as "Below threshold".
+
+    Rows scored before the label became threshold-aware keep a stale
+    "Below threshold" even when the candidate is *above* the role's actual
+    cutoff (e.g. a 40-scorer on a role that rejects at 30). This relabels
+    them in place — no LLM re-run — so the displayed verdict matches the
+    threshold the agent actually rejects on.
+
+    Deliberately **relax-only**: it only touches rows currently labelled
+    "Below threshold" whose score is at/above the role's cutoff, and only
+    ever moves them *off* the reject label. It never introduces a new
+    "Below threshold" (which could trip the label-keyed auto-reject hooks
+    in applications_routes). The reject *decisions* are reconciled
+    separately and score-authoritatively by
+    ``reconcile_pre_screen_reject_decisions``.
+
+    Skips:
+    - NULL-score rows — their "Below threshold" is a must-have-miss /
+      invalidated verdict, not score-derivable.
+    - fraud-capped rows — "Below threshold" there is a fraud verdict
+      forced independently of the score band.
+    - roles with no configured threshold — nothing to compare against.
+
+    Returns ``{"updated": int, "scanned": int}``.
+    """
+    # Lazy imports: the emitter is imported by application_automation_service
+    # alongside pre_screening_service, so importing the latter at module load
+    # would risk a cycle. Inside the function it's safe.
+    from .pre_screening_service import resolved_auto_reject_config
+    from .pre_screening_snapshot import pre_screen_recommendation_label
+
+    q = (
+        db.query(CandidateApplication, Role)
+        .join(Role, Role.id == CandidateApplication.role_id)
+        .filter(
+            CandidateApplication.pre_screen_score_100.isnot(None),
+            CandidateApplication.pre_screen_recommendation == "Below threshold",
+            CandidateApplication.deleted_at.is_(None),
+            Role.deleted_at.is_(None),
+        )
+    )
+    if role_id is not None:
+        q = q.filter(CandidateApplication.role_id == int(role_id))
+    if organization_id is not None:
+        q = q.filter(CandidateApplication.organization_id == int(organization_id))
+
+    threshold_cache: dict[int, float | None] = {}
+    updated = 0
+    scanned = 0
+    for app, role in q.all():
+        scanned += 1
+        evidence = app.pre_screen_evidence if isinstance(app.pre_screen_evidence, dict) else {}
+        if evidence.get("fraud_capped"):
+            continue
+        if role.id not in threshold_cache:
+            threshold_cache[role.id] = resolved_auto_reject_config(None, role, db=db)["threshold_100"]
+        threshold = threshold_cache[role.id]
+        if threshold is None:
+            continue
+        if float(app.pre_screen_score_100) < float(threshold):
+            continue  # genuinely below the cutoff — keep the reject label
+        new_label = pre_screen_recommendation_label(app.pre_screen_score_100, threshold)
+        if new_label and new_label != "Below threshold":
+            app.pre_screen_recommendation = new_label
+            updated += 1
+    if updated:
+        db.commit()
+    return {"updated": updated, "scanned": scanned}

@@ -355,6 +355,24 @@ def agent_cohort_tick_role(self, role_id: int) -> dict:
             )
             db.rollback()
 
+        # Phase 1.6: correct stale "Below threshold" *display* labels left by
+        # the old hard-coded <50 rule (relax-only — only un-flags candidates
+        # now above the role's cutoff; never introduces a new reject label).
+        # Pairs with the decision reconcile above so the verdict and the
+        # displayed recommendation agree. Idempotent; a no-op once converged.
+        try:
+            from ..services.pre_screen_decision_emitter import (
+                rederive_pre_screen_recommendations,
+            )
+
+            rederive_pre_screen_recommendations(db, role_id=role_id)
+        except Exception:
+            logger.exception(
+                "pre-screen recommendation re-derive failed in cohort tick role_id=%s",
+                role_id,
+            )
+            db.rollback()
+
         # Phase 2: early-exit if there's nothing for the agent to do.
         # Calling run_cycle when the survey shows zero actionable work
         # burns ~$0.05 of Sonnet 4.5 per role per tick (4 roles × 48
