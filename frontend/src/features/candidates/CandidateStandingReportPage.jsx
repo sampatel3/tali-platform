@@ -16,7 +16,6 @@ import {
   WorkableComparisonCard,
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
-import { CopyLinkButton } from '../../shared/ui/CopyLinkButton';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
 import { RadarChart } from '../../shared/ui/RadarChart';
@@ -1294,7 +1293,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           period={false}
           subtitle={metaParts.length ? metaParts.join(' · ') : 'Candidate standing report'}
           breadcrumbs={breadcrumbItems}
-          breadcrumbActions={<CopyLinkButton label="Copy link to report" successMessage="Candidate report link copied." />}
           preTitle={(
             <div className="ah-cand-pre">
               <div className="ah-cand-avatar" aria-hidden="true">{candidateInitials}</div>

@@ -16,7 +16,6 @@ import { prefetchDocumentBlob } from '../../shared/api/documentCache';
 import { useToast } from '../../context/ToastContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
-import { CopyLinkButton } from '../../shared/ui/CopyLinkButton';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
 import { useRoleProgressPolling } from './useRoleProgressPolling';
@@ -1975,7 +1974,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         kicker={`${role?.name || 'Role'} · #${role?.id || '—'}`}
         title={role?.name || 'Role'}
         breadcrumbs={[{ label: 'Jobs', page: 'jobs' }, { label: role?.name || 'Role' }]}
-        breadcrumbActions={<CopyLinkButton label="Copy link to role" successMessage="Role link copied." />}
         actions={(
           <>
             {/* Reverse deep-link to the Hub: when this role has pending

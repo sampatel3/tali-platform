@@ -245,10 +245,9 @@ export const AgentHeader = ({
   // it replaces the old in-header backLink. Every recruiter page passes
   // it (top-level pages pass a single crumb, e.g. [{ label: 'Jobs' }]),
   // so the strip is always present and the purple header never shifts
-  // vertically between pages. `breadcrumbActions` renders on the right of
-  // the strip (e.g. a Copy-link button).
+  // vertically between pages. The strip is navigation only — no action
+  // buttons live in it.
   breadcrumbs = null,
-  breadcrumbActions = null,
   preTitle = null,
   postTitle = null,
   period = true,
@@ -282,7 +281,7 @@ export const AgentHeader = ({
           slab. Rendering it on every recruiter page keeps the slab's top at
           the same y-coordinate everywhere (no jump on navigation). */}
       {hasBreadcrumbs ? (
-        <BreadcrumbsRow items={breadcrumbs} actions={breadcrumbActions} />
+        <BreadcrumbsRow items={breadcrumbs} />
       ) : null}
       <div
         className={`agent-header ${heroState} ${variant === 'compact' ? 'compact' : ''} ${className}`.trim()}
