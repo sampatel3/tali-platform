@@ -257,6 +257,8 @@ class ApplicationResponse(BaseModel):
     workable_score_raw: Optional[float] = None
     workable_score: Optional[float] = None
     workable_score_source: Optional[str] = None
+    workable_disqualified: Optional[bool] = None
+    workable_disqualified_at: Optional[datetime] = None
     rank_score: Optional[float] = None
     # Rich candidate profile fields
     candidate_headline: Optional[str] = None

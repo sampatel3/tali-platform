@@ -24,10 +24,13 @@ from ....domains.assessments_runtime.pipeline_service import (
     initialize_pipeline_event_if_missing,
     map_legacy_status_to_pipeline,
     normalize_pipeline_key,
-    should_auto_advance_to_advanced,
+    transition_outcome,
     transition_stage,
 )
-from ....domains.assessments_runtime.role_support import refresh_application_score_cache
+from ....domains.assessments_runtime.role_support import (
+    is_resolved,
+    refresh_application_score_cache,
+)
 from ....services.document_service import (
     extract_text,
     sanitize_json_for_storage,
@@ -437,6 +440,64 @@ def _is_terminal_candidate(payload: dict) -> bool:
     if payload.get("hired_at"):
         return True
     return False
+
+
+def _is_disqualified(payload: dict, ref: dict | None = None) -> bool:
+    """True when Workable marks the candidate disqualified.
+
+    Disqualification is an overlay flag, not a stage — the candidate keeps
+    their stage (e.g. "Technical Interview") in Workable. We handle it
+    separately from terminal *stages* (hired/rejected) so the row gets
+    updated rather than skipped.
+    """
+    if payload.get("disqualified") is True:
+        return True
+    if ref is not None and ref.get("disqualified") is True:
+        return True
+    return False
+
+
+def _disqualified_at_from_payload(payload: dict, ref: dict | None = None) -> datetime | None:
+    for source in (payload, ref or {}):
+        raw = source.get("disqualified_at")
+        if isinstance(raw, str) and raw.strip():
+            text = raw.strip().replace("Z", "+00:00")
+            try:
+                return datetime.fromisoformat(text)
+            except ValueError:
+                continue
+    return None
+
+
+# Maps a terminal Workable stage to Tali's application_outcome so the
+# calibration loop (agent_runtime.outcome_learning) can learn from the realized
+# result. "archived" is intentionally omitted — too ambiguous to label.
+_TERMINAL_STAGE_TO_OUTCOME = {
+    "hired": "hired",
+    "rejected": "rejected",
+    "disqualified": "rejected",
+    "declined": "rejected",
+    "withdrawn": "withdrawn",
+}
+
+
+def _terminal_outcome(payload: dict, ref: dict | None = None, *, disqualified: bool = False) -> str | None:
+    """Resolve the realized application_outcome from a terminal Workable payload.
+
+    Returns one of ``hired`` / ``rejected`` / ``withdrawn``, or ``None`` when the
+    payload is terminal but carries no outcome we can confidently label.
+    """
+    if disqualified:
+        return "rejected"
+    for source in (payload, ref or {}):
+        if source.get("hired_at"):
+            return "hired"
+    for source in (payload, ref or {}):
+        for raw in (source.get("stage_kind"), source.get("stage"), source.get("stage_name"), source.get("status")):
+            normalized = _normalize_stage_for_terminal(str(raw or ""))
+            if normalized:
+                return _TERMINAL_STAGE_TO_OUTCOME.get(normalized)
+    return None
 
 
 def _candidate_email(payload: dict) -> str | None:
@@ -1466,12 +1527,106 @@ class WorkableSyncService:
             or candidate_ref.get("stage_name")
             or ""
         )
-        if _is_terminal_candidate(candidate_payload) or _is_terminal_candidate(candidate_ref):
-            logger.debug(
-                "Skipping candidate id=%s (terminal stage: %s)",
-                candidate_id,
-                candidate_payload.get("stage") or candidate_payload.get("stage_name") or candidate_ref.get("stage"),
+        ref_disqualified = _is_disqualified(candidate_payload, candidate_ref)
+        ref_terminal = _is_terminal_candidate(candidate_payload) or _is_terminal_candidate(candidate_ref)
+
+        # Any application that already exists for this Workable candidate on this
+        # role. Drives the two freeze paths below.
+        existing = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.organization_id == org.id,
+                CandidateApplication.workable_candidate_id == candidate_id,
+                CandidateApplication.role_id == role.id,
             )
+            .first()
+        )
+
+        if ref_terminal or ref_disqualified:
+            # The candidate has reached a terminal state in Workable
+            # (hired / rejected / disqualified / withdrawn). Candidates who have
+            # left Tali are exactly the ones whose realized outcome we want for
+            # model refinement. For an existing app we record the outcome (which
+            # fires the outcome_learning calibration hooks via transition_outcome),
+            # refresh the observed Workable stage, and park them in Tali's
+            # terminal `advanced` stage. Brand-new terminal candidates are not
+            # imported — Tali never tracked or scored them, so there is no
+            # decision to pair the outcome with.
+            if existing is None:
+                return counters
+            existing.deleted_at = None
+            if stage:
+                existing.workable_stage = sanitize_text_for_storage(str(stage))
+            existing.last_synced_at = now
+            if ref_disqualified:
+                existing.workable_disqualified = True
+                existing.workable_disqualified_at = (
+                    _disqualified_at_from_payload(candidate_payload, candidate_ref) or now
+                )
+            # Park in `advanced` — they're past Tali's flow. (No-op if already there.)
+            if (existing.pipeline_stage or "").lower() != "advanced":
+                try:
+                    transition_stage(
+                        db,
+                        app=existing,
+                        to_stage="advanced",
+                        source="sync",
+                        actor_type="sync",
+                        reason="Reached terminal stage in Workable",
+                        metadata={"workable_stage": str(stage or ""), "disqualified": ref_disqualified},
+                        idempotency_key=f"sync_terminal_advance:{existing.id}",
+                    )
+                except Exception:  # pragma: no cover — never block a sync
+                    import logging
+                    logging.getLogger("taali.workable.sync").exception(
+                        "Terminal advance failed for app_id=%s", existing.id,
+                    )
+            # Record the realized outcome so calibration can learn from it.
+            outcome = _terminal_outcome(candidate_payload, candidate_ref, disqualified=ref_disqualified)
+            if outcome and (existing.application_outcome or "open").lower() != outcome:
+                try:
+                    transition_outcome(
+                        db,
+                        app=existing,
+                        to_outcome=outcome,
+                        actor_type="sync",
+                        reason=f"Workable outcome: {stage or outcome}",
+                        metadata={"workable_stage": str(stage or ""), "disqualified": ref_disqualified},
+                        idempotency_key=f"workable_outcome:{existing.id}:{outcome}",
+                    )
+                except Exception:  # pragma: no cover — never block a sync
+                    import logging
+                    logging.getLogger("taali.workable.sync").exception(
+                        "Outcome capture failed for app_id=%s", existing.id,
+                    )
+            counters["application_upserted"] += 1
+            return counters
+
+        if existing is not None and is_resolved(existing):
+            # Already resolved (advanced / hired / rejected): the candidate has
+            # left Tali's flow and is FROZEN — no profile enrichment, no CV
+            # refresh, no scoring, no agent activity. We only keep their Workable
+            # stage current (e.g. a non-terminal interview -> offer move) so the
+            # trail stays accurate; the realized outcome is captured by the
+            # terminal branch above when it lands. Their data is used solely for
+            # model refinement from here on.
+            existing.deleted_at = None
+            if stage:
+                existing.workable_stage = sanitize_text_for_storage(str(stage))
+                existing.external_stage_raw = sanitize_text_for_storage(str(stage))
+                existing.external_stage_normalized = normalize_pipeline_key(str(stage))
+            existing.last_synced_at = now
+            existing.integration_sync_state = sanitize_json_for_storage(
+                {
+                    "last_sync_at": now.isoformat(),
+                    "sync_status": "success",
+                    "run_id": run.id if run else None,
+                    "source": "workable",
+                    "mode": mode,
+                    "frozen": True,
+                }
+            )
+            counters["application_upserted"] += 1
             return counters
 
         email = _candidate_email(candidate_payload) or _candidate_email(candidate_ref)
@@ -1627,6 +1782,14 @@ class WorkableSyncService:
         created_application = False
         if not app:
             mapped_stage, mapped_outcome = map_legacy_status_to_pipeline(str(stage or "applied"))
+            # Tali's `advanced` stage must only ever result from a Tali
+            # hand-back decision, never from observing the candidate's Workable
+            # stage. A fresh import that is already past handover in Workable
+            # (e.g. "Technical Interview") still enters Tali at the top of the
+            # funnel — the real Workable stage stays visible via workable_stage.
+            # `hired` keeps its terminal mapping (genuinely out, nothing to do).
+            if mapped_stage == "advanced" and mapped_outcome != "hired":
+                mapped_stage = "applied"
             app = CandidateApplication(
                 organization_id=org.id,
                 candidate_id=candidate.id,
@@ -1660,34 +1823,15 @@ class WorkableSyncService:
         app.external_stage_raw = sanitize_text_for_storage(str(stage or ""))
         app.external_stage_normalized = normalize_pipeline_key(str(stage or ""))
 
-        # Auto-advance Tali's pipeline_stage when Workable confirms the
-        # candidate is past the handover point. Forward-only — never demote.
-        # New apps already get the right stage via map_legacy_status_to_pipeline
-        # above; this is for existing apps the recruiter has moved in Workable
-        # since the last sync.
-        if not created_application:
-            workable_mapped_stage, _ = map_legacy_status_to_pipeline(str(stage or ""))
-            if (
-                workable_mapped_stage == "advanced"
-                and should_auto_advance_to_advanced(app.pipeline_stage)
-            ):
-                try:
-                    transition_stage(
-                        db,
-                        app=app,
-                        to_stage="advanced",
-                        source="sync",
-                        actor_type="sync",
-                        reason=f"Workable moved candidate to {stage!r}",
-                        metadata={"workable_stage": str(stage or "")},
-                        idempotency_key=f"sync_advance:{app.id}:{normalize_pipeline_key(str(stage or ''))}",
-                    )
-                except Exception:  # pragma: no cover — never block a sync
-                    import logging
-                    logging.getLogger("taali.workable.sync").exception(
-                        "Auto-advance to 'advanced' failed for app_id=%s",
-                        app.id,
-                    )
+        # NOTE: sync deliberately does NOT move the candidate to Tali's
+        # `advanced` stage based on their Workable stage. `advanced` is reserved
+        # for an explicit Tali hand-back decision (see the
+        # /applications/{id}/workable/move-stage endpoint). Observing that a
+        # recruiter moved the candidate forward in Workable only updates
+        # `workable_stage` above — Tali keeps owning them until a Tali decision
+        # hands them off. Disqualification is the one exception, handled near
+        # the top of this function.
+
         app.external_refs = sanitize_json_for_storage(
             {
                 "workable_candidate_id": candidate_id,

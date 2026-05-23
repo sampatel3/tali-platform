@@ -6,6 +6,8 @@ from app.components.integrations.workable.sync_service import (
     _format_job_spec_from_api,
     _strip_html,
     _is_terminal_candidate,
+    _is_disqualified,
+    _disqualified_at_from_payload,
     _candidate_email,
     _normalize_stage_for_terminal,
     WorkableSyncService,
@@ -141,6 +143,34 @@ class TestIsTerminalCandidate:
 
     def test_hired_at(self):
         assert _is_terminal_candidate({"hired_at": "2024-01-01"}) is True
+
+
+class TestIsDisqualified:
+    def test_flag_in_payload(self):
+        assert _is_disqualified({"disqualified": True}) is True
+
+    def test_flag_in_ref(self):
+        assert _is_disqualified({}, {"disqualified": True}) is True
+
+    def test_not_disqualified(self):
+        assert _is_disqualified({"stage": "interview"}) is False
+        assert _is_disqualified({"disqualified": False}, {"disqualified": False}) is False
+        assert _is_disqualified({}) is False
+
+
+class TestDisqualifiedAt:
+    def test_parses_iso_with_z(self):
+        out = _disqualified_at_from_payload({"disqualified_at": "2026-05-20T10:00:00Z"})
+        assert out is not None
+        assert out.year == 2026 and out.month == 5 and out.day == 20
+
+    def test_falls_back_to_ref(self):
+        out = _disqualified_at_from_payload({}, {"disqualified_at": "2026-01-02T00:00:00+00:00"})
+        assert out is not None and out.month == 1
+
+    def test_none_when_absent_or_garbage(self):
+        assert _disqualified_at_from_payload({}) is None
+        assert _disqualified_at_from_payload({"disqualified_at": "not-a-date"}) is None
 
 
 class TestCandidateEmail:
@@ -384,3 +414,207 @@ class TestWorkableSyncIntegration:
         ).first()
         assert candidate is not None
         assert candidate.email == "dev@example.com"
+
+
+def _make_org(db, slug):
+    from app.models.organization import Organization
+
+    org = Organization(
+        name=slug,
+        slug=slug,
+        workable_connected=True,
+        workable_access_token="x",
+        workable_subdomain="test",
+    )
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+    return org
+
+
+def _client_returning(candidates_by_run):
+    """MockClient whose candidate list changes per sync run (call count)."""
+    state = {"calls": 0}
+
+    class MockClient(WorkableService):
+        def __init__(self):
+            super().__init__(access_token="x", subdomain="test")
+
+        def list_open_jobs(self):
+            return [{"id": "J1", "shortcode": "J1", "title": "AI Engineer"}]
+
+        def list_job_candidates(self, job_identifier, *, paginate=False, max_pages=None):
+            idx = min(state["calls"], len(candidates_by_run) - 1)
+            return candidates_by_run[idx]
+
+        def get_job_details(self, job_identifier):
+            return {}
+
+        def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
+            return None, None, None
+
+    return MockClient, state
+
+
+def test_post_handover_workable_stage_does_not_advance_tali(db):
+    """A fresh import already at a post-handover Workable stage must land in
+    Tali's `applied` bucket, not `advanced`. Advanced is reserved for an
+    explicit Tali hand-back decision."""
+    from app.models.candidate_application import CandidateApplication
+
+    org = _make_org(db, "post-handover-no-advance-org")
+    MockClient, _ = _client_returning([
+        [{"id": "cand_th", "email": "th@example.com", "name": "Tech Interviewee",
+          "stage": "Technical Interview"}],
+    ])
+    service = WorkableSyncService(MockClient())
+    service.sync_org(db, org)
+
+    app = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org.id,
+        CandidateApplication.workable_candidate_id == "cand_th",
+    ).first()
+    assert app is not None
+    assert app.pipeline_stage == "applied"
+    # The real Workable stage is still surfaced for context.
+    assert (app.workable_stage or "").lower().startswith("technical")
+
+
+def test_disqualified_candidate_is_flagged_and_advanced(db):
+    """When Workable disqualifies an existing candidate, sync records the flag,
+    refreshes the Workable stage, and parks them in Tali's terminal stage."""
+    from app.models.candidate_application import CandidateApplication
+
+    org = _make_org(db, "disqualified-update-org")
+    MockClient, state = _client_returning([
+        # First run: normal candidate in screening.
+        [{"id": "cand_dq", "email": "dq@example.com", "name": "Soon Gone",
+          "stage": "Screening"}],
+        # Second run: same candidate, now disqualified while in Technical Interview.
+        [{"id": "cand_dq", "email": "dq@example.com", "name": "Soon Gone",
+          "stage": "Technical Interview", "disqualified": True,
+          "disqualified_at": "2026-05-20T10:00:00Z"}],
+    ])
+    service = WorkableSyncService(MockClient())
+
+    service.sync_org(db, org)
+    state["calls"] = 1
+    service.sync_org(db, org)
+
+    app = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org.id,
+        CandidateApplication.workable_candidate_id == "cand_dq",
+    ).first()
+    assert app is not None
+    assert app.workable_disqualified is True
+    assert app.workable_disqualified_at is not None
+    assert app.pipeline_stage == "advanced"
+    # Disqualified is a negative final outcome — captured for model training.
+    assert app.application_outcome == "rejected"
+    assert (app.workable_stage or "").lower().startswith("technical")
+
+
+def test_terminal_outcome_is_captured_for_existing_candidate(db):
+    """A candidate already in Tali who later reaches a terminal Workable stage
+    (hired / rejected) has that outcome recorded — sync no longer drops it, so
+    the calibration loop can learn from the realized result."""
+    from app.models.candidate_application import CandidateApplication
+
+    org = _make_org(db, "terminal-outcome-capture-org")
+    MockClient, state = _client_returning([
+        # First run: candidate in review.
+        [{"id": "cand_hire", "email": "hire@example.com", "name": "Will Hire",
+          "stage": "Review"},
+         {"id": "cand_rej", "email": "rej@example.com", "name": "Will Reject",
+          "stage": "Review"}],
+        # Second run: one hired, one rejected.
+        [{"id": "cand_hire", "email": "hire@example.com", "name": "Will Hire",
+          "stage": "Hired", "hired_at": "2026-05-22T09:00:00Z"},
+         {"id": "cand_rej", "email": "rej@example.com", "name": "Will Reject",
+          "stage": "Rejected"}],
+    ])
+    service = WorkableSyncService(MockClient())
+
+    service.sync_org(db, org)
+    state["calls"] = 1
+    service.sync_org(db, org)
+
+    hired = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org.id,
+        CandidateApplication.workable_candidate_id == "cand_hire",
+    ).first()
+    assert hired is not None
+    assert hired.application_outcome == "hired"
+    assert hired.pipeline_stage == "advanced"
+
+    rejected = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org.id,
+        CandidateApplication.workable_candidate_id == "cand_rej",
+    ).first()
+    assert rejected is not None
+    assert rejected.application_outcome == "rejected"
+    assert rejected.pipeline_stage == "advanced"
+
+
+def test_resolved_candidate_is_frozen_except_workable_stage(db):
+    """Once a candidate is resolved (advanced/hired/rejected) they are frozen on
+    Tali: later syncs must NOT re-enrich their profile, but their Workable stage
+    keeps updating so the trail stays accurate for model refinement."""
+    from app.models.candidate import Candidate
+    from app.models.candidate_application import CandidateApplication
+
+    org = _make_org(db, "frozen-resolved-org")
+    MockClient, state = _client_returning([
+        [{"id": "cand_frozen", "email": "frozen@example.com", "name": "Original Name",
+          "stage": "Review"}],
+        # Recruiter moved them forward in Workable (non-terminal) and the name
+        # changed upstream — the name change must be ignored (frozen), the stage
+        # must update.
+        [{"id": "cand_frozen", "email": "frozen@example.com", "name": "Changed Name",
+          "stage": "Offer"}],
+    ])
+    service = WorkableSyncService(MockClient())
+    service.sync_org(db, org)
+
+    # Simulate a Tali hand-back decision putting them in `advanced` (resolved).
+    app = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org.id,
+        CandidateApplication.workable_candidate_id == "cand_frozen",
+    ).first()
+    app.pipeline_stage = "advanced"
+    app.pipeline_stage_source = "recruiter"
+    db.commit()
+
+    state["calls"] = 1
+    service.sync_org(db, org)
+
+    candidate = db.query(Candidate).filter(
+        Candidate.organization_id == org.id,
+        Candidate.workable_candidate_id == "cand_frozen",
+    ).first()
+    db.refresh(app)
+    # Profile frozen — name not re-enriched from the new payload.
+    assert candidate.full_name == "Original Name"
+    # Workable stage still tracked.
+    assert (app.workable_stage or "").lower() == "offer"
+    assert app.pipeline_stage == "advanced"
+
+
+def test_brand_new_disqualified_candidate_is_not_imported(db):
+    """A candidate first seen already disqualified has nothing to act on — we
+    don't create an application for them."""
+    from app.models.candidate_application import CandidateApplication
+
+    org = _make_org(db, "disqualified-new-skip-org")
+    MockClient, _ = _client_returning([
+        [{"id": "cand_new_dq", "email": "newdq@example.com", "name": "Already Out",
+          "stage": "Technical Interview", "disqualified": True}],
+    ])
+    service = WorkableSyncService(MockClient())
+    service.sync_org(db, org)
+
+    app = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org.id,
+        CandidateApplication.workable_candidate_id == "cand_new_dq",
+    ).first()
+    assert app is None

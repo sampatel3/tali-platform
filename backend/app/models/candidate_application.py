@@ -55,6 +55,12 @@ class CandidateApplication(Base):
     workable_score_raw = Column(Float, nullable=True)
     workable_score = Column(Float, nullable=True)
     workable_score_source = Column(String, nullable=True)
+    # Workable disqualification overlay. In Workable a disqualified candidate
+    # keeps their stage (e.g. "Technical Interview") and gets this flag laid on
+    # top — it is not a stage. Captured so the UI can show a "Disqualified"
+    # badge and the candidate can be parked in Tali's terminal `advanced` stage.
+    workable_disqualified = Column(Boolean, nullable=True)
+    workable_disqualified_at = Column(DateTime(timezone=True), nullable=True)
     rank_score = Column(Float, nullable=True)
     last_synced_at = Column(DateTime(timezone=True), nullable=True)
 
