@@ -40,12 +40,13 @@ const resolveAssessmentStatus = (application) => (
   String(application?.score_summary?.assessment_status || application?.valid_assessment_status || '').toLowerCase()
 );
 
-// HANDOFF v2 §5.1: candidate file is exactly 4 tabs.
-// Overview · CV & match · Interview prep · Notes & timeline
-// (the standalone "Assessment" tab was dropped — its content surfaces on
-// Overview now.)
+// Candidate file is the single canonical candidate page. Base tabs are
+// always present; assessment-only tabs (requiresAssessment) reveal once a
+// completed assessment is linked — replacing the separate /assessments/:id
+// page. internalOnly tabs are recruiter-only (hidden from client shares).
 const REPORT_TABS = [
   { id: 'overview', label: 'Overview' },
+  { id: 'assessment', label: 'Assessment', internalOnly: true, requiresAssessment: true },
   { id: 'cv', label: 'CV' },
   { id: 'prep', label: 'Interview prep', recruiterPrep: true },
   { id: 'notes', label: 'Notes & timeline', internalOnly: true },
@@ -786,6 +787,17 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     REPORT_TAB_IDS.has(requestedTab) ? requestedTab : 'overview'
   );
 
+  // Assessment-only tabs reveal once a completed assessment is linked.
+  // `completedAssessment` is only fetched when the latest attempt is in a
+  // completed status (see loadStandingReport), so this mirrors "appears on
+  // completion" without an extra flag.
+  const hasAssessmentDetail = Boolean(completedAssessment);
+  const availableTabIds = useMemo(() => new Set(
+    REPORT_TABS
+      .filter((tab) => !hiddenTabs.has(tab.id) && (!tab.requiresAssessment || hasAssessmentDetail))
+      .map((tab) => tab.id)
+  ), [hiddenTabs, hasAssessmentDetail]);
+
   useEffect(() => {
     document.body.classList.toggle('interview-view', isInterviewView);
     return () => {
@@ -795,11 +807,11 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
 
   useEffect(() => {
     const nextTab = REPORT_TAB_IDS.has(requestedTab) ? requestedTab : 'overview';
-    setActiveTab(hiddenTabs.has(nextTab) ? 'overview' : nextTab);
-  }, [hiddenTabs, requestedTab]);
+    setActiveTab(availableTabIds.has(nextTab) ? nextTab : 'overview');
+  }, [availableTabIds, requestedTab]);
 
   const activateTab = useCallback((tabId) => {
-    const safeTab = hiddenTabs.has(tabId) ? 'overview' : tabId;
+    const safeTab = availableTabIds.has(tabId) ? tabId : 'overview';
     setActiveTab(safeTab);
     const nextParams = new URLSearchParams(searchParams);
     if (safeTab === 'overview') {
@@ -808,7 +820,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       nextParams.set('tab', safeTab);
     }
     setSearchParams(nextParams, { replace: true });
-  }, [hiddenTabs, searchParams, setSearchParams]);
+  }, [availableTabIds, searchParams, setSearchParams]);
 
   const loadStandingReport = useCallback(async () => {
     if (routeApplicationKey === 'demo') {
@@ -1355,7 +1367,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         ) : null}
 
         <div className="tabs report-tabs" role="tablist" aria-label="Candidate report sections">
-          {REPORT_TABS.filter((tab) => !hiddenTabs.has(tab.id)).map((tab) => (
+          {REPORT_TABS.filter((tab) => availableTabIds.has(tab.id)).map((tab) => (
             <button
               key={tab.id}
               type="button"
