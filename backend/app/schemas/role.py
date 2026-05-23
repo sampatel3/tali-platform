@@ -300,6 +300,11 @@ class ApplicationResponse(BaseModel):
     score_summary: Optional[dict[str, Any]] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    # Most recent moment *any* meaningful activity touched this application —
+    # CV upload, any scoring pass, a stage/outcome/notes edit, or a recruiter
+    # comment (which lands on the linked assessment's timeline). Computed in
+    # ``application_to_response``; drives the pipeline "Last updated" column.
+    last_activity_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
