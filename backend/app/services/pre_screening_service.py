@@ -275,15 +275,15 @@ def execute_pre_screen_only(
     # writes the pre-screen usage_event per actual call (FK-linked to
     # claude_call_log) — capturing errored / JSON-parse-failure calls
     # that the old post-call record missed (the bulk of the Haiku
-    # reconciliation gap). ``db`` is included so the event commits with
-    # this transaction.
+    # reconciliation gap). The wrapper self-manages fresh, committed
+    # sessions for both writes; passing the caller's open ``db`` here is
+    # what caused call_log's FK to violate, so it is omitted.
     pre_screen_metering_context = None
     if db is not None and getattr(app, "organization_id", None):
         pre_screen_metering_context = {
             "organization_id": int(app.organization_id),
             "role_id": getattr(app, "role_id", None),
             "entity_id": f"application:{app.id}",
-            "db": db,
         }
     try:
         pre = run_pre_screen(
