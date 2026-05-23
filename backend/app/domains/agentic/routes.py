@@ -84,13 +84,13 @@ class AgentDecisionPayload(BaseModel):
     candidate_name: Optional[str] = None
     candidate_email: Optional[str] = None
     role_name: Optional[str] = None
-    # The candidate's composite role-fit ("Tali") score, 0–100, joined from
-    # CandidateApplication.role_fit_score_cache_100. This is the number the
-    # advance/reject reasoning cites ("Role-fit score 27.5 is below..."), so
-    # the Hub can render it as a score ring on the card. Null for pre-screen
-    # rejects — those candidates are rejected before role-fit scoring runs, so
-    # there's no score to show.
-    role_fit_score: Optional[float] = None
+    # The candidate's headline Tali score, 0–100, joined from
+    # CandidateApplication.taali_score_cache_100 (the composite shown on the
+    # candidate report). Pre-assessment it equals role-fit; post-assessment it
+    # folds in the assessment result. The Hub renders it as a score ring on the
+    # card. Null for pre-screen rejects — those candidates are rejected before
+    # any scoring runs, so there's no score to show.
+    taali_score: Optional[float] = None
     # Workable shortcode (= role.workable_job_id) so the home-page modal
     # can fetch this role's Workable stages for the Advance / Skip & advance
     # stage <select> without a second round-trip.
@@ -233,11 +233,11 @@ def _decision_to_payload(
         cost_micro = int(token_spend.get("total_micro_usd") or 0)
     cost_cents = cost_micro // 10_000
 
-    role_fit_score = None
+    taali_score = None
     if application is not None:
-        raw_fit = getattr(application, "role_fit_score_cache_100", None)
-        if raw_fit is not None:
-            role_fit_score = float(raw_fit)
+        raw_score = getattr(application, "taali_score_cache_100", None)
+        if raw_score is not None:
+            taali_score = float(raw_score)
 
     return AgentDecisionPayload(
         id=int(decision.id),
@@ -260,7 +260,7 @@ def _decision_to_payload(
         candidate_name=getattr(candidate, "full_name", None) if candidate else None,
         candidate_email=getattr(candidate, "email", None) if candidate else None,
         role_name=getattr(role, "name", None) if role else None,
-        role_fit_score=role_fit_score,
+        taali_score=taali_score,
         workable_job_id=getattr(role, "workable_job_id", None) if role else None,
         is_stale=is_stale,
         staleness_reasons=staleness_reasons or [],
