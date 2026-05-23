@@ -52,12 +52,22 @@ logger = logging.getLogger("taali.cv_match.runner")
 INPUT_TOKEN_CEILING = 32_000
 # Output ceiling: 8K tokens. The new prompt's per-requirement object is
 # ~150 tokens (evidence_quotes list, reasoning, status, tier, etc.).
-# At 8 requirements × 150 = 1200 + 6-dim scores + summary + matching/
-# missing skills lists, real responses land around 3000-5000 tokens.
-# Production showed truncation at 4000 (chars 16K-17K = ~4K tokens).
-# 8K leaves room for 15+ requirements without truncation. At Haiku
-# output pricing ($1.25/1M), 8K output is ~$0.01 per call.
-OUTPUT_TOKEN_CEILING = 8000
+# Each requirement assessment costs ~350 output tokens (evidence_quotes,
+# reasoning, status, match_tier, impact, confidence). The agent-on roles
+# in production carry 20-22 criteria → ~7,700 tokens for the assessment
+# list alone, before the 6-dim scores, summary, and skills lists. At an
+# 8K ceiling those responses truncated mid-JSON → invalid JSON →
+# validation_failed_after_retry → the whole scoring run errored.
+#
+# 2026-05-22 data: 76% of cv_match runs were erroring post the
+# missing-criteria validator fix, almost all "Response was not valid
+# JSON". A truncating role burned ~16K output tokens across two failed
+# attempts ($0.08 at Haiku $5/1M output) and produced ZERO usable score.
+# A single complete 16K-ceiling response uses ~8K tokens ($0.04) and
+# SUCCEEDS — half the cost, real result. Raising the ceiling is a pure
+# win: small responses are unaffected (model stops when done), large
+# ones stop failing.
+OUTPUT_TOKEN_CEILING = 16000
 MAX_RETRIES = 1
 TEMPERATURE = 0.0
 
