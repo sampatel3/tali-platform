@@ -373,7 +373,12 @@ def execute_pre_screen_only(
         )
         decision = "no"
     else:
-        recommendation = pre_screen_recommendation_label(score)
+        # Label against the role's own reject cutoff, not a hard-coded <50,
+        # so "Below threshold" matches the threshold the agent actually
+        # rejects on (e.g. a role rejecting at 30 shouldn't brand a
+        # 40-scorer "Below threshold").
+        threshold_100 = resolved_auto_reject_config(None, role, db=db)["threshold_100"]
+        recommendation = pre_screen_recommendation_label(score, threshold_100)
         summary = sanitize_text_for_storage(str(pre.reason or "").strip()) or None
         decision = pre.decision
 
