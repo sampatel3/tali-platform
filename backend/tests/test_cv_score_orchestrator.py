@@ -293,3 +293,74 @@ def test_mark_role_scores_stale_skips_unscored_apps(session) -> None:
     marked = mark_role_scores_stale(db, role.id)
     db.commit()
     assert marked == 0
+
+
+def test_pre_screen_gate_uses_evidence_not_contaminated_column(monkeypatch, session) -> None:
+    """The gate must read the genuine pre-screen evidence, not the shared
+    pre_screen_score_100 column a prior cv_match may have overwritten."""
+    from datetime import datetime, timezone
+
+    db, _org, _role, app = session
+    monkeypatch.setattr(settings, "ENABLE_PRE_SCREEN_GATE", True)
+    monkeypatch.setattr(cv_match_runner, "run_cv_match", lambda *a, **kw: _stub_match_output(72.0))
+    # Contaminated column (16.7) but evidence says PASS (llm 75). Pre-screen
+    # already ran and the CV isn't newer, so execute_pre_screen_only is skipped
+    # and the gate falls back to the stored score — which must be the evidence.
+    app.pre_screen_score_100 = 16.7
+    app.pre_screen_evidence = {"llm_score_100": 75.0, "decision": "yes"}
+    app.pre_screen_run_at = datetime.now(timezone.utc)
+    app.cv_uploaded_at = None
+    db.commit()
+
+    enqueue_score(db, app, force=True)
+    db.refresh(app)
+    assert app.cv_match_score is not None  # full-scored, NOT pre-screen-filtered
+
+
+def test_pre_screen_gate_still_filters_genuine_reject(monkeypatch, session) -> None:
+    """A genuinely low pre-screen score (evidence < threshold) is still filtered."""
+    from datetime import datetime, timezone
+
+    db, _org, _role, app = session
+    monkeypatch.setattr(settings, "ENABLE_PRE_SCREEN_GATE", True)
+    monkeypatch.setattr(cv_match_runner, "run_cv_match", lambda *a, **kw: _stub_match_output(72.0))
+    app.pre_screen_score_100 = 20.0
+    app.pre_screen_evidence = {"llm_score_100": 20.0, "decision": "no"}
+    app.pre_screen_run_at = datetime.now(timezone.utc)
+    app.cv_uploaded_at = None
+    db.commit()
+
+    enqueue_score(db, app, force=True)
+    db.refresh(app)
+    assert app.cv_match_score is None  # correctly pre-screen-filtered
+
+
+def test_rescore_wrongly_filtered_prescreen_selection(session) -> None:
+    from datetime import datetime, timezone
+
+    from app.services.cv_score_orchestrator import rescore_wrongly_filtered_prescreen
+
+    db, org, role, _app = session
+    now = datetime.now(timezone.utc)
+
+    def mkfiltered(email, llm, fraud=False):
+        c = Candidate(organization_id=org.id, email=email)
+        db.add(c); db.flush()
+        a = CandidateApplication(
+            organization_id=org.id, candidate_id=c.id, role_id=role.id,
+            status="applied", application_outcome="open",
+            cv_text="x", cv_match_score=None, cv_match_scored_at=now,
+            cv_match_details={"pre_screen_decision": "yes" if llm >= 30 else "no",
+                              "pre_screen_score_100": 16.7, "scoring_version": "cv_match_v13"},
+            pre_screen_evidence={"llm_score_100": llm, "fraud_capped": fraud},
+        )
+        db.add(a); db.flush(); return a
+
+    wrong = mkfiltered("wrong@x.test", llm=75)       # passed pre-screen → re-score
+    genuine = mkfiltered("genuine@x.test", llm=20)   # genuinely low → leave
+    fraud = mkfiltered("fraud@x.test", llm=75, fraud=True)  # fraud → leave
+    db.commit()
+
+    res = rescore_wrongly_filtered_prescreen(db, organization_id=int(org.id), dry_run=True)
+    assert res["scanned"] == 1
+    assert res["rescored"] == 1  # dry_run counts the one wrongly-filtered app

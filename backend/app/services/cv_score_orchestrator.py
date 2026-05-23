@@ -174,6 +174,54 @@ def latest_score_status(db: Session, application_id: int) -> str | None:
     return job.status if job else None
 
 
+def rescore_wrongly_filtered_prescreen(
+    db: Session, *, organization_id: int | None = None, dry_run: bool = False
+) -> dict:
+    """Re-score apps the pre-screen gate WRONGLY filtered.
+
+    Before the gate read the genuine pre-screen evidence, it gated on the
+    shared ``pre_screen_score_100`` column — which a prior cv_match run could
+    have overwritten — and so skipped full scoring for candidates the
+    pre-screen actually passed (decision 'yes', llm >= threshold). They were
+    marked pre-screen-filtered (``cv_match_score`` NULL, ``cv_match_scored_at``
+    set). Re-enqueue them so the corrected gate full-scores them.
+
+    Scopes to filtered apps (``cv_match_score`` NULL + ``cv_match_scored_at``
+    set), then keeps only the non-fraud, evidence-passed ones. Returns
+    ``{"rescored": int, "scanned": int}``.
+    """
+    threshold = float(settings.PRE_SCREEN_THRESHOLD)
+    q = db.query(CandidateApplication).filter(
+        CandidateApplication.deleted_at.is_(None),
+        CandidateApplication.application_outcome == "open",
+        CandidateApplication.cv_match_score.is_(None),
+        CandidateApplication.cv_match_scored_at.isnot(None),
+    )
+    if organization_id is not None:
+        q = q.filter(CandidateApplication.organization_id == int(organization_id))
+    rescored = 0
+    scanned = 0
+    for app in q.all():
+        details = app.cv_match_details if isinstance(app.cv_match_details, dict) else {}
+        if not details.get("pre_screen_decision"):
+            continue  # not a pre-screen-filter record
+        ev = app.pre_screen_evidence if isinstance(app.pre_screen_evidence, dict) else {}
+        if ev.get("fraud_capped"):
+            continue  # fraud → correctly filtered
+        llm = ev.get("llm_score_100")
+        if llm is None or float(llm) < threshold:
+            continue  # genuinely below threshold → correctly filtered
+        scanned += 1
+        if dry_run:
+            rescored += 1
+            continue
+        if enqueue_score(db, app, force=True) is not None:
+            rescored += 1
+    if not dry_run:
+        db.commit()
+    return {"rescored": rescored, "scanned": scanned}
+
+
 def enqueue_score(
     db: Session,
     application: CandidateApplication,
@@ -495,10 +543,23 @@ def _execute_scoring_v3(
         if application_needs_pre_screen(application):
             execute_pre_screen_only(application, db=db, client=org_client)
 
-        gated_score = application.pre_screen_score_100
         threshold = settings.PRE_SCREEN_THRESHOLD
         evidence = application.pre_screen_evidence if isinstance(application.pre_screen_evidence, dict) else {}
         fraud_capped = bool(evidence.get("fraud_capped", False))
+        # Gate on the GENUINE pre-screen score from THIS run's evidence — not
+        # the shared ``pre_screen_score_100`` column, which a prior full
+        # cv_match run may have overwritten. Reading the column filtered
+        # candidates the pre-screen actually passed (decision 'yes', llm 75,
+        # but the column held a stale 16.7). The effective pre-screen score is
+        # the fraud cap when fraud-capped, else the raw LLM score; fall back to
+        # the column only when evidence carries no score.
+        _llm_score = evidence.get("llm_score_100")
+        if fraud_capped:
+            gated_score = float(settings.FRAUD_PENALTY_CAP_SCORE)
+        elif _llm_score is not None:
+            gated_score = float(_llm_score)
+        else:
+            gated_score = application.pre_screen_score_100
         # Pre-screen errored (Anthropic credit exhaustion, network
         # timeout, JSON parse failure, etc.) — DON'T fall through to v3
         # cv_match. Previously we did, and the v3 score got mirrored
