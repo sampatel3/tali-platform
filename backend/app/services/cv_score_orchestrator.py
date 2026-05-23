@@ -643,6 +643,25 @@ def _execute_scoring_v3(
     application.cv_match_scored_at = datetime.now(timezone.utc)
     job.status = SCORE_JOB_DONE
     job.finished_at = datetime.now(timezone.utc)
+    # The authoritative full score just landed. If a pending pre-screen reject
+    # card exists and this score clears the pre-screen threshold, the cheap
+    # gate's verdict is moot — discard it so the agent's cv_match flow can
+    # send/advance the candidate instead of leaving them in the reject queue.
+    try:
+        from .pre_screen_decision_emitter import (
+            supersede_pre_screen_reject_on_full_score,
+        )
+        from .pre_screening_service import resolved_auto_reject_config
+
+        threshold_100 = resolved_auto_reject_config(None, role, db=db)["threshold_100"]
+        supersede_pre_screen_reject_on_full_score(
+            db, application=application, threshold=threshold_100
+        )
+    except Exception:  # pragma: no cover — never fail scoring on a card cleanup
+        logger.exception(
+            "supersede_pre_screen_reject_on_full_score failed for app=%s",
+            getattr(application, "id", None),
+        )
     _emit_cv_scored_event(
         db,
         application=application,

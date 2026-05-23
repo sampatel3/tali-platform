@@ -679,6 +679,40 @@ def admin_rewrite_pre_screen_reject_reasoning(request: Request, organization_id:
         db.close()
 
 
+@app.post("/admin/pre-screen-rejects/supersede-mislabeled")
+def admin_supersede_mislabeled_pre_screen_rejects(
+    request: Request, organization_id: int | None = None, dry_run: bool = False
+):
+    """Discard pending pre-screen reject cards that should never have been
+    pre-screen rejects because the candidate was fully cv_match-scored.
+
+    Discards the A∪B cohorts (passed pre-screen, or cleared by the full
+    score) and leaves genuine pre-screen rejects (C) alone; the agent
+    re-triages the discarded ones on the authoritative cv_match score. Pass
+    ``dry_run=true`` to preview counts without writing. Auth via
+    ``X-Admin-Secret``. Returns ``{discarded, scanned, skipped_human}``.
+    """
+    from .platform.config import settings as _settings
+    from .platform.database import SessionLocal
+    from .services.pre_screen_decision_emitter import (
+        supersede_mislabeled_pre_screen_rejects,
+    )
+
+    admin_secret = getattr(_settings, "ADMIN_SECRET", "") or ""
+    provided = request.headers.get("X-Admin-Secret", "")
+    if not admin_secret or provided != admin_secret:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    db = SessionLocal()
+    try:
+        result = supersede_mislabeled_pre_screen_rejects(
+            db, organization_id=organization_id, dry_run=dry_run
+        )
+        return {"ok": True, "dry_run": dry_run, **result}
+    finally:
+        db.close()
+
+
 @app.get("/admin/graphiti/search-debug")
 def graphiti_search_debug(request: Request):
     """Raw Graphiti search result shape for debugging the graph view."""
