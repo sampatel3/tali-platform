@@ -43,24 +43,23 @@ _THRESHOLD_CEILING = 75
 _DEFAULT_FALLBACK = 50
 
 # --- Role-fit SEND threshold (the post-pre-screen send/advance bar) ----------
-# Different intent from the pre-screen reject floor above: this gates the
-# detailed role-fit (CV-match) score and decides who, OF THE PRE-SCREEN
-# SURVIVORS, reaches HITL review (send_assessment / advance). Two signals,
-# balanced:
-#   (a) quality — role-fit scores of candidates the recruiter actually
-#       progressed to interview / offer / hire (strong signals), and
-#   (b) volume — send roughly the top ~20% of the pre-screen-pass pool.
-# Pre-screen already culls the obviously-weak (often 80–95% of applicants),
-# so this bar should be inclusive of the survivors, not another harsh cut —
-# ~20% of the pool maps to the 75th–85th percentile of role-fit. The volume
-# band is the guardrail; the quality anchor positions the bar inside it.
-_SEND_STRONG_STAGES = ("Technical Interview", "Final Interview", "Offer", "Hired")
-_SEND_STRONG_STAGES_NORM = ("technical_interview", "final_interview", "offer", "hired")
-_SEND_VOLUME_TARGET_PCT = 20.0  # send ~top fifth of the pre-screen-pass pool
-_SEND_VOLUME_CAP_PCT = 25.0     # never send more than ~this share -> p75
-_SEND_VOLUME_FLOOR_PCT = 15.0   # never send fewer than ~this share -> p85
-_SEND_MIN_STRONG_SAMPLES = 3
-_SEND_FLOOR = 45                # absolute safety floor for a SEND bar
+# A GENERAL, ABSOLUTE quality bar on the role-fit (CV-match) score — NOT a
+# per-role percentile. It is derived once from the ORG-WIDE score
+# distribution (all roles pooled) and applied identically to every role.
+#
+# Why absolute, not per-role: a per-role "top N%" forces a fixed share
+# through even when a whole role's pool is weak ("don't push a group of
+# rubbish candidates into interviews just because they're the best of a bad
+# bunch"). With one global bar, a strong role sends many and a weak role
+# sends few/none — the right behaviour falls out for free.
+#
+# Level: ~top 20% of the org-wide distribution. On a normal/strong role that
+# lands around 5–10% of that role's applicants reaching HITL (e.g. ~24 of
+# 377 for a healthy pipeline); a weak role sends ~none. Recomputed live, so
+# it tracks the org's candidate quality over time. Floor keeps a genuine
+# minimum even if the whole org pipeline is weak.
+_SEND_GLOBAL_TARGET_PCT = 20.0  # bar = ~top fifth of the ORG-WIDE distribution
+_SEND_FLOOR = 50                # absolute quality minimum for a SEND bar
 _SEND_CEILING = 85
 _SEND_FALLBACK = 55             # no scored candidates yet
 
@@ -201,49 +200,17 @@ def compute_recommended_threshold(
     )
 
 
-def _role_fit_pool(db: Session, *, role: Role) -> list[float]:
-    """Role-fit (CV-match) scores for the role's scored, pre-screen-passing
-    pool — the candidates eligible to reach HITL review. This is the base
-    the volume cap (5–10%) is measured against."""
+def _org_scored_role_fit(db: Session, *, organization_id: int) -> list[float]:
+    """Role-fit (CV-match) scores of EVERY scored candidate in the org,
+    across all roles. This org-wide pool defines the general, absolute
+    quality bar — it is deliberately NOT filtered to one role, so the bar
+    is not tailored to any single (possibly weak) role's pool."""
     rows = (
         db.query(CandidateApplication.cv_match_score)
         .filter(
-            CandidateApplication.role_id == role.id,
-            CandidateApplication.organization_id == role.organization_id,
+            CandidateApplication.organization_id == organization_id,
             CandidateApplication.deleted_at.is_(None),
             CandidateApplication.cv_match_score.isnot(None),
-            (
-                (CandidateApplication.pre_screen_score_100.is_(None))
-                | (CandidateApplication.pre_screen_score_100 >= 50)
-            ),
-        )
-        .all()
-    )
-    return [float(r[0]) for r in rows if r[0] is not None]
-
-
-def _strong_signal_role_fit(db: Session, *, role: Role) -> list[float]:
-    """Role-fit scores of candidates the recruiter actually progressed —
-    reached technical/final interview, offer, or hire. These are the
-    strongest available 'this candidate was worth pursuing' signals.
-
-    Computed GLOBALLY across the org (all roles), not per-role: a strong
-    role-fit score means roughly the same thing regardless of role, and
-    many roles have few/no interview-stage candidates of their own, so a
-    per-role anchor would be noisy or empty. Pooling org-wide gives a
-    stable anchor every role shares. (Scoped to the org — never across
-    tenants.) The volume cap stays per-role."""
-    rows = (
-        db.query(CandidateApplication.cv_match_score)
-        .filter(
-            CandidateApplication.organization_id == role.organization_id,
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.cv_match_score.isnot(None),
-            (
-                (CandidateApplication.application_outcome == "hired")
-                | (CandidateApplication.workable_stage.in_(_SEND_STRONG_STAGES))
-                | (CandidateApplication.external_stage_normalized.in_(_SEND_STRONG_STAGES_NORM))
-            ),
         )
         .all()
     )
@@ -253,66 +220,42 @@ def _strong_signal_role_fit(db: Session, *, role: Role) -> list[float]:
 def compute_role_fit_send_threshold(
     db: Session, *, role: Role
 ) -> ThresholdRecommendation:
-    """Dynamic send/advance bar on the role-fit score.
+    """General, ABSOLUTE send/advance bar on the role-fit score.
 
-    Balances (a) the role-fit scores of recruiter-progressed candidates
-    (interview/offer/hire) with (b) sending roughly the top ~20% of the
-    pre-screen-pass pool. Pre-screen already removed the obviously-weak, so
-    this bar is inclusive of the survivors. The volume band maps to the
-    75th–85th percentile of the pool and is the guardrail; the strong-signal
-    median positions the bar inside it. Recomputed live each evaluation, so
-    it tracks the data with no separate job. Clamped to [45, 85]."""
-    pool = _role_fit_pool(db, role=role)
+    Derived from the ORG-WIDE score distribution (all roles pooled), NOT a
+    per-role percentile: the bar is the ~top ``_SEND_GLOBAL_TARGET_PCT``%
+    of every candidate the org has scored, then applied identically to all
+    roles. So a strong role sends many candidates and a weak role sends
+    few/none — a pool of all-weak candidates is never forced to surface its
+    "best of a bad bunch". Recomputed live, so it tracks org candidate
+    quality over time. Clamped to ``[_SEND_FLOOR, _SEND_CEILING]`` so there
+    is always a genuine minimum even if the whole pipeline is weak.
+
+    Note ``role`` is used only for its ``organization_id`` — the value is
+    identical for every role in the org by design."""
+    pool = _org_scored_role_fit(db, organization_id=int(role.organization_id))
     if not pool:
         return ThresholdRecommendation(
-            value=_SEND_FALLBACK, source="fallback",
+            value=_SEND_FLOOR, source="fallback",
             rationale=(
-                "No scored candidates yet — using a sensible default send bar "
-                f"of {_SEND_FALLBACK}. It will recalibrate as candidates score."
+                "No scored candidates in the org yet — using the minimum send "
+                f"bar of {_SEND_FLOOR}. It recalibrates as candidates score."
             ),
             sample_size=0,
         )
 
-    p_cap = _percentile(pool, 100 - _SEND_VOLUME_CAP_PCT)     # ~p75 -> at most ~25% above
-    p_floor = _percentile(pool, 100 - _SEND_VOLUME_FLOOR_PCT)  # ~p85 -> at least ~15% above
-    target = _percentile(pool, 100 - _SEND_VOLUME_TARGET_PCT)  # ~p80 -> ~20%
-
-    strong = _strong_signal_role_fit(db, role=role)
-    if len(strong) >= _SEND_MIN_STRONG_SAMPLES:
-        strong_med = statistics.median(strong)
-        # Don't set the bar above the median progressed candidate (we still
-        # want to surface candidates as strong as those interviewed), but
-        # keep volume inside the ~15–25% band.
-        value = min(target, strong_med)
-        value = max(value, p_cap)   # cap volume at ~25%
-        value = min(value, p_floor)  # ensure at least ~15% flow
-        source = "labelled_volume_balanced"
-        rationale = (
-            f"{len(strong)} candidates reached interview/offer/hire (median "
-            f"role-fit {strong_med:.0f}); set to send roughly the top "
-            f"{_SEND_VOLUME_TARGET_PCT:.0f}% of {len(pool)} pre-screen-pass "
-            f"candidates → send bar {round(value)}."
-        )
-    else:
-        value = target
-        value = max(value, p_cap)
-        value = min(value, p_floor)
-        source = "volume"
-        rationale = (
-            f"No interview/offer/hire labels yet; targeting ~{_SEND_VOLUME_TARGET_PCT:.0f}% "
-            f"of {len(pool)} pre-screen-pass candidates for review → send bar {round(value)}."
-        )
-
-    value = int(max(_SEND_FLOOR, min(_SEND_CEILING, round(value))))
-    # Enforce the volume cap strictly even when scores are tied at the
-    # boundary (a percentile can land inside a big cluster, so `>= value`
-    # would sweep far more than the cap). Raise the bar past the cluster —
-    # prefer sending fewer than flooding the review queue.
-    cap_count = max(1, int(round(_SEND_VOLUME_CAP_PCT / 100.0 * len(pool))))
-    while value < _SEND_CEILING and sum(1 for s in pool if s >= value) > cap_count:
-        value += 1
+    raw = _percentile(pool, 100 - _SEND_GLOBAL_TARGET_PCT)  # ~top 20% org-wide
+    value = int(max(_SEND_FLOOR, min(_SEND_CEILING, round(raw))))
     return ThresholdRecommendation(
-        value=value, source=source, rationale=rationale, sample_size=len(pool)
+        value=value,
+        source="global_absolute",
+        rationale=(
+            f"General quality bar = top ~{_SEND_GLOBAL_TARGET_PCT:.0f}% of the "
+            f"{len(pool)} candidates scored across the org → send bar {value}. "
+            "Applied to every role, so weak pipelines send few and strong ones "
+            "send more."
+        ),
+        sample_size=len(pool),
     )
 
 
