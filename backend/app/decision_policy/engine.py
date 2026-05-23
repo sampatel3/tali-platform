@@ -107,6 +107,16 @@ class DecisionInputs:
     # policy's lookback window (already filtered by the orchestrator).
     manual_actions: list[ManualAction] = field(default_factory=list)
 
+    # The role's *effective* role-fit threshold (recruiter-set
+    # ``score_threshold`` in manual mode, or the agent-calibrated value in
+    # auto mode), resolved by the caller. When set, it collapses the
+    # reject ceiling and send-assessment floor onto this single boundary
+    # at eval time (see ``apply_effective_threshold``) — so the recruiter's
+    # one knob drives the agent live, and there's no "gap" band where a
+    # candidate gets no verdict. ``None`` => fall back to the policy_json
+    # thresholds unchanged (e.g. threshold genuinely unset).
+    effective_role_fit_threshold: float | None = None
+
 
 @dataclass
 class PolicyDecision:
@@ -185,6 +195,45 @@ def load_active_policy(
             "bootstrap_org probably never ran for this org"
         )
     return default_row
+
+
+def apply_effective_threshold(policy: "PolicyJson", value: float | None) -> "PolicyJson":
+    """Collapse the reject ceiling and send-assessment floor onto a single
+    boundary = ``value`` (the role's effective threshold).
+
+    Rewrites ``role_fit_min`` and ``role_fit_max`` wherever they already
+    appear in a decision point's thresholds (send_assessment carries
+    ``role_fit_min``; reject carries ``role_fit_max``) to the same value.
+    The result: ``role_fit < value`` -> reject, ``role_fit >= value`` ->
+    send_assessment (send is evaluated before reject so the boundary
+    candidate goes to send). This both (a) makes the recruiter's single
+    threshold drive the agent live and (b) closes the old "gap" band
+    (reject_ceiling .. send_floor) where a candidate received no verdict.
+
+    Works on already-persisted policies without a migration: it only
+    touches keys that exist, so the frozen org policy (role_fit_min=65,
+    role_fit_max=30) is corrected purely at eval time. ``None`` is a
+    no-op (fall back to the stored thresholds — e.g. threshold unset)."""
+    if value is None:
+        return policy
+    value = float(max(0.0, min(100.0, value)))
+    new_points: dict[str, DecisionPoint] = {}
+    changed = False
+    for point_name, point in policy.decision_points.items():
+        thresholds = dict(point.thresholds)
+        touched = False
+        for key in ("role_fit_min", "role_fit_max"):
+            if key in thresholds and thresholds[key] != value:
+                thresholds[key] = value
+                touched = True
+        if touched:
+            new_points[point_name] = point.model_copy(update={"thresholds": thresholds})
+            changed = True
+        else:
+            new_points[point_name] = point
+    if not changed:
+        return policy
+    return policy.model_copy(update={"decision_points": new_points})
 
 
 def merge_role_into_default(
@@ -649,6 +698,11 @@ def evaluate(inputs: DecisionInputs, *, db: Session) -> PolicyDecision:
             rule_path=["policy_validation_failed"],
             policy_revision_id=int(row.revision_id),
         )
+
+    # Collapse the reject/send boundary onto the role's effective
+    # threshold FIRST (so it's the base), then let recruiter-intent
+    # strictness nudge it.
+    policy = apply_effective_threshold(policy, inputs.effective_role_fit_threshold)
 
     intent_payload = inputs.intent or {}
     overlaid, intent_overrode = apply_intent_overrides(policy, intent_payload)

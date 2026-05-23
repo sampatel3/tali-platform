@@ -956,6 +956,43 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
     actor = Actor.agent(int(agent_run.id))
     application_id = int(args["application_id"])
 
+    # No assessment task on this role → there is nothing to send. Rather
+    # than dead-end (the approve/dispatch path would 422 on a missing
+    # task), advance the strong candidate straight to interview. This
+    # keeps a positive verdict actionable and mirrors the deterministic
+    # bulk-decision pass's send→advance switch. Runs before the HITL gate
+    # so it applies in both auto_promote modes (advance needs no task).
+    if not bool(getattr(role, "tasks", None)):
+        result = _queue(
+            db,
+            agent_run=agent_run,
+            role=role,
+            args={
+                "application_id": application_id,
+                "reasoning": str(
+                    args.get("reasoning")
+                    or "Strong candidate; role has no assessment task configured, "
+                    "advancing directly to interview."
+                ),
+                "evidence": {
+                    "redirected_from": "send_assessment",
+                    "reason": "no_assessment_task",
+                },
+                "confidence": float(args.get("confidence") or 0.85),
+            },
+            decision_type="advance_to_interview",
+        )
+        return {
+            "status": (
+                "awaiting_recruiter_approval"
+                if result["status"] == "pending"
+                else result["status"]
+            ),
+            "decision_id": result["decision_id"],
+            "application_id": application_id,
+            "redirected_to": "advance_to_interview",
+        }
+
     # HITL gate per Role.auto_promote.
     #
     # auto_promote=True  → dispatch the send immediately as a system action.

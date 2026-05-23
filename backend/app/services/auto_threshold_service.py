@@ -191,3 +191,23 @@ def effective_threshold(
     if mode == "auto":
         return compute_recommended_threshold(db, role=role).value
     return role.score_threshold
+
+
+def resolve_role_fit_threshold(db: Session, *, role: Role) -> float | None:
+    """The single role-fit boundary the decision engine should use.
+
+    Manual mode → the recruiter's ``score_threshold``; auto mode → the
+    agent-calibrated recommendation. When manual mode has no value set,
+    fall back to the calibrated recommendation anyway (which always
+    resolves, with a default floor) so EVERY candidate lands on one side
+    of the boundary and gets a decision — no silent "gap" band. Returns
+    None only if even the recommendation can't be computed, in which case
+    the engine keeps the stored policy thresholds unchanged.
+    """
+    try:
+        eff = effective_threshold(db, role=role)
+        if eff is None:
+            eff = compute_recommended_threshold(db, role=role).value
+        return float(eff) if eff is not None else None
+    except Exception:  # pragma: no cover — never break the verdict path
+        return None

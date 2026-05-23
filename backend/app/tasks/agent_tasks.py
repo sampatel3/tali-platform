@@ -373,6 +373,27 @@ def agent_cohort_tick_role(self, role_id: int) -> dict:
             )
             db.rollback()
 
+        # Phase 1.7: deterministic bulk decisioning. The policy verdict is
+        # deterministic, so every undecided pre-screen-pass scored OPEN
+        # candidate gets its verdict queued here (reject below the
+        # threshold; send_assessment / advance above it) — no LLM, no
+        # per-cycle decision cap. This is what makes "every candidate has a
+        # decision" true and clears large cohorts in one or two ticks
+        # instead of hundreds of LLM cycles. Runs before the no-op
+        # early-exit so it self-heals regardless of the LLM cycle, and
+        # before run_cycle so find_apps_in_state excludes the now-pending
+        # apps (no double-queue). Failures never abort the tick.
+        bulk_decided = None
+        try:
+            from ..services.bulk_decision_service import decide_role_cohort
+
+            bulk_decided = decide_role_cohort(db, role=role)
+        except Exception:
+            logger.exception(
+                "bulk decisioning failed in cohort tick role_id=%s", role_id
+            )
+            db.rollback()
+
         # Phase 2: early-exit if there's nothing for the agent to do.
         # Calling run_cycle when the survey shows zero actionable work
         # burns ~$0.05 of Sonnet 4.5 per role per tick (4 roles × 48
@@ -389,6 +410,7 @@ def agent_cohort_tick_role(self, role_id: int) -> dict:
                 "reason": "no_actionable_work",
                 "role_id": role_id,
                 "auto_scored_enqueued": auto_scored,
+                "bulk_decided": bulk_decided,
             }
 
         try:
