@@ -8,7 +8,7 @@ Single scoring path. No version flags. Iterate by bumping ``PROMPT_VERSION``
 and (when relevant) ``MODEL_VERSION``.
 """
 
-PROMPT_VERSION = "cv_match_v13"
+PROMPT_VERSION = "cv_match_v14"
 MODEL_VERSION = "claude-haiku-4-5-20251001"
 
 
@@ -18,6 +18,7 @@ def __getattr__(name: str):
     if name in {
         "CandidateSnapshot",
         "Category",
+        "ClaimToVerify",
         "Confidence",
         "CVMatchOutput",
         "CVMatchResult",
@@ -56,6 +57,7 @@ __all__ = [
     "BatchSubmission",
     "CandidateSnapshot",
     "Category",
+    "ClaimToVerify",
     "Confidence",
     "CVMatchOutput",
     "CVMatchResult",

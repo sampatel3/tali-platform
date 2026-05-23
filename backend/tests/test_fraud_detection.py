@@ -2,8 +2,12 @@
 
 from app.services.fraud_detection import (
     apply_fraud_penalty,
+    apply_integrity_penalty,
+    apply_unverified_claim_prescreen_penalty,
     build_fraud_signals_payload,
+    compute_integrity_penalty,
     detect_cv_copy_paste,
+    detect_timeline_inconsistencies,
 )
 
 
@@ -159,3 +163,179 @@ def test_signals_payload_shape():
     for key in ("score", "matched_chars", "cv_chars", "triggered", "threshold", "evidence"):
         assert key in cp
     assert isinstance(cp["evidence"], list)
+
+
+# ── Pre-screen unverified-claim soft penalty ──────────────────────────────────
+
+
+def test_prescreen_unverified_penalty_applies_when_flagged():
+    score, penalised = apply_unverified_claim_prescreen_penalty(72.0, True, penalty=5.0)
+    assert score == 67.0
+    assert penalised is True
+
+
+def test_prescreen_unverified_penalty_skips_when_not_flagged():
+    score, penalised = apply_unverified_claim_prescreen_penalty(72.0, False, penalty=5.0)
+    assert score == 72.0
+    assert penalised is False
+
+
+def test_prescreen_unverified_penalty_clamps_at_zero():
+    score, penalised = apply_unverified_claim_prescreen_penalty(3.0, True, penalty=5.0)
+    assert score == 0.0
+    assert penalised is True
+
+
+def test_prescreen_unverified_penalty_handles_none_and_zero_penalty():
+    assert apply_unverified_claim_prescreen_penalty(None, True, penalty=5.0) == (None, False)
+    assert apply_unverified_claim_prescreen_penalty(80.0, True, penalty=0.0) == (80.0, False)
+
+
+# ── Timeline inconsistency detection ──────────────────────────────────────────
+
+
+def _entry(company="Acme", role="Engineer", start=2018, end=2021, current=False) -> dict:
+    return {
+        "company": company,
+        "role": role,
+        "start_year": start,
+        "end_year": end,
+        "is_current": current,
+    }
+
+
+def test_timeline_clean_has_no_issues():
+    timeline = [
+        _entry("Klarna", start=2021, end=None, current=True),
+        _entry("Stripe", start=2017, end=2021),
+    ]
+    result = detect_timeline_inconsistencies(timeline, now_year=2026)
+    assert result.triggered is False
+    assert result.issues == []
+
+
+def test_timeline_year_overlap_is_not_flagged():
+    # A mid-year job change legitimately shows two roles sharing a year.
+    timeline = [_entry("New Co", start=2020, end=2023), _entry("Old Co", start=2018, end=2020)]
+    result = detect_timeline_inconsistencies(timeline, now_year=2026)
+    assert result.triggered is False
+
+
+def test_timeline_future_date_flagged():
+    result = detect_timeline_inconsistencies([_entry(end=2099)], now_year=2026)
+    assert result.triggered is True
+    assert any(i.kind == "future_date" for i in result.issues)
+
+
+def test_timeline_near_future_start_is_tolerated():
+    # CVs list an agreed start date one year out — should not flag.
+    result = detect_timeline_inconsistencies(
+        [_entry(start=2027, end=None, current=True)], now_year=2026
+    )
+    assert result.triggered is False
+
+
+def test_timeline_end_before_start_flagged():
+    result = detect_timeline_inconsistencies(
+        [_entry(start=2020, end=2015)], now_year=2026
+    )
+    assert any(i.kind == "end_before_start" for i in result.issues)
+
+
+def test_timeline_impossible_span_flagged():
+    result = detect_timeline_inconsistencies(
+        [_entry(start=1900, end=2000)], now_year=2026
+    )
+    assert any(i.kind == "impossible_span" for i in result.issues)
+
+
+def test_timeline_excess_concurrent_current_flagged():
+    timeline = [
+        _entry("A", start=2020, end=None, current=True),
+        _entry("B", start=2021, end=None, current=True),
+        _entry("C", start=2022, end=None, current=True),
+    ]
+    result = detect_timeline_inconsistencies(timeline, now_year=2026)
+    assert any(i.kind == "excess_current" for i in result.issues)
+
+
+def test_timeline_two_concurrent_current_is_tolerated():
+    timeline = [
+        _entry("Day Job", start=2020, end=None, current=True),
+        _entry("Advisor", start=2021, end=None, current=True),
+    ]
+    result = detect_timeline_inconsistencies(timeline, now_year=2026)
+    assert not any(i.kind == "excess_current" for i in result.issues)
+
+
+def test_timeline_empty_and_none_safe():
+    assert detect_timeline_inconsistencies(None).triggered is False
+    assert detect_timeline_inconsistencies([]).triggered is False
+
+
+# ── Integrity penalty (claims + timeline) ─────────────────────────────────────
+
+
+def _claim(corroboration="uncorroborated", familiarity="unknown") -> dict:
+    return {
+        "claim_text": "1st place, XYZ Global Hackathon 2023",
+        "claim_type": "competition",
+        "corroboration": corroboration,
+        "model_familiarity": familiarity,
+    }
+
+
+def test_integrity_penalty_counts_unverified_claim():
+    result = compute_integrity_penalty(
+        [_claim()], None, points_per_issue=5.0, max_penalty=15.0
+    )
+    assert result.unverified_claim_count == 1
+    assert result.penalty == 5.0
+    assert result.triggered is True
+
+
+def test_integrity_penalty_fails_open_on_corroborated_or_known_claim():
+    # Corroborated OR known → not penalised (both conditions required).
+    claims = [
+        _claim(corroboration="corroborated", familiarity="unknown"),
+        _claim(corroboration="uncorroborated", familiarity="known"),
+        _claim(corroboration="weird-model-output", familiarity="???"),
+    ]
+    result = compute_integrity_penalty(claims, None, points_per_issue=5.0, max_penalty=15.0)
+    assert result.unverified_claim_count == 0
+    assert result.penalty == 0.0
+
+
+def test_integrity_penalty_combines_claims_and_timeline():
+    # One claim + one timeline issue (end-before-start) = 2 issues × 5pts.
+    timeline = detect_timeline_inconsistencies(
+        [_entry(start=2020, end=2015)], now_year=2026
+    )
+    assert timeline.triggered and len(timeline.issues) == 1
+    result = compute_integrity_penalty(
+        [_claim()], timeline, points_per_issue=5.0, max_penalty=15.0
+    )
+    assert result.unverified_claim_count == 1
+    assert result.timeline_issue_count == 1
+    assert result.penalty == 10.0
+
+
+def test_integrity_penalty_respects_cap():
+    claims = [_claim() for _ in range(10)]
+    result = compute_integrity_penalty(claims, None, points_per_issue=5.0, max_penalty=15.0)
+    assert result.penalty == 15.0
+    assert result.capped is True
+
+
+def test_integrity_penalty_disabled_when_max_zero():
+    result = compute_integrity_penalty(
+        [_claim()], None, points_per_issue=5.0, max_penalty=0.0
+    )
+    assert result.penalty == 0.0
+    assert result.capped is False
+
+
+def test_apply_integrity_penalty_subtracts_and_clamps():
+    assert apply_integrity_penalty(80.0, 15.0) == 65.0
+    assert apply_integrity_penalty(10.0, 15.0) == 0.0
+    assert apply_integrity_penalty(80.0, 0.0) == 80.0

@@ -13,6 +13,7 @@ from ..platform.config import settings
 from .document_service import sanitize_json_for_storage, sanitize_text_for_storage
 from .fraud_detection import (
     apply_fraud_penalty,
+    apply_unverified_claim_prescreen_penalty,
     build_fraud_signals_payload,
     detect_cv_copy_paste,
 )
@@ -361,7 +362,17 @@ def execute_pre_screen_only(
         fraud,
         cap_score=settings.FRAUD_PENALTY_CAP_SCORE,
     )
+    # Soft penalty when the gate flags an extraordinary CV-uncorroborated claim (skipped if copy-paste already capped).
+    score, unverified_penalised = apply_unverified_claim_prescreen_penalty(
+        score,
+        pre.unverified_claim and not fraud_capped,
+        penalty=settings.FRAUD_PRESCREEN_UNVERIFIED_PENALTY,
+    )
     fraud_signals = build_fraud_signals_payload(fraud)
+    fraud_signals["unverified_claim"] = {
+        "flagged": pre.unverified_claim,
+        "penalty_applied": unverified_penalised,
+    }
     if fraud_capped:
         # Replace the LLM rationale with a fraud-specific one so the
         # directory and report copy doesn't claim the candidate is a poor

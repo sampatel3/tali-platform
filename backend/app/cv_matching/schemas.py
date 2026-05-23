@@ -395,6 +395,40 @@ class CandidateSnapshot(BaseModel):
         return v
 
 
+class ClaimToVerify(BaseModel):
+    """An extraordinary, externally-verifiable claim asserted on the CV —
+    e.g. "1st place, XYZ Global Hackathon 2023", an award, a named
+    competition placement, a publication, a named certification.
+
+    The LLM only *flags* these; it does not (and cannot reliably) verify
+    them. ``corroboration`` records whether the surrounding CV gives the
+    claim context (employer / role / date / concrete detail);
+    ``model_familiarity`` is the model's prior on whether the named
+    event/credential plausibly exists at all. The deterministic integrity
+    penalty (``fraud_detection.compute_integrity_penalty``) only bites when
+    a claim is BOTH uncorroborated AND low-familiarity — it fails open on
+    anything unrecognised so a real-but-obscure achievement is never
+    punished, and a recruiter still sees the flag either way.
+
+    Plain-string fields (not Enum/Literal) on purpose: an unrecognised
+    value degrades to "no penalty" rather than forcing a costly retry.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    claim_text: str = ""
+    claim_type: str = ""  # award | competition | publication | certification | employer | other
+    corroboration: str = ""  # corroborated | uncorroborated
+    model_familiarity: str = ""  # known | unknown | implausible
+    reasoning: str = ""
+
+
+def _truncate_to_10(v: Any) -> Any:
+    if isinstance(v, list) and len(v) > 10:
+        return v[:10]
+    return v
+
+
 class CVMatchResult(BaseModel):
     """Raw LLM output after JSON parsing.
 
@@ -418,11 +452,17 @@ class CVMatchResult(BaseModel):
     concerns: list[str] = Field(default_factory=list, max_length=5)
     summary: str = ""
     candidate_snapshot: CandidateSnapshot | None = None
+    claims_to_verify: list[ClaimToVerify] = Field(default_factory=list)
 
     @field_validator("experience_highlights", "concerns", mode="before")
     @classmethod
     def _truncate_capped_lists(cls, v):
         return _truncate_to_5(v)
+
+    @field_validator("claims_to_verify", mode="before")
+    @classmethod
+    def _truncate_claims(cls, v):
+        return _truncate_to_10(v)
 
 
 class CVMatchOutput(BaseModel):
@@ -444,6 +484,16 @@ class CVMatchOutput(BaseModel):
     concerns: list[str] = Field(default_factory=list, max_length=5)
     summary: str = ""
     candidate_snapshot: CandidateSnapshot | None = None
+    # Extraordinary claims the model flagged for human verification (hackathon
+    # wins, awards, publications). A flag for the recruiter, not a verdict.
+    claims_to_verify: list[ClaimToVerify] = Field(default_factory=list)
+    # Human-readable timeline inconsistencies found deterministically over the
+    # extracted career timeline (future dates, end-before-start, etc.).
+    timeline_flags: list[str] = Field(default_factory=list)
+    # Points deducted from role_fit_score by the bounded integrity penalty
+    # (unverified claims + timeline issues). 0.0 when clean. role_fit_score
+    # below already reflects this deduction; this field makes it auditable.
+    integrity_penalty: float = Field(default=0.0, ge=0, le=100)
 
     requirements_match_score: float = Field(default=0.0, ge=0, le=100)
     cv_fit_score: float = Field(default=0.0, ge=0, le=100)
