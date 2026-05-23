@@ -45,6 +45,21 @@ class StalenessReport:
     details: dict = field(default_factory=dict)
 
 
+@dataclass
+class StalenessCache:
+    """Per-request memo for batch ``evaluate`` calls.
+
+    A list of pending decisions usually shares a handful of roles, so the
+    per-role criteria fingerprint and latest-note lookups would otherwise
+    re-run once per decision (N+1). Pass a single instance to every
+    ``evaluate`` call in the batch to collapse those to one query per
+    distinct role. Scope it to a single request — it holds no TTL.
+    """
+
+    criteria_fp: dict[int, str | None] = field(default_factory=dict)
+    latest_note_id: dict[int, int | None] = field(default_factory=dict)
+
+
 def _score_drift(old: Optional[float], new: Optional[float]) -> bool:
     """True if both sides have a value and they differ by >= the band.
 
@@ -61,7 +76,9 @@ def _score_drift(old: Optional[float], new: Optional[float]) -> bool:
         return False
 
 
-def _recompute_criteria_fingerprint(db: Session, role_id: int) -> str | None:
+def _recompute_criteria_fingerprint(
+    db: Session, role_id: int, *, cache: "StalenessCache | None" = None
+) -> str | None:
     """Mirror of queue_decision._capture_input_fingerprint's criteria hash.
 
     Must stay in sync — if the queue-time hashing changes, this must
@@ -69,6 +86,8 @@ def _recompute_criteria_fingerprint(db: Session, role_id: int) -> str | None:
     place is a follow-up; for now both sides use the same simple
     ``id:text:bucket:weight`` join.
     """
+    if cache is not None and role_id in cache.criteria_fp:
+        return cache.criteria_fp[role_id]
     rows = (
         db.query(RoleCriterion)
         .filter(
@@ -82,17 +101,27 @@ def _recompute_criteria_fingerprint(db: Session, role_id: int) -> str | None:
         f"{c.id}:{(c.text or '').strip()}:{c.bucket or ''}:{c.weight or 0}"
         for c in rows
     )
-    return hashlib.sha256(signature.encode("utf-8")).hexdigest()
+    result = hashlib.sha256(signature.encode("utf-8")).hexdigest()
+    if cache is not None:
+        cache.criteria_fp[role_id] = result
+    return result
 
 
-def _latest_recruiter_note_id(db: Session, role_id: int) -> int | None:
+def _latest_recruiter_note_id(
+    db: Session, role_id: int, *, cache: "StalenessCache | None" = None
+) -> int | None:
+    if cache is not None and role_id in cache.latest_note_id:
+        return cache.latest_note_id[role_id]
     row = (
         db.query(RoleFeedbackNote.id)
         .filter(RoleFeedbackNote.role_id == role_id)
         .order_by(RoleFeedbackNote.id.desc())
         .first()
     )
-    return int(row[0]) if row else None
+    result = int(row[0]) if row else None
+    if cache is not None:
+        cache.latest_note_id[role_id] = result
+    return result
 
 
 def evaluate(
@@ -101,11 +130,15 @@ def evaluate(
     *,
     application: CandidateApplication | None = None,
     role: Role | None = None,
+    cache: "StalenessCache | None" = None,
 ) -> StalenessReport:
     """Return a StalenessReport for the given decision.
 
     ``application`` and ``role`` may be passed in to avoid a re-query
     when the caller has already loaded them (batch path on the Hub).
+    ``cache`` (a StalenessCache) memoizes the per-role criteria/note
+    lookups across a batch of calls so a list of decisions sharing roles
+    doesn't re-query per row.
 
     Resolved decisions are never stale by design — they're the frozen
     audit record. Empty fingerprint = pre-A1 decision = also fresh
@@ -134,7 +167,9 @@ def evaluate(
     details: dict = {}
 
     # 1. Role criteria edited
-    current_criteria_fp = _recompute_criteria_fingerprint(db, int(decision.role_id))
+    current_criteria_fp = _recompute_criteria_fingerprint(
+        db, int(decision.role_id), cache=cache
+    )
     if (
         decision.criteria_fingerprint
         and current_criteria_fp
@@ -202,7 +237,9 @@ def evaluate(
 
     # 6. Recruiter note added since emit
     last_note_at_emit = fingerprint.get("last_recruiter_note_id")
-    current_last_note = _latest_recruiter_note_id(db, int(decision.role_id))
+    current_last_note = _latest_recruiter_note_id(
+        db, int(decision.role_id), cache=cache
+    )
     if (
         current_last_note is not None
         and (last_note_at_emit is None or current_last_note > int(last_note_at_emit))
