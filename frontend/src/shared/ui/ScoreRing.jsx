@@ -2,8 +2,9 @@ import React from 'react';
 
 // Circular SVG ring used on the candidate report. Score is 0–100.
 // Stroke is the brand purple over a soft track.
-export const ScoreRing = ({ score = 0, size = 110, label = 'SCORE', strokeWidth = 6 }) => {
+export const ScoreRing = ({ score = 0, size = 110, label = 'SCORE', strokeWidth = 6, display = null }) => {
   const safeScore = Math.max(0, Math.min(100, Number(score) || 0));
+  const centerText = display != null ? String(display) : String(Math.round(safeScore));
   const r = size / 2 - strokeWidth - 2;
   const c = 2 * Math.PI * r;
   const dash = (safeScore / 100) * c;
@@ -27,12 +28,12 @@ export const ScoreRing = ({ score = 0, size = 110, label = 'SCORE', strokeWidth 
         textAnchor="middle"
         dominantBaseline="middle"
         fontFamily="var(--font-display)"
-        fontSize={size * 0.28}
+        fontSize={centerText.length >= 4 ? size * 0.2 : size * 0.28}
         fontWeight="600"
         fill="var(--ink)"
         letterSpacing="-0.02em"
       >
-        {Math.round(safeScore)}
+        {centerText}
       </text>
       <text
         x={size / 2}
