@@ -561,6 +561,30 @@ def transition_outcome(
             app.id,
         )
 
+    # When an application closes, its queued agent decisions are moot —
+    # discard them so the Review queue doesn't show live cards for candidates
+    # already out of the funnel. In an approve/override flow the decision
+    # being acted on is re-stamped to approved/overridden by the caller AFTER
+    # this returns, so it still resolves correctly. Best-effort: never block
+    # the outcome change.
+    if target != "open":
+        try:
+            from ...services.pre_screen_decision_emitter import (
+                discard_pending_decisions_for_app,
+            )
+
+            discard_pending_decisions_for_app(
+                db,
+                application_id=int(app.id),
+                reason=f"superseded: application closed ({target})",
+            )
+        except Exception:  # pragma: no cover — never block an outcome change
+            import logging
+            logging.getLogger("taali.pipeline_service").exception(
+                "discard_pending_decisions_for_app failed (application_id=%s)",
+                app.id,
+            )
+
     return app
 
 

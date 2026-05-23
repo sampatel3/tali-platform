@@ -10,8 +10,13 @@ from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
 from app.services.pre_screen_decision_emitter import (
+    backfill_discard_decisions_on_closed_apps,
     backfill_existing_below_threshold,
     backfill_pre_screen_reject_reasoning,
+    backfill_recommendations_from_cvmatch,
+    backfill_summaries_from_cvmatch,
+    discard_pending_decisions_for_app,
+    pre_screen_gate_divergence_report,
     queue_pre_screen_reject,
     reconcile_pre_screen_reject_decisions,
     supersede_mislabeled_pre_screen_rejects,
@@ -984,3 +989,127 @@ def test_pending_decision_map_resolves_per_app(db):
 
     # Empty input is a no-op (no query).
     assert _pending_decision_map(db, []) == {}
+
+
+# ---------------------------------------------------------------------------
+# Score/decision consistency repairs (P1–P4)
+# ---------------------------------------------------------------------------
+
+
+def test_discard_pending_decisions_for_app_skips_human_resolved(db):
+    org, role, app = _seed(db, score=15.0, threshold=30.0)
+    d = _direct_card(db, org, role, app, 30.0)
+    n = discard_pending_decisions_for_app(db, application_id=int(app.id), reason="closed")
+    assert n == 1
+    db.flush(); db.refresh(d)
+    assert d.status == "discarded"
+
+
+def test_backfill_discard_decisions_on_closed_apps(db):
+    org = Organization(name="O", slug=f"o-{id(db)}cl"); db.add(org); db.flush()
+    role = Role(organization_id=org.id, name="R", source="manual", auto_reject=False, agentic_mode_enabled=True)
+    db.add(role); db.flush()
+
+    def mkapp(email, outcome):
+        c = Candidate(organization_id=org.id, email=email, full_name=email); db.add(c); db.flush()
+        a = CandidateApplication(
+            organization_id=org.id, candidate_id=c.id, role_id=role.id,
+            status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
+            application_outcome=outcome, source="manual", pre_screen_score_100=15.0,
+        )
+        db.add(a); db.flush(); return a
+
+    open_app = mkapp("open@x.test", "open")
+    closed_app = mkapp("closed@x.test", "rejected")
+    d_open = _direct_card(db, org, role, open_app, 30.0)
+    d_closed = _direct_card(db, org, role, closed_app, 30.0)
+
+    res = backfill_discard_decisions_on_closed_apps(db, organization_id=int(org.id))
+    assert res["discarded"] == 1
+    assert res["scanned"] == 1
+    db.refresh(d_open); db.refresh(d_closed)
+    assert d_open.status == "pending"      # open app untouched
+    assert d_closed.status == "discarded"  # closed app's card discarded
+
+
+def test_backfill_recommendations_from_cvmatch_both_directions(db):
+    org, role, _ = _seed(db, score=None, threshold=50.0)
+    role.score_threshold = 50
+    db.flush()
+
+    def mkapp(email, score, rec, fraud=False):
+        c = Candidate(organization_id=org.id, email=email, full_name=email); db.add(c); db.flush()
+        a = CandidateApplication(
+            organization_id=org.id, candidate_id=c.id, role_id=role.id,
+            status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
+            application_outcome="open", source="manual",
+            pre_screen_score_100=score, cv_match_score=score,
+            pre_screen_recommendation=rec,
+            pre_screen_evidence={"fraud_capped": True} if fraud else {},
+        )
+        db.add(a); db.flush(); return a
+
+    low = mkapp("low@x.test", 12.0, "Strong match")     # stale high → should drop
+    high = mkapp("high@x.test", 85.0, "Below threshold")  # stale low → should raise
+    fraud = mkapp("fraud@x.test", 10.0, "Below threshold", fraud=True)  # keep
+
+    res = backfill_recommendations_from_cvmatch(db, organization_id=int(org.id))
+    assert res["updated"] == 2
+    db.refresh(low); db.refresh(high); db.refresh(fraud)
+    assert low.pre_screen_recommendation == "Below threshold"
+    assert high.pre_screen_recommendation == "Strong match"
+    assert fraud.pre_screen_recommendation == "Below threshold"  # untouched
+
+
+def test_backfill_summaries_from_cvmatch(db):
+    org, role, app = _seed(db, score=40.0, threshold=50.0)
+    app.pre_screen_evidence = {}  # no summary
+    app.cv_match_details = {"summary": "Weak fit — missing must-have Kubernetes."}
+    db.flush()
+    res = backfill_summaries_from_cvmatch(db, organization_id=int(org.id))
+    assert res["updated"] == 1
+    db.refresh(app)
+    assert "Weak fit" in (app.pre_screen_evidence or {}).get("summary", "")
+
+
+def test_backfill_summaries_skips_when_present(db):
+    org, role, app = _seed(db, score=40.0, threshold=50.0)
+    app.pre_screen_evidence = {"summary": "existing"}
+    app.cv_match_details = {"summary": "from cv"}
+    db.flush()
+    res = backfill_summaries_from_cvmatch(db, organization_id=int(org.id))
+    assert res["updated"] == 0
+
+
+def test_gate_divergence_report(db):
+    org, role, _ = _seed(db, score=None, threshold=30.0)
+
+    def mkapp(email, llm, cv):
+        c = Candidate(organization_id=org.id, email=email, full_name=email); db.add(c); db.flush()
+        a = CandidateApplication(
+            organization_id=org.id, candidate_id=c.id, role_id=role.id,
+            status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
+            application_outcome="open", source="manual",
+            cv_match_score=cv, pre_screen_evidence={"llm_score_100": llm},
+        )
+        db.add(a); db.flush(); return a
+
+    mkapp("fn@x.test", llm=20, cv=80)   # false negative + diverge
+    mkapp("fp@x.test", llm=70, cv=15)   # false positive + diverge
+    mkapp("agree@x.test", llm=60, cv=62)  # agree
+
+    rep = pre_screen_gate_divergence_report(db, organization_id=int(org.id))
+    assert rep["both_scored"] == 3
+    assert rep["diverge_gt20"] == 2
+    assert rep["gate_false_negatives"] == 1
+    assert rep["gate_false_positives"] == 1
+
+
+def test_transition_outcome_discards_pending_decisions(db):
+    from app.domains.assessments_runtime.pipeline_service import transition_outcome
+
+    org, role, app = _seed(db, score=15.0, threshold=30.0)
+    d = _direct_card(db, org, role, app, 30.0)
+    transition_outcome(db, app=app, to_outcome="rejected", actor_type="system")
+    db.flush(); db.refresh(d)
+    assert d.status == "discarded"

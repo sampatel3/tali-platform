@@ -713,6 +713,89 @@ def admin_supersede_mislabeled_pre_screen_rejects(
         db.close()
 
 
+def _require_admin(request: Request) -> None:
+    from .platform.config import settings as _settings
+
+    admin_secret = getattr(_settings, "ADMIN_SECRET", "") or ""
+    if not admin_secret or request.headers.get("X-Admin-Secret", "") != admin_secret:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+@app.post("/admin/decisions/discard-on-closed")
+def admin_discard_decisions_on_closed(
+    request: Request, organization_id: int | None = None, dry_run: bool = False
+):
+    """P1: discard pending agent decisions whose application is already closed."""
+    from .platform.database import SessionLocal
+    from .services.pre_screen_decision_emitter import (
+        backfill_discard_decisions_on_closed_apps,
+    )
+
+    _require_admin(request)
+    db = SessionLocal()
+    try:
+        result = backfill_discard_decisions_on_closed_apps(
+            db, organization_id=organization_id, dry_run=dry_run
+        )
+        return {"ok": True, "dry_run": dry_run, **result}
+    finally:
+        db.close()
+
+
+@app.post("/admin/scores/rederive-recommendations")
+def admin_rederive_recommendations(
+    request: Request, organization_id: int | None = None, dry_run: bool = False
+):
+    """P2: re-derive pre_screen_recommendation labels to match current scores."""
+    from .platform.database import SessionLocal
+    from .services.pre_screen_decision_emitter import (
+        backfill_recommendations_from_cvmatch,
+    )
+
+    _require_admin(request)
+    db = SessionLocal()
+    try:
+        result = backfill_recommendations_from_cvmatch(
+            db, organization_id=organization_id, dry_run=dry_run
+        )
+        return {"ok": True, "dry_run": dry_run, **result}
+    finally:
+        db.close()
+
+
+@app.post("/admin/scores/backfill-summaries")
+def admin_backfill_summaries(
+    request: Request, organization_id: int | None = None, dry_run: bool = False
+):
+    """P3: fill missing pre_screen_evidence.summary from cv_match_details."""
+    from .platform.database import SessionLocal
+    from .services.pre_screen_decision_emitter import backfill_summaries_from_cvmatch
+
+    _require_admin(request)
+    db = SessionLocal()
+    try:
+        result = backfill_summaries_from_cvmatch(
+            db, organization_id=organization_id, dry_run=dry_run
+        )
+        return {"ok": True, "dry_run": dry_run, **result}
+    finally:
+        db.close()
+
+
+@app.get("/admin/scores/gate-divergence")
+def admin_gate_divergence(request: Request, organization_id: int | None = None):
+    """P4 monitor: pre-screen gate vs full cv_match score disagreement."""
+    from .platform.database import SessionLocal
+    from .services.pre_screen_decision_emitter import pre_screen_gate_divergence_report
+
+    _require_admin(request)
+    db = SessionLocal()
+    try:
+        return {"ok": True, **pre_screen_gate_divergence_report(db, organization_id=organization_id)}
+    finally:
+        db.close()
+
+
 @app.get("/admin/graphiti/search-debug")
 def graphiti_search_debug(request: Request):
     """Raw Graphiti search result shape for debugging the graph view."""
