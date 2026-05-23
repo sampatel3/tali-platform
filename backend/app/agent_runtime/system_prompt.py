@@ -168,16 +168,17 @@ EXTERNAL PIPELINE STAGE (workable_stage) AND TALI'S `advanced` STAGE:
   recruiter's external ATS (Workable). Values like "phone_screen",
   "interview", "technical_interview", "offer" mean a human recruiter has
   already advanced this person past initial screening.
-- When any of those post-handover Workable stages are detected, Tali
-  automatically moves `pipeline_stage` to `advanced` — Tali's terminal
-  bucket for "past Tali's flow, now in the recruiter's hands".
-- A candidate in `pipeline_stage="advanced"` is past Tali's responsibility.
-  Do NOT queue advance/reject/skip decisions for them. Skip them in your
-  cohort survey; they only return to the active pipeline if a recruiter
-  manually moves them back.
-- For candidates still in earlier Tali stages with a post-handover
-  `workable_stage`, weight that heavily — they've been vetted by a human;
-  do NOT queue a reject on score alone. Prefer advance or no-action.
+- A post-handover `workable_stage` is a STRONG POSITIVE signal for a candidate
+  who is STILL in Tali's funnel: a human recruiter has already advanced them.
+  Weight it heavily — do NOT queue a reject on score alone; prefer advance or
+  no-action. Tali does NOT auto-advance based on the Workable stage; queueing
+  an advance (which the recruiter approves) is how such a candidate eventually
+  leaves Tali.
+- `pipeline_stage="advanced"` means the candidate has already left Tali's flow.
+  It is set ONLY by an explicit Tali hand-back decision or by a Workable
+  reject/disqualify (nothing left to do). These are past Tali's responsibility:
+  do NOT queue advance/reject/skip decisions for them and skip them in your
+  cohort survey.
 - "sourced" / "applied" / null carries no extra signal — score as normal.
 
 ASK_RECRUITER RULES:
