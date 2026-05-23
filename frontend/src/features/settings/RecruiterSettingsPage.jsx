@@ -1328,6 +1328,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     <div>
       {NavComponent ? <NavComponent currentPage="settings" onNavigate={onNavigate} /> : null}
       <AgentHeader
+        breadcrumbs={[{ label: 'Settings' }]}
         kicker="SETTINGS · WORKSPACE"
         title="Settings"
         subtitle="Workspace, scoring policy, integrations, and access. Changes apply to new recruiter-facing surfaces immediately."

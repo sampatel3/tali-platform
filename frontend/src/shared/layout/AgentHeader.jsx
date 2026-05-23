@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Pause, Play, Settings as SettingsIcon, Sparkles } from 'lucide-react';
 
 import { useAgentStatus } from './AgentBar';
+import { BreadcrumbsRow } from '../ui/Breadcrumbs';
 
 // AgentHeader — the single dark-purple slab that sits at the top of every
 // recruiter page (HANDOFF unified-headers.md §2). Replaces the legacy
@@ -225,7 +226,15 @@ export const AgentHeader = ({
   title,
   subtitle,
   actions = null,
-  backLink = null,
+  // Breadcrumb trail rendered as a light strip ABOVE the purple slab.
+  // This is the single "where am I / where did I come from" affordance —
+  // it replaces the old in-header backLink. Every recruiter page passes
+  // it (top-level pages pass a single crumb, e.g. [{ label: 'Jobs' }]),
+  // so the strip is always present and the purple header never shifts
+  // vertically between pages. `breadcrumbActions` renders on the right of
+  // the strip (e.g. a Copy-link button).
+  breadcrumbs = null,
+  breadcrumbActions = null,
   preTitle = null,
   postTitle = null,
   period = true,
@@ -251,47 +260,48 @@ export const AgentHeader = ({
   const heroState =
     showAgent && agent.on && !agent.paused ? 'agent-running' : 'agent-quiet';
 
-  return (
-    <div
-      className={`agent-header ${heroState} ${variant === 'compact' ? 'compact' : ''} ${className}`.trim()}
-    >
-      {/* Bright running-state gradient layered as an opacity-faded overlay so
-          turning the agent on/off cross-fades the hero instead of snapping
-          (browsers can't transition `background` between gradient values). */}
-      <span className="ah-bright-overlay" aria-hidden="true" />
-      <div className="agent-header-inner">
-        <div className="agent-header-left">
-          {backLink ? (
-            backLink.onClick ? (
-              <button type="button" className="back-link" onClick={backLink.onClick}>
-                ← {backLink.label}
-              </button>
-            ) : (
-              <a className="back-link" href={backLink.href || '#'}>← {backLink.label}</a>
-            )
-          ) : null}
-          {preTitle ? <div className="ah-pre">{preTitle}</div> : null}
-          {kicker ? <div className="ah-kicker">{kicker}</div> : null}
-          <div className="ah-title-row">
-            {renderTitleNode(title, period)}
-            {actions ? <div className="ah-title-actions">{actions}</div> : null}
-          </div>
-          {subtitle ? <p className="ah-subtitle">{subtitle}</p> : null}
-          {postTitle ? <div className="ah-post">{postTitle}</div> : null}
-        </div>
+  const hasBreadcrumbs = Array.isArray(breadcrumbs) && breadcrumbs.length > 0;
 
-        {showAgent ? (
-          <AgentPanel
-            agent={agent}
-            onActivate={onActivateAgent}
-            onPause={onPauseAgent}
-            onResume={onResumeAgent}
-            onSettings={onAgentSettings}
-            offStateMessage={offStateMessage}
-          />
-        ) : null}
+  return (
+    <>
+      {/* Light breadcrumb strip — sits between the global nav and the purple
+          slab. Rendering it on every recruiter page keeps the slab's top at
+          the same y-coordinate everywhere (no jump on navigation). */}
+      {hasBreadcrumbs ? (
+        <BreadcrumbsRow items={breadcrumbs} actions={breadcrumbActions} />
+      ) : null}
+      <div
+        className={`agent-header ${heroState} ${variant === 'compact' ? 'compact' : ''} ${className}`.trim()}
+      >
+        {/* Bright running-state gradient layered as an opacity-faded overlay so
+            turning the agent on/off cross-fades the hero instead of snapping
+            (browsers can't transition `background` between gradient values). */}
+        <span className="ah-bright-overlay" aria-hidden="true" />
+        <div className="agent-header-inner">
+          <div className="agent-header-left">
+            {preTitle ? <div className="ah-pre">{preTitle}</div> : null}
+            {kicker ? <div className="ah-kicker">{kicker}</div> : null}
+            <div className="ah-title-row">
+              {renderTitleNode(title, period)}
+              {actions ? <div className="ah-title-actions">{actions}</div> : null}
+            </div>
+            {subtitle ? <p className="ah-subtitle">{subtitle}</p> : null}
+            {postTitle ? <div className="ah-post">{postTitle}</div> : null}
+          </div>
+
+          {showAgent ? (
+            <AgentPanel
+              agent={agent}
+              onActivate={onActivateAgent}
+              onPause={onPauseAgent}
+              onResume={onResumeAgent}
+              onSettings={onAgentSettings}
+              offStateMessage={offStateMessage}
+            />
+          ) : null}
+        </div>
       </div>
-    </div>
+    </>
   );
 };
 

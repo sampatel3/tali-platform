@@ -507,6 +507,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           panel reserves the same vertical space so the hero stays 280px
           tall. */}
       <AgentHeader
+        breadcrumbs={[{ label: 'Jobs' }]}
         kicker={`JOBS · ${roles.length} ACTIVE ROLE${roles.length === 1 ? '' : 'S'}`}
         title={<>{roles.length} active <em>roles</em></>}
         period={false}
