@@ -11,6 +11,34 @@ from sqlalchemy.orm import Session
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
 
+# An application is described by TWO independent axes:
+#
+#   pipeline_stage  — WHERE the candidate is in Tali's own funnel.
+#   application_outcome — the RESULT, orthogonal to the stage.
+#
+# A candidate always has both (e.g. stage=advanced + outcome=rejected means
+# "Tali handed them off, and they were ultimately rejected downstream").
+#
+# pipeline_stage:
+#   applied        — entered Tali; not yet actioned.
+#   invited        — invited to a Tali assessment.
+#   in_assessment  — assessment in progress.
+#   review         — assessment done / awaiting a recruiter decision in Tali.
+#   advanced       — handed OUT of Tali into the recruiter's Workable flow.
+#                    Set ONLY by an explicit Tali hand-back decision, never
+#                    derived from the Workable stage. This is terminal for Tali:
+#                    the candidate is frozen (no scoring, no profile updates, no
+#                    agent activity — see role_support.is_resolved). Workable
+#                    sync keeps running purely to capture the realized outcome
+#                    for model refinement.
+#
+# application_outcome:
+#   open      — still live (no terminal result yet).
+#   rejected  — not proceeding (Tali reject, Workable rejection, or disqualified).
+#   withdrawn — candidate withdrew.
+#   hired     — hired.
+#
+# pipeline_stage_source — who set the current stage: system | recruiter | sync | agent.
 PIPELINE_STAGES = ("applied", "invited", "in_assessment", "review", "advanced")
 APPLICATION_OUTCOMES = ("open", "rejected", "withdrawn", "hired")
 PIPELINE_STAGE_SOURCES = ("system", "recruiter", "sync", "agent")

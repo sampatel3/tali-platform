@@ -14507,6 +14507,14 @@ button.eng-badge-button:focus-visible {
   white-space: nowrap;
 }
 
+/* Disqualified-in-Workable overlay. Kept on the purple family (not red) to
+   stay on-brand; the weight + filled soft background mark it as terminal. */
+.stage-pill.is-disqualified {
+  background: var(--purple-soft);
+  color: var(--purple-2);
+  font-weight: 600;
+}
+
 .ctable .ctable-status {
   color: var(--mute);
   font-size: 12.5px;
