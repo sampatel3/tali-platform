@@ -839,6 +839,28 @@ def admin_discard_on_agent_off(
         db.close()
 
 
+@app.post("/admin/scores/normalize-recommendation-labels")
+def admin_normalize_recommendation_labels(
+    request: Request, organization_id: int | None = None, dry_run: bool = False
+):
+    """Replace raw cv_match recommendation enums leaked into
+    pre_screen_recommendation ('no'/'lean_no'/...) with proper labels."""
+    from .platform.database import SessionLocal
+    from .services.pre_screen_decision_emitter import (
+        backfill_normalize_raw_recommendation_labels,
+    )
+
+    _require_admin(request)
+    db = SessionLocal()
+    try:
+        result = backfill_normalize_raw_recommendation_labels(
+            db, organization_id=organization_id, dry_run=dry_run
+        )
+        return {"ok": True, "dry_run": dry_run, **result}
+    finally:
+        db.close()
+
+
 @app.get("/admin/graphiti/search-debug")
 def graphiti_search_debug(request: Request):
     """Raw Graphiti search result shape for debugging the graph view."""

@@ -9,10 +9,12 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
+from app.services.pre_screening_snapshot import normalize_recommendation_label
 from app.services.pre_screen_decision_emitter import (
     backfill_discard_decisions_on_agent_off_roles,
     backfill_discard_decisions_on_closed_apps,
     backfill_existing_below_threshold,
+    backfill_normalize_raw_recommendation_labels,
     backfill_pre_screen_reject_reasoning,
     backfill_recommendations_from_cvmatch,
     backfill_summaries_from_cvmatch,
@@ -1252,3 +1254,43 @@ def test_backfill_discard_decisions_on_agent_off_roles(db):
     db.refresh(d_on); db.refresh(d_off)
     assert d_on.status == "pending"      # agent-on role untouched
     assert d_off.status == "discarded"   # agent-off role's card cleared
+
+
+# ---------------------------------------------------------------------------
+# Normalize raw cv_match recommendation enums leaked into the display field
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_recommendation_label_maps_raw_enums():
+    assert normalize_recommendation_label("no") == "Below threshold"
+    assert normalize_recommendation_label("lean_no") == "Manual review recommended"
+    assert normalize_recommendation_label("yes") == "Proceed to screening"
+    assert normalize_recommendation_label("strong_yes") == "Strong match"
+    # Already-proper labels pass through unchanged.
+    assert normalize_recommendation_label("Strong match") == "Strong match"
+    assert normalize_recommendation_label("") is None
+
+
+def test_backfill_normalize_raw_recommendation_labels(db):
+    org, role, _ = _seed(db, score=None, threshold=30.0)
+
+    def mkapp(email, rec):
+        c = Candidate(organization_id=org.id, email=email, full_name=email); db.add(c); db.flush()
+        a = CandidateApplication(
+            organization_id=org.id, candidate_id=c.id, role_id=role.id,
+            status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
+            application_outcome="open", source="manual",
+            pre_screen_score_100=None, pre_screen_recommendation=rec,
+        )
+        db.add(a); db.flush(); return a
+
+    a_no = mkapp("no@x.test", "no")
+    a_lean = mkapp("lean@x.test", "lean_no")
+    a_ok = mkapp("ok@x.test", "Strong match")  # already proper — untouched
+
+    res = backfill_normalize_raw_recommendation_labels(db, organization_id=int(org.id))
+    assert res["updated"] == 2
+    db.refresh(a_no); db.refresh(a_lean); db.refresh(a_ok)
+    assert a_no.pre_screen_recommendation == "Below threshold"
+    assert a_lean.pre_screen_recommendation == "Manual review recommended"
+    assert a_ok.pre_screen_recommendation == "Strong match"

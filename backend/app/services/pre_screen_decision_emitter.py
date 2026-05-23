@@ -1075,6 +1075,43 @@ def repair_passed_prescreen_contamination(
     return {"cards_discarded": cards_discarded, "recs_fixed": recs_fixed}
 
 
+def backfill_normalize_raw_recommendation_labels(
+    db: Session, *, organization_id: int | None = None, dry_run: bool = False
+) -> dict:
+    """Replace raw cv_match recommendation enums ('no'/'lean_no'/'yes'/
+    'strong_yes') that leaked into ``pre_screen_recommendation`` (a display
+    field) with proper recruiter-facing labels. The leak came from the
+    snapshot fallback to ``cv_match_details.recommendation``; that path now
+    normalizes too, so this just catches up existing rows.
+
+    Returns ``{"updated": int, "scanned": int}``.
+    """
+    from sqlalchemy import func
+
+    from .pre_screening_snapshot import normalize_recommendation_label
+
+    q = db.query(CandidateApplication).filter(
+        CandidateApplication.deleted_at.is_(None),
+        func.lower(func.trim(func.coalesce(CandidateApplication.pre_screen_recommendation, ""))).in_(
+            ["strong_yes", "yes", "lean_no", "no"]
+        ),
+    )
+    if organization_id is not None:
+        q = q.filter(CandidateApplication.organization_id == int(organization_id))
+    updated = 0
+    scanned = 0
+    for app in q.all():
+        scanned += 1
+        new_label = normalize_recommendation_label(app.pre_screen_recommendation)
+        if new_label and new_label != app.pre_screen_recommendation:
+            if not dry_run:
+                app.pre_screen_recommendation = new_label
+            updated += 1
+    if updated and not dry_run:
+        db.commit()
+    return {"updated": updated, "scanned": scanned}
+
+
 def pre_screen_gate_divergence_report(
     db: Session, *, organization_id: int | None = None
 ) -> dict:
