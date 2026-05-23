@@ -20,6 +20,9 @@ _TASK_ROUTES = {
     # Nightly calibration scoring is Anthropic-heavy — keep it off the default
     # queue so it can't starve agent ticks / sync.
     "app.tasks.calibration_tasks.score_terminal_for_calibration": {"queue": "scoring"},
+    # Recalibration writes snapshots read by apply_calibrator during scoring —
+    # keep it on the scoring worker so they're co-located.
+    "app.tasks.calibration_tasks.recalibrate_cv_match": {"queue": "scoring"},
 }
 
 celery_app.conf.update(
@@ -135,6 +138,14 @@ celery_app.conf.update(
         "score-terminal-for-calibration-nightly": {
             "task": "app.tasks.calibration_tasks.score_terminal_for_calibration",
             "schedule": crontab(hour=3, minute=45),
+        },
+        # Refit the cv_match calibrators from the day's (score -> outcome)
+        # pairs. Runs AFTER the terminal-scoring task so the fresh scores are
+        # included. Same scoring queue so snapshots land where apply_calibrator
+        # reads them at scoring time.
+        "recalibrate-cv-match-nightly": {
+            "task": "app.tasks.calibration_tasks.recalibrate_cv_match",
+            "schedule": crontab(hour=4, minute=30),
         },
     },
 )

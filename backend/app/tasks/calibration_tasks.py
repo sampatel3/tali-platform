@@ -42,3 +42,36 @@ def score_terminal_for_calibration(limit: int = _NIGHTLY_SCORE_LIMIT) -> dict:
         db.close()
     logger.info("score_terminal_for_calibration: %s", summary)
     return summary
+
+
+@celery_app.task(name="app.tasks.calibration_tasks.recalibrate_cv_match")
+def recalibrate_cv_match(lookback_days: int = 90) -> dict:
+    """Refit the cv_match calibrators from the latest (score -> outcome) pairs
+    (recruiter overrides + realized Workable outcomes). Runs nightly AFTER the
+    terminal-scoring task so fresh scores are included.
+
+    NOTE: calibrator snapshots are written to local disk. On the single scoring
+    worker this co-locates them with where ``apply_calibrator`` reads at scoring
+    time and they're refit nightly, but they are NOT durable across deploys
+    (graceful fallback: scoring uses the raw score until the next refit). A
+    durable/shared snapshot store (S3/Tigris) is the follow-up to make this
+    deploy-proof and multi-worker-safe.
+    """
+    from ..cv_matching.calibrators.recalibrate import recalibrate_all
+
+    reports = recalibrate_all(lookback_days=lookback_days)
+    summary = {
+        "fits": len(reports),
+        "role_families": sorted({getattr(r, "role_family", "?") for r in reports}),
+        "alerts": [
+            {
+                "role_family": getattr(r, "role_family", "?"),
+                "dimension": getattr(r, "dimension", "?"),
+                "ece": getattr(r, "ece", None),
+            }
+            for r in reports
+            if (getattr(r, "ece", None) or 0) > 0.05
+        ],
+    }
+    logger.info("recalibrate_cv_match: %s", summary)
+    return summary
