@@ -367,7 +367,7 @@ export const CandidateStageOneScreeningTab = ({
   );
 };
 
-const TranscriptPanel = ({
+export const TranscriptPanel = ({
   application = null,
   firefliesConnected = false,
   firefliesLinkSupported = false,

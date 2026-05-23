@@ -18,7 +18,7 @@ import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
 import { RadarChart } from '../../shared/ui/RadarChart';
 import { ScoreRing } from '../../shared/ui/ScoreRing';
 import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAssessmentToCandidateView } from './assessmentViewModels';
-import { AssessmentEvidencePanels, EvaluatePanel } from './CandidateAssessmentDetailPanels';
+import { AssessmentEvidencePanels, EvaluatePanel, InterviewTranscriptCapture } from './CandidateAssessmentDetailPanels';
 import { CandidateSnapshotCard } from './CandidateSnapshotCard';
 import {
   getErrorMessage,
@@ -1200,6 +1200,62 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     }
   }, [application?.id, rolesApi, showToast]);
 
+  // Recruiter lifecycle actions migrated from the legacy /assessments page.
+  // Rendered in the (recruiter-only) Assessment pane, so they never reach a
+  // share route. `resend` doubles as the candidate CV-request trigger.
+  const normalizedAssessmentStatus = String(
+    completedAssessment?.status || resolveAssessmentStatus(application) || ''
+  ).toLowerCase();
+  const canResendInvite = Boolean(assessmentId)
+    && (normalizedAssessmentStatus === 'pending' || normalizedAssessmentStatus === 'expired');
+  const hasCvOnFile = Boolean(
+    application?.cv_filename || completedAssessment?.candidate_cv_filename || application?.cv_uploaded_at
+  );
+  const canRequestCvUpload = Boolean(
+    assessmentId && !hasCvOnFile && (application?.candidate_email || completedAssessment?.candidate_email)
+  );
+
+  const handleResendInvite = useCallback(async () => {
+    if (!assessmentId || !assessmentsApi?.resend) return;
+    setBusyAction('resend');
+    try {
+      await assessmentsApi.resend(assessmentId);
+      showToast('Assessment invite resent.', 'success');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to resend invite.'), 'error');
+    } finally {
+      setBusyAction('');
+    }
+  }, [assessmentId, assessmentsApi, showToast]);
+
+  const handleRequestCvUpload = useCallback(async () => {
+    if (!assessmentId || !assessmentsApi?.resend) return;
+    setBusyAction('request-cv');
+    try {
+      await assessmentsApi.resend(assessmentId);
+      showToast('CV request sent. The candidate can upload from the assessment link.', 'success');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to send CV request.'), 'error');
+    } finally {
+      setBusyAction('');
+    }
+  }, [assessmentId, assessmentsApi, showToast]);
+
+  const handleDeleteAssessment = useCallback(async () => {
+    if (!assessmentId || !assessmentsApi?.remove) return;
+    if (typeof window !== 'undefined'
+      && !window.confirm('Delete this assessment? This cannot be undone.')) return;
+    setBusyAction('delete');
+    try {
+      await assessmentsApi.remove(assessmentId);
+      showToast('Assessment deleted.', 'success');
+      onNavigate('jobs');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to delete assessment.'), 'error');
+      setBusyAction('');
+    }
+  }, [assessmentId, assessmentsApi, showToast, onNavigate]);
+
   if (loading) {
     return (
       <div>
@@ -1613,6 +1669,28 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         </div>
 
         <div className={`pane ${activeTab === 'assessment' ? 'active' : ''}`} data-p="assessment">
+          {assessmentId ? (
+            <div className="report-recruiter-actions mb-3 flex flex-wrap gap-2" data-internal-only>
+              {canResendInvite ? (
+                <button type="button" className="btn btn-outline btn-sm" onClick={handleResendInvite} disabled={busyAction !== ''}>
+                  {busyAction === 'resend' ? 'Resending…' : 'Resend invite'}
+                </button>
+              ) : null}
+              {canRequestCvUpload ? (
+                <button type="button" className="btn btn-outline btn-sm" onClick={handleRequestCvUpload} disabled={busyAction !== ''}>
+                  {busyAction === 'request-cv' ? 'Sending…' : 'Request CV upload'}
+                </button>
+              ) : null}
+              {workableConnected && workableSource && !completedAssessment?.posted_to_workable ? (
+                <button type="button" className="btn btn-outline btn-sm" onClick={handlePostToWorkable} disabled={busyAction !== ''}>
+                  {busyAction === 'workable' ? 'Posting…' : 'Post to Workable'}
+                </button>
+              ) : null}
+              <button type="button" className="btn btn-outline btn-sm" onClick={handleDeleteAssessment} disabled={busyAction !== ''}>
+                {busyAction === 'delete' ? 'Deleting…' : 'Delete assessment'}
+              </button>
+            </div>
+          ) : null}
           <div className="two-col">
             <div className="panel">
               <h2>Scored <em>dimensions</em></h2>
@@ -1790,6 +1868,21 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               ))}
             </div>
           </div>
+
+          {/* Screening transcript capture (Fireflies link / manual paste),
+              migrated from the legacy /assessments page. Recruiter-only —
+              not mounted on unauth share routes (it calls authed APIs). */}
+          {!isShareRoute ? (
+            <div className="mc-prep-stage" data-internal-only>
+              <div className="mc-kicker">SCREENING TRANSCRIPT</div>
+              <InterviewTranscriptCapture
+                application={application}
+                firefliesConnected={Boolean(orgData?.fireflies_config?.connected)}
+                rolesApi={rolesApi}
+                onRefresh={loadStandingReport}
+              />
+            </div>
+          ) : null}
         </div>
 
         <div className={`pane ${activeTab === 'notes' ? 'active' : ''}`} data-p="notes" data-internal-only>
