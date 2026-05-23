@@ -54,19 +54,19 @@ def _below_threshold(
     """Whether this candidate is a pre-screen reject under ``threshold`` —
     mirrors the deterministic gate in ``evaluate_auto_reject_decision``.
 
-    A numeric score is authoritative against the role threshold. The
-    ``'Below threshold'`` recommendation only justifies a reject when there
-    is *no* numeric score (must-have miss / invalidated score) — it must
-    NOT keep a card alive for a candidate whose score is above the role's
-    cutoff (the ``recommendation`` label uses a hard-coded ``< 50`` and so
-    is not a role-threshold verdict on its own).
+    A numeric score is authoritative AND only meaningful against a configured
+    cutoff: with a numeric score we reject iff ``score < threshold`` and
+    ``threshold is not None``. With no threshold there is no score-based
+    reject — the ``'Below threshold'`` recommendation is a hard-coded ``< 50``
+    label, not a role verdict, so it must NOT keep a numeric-score card alive
+    after the cutoff is cleared.
+
+    The recommendation only justifies a reject when there is *no* numeric
+    score (must-have miss / invalidated score), with or without a threshold.
     """
-    rec_below = (recommendation or "").strip().lower() == "below threshold"
-    if score is None:
-        return rec_below
-    if threshold is None:
-        return rec_below
-    return float(score) < float(threshold)
+    if score is not None:
+        return threshold is not None and float(score) < float(threshold)
+    return (recommendation or "").strip().lower() == "below threshold"
 
 
 def _format_reasoning(score: float | None, threshold: float | None) -> str:
@@ -162,7 +162,13 @@ def queue_pre_screen_reject(
                 .filter(AgentDecision.idempotency_key == key)
                 .first()
             )
-            if existing is not None and existing.status != "pending":
+            # Only revive a *system-discarded* card (what the reconcile /
+            # supersede paths set). Never reopen a recruiter resolution
+            # (``overridden`` / ``approved`` / ``reverted_for_feedback``) or
+            # an ``expired`` row: the cohort tick re-runs reconcile every
+            # cycle, so reviving those would undo the human decision on every
+            # tick. Leave them untouched and return as-is.
+            if existing is not None and existing.status == "discarded":
                 existing.status = "pending"
                 existing.resolved_at = None
                 existing.resolution_note = None

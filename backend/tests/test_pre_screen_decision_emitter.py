@@ -578,6 +578,31 @@ def test_queue_pre_screen_reject_revives_discarded_card(db):
     assert n == 1
 
 
+def test_queue_pre_screen_reject_does_not_revive_recruiter_resolution(db):
+    """A recruiter-resolved (overridden) card must NOT be reopened by a
+    re-queue — the cohort tick re-runs reconcile each cycle, so reviving it
+    would undo the human decision repeatedly.
+    """
+    org, role, app = _seed(db, score=20.0, threshold=50.0)
+    first = queue_pre_screen_reject(
+        db, organization_id=org.id, role=role, application=app,
+        pre_screen_score=20.0, threshold=50.0,
+    )
+    db.commit()
+    first.status = "overridden"  # recruiter kept the candidate in pipeline
+    db.commit()
+
+    result = queue_pre_screen_reject(
+        db, organization_id=org.id, role=role, application=app,
+        pre_screen_score=20.0, threshold=50.0,
+    )
+    assert result is not None
+    assert result.id == first.id
+    assert result.status == "overridden"  # left as-is, NOT revived to pending
+    n = db.query(AgentDecision).filter(AgentDecision.application_id == app.id).count()
+    assert n == 1
+
+
 def test_reconcile_threshold_replay_revives_after_discard(db):
     """Full replay: 50→30 discards a 40-scorer; 30→50 must put it back as a
     pending card (the silent-miss Codex flagged).
@@ -632,3 +657,26 @@ def test_reconcile_emits_rec_only_rejects_when_threshold_none(db):
     )
     assert summary["created"] == 1
     assert _latest_status(db, app) == "pending"
+
+
+def test_reconcile_threshold_cleared_discards_scored_reject(db):
+    """Clearing the threshold to None removes score-based rejects: a scored
+    candidate with a stale 'Below threshold' label is discarded (no cutoff),
+    while a null-score must-have-miss is kept.
+    """
+    org, role, scored = _seed(db, score=40.0, threshold=50.0)
+    scored.pre_screen_recommendation = "Below threshold"  # stale <50 label
+    null_rec = _add_app(db, org, role, score=None, rec="Below threshold", email="z@x.test")
+    for a in (scored, null_rec):
+        queue_pre_screen_reject(
+            db, organization_id=org.id, role=role, application=a,
+            pre_screen_score=a.pre_screen_score_100, threshold=50.0,
+        )
+    db.commit()
+
+    summary = reconcile_pre_screen_reject_decisions(
+        db, role=role, organization_id=int(org.id), threshold=None
+    )
+    assert summary["discarded"] == 1  # the scored row — no cutoff to be below
+    assert _latest_status(db, scored) == "discarded"
+    assert _latest_status(db, null_rec) == "pending"  # must-have miss survives
