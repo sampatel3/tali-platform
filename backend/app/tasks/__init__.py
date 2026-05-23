@@ -63,6 +63,7 @@ from .decision_policy_tasks import nightly_retune_sweep
 # an app.tasks.tasks module, which doesn't exist.)
 from .calibration_tasks import (
     recalibrate_cv_match,
+    sample_prescreen_for_calibration,
     score_terminal_for_calibration,
 )
 
@@ -92,5 +93,6 @@ __all__ = [
     "agent_expire_stuck_runs",
     "nightly_retune_sweep",
     "score_terminal_for_calibration",
+    "sample_prescreen_for_calibration",
     "recalibrate_cv_match",
 ]

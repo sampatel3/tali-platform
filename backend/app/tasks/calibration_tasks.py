@@ -44,6 +44,31 @@ def score_terminal_for_calibration(limit: int = _NIGHTLY_SCORE_LIMIT) -> dict:
     return summary
 
 
+_PRESCREEN_SAMPLE_LIMIT = 50
+
+
+@celery_app.task(name="app.tasks.calibration_tasks.sample_prescreen_for_calibration")
+def sample_prescreen_for_calibration(limit: int = _PRESCREEN_SAMPLE_LIMIT) -> dict:
+    """Shadow-score a random sample of pre-screen rejects to build
+    reject-inference training data for the pre-screen calibrator. Backend-only:
+    results are stored in ``prescreen_calibration_samples`` and never written
+    to the application or shown to a recruiter. Returns the run summary."""
+    from ..services.prescreen_calibration import sample_and_shadow_score_rejects
+    from ..platform.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        summary = sample_and_shadow_score_rejects(db, limit=limit)
+    except Exception:
+        db.rollback()
+        logger.exception("sample_prescreen_for_calibration failed")
+        raise
+    finally:
+        db.close()
+    logger.info("sample_prescreen_for_calibration: %s", summary)
+    return summary
+
+
 @celery_app.task(name="app.tasks.calibration_tasks.recalibrate_cv_match")
 def recalibrate_cv_match(lookback_days: int = 90) -> dict:
     """Refit the cv_match calibrators from the latest (score -> outcome) pairs
