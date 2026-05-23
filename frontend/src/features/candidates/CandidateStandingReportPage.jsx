@@ -608,9 +608,9 @@ const CvDocumentViewer = ({
   );
 };
 
-// Status order for the unified, gaps-first requirement list: missing first
-// (where the recruiter's attention is needed), then partial, then met.
-const REQ_STATUS_RANK = { missing: 0, partially_met: 1, unknown: 2, met: 3 };
+// Status order for the unified requirement list: positives (met) first, then
+// partial, then unclear, with gaps last.
+const REQ_STATUS_RANK = { met: 0, partially_met: 1, unknown: 2, missing: 3 };
 
 const reqStatusKey = (status) => {
   const value = String(status || '').toLowerCase();
