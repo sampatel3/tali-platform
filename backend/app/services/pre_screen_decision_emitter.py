@@ -797,6 +797,79 @@ def discard_pending_decisions_for_app(
     return discarded
 
 
+def discard_pending_decisions_for_role(
+    db: Session,
+    *,
+    role_id: int,
+    reason: str,
+    resolved_by_user_id: int | None = None,
+) -> int:
+    """Discard every pending agent decision for a role — used when the agent
+    is turned OFF for that role. With the agent disabled the queue should
+    carry no agent cards for it; orphaned cards otherwise linger in the
+    recruiter's Review queue.
+
+    ``resolved_by_user_id`` attributes the discard to the recruiter who
+    toggled the agent off (a deliberate human resolution, so the emitter's
+    revival path won't reopen it). Does NOT commit; the caller owns the txn.
+    Returns the number discarded.
+    """
+    cards = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == int(role_id),
+            AgentDecision.status == "pending",
+            AgentDecision.resolved_by_user_id.is_(None),
+        )
+        .all()
+    )
+    now = datetime.now(timezone.utc)
+    discarded = 0
+    for card in cards:
+        card.status = "discarded"
+        card.resolved_at = now
+        card.resolution_note = reason[:500]
+        if resolved_by_user_id is not None:
+            card.resolved_by_user_id = int(resolved_by_user_id)
+        discarded += 1
+    return discarded
+
+
+def backfill_discard_decisions_on_agent_off_roles(
+    db: Session, *, organization_id: int | None = None, dry_run: bool = False
+) -> dict:
+    """Discard pending agent decisions on roles whose agent is OFF
+    (``agentic_mode_enabled`` not true). These are orphaned cards a
+    toggle-off should have cleared. Returns ``{"discarded": int, "scanned": int}``.
+    """
+    q = (
+        db.query(AgentDecision)
+        .join(Role, Role.id == AgentDecision.role_id)
+        .filter(
+            AgentDecision.status == "pending",
+            AgentDecision.resolved_by_user_id.is_(None),
+            Role.agentic_mode_enabled.isnot(True),
+        )
+    )
+    if organization_id is not None:
+        q = q.filter(AgentDecision.organization_id == int(organization_id))
+    now = datetime.now(timezone.utc)
+    discarded = 0
+    scanned = 0
+    for card in q.all():
+        scanned += 1
+        if dry_run:
+            discarded += 1
+            continue
+        card.status = "discarded"
+        card.resolved_at = now
+        card.resolution_note = "superseded: agent disabled for this role"[:500]
+        discarded += 1
+    if discarded and not dry_run:
+        db.commit()
+    return {"discarded": discarded, "scanned": scanned}
+
+
 def backfill_discard_decisions_on_closed_apps(
     db: Session, *, organization_id: int | None = None, dry_run: bool = False
 ) -> dict:
