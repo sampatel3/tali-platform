@@ -315,6 +315,12 @@ def post_decision_summary_to_workable(
         return False
     assert org is not None  # narrowed above
 
+    from ..services.workable_actions_service import resolve_workable_actor_member_id
+
+    member_id = resolve_workable_actor_member_id(org, role=getattr(app, "role", None))
+    if not member_id:
+        return False
+
     share_url = _mint_30d_share_link(
         db, app=app, created_by_user_id=actor.user_id
     )
@@ -332,8 +338,8 @@ def post_decision_summary_to_workable(
         subdomain=org.workable_subdomain,
     )
     try:
-        result = adapter.post_candidate_activity(
-            candidate_id=str(app.workable_candidate_id), body=body
+        result = adapter.post_candidate_comment(
+            candidate_id=str(app.workable_candidate_id), member_id=member_id, body=body
         )
     except Exception:  # pragma: no cover — defensive
         logger.exception(

@@ -111,12 +111,22 @@ def run(
             detail="Workable is not connected for this organization",
         )
 
+    from ..services.workable_actions_service import resolve_workable_actor_member_id
+
+    member_id = resolve_workable_actor_member_id(org, getattr(app, "role", None))
+    if not member_id:
+        return PostWorkableNoteResult(
+            application_id=application_id,
+            status="skipped",
+            detail="Workable actor member is not configured for this organization",
+        )
+
     svc = build_workable_adapter(
         access_token=org.workable_access_token,
         subdomain=org.workable_subdomain,
     )
-    result = svc.post_candidate_activity(
-        candidate_id=app.workable_candidate_id, body=note
+    result = svc.post_candidate_comment(
+        candidate_id=app.workable_candidate_id, member_id=member_id, body=note
     )
     if not result.get("success"):
         logger.warning(
@@ -127,7 +137,7 @@ def run(
         return PostWorkableNoteResult(
             application_id=application_id,
             status="failed",
-            detail=str(result.get("error") or "post_candidate_activity returned no success"),
+            detail=str(result.get("error") or "post_candidate_comment returned no success"),
         )
 
     ensure_pipeline_fields(app)

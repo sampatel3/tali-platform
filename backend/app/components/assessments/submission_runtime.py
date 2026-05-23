@@ -899,6 +899,7 @@ def submit_assessment_impl(
         and assessment.workable_candidate_id
     ):
         from ...tasks.assessment_tasks import post_results_to_workable
+        from ...services.workable_actions_service import resolve_workable_actor_member_id
 
         post_results_to_workable.delay(
             access_token=org.workable_access_token,
@@ -911,6 +912,7 @@ def submit_assessment_impl(
                 "time_taken": assessment.duration_minutes,
                 "results_url": f"{settings_obj.FRONTEND_URL}/assessments/{assessment.id}",
             },
+            member_id=resolve_workable_actor_member_id(org, getattr(application_row, "role", None)),
             request_id=get_request_id(),
         )
 
