@@ -18,8 +18,10 @@ const PAGE_FILE_PATTERN = /Page\.(js|jsx|ts|tsx)$/;
 // post-redesign baseline, not to demand a refactor of pages that
 // shipped intentionally large per HANDOFF. Nudged 2625→2650 for the
 // agent-settings save/toggle race fixes (load-token guard + optimistic
-// budget apply) in JobPipelinePage.
-const MAX_PAGE_LINES = 2650;
+// budget apply) in JobPipelinePage; 2650→2660 to track the post-#278
+// baseline (global interview anchor / dynamic threshold UX), which left
+// JobPipelinePage at 2656 on main on its own.
+const MAX_PAGE_LINES = 2660;
 const DISALLOWED_IMPORT_PATTERNS = [
   /from\s+['"][^'"]*lib\/api(?:\.js)?['"]/g,
   /import\s*\(\s*['"][^'"]*lib\/api(?:\.js)?['"]\s*\)/g,

@@ -24,7 +24,6 @@ import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 import RecruiterAnswersLog from './RecruiterAnswersLog';
 import RoleFeedbackNotes from './RoleFeedbackNotes';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
-import AgentActivityLog from './AgentActivityLog';
 import { useAgentStatus } from '../../shared/layout/AgentBar';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 // AgentRail (the legacy left "cockpit rail") was retired with the v3
@@ -867,8 +866,6 @@ const RoleAgentSettingsTab = ({
             </label>
           ))}
         </section>
-
-        {role?.id ? <AgentActivityLog roleId={role.id} /> : null}
 
         {/* Save bar */}
         <div className="mc-agent-settings-savebar">
