@@ -31,6 +31,7 @@ import {
   formatRelativeAge,
   initialsFrom,
   RolePill,
+  ScoreChip,
   TypeBadge,
 } from './atoms';
 import { TeachModal } from './TeachModal';
@@ -302,6 +303,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <TypeBadge type={p.decision_type} size="sm" />
+              <ScoreChip evidence={p.evidence} size="sm" />
               <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--mute)', letterSpacing: '.06em', marginLeft: 'auto' }}>
                 {formatRelativeAge(p.created_at)}
               </span>
@@ -376,6 +378,7 @@ const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze,
           ) : decision.status === 'reverted_for_feedback' ? (
             <span className="rq-stream-teachpill">+ FEEDBACK</span>
           ) : null}
+          <ScoreChip evidence={decision.evidence} />
         </div>
         {decision.confidence != null ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
