@@ -63,6 +63,30 @@ def pre_screen_recommendation_label(
     return "Manual review recommended" if threshold is not None else "Below threshold"
 
 
+# Raw cv_match ``Recommendation`` enum values that have leaked into the
+# recruiter-facing ``pre_screen_recommendation`` (a display field) via the
+# snapshot fallback below. Map them to proper labels. ``lean_no`` is
+# uncertain → "Manual review recommended" (NOT a hard reject), so we don't
+# turn an unsure verdict into a reject card; only a definitive ``no`` →
+# "Below threshold".
+_CV_RECOMMENDATION_TO_LABEL = {
+    "strong_yes": "Strong match",
+    "yes": "Proceed to screening",
+    "lean_no": "Manual review recommended",
+    "no": "Below threshold",
+}
+
+
+def normalize_recommendation_label(value: Any) -> str | None:
+    """Coerce a recommendation value into a recruiter-facing label: map a raw
+    cv_match enum ('no'/'lean_no'/'yes'/'strong_yes') to its display label,
+    pass an already-proper label through unchanged."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return _CV_RECOMMENDATION_TO_LABEL.get(text.lower(), text)
+
+
 def build_pre_screen_evidence(details: dict[str, Any] | None) -> dict[str, Any]:
     payload = details if isinstance(details, dict) else {}
     return sanitize_json_for_storage(
@@ -116,10 +140,16 @@ def pre_screen_snapshot(app: CandidateApplication) -> dict[str, Any]:
     if cv_fit_score is None:
         cv_fit_score = normalize_score_100(details.get("pre_screen_score_100"))
     pre_screen_score = cv_fit_score
+    # ``details.get("recommendation")`` is the raw cv_match enum (e.g.
+    # 'lean_no') — normalize any raw enum to a proper label so the recruiter
+    # never sees internal jargon. Self-healing: also normalizes an existing
+    # raw value already stored on the app.
     recommendation = sanitize_text_for_storage(
         str(
-            getattr(app, "pre_screen_recommendation", None)
-            or details.get("recommendation")
+            normalize_recommendation_label(
+                getattr(app, "pre_screen_recommendation", None)
+                or details.get("recommendation")
+            )
             or pre_screen_recommendation_label(pre_screen_score)
             or ""
         ).strip()
