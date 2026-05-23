@@ -508,8 +508,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           tall. */}
       <AgentHeader
         breadcrumbs={[{ label: 'Jobs' }]}
-        kicker={`JOBS · ${roles.length} ACTIVE ROLE${roles.length === 1 ? '' : 'S'}`}
-        title={<>{roles.length} active <em>roles</em></>}
+        kicker={`JOBS · ${sourceCounts.live} ACTIVE ROLE${sourceCounts.live === 1 ? '' : 'S'}`}
+        title={<>{sourceCounts.live} active <em>roles</em></>}
         period={false}
         subtitle="You're hiring. Star a role to keep its candidates flowing in automatically."
         actions={(
@@ -593,7 +593,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             roles the agent is enabled on; mirrors the AgentBar org rollup.) */}
         <div className="mc-jobs-kpis">
           {(() => {
-            const activeRoles = roles.length;
+            const activeRoles = sourceCounts.live;
             const starredCount = roles.filter((r) => r.starred_for_auto_sync).length;
             const pipelineCount = roles.reduce(
               (acc, r) => acc + Number(r.active_candidates_count || r.applications_count || 0),
