@@ -23,6 +23,13 @@ export const billing = {
     api.get('/billing/usage-reconciliation', {
       params: { period_days: periodDays },
     }),
+  // Admin-only: claude_call_log summary — total spend, per-feature
+  // breakdown, attribution gap (calls with no UsageEvent), failure rate.
+  // Ground truth from the unconditional call log. Period clamped 1..90.
+  meteringGap: (periodDays = 7) =>
+    api.get('/billing/admin/metering-gap', {
+      params: { days: periodDays },
+    }),
   // Replaces createCheckoutSession (Lemon). Returns { url } from Stripe.
   topup: (data) => api.post('/billing/topup', data),
 };

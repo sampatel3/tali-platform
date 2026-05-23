@@ -333,9 +333,14 @@ const StackedBarChart = ({ days }) => {
   );
 };
 
+const GAP_PERIOD_DAYS = 7;
+
 export default function UsagePanel() {
   const [timeseries, setTimeseries] = useState(null);
   const [loadingSeries, setLoadingSeries] = useState(false);
+  // Admin-only metering-gap summary (claude_call_log). null when the
+  // endpoint 403s for non-admins or hasn't loaded — section stays hidden.
+  const [meteringGap, setMeteringGap] = useState(null);
 
   const loadTimeseries = useCallback(async () => {
     setLoadingSeries(true);
@@ -351,9 +356,20 @@ export default function UsagePanel() {
     }
   }, []);
 
+  const loadMeteringGap = useCallback(async () => {
+    try {
+      const res = await billingApi.meteringGap(GAP_PERIOD_DAYS);
+      setMeteringGap(res?.data || null);
+    } catch {
+      // 403 for non-admins, or endpoint unavailable — hide the section.
+      setMeteringGap(null);
+    }
+  }, []);
+
   useEffect(() => {
     void loadTimeseries();
-  }, [loadTimeseries]);
+    void loadMeteringGap();
+  }, [loadTimeseries, loadMeteringGap]);
 
   const buckets = timeseries?.buckets || [];
   const days = useMemo(() => pivotByDay(buckets), [buckets]);
@@ -449,6 +465,101 @@ export default function UsagePanel() {
           </tbody>
         </table>
       </div>
+
+      <MeteringGapPanel gap={meteringGap} />
+    </div>
+  );
+}
+
+// Admin-only diagnostic. Reads claude_call_log (ground-truth log of every
+// Anthropic call). Surfaces the attribution gap — calls that hit Anthropic
+// but never got a feature/role record — plus failure rate. Hidden entirely
+// for non-admins (the endpoint 403s and ``gap`` stays null).
+function MeteringGapPanel({ gap }) {
+  if (!gap || !gap.totals) return null;
+  const totalCalls = Number(gap.totals.calls || 0);
+  const totalUsd = Number(gap.totals.cost_usd || 0);
+  const gapCalls = Number(gap.attribution_gap?.calls || 0);
+  const gapUsd = Number(gap.attribution_gap?.cost_usd || 0);
+  const gapPct = totalCalls > 0 ? (gapCalls / totalCalls) * 100 : 0;
+  const byStatus = Array.isArray(gap.by_status) ? gap.by_status : [];
+  const errorCalls = byStatus
+    .filter((s) => s.status && s.status !== 'ok')
+    .reduce((sum, s) => sum + Number(s.calls || 0), 0);
+  const errorPct = totalCalls > 0 ? (errorCalls / totalCalls) * 100 : 0;
+  const byFeature = Array.isArray(gap.by_feature) ? gap.by_feature : [];
+
+  return (
+    <div style={{ marginTop: 32 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 4 }}>
+        <h3 style={{ fontSize: 14, margin: 0 }}>Anthropic call log</h3>
+        <span style={{ fontSize: 11, color: 'var(--mute)' }}>
+          admin · ground truth · trailing {gap.period_days || GAP_PERIOD_DAYS} days
+        </span>
+      </div>
+      <p style={{ fontSize: 12, color: 'var(--mute)', marginTop: 0, marginBottom: 12 }}>
+        Every Anthropic call writes a row here regardless of whether the app
+        attributed it. The attribution gap is spend with no feature record —
+        non-zero means a code path is calling Claude without metering it.
+      </p>
+
+      <div className="settings-billing-summary">
+        <div className="settings-billing-card">
+          <div className="settings-summary-label">Total calls</div>
+          <div className="settings-summary-value">{formatNumber(totalCalls)}</div>
+          <div className="settings-summary-note">{formatUsd(totalUsd)} raw cost</div>
+        </div>
+        <div className="settings-billing-card">
+          <div className="settings-summary-label">Attribution gap</div>
+          <div
+            className="settings-summary-value"
+            style={{ color: gapUsd > 0 ? 'var(--purple-2)' : 'inherit' }}
+          >
+            {formatUsd(gapUsd)}
+          </div>
+          <div className="settings-summary-note">
+            {formatNumber(gapCalls)} calls · {gapPct.toFixed(1)}% of total
+          </div>
+        </div>
+        <div className="settings-billing-card">
+          <div className="settings-summary-label">Failure rate</div>
+          <div
+            className="settings-summary-value"
+            style={{ color: errorPct > 10 ? 'var(--purple-2)' : 'inherit' }}
+          >
+            {errorPct.toFixed(1)}%
+          </div>
+          <div className="settings-summary-note">
+            {formatNumber(errorCalls)} non-ok of {formatNumber(totalCalls)}
+          </div>
+        </div>
+      </div>
+
+      {byFeature.length > 0 ? (
+        <div className="settings-usage-table" style={{ marginTop: 16 }}>
+          <div className="settings-usage-head">
+            <h3>Calls by feature</h3>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Feature</th>
+                <th>Calls</th>
+                <th>Raw cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {byFeature.map((row) => (
+                <tr key={row.feature || 'unknown'}>
+                  <td>{row.feature || '(unattributed)'}</td>
+                  <td>{formatNumber(row.calls)}</td>
+                  <td>{formatUsd4(row.cost_usd)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
     </div>
   );
 }
