@@ -224,11 +224,17 @@ def _role_fit_pool(db: Session, *, role: Role) -> list[float]:
 def _strong_signal_role_fit(db: Session, *, role: Role) -> list[float]:
     """Role-fit scores of candidates the recruiter actually progressed —
     reached technical/final interview, offer, or hire. These are the
-    strongest available 'this candidate was worth pursuing' signals."""
+    strongest available 'this candidate was worth pursuing' signals.
+
+    Computed GLOBALLY across the org (all roles), not per-role: a strong
+    role-fit score means roughly the same thing regardless of role, and
+    many roles have few/no interview-stage candidates of their own, so a
+    per-role anchor would be noisy or empty. Pooling org-wide gives a
+    stable anchor every role shares. (Scoped to the org — never across
+    tenants.) The volume cap stays per-role."""
     rows = (
         db.query(CandidateApplication.cv_match_score)
         .filter(
-            CandidateApplication.role_id == role.id,
             CandidateApplication.organization_id == role.organization_id,
             CandidateApplication.deleted_at.is_(None),
             CandidateApplication.cv_match_score.isnot(None),

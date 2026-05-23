@@ -69,8 +69,12 @@ def _gaps_for(role: Role) -> Iterable[str]:
     """
     from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 
-    # 1. Score threshold for advancing candidates.
-    if role.score_threshold is None:
+    # 1. Score threshold for advancing candidates. In ``auto`` mode the
+    # threshold is dynamic / agent-managed (recalibrated live), so there's
+    # nothing for the recruiter to set — don't surface the gap. Only ask
+    # when they've chosen manual mode but left the value blank.
+    mode = getattr(role, "auto_reject_threshold_mode", None) or "manual"
+    if mode != "auto" and role.score_threshold is None:
         yield "threshold_ambiguous"
 
     # 2. Recruiter-set must-have requirements (excluding derived-from-spec).

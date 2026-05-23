@@ -741,8 +741,16 @@ const RoleAgentSettingsTab = ({
               </p>
             </div>
             <div className="mc-agent-settings-threshold-display">
-              {thresholdMode === 'auto' && suggestedThreshold?.value != null ? suggestedThreshold.value : thresholdDisplay}
-              <span className="mc-agent-settings-threshold-pct">%</span>
+              {thresholdMode === 'auto' ? (
+                <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--purple, #7c5cff)', whiteSpace: 'nowrap' }}>
+                  Dynamic
+                </span>
+              ) : (
+                <>
+                  {thresholdDisplay}
+                  <span className="mc-agent-settings-threshold-pct">%</span>
+                </>
+              )}
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
@@ -756,7 +764,7 @@ const RoleAgentSettingsTab = ({
                 disabled={savingThresholdMode}
               >
                 <option value="manual">Manual</option>
-                <option value="auto">Auto · agent-optimised</option>
+                <option value="auto">Agent-managed (dynamic)</option>
               </select>
             </label>
             {thresholdMode === 'auto' && suggestedThreshold?.rationale ? (
@@ -765,23 +773,30 @@ const RoleAgentSettingsTab = ({
               </span>
             ) : null}
           </div>
-          <div className="mc-agent-settings-slider">
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={1}
-              value={thresholdMode === 'auto' && suggestedThreshold?.value != null ? suggestedThreshold.value : thresholdDisplay}
-              onChange={(event) => setThresholdDraft(event.target.value)}
-              aria-label="Reject threshold percent"
-              className="ce-range mc-agent-settings-slider-input"
-              style={{ '--ce-range-val': thresholdMode === 'auto' && suggestedThreshold?.value != null ? suggestedThreshold.value : thresholdDisplay }}
-              disabled={thresholdMode === 'auto'}
-            />
-            <div className="mc-agent-settings-slider-scale">
-              <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
+          {thresholdMode === 'auto' ? (
+            <p className="mc-agent-settings-card-help" style={{ marginTop: 4 }}>
+              Agent-managed — no fixed number. The threshold recalibrates
+              automatically from your interview / offer / hire decisions and
+              keeps candidates sent for review to roughly the strongest 5–10%.
+            </p>
+          ) : (
+            <div className="mc-agent-settings-slider">
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={thresholdDisplay}
+                onChange={(event) => setThresholdDraft(event.target.value)}
+                aria-label="Reject threshold percent"
+                className="ce-range mc-agent-settings-slider-input"
+                style={{ '--ce-range-val': thresholdDisplay }}
+              />
+              <div className="mc-agent-settings-slider-scale">
+                <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
+              </div>
             </div>
-          </div>
+          )}
           {total > 0 ? (
             <>
               <div className="mc-kicker is-mute" style={{ marginTop: 18, marginBottom: 12 }}>
