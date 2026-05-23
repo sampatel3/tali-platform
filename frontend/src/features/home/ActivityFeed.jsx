@@ -64,7 +64,7 @@ export const ActivityFeed = ({
                 <div className="rq-stream-body">
                   <div className="rq-stream-meta">
                     <TypeBadge type={row.decision_type} size="sm" />
-                    <ScoreChip evidence={row.evidence} size="sm" />
+                    <ScoreChip score={row.role_fit_score} size="sm" />
                     {row.status === 'pending'
                       ? <span className="rq-stream-pendpill">NEEDS YOU</span>
                       : <span className="rq-stream-teachpill">+ FEEDBACK</span>}
@@ -109,7 +109,7 @@ export const ActivityFeed = ({
               <div className="rq-stream-body">
                 <div className="rq-stream-meta">
                   <TypeBadge type={row.decision_type} size="sm" />
-                  <ScoreChip evidence={row.evidence} size="sm" />
+                  <ScoreChip score={row.role_fit_score} size="sm" />
                   {row.status === 'overridden' ? <span className="rq-stream-overridepill">OVERRIDE</span> : null}
                   {row.human_disposition === 'taught' ? <span className="rq-stream-teachpill">+ FEEDBACK</span> : null}
                   <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--mute)', letterSpacing: '.06em', marginLeft: 'auto' }}>

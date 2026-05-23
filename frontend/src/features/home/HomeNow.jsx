@@ -24,6 +24,7 @@ import {
 import { agent as agentApi, organizations as orgsApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import { pathForPage } from '../../app/routing';
+import { ScoreRing } from '../../shared/ui/ScoreRing';
 import {
   Avatar,
   ConfBar,
@@ -303,7 +304,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <TypeBadge type={p.decision_type} size="sm" />
-              <ScoreChip evidence={p.evidence} size="sm" />
+              <ScoreChip score={p.role_fit_score} size="sm" />
               <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--mute)', letterSpacing: '.06em', marginLeft: 'auto' }}>
                 {formatRelativeAge(p.created_at)}
               </span>
@@ -378,7 +379,6 @@ const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze,
           ) : decision.status === 'reverted_for_feedback' ? (
             <span className="rq-stream-teachpill">+ FEEDBACK</span>
           ) : null}
-          <ScoreChip evidence={decision.evidence} />
         </div>
         {decision.confidence != null ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -407,6 +407,9 @@ const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze,
             {decision.candidate_email || ''}
           </div>
         </div>
+        {decision.role_fit_score != null ? (
+          <ScoreRing score={decision.role_fit_score} size={72} label="TALI" />
+        ) : null}
       </div>
 
       <p style={{ margin: '0 0 14px', fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: 760 }}>
