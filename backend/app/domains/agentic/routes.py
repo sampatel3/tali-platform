@@ -84,12 +84,13 @@ class AgentDecisionPayload(BaseModel):
     candidate_name: Optional[str] = None
     candidate_email: Optional[str] = None
     role_name: Optional[str] = None
-    # The candidate's headline Tali score, 0–100, joined from
-    # CandidateApplication.taali_score_cache_100 (the composite shown on the
-    # candidate report). Pre-assessment it equals role-fit; post-assessment it
-    # folds in the assessment result. The Hub renders it as a score ring on the
-    # card. Null for pre-screen rejects — those candidates are rejected before
-    # any scoring runs, so there's no score to show.
+    # The candidate's headline Tali score, 0–100. Resolved by preferring the
+    # score the agent stamped on this decision's evidence (frozen at decision
+    # time, present even when the application's score cache is still "pending"),
+    # then the application's cached score; within each, Tali composite then
+    # role-fit (== Tali pre-assessment). The Hub renders it as a score ring on
+    # the card. Null for pre-screen rejects — surfaced before any scoring runs,
+    # so there's no score to show.
     taali_score: Optional[float] = None
     # Workable shortcode (= role.workable_job_id) so the home-page modal
     # can fetch this role's Workable stages for the Advance / Skip & advance
@@ -203,6 +204,24 @@ def _confidence_band(value: Optional[float]) -> Optional[str]:
     return "low"
 
 
+def _first_score(*candidates: Any) -> Optional[float]:
+    """Return the first candidate that is a finite number, as a float.
+
+    Uses an explicit None/finite check rather than ``a or b`` so a genuine
+    ``0.0`` score isn't skipped as falsy.
+    """
+    for c in candidates:
+        if c is None:
+            continue
+        try:
+            f = float(c)
+        except (TypeError, ValueError):
+            continue
+        if f == f and f not in (float("inf"), float("-inf")):  # exclude NaN/inf
+            return f
+    return None
+
+
 def _decision_to_payload(
     decision: AgentDecision,
     candidate: Optional[Candidate],
@@ -240,10 +259,19 @@ def _decision_to_payload(
     # cache: an application can carry a stale cached score from another flow
     # (e.g. a CV match) even though this decision is a pre-screen reject, and
     # that score must not leak onto the card.
-    if application is not None and str(decision.decision_type) != "skip_assessment_reject":
-        raw_score = getattr(application, "taali_score_cache_100", None)
-        if raw_score is not None:
-            taali_score = float(raw_score)
+    if str(decision.decision_type) != "skip_assessment_reject":
+        # Prefer the score the agent stamped on THIS decision (frozen at
+        # decision time, so it matches the reasoning text and is present even
+        # when the application's score cache is still "pending"), then fall
+        # back to the application's cached score. Within each source prefer the
+        # composite Tali score, then role-fit (== Tali pre-assessment).
+        evidence = decision.evidence if isinstance(decision.evidence, dict) else {}
+        taali_score = _first_score(
+            evidence.get("taali_score"),
+            evidence.get("role_fit_score"),
+            getattr(application, "taali_score_cache_100", None) if application else None,
+            getattr(application, "role_fit_score_cache_100", None) if application else None,
+        )
 
     return AgentDecisionPayload(
         id=int(decision.id),

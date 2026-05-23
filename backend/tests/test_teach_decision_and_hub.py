@@ -804,3 +804,76 @@ def test_taali_score_shown_on_advance_but_never_on_pre_screen_reject(client):
 
     psr = by_id[seeded["psr_decision_id"]]
     assert psr["taali_score"] is None, "pre-screen reject must never expose a score"
+
+
+def _seed_advance_with_evidence_only_score(*, org_name: str) -> dict:
+    """Seed an advance decision whose application has NO cached score (the
+    'pending' cache case), with the Tali score present only in the decision's
+    evidence — mirrors the Rajesh Yadla report where the card showed no score."""
+    from tests.conftest import TestingSessionLocal
+
+    sess = TestingSessionLocal()
+    try:
+        org = Organization(name=org_name, slug=f"evonly-{id(sess)}")
+        sess.add(org)
+        sess.flush()
+        role = Role(
+            organization_id=org.id,
+            name="Sr. Backend",
+            source="manual",
+            agentic_mode_enabled=True,
+            monthly_usd_budget_cents=0,
+        )
+        sess.add(role)
+        sess.flush()
+        cand = Candidate(organization_id=org.id, email="evonly@x.test", full_name="Ev")
+        sess.add(cand)
+        sess.flush()
+        app = CandidateApplication(
+            organization_id=org.id,
+            candidate_id=cand.id,
+            role_id=role.id,
+            status="applied",
+            pipeline_stage="review",
+            pipeline_stage_source="recruiter",
+            application_outcome="open",
+            source="manual",
+            # No cached score — the cause of the missing-score bug.
+            taali_score_cache_100=None,
+            role_fit_score_cache_100=None,
+        )
+        sess.add(app)
+        sess.flush()
+        dec = AgentDecision(
+            organization_id=org.id,
+            role_id=role.id,
+            application_id=app.id,
+            decision_type="advance_to_interview",
+            recommendation="advance_to_interview",
+            status="pending",
+            reasoning="Top scorer (73.7).",
+            evidence={"taali_score": 73.7, "cv_match_score": 73.74},
+            model_version="m",
+            prompt_version="p",
+            idempotency_key=f"evonly:{app.id}:advance",
+        )
+        sess.add(dec)
+        sess.commit()
+        return {"org_id": int(org.id), "decision_id": int(dec.id)}
+    finally:
+        sess.close()
+
+
+def test_taali_score_falls_back_to_decision_evidence_when_cache_empty(client):
+    """When the application's score cache is empty, the card still shows the
+    Tali score the agent stamped on the decision's evidence."""
+    from tests.conftest import auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_advance_with_evidence_only_score(org_name="Evidence Only Org")
+    _attach_user_to_org(email, seeded["org_id"])
+
+    listing = client.get("/api/v1/agent-decisions?status=pending", headers=headers)
+    assert listing.status_code == 200, listing.text
+    row = next(r for r in listing.json() if r["id"] == seeded["decision_id"])
+    assert row["taali_score"] == 73.7, "should fall back to evidence taali_score"
