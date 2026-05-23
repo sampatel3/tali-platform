@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterable
 
+from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from ..models.decision_feedback import DecisionFeedback
@@ -136,19 +137,49 @@ def author_new_version(
     db.add(row)
     db.flush()
 
-    # Mirror the row into Graphiti so the graph carries the canonical
-    # RoleIntent entity alongside Postgres. Fire-and-forget; failures
-    # are logged and don't roll back the Postgres write.
-    _emit_role_intent_episode_safe(db, row=row)
+    # Mirror the row into Graphiti, but only once the caller's
+    # transaction COMMITS. Emitting here (during the flush) would leave a
+    # phantom graph node if the caller later rolls back. Fire-and-forget;
+    # failures are logged and never roll back the Postgres write.
+    _schedule_role_intent_episode(db, row=row)
     return row
 
 
-def _emit_role_intent_episode_safe(db: Session, *, row: RoleIntent) -> None:
-    """Mirror a freshly authored RoleIntent into Graphiti. Never raises."""
+def _schedule_role_intent_episode(db: Session, *, row: RoleIntent) -> None:
+    """Defer the Graphiti mirror of a RoleIntent until the txn commits.
+
+    The payload is snapshotted now (while the row + its role are loaded),
+    then emitted from a one-shot ``after_commit`` hook so the graph only
+    gains the node once the Postgres row is durable. Never raises.
+    """
+    payload = _role_intent_episode_payload(db, row=row)
+    if payload is None:
+        return
+
+    @event.listens_for(db, "after_commit", once=True)
+    def _emit(_session: Session) -> None:  # noqa: ARG001
+        try:
+            from ..candidate_graph import agent_episodes
+
+            agent_episodes.emit_role_intent_event(**payload)
+        except Exception:
+            logger.warning(
+                "role intent episode emit failed for role_id=%s v%s",
+                payload.get("role_id"),
+                payload.get("intent_version"),
+            )
+
+
+def _role_intent_episode_payload(
+    db: Session, *, row: RoleIntent
+) -> dict | None:
+    """Build the ``emit_role_intent_event`` kwargs for a new RoleIntent.
+
+    Returns None (and logs) if anything goes wrong, so the caller's
+    commit is never blocked.
+    """
     try:
-        from ..candidate_graph import agent_episodes
         from ..models.role import Role
-        from .contracts import StructuredIntent
 
         structured = StructuredIntent.model_validate(row.structured_fields or {})
         summary_parts: list[str] = []
@@ -168,24 +199,25 @@ def _emit_role_intent_episode_safe(db: Session, *, row: RoleIntent) -> None:
                 f"{', '.join(structured.must_haves_missing_from_spec)}"
             )
         role = db.query(Role).filter(Role.id == int(row.role_id)).one_or_none()
-        agent_episodes.emit_role_intent_event(
-            organization_id=int(row.organization_id),
-            role_id=int(row.role_id),
-            role_name=str(role.name) if role else None,
-            intent_version=int(row.version),
-            structured_summary=" · ".join(summary_parts) or "(no structured fields)",
-            free_text=row.free_text,
-            authored_by_user_id=(
+        return {
+            "organization_id": int(row.organization_id),
+            "role_id": int(row.role_id),
+            "role_name": str(role.name) if role else None,
+            "intent_version": int(row.version),
+            "structured_summary": " · ".join(summary_parts) or "(no structured fields)",
+            "free_text": row.free_text,
+            "authored_by_user_id": (
                 int(row.authored_by_user_id) if row.authored_by_user_id else None
             ),
-            authored_at=row.authored_at,
-        )
+            "authored_at": row.authored_at,
+        }
     except Exception:
         logger.warning(
-            "role intent episode emit failed for role_id=%s v%s",
+            "role intent episode payload build failed for role_id=%s v%s",
             getattr(row, "role_id", None),
             getattr(row, "version", None),
         )
+        return None
 
 
 # ---------------------------------------------------------------------------

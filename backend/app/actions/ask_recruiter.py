@@ -394,10 +394,12 @@ def _writeback_budget(role: Role, raw: str) -> None:
         n = float(cleaned)
     except (TypeError, ValueError):
         return
-    # Heuristic mirrors ``cohort_tools._recent_resolved_answers``: a small
-    # number is dollars, a large number is cents. Recruiters typing "$50"
-    # mean fifty dollars per month, not fifty cents.
-    role.monthly_usd_budget_cents = int(n * 100) if n <= 1000 else int(n)
+    # Recruiters answer this question in dollars per month ("$50",
+    # "2000"), always. The field is stored in cents, so just scale by
+    # 100. The old "small number is dollars, large number is cents"
+    # heuristic mangled any genuine budget over $1000 — "2000" ($2000/mo)
+    # was stored as 2000 cents = $20.
+    role.monthly_usd_budget_cents = max(0, int(round(n * 100)))
 
 
 def _writeback_intent(

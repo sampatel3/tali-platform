@@ -192,6 +192,10 @@ def run_for_all_orgs(db: Session) -> list[NightlyResult]:
             results.append(run_for_org(db, organization_id=oid))
         except Exception as exc:
             logger.exception("nightly retune crashed for org_id=%s", oid)
+            # run_for_org adds/flushes rows; a mid-flight failure leaves
+            # the session in a failed state. Roll back before the next org
+            # so one org's crash doesn't poison every subsequent retune.
+            db.rollback()
             results.append(
                 NightlyResult(
                     organization_id=oid,

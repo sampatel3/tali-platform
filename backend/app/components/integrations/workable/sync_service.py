@@ -1619,6 +1619,13 @@ class WorkableSyncService:
             # Park in `advanced` — they're past Tali's flow. (No-op if already there.)
             if (existing.pipeline_stage or "").lower() != "advanced":
                 try:
+                    # No idempotency_key: transition_stage already no-ops
+                    # when from_stage == target, and the caller guards on
+                    # "not already advanced". A permanent
+                    # ``sync_terminal_advance:{id}`` key instead blocked a
+                    # legitimate re-advance (and its outcome-learning hook)
+                    # if a candidate round-tripped back to non-terminal and
+                    # was later re-observed terminal.
                     transition_stage(
                         db,
                         app=existing,
@@ -1627,7 +1634,6 @@ class WorkableSyncService:
                         actor_type="sync",
                         reason="Reached terminal stage in Workable",
                         metadata={"workable_stage": str(stage or ""), "disqualified": ref_disqualified},
-                        idempotency_key=f"sync_terminal_advance:{existing.id}",
                     )
                 except Exception:  # pragma: no cover — never block a sync
                     import logging
