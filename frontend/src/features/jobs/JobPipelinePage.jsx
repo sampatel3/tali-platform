@@ -740,16 +740,9 @@ const RoleAgentSettingsTab = ({
               </p>
             </div>
             <div className="mc-agent-settings-threshold-display">
-              {thresholdMode === 'auto' ? (
-                <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--purple, #7c5cff)', whiteSpace: 'nowrap' }}>
-                  Dynamic
-                </span>
-              ) : (
-                <>
-                  {thresholdDisplay}
-                  <span className="mc-agent-settings-threshold-pct">%</span>
-                </>
-              )}
+              {thresholdMode === 'auto'
+                ? <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--purple, #7c5cff)' }}>Dynamic</span>
+                : <>{thresholdDisplay}<span className="mc-agent-settings-threshold-pct">%</span></>}
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
@@ -774,9 +767,7 @@ const RoleAgentSettingsTab = ({
           </div>
           {thresholdMode === 'auto' ? (
             <p className="mc-agent-settings-card-help" style={{ marginTop: 4 }}>
-              Agent-managed — no fixed number. The threshold recalibrates
-              automatically from your interview / offer / hire decisions and
-              keeps candidates sent for review to roughly the strongest 5–10%.
+              Agent-managed — no fixed number. Recalibrates from your interview / offer / hire decisions and sends roughly the strongest ~20% of pre-screen survivors.
             </p>
           ) : (
             <div className="mc-agent-settings-slider">

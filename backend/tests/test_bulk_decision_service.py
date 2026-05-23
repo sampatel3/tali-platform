@@ -162,3 +162,34 @@ def test_volume_guard_raises_threshold_question(db, monkeypatch):
         .all()
     )
     assert len(qs) == 1, "high review load should open one threshold question"
+
+
+def test_reconcile_re_decides_pending_on_threshold_shift(db):
+    """When the threshold recalibrates, an existing pending bulk decision
+    whose band flipped is discarded and re-decided with the new bar."""
+    org, role = _seed_role(db, score_threshold=40, with_task=False)  # manual mode
+    _add_app(db, org, role, role_fit=55.0)  # 55 >= 40 -> advance (no task)
+
+    decide_role_cohort(db, role=role)
+    decs = _pending(db, role)
+    assert len(decs) == 1 and decs[0].decision_type == "advance_to_interview"
+
+    # Raise the threshold above the candidate's score -> should flip to reject.
+    role.score_threshold = 70
+    db.commit()
+    summary = decide_role_cohort(db, role=role)
+    assert summary.get("reconciled_discarded", 0) >= 1
+
+    decs = _pending(db, role)
+    assert len(decs) == 1, "still exactly one pending decision (re-decided, not duplicated)"
+    assert decs[0].decision_type == "reject"
+
+
+def test_reconcile_noop_when_threshold_unchanged(db):
+    """No churn: re-running with the same threshold discards nothing."""
+    org, role = _seed_role(db, score_threshold=40, with_task=False)
+    _add_app(db, org, role, role_fit=55.0)
+    decide_role_cohort(db, role=role)
+    summary = decide_role_cohort(db, role=role)
+    assert summary.get("reconciled_discarded", 0) == 0
+    assert len(_pending(db, role)) == 1
