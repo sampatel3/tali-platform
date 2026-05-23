@@ -42,6 +42,27 @@ _THRESHOLD_FLOOR = 30
 _THRESHOLD_CEILING = 75
 _DEFAULT_FALLBACK = 50
 
+# --- Role-fit SEND threshold (the post-pre-screen send/advance bar) ----------
+# Different intent from the pre-screen reject floor above: this gates the
+# detailed role-fit (CV-match) score and decides who reaches HITL review
+# (send_assessment / advance). Two signals, balanced:
+#   (a) quality — role-fit scores of candidates the recruiter actually
+#       progressed to interview / offer / hire (strong signals), and
+#   (b) volume — keep HITL review to ~5–10% of the scored pool.
+# 5–10% above the bar maps to the 90th–95th percentile of role-fit, so the
+# volume band is the hard guardrail; the quality anchor positions the bar
+# inside it. Strong-signal scores are noisy (some interviewees score low),
+# so volume dominates when they'd drag the bar too low.
+_SEND_STRONG_STAGES = ("Technical Interview", "Final Interview", "Offer", "Hired")
+_SEND_STRONG_STAGES_NORM = ("technical_interview", "final_interview", "offer", "hired")
+_SEND_VOLUME_TARGET_PCT = 7.5   # midpoint of the 5–10% review band
+_SEND_VOLUME_CAP_PCT = 10.0     # never send more than ~this share -> p90
+_SEND_VOLUME_FLOOR_PCT = 5.0    # never send fewer than ~this share -> p95
+_SEND_MIN_STRONG_SAMPLES = 3
+_SEND_FLOOR = 45                # absolute safety floor for a SEND bar
+_SEND_CEILING = 85
+_SEND_FALLBACK = 60             # no scored candidates yet
+
 
 @dataclass
 class ThresholdRecommendation:
@@ -179,6 +200,113 @@ def compute_recommended_threshold(
     )
 
 
+def _role_fit_pool(db: Session, *, role: Role) -> list[float]:
+    """Role-fit (CV-match) scores for the role's scored, pre-screen-passing
+    pool — the candidates eligible to reach HITL review. This is the base
+    the volume cap (5–10%) is measured against."""
+    rows = (
+        db.query(CandidateApplication.cv_match_score)
+        .filter(
+            CandidateApplication.role_id == role.id,
+            CandidateApplication.organization_id == role.organization_id,
+            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.cv_match_score.isnot(None),
+            (
+                (CandidateApplication.pre_screen_score_100.is_(None))
+                | (CandidateApplication.pre_screen_score_100 >= 50)
+            ),
+        )
+        .all()
+    )
+    return [float(r[0]) for r in rows if r[0] is not None]
+
+
+def _strong_signal_role_fit(db: Session, *, role: Role) -> list[float]:
+    """Role-fit scores of candidates the recruiter actually progressed —
+    reached technical/final interview, offer, or hire. These are the
+    strongest available 'this candidate was worth pursuing' signals."""
+    rows = (
+        db.query(CandidateApplication.cv_match_score)
+        .filter(
+            CandidateApplication.role_id == role.id,
+            CandidateApplication.organization_id == role.organization_id,
+            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.cv_match_score.isnot(None),
+            (
+                (CandidateApplication.application_outcome == "hired")
+                | (CandidateApplication.workable_stage.in_(_SEND_STRONG_STAGES))
+                | (CandidateApplication.external_stage_normalized.in_(_SEND_STRONG_STAGES_NORM))
+            ),
+        )
+        .all()
+    )
+    return [float(r[0]) for r in rows if r[0] is not None]
+
+
+def compute_role_fit_send_threshold(
+    db: Session, *, role: Role
+) -> ThresholdRecommendation:
+    """Dynamic send/advance bar on the role-fit score.
+
+    Balances (a) the role-fit scores of recruiter-progressed candidates
+    (interview/offer/hire) with (b) a 5–10% HITL-review volume cap. The
+    volume band maps to the 90th–95th percentile of the scored pool and is
+    the hard guardrail; the strong-signal median positions the bar inside
+    it. Recomputed live each evaluation, so it tracks the data daily with
+    no separate job. Clamped to [45, 85]."""
+    pool = _role_fit_pool(db, role=role)
+    if not pool:
+        return ThresholdRecommendation(
+            value=_SEND_FALLBACK, source="fallback",
+            rationale=(
+                "No scored candidates yet — using a sensible default send bar "
+                f"of {_SEND_FALLBACK}. It will recalibrate as candidates score."
+            ),
+            sample_size=0,
+        )
+
+    p_cap = _percentile(pool, 100 - _SEND_VOLUME_CAP_PCT)     # ~p90 -> at most ~10% above
+    p_floor = _percentile(pool, 100 - _SEND_VOLUME_FLOOR_PCT)  # ~p95 -> at least ~5% above
+    target = _percentile(pool, 100 - _SEND_VOLUME_TARGET_PCT)  # ~p92.5 -> ~7.5%
+
+    strong = _strong_signal_role_fit(db, role=role)
+    if len(strong) >= _SEND_MIN_STRONG_SAMPLES:
+        strong_med = statistics.median(strong)
+        # Don't set the bar above the median progressed candidate (we still
+        # want to surface candidates as strong as those interviewed), but
+        # keep volume inside the 5–10% band.
+        value = min(target, strong_med)
+        value = max(value, p_cap)   # cap volume at ~10%
+        value = min(value, p_floor)  # ensure at least ~5% flow
+        source = "labelled_volume_balanced"
+        rationale = (
+            f"{len(strong)} candidates reached interview/offer/hire (median "
+            f"role-fit {strong_med:.0f}); balanced against a 5–10% review-volume "
+            f"cap over {len(pool)} scored candidates → send bar {round(value)}."
+        )
+    else:
+        value = target
+        value = max(value, p_cap)
+        value = min(value, p_floor)
+        source = "volume"
+        rationale = (
+            f"No interview/offer/hire labels yet; targeting ~{_SEND_VOLUME_TARGET_PCT:.0f}% "
+            f"of {len(pool)} scored candidates for review → send bar {round(value)}."
+        )
+
+    value = int(max(_SEND_FLOOR, min(_SEND_CEILING, round(value))))
+    # Enforce the volume cap strictly even when scores are tied at the
+    # boundary (a percentile can land inside a big cluster, so `>= value`
+    # would sweep far more than the cap). Raise the bar past the cluster —
+    # prefer sending fewer than flooding the review queue.
+    cap_count = max(1, int(round(_SEND_VOLUME_CAP_PCT / 100.0 * len(pool))))
+    while value < _SEND_CEILING and sum(1 for s in pool if s >= value) > cap_count:
+        value += 1
+    return ThresholdRecommendation(
+        value=value, source=source, rationale=rationale, sample_size=len(pool)
+    )
+
+
 def effective_threshold(
     db: Session, *, role: Role
 ) -> int | None:
@@ -194,20 +322,23 @@ def effective_threshold(
 
 
 def resolve_role_fit_threshold(db: Session, *, role: Role) -> float | None:
-    """The single role-fit boundary the decision engine should use.
+    """The single role-fit send/reject boundary the decision engine uses.
 
-    Manual mode → the recruiter's ``score_threshold``; auto mode → the
-    agent-calibrated recommendation. When manual mode has no value set,
-    fall back to the calibrated recommendation anyway (which always
-    resolves, with a default floor) so EVERY candidate lands on one side
-    of the boundary and gets a decision — no silent "gap" band. Returns
-    None only if even the recommendation can't be computed, in which case
-    the engine keeps the stored policy thresholds unchanged.
+    Auto mode → the dynamic, agent-managed ``compute_role_fit_send_threshold``
+    (strong-stage anchor + 5–10% volume cap, recomputed live). Manual mode →
+    the recruiter's fixed ``score_threshold``, falling back to the dynamic
+    value when they haven't set one — so EVERY candidate lands on one side of
+    the boundary and gets a decision (no silent "gap"). Returns None only if
+    nothing is computable, in which case the engine keeps the stored policy
+    thresholds unchanged.
     """
     try:
-        eff = effective_threshold(db, role=role)
-        if eff is None:
-            eff = compute_recommended_threshold(db, role=role).value
-        return float(eff) if eff is not None else None
+        mode = getattr(role, "auto_reject_threshold_mode", None) or "manual"
+        if mode == "auto":
+            return float(compute_role_fit_send_threshold(db, role=role).value)
+        # Manual mode: recruiter's fixed value, else the dynamic recommendation.
+        if role.score_threshold is not None:
+            return float(role.score_threshold)
+        return float(compute_role_fit_send_threshold(db, role=role).value)
     except Exception:  # pragma: no cover — never break the verdict path
         return None
