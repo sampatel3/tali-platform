@@ -651,10 +651,13 @@ def list_role_applications(
             # one-to-many relationships at once produces a cartesian product —
             # measured at 343 apps -> 6,444 materialised rows for a single role,
             # which SQLAlchemy then de-dupes in Python. selectinload issues one
-            # extra flat IN-query per collection instead. assessments are not
-            # read in list mode (cached score summary) so we don't load them.
+            # extra flat IN-query per collection instead. assessments stay
+            # loaded (without the task join, which list mode doesn't read):
+            # _last_activity_at iterates them for the "Last updated" column, so
+            # dropping them would reintroduce a per-row lazy-load N+1.
             selectinload(CandidateApplication.interviews),
             selectinload(CandidateApplication.score_jobs),
+            selectinload(CandidateApplication.assessments),
         )
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
@@ -1328,9 +1331,12 @@ def list_applications_global(
                 joinedload(CandidateApplication.candidate),
                 joinedload(CandidateApplication.organization),
                 joinedload(CandidateApplication.role),
-                # selectinload avoids the multi-collection cartesian product;
-                # assessments aren't read in list mode (cached score summary).
+                # selectinload avoids the multi-collection cartesian product.
+                # assessments stay loaded (no task join) — _last_activity_at
+                # iterates them for the "Last updated" column; dropping them
+                # would reintroduce a per-row lazy-load N+1.
                 selectinload(CandidateApplication.interviews),
+                selectinload(CandidateApplication.assessments),
             )
             .filter(CandidateApplication.id.in_(page_ids))
             .all()
@@ -1484,9 +1490,12 @@ def get_role_pipeline(
                 joinedload(CandidateApplication.candidate),
                 joinedload(CandidateApplication.organization),
                 joinedload(CandidateApplication.role),
-                # selectinload avoids the multi-collection cartesian product;
-                # assessments aren't read in list mode (cached score summary).
+                # selectinload avoids the multi-collection cartesian product.
+                # assessments stay loaded (no task join) — _last_activity_at
+                # iterates them for the "Last updated" column; dropping them
+                # would reintroduce a per-row lazy-load N+1.
                 selectinload(CandidateApplication.interviews),
+                selectinload(CandidateApplication.assessments),
             )
             .filter(CandidateApplication.id.in_(page_ids))
             .all()
