@@ -289,6 +289,10 @@ class ApplicationResponse(BaseModel):
     auto_reject_state: Optional[str] = None
     auto_reject_reason: Optional[str] = None
     auto_reject_triggered_at: Optional[datetime] = None
+    # The application's latest pending agent decision (id/decision_type/
+    # recommendation/status), resolved per-row by the list endpoint so the
+    # candidate-list AGENT column isn't capped by a separate decisions fetch.
+    pending_decision: Optional[dict[str, Any]] = None
     screening_pack: Optional[InterviewPack] = None
     tech_interview_pack: Optional[InterviewPack] = None
     screening_interview_summary: Optional[dict[str, Any]] = None

@@ -20,8 +20,7 @@ from app.services.pre_screen_decision_emitter import (
 
 # SQLite BigInteger PK workaround. ``AgentDecision.id`` is BigInteger, and
 # SQLite only auto-increments INTEGER PRIMARY KEY columns (not BIGINT).
-# Production uses Postgres where this isn't a problem. Mirrors the same
-# fix used in ``test_agent_runtime_orchestrator.py``.
+# Production uses Postgres where this isn't a problem.
 _BIG_PK = {"agent_decisions": 0}
 
 def _assign_big_pk(mapper, connection, target):  # pragma: no cover — SQLA hook
@@ -732,3 +731,32 @@ def test_reconcile_threshold_cleared_discards_scored_reject(db):
     assert summary["discarded"] == 1  # the scored row — no cutoff to be below
     assert _latest_status(db, scored) == "discarded"
     assert _latest_status(db, null_rec) == "pending"  # must-have miss survives
+
+
+def test_pending_decision_map_resolves_per_app(db):
+    """The candidate-list AGENT column reads its decision from a per-app
+    batch map so it isn't capped by the /agent-decisions fetch limit.
+    """
+    from app.domains.assessments_runtime.applications_routes import _pending_decision_map
+
+    org, role, app = _seed(db, score=20.0, threshold=50.0)
+    decision = queue_pre_screen_reject(
+        db, organization_id=org.id, role=role, application=app,
+        pre_screen_score=20.0, threshold=50.0,
+    )
+    db.commit()
+
+    m = _pending_decision_map(db, [app.id])
+    assert app.id in m
+    assert m[app.id]["id"] == decision.id
+    assert m[app.id]["decision_type"] == "skip_assessment_reject"
+    assert m[app.id]["recommendation"] == "skip_assessment_reject"
+    assert m[app.id]["status"] == "pending"
+
+    # Resolved decisions drop out of the map.
+    decision.status = "discarded"
+    db.commit()
+    assert _pending_decision_map(db, [app.id]) == {}
+
+    # Empty input is a no-op (no query).
+    assert _pending_decision_map(db, []) == {}
