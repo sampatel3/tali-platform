@@ -397,6 +397,33 @@ def run_cv_match(
         archetype_weights=archetype_weights,
     )
 
+    # 7b. CV integrity — deterministic, bounded soft penalty on role_fit.
+    # Two signals: unverified extraordinary claims the model flagged, and
+    # timeline inconsistencies over the extracted career timeline. Capped so
+    # fraud can't inflate a candidate into interview, but a false positive
+    # (LLM-extracted timeline, model-prior familiarity) can't auto-reject.
+    # Function-level imports keep cv_matching free of a load-time dependency
+    # on the services layer (which imports cv_matching).
+    from ..platform.config import settings
+    from ..services.fraud_detection import (
+        apply_integrity_penalty,
+        compute_integrity_penalty,
+        detect_timeline_inconsistencies,
+    )
+
+    timeline_entries = (
+        parsed.candidate_snapshot.timeline if parsed.candidate_snapshot else []
+    )
+    timeline_result = detect_timeline_inconsistencies(timeline_entries)
+    integrity = compute_integrity_penalty(
+        parsed.claims_to_verify,
+        timeline_result,
+        points_per_issue=settings.FRAUD_INTEGRITY_PENALTY_POINTS,
+        max_penalty=settings.FRAUD_INTEGRITY_PENALTY_MAX,
+    )
+    role_fit = apply_integrity_penalty(role_fit, integrity.penalty)
+    timeline_flags = [issue.detail for issue in timeline_result.issues]
+
     # 8. Calibration (None when no calibrator exists)
     calibrated_p_advance = None
     if archetype is not None:
@@ -423,6 +450,9 @@ def run_cv_match(
         concerns=parsed.concerns,
         summary=parsed.summary,
         candidate_snapshot=parsed.candidate_snapshot,
+        claims_to_verify=parsed.claims_to_verify,
+        timeline_flags=timeline_flags,
+        integrity_penalty=integrity.penalty,
         requirements_match_score=req_match,
         cv_fit_score=cv_fit,
         role_fit_score=role_fit,

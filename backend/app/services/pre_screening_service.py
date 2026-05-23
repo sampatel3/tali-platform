@@ -13,8 +13,10 @@ from ..platform.config import settings
 from .document_service import sanitize_json_for_storage, sanitize_text_for_storage
 from .fraud_detection import (
     apply_fraud_penalty,
+    apply_unverified_claim_prescreen_penalty,
     build_fraud_signals_payload,
     detect_cv_copy_paste,
+    persist_fraud_filtered_prescreen,
 )
 from .pricing_service import Feature
 from .taali_scoring import compute_role_fit_score
@@ -271,6 +273,13 @@ def execute_pre_screen_only(
             app.id,
         )
 
+    # Deterministic gate: CV↔JD copy-paste needs no LLM — run it first so a
+    # plagiarised CV is filtered for free (skips the Haiku call AND full
+    # scoring). Non-fraud CVs fall through to the LLM unchanged.
+    fraud = detect_cv_copy_paste(cv_text, job_spec_text, threshold=settings.FRAUD_COPY_PASTE_THRESHOLD)
+    if fraud.triggered:
+        return persist_fraud_filtered_prescreen(app, fraud, cap_score=settings.FRAUD_PENALTY_CAP_SCORE)
+
     # Thread the metering context so the MeteredAnthropicClient wrapper
     # writes the pre-screen usage_event per actual call (FK-linked to
     # claude_call_log) — capturing errored / JSON-parse-failure calls
@@ -348,20 +357,24 @@ def execute_pre_screen_only(
             "prompt_version": pre.prompt_version,
         }
 
-    # Deterministic fraud check — currently CV ↔ JD copy-paste only.
-    # Always compute (so we can calibrate the threshold from real data
-    # later) but only cap the score when the threshold is crossed.
-    fraud = detect_cv_copy_paste(
-        cv_text,
-        job_spec_text,
-        threshold=settings.FRAUD_COPY_PASTE_THRESHOLD,
-    )
+    # ``fraud`` was computed by the deterministic gate above (triggered →
+    # already short-circuited), so reuse it; here it never caps.
     score, fraud_capped = apply_fraud_penalty(
         pre.score,
         fraud,
         cap_score=settings.FRAUD_PENALTY_CAP_SCORE,
     )
+    # Soft penalty when the gate flags an extraordinary CV-uncorroborated claim (skipped if copy-paste already capped).
+    score, unverified_penalised = apply_unverified_claim_prescreen_penalty(
+        score,
+        pre.unverified_claim and not fraud_capped,
+        penalty=settings.FRAUD_PRESCREEN_UNVERIFIED_PENALTY,
+    )
     fraud_signals = build_fraud_signals_payload(fraud)
+    fraud_signals["unverified_claim"] = {
+        "flagged": pre.unverified_claim,
+        "penalty_applied": unverified_penalised,
+    }
     if fraud_capped:
         # Replace the LLM rationale with a fraud-specific one so the
         # directory and report copy doesn't claim the candidate is a poor

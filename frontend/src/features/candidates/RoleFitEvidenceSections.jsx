@@ -220,6 +220,8 @@ export function RoleFitEvidenceSections({
   const matchingSkills = model?.matchingSkills || [];
   const missingSkills = model?.missingSkills || [];
   const concerns = model?.concerns || [];
+  const claimsToVerify = (model?.claimsToVerify || []).slice(0, config.reasonLimit);
+  const timelineFlags = (model?.timelineFlags || []).slice(0, config.reasonLimit);
 
   if (!model?.hasAnyEvidence) {
     return (
@@ -292,6 +294,49 @@ export function RoleFitEvidenceSections({
 
       {concerns.length > 0 ? (
         <ConcernsCallout concerns={concerns} limit={config.reasonLimit} titleSize={config.titleSize} />
+      ) : null}
+
+      {(claimsToVerify.length > 0 || timelineFlags.length > 0) ? (
+        <Panel className="border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className={cx(config.titleSize, 'text-[var(--taali-text)]')}>Verify before interview</div>
+            <Badge variant="warning" className="text-[11px]">unverified</Badge>
+          </div>
+          <p className="mt-1 text-xs text-[var(--taali-muted)]">
+            Claims the agent could not confirm from the CV. Not held against the score beyond a small flag — confirm in screening.
+          </p>
+          {claimsToVerify.length > 0 ? (
+            <ul className="mt-3 space-y-2">
+              {claimsToVerify.map((item, index) => (
+                <li key={`claim-${index}`} className="flex gap-2 text-sm text-[var(--taali-text)]">
+                  <span className="mt-1 h-1.5 w-1.5 rounded-full bg-[var(--taali-warning)]" />
+                  <span>
+                    {item.claimType ? (
+                      <span className="font-medium text-[var(--taali-text)]">{item.claimType.replace(/_/g, ' ')}: </span>
+                    ) : null}
+                    {item.claimText}
+                    {item.reasoning ? (
+                      <span className="text-[var(--taali-muted)]"> — {item.reasoning}</span>
+                    ) : null}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {timelineFlags.length > 0 ? (
+            <div className="mt-3">
+              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Timeline checks</div>
+              <ul className="mt-2 space-y-2">
+                {timelineFlags.map((item, index) => (
+                  <li key={`timeline-${index}`} className="flex gap-2 text-sm text-[var(--taali-text)]">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-[var(--taali-warning)]" />
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </Panel>
       ) : null}
     </div>
   );

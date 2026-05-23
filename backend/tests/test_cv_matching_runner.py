@@ -166,6 +166,102 @@ def test_runner_returns_canonical_output(monkeypatch):
     assert abs(out.experience_relevance_score - 62.5) < 0.01
 
 
+def _payload_with_integrity(
+    *,
+    claims: list[dict] | None = None,
+    timeline: list[dict] | None = None,
+) -> str:
+    cv = "Python developer for 6 years"
+    body = json.loads(_payload(cv_text=cv))
+    if timeline is not None:
+        body["candidate_snapshot"] = {
+            "years_experience": 6,
+            "top_skills": ["Python"],
+            "timeline": timeline,
+        }
+    if claims is not None:
+        body["claims_to_verify"] = claims
+    return json.dumps(body)
+
+
+def _run_with_payload(monkeypatch, payload: str) -> CVMatchOutput:
+    _disable_archetype(monkeypatch)
+    return run_cv_match(
+        cv_text="Python developer for 6 years",
+        jd_text="Senior Python role",
+        requirements=[
+            RequirementInput(
+                id="jd_req_1", requirement="5+ years Python", priority=Priority.MUST_HAVE
+            )
+        ],
+        client=_stub_client([payload]),
+        skip_cache=True,
+    )
+
+
+def test_runner_clean_cv_has_no_integrity_penalty(monkeypatch):
+    out = _run_with_payload(monkeypatch, _payload_with_integrity(claims=[], timeline=[]))
+    assert out.integrity_penalty == 0.0
+    assert out.claims_to_verify == []
+    assert out.timeline_flags == []
+
+
+def test_runner_penalises_unverified_claim_and_timeline(monkeypatch):
+    clean = _run_with_payload(monkeypatch, _payload_with_integrity(claims=[], timeline=[]))
+    flagged = _run_with_payload(
+        monkeypatch,
+        _payload_with_integrity(
+            claims=[
+                {
+                    "claim_text": "1st place, XYZ Global Hackathon 2023",
+                    "claim_type": "competition",
+                    "corroboration": "uncorroborated",
+                    "model_familiarity": "unknown",
+                    "reasoning": "No employer/date context; event unknown.",
+                }
+            ],
+            timeline=[
+                {
+                    "company": "Acme",
+                    "role": "Engineer",
+                    "start_year": 2020,
+                    "end_year": 2015,
+                    "is_current": False,
+                }
+            ],
+        ),
+    )
+    # 1 unverified claim + 1 timeline issue = 2 × 5pts default.
+    assert flagged.integrity_penalty == 10.0
+    assert len(flagged.claims_to_verify) == 1
+    assert flagged.claims_to_verify[0].claim_type == "competition"
+    assert len(flagged.timeline_flags) == 1
+    assert "before it starts" in flagged.timeline_flags[0]
+    # The operative score (role_fit) reflects the deduction.
+    assert flagged.role_fit_score == max(0.0, clean.role_fit_score - 10.0)
+
+
+def test_runner_does_not_penalise_corroborated_known_claim(monkeypatch):
+    out = _run_with_payload(
+        monkeypatch,
+        _payload_with_integrity(
+            claims=[
+                {
+                    "claim_text": "Won Google Summer of Code 2019",
+                    "claim_type": "award",
+                    "corroboration": "corroborated",
+                    "model_familiarity": "known",
+                    "reasoning": "Well-known program; CV gives the year.",
+                }
+            ],
+            timeline=[],
+        ),
+    )
+    # Still surfaced for the recruiter, but no score deduction.
+    assert out.integrity_penalty == 0.0
+    assert len(out.claims_to_verify) == 1
+
+
 def test_runner_sends_untrusted_cv_wrapper(monkeypatch):
     _disable_archetype(monkeypatch)
     cv = "Python developer for 6 years"

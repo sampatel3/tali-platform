@@ -202,7 +202,7 @@ def test_post_summary_posts_note_with_share_link(db, monkeypatch):
         "app.actions._workable_decision_summary.build_workable_adapter"
     ) as mock_factory:
         adapter = mock_factory.return_value
-        adapter.post_candidate_activity.return_value = {"success": True}
+        adapter.post_candidate_comment.return_value = {"success": True}
 
         ok = wds.post_decision_summary_to_workable(
             db,
@@ -215,8 +215,9 @@ def test_post_summary_posts_note_with_share_link(db, monkeypatch):
         )
 
     assert ok is True
-    assert adapter.post_candidate_activity.called
-    kwargs = adapter.post_candidate_activity.call_args.kwargs
+    assert adapter.post_candidate_comment.called
+    kwargs = adapter.post_candidate_comment.call_args.kwargs
+    assert kwargs["member_id"] == "member-1"
     body = kwargs["body"]
     assert "TAALI ▸ Advanced by recruiter" in body
     assert "Score: 85/100" in body
@@ -244,7 +245,7 @@ def test_post_summary_records_failure_event_on_api_error(db, monkeypatch):
         "app.actions._workable_decision_summary.build_workable_adapter"
     ) as mock_factory:
         adapter = mock_factory.return_value
-        adapter.post_candidate_activity.return_value = {
+        adapter.post_candidate_comment.return_value = {
             "success": False,
             "error": "workable 502",
         }

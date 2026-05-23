@@ -118,9 +118,14 @@ def patched_workable():
     ) as mock_move, patch(
         "app.domains.integrations_notifications.invite_flow.build_workable_adapter"
     ) as mock_adapter_factory:
-        mock_move.return_value = {"success": True, "action": "move", "code": "ok"}
+        mock_move.return_value = {
+            "success": True,
+            "action": "move",
+            "code": "ok",
+            "config": {"actor_member_id": "member-x"},
+        }
         adapter = mock_adapter_factory.return_value
-        adapter.post_candidate_activity.return_value = {"success": True}
+        adapter.post_candidate_comment.return_value = {"success": True}
         yield {"move": mock_move, "adapter_factory": mock_adapter_factory}
 
 
@@ -322,7 +327,7 @@ def test_workable_partial_when_stage_move_fails(db, patched_email, monkeypatch):
         "app.domains.integrations_notifications.invite_flow.build_workable_adapter"
     ) as mock_adapter_factory:
         adapter = mock_adapter_factory.return_value
-        adapter.post_candidate_activity.return_value = {"success": True}
+        adapter.post_candidate_comment.return_value = {"success": True}
         channel = dispatch_assessment_invite(
             assessment=a,
             org=org,
@@ -353,12 +358,12 @@ def test_workable_partial_when_activity_post_fails(db, patched_email, monkeypatc
 
     with patch(
         "app.domains.integrations_notifications.invite_flow.move_candidate_in_workable",
-        return_value={"success": True},
+        return_value={"success": True, "config": {"actor_member_id": "member-x"}},
     ), patch(
         "app.domains.integrations_notifications.invite_flow.build_workable_adapter"
     ) as mock_adapter_factory:
         adapter = mock_adapter_factory.return_value
-        adapter.post_candidate_activity.return_value = {"success": False}
+        adapter.post_candidate_comment.return_value = {"success": False}
         channel = dispatch_assessment_invite(
             assessment=a,
             org=org,
@@ -425,12 +430,12 @@ def test_workable_activity_note_contains_assessment_link(db, patched_email, monk
 
     with patch(
         "app.domains.integrations_notifications.invite_flow.move_candidate_in_workable",
-        return_value={"success": True},
+        return_value={"success": True, "config": {"actor_member_id": "member-x"}},
     ), patch(
         "app.domains.integrations_notifications.invite_flow.build_workable_adapter"
     ) as mock_adapter_factory:
         adapter = mock_adapter_factory.return_value
-        adapter.post_candidate_activity.return_value = {"success": True}
+        adapter.post_candidate_comment.return_value = {"success": True}
 
         dispatch_assessment_invite(
             assessment=a,
@@ -440,9 +445,10 @@ def test_workable_activity_note_contains_assessment_link(db, patched_email, monk
             position="Backend",
         )
 
-        post_args = adapter.post_candidate_activity.call_args
-        candidate_id_arg, body = post_args.args
+        post_args = adapter.post_candidate_comment.call_args
+        candidate_id_arg, member_id_arg, body = post_args.args
         assert candidate_id_arg == "wkbl_008"
+        assert member_id_arg == "member-x"
         assert "Alice" in body
         assert "alice@x.test" in body
         assert f"https://app.taali.test/assessment/{a.id}" in body

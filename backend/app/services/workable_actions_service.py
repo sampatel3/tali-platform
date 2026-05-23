@@ -95,6 +95,15 @@ def resolved_workable_action_config(org: Organization | None, role: Role | None 
     }
 
 
+def resolve_workable_actor_member_id(org: Organization | None, role: Role | None = None) -> str | None:
+    """Member id Workable attributes write-backs to (per-role override → org).
+
+    Comments, assessment-result notes and stage moves all require this; it
+    is None when the org never configured ``workable_actor_member_id``.
+    """
+    return resolved_workable_action_config(org, role=role).get("actor_member_id")
+
+
 def render_workable_note_template(template: str | None, **mapping: Any) -> str | None:
     raw_template = sanitize_text_for_storage(str(template or "").strip())
     if not raw_template:

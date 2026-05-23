@@ -43,6 +43,10 @@ class PreScreenResult:
     trace_id: str
     cache_hit: bool
     score: float | None = None  # 0-100 numeric pre-screen score (v2.0+)
+    # v2.2: gate flag — candidate leans on an extraordinary, CV-uncorroborated
+    # claim (named hackathon win, award, publication). Drives a soft penalty
+    # downstream; never a hard reject on its own.
+    unverified_claim: bool = False
     # Token usage (populated by the runner, used by usage_metering_service).
     input_tokens: int = 0
     output_tokens: int = 0
@@ -128,6 +132,7 @@ def _cache_get(cache_key: str) -> PreScreenResult | None:
             cached_score: float | None = max(0.0, min(100.0, float(raw_score)))
         except (TypeError, ValueError):
             cached_score = None
+        unverified_claim = bool(result.get("unverified_extraordinary_claim") or False)
         try:
             row.hit_count = (row.hit_count or 0) + 1
             row.last_hit_at = datetime.now(timezone.utc)
@@ -142,6 +147,7 @@ def _cache_get(cache_key: str) -> PreScreenResult | None:
             trace_id=str(result.get("trace_id") or ""),
             cache_hit=True,
             score=cached_score,
+            unverified_claim=unverified_claim,
         )
     finally:
         session.close()
@@ -172,6 +178,7 @@ def _cache_set(cache_key: str, result: PreScreenResult, score: float | None = No
                 "score": result.score,
                 "reason": result.reason,
                 "trace_id": result.trace_id,
+                "unverified_extraordinary_claim": result.unverified_claim,
             },
             hit_count=0,
         )
@@ -301,6 +308,7 @@ def run_pre_screen(
     decision: PreScreenDecision = "error"
     reason = ""
     parsed_score: float | None = None
+    parsed_unverified: bool = False
     try:
         parsed = json.loads(text)
         if isinstance(parsed, dict):
@@ -316,6 +324,7 @@ def run_pre_screen(
                 # v1.0 cache hit or malformed v2 response — use decision field
                 decision = _normalize_decision(str(parsed.get("decision") or ""))
             reason = str(parsed.get("reason") or "")[:240]
+            parsed_unverified = bool(parsed.get("unverified_extraordinary_claim") or False)
     except json.JSONDecodeError as exc:
         logger.warning("Pre-screen JSON parse failed: %s", exc)
         decision = "error"
@@ -335,6 +344,7 @@ def run_pre_screen(
         trace_id=trace_id,
         cache_hit=False,
         score=parsed_score,
+        unverified_claim=parsed_unverified,
         input_tokens=in_tok,
         output_tokens=out_tok,
         cache_read_tokens=cache_read_tok,
