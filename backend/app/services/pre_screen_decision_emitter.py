@@ -733,3 +733,201 @@ def rederive_pre_screen_recommendations(
     if updated:
         db.commit()
     return {"updated": updated, "scanned": scanned}
+
+
+# ---------------------------------------------------------------------------
+# Score/decision consistency repairs. A per-app discard helper used by the
+# outcome-close path, plus one-shot backfills + a divergence monitor.
+# ---------------------------------------------------------------------------
+
+
+def discard_pending_decisions_for_app(
+    db: Session, *, application_id: int, reason: str
+) -> int:
+    """Discard every pending agent decision for an application — used when the
+    application closes (rejected / hired / withdrawn). A closed candidate's
+    queued decisions are moot; leaving them pending shows the recruiter live
+    cards for people already out of the funnel.
+
+    Never touches a human-resolved row (defensive — a pending row shouldn't
+    have a human resolver). Returns the number discarded. Does NOT commit;
+    the caller's transaction owns that.
+    """
+    cards = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.application_id == int(application_id),
+            AgentDecision.status == "pending",
+            AgentDecision.resolved_by_user_id.is_(None),
+        )
+        .all()
+    )
+    now = datetime.now(timezone.utc)
+    discarded = 0
+    for card in cards:
+        card.status = "discarded"
+        card.resolved_at = now
+        card.resolution_note = reason[:500]
+        discarded += 1
+    return discarded
+
+
+def backfill_discard_decisions_on_closed_apps(
+    db: Session, *, organization_id: int | None = None, dry_run: bool = False
+) -> dict:
+    """P1: discard pending agent decisions whose application is no longer open.
+
+    These accumulated because closing an application via a path other than
+    approving the decision (Workable sync, manual outcome change, direct
+    auto-reject) didn't clear its queued cards. Returns
+    ``{"discarded": int, "scanned": int}``.
+    """
+    q = (
+        db.query(AgentDecision, CandidateApplication)
+        .join(CandidateApplication, CandidateApplication.id == AgentDecision.application_id)
+        .filter(
+            AgentDecision.status == "pending",
+            AgentDecision.resolved_by_user_id.is_(None),
+            CandidateApplication.application_outcome != "open",
+        )
+    )
+    if organization_id is not None:
+        q = q.filter(AgentDecision.organization_id == int(organization_id))
+    now = datetime.now(timezone.utc)
+    discarded = 0
+    scanned = 0
+    for decision, app in q.all():
+        scanned += 1
+        if dry_run:
+            discarded += 1
+            continue
+        decision.status = "discarded"
+        decision.resolved_at = now
+        decision.resolution_note = (
+            f"superseded: application already closed ({app.application_outcome})"
+        )[:500]
+        discarded += 1
+    if discarded and not dry_run:
+        db.commit()
+    return {"discarded": discarded, "scanned": scanned}
+
+
+def backfill_recommendations_from_cvmatch(
+    db: Session, *, organization_id: int | None = None, dry_run: bool = False
+) -> dict:
+    """P2: re-derive ``pre_screen_recommendation`` so it matches the current
+    score. cv_match scoring overwrites the numeric score but left the frozen
+    pre-screen label, leaving "Strong match" on a 12/100 and "Below
+    threshold" on a 55/100. Re-label from the current score + role threshold,
+    both directions. Fraud-capped rows keep their verdict (not score-derived).
+
+    Returns ``{"updated": int, "scanned": int}``.
+    """
+    from .pre_screening_service import resolved_auto_reject_config
+    from .pre_screening_snapshot import pre_screen_recommendation_label
+
+    q = (
+        db.query(CandidateApplication, Role)
+        .join(Role, Role.id == CandidateApplication.role_id)
+        .filter(
+            CandidateApplication.deleted_at.is_(None),
+            Role.deleted_at.is_(None),
+            CandidateApplication.pre_screen_score_100.isnot(None),
+        )
+    )
+    if organization_id is not None:
+        q = q.filter(CandidateApplication.organization_id == int(organization_id))
+    threshold_cache: dict[int, float | None] = {}
+    updated = 0
+    scanned = 0
+    for app, role in q.all():
+        scanned += 1
+        evidence = app.pre_screen_evidence if isinstance(app.pre_screen_evidence, dict) else {}
+        if evidence.get("fraud_capped"):
+            continue
+        if role.id not in threshold_cache:
+            threshold_cache[role.id] = resolved_auto_reject_config(None, role, db=db)["threshold_100"]
+        new_label = pre_screen_recommendation_label(app.pre_screen_score_100, threshold_cache[role.id])
+        if new_label and new_label != (app.pre_screen_recommendation or ""):
+            if not dry_run:
+                app.pre_screen_recommendation = new_label
+            updated += 1
+    if updated and not dry_run:
+        db.commit()
+    return {"updated": updated, "scanned": scanned}
+
+
+def backfill_summaries_from_cvmatch(
+    db: Session, *, organization_id: int | None = None, dry_run: bool = False
+) -> dict:
+    """P3: fill a missing ``pre_screen_evidence.summary`` from the richer
+    ``cv_match_details.summary`` so the card/report has a reason line.
+    Only touches rows that have a score but no summary. Returns
+    ``{"updated": int, "scanned": int}``.
+    """
+    q = db.query(CandidateApplication).filter(
+        CandidateApplication.deleted_at.is_(None),
+        CandidateApplication.pre_screen_score_100.isnot(None),
+    )
+    if organization_id is not None:
+        q = q.filter(CandidateApplication.organization_id == int(organization_id))
+    updated = 0
+    scanned = 0
+    for app in q.all():
+        scanned += 1
+        ev = app.pre_screen_evidence if isinstance(app.pre_screen_evidence, dict) else {}
+        if str(ev.get("summary") or "").strip():
+            continue
+        details = app.cv_match_details if isinstance(app.cv_match_details, dict) else {}
+        cv_summary = str(details.get("summary") or "").strip()
+        if not cv_summary:
+            continue
+        if not dry_run:
+            new_ev = dict(ev)
+            new_ev["summary"] = cv_summary[:240]
+            app.pre_screen_evidence = new_ev
+        updated += 1
+    if updated and not dry_run:
+        db.commit()
+    return {"updated": updated, "scanned": scanned}
+
+
+def pre_screen_gate_divergence_report(
+    db: Session, *, organization_id: int | None = None
+) -> dict:
+    """P4 monitor (read-only): quantify disagreement between the cheap
+    pre-screen gate (``llm_score_100``) and the authoritative full cv_match
+    score, for fully-scored candidates. A high divergence rate is the root
+    signal behind mislabelled rejects — surfaced so the gate prompt/threshold
+    can be recalibrated deliberately.
+
+    Returns counts: candidates scored by both, |gap|>20, gate false-negatives
+    (gate<30 but full>=50) and gate false-positives (gate>=50 but full<30).
+    """
+    q = db.query(CandidateApplication).filter(
+        CandidateApplication.deleted_at.is_(None),
+        CandidateApplication.cv_match_score.isnot(None),
+    )
+    if organization_id is not None:
+        q = q.filter(CandidateApplication.organization_id == int(organization_id))
+    both = diverge = false_neg = false_pos = 0
+    for app in q.all():
+        ev = app.pre_screen_evidence if isinstance(app.pre_screen_evidence, dict) else {}
+        llm = ev.get("llm_score_100")
+        if llm is None:
+            continue
+        llm = float(llm)
+        cv = float(app.cv_match_score)
+        both += 1
+        if abs(llm - cv) > 20:
+            diverge += 1
+        if llm < 30 and cv >= 50:
+            false_neg += 1
+        if llm >= 50 and cv < 30:
+            false_pos += 1
+    return {
+        "both_scored": both,
+        "diverge_gt20": diverge,
+        "gate_false_negatives": false_neg,
+        "gate_false_positives": false_pos,
+    }

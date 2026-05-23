@@ -652,11 +652,25 @@ def _execute_scoring_v3(
             supersede_pre_screen_reject_on_full_score,
         )
         from .pre_screening_service import resolved_auto_reject_config
+        from .pre_screening_snapshot import pre_screen_recommendation_label
 
         threshold_100 = resolved_auto_reject_config(None, role, db=db)["threshold_100"]
         supersede_pre_screen_reject_on_full_score(
             db, application=application, threshold=threshold_100
         )
+        # Keep the recommendation label aligned with the authoritative score.
+        # The shared ``pre_screen_score_100`` is overwritten with this score,
+        # so the frozen pre-screen label would otherwise contradict it
+        # ("Strong match" on a 12/100). Fraud-capped rows keep their verdict.
+        ps_ev = (
+            application.pre_screen_evidence
+            if isinstance(application.pre_screen_evidence, dict)
+            else {}
+        )
+        if not ps_ev.get("fraud_capped"):
+            application.pre_screen_recommendation = pre_screen_recommendation_label(
+                output.role_fit_score, threshold_100
+            )
     except Exception:  # pragma: no cover — never fail scoring on a card cleanup
         logger.exception(
             "supersede_pre_screen_reject_on_full_score failed for app=%s",
