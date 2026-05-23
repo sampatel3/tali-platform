@@ -10,7 +10,6 @@ import {
   ArrowRight,
   Brain,
   Check,
-  ExternalLink,
   Eye,
   FileText,
   Inbox,
@@ -409,6 +408,18 @@ const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze,
             {decision.candidate_email || ''}
           </div>
         </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0, width: 210 }}>
+          <DeepLinkRow
+            Icon={FileText}
+            label="Open candidate report"
+            href={pathForPage('candidate-report', { candidateApplicationId: decision.application_id, fromHome: true })}
+          />
+          <DeepLinkRow
+            Icon={Eye}
+            label="Open job pipeline"
+            onClick={() => onNavigate?.('job-pipeline', { roleId: decision.role_id })}
+          />
+        </div>
         {decision.taali_score != null ? (
           <ScoreRing score={decision.taali_score} size={72} label="TALI" />
         ) : null}
@@ -417,27 +428,6 @@ const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze,
       <p style={{ margin: '0 0 14px', fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: 760 }}>
         {decision.reasoning}
       </p>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8, marginBottom: 14 }}>
-        <DeepLinkRow
-          Icon={FileText}
-          label="Open candidate report"
-          value="Six dimensions + evidence"
-          href={pathForPage('candidate-report', { candidateApplicationId: decision.application_id, fromHome: true })}
-        />
-        <DeepLinkRow
-          Icon={Eye}
-          label="Open role pipeline"
-          value={decision.role_name || `Role #${decision.role_id}`}
-          onClick={() => onNavigate?.('job-pipeline', { roleId: decision.role_id })}
-        />
-        <DeepLinkRow
-          Icon={ExternalLink}
-          label="Open assessment results"
-          value={decision.candidate_name ? `${decision.candidate_name}'s assessment` : `Application ${decision.application_id}`}
-          onClick={() => onNavigate?.('candidate-detail', { candidateDetailAssessmentId: decision.application_id })}
-        />
-      </div>
 
       {evidence.length > 0 ? (
         <div className="rq-evidence-grid">
