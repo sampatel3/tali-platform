@@ -10,12 +10,14 @@ from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
 from app.services.pre_screen_decision_emitter import (
+    backfill_discard_decisions_on_agent_off_roles,
     backfill_discard_decisions_on_closed_apps,
     backfill_existing_below_threshold,
     backfill_pre_screen_reject_reasoning,
     backfill_recommendations_from_cvmatch,
     backfill_summaries_from_cvmatch,
     discard_pending_decisions_for_app,
+    discard_pending_decisions_for_role,
     pre_screen_gate_divergence_report,
     queue_pre_screen_reject,
     reconcile_pre_screen_reject_decisions,
@@ -1205,3 +1207,48 @@ def test_repair_passed_prescreen_contamination(db):
     assert d_failed.status == "pending"   # genuine reject untouched
     assert passed.pre_screen_recommendation != "Below threshold"  # relabelled from llm 75
     assert failed.pre_screen_recommendation == "Below threshold"  # unchanged
+
+
+# ---------------------------------------------------------------------------
+# Agent-off cleanup: turning the agent off clears its pending decisions
+# ---------------------------------------------------------------------------
+
+
+def test_discard_pending_decisions_for_role(db):
+    org, role, app = _seed(db, score=15.0, threshold=30.0)
+    d = _direct_card(db, org, role, app, 30.0)
+    # resolved_by_user_id left None here (a real user FK is required to set it;
+    # the toggle-off route passes current_user.id in prod).
+    n = discard_pending_decisions_for_role(
+        db, role_id=int(role.id), reason="agent disabled"
+    )
+    assert n == 1
+    db.flush(); db.refresh(d)
+    assert d.status == "discarded"
+
+
+def test_backfill_discard_decisions_on_agent_off_roles(db):
+    org = Organization(name="O", slug=f"o-{id(db)}ao"); db.add(org); db.flush()
+    role_on = Role(organization_id=org.id, name="On", source="manual", auto_reject=False, agentic_mode_enabled=True)
+    role_off = Role(organization_id=org.id, name="Off", source="manual", auto_reject=False, agentic_mode_enabled=False)
+    db.add_all([role_on, role_off]); db.flush()
+
+    def mkcard(role):
+        c = Candidate(organization_id=org.id, email=f"c{role.id}@x.test", full_name="C"); db.add(c); db.flush()
+        a = CandidateApplication(
+            organization_id=org.id, candidate_id=c.id, role_id=role.id,
+            status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
+            application_outcome="open", source="manual", pre_screen_score_100=15.0,
+        )
+        db.add(a); db.flush()
+        return _direct_card(db, org, role, a, 30.0)
+
+    d_on = mkcard(role_on)
+    d_off = mkcard(role_off)
+
+    res = backfill_discard_decisions_on_agent_off_roles(db, organization_id=int(org.id))
+    assert res["discarded"] == 1
+    assert res["scanned"] == 1
+    db.refresh(d_on); db.refresh(d_off)
+    assert d_on.status == "pending"      # agent-on role untouched
+    assert d_off.status == "discarded"   # agent-off role's card cleared

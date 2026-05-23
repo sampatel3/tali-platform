@@ -818,6 +818,27 @@ def admin_repair_passed_prescreen(
         db.close()
 
 
+@app.post("/admin/decisions/discard-on-agent-off")
+def admin_discard_on_agent_off(
+    request: Request, organization_id: int | None = None, dry_run: bool = False
+):
+    """Discard pending agent decisions on roles whose agent is disabled."""
+    from .platform.database import SessionLocal
+    from .services.pre_screen_decision_emitter import (
+        backfill_discard_decisions_on_agent_off_roles,
+    )
+
+    _require_admin(request)
+    db = SessionLocal()
+    try:
+        result = backfill_discard_decisions_on_agent_off_roles(
+            db, organization_id=organization_id, dry_run=dry_run
+        )
+        return {"ok": True, "dry_run": dry_run, **result}
+    finally:
+        db.close()
+
+
 @app.get("/admin/graphiti/search-debug")
 def graphiti_search_debug(request: Request):
     """Raw Graphiti search result shape for debugging the graph view."""
