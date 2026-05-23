@@ -1077,6 +1077,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     try {
       await apiClient.agent.approveDecision(decisionId);
       showToast(`Approved agent recommendation #${decisionId}`, 'success');
+      setRoleApplications((apps) => apps.map((a) => (a?.pending_decision?.id === decisionId ? { ...a, pending_decision: null } : a)));
       await fetchPendingDecisions();
     } catch (err) {
       showToast(getErrorMessage(err, 'Failed to approve recommendation.'), 'error');
@@ -1090,6 +1091,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     try {
       await apiClient.agent.overrideDecision(decisionId, { override_action: 'manual_review' });
       showToast(`Overrode agent recommendation #${decisionId}`, 'info');
+      setRoleApplications((apps) => apps.map((a) => (a?.pending_decision?.id === decisionId ? { ...a, pending_decision: null } : a)));
       await fetchPendingDecisions();
     } catch (err) {
       showToast(getErrorMessage(err, 'Failed to override recommendation.'), 'error');
@@ -2059,10 +2061,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         : null;
                       const isLive = String(application?.pipeline_stage || '').toLowerCase() === 'in_assessment';
                       const isReview = stage.key === 'review';
-                      // Real pending agent decision (if any) for this candidate.
-                      // When present, the agent block surfaces the actual
-                      // recommendation verb + reasoning + wires Approve /
-                      // Override to apiClient.agent.{approve,override}Decision.
+                      // Approve/Override act ONLY on the freshly-polled map, not
+                      // the per-row snapshot (which can go stale and expose
+                      // actions against an already-resolved decision).
                       const pendingDecision = pendingAgentDecisions[application?.id] || null;
                       const decisionResolving = pendingDecision?.id != null
                         && resolvingDecisionId === pendingDecision.id;
@@ -2464,7 +2465,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         const scoreClass = score == null ? '' : score >= 80 ? 'hi' : score >= 60 ? 'mid' : 'lo';
                         const stageLabel = (PIPELINE_STAGE_ORDER.find((s) => s.key === stage)?.label) || (stage ? stage.replace(/_/g, ' ') : '—');
                         const statusText = resolvePipelineCardFooterStatus(application);
-                        const pendingDecision = pendingAgentDecisions[application?.id] || null;
+                        const pendingDecision = pendingAgentDecisions[application?.id] || application?.pending_decision || null;
                         const agentLabel = pendingDecision?.recommendation
                           || (stage === 'review' && score != null && score >= 75 ? 'Advance recommended'
                             : stage === 'review' && score != null && score < 50 ? 'Reject recommended'

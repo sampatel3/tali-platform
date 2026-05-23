@@ -1087,6 +1087,7 @@ def application_list_payload(
     *,
     include_cv_text: bool,
     score_status: Any = _UNSET,
+    pending_decision: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     data = application_to_response(
         app,
@@ -1094,6 +1095,10 @@ def application_list_payload(
         score_status=score_status,
     )
     payload = data.model_dump()
+    # Resolved by the list route in one batch query (see _pending_decision_map)
+    # so the AGENT column shows a chip for every row that has a pending
+    # decision, not just the first page of a capped decisions fetch.
+    payload["pending_decision"] = pending_decision
     if include_cv_text:
         cv = (app.cv_text or "").strip()
         if not cv and app.candidate:

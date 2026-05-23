@@ -352,3 +352,32 @@ def test_evaluate_auto_reject_does_not_trigger_when_score_above_threshold(db):
     verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
     assert verdict["should_trigger"] is False
     assert verdict["state"] == "not_triggered"
+
+
+def test_pending_decision_map_resolves_per_app(db):
+    """The candidate-list AGENT column reads its decision from a per-app
+    batch map so it isn't capped by the /agent-decisions fetch limit.
+    """
+    from app.domains.assessments_runtime.applications_routes import _pending_decision_map
+
+    org, role, app = _seed(db, score=20.0, threshold=50.0)
+    decision = queue_pre_screen_reject(
+        db, organization_id=org.id, role=role, application=app,
+        pre_screen_score=20.0, threshold=50.0,
+    )
+    db.commit()
+
+    m = _pending_decision_map(db, [app.id])
+    assert app.id in m
+    assert m[app.id]["id"] == decision.id
+    assert m[app.id]["decision_type"] == "skip_assessment_reject"
+    assert m[app.id]["recommendation"] == "skip_assessment_reject"
+    assert m[app.id]["status"] == "pending"
+
+    # Resolved decisions drop out of the map.
+    decision.status = "discarded"
+    db.commit()
+    assert _pending_decision_map(db, [app.id]) == {}
+
+    # Empty input is a no-op (no query).
+    assert _pending_decision_map(db, []) == {}
