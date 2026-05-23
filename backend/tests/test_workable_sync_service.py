@@ -556,6 +556,62 @@ def test_terminal_outcome_is_captured_for_existing_candidate(db):
     assert rejected.pipeline_stage == "advanced"
 
 
+def test_outcome_flip_back_is_recorded(db):
+    """A permanent per-outcome idempotency key would block a legitimate flip
+    back to a previously-seen outcome. After rejected -> hired -> rejected the
+    final outcome must be `rejected`, not stuck at `hired`."""
+    from app.models.candidate_application import CandidateApplication
+
+    org = _make_org(db, "outcome-flip-org")
+    MockClient, state = _client_returning([
+        [{"id": "cand_flip", "email": "flip@example.com", "name": "Flip", "stage": "Review"}],
+        [{"id": "cand_flip", "email": "flip@example.com", "name": "Flip", "stage": "Rejected"}],
+        [{"id": "cand_flip", "email": "flip@example.com", "name": "Flip",
+          "stage": "Hired", "hired_at": "2026-05-22T09:00:00Z"}],
+        [{"id": "cand_flip", "email": "flip@example.com", "name": "Flip", "stage": "Rejected"}],
+    ])
+    service = WorkableSyncService(MockClient())
+    for i in range(4):
+        state["calls"] = i
+        service.sync_org(db, org)
+
+    app = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org.id,
+        CandidateApplication.workable_candidate_id == "cand_flip",
+    ).first()
+    assert app is not None
+    assert app.application_outcome == "rejected"
+
+
+def test_email_linked_terminal_app_gets_outcome_captured(db):
+    """An app linked only by candidate email (no workable_candidate_id yet) must
+    still receive terminal outcome capture, and have its Workable id backfilled."""
+    from app.models.candidate_application import CandidateApplication
+
+    org = _make_org(db, "email-linked-terminal-org")
+    MockClient, state = _client_returning([
+        [{"id": "cand_email", "email": "linked@example.com", "name": "Linked", "stage": "Review"}],
+        [{"id": "cand_email", "email": "linked@example.com", "name": "Linked", "stage": "Rejected"}],
+    ])
+    service = WorkableSyncService(MockClient())
+    service.sync_org(db, org)
+
+    app = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org.id,
+        CandidateApplication.workable_candidate_id == "cand_email",
+    ).first()
+    # Simulate a row linked only by email (Workable id not yet attached).
+    app.workable_candidate_id = None
+    db.commit()
+
+    state["calls"] = 1
+    service.sync_org(db, org)
+    db.refresh(app)
+    assert app.application_outcome == "rejected"
+    assert app.pipeline_stage == "advanced"
+    assert app.workable_candidate_id == "cand_email"  # backfilled by the email-fallback lookup
+
+
 def test_resolved_candidate_is_frozen_except_workable_stage(db):
     """Once a candidate is resolved (advanced/hired/rejected) they are frozen on
     Tali: later syncs must NOT re-enrich their profile, but their Workable stage

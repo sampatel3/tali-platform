@@ -1541,6 +1541,32 @@ class WorkableSyncService:
             )
             .first()
         )
+        if existing is None:
+            # Older / manually-created rows may be linked by candidate email
+            # rather than the Workable id. Match those too so terminal capture
+            # and the resolved-freeze still apply, and backfill the Workable id.
+            lookup_email = _candidate_email(candidate_payload) or _candidate_email(candidate_ref)
+            if lookup_email:
+                linked_candidate = (
+                    db.query(Candidate)
+                    .filter(
+                        Candidate.organization_id == org.id,
+                        Candidate.email == lookup_email,
+                    )
+                    .first()
+                )
+                if linked_candidate is not None:
+                    existing = (
+                        db.query(CandidateApplication)
+                        .filter(
+                            CandidateApplication.organization_id == org.id,
+                            CandidateApplication.candidate_id == linked_candidate.id,
+                            CandidateApplication.role_id == role.id,
+                        )
+                        .first()
+                    )
+                    if existing is not None and not existing.workable_candidate_id:
+                        existing.workable_candidate_id = sanitize_text_for_storage(candidate_id)
 
         if ref_terminal or ref_disqualified:
             # The candidate has reached a terminal state in Workable
@@ -1585,6 +1611,11 @@ class WorkableSyncService:
             outcome = _terminal_outcome(candidate_payload, candidate_ref, disqualified=ref_disqualified)
             if outcome and (existing.application_outcome or "open").lower() != outcome:
                 try:
+                    # No idempotency_key: transition_outcome already no-ops when
+                    # the outcome is unchanged (from_outcome == target). A
+                    # permanent per-outcome key would instead block a legitimate
+                    # later correction if the outcome flips and returns to a
+                    # previously-seen value (rejected -> hired -> rejected).
                     transition_outcome(
                         db,
                         app=existing,
@@ -1592,7 +1623,6 @@ class WorkableSyncService:
                         actor_type="sync",
                         reason=f"Workable outcome: {stage or outcome}",
                         metadata={"workable_stage": str(stage or ""), "disqualified": ref_disqualified},
-                        idempotency_key=f"workable_outcome:{existing.id}:{outcome}",
                     )
                 except Exception:  # pragma: no cover — never block a sync
                     import logging
