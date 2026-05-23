@@ -2063,7 +2063,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                       // When present, the agent block surfaces the actual
                       // recommendation verb + reasoning + wires Approve /
                       // Override to apiClient.agent.{approve,override}Decision.
-                      const pendingDecision = pendingAgentDecisions[application?.id] || null;
+                      const pendingDecision = pendingAgentDecisions[application?.id] || application?.pending_decision || null;
                       const decisionResolving = pendingDecision?.id != null
                         && resolvingDecisionId === pendingDecision.id;
                       const decisionVerb = pendingDecision?.recommendation
@@ -2464,7 +2464,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         const scoreClass = score == null ? '' : score >= 80 ? 'hi' : score >= 60 ? 'mid' : 'lo';
                         const stageLabel = (PIPELINE_STAGE_ORDER.find((s) => s.key === stage)?.label) || (stage ? stage.replace(/_/g, ' ') : '—');
                         const statusText = resolvePipelineCardFooterStatus(application);
-                        const pendingDecision = pendingAgentDecisions[application?.id] || null;
+                        const pendingDecision = pendingAgentDecisions[application?.id] || application?.pending_decision || null;
                         const agentLabel = pendingDecision?.recommendation
                           || (stage === 'review' && score != null && score >= 75 ? 'Advance recommended'
                             : stage === 'review' && score != null && score < 50 ? 'Reject recommended'

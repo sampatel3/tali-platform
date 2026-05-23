@@ -652,6 +652,70 @@ def _latest_score_status_map(db: Session, application_ids: list[int]) -> dict[in
     return {app_id: status for app_id, status in rows}
 
 
+def _pending_decision_map(db: Session, application_ids: list[int]) -> dict[int, dict]:
+    """Latest *pending* AgentDecision per application, in one grouped query.
+
+    The candidate list's AGENT column needs each row's pending decision (if
+    any). Fetching the role's decisions separately capped the result — the
+    ``/agent-decisions`` endpoint maxes at 200 — so on a role with hundreds
+    of pending rows the candidates beyond the cap rendered blank even though
+    a decision existed. Resolving it per-app here removes that ceiling.
+    Window function (not Postgres ``DISTINCT ON``) keeps it portable to the
+    SQLite test backend; the snooze filter mirrors the decisions endpoint so
+    snoozed rows don't surface early.
+    """
+    if not application_ids:
+        return {}
+    from ...models.agent_decision import AgentDecision
+
+    now = datetime.now(timezone.utc)
+    row_num = (
+        func.row_number()
+        .over(
+            partition_by=AgentDecision.application_id,
+            order_by=(AgentDecision.created_at.desc(), AgentDecision.id.desc()),
+        )
+        .label("rn")
+    )
+    ranked = (
+        db.query(
+            AgentDecision.application_id.label("application_id"),
+            AgentDecision.id.label("id"),
+            AgentDecision.decision_type.label("decision_type"),
+            AgentDecision.recommendation.label("recommendation"),
+            row_num,
+        )
+        .filter(
+            AgentDecision.application_id.in_(application_ids),
+            AgentDecision.status == "pending",
+            or_(
+                AgentDecision.snoozed_until.is_(None),
+                AgentDecision.snoozed_until <= now,
+            ),
+        )
+        .subquery()
+    )
+    rows = (
+        db.query(
+            ranked.c.application_id,
+            ranked.c.id,
+            ranked.c.decision_type,
+            ranked.c.recommendation,
+        )
+        .filter(ranked.c.rn == 1)
+        .all()
+    )
+    return {
+        int(app_id): {
+            "id": int(d_id),
+            "decision_type": d_type,
+            "recommendation": rec,
+            "status": "pending",
+        }
+        for app_id, d_id, d_type, rec in rows
+    }
+
+
 @router.get("/roles/{role_id}/applications")
 def list_role_applications(
     role_id: int,
@@ -748,12 +812,18 @@ def list_role_applications(
     # assessment_preview, assessment_history, candidate_interview_kit) stay
     # absent and the schema treats them as optional. The dedicated detail
     # endpoint below still uses application_detail_payload.
+    # Pending agent decision per app, in one query — drives the candidate
+    # list's AGENT column without the separate /agent-decisions fetch (which
+    # caps at 200 and left rows beyond the cap showing blank).
+    decision_map = _pending_decision_map(db, [app.id for app in apps])
+
     return [
         ApplicationDetailResponse(
             **application_list_payload(
                 app,
                 include_cv_text=include_cv_text,
                 score_status=status_map.get(app.id),
+                pending_decision=decision_map.get(app.id),
             )
         )
         for app in apps
