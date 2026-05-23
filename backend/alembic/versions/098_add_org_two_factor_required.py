@@ -5,8 +5,8 @@ org-update payload, but the column never existed so the value was
 silently dropped and reverted on reload. Add the backing column (NOT
 NULL, defaulting to false) so the toggle persists.
 
-Revision ID: 095_add_org_two_factor_required
-Revises: 094_c4_decision_dedup_key
+Revision ID: 098_add_org_two_factor_required
+Revises: 097_add_decision_type_index
 Create Date: 2026-05-23
 """
 
@@ -16,8 +16,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision = "095_add_org_two_factor_required"
-down_revision = "094_c4_decision_dedup_key"
+revision = "098_add_org_two_factor_required"
+down_revision = "097_add_decision_type_index"
 branch_labels = None
 depends_on = None
 
