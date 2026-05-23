@@ -671,10 +671,6 @@ const CvMatchReview = ({
 
   const scoredAt = application?.cv_match_scored_at || application?.updated_at || null;
   const roleName = application?.role_name || application?.candidate_position || 'target role';
-  const summaryText = String(cvMatchDetails?.summary || '').trim();
-  const summaryParagraphs = summaryText
-    ? summaryText.split(/\n{2,}|\r\n{2,}/).map((p) => p.trim()).filter(Boolean)
-    : [];
 
   return (
     <section className="cv-rail cv-match-summary cv-match-review" aria-label="CV match summary">
@@ -700,13 +696,6 @@ const CvMatchReview = ({
             </div>
           </div>
         </div>
-        {summaryParagraphs.length ? (
-          <div className="cv-summary-text">
-            {summaryParagraphs.map((paragraph, idx) => (
-              <p key={`cv-summary-${idx}`}>{paragraph}</p>
-            ))}
-          </div>
-        ) : null}
       </div>
 
       {total ? (
