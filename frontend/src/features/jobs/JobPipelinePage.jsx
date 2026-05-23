@@ -18,7 +18,9 @@ import { useJobStatus } from '../../contexts/JobStatusContext';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
 import { BreadcrumbsRow } from '../../shared/ui/Breadcrumbs';
 import { CopyLinkButton } from '../../shared/ui/CopyLinkButton';
+import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
+import { useRoleProgressPolling } from './useRoleProgressPolling';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 import RecruiterAnswersLog from './RecruiterAnswersLog';
@@ -1172,7 +1174,22 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
 
   const loadRoleWorkspace = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
-    setLoading(true);
+    // Stale-while-revalidate: if we've loaded this role before, paint the
+    // cached workspace immediately and revalidate silently in the background.
+    // Only show the full-page spinner on a true cold load. This makes
+    // navigating away and back feel instant instead of re-spinning.
+    const cacheKey = `role-workspace:${numericRoleId}`;
+    const cached = readCache(cacheKey);
+    if (cached?.data) {
+      const c = cached.data;
+      setRole(c.role || null);
+      setRoleTasks(Array.isArray(c.roleTasks) ? c.roleTasks : []);
+      setRoleApplications(Array.isArray(c.roleApplications) ? c.roleApplications : []);
+      setWorkspaceCriteria(Array.isArray(c.workspaceCriteria) ? c.workspaceCriteria : []);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     try {
       // Two separate fetches (open + rejected) at the backend's 2000-row
       // ceiling — splits the budget so a long reject history can't crowd
@@ -1205,13 +1222,23 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           .then((res) => setSuggestedThreshold(res?.data || null))
           .catch(() => setSuggestedThreshold(null));
       } else setSuggestedThreshold(null);
-      setRoleTasks(Array.isArray(tasksRes?.data) ? tasksRes.data : []);
+      const nextTasks = Array.isArray(tasksRes?.data) ? tasksRes.data : [];
+      setRoleTasks(nextTasks);
       // Dedupe by id — defensive against any backend overlap.
       const byId = new Map();
       for (const a of [...(openAppsRes?.data || []), ...(rejectedAppsRes?.data || [])]) {
         if (a?.id != null && !byId.has(a.id)) byId.set(a.id, a);
       }
-      setRoleApplications([...byId.values()]);
+      const nextApps = [...byId.values()];
+      setRoleApplications(nextApps);
+      const nextCriteria = Array.isArray(orgCriteriaRes?.data) ? orgCriteriaRes.data : [];
+      // Refresh the SWR cache so the next visit paints instantly.
+      writeCache(cacheKey, {
+        role: nextRole,
+        roleTasks: nextTasks,
+        roleApplications: nextApps,
+        workspaceCriteria: nextCriteria,
+      });
       // Hand off batch status to the global context — it owns display state.
       // If a batch is already running when this page loads, make the context
       // track it immediately (no waiting for the next 10s discovery poll).
@@ -1222,10 +1249,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setFetchCvsProgress(fetchStatusRes?.data || EMPTY_FETCH_PROGRESS);
       setPreScreenProgress(preScreenStatusRes?.data || EMPTY_PRE_SCREEN_PROGRESS);
     } catch (error) {
-      setRole(null);
-      setRoleTasks([]);
-      setRoleApplications([]);
-      showToast(getErrorMessage(error, 'Failed to load role pipeline.'), 'error');
+      // Don't wipe a cached paint if a background revalidate fails — only
+      // surface a hard failure when there was nothing to show in the first
+      // place (cold load).
+      if (!cached?.data) {
+        setRole(null);
+        setRoleTasks([]);
+        setRoleApplications([]);
+        showToast(getErrorMessage(error, 'Failed to load role pipeline.'), 'error');
+      }
     } finally {
       setLoading(false);
     }
@@ -1235,29 +1267,30 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     void loadRoleWorkspace();
   }, [loadRoleWorkspace]);
 
+  // The org-wide task list only feeds the role-edit drawer's task picker
+  // (<RoleSheet>). It's not needed for the candidate table, so defer the
+  // fetch until the drawer is first opened — one fewer request on every
+  // role-page load. `loadedAllTasksRef` keeps it to a single fetch.
+  const loadedAllTasksRef = useRef(false);
   useEffect(() => {
-    if (!tasksApi?.list) {
-      setAllTasks([]);
-      return undefined;
-    }
+    if (!roleSheetOpen || loadedAllTasksRef.current || !tasksApi?.list) return undefined;
     let cancelled = false;
     const loadAllTasks = async () => {
       try {
         const res = await tasksApi.list();
         if (!cancelled) {
           setAllTasks(Array.isArray(res?.data) ? res.data : []);
+          loadedAllTasksRef.current = true;
         }
       } catch {
-        if (!cancelled) {
-          setAllTasks([]);
-        }
+        if (!cancelled) setAllTasks([]);
       }
     };
     void loadAllTasks();
     return () => {
       cancelled = true;
     };
-  }, [tasksApi]);
+  }, [roleSheetOpen, tasksApi]);
 
   // ── Reload applications when the global context tells us a batch finished ──
   // batchScoreProgress is read from JobStatusContext (single source of truth).
@@ -1274,53 +1307,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   }, [batchScoreProgress?.status, loadRoleWorkspace]);
 
-  // ── Poll fetchCvs + pre-screen progress (these live locally, not in global context) ────
-  // batch-score progress now lives in the global BackgroundJobsToaster context,
-  // so we only poll fetchCvs and pre-screen here.
-  useEffect(() => {
-    if (!Number.isFinite(numericRoleId)) return undefined;
-    const fetchRunning = String(fetchCvsProgress?.status || '').toLowerCase() === 'running';
-    const preScreenRunning = String(preScreenProgress?.status || '').toLowerCase() === 'running';
-    if (!fetchRunning && !preScreenRunning) return undefined;
-
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const [fetchStatusRes, preScreenStatusRes] = await Promise.all([
-          rolesApi.fetchCvsStatus(numericRoleId),
-          rolesApi.batchPreScreenStatus(numericRoleId).catch(() => ({ data: EMPTY_PRE_SCREEN_PROGRESS })),
-        ]);
-        if (cancelled) return;
-        const nextFetch = fetchStatusRes?.data || EMPTY_FETCH_PROGRESS;
-        const nextPre = preScreenStatusRes?.data || EMPTY_PRE_SCREEN_PROGRESS;
-        const fetchWasRunning = String(fetchCvsProgress?.status || '').toLowerCase() === 'running';
-        const preWasRunning = String(preScreenProgress?.status || '').toLowerCase() === 'running';
-        const fetchNowRunning = String(nextFetch.status || '').toLowerCase() === 'running';
-        const preNowRunning = String(nextPre.status || '').toLowerCase() === 'running';
-        setFetchCvsProgress(nextFetch);
-        setPreScreenProgress(nextPre);
-        if (
-          (fetchWasRunning && !fetchNowRunning)
-          || (preWasRunning && !preNowRunning)
-        ) {
-          await loadRoleWorkspace();
-          setRefreshTick((value) => value + 1);
-        }
-      } catch {
-        if (!cancelled) {
-          setFetchCvsProgress((current) => ({ ...current, status: current.status || 'failed' }));
-        }
-      }
-    };
-
-    const intervalId = window.setInterval(() => {
-      void poll();
-    }, 2500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [fetchCvsProgress, preScreenProgress, loadRoleWorkspace, numericRoleId, rolesApi]);
+  // Poll fetchCvs + pre-screen progress while a job runs (pauses when the tab
+  // is hidden, reloads the workspace on completion). Extracted to a hook.
+  useRoleProgressPolling({
+    numericRoleId,
+    rolesApi,
+    fetchCvsProgress,
+    preScreenProgress,
+    setFetchCvsProgress,
+    setPreScreenProgress,
+    loadRoleWorkspace,
+    bumpRefreshTick: () => setRefreshTick((value) => value + 1),
+  });
 
   const rejectedApplications = useMemo(() => (
     roleApplications.filter((application) => application?.application_outcome === 'rejected')

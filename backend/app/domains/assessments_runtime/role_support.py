@@ -1048,6 +1048,24 @@ def _build_client_share_summary(app: CandidateApplication, payload: dict[str, An
     }
 
 
+# Detail-only fields stripped from list rows. Measured on a 343-applicant
+# role, these accounted for ~93% of a 12.6MB response (cv_match_details alone
+# was 57%). None of them are rendered in the role table, candidates directory,
+# or pipeline kanban — they're only used by the candidate detail/report pages,
+# which re-fetch the full payload via the /applications/{id} detail endpoint.
+# Scores themselves (cv_match_score, pre_screen_score, score_summary) stay.
+_LIST_OMITTED_HEAVY_FIELDS = (
+    "cv_match_details",            # ~57% of payload — full per-requirement evidence
+    "screening_pack",             # ~18% — generated screening interview questions
+    "tech_interview_pack",        # ~12% — generated technical interview questions
+    "interview_evidence_summary",  # ~4%
+    "tech_interview_summary",
+    "screening_interview_summary",
+    "candidate_experience",       # full work-history array; report-only
+    "candidate_education",        # full education array; report-only
+)
+
+
 def application_list_payload(app: CandidateApplication, *, include_cv_text: bool) -> dict[str, Any]:
     data = application_to_response(app, use_cached_score_summary=True)
     payload = data.model_dump()
@@ -1060,4 +1078,17 @@ def application_list_payload(app: CandidateApplication, *, include_cv_text: bool
         payload["cv_text"] = None
     payload["assessment_preview"] = None
     payload["assessment_history"] = []
+    # Strip heavy detail-only fields (see note above) to keep list responses
+    # small. The detail endpoint serves the full payload when a row is opened.
+    for key in _LIST_OMITTED_HEAVY_FIELDS:
+        if key in payload:
+            payload[key] = None
+    # Interview transcripts + raw provider payloads are bulky and never
+    # rendered in a list row — drop them here (list-only) while the detail
+    # endpoint keeps them intact.
+    if isinstance(payload.get("interviews"), list):
+        for interview in payload["interviews"]:
+            if isinstance(interview, dict):
+                interview["transcript_text"] = None
+                interview["provider_payload"] = None
     return payload
