@@ -11,7 +11,12 @@ from __future__ import annotations
 
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
-from app.services.workable_context_service import format_workable_context
+from app.services.workable_context_service import (
+    format_workable_context,
+    workable_activity_log,
+    workable_questionnaire_answers,
+    workable_recruiter_comments,
+)
 
 
 def _candidate(**fields) -> Candidate:
@@ -303,3 +308,88 @@ def test_malformed_payloads_are_ignored_not_crash():
     assert "<WORKABLE_QUESTIONNAIRE_ANSWERS>" not in out
     assert "<WORKABLE_RECRUITER_COMMENTS>" not in out
     assert "<WORKABLE_ACTIVITY_LOG>" not in out
+
+
+# ── Structured surfaces for the candidate-detail Notes tab ────────────
+
+
+def test_structured_none_candidate_returns_empty_lists():
+    assert workable_recruiter_comments(None) == []
+    assert workable_questionnaire_answers(None) == []
+    assert workable_activity_log(None) == []
+
+
+def test_structured_questionnaire_answers_nested_and_flat_shapes():
+    cand = _candidate(
+        workable_data={
+            "answers": [
+                {
+                    "answer": {"body": "25000"},
+                    "question": {"body": "Salary expectation, monthly in AED"},
+                },
+                {"question_key": "willing_to_relocate", "checked": True},
+            ]
+        }
+    )
+    rows = workable_questionnaire_answers(cand)
+    assert rows == [
+        {"question": "Salary expectation, monthly in AED", "answer": "25000"},
+        {"question": "willing_to_relocate", "answer": "Yes"},
+    ]
+
+
+def test_structured_recruiter_comments_carry_author_and_timestamp():
+    cand = _candidate(
+        workable_comments=[
+            {
+                "body": "Phone screen — asking for 70k.",
+                "member": {"name": "Alex Recruiter"},
+                "created_at": "2026-05-19T10:30:00Z",
+            },
+            {"body": "", "member": {"name": "Skip me"}},  # no body → dropped
+        ]
+    )
+    rows = workable_recruiter_comments(cand)
+    assert rows == [
+        {
+            "author": "Alex Recruiter",
+            "created_at": "2026-05-19T10:30:00Z",
+            "body": "Phone screen — asking for 70k.",
+        }
+    ]
+
+
+def test_structured_activity_log_renders_stage_and_body():
+    cand = _candidate(
+        workable_activities=[
+            {
+                "action": "moved",
+                "stage_name": "Applied",
+                "to_stage": "Phone Screen",
+                "created_at": "2026-05-18T12:00:00Z",
+            },
+            {"action": "comment", "body": "Looks promising."},
+            {"junk": "no body/action"},  # nothing meaningful → dropped
+        ]
+    )
+    rows = workable_activity_log(cand)
+    assert rows == [
+        {
+            "action": "moved",
+            "stage": "Applied → Phone Screen",
+            "body": None,
+            "created_at": "2026-05-18T12:00:00Z",
+        },
+        {"action": "comment", "stage": None, "body": "Looks promising.", "created_at": None},
+    ]
+
+
+def test_structured_surfaces_tolerate_malformed_input():
+    cand = _candidate(
+        workable_data={"answers": "not-a-list"},
+        workable_comments="not-a-list",
+        workable_activities=[{"junk": "x"}],
+    )
+    assert workable_questionnaire_answers(cand) == []
+    assert workable_recruiter_comments(cand) == []
+    assert workable_activity_log(cand) == []

@@ -975,6 +975,20 @@ def application_detail_payload(
     payload["assessment_history"] = _assessment_history_for_application(app)
     payload["candidate_interview_kit"] = build_candidate_interview_kit_for_application(app)
 
+    # Structured Workable surfaces for the Notes tab — recruiter comments,
+    # LinkedIn/questionnaire answers, and the activity log we already sync
+    # onto the candidate. Detail-only; stripped below for client shares.
+    from ...services.workable_context_service import (
+        workable_activity_log,
+        workable_questionnaire_answers,
+        workable_recruiter_comments,
+    )
+
+    candidate = getattr(app, "candidate", None)
+    payload["workable_comments"] = workable_recruiter_comments(candidate)
+    payload["workable_questionnaire_answers"] = workable_questionnaire_answers(candidate)
+    payload["workable_activity_log"] = workable_activity_log(candidate)
+
     if client_safe:
         # Strip recruiter-internal fields so an external client share
         # (e.g. a hiring-manager-at-a-customer link) cannot read recruiter
@@ -992,6 +1006,10 @@ def application_detail_payload(
         payload["tech_interview_summary"] = None
         payload["interview_evidence_summary"] = None
         payload["interviews"] = []
+        # Workable recruiter comments + activity are recruiter-internal.
+        payload["workable_comments"] = []
+        payload["workable_questionnaire_answers"] = []
+        payload["workable_activity_log"] = []
         if isinstance(payload.get("score_summary"), dict):
             ss = dict(payload["score_summary"])
             for k in (

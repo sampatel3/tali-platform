@@ -84,8 +84,8 @@ def _join_nonempty(parts: list[str], sep: str = " · ") -> str:
     return sep.join(p for p in (str(p or "").strip() for p in parts) if p)
 
 
-def _format_answer(answer: dict) -> str | None:
-    """Render one Workable questionnaire answer.
+def _parse_answer(answer: dict) -> tuple[str, str] | None:
+    """Parse one Workable questionnaire answer into ``(question, answer)``.
 
     Workable's payload shape varies. Two known forms in the wild:
 
@@ -96,8 +96,9 @@ def _format_answer(answer: dict) -> str | None:
     Flat (documented in some Workable API spec versions):
         {"question_key": "...", "body": "...", "checked": ...}
 
-    We look in both places for body / checked / choices so the formatter
-    handles either shape without needing the caller to normalise first.
+    We look in both places for body / checked / choices so callers handle
+    either shape without needing to normalise first. Returns ``None`` when
+    the entry has no usable question or answer text.
     """
     if not isinstance(answer, dict):
         return None
@@ -159,10 +160,23 @@ def _format_answer(answer: dict) -> str | None:
     answer_text = _join_nonempty(parts, sep=" — ")
     if not answer_text:
         return None
+    return question_text, answer_text
+
+
+def _format_answer(answer: dict) -> str | None:
+    """Render one Workable questionnaire answer as ``Q: …\\nA: …`` text."""
+    parsed = _parse_answer(answer)
+    if parsed is None:
+        return None
+    question_text, answer_text = parsed
     return f"Q: {question_text}\nA: {answer_text}"
 
 
-def _format_comment(comment: dict) -> str | None:
+def _comment_fields(comment: dict) -> tuple[str, str, str] | None:
+    """Parse one recruiter comment into ``(author, created_at, body)``.
+
+    Returns ``None`` when there is no comment body to show.
+    """
     if not isinstance(comment, dict):
         return None
     body = _trim(comment.get("body") or comment.get("text"))
@@ -179,19 +193,27 @@ def _format_comment(comment: dict) -> str | None:
         or comment.get("updated_at")
         or ""
     )
-    header = _join_nonempty([author_name, _trim(created_at, 32)])
+    return _trim(author_name, 160), _trim(created_at, 32), body
+
+
+def _format_comment(comment: dict) -> str | None:
+    fields = _comment_fields(comment)
+    if fields is None:
+        return None
+    author_name, created_at, body = fields
+    header = _join_nonempty([author_name, created_at])
     if header:
         return f"[{header}] {body}"
     return body
 
 
-def _format_activity(activity: dict) -> str | None:
-    """Render one Workable activity-log entry.
+def _activity_fields(activity: dict) -> dict | None:
+    """Parse one Workable activity-log entry into structured fields.
 
     We're permissive about shape because Workable returns many activity
     types (stage transitions, automated emails, ratings, comments echoed
-    back). The pre-screener mostly cares about anything with a body or a
-    stage change.
+    back). Returns ``{action, stage, body, created_at}`` or ``None`` when
+    the entry carries nothing meaningful.
     """
     if not isinstance(activity, dict):
         return None
@@ -202,16 +224,34 @@ def _format_activity(activity: dict) -> str | None:
     created_at = _trim(activity.get("created_at") or activity.get("posted_at"), 32)
     if not (body or action or stage_from or stage_to):
         return None
-    pieces: list[str] = []
-    if action:
-        pieces.append(action)
     if stage_from and stage_to:
-        pieces.append(f"{stage_from} → {stage_to}")
+        stage = f"{stage_from} → {stage_to}"
     elif stage_from:
-        pieces.append(stage_from)
-    if created_at:
-        pieces.append(created_at)
+        stage = stage_from
+    else:
+        stage = ""
+    return {
+        "action": action,
+        "stage": stage,
+        "body": body,
+        "created_at": created_at,
+    }
+
+
+def _format_activity(activity: dict) -> str | None:
+    """Render one Workable activity-log entry as a single text line."""
+    fields = _activity_fields(activity)
+    if fields is None:
+        return None
+    pieces: list[str] = []
+    if fields["action"]:
+        pieces.append(fields["action"])
+    if fields["stage"]:
+        pieces.append(fields["stage"])
+    if fields["created_at"]:
+        pieces.append(fields["created_at"])
     header = " · ".join(pieces)
+    body = fields["body"]
     if body and header:
         return f"[{header}] {body}"
     return body or header or None
@@ -454,3 +494,75 @@ def format_workable_context(
             )
 
     return "\n\n".join(sections)
+
+
+# ── Structured surfaces for the candidate-detail UI ───────────────────
+# The pre-screen prompt wants one text blob (``format_workable_context``);
+# the recruiter UI's Notes tab wants structured rows it can lay out. These
+# reuse the same parsers so the LLM and the UI never disagree about what a
+# comment / answer / activity says. Bounded by the same caps as the prompt.
+
+
+def workable_questionnaire_answers(candidate: Candidate | None) -> list[dict[str, str]]:
+    """Structured ``[{question, answer}]`` from the candidate's Workable
+    questionnaire / LinkedIn-apply answers. Empty list when none."""
+    if candidate is None:
+        return []
+    workable_data = candidate.workable_data if isinstance(candidate.workable_data, dict) else {}
+    answers = workable_data.get("answers")
+    if not isinstance(answers, list):
+        return []
+    out: list[dict[str, str]] = []
+    for entry in answers[:_MAX_ANSWERS]:
+        parsed = _parse_answer(entry)
+        if parsed:
+            out.append({"question": parsed[0], "answer": parsed[1]})
+    return out
+
+
+def workable_recruiter_comments(candidate: Candidate | None) -> list[dict[str, str | None]]:
+    """Structured ``[{author, created_at, body}]`` recruiter comments synced
+    from Workable. Empty list when none."""
+    if candidate is None:
+        return []
+    comments = candidate.workable_comments
+    if not isinstance(comments, list):
+        return []
+    out: list[dict[str, str | None]] = []
+    for entry in comments[:_MAX_COMMENTS]:
+        fields = _comment_fields(entry)
+        if fields is None:
+            continue
+        author_name, created_at, body = fields
+        out.append(
+            {
+                "author": author_name or None,
+                "created_at": created_at or None,
+                "body": body,
+            }
+        )
+    return out
+
+
+def workable_activity_log(candidate: Candidate | None) -> list[dict[str, str | None]]:
+    """Structured ``[{action, stage, body, created_at}]`` activity entries
+    synced from Workable. Empty list when none."""
+    if candidate is None:
+        return []
+    activities = candidate.workable_activities
+    if not isinstance(activities, list):
+        return []
+    out: list[dict[str, str | None]] = []
+    for entry in activities[:_MAX_ACTIVITIES]:
+        fields = _activity_fields(entry)
+        if fields is None:
+            continue
+        out.append(
+            {
+                "action": fields["action"] or None,
+                "stage": fields["stage"] or None,
+                "body": fields["body"] or None,
+                "created_at": fields["created_at"] or None,
+            }
+        )
+    return out

@@ -325,6 +325,11 @@ class ApplicationDetailResponse(ApplicationResponse):
     assessment_preview: Optional[dict[str, Any]] = None
     assessment_history: list[dict[str, Any]] = Field(default_factory=list)
     candidate_interview_kit: Optional[dict[str, Any]] = None
+    # Recruiter-internal Workable surfaces, structured for the Notes tab.
+    # Detail-only (omitted from list rows) and stripped from client shares.
+    workable_comments: list[dict[str, Any]] = Field(default_factory=list)
+    workable_questionnaire_answers: list[dict[str, Any]] = Field(default_factory=list)
+    workable_activity_log: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ApplicationCvUploadResponse(BaseModel):

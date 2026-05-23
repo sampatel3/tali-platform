@@ -764,6 +764,58 @@ export const CandidateStageTwoTechnicalTab = ({
   );
 };
 
+const WorkableCommentCard = ({ comment }) => {
+  const body = safeText(comment?.body);
+  if (!body) return null;
+  const author = safeText(comment?.author);
+  const when = comment?.created_at ? formatDateTime(comment.created_at) : '';
+  const header = [author, when && when !== '—' ? when : ''].filter(Boolean).join(' · ');
+  return (
+    <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-3">
+      {header ? (
+        <div className="font-mono text-xs text-[var(--taali-muted)]">{header}</div>
+      ) : null}
+      <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-[var(--taali-text)]">{body}</p>
+    </div>
+  );
+};
+
+const WorkableAnswerCard = ({ entry }) => {
+  const question = safeText(entry?.question);
+  const answer = safeText(entry?.answer);
+  if (!question && !answer) return null;
+  return (
+    <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-3">
+      {question ? (
+        <div className="text-sm font-semibold text-[var(--taali-text)]">{question}</div>
+      ) : null}
+      {answer ? (
+        <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-[var(--taali-muted)]">{answer}</p>
+      ) : null}
+    </div>
+  );
+};
+
+const WorkableActivityRow = ({ entry }) => {
+  const action = safeText(entry?.action);
+  const stage = safeText(entry?.stage);
+  const body = safeText(entry?.body);
+  const when = entry?.created_at ? formatDateTime(entry.created_at) : '';
+  const header = [action ? action.replace(/_/g, ' ') : '', stage, when && when !== '—' ? when : '']
+    .filter(Boolean)
+    .join(' · ');
+  if (!header && !body) return null;
+  return (
+    <li className="flex gap-2 text-sm text-[var(--taali-text)]">
+      <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--taali-purple)]" />
+      <div className="min-w-0">
+        {header ? <div className="font-mono text-xs text-[var(--taali-muted)]">{header}</div> : null}
+        {body ? <div className="whitespace-pre-wrap">{body}</div> : null}
+      </div>
+    </li>
+  );
+};
+
 export const CandidateTeamNotesTab = ({
   application = null,
   noteText = '',
@@ -775,6 +827,9 @@ export const CandidateTeamNotesTab = ({
   const applicationNotes = safeText(application?.notes);
   const screeningSummary = safeText(application?.screening_interview_summary?.summary);
   const techSummary = safeText(application?.tech_interview_summary?.summary);
+  const workableComments = safeList(application?.workable_comments);
+  const workableAnswers = safeList(application?.workable_questionnaire_answers);
+  const workableActivity = safeList(application?.workable_activity_log);
 
   return (
     <div className="space-y-4">
@@ -786,9 +841,57 @@ export const CandidateTeamNotesTab = ({
           Shared recruiter context
         </div>
         <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
-          Keep the panel aligned on what to validate next, what the screening call already covered, and any open concerns before the next stage.
+          Comments, questionnaire answers, and activity synced from Workable sit alongside Tali notes here. Feedback you add below stays in Tali for the hiring team and TAALI agents — it is not posted back to Workable.
         </p>
       </Panel>
+
+      {workableComments.length > 0 ? (
+        <Panel className="p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
+              Workable Comments
+            </div>
+            <Badge variant="purple" className="font-mono text-[11px]">Synced from Workable</Badge>
+          </div>
+          <div className="mt-3 space-y-2">
+            {workableComments.map((comment, index) => (
+              <WorkableCommentCard key={`workable-comment-${index}`} comment={comment} />
+            ))}
+          </div>
+        </Panel>
+      ) : null}
+
+      {workableAnswers.length > 0 ? (
+        <Panel className="p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
+              Questionnaire Responses
+            </div>
+            <Badge variant="purple" className="font-mono text-[11px]">LinkedIn / Workable apply</Badge>
+          </div>
+          <div className="mt-3 space-y-2">
+            {workableAnswers.map((entry, index) => (
+              <WorkableAnswerCard key={`workable-answer-${index}`} entry={entry} />
+            ))}
+          </div>
+        </Panel>
+      ) : null}
+
+      {workableActivity.length > 0 ? (
+        <Panel className="p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
+              Workable Activity
+            </div>
+            <Badge variant="muted" className="font-mono text-[11px]">Synced from Workable</Badge>
+          </div>
+          <ul className="mt-3 space-y-2">
+            {workableActivity.map((entry, index) => (
+              <WorkableActivityRow key={`workable-activity-${index}`} entry={entry} />
+            ))}
+          </ul>
+        </Panel>
+      ) : null}
 
       {applicationNotes ? (
         <Panel className="p-4">
