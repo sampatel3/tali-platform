@@ -17,7 +17,8 @@ import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
 import { RadarChart } from '../../shared/ui/RadarChart';
 import { ScoreRing } from '../../shared/ui/ScoreRing';
-import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES } from './assessmentViewModels';
+import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAssessmentToCandidateView } from './assessmentViewModels';
+import { AssessmentEvidencePanels, EvaluatePanel } from './CandidateAssessmentDetailPanels';
 import { CandidateSnapshotCard } from './CandidateSnapshotCard';
 import {
   getErrorMessage,
@@ -47,6 +48,7 @@ const resolveAssessmentStatus = (application) => (
 const REPORT_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'assessment', label: 'Assessment', internalOnly: true, requiresAssessment: true },
+  { id: 'evaluate', label: 'Evaluate', internalOnly: true, requiresAssessment: true },
   { id: 'cv', label: 'CV' },
   { id: 'prep', label: 'Interview prep', recruiterPrep: true },
   { id: 'notes', label: 'Notes & timeline', internalOnly: true },
@@ -57,6 +59,10 @@ const CLIENT_HIDDEN_TABS = new Set(
   REPORT_TABS.filter((tab) => tab.internalOnly || tab.recruiterPrep).map((tab) => tab.id),
 );
 const REPORT_TAB_IDS = new Set(REPORT_TABS.map((tab) => tab.id));
+
+// Stable empty-rubric reference so the Evaluate panel's draft-init effect
+// (keyed on the rubric identity) doesn't reset recruiter input every render.
+const EMPTY_RUBRIC = Object.freeze({});
 
 const CV_TEXT_PREVIEW_LIMIT = 18000;
 
@@ -924,6 +930,16 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
 
   const assessmentId = completedAssessment?.id || resolveAssessmentId(application);
   const canOpenAssessmentDetail = Boolean(completedAssessment?.id);
+  // Mapped assessment view for the Assessment + Evaluate tabs (shared shape
+  // with the legacy /assessments page). Memoized so the leaf components and
+  // the Evaluate draft-init effect see a stable `candidate` reference.
+  const candidateView = useMemo(
+    () => mapAssessmentToCandidateView(completedAssessment),
+    [completedAssessment]
+  );
+  const evaluationRubric = (completedAssessment?.evaluation_rubric && typeof completedAssessment.evaluation_rubric === 'object')
+    ? completedAssessment.evaluation_rubric
+    : EMPTY_RUBRIC;
   const workableConnected = Boolean(orgData?.workable_connected);
   const workableSource = Boolean(application?.workable_sourced || application?.workable_score_raw != null || application?.workable_profile_url);
   // Strengths and risks are now derived from the same
@@ -1656,6 +1672,29 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               ) : null}
             </div>
           </div>
+
+          {/* Full assessment evidence migrated from the legacy /assessments
+              page: AI-usage analytics, code/git, and the prompt-by-prompt
+              timeline. Recruiter-only (this pane is internalOnly). */}
+          {candidateView ? (
+            <AssessmentEvidencePanels candidate={candidateView} />
+          ) : null}
+        </div>
+
+        <div className={`pane ${activeTab === 'evaluate' ? 'active' : ''}`} data-p="evaluate" data-internal-only>
+          {candidateView ? (
+            <EvaluatePanel
+              candidate={candidateView}
+              evaluationRubric={evaluationRubric}
+              assessmentId={assessmentId}
+              assessmentsApi={assessmentsApi}
+              roleFitCriteria={reportModel?.roleFitModel?.requirementsAssessment || []}
+              recommendation={reportModel?.recommendation}
+              recruiterSummary={reportModel?.recruiterSummaryText || ''}
+            />
+          ) : (
+            <div className="mc-notes-empty">Evaluation opens once a completed assessment is linked.</div>
+          )}
         </div>
 
         <div className={`pane ${activeTab === 'cv' ? 'active' : ''}`} data-p="cv">

@@ -3,6 +3,35 @@ import { formatScale100Score, normalizeScore } from '../../lib/scoreDisplay';
 
 export const COMPLETED_ASSESSMENT_STATUSES = new Set(['completed', 'completed_due_to_timeout']);
 
+// Shapes a raw assessment record into the `candidate` view object the
+// assessment tab components (CandidateResultsTab, CandidateAiUsageTab,
+// CandidateCodeGitTab, CandidateTimelineTab, CandidateEvaluateTab) expect.
+// Lifted out of AppShell so the Standing Report can build the same shape
+// from its fetched `completedAssessment` (the consolidation keeps both the
+// legacy /assessments page and the report on one mapper). `_raw` is the
+// full assessment record the leaf components read most fields from.
+export const mapAssessmentToCandidateView = (assessment) => {
+  if (!assessment || typeof assessment !== 'object') return null;
+  return {
+    id: assessment.id,
+    name: (assessment.candidate_name || assessment.candidate?.full_name || assessment.candidate_email || '').trim() || 'Unknown',
+    email: assessment.candidate_email || assessment.candidate?.email || '',
+    task: assessment.task_name || assessment.task?.name || 'Assessment',
+    status: assessment.status || 'pending',
+    score: assessment.score ?? assessment.overall_score ?? null,
+    time: assessment.duration_taken ? `${Math.round(assessment.duration_taken / 60)}m` : '—',
+    position: assessment.role_name || assessment.candidate?.position || '',
+    completedDate: assessment.completed_at ? new Date(assessment.completed_at).toLocaleDateString() : null,
+    breakdown: assessment.breakdown || null,
+    prompts: assessment.prompt_count ?? 0,
+    promptsList: assessment.prompts_list || [],
+    timeline: assessment.timeline || [],
+    results: assessment.results || [],
+    token: assessment.token,
+    _raw: assessment,
+  };
+};
+
 const normalizeStatus = (value) => String(value || '').trim().toLowerCase();
 
 const toFiniteNumber = (value) => {
