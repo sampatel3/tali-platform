@@ -1823,6 +1823,21 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               return 'var(--mute)';
             };
 
+            // Synced-from-Workable surfaces, exposed on ApplicationDetailResponse.
+            // These are read-only here: Workable comments + the activity log come
+            // from the recruiter's Workable account, questionnaire answers are the
+            // candidate's own LinkedIn/Workable-apply responses. The hiring-team
+            // note box above stays Tali-internal (never posted back to Workable).
+            const workableComments = Array.isArray(application?.workable_comments)
+              ? application.workable_comments
+              : [];
+            const workableAnswers = Array.isArray(application?.workable_questionnaire_answers)
+              ? application.workable_questionnaire_answers
+              : [];
+            const workableActivity = Array.isArray(application?.workable_activity_log)
+              ? application.workable_activity_log
+              : [];
+
             return (
               <div className="mc-notes-grid">
                 <div className="mc-notes-col">
@@ -1866,6 +1881,46 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                       </button>
                     </div>
                   </div>
+
+                  {workableComments.length > 0 ? (
+                    <>
+                      <div className="mc-kicker" style={{ marginTop: 18 }}>WORKABLE COMMENTS</div>
+                      {workableComments.map((comment, idx) => {
+                        const body = String(comment?.body || '').trim();
+                        if (!body) return null;
+                        const author = String(comment?.author || '').trim() || 'Workable';
+                        return (
+                          <div key={`wk-comment-${comment?.created_at || idx}`} className="mc-notes-card">
+                            <div className="mc-notes-card-head">
+                              <span className="mc-notes-card-who">
+                                {author}
+                                <span className="mc-notes-card-role"> · Workable</span>
+                              </span>
+                              <span className="mc-notes-card-time">{fmtRelative(comment?.created_at)}</span>
+                            </div>
+                            <div className="mc-notes-card-body">{body}</div>
+                          </div>
+                        );
+                      })}
+                    </>
+                  ) : null}
+
+                  {workableAnswers.length > 0 ? (
+                    <>
+                      <div className="mc-kicker" style={{ marginTop: 18 }}>QUESTIONNAIRE RESPONSES</div>
+                      {workableAnswers.map((entry, idx) => {
+                        const question = String(entry?.question || '').trim();
+                        const answer = String(entry?.answer || '').trim();
+                        if (!question && !answer) return null;
+                        return (
+                          <div key={`wk-answer-${idx}`} className="mc-notes-card">
+                            {question ? <div className="mc-notes-card-who">{question}</div> : null}
+                            {answer ? <div className="mc-notes-card-body">{answer}</div> : null}
+                          </div>
+                        );
+                      })}
+                    </>
+                  ) : null}
                 </div>
 
                 <div className="mc-notes-col">
@@ -1902,6 +1957,35 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                       })}
                     </div>
                   )}
+
+                  {workableActivity.length > 0 ? (
+                    <>
+                      <div className="mc-kicker" style={{ marginTop: 18 }}>WORKABLE ACTIVITY</div>
+                      <div className="mc-audit-timeline">
+                        {workableActivity.map((entry, idx) => {
+                          const action = String(entry?.action || '').replace(/_/g, ' ').trim();
+                          const stage = String(entry?.stage || '').trim();
+                          const body = String(entry?.body || '').trim();
+                          const title = [action, stage].filter(Boolean).join(' · ')
+                            || (body ? 'Comment' : 'Workable activity');
+                          return (
+                            <div key={`wk-activity-${entry?.created_at || idx}`} className="mc-audit-row">
+                              <span
+                                className="mc-audit-dot"
+                                aria-hidden="true"
+                                style={{ background: 'var(--purple)' }}
+                              />
+                              <div>
+                                <div className="mc-audit-time">{fmtRelative(entry?.created_at).toUpperCase()}</div>
+                                <div className="mc-audit-title">{title}</div>
+                                {body && body !== title ? <div className="mc-audit-detail">{body}</div> : null}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  ) : null}
                 </div>
               </div>
             );
