@@ -147,13 +147,30 @@ def queue_pre_screen_reject(
         try:
             db.flush()
         except IntegrityError:
-            # Race: another path inserted it between our SELECT and our INSERT.
+            # A row with this app's idempotency key already exists. Two cases:
+            #   1. Race — a concurrent path inserted a *pending* row.
+            #   2. Replay — a prior card for this app was discarded (e.g. a
+            #      threshold 50→30 reconcile), and now we want one again
+            #      (30→50). The key is per-application, so we can't insert a
+            #      second row; the existing row is non-pending.
+            # In case 2 we must REVIVE the existing row to pending, otherwise
+            # the candidate is left with no pending card while ``created`` is
+            # incremented — the silent-miss the reconcile replay path hit.
             db.rollback()
-            return (
+            existing = (
                 db.query(AgentDecision)
                 .filter(AgentDecision.idempotency_key == key)
                 .first()
             )
+            if existing is not None and existing.status != "pending":
+                existing.status = "pending"
+                existing.resolved_at = None
+                existing.resolution_note = None
+                existing.agent_run_id = None
+                existing.reasoning = _format_reasoning(pre_screen_score, threshold)
+                existing.evidence = body
+                db.flush()
+            return existing
 
         db.add(
             CandidateApplicationEvent(
@@ -298,7 +315,7 @@ def reconcile_pre_screen_reject_decisions(
 
     Returns ``{"discarded": int, "created": int, "skipped_existing": int}``.
     """
-    from sqlalchemy import and_, or_
+    from sqlalchemy import and_, func, or_
 
     if not bool(getattr(role, "agentic_mode_enabled", False)):
         return {"discarded": 0, "created": 0, "skipped_existing": 0}
@@ -344,30 +361,40 @@ def reconcile_pre_screen_reject_decisions(
     # --- Emit cards for candidates now below the new threshold -----------
     created = 0
     skipped_existing = 0
+    # Case/space-insensitive match — the decider and the discard path both
+    # normalize ``pre_screen_recommendation``, so non-canonical stored values
+    # ("below threshold", trailing space) must count here too or they'd be
+    # treated as below-threshold by policy yet never get a reconciled card.
+    rec_below = (
+        func.lower(func.trim(func.coalesce(CandidateApplication.pre_screen_recommendation, "")))
+        == "below threshold"
+    )
+    # No numeric score → the 'Below threshold' recommendation (must-have miss
+    # / invalidated score) is the reject signal. This branch holds even when
+    # ``threshold`` is None (a cleared/auto-fallback threshold), so rec-only
+    # rejects aren't stranded.
+    below_conditions = [
+        and_(CandidateApplication.pre_screen_score_100.is_(None), rec_below)
+    ]
     if threshold is not None:
-        below = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.role_id == int(role.id),
-                CandidateApplication.organization_id == int(organization_id),
-                CandidateApplication.application_outcome == "open",
-                or_(
-                    # Numeric score is authoritative against the cutoff.
-                    and_(
-                        CandidateApplication.pre_screen_score_100.isnot(None),
-                        CandidateApplication.pre_screen_score_100 < float(threshold),
-                    ),
-                    # No numeric score → the 'Below threshold' recommendation
-                    # (must-have miss / invalidated score) is the reject signal.
-                    and_(
-                        CandidateApplication.pre_screen_score_100.is_(None),
-                        CandidateApplication.pre_screen_recommendation == "Below threshold",
-                    ),
-                ),
+        # Numeric score is authoritative against the cutoff.
+        below_conditions.append(
+            and_(
+                CandidateApplication.pre_screen_score_100.isnot(None),
+                CandidateApplication.pre_screen_score_100 < float(threshold),
             )
-            .all()
         )
-        for app in below:
+    below = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.role_id == int(role.id),
+            CandidateApplication.organization_id == int(organization_id),
+            CandidateApplication.application_outcome == "open",
+            or_(*below_conditions),
+        )
+        .all()
+    )
+    for app in below:
             existing_pending = (
                 db.query(AgentDecision)
                 .filter(
@@ -387,7 +414,7 @@ def reconcile_pre_screen_reject_decisions(
                 pre_screen_score=float(app.pre_screen_score_100)
                 if app.pre_screen_score_100 is not None
                 else None,
-                threshold=float(threshold),
+                threshold=float(threshold) if threshold is not None else None,
             )
             if result is not None:
                 created += 1

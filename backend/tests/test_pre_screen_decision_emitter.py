@@ -549,3 +549,86 @@ def test_rederive_relabels_above_cutoff_below_threshold_rows(db):
     assert below.pre_screen_recommendation == "Below threshold"
     assert fraud.pre_screen_recommendation == "Below threshold"
     assert null_rec.pre_screen_recommendation == "Below threshold"
+
+
+def test_queue_pre_screen_reject_revives_discarded_card(db):
+    """The per-app idempotency key blocks a 2nd insert, so re-queueing after
+    a discard must REVIVE the existing row to pending — not leave the
+    candidate with no pending card.
+    """
+    org, role, app = _seed(db, score=20.0, threshold=50.0)
+    first = queue_pre_screen_reject(
+        db, organization_id=org.id, role=role, application=app,
+        pre_screen_score=20.0, threshold=50.0,
+    )
+    db.commit()
+    # Simulate a prior reconcile discard.
+    first.status = "discarded"
+    db.commit()
+
+    revived = queue_pre_screen_reject(
+        db, organization_id=org.id, role=role, application=app,
+        pre_screen_score=20.0, threshold=50.0,
+    )
+    assert revived is not None
+    assert revived.id == first.id  # same row, no duplicate
+    assert revived.status == "pending"
+    assert revived.resolved_at is None
+    n = db.query(AgentDecision).filter(AgentDecision.application_id == app.id).count()
+    assert n == 1
+
+
+def test_reconcile_threshold_replay_revives_after_discard(db):
+    """Full replay: 50→30 discards a 40-scorer; 30→50 must put it back as a
+    pending card (the silent-miss Codex flagged).
+    """
+    org, role, app = _seed(db, score=40.0, threshold=50.0)
+    queue_pre_screen_reject(
+        db, organization_id=org.id, role=role, application=app,
+        pre_screen_score=40.0, threshold=50.0,
+    )
+    db.commit()
+
+    lowered = reconcile_pre_screen_reject_decisions(
+        db, role=role, organization_id=int(org.id), threshold=30.0
+    )
+    assert lowered["discarded"] == 1
+    assert _latest_status(db, app) == "discarded"
+
+    raised = reconcile_pre_screen_reject_decisions(
+        db, role=role, organization_id=int(org.id), threshold=50.0
+    )
+    assert raised["created"] == 1
+    assert _latest_status(db, app) == "pending"
+    # Exactly one row — revived, not duplicated.
+    assert db.query(AgentDecision).filter(AgentDecision.application_id == app.id).count() == 1
+
+
+def test_reconcile_emit_matches_recommendation_case_insensitively(db):
+    """A non-canonical 'below threshold' (lowercase) null-score row must
+    still get a card — the decider normalizes, so the emit query must too.
+    """
+    org, role, app = _seed(db, score=None, threshold=30.0)
+    app.pre_screen_recommendation = "below threshold "  # lowercase + trailing space
+    db.commit()
+
+    summary = reconcile_pre_screen_reject_decisions(
+        db, role=role, organization_id=int(org.id), threshold=30.0
+    )
+    assert summary["created"] == 1
+    assert _latest_status(db, app) == "pending"
+
+
+def test_reconcile_emits_rec_only_rejects_when_threshold_none(db):
+    """With threshold cleared to None, numeric rejects are dropped but
+    recommendation-only (must-have miss) rejects must still be surfaced.
+    """
+    org, role, app = _seed(db, score=None, threshold=None)
+    app.pre_screen_recommendation = "Below threshold"
+    db.commit()
+
+    summary = reconcile_pre_screen_reject_decisions(
+        db, role=role, organization_id=int(org.id), threshold=None
+    )
+    assert summary["created"] == 1
+    assert _latest_status(db, app) == "pending"

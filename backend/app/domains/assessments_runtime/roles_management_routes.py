@@ -240,14 +240,15 @@ def _effective_pre_screen_threshold(db: Session, role: Role) -> float | None:
     auto-reject decider (``score_threshold`` in manual mode, the computed
     value in auto mode). ``org`` isn't needed for the threshold itself, so
     we pass None to avoid an extra load.
+
+    Raises on failure (does NOT swallow to ``None``): a resolution error —
+    e.g. while switching to ``auto`` mode — must not be mistaken for a
+    genuine "no threshold" value, or the reconcile would treat every
+    numeric-score reject as no-longer-below-threshold and discard it.
     """
     from ...services.pre_screening_service import resolved_auto_reject_config
 
-    try:
-        return resolved_auto_reject_config(None, role, db=db)["threshold_100"]
-    except Exception:
-        logger.exception("Failed to resolve pre-screen threshold for role_id=%s", role.id)
-        return None
+    return resolved_auto_reject_config(None, role, db=db)["threshold_100"]
 
 
 def _thresholds_equal(a: float | None, b: float | None) -> bool:
@@ -273,7 +274,17 @@ def update_role(
     _threshold_may_change = (
         "score_threshold" in updates or "auto_reject_threshold_mode" in updates
     )
-    _threshold_before = _effective_pre_screen_threshold(db, role) if _threshold_may_change else None
+    _threshold_before = None
+    if _threshold_may_change:
+        try:
+            _threshold_before = _effective_pre_screen_threshold(db, role)
+        except Exception:
+            # No safe baseline to compare against → don't reconcile (and
+            # never block the role edit itself on a threshold-resolution error).
+            logger.exception(
+                "Pre-screen threshold (pre-update) resolution failed for role_id=%s", role.id
+            )
+            _threshold_may_change = False
     if "name" in updates and updates["name"] is not None:
         role.name = updates["name"].strip()
     if "description" in updates:
@@ -396,24 +407,34 @@ def update_role(
     # edits, which DO change scores). Failures are logged, never fatal to
     # the PATCH.
     if _threshold_may_change:
-        _threshold_after = _effective_pre_screen_threshold(db, role)
-        if not _thresholds_equal(_threshold_before, _threshold_after):
-            try:
-                from ...services.pre_screen_decision_emitter import (
-                    reconcile_pre_screen_reject_decisions,
-                )
-                reconcile_pre_screen_reject_decisions(
-                    db,
-                    role=role,
-                    organization_id=int(current_user.organization_id),
-                    threshold=_threshold_after,
-                )
-                db.commit()
-            except Exception:
-                logger.exception(
-                    "Pre-screen reject reconcile failed for role_id=%s", role.id
-                )
-                db.rollback()
+        try:
+            _threshold_after = _effective_pre_screen_threshold(db, role)
+        except Exception:
+            # Post-update resolution failed — skip reconcile rather than
+            # treat the failure as a (None) threshold, which would discard
+            # valid numeric-score reject cards.
+            logger.exception(
+                "Pre-screen threshold (post-update) resolution failed for role_id=%s; "
+                "skipping reject reconcile", role.id
+            )
+        else:
+            if not _thresholds_equal(_threshold_before, _threshold_after):
+                try:
+                    from ...services.pre_screen_decision_emitter import (
+                        reconcile_pre_screen_reject_decisions,
+                    )
+                    reconcile_pre_screen_reject_decisions(
+                        db,
+                        role=role,
+                        organization_id=int(current_user.organization_id),
+                        threshold=_threshold_after,
+                    )
+                    db.commit()
+                except Exception:
+                    logger.exception(
+                        "Pre-screen reject reconcile failed for role_id=%s", role.id
+                    )
+                    db.rollback()
     return role_to_response(role)
 
 

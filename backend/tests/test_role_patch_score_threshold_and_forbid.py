@@ -112,6 +112,44 @@ def test_patch_role_threshold_change_reconciles_reject_queue(db, client):
     assert db.query(AgentDecision).filter(AgentDecision.id == card.id).one().status == "discarded"
 
 
+def test_patch_role_threshold_resolution_failure_skips_reconcile(db, client, monkeypatch):
+    """A threshold-resolution error after the PATCH must NOT crash the edit
+    or run reconcile with a (None) threshold — it's skipped, the role edit
+    still applies. Guards the data-loss path Codex flagged.
+    """
+    from app.domains.assessments_runtime import roles_management_routes as rmr
+
+    headers, _ = auth_headers(client, organization_name="ResolveFailOrg")
+    me = _current_user(db)
+    role = Role(
+        organization_id=me.organization_id,
+        name=f"Agent {id(db)}",
+        source="manual",
+        score_threshold=50,
+        agentic_mode_enabled=True,
+        auto_reject=False,
+    )
+    db.add(role); db.flush(); db.commit()
+
+    real = rmr._effective_pre_screen_threshold
+    calls = {"n": 0}
+
+    def flaky(dbsess, r):
+        calls["n"] += 1
+        if calls["n"] >= 2:  # pre-update read ok; post-update read fails
+            raise RuntimeError("threshold boom")
+        return real(dbsess, r)
+
+    monkeypatch.setattr(rmr, "_effective_pre_screen_threshold", flaky)
+
+    resp = client.patch(
+        f"/api/v1/roles/{role.id}", json={"score_threshold": 30}, headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    db.expire(role)
+    assert role.score_threshold == 30  # edit applied despite resolution failure
+
+
 def test_patch_role_rejects_unknown_field(db, client):
     headers, _ = auth_headers(client, organization_name="ForbidOrg")
     me = _current_user(db)
