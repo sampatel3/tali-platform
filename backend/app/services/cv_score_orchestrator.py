@@ -582,10 +582,13 @@ def _execute_scoring_v3(
             )
             return
 
-    # Archetype synthesis uses Sonnet and is metered separately by the
-    # wrapper using ``metering_context``. The score call itself is metered
-    # by ``_record_usage_safe`` below — the runner sets metering={skip}.
-    archetype_metering_context = {
+    # The score + archetype Anthropic calls are now metered by the
+    # MeteredAnthropicClient wrapper itself — it writes one usage_event
+    # per call (FK-linked to claude_call_log), threaded with this
+    # context. That captures errored/retried calls the old post-call
+    # record missed (usage_event was ~73% short of actual spend on
+    # 2026-05-22; claude_call_log proved it).
+    score_metering_context = {
         "organization_id": getattr(application, "organization_id", None),
         "role_id": getattr(application, "role_id", None),
         "entity_id": f"application:{application.id}",
@@ -596,32 +599,27 @@ def _execute_scoring_v3(
         job_spec_text,
         requirements,
         client=org_client,
-        metering_context=archetype_metering_context,
+        metering_context=score_metering_context,
     )
     job.cache_hit = "hit" if getattr(output, "cache_hit", False) else "miss"
-    # Retry telemetry lands on the UsageEvent row so the rate is
-    # queryable from the same place as the cost. validation_failures > 0
-    # means cv_match v3 made N+1 Anthropic calls for this single score
-    # — compound spend, worth watching.
-    retry_count = int(getattr(output, "retry_count", 0) or 0)
-    validation_failures = int(getattr(output, "validation_failures", 0) or 0)
-    _record_usage_safe(
-        db,
-        organization_id=getattr(application, "organization_id", None),
-        role_id=getattr(application, "role_id", None),
-        feature=Feature.SCORE,
-        model=V3_MODEL_VERSION,
-        input_tokens=int(getattr(output, "input_tokens", 0) or 0),
-        output_tokens=int(getattr(output, "output_tokens", 0) or 0),
-        cache_read_tokens=int(getattr(output, "cache_read_tokens", 0) or 0),
-        cache_creation_tokens=int(getattr(output, "cache_creation_tokens", 0) or 0),
-        cache_hit=bool(getattr(output, "cache_hit", False)),
-        entity_id=f"application:{application.id}",
-        metadata={
-            "retry_count": retry_count,
-            "validation_failures": validation_failures,
-        } if (retry_count or validation_failures) else None,
-    )
+    # CACHE HITS ONLY: a cache hit makes no Anthropic call, so the wrapper
+    # never runs and never records. Record it here so cached scores still
+    # bill (unchanged behaviour). Cache MISSES are already recorded by the
+    # wrapper per-call above — recording them here too would double-count.
+    if bool(getattr(output, "cache_hit", False)):
+        _record_usage_safe(
+            db,
+            organization_id=getattr(application, "organization_id", None),
+            role_id=getattr(application, "role_id", None),
+            feature=Feature.SCORE,
+            model=V3_MODEL_VERSION,
+            input_tokens=int(getattr(output, "input_tokens", 0) or 0),
+            output_tokens=int(getattr(output, "output_tokens", 0) or 0),
+            cache_read_tokens=int(getattr(output, "cache_read_tokens", 0) or 0),
+            cache_creation_tokens=int(getattr(output, "cache_creation_tokens", 0) or 0),
+            cache_hit=True,
+            entity_id=f"application:{application.id}",
+        )
 
     if output.scoring_status == ScoringStatus.FAILED:
         job.status = SCORE_JOB_ERROR

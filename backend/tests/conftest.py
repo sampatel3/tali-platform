@@ -66,6 +66,29 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.close()
 
+
+# SQLite BigInteger-PK workaround for claude_call_log. SQLite only
+# auto-increments INTEGER PRIMARY KEY; a BIGINT PK stays NULL on insert.
+# claude_call_log rows are now written by MeteredAnthropicClient from many
+# code paths (any test that triggers a Claude call through the wrapper),
+# so the workaround lives here globally rather than per-test-file. Prod
+# uses Postgres where BigInteger PKs auto-increment via sequence.
+_CLAUDE_CALL_LOG_PK_COUNTER = {"n": 0}
+
+
+def _assign_claude_call_log_pk(mapper, connection, target):  # pragma: no cover
+    if getattr(target, "id", None) is None:
+        _CLAUDE_CALL_LOG_PK_COUNTER["n"] += 1
+        target.id = _CLAUDE_CALL_LOG_PK_COUNTER["n"]
+
+
+try:
+    from app.models.claude_call_log import ClaudeCallLog as _ClaudeCallLog
+
+    event.listen(_ClaudeCallLog, "before_insert", _assign_claude_call_log_pk)
+except Exception:  # pragma: no cover — model import shouldn't fail
+    pass
+
 def override_get_db():
     db = TestingSessionLocal()
     try:

@@ -271,6 +271,20 @@ def execute_pre_screen_only(
             app.id,
         )
 
+    # Thread the metering context so the MeteredAnthropicClient wrapper
+    # writes the pre-screen usage_event per actual call (FK-linked to
+    # claude_call_log) — capturing errored / JSON-parse-failure calls
+    # that the old post-call record missed (the bulk of the Haiku
+    # reconciliation gap). ``db`` is included so the event commits with
+    # this transaction.
+    pre_screen_metering_context = None
+    if db is not None and getattr(app, "organization_id", None):
+        pre_screen_metering_context = {
+            "organization_id": int(app.organization_id),
+            "role_id": getattr(app, "role_id", None),
+            "entity_id": f"application:{app.id}",
+            "db": db,
+        }
     try:
         pre = run_pre_screen(
             cv_text,
@@ -278,21 +292,19 @@ def execute_pre_screen_only(
             requirements,
             client=client,
             workable_context=workable_context or None,
+            metering_context=pre_screen_metering_context,
         )
     except Exception as exc:  # noqa: BLE001 — guard the LLM call
         _persist_pre_screen_error(app, reason=f"pre_screen_failed: {exc}"[:500])
         return {"status": "error", "reason": f"pre_screen_failed: {exc}"[:200]}
 
-    # Record usage metering BEFORE the error-path early-return below.
-    # Anthropic charges for tokens whether or not we managed to parse
-    # the response — a 200 OK whose body fails JSON.loads still consumed
-    # input + output tokens. Previously this block lived after the
-    # error guard, which meant every JSON-parse failure (7,668 of them
-    # on 2026-05-21 — the bulk of the Haiku reconciliation gap)
-    # vanished from the meter. Cache hits and exception paths return
-    # input_tokens=0 / output_tokens=0 so they're effectively no-ops.
+    # CACHE HITS ONLY. An actual Anthropic call is metered by the wrapper
+    # above (per call, including errors/retries). A cache hit makes no
+    # call, so the wrapper never runs — record it here to preserve cached-
+    # result billing. Recording a cache MISS here too would double-count.
     if (
-        db is not None
+        pre.cache_hit
+        and db is not None
         and getattr(app, "organization_id", None)
         and (pre.input_tokens or pre.output_tokens or pre.cache_read_tokens or pre.cache_creation_tokens)
     ):
@@ -307,7 +319,7 @@ def execute_pre_screen_only(
                 output_tokens=pre.output_tokens,
                 cache_read_tokens=pre.cache_read_tokens,
                 cache_creation_tokens=pre.cache_creation_tokens,
-                cache_hit=pre.cache_hit,
+                cache_hit=True,
                 entity_id=f"application:{app.id}",
             )
         except Exception:  # pragma: no cover — defensive
