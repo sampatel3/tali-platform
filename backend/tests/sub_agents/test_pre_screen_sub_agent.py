@@ -71,6 +71,49 @@ def test_runner_invoked_when_no_cached_score(db):
     assert result.tokens_used == 250
 
 
+def test_metering_context_is_forwarded_to_runner(db):
+    """Regression: the pre-screen sub-agent must thread ``metering_context``
+    into ``run_pre_screen``. Without it the runner falls back to
+    metering={"skip": True} and the agent's pre-screen Anthropic calls are
+    never billed — they showed up only as feature_hint="skip" in
+    claude_call_log (~$11/day of unattributed Haiku)."""
+    org, role, _, app = make_full_application(db)
+    ctx = {
+        "agent_run_id": 7,
+        "organization_id": int(org.id),
+        "role_id": int(role.id),
+        "entity_id": f"application:{app.id}",
+        "feature": "evaluate_policy",
+    }
+    req = SubAgentRequest(
+        organization_id=int(org.id),
+        application_id=int(app.id),
+        role_id=int(role.id),
+        metering_context=ctx,
+    )
+
+    class _FakePreScreenResult:
+        decision = "yes"
+        reason = "ok"
+        score = 80.0
+        cache_hit = False
+        input_tokens = 100
+        output_tokens = 20
+        cache_read_tokens = 0
+        cache_creation_tokens = 0
+
+    with patch(
+        "app.sub_agents.pre_screen.run_pre_screen",
+        return_value=_FakePreScreenResult(),
+    ) as runner:
+        PRE_SCREEN_SUB_AGENT.run(req, db=db)
+    runner.assert_called_once()
+    assert runner.call_args.kwargs.get("metering_context") == ctx, (
+        "pre_screen sub-agent dropped metering_context — agent pre-screens "
+        "will leak as unmetered 'skip' calls"
+    )
+
+
 def test_unknown_application_returns_error(db):
     org, role, _, _app = make_full_application(db)
     req = SubAgentRequest(

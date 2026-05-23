@@ -192,6 +192,12 @@ class PreScreenSubAgent:
             jd_text,
             skip_cache=req.skip_cache,
             workable_context=workable_context or None,
+            # Without this the runner falls back to metering={"skip": True}
+            # and the agent's pre-screen Anthropic calls never write a
+            # usage_event — they were ~$11/day of Haiku showing up only as
+            # feature_hint="skip" in claude_call_log. cv_scoring already
+            # threads this; pre_screen had silently dropped it.
+            metering_context=req.metering_context,
         )
         if result.decision == "error":
             return SubAgentResult(

@@ -1459,8 +1459,17 @@ def _tool_evaluate_policy(
     evaluated.add(application_id)
     agent_run.__evaluated_apps__ = evaluated  # type: ignore[attr-defined]
 
+    # org/role/entity must be present so the sub-agents' Anthropic calls
+    # (cv_scoring, pre_screen) write attributable usage_events and count
+    # toward the role's monthly budget. Without org_id the wrapper drops
+    # the usage_event (no org → can't bill); without role_id the spend
+    # never reaches the budget guard. Sub-agents override ``feature``
+    # (score / prescreen) on their own call.
     metering_context = {
         "agent_run_id": int(agent_run.id),
+        "organization_id": getattr(role, "organization_id", None),
+        "role_id": int(role.id),
+        "entity_id": f"application:{application_id}",
         "feature": "evaluate_policy",
     }
     verdict, sub_outputs = policy_evaluator.evaluate_for_application(
