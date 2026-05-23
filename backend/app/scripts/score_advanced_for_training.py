@@ -46,25 +46,33 @@ from ..domains.assessments_runtime.pipeline_service import normalize_pipeline_ke
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_TARGET_STAGES = frozenset({"final_interview", "offer"})
-
-
-def _target_stages_from_argv(argv: list[str]) -> frozenset[str]:
+def _target_stages_from_argv(argv: list[str]) -> frozenset[str] | None:
+    """Return the stage filter, or None to cover ALL `advanced` candidates."""
     for i, arg in enumerate(argv):
         if arg == "--stages" and i + 1 < len(argv):
             return frozenset(normalize_pipeline_key(s) for s in argv[i + 1].split(",") if s.strip())
         if arg.startswith("--stages="):
             return frozenset(normalize_pipeline_key(s) for s in arg.split("=", 1)[1].split(",") if s.strip())
-    return _DEFAULT_TARGET_STAGES
+    return None
 
 
-def score_advanced_for_training(db: Session, *, target_stages: frozenset[str], apply: bool) -> dict:
+def score_advanced_for_training(
+    db: Session,
+    *,
+    target_stages: frozenset[str] | None = None,
+    apply: bool,
+    limit: int | None = None,
+) -> dict:
+    # All `advanced` (= terminal / decided) candidates that lack a Tali score.
+    # advanced means the hiring decision is made — a Tali hand-back, or a
+    # Workable offer/hired/reject — so scoring them gives the cv_match
+    # calibrator a (score -> outcome) training pair: positives (offer/hired)
+    # and negatives (reject/disqualify). Already-scored candidates are skipped
+    # (cv_match_score NOT NULL), so this never re-scores.
     candidates = (
         db.query(CandidateApplication)
         .filter(
             CandidateApplication.pipeline_stage == "advanced",
-            CandidateApplication.pipeline_stage_source == "sync",
-            CandidateApplication.application_outcome == "open",
             CandidateApplication.deleted_at.is_(None),
             CandidateApplication.cv_match_score.is_(None),
         )
@@ -72,8 +80,11 @@ def score_advanced_for_training(db: Session, *, target_stages: frozenset[str], a
     )
     targets = [
         app for app in candidates
-        if normalize_pipeline_key(app.workable_stage) in target_stages
+        if target_stages is None
+        or normalize_pipeline_key(app.workable_stage) in target_stages
     ]
+    if limit is not None:
+        targets = targets[: max(0, int(limit))]
 
     summary = {
         "matched": len(targets),
@@ -171,15 +182,24 @@ def main() -> int:
     argv = sys.argv[1:]
     apply = "--apply" in argv
     target_stages = _target_stages_from_argv(argv)
+    limit = None
+    for i, arg in enumerate(argv):
+        if arg == "--limit" and i + 1 < len(argv):
+            limit = int(argv[i + 1])
+        elif arg.startswith("--limit="):
+            limit = int(arg.split("=", 1)[1])
 
     db = SessionLocal()
     try:
+        stages_label = "ALL advanced" if target_stages is None else sorted(target_stages)
         print(
             f"[score_advanced_for_training] mode={'APPLY' if apply else 'DRY-RUN'} "
-            f"target_stages={sorted(target_stages)}",
+            f"target_stages={stages_label} limit={limit}",
             flush=True,
         )
-        summary = score_advanced_for_training(db, target_stages=target_stages, apply=apply)
+        summary = score_advanced_for_training(
+            db, target_stages=target_stages, apply=apply, limit=limit
+        )
         print(f"[score_advanced_for_training] {summary}", flush=True)
         if not apply and summary["matched"]:
             print("  (dry run — re-run with --apply to score)", flush=True)
