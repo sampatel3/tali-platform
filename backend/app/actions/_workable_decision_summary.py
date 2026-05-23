@@ -197,6 +197,17 @@ _VERDICT_HEADLINES = {
     "invite_resent": "Assessment invite resent by recruiter",
 }
 
+# Plain-English verdict labels for the Workable note — the raw
+# ``decision_type`` (e.g. ``skip_assessment_reject``) is Taali-internal
+# jargon that shouldn't leak into a recruiter's Workable activity feed.
+_DECISION_TYPE_LABELS = {
+    "advance_to_interview": "advance",
+    "reject": "reject",
+    "skip_assessment_reject": "reject",
+    "send_assessment": "send assessment",
+    "resend_assessment_invite": "resend invite",
+}
+
 
 def _format_score(value: Optional[float]) -> Optional[str]:
     if value is None:
@@ -262,8 +273,12 @@ def compose_decision_summary_note(
 
     agent_reasoning = _truncate(decision.reasoning or "", limit=240)
     if agent_reasoning:
+        verdict_label = _DECISION_TYPE_LABELS.get(
+            decision.decision_type,
+            (decision.decision_type or "").replace("_", " "),
+        )
         lines.append(
-            f"Agent recommended: {decision.decision_type} — \"{agent_reasoning}\""
+            f"Agent recommended: {verdict_label} — \"{agent_reasoning}\""
         )
 
     recruiter_note = _truncate(reason or "", limit=200)
