@@ -96,6 +96,49 @@ export const ConfBar = ({ value }) => {
   );
 };
 
+// Compact chip surfacing the candidate's Tali pre-screen score for the
+// decisions that carry one (pre-screen rejects). Reads the score + cutoff
+// straight off ``evidence`` and renders nothing when there's no numeric
+// score — agent decisions of other types, or pre-screen rejects whose
+// score was invalidated (must-have miss). Purple tones only: the TypeBadge
+// already carries the red reject signal, so this just reports the number
+// against the cutoff that drove the decision.
+export const ScoreChip = ({ evidence, size = 'md' }) => {
+  const score = Number(evidence?.pre_screen_score_100);
+  if (!Number.isFinite(score)) return null;
+  const thr = Number(evidence?.threshold_100);
+  const hasThr = Number.isFinite(thr);
+  const small = size === 'sm';
+  return (
+    <span
+      title={
+        hasThr
+          ? `Tali pre-screen score ${Math.round(score)} (threshold ${Math.round(thr)})`
+          : `Tali pre-screen score ${Math.round(score)}`
+      }
+      style={{
+        display: 'inline-flex',
+        alignItems: 'baseline',
+        gap: 4,
+        padding: small ? '2px 8px' : '3px 9px',
+        borderRadius: 6,
+        background: 'color-mix(in oklab, var(--purple) 12%, transparent)',
+        color: 'var(--purple)',
+        fontFamily: 'var(--font-mono)',
+        fontSize: small ? 10.5 : 11.5,
+        fontWeight: 600,
+        letterSpacing: '.04em',
+        lineHeight: 1.4,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <span style={{ opacity: 0.7 }}>SCORE</span>
+      <span>{Math.round(score)}</span>
+      {hasThr ? <span style={{ opacity: 0.7 }}>/ {Math.round(thr)}</span> : null}
+    </span>
+  );
+};
+
 export const Avatar = ({ initials, size = 36 }) => (
   <span
     style={{
