@@ -4,6 +4,7 @@
 // paragraph stays one click away for users who relied on it.
 
 import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import {
   Bar,
@@ -17,10 +18,11 @@ import {
 
 import { analytics as analyticsApi } from '../../shared/api';
 import { formatRelativeAge, FeedbackPill, TypeBadge } from './atoms';
+import { pathForPage } from '../../app/routing';
 
 const safeNumber = (v, fb = 0) => (Number.isFinite(Number(v)) ? Number(v) : fb);
 
-const HistoryTable = ({ rows, onSelect, onNavigate }) => (
+const HistoryTable = ({ rows, onSelect }) => (
   <div className="rq-history">
     <div className="rq-history-head">
       <span></span>
@@ -53,15 +55,15 @@ const HistoryTable = ({ rows, onSelect, onNavigate }) => (
           <span><TypeBadge type={row.decision_type} size="sm" /></span>
           <span style={{ minWidth: 0 }}>
             <div style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              <button
-                type="button"
+              <Link
+                to={pathForPage('candidate-report', { candidateApplicationId: row.application_id })}
                 className="rq-inline-link"
-                style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', fontWeight: 500 }}
-                onClick={(e) => { e.stopPropagation(); onNavigate?.('candidate-report', { candidateApplicationId: row.application_id }); }}
+                style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', fontWeight: 500, textDecoration: 'none' }}
+                onClick={(e) => e.stopPropagation()}
                 title="Open candidate report"
               >
                 {row.candidate_name || `Application #${row.application_id}`}
-              </button>
+              </Link>
             </div>
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--mute)', letterSpacing: '.04em', marginTop: 2 }}>
               D-{row.id}
@@ -208,7 +210,7 @@ export const HomeEverything = ({ rows, onSelect, onNavigate }) => {
         </div>
       </div>
 
-      <HistoryTable rows={rows} onSelect={onSelect} onNavigate={onNavigate} />
+      <HistoryTable rows={rows} onSelect={onSelect} />
 
       <div className="home-analytics-accordion">
         <button

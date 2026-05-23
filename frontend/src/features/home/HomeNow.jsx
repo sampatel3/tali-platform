@@ -6,6 +6,7 @@
 // opens TeachModal which POSTs /agent/feedback.
 
 import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Brain,
   Check,
@@ -20,6 +21,7 @@ import {
 
 import { agent as agentApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
+import { pathForPage } from '../../app/routing';
 import {
   Avatar,
   ConfBar,
@@ -130,23 +132,15 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
               </span>
             </div>
             <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink)', lineHeight: 1.35 }}>
-              <span
-                role="link"
-                tabIndex={0}
+              <Link
+                to={pathForPage('candidate-report', { candidateApplicationId: p.application_id })}
                 className="rq-inline-link"
-                style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer' }}
-                onClick={(e) => { e.stopPropagation(); onNavigate?.('candidate-report', { candidateApplicationId: p.application_id }); }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onNavigate?.('candidate-report', { candidateApplicationId: p.application_id });
-                  }
-                }}
+                style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', textDecoration: 'none' }}
+                onClick={(e) => e.stopPropagation()}
                 title="Open candidate report"
               >
                 {p.candidate_name || `Application #${p.application_id}`}
-              </span>
+              </Link>
             </div>
             <div style={{ fontSize: 11, color: 'var(--mute)', marginTop: 5, display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontFamily: 'var(--font-mono)', letterSpacing: '.04em' }}>#{p.id}</span>
@@ -213,15 +207,14 @@ const DecisionDetail = ({ decision, onApprove, onOverride, onTeach, onSnooze, on
         <Avatar initials={initialsFrom(decision.candidate_name)} size={48} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <h2 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 600, letterSpacing: '-.02em', lineHeight: 1.2, color: 'var(--ink)' }}>
-            <button
-              type="button"
+            <Link
+              to={pathForPage('candidate-report', { candidateApplicationId: decision.application_id })}
               className="rq-inline-link"
-              style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', textAlign: 'left' }}
-              onClick={() => onNavigate?.('candidate-report', { candidateApplicationId: decision.application_id })}
+              style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', textAlign: 'left', textDecoration: 'none' }}
               title="Open candidate report"
             >
               {decision.candidate_name || `Application #${decision.application_id}`}
-            </button>
+            </Link>
           </h2>
           <div style={{ fontSize: 13, color: 'var(--mute)', marginTop: 2 }}>
             {decision.candidate_email || ''}

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useParams, useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { AlertCircle, Check, Copy, Download, ExternalLink, Eye, X } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
@@ -15,7 +15,6 @@ import {
   WorkableComparisonCard,
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
-import { ShareModal } from './ShareModal';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
 import { RadarChart } from '../../shared/ui/RadarChart';
@@ -784,6 +783,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const { showToast } = useToast();
   const { applicationId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const location = useLocation();
   const rolesApi = 'roles' in apiClient ? apiClient.roles : null;
   const assessmentsApi = 'assessments' in apiClient ? apiClient.assessments : null;
   const candidatesApi = 'candidates' in apiClient ? apiClient.candidates : null;
@@ -796,11 +797,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [busyAction, setBusyAction] = useState('');
-  const [shareModalOpen, setShareModalOpen] = useState(false);
-  // 'interview' = internal panel link · 'client' = external client link.
-  // Pre-set when the candidate header opens the modal so the right tab
-  // is active (HANDOFF v2 §3).
-  const [shareInitialMode, setShareInitialMode] = useState('client');
+  const [sharingMode, setSharingMode] = useState('');
   const [applicationEvents, setApplicationEvents] = useState([]);
   // Notes & timeline tab — local note draft + a tick that lets us refetch
   // the events feed after a successful save without a full page reload.
@@ -1186,6 +1183,23 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     }
   };
 
+  const handleMintAndCopyShareLink = useCallback(async (mode, successMessage) => {
+    if (!application?.id || !rolesApi?.createApplicationShareLink) return;
+    setSharingMode(mode);
+    try {
+      const res = await rolesApi.createApplicationShareLink(application.id, { mode, expiry: '7d' });
+      const token = res?.data?.token;
+      if (!token || typeof window === 'undefined') throw new Error('Share link unavailable.');
+      const url = `${window.location.origin}/share/${token}`;
+      await navigator.clipboard.writeText(url);
+      showToast(successMessage, 'success');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to create share link.'), 'error');
+    } finally {
+      setSharingMode('');
+    }
+  }, [application?.id, rolesApi, showToast]);
+
   const handleCopyClientLink = async () => {
     try {
       const payload = await loadShareLink({ force: !shareUrl });
@@ -1331,13 +1345,21 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           period={false}
           subtitle={metaParts.length ? metaParts.join(' · ') : 'Candidate standing report'}
           backLink={{
-            label: targetRoleId != null ? `Back to job: ${targetRoleName}` : 'Back to candidates',
+            label: targetRoleId != null ? `Back to job: ${targetRoleName}` : 'Back',
             onClick: () => {
+              // Return to the exact page the user came from (job pipeline,
+              // candidate list, search, etc.). location.key is 'default'
+              // only on a fresh entry (deep link / refresh / new tab), where
+              // there is no in-app history to pop.
+              if (location.key !== 'default') {
+                navigate(-1);
+                return;
+              }
               if (targetRoleId != null) {
                 onNavigate('job-pipeline', { roleId: targetRoleId });
                 return;
               }
-              onNavigate('candidates');
+              onNavigate('jobs');
             },
           }}
           preTitle={(
@@ -1360,25 +1382,19 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               <button
                 type="button"
                 className="btn btn-outline btn-sm"
-                onClick={() => {
-                  setShareInitialMode('interview');
-                  setShareModalOpen(true);
-                }}
-                disabled={!application?.id}
+                onClick={() => handleMintAndCopyShareLink('recruiter', 'Internal share link copied (expires in 7 days).')}
+                disabled={!application?.id || sharingMode === 'recruiter'}
               >
                 <Copy size={13} />
-                Share internally
+                {sharingMode === 'recruiter' ? 'Copying…' : 'Share internally'}
               </button>
               <button
                 type="button"
                 className="btn btn-purple btn-sm"
-                onClick={() => {
-                  setShareInitialMode('client');
-                  setShareModalOpen(true);
-                }}
-                disabled={!application?.id}
+                onClick={() => handleMintAndCopyShareLink('client', 'Client share link copied (expires in 7 days).')}
+                disabled={!application?.id || sharingMode === 'client'}
               >
-                Share with client
+                {sharingMode === 'client' ? 'Copying…' : 'Share with client'}
               </button>
             </>
           ) : null}
@@ -2031,12 +2047,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           })()}
         </div>
       </div>
-      <ShareModal
-        open={shareModalOpen}
-        onClose={() => setShareModalOpen(false)}
-        applicationId={application?.id}
-        initialMode={shareInitialMode}
-      />
     </div>
   );
 };

@@ -123,10 +123,14 @@ export const formatRelativeAge = (iso) => {
   return `${Math.round(h / 24)}d`;
 };
 
-export const DeepLinkRow = ({ Icon, label, value, onClick }) => (
-  <button
-    type="button"
-    onClick={onClick}
+export const DeepLinkRow = ({ Icon, label, value, onClick, href }) => {
+  const Tag = href ? 'a' : 'button';
+  const tagProps = href
+    ? { href, target: '_blank', rel: 'noopener noreferrer' }
+    : { type: 'button', onClick };
+  return (
+  <Tag
+    {...tagProps}
     style={{
       display: 'grid',
       gridTemplateColumns: '24px 1fr auto',
@@ -140,6 +144,8 @@ export const DeepLinkRow = ({ Icon, label, value, onClick }) => (
       cursor: 'pointer',
       font: 'inherit',
       textAlign: 'left',
+      color: 'inherit',
+      textDecoration: 'none',
     }}
   >
     <span style={{ display: 'inline-grid', placeItems: 'center', color: 'var(--purple)' }}>
@@ -154,8 +160,9 @@ export const DeepLinkRow = ({ Icon, label, value, onClick }) => (
       </span>
     </span>
     <ArrowUpRight size={14} strokeWidth={1.8} aria-hidden="true" style={{ color: 'var(--mute)' }} />
-  </button>
-);
+  </Tag>
+  );
+};
 
 export const FeedbackPill = ({ kind = 'teach' }) => (
   <span className={kind === 'override' ? 'rq-stream-overridepill' : 'rq-stream-teachpill'}>
