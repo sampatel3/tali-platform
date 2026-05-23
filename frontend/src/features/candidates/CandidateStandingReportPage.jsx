@@ -12,9 +12,6 @@ import {
   Panel,
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
-import {
-  WorkableComparisonCard,
-} from '../../shared/ui/RecruiterDesignPrimitives';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
@@ -634,14 +631,11 @@ const REQ_STATUS_META = {
 
 const CvMatchReview = ({
   application,
-  reportModel,
   cvMatchDetails,
   matchedRequirements,
   missingRequirements,
   onJumpToPrep,
 }) => {
-  const roleFitScore = reportModel?.summaryModel?.roleFitScore;
-
   // Build one list, scored requirements preferred. Fall back to raw skill
   // strings when the role hasn't been scored against criteria yet.
   const hasRequirements = Array.isArray(cvMatchDetails?.requirements_assessment)
@@ -674,32 +668,14 @@ const CvMatchReview = ({
 
   return (
     <section className="cv-rail cv-match-summary cv-match-review" aria-label="CV match summary">
-      <div className="rail-card cv-summary-bar">
-        <div className="rail-score">
-          {roleFitScore != null ? (
-            <ScoreRing score={Math.round(roleFitScore)} size={96} label="CV MATCH" />
-          ) : (
-            <div className="mc-report-snapshot-score-empty" style={{ width: 96, height: 96 }}>—</div>
-          )}
-          <div>
-            <div className="mc-kicker" style={{ marginBottom: 6 }}>CV MATCH</div>
-            <div className="cvm-headline">
-              {total
-                ? <>{counts.met} of {total} requirements <em>evidenced</em></>
-                : <>CV evidence summary</>}
-            </div>
-            <div className="meta" style={{ marginTop: 4 }}>
-              vs. <b>{roleName}</b>
-            </div>
-            <div className="rail-meta" style={{ marginTop: '4px' }}>
-              {scoredAt ? `Scored ${new Date(scoredAt).toLocaleDateString()}` : 'Awaiting CV score'}
-            </div>
-          </div>
-        </div>
-      </div>
-
       {total ? (
         <div className="rail-card cvm-body">
+          <div className="cvm-head">
+            <div className="mc-kicker">CV MATCH</div>
+            <div className="meta" style={{ marginTop: 4 }}>
+              vs <b>{roleName}</b>{scoredAt ? ` · Scored ${new Date(scoredAt).toLocaleDateString()}` : ''}
+            </div>
+          </div>
           <div className="cvm-coverage">
             <div className="cvm-bar" aria-hidden="true">
               {counts.met ? <span style={{ flex: counts.met, background: 'var(--purple)' }} /> : null}
@@ -1421,6 +1397,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             return null;
           })();
           const recommendationLabel = reportModel?.recommendation?.label || 'Continue review';
+          const reqMet = matchedRequirements.length;
+          const reqTotal = matchedRequirements.length + missingRequirements.length;
           const fmtScore = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v)) : null);
 
           // 6-dimension labels (long form, matches canvas DIMENSION SCORES)
@@ -1494,13 +1472,21 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                       <span className="mc-overview-signal-suffix">/ 100</span>
                     </span>
                   </div>
+                  {reqTotal ? (
+                    <div className="mc-overview-signal-row">
+                      <span>Requirements</span>
+                      <span className="mc-overview-signal-val">
+                        {reqMet}
+                        <span className="mc-overview-signal-suffix">/ {reqTotal} met</span>
+                      </span>
+                    </div>
+                  ) : null}
                 </div>
               </div>
 
               {/* (2) CV match review — full requirement breakdown, gaps first */}
               <CvMatchReview
                 application={application}
-                reportModel={reportModel}
                 cvMatchDetails={cvMatchDetails}
                 matchedRequirements={matchedRequirements}
                 missingRequirements={missingRequirements}
@@ -1564,18 +1550,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   Hidden on isClient external shared views. */}
               {!isClientView ? (
                 <div className="mc-overview-footer" data-internal-only>
-                  {workableConnected && workableSource ? (
-                    <WorkableComparisonCard
-                      workableRawScore={application?.workable_score_raw}
-                      taaliScore={reportModel?.summaryModel?.taaliScore}
-                      posted={Boolean(completedAssessment?.posted_to_workable)}
-                      postedAt={completedAssessment?.posted_to_workable_at || null}
-                      workableProfileUrl={application?.workable_profile_url || ''}
-                      scorePrecedence={orgData?.workable_config?.score_precedence || 'workable_first'}
-                      onPost={assessmentId && !completedAssessment?.posted_to_workable ? handlePostToWorkable : null}
-                      posting={busyAction === 'workable'}
-                    />
-                  ) : null}
                   <div className="mc-overview-footer-row">
                     <div className="mc-overview-footer-status">
                       <div className="mc-kicker is-mute">STANDING REPORT STATUS</div>
