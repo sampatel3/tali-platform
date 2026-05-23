@@ -85,3 +85,49 @@ def test_cache_key_changes_with_workable_context():
     )
     assert no_ctx != with_ctx
     assert with_ctx != other_ctx
+
+
+# --------------------------------------------------------------------------- #
+# System-block prompt caching (2026-05-22)                                     #
+# --------------------------------------------------------------------------- #
+#
+# Pre-screen previously cached via a cache_control'd block at the front of
+# the USER message, which produced zero cache hits in production despite a
+# byte-identical >2K-token static block. Moving the stable content into a
+# cache_control'd SYSTEM block (Anthropic's canonical caching location) is
+# the fix. These guard the new build_pre_screen_system /
+# build_pre_screen_user_messages split.
+
+from app.cv_matching.prompts_pre_screen import (  # noqa: E402
+    build_pre_screen_system,
+    build_pre_screen_user_messages,
+)
+
+
+def test_system_block_carries_cache_control_and_jd():
+    system = build_pre_screen_system("ACME backend role, Python required", _REQS)
+    assert isinstance(system, list) and len(system) == 1
+    block = system[0]
+    assert block["type"] == "text"
+    assert block.get("cache_control") == {"type": "ephemeral", "ttl": "1h"}
+    assert "ACME backend role" in block["text"]
+    # Must-have requirement text is part of the stable cached prefix.
+    assert "Salary expectation" in block["text"]
+
+
+def test_system_block_identical_across_candidates():
+    """The whole point of caching — the system block must be byte-identical
+    for every candidate in a role batch so Anthropic reuses the prefix."""
+    a = build_pre_screen_system("same JD", _REQS)
+    b = build_pre_screen_system("same JD", _REQS)
+    assert a[0]["text"] == b[0]["text"]
+
+
+def test_user_message_holds_only_candidate_cv():
+    msgs = build_pre_screen_user_messages("ALICE CV here", workable_context=None)
+    assert len(msgs) == 1
+    assert msgs[0]["role"] == "user"
+    content = msgs[0]["content"]
+    assert "ALICE CV here" in content
+    # No cache_control on the per-candidate message (it's the variable part).
+    assert isinstance(content, str)

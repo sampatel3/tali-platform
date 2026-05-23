@@ -17,134 +17,28 @@ from .fraud_detection import (
     detect_cv_copy_paste,
 )
 from .pricing_service import Feature
-from .taali_scoring import compute_role_fit_score, normalize_score_100 as _normalize_score_100
+from .taali_scoring import compute_role_fit_score
 from .usage_metering_service import record_event as _meter_record_event
 from .workable_actions_service import render_workable_note_template
 from .workable_context_service import format_workable_context
+# Pure score/evidence transforms live in pre_screening_snapshot now (kept
+# this module under the 500-LOC architecture gate). Re-exported here so
+# existing import sites — ``from .pre_screening_service import
+# pre_screen_snapshot`` / ``refresh_pre_screening_fields`` /
+# ``normalize_score_100`` — keep working unchanged.
+from .pre_screening_snapshot import (  # noqa: F401
+    build_pre_screen_evidence,
+    normalize_score_100,
+    pre_screen_recommendation_label,
+    pre_screen_snapshot,
+    refresh_pre_screening_fields,
+)
 
 logger = logging.getLogger("taali.pre_screening_service")
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def normalize_score_100(value: Any) -> float | None:
-    """Coerce a score into the 0-100 range — delegates to the canonical
-    ``taali_scoring.normalize_score_100``. Kept as a re-export so the
-    existing import surface (and tests) stay stable.
-
-    No implicit ``<= 1.0 → ×100`` or ``<= 10 → ×10`` upscaling: every
-    caller passes a value that's already 0-100 by construction
-    (cv_match_score, pre_screen_score_100, fraud cap, etc.), and the old
-    heuristics silently inflated real weak scores (e.g. ``0.4`` aggregate
-    role_fit became ``40``, hiding near-zero candidates as moderate fits;
-    the fraud cap of ``10.0`` became ``100`` and pushed plagiarised CVs
-    to the top of the rank).
-    """
-    return _normalize_score_100(value)
-
-
-def pre_screen_recommendation_label(score_100: float | None) -> str | None:
-    if score_100 is None:
-        return None
-    if score_100 >= 80.0:
-        return "Strong match"
-    if score_100 >= 65.0:
-        return "Proceed to screening"
-    if score_100 >= 50.0:
-        return "Manual review recommended"
-    return "Below threshold"
-
-
-def build_pre_screen_evidence(details: dict[str, Any] | None) -> dict[str, Any]:
-    payload = details if isinstance(details, dict) else {}
-    return sanitize_json_for_storage(
-        {
-            "summary": sanitize_text_for_storage(str(payload.get("summary") or "").strip()) or None,
-            "matching_skills": [
-                sanitize_text_for_storage(str(item).strip())
-                for item in payload.get("matching_skills", [])
-                if str(item or "").strip()
-            ][:8],
-            "missing_skills": [
-                sanitize_text_for_storage(str(item).strip())
-                for item in payload.get("missing_skills", [])
-                if str(item or "").strip()
-            ][:8],
-            "concerns": [
-                sanitize_text_for_storage(str(item).strip())
-                for item in payload.get("concerns", [])
-                if str(item or "").strip()
-            ][:6],
-            "score_rationale_bullets": [
-                sanitize_text_for_storage(str(item).strip())
-                for item in payload.get("score_rationale_bullets", [])
-                if str(item or "").strip()
-            ][:6],
-            "requirements_coverage": payload.get("requirements_coverage")
-            if isinstance(payload.get("requirements_coverage"), dict)
-            else {},
-            "requirements_assessment": payload.get("requirements_assessment")
-            if isinstance(payload.get("requirements_assessment"), list)
-            else [],
-        }
-    )
-
-
-def pre_screen_snapshot(app: CandidateApplication) -> dict[str, Any]:
-    details = app.cv_match_details if isinstance(app.cv_match_details, dict) else {}
-    cv_fit_score = normalize_score_100(app.cv_match_score)
-    requirements_fit_score = normalize_score_100(
-        details.get("requirements_match_score_100")
-        or details.get("requirements_match_score")
-    )
-    # ``cv_match_score`` is already the aggregated role_fit score
-    # written by ``cv_score_orchestrator`` (= 0.40·cv_fit + 0.60·req in
-    # v9). Re-running ``compute_role_fit_score`` here would double-count
-    # requirements. Treat pre_screen as a pass-through of the aggregated
-    # score so the directory list matches the candidate detail page.
-    # For pre-screen-filtered candidates (cv_match_score=None), fall back to
-    # the pre-screen score stored in cv_match_details so they appear in the
-    # directory with their numeric pre-screen score instead of blank.
-    if cv_fit_score is None:
-        cv_fit_score = normalize_score_100(details.get("pre_screen_score_100"))
-    pre_screen_score = cv_fit_score
-    recommendation = sanitize_text_for_storage(
-        str(
-            getattr(app, "pre_screen_recommendation", None)
-            or details.get("recommendation")
-            or pre_screen_recommendation_label(pre_screen_score)
-            or ""
-        ).strip()
-    ) or None
-    evidence = (
-        sanitize_json_for_storage(app.pre_screen_evidence)
-        if isinstance(getattr(app, "pre_screen_evidence", None), dict)
-        else build_pre_screen_evidence(details)
-    )
-    return {
-        "cv_fit_score": cv_fit_score,
-        "requirements_fit_score": requirements_fit_score,
-        "pre_screen_score": pre_screen_score,
-        "pre_screen_recommendation": recommendation,
-        "pre_screen_evidence": evidence,
-    }
-
-
-def refresh_pre_screening_fields(app: CandidateApplication) -> dict[str, Any]:
-    snapshot = pre_screen_snapshot(app)
-    app.requirements_fit_score_100 = snapshot["requirements_fit_score"]
-    app.pre_screen_score_100 = snapshot["pre_screen_score"]
-    app.pre_screen_recommendation = snapshot["pre_screen_recommendation"]
-    app.pre_screen_evidence = snapshot["pre_screen_evidence"]
-    if snapshot["pre_screen_score"] is not None:
-        app.rank_score = snapshot["pre_screen_score"]
-    elif app.workable_score is not None:
-        app.rank_score = app.workable_score
-    else:
-        app.rank_score = app.cv_match_score
-    return snapshot
 
 
 def resolved_auto_reject_config(
@@ -377,6 +271,20 @@ def execute_pre_screen_only(
             app.id,
         )
 
+    # Thread the metering context so the MeteredAnthropicClient wrapper
+    # writes the pre-screen usage_event per actual call (FK-linked to
+    # claude_call_log) — capturing errored / JSON-parse-failure calls
+    # that the old post-call record missed (the bulk of the Haiku
+    # reconciliation gap). ``db`` is included so the event commits with
+    # this transaction.
+    pre_screen_metering_context = None
+    if db is not None and getattr(app, "organization_id", None):
+        pre_screen_metering_context = {
+            "organization_id": int(app.organization_id),
+            "role_id": getattr(app, "role_id", None),
+            "entity_id": f"application:{app.id}",
+            "db": db,
+        }
     try:
         pre = run_pre_screen(
             cv_text,
@@ -384,21 +292,19 @@ def execute_pre_screen_only(
             requirements,
             client=client,
             workable_context=workable_context or None,
+            metering_context=pre_screen_metering_context,
         )
     except Exception as exc:  # noqa: BLE001 — guard the LLM call
         _persist_pre_screen_error(app, reason=f"pre_screen_failed: {exc}"[:500])
         return {"status": "error", "reason": f"pre_screen_failed: {exc}"[:200]}
 
-    # Record usage metering BEFORE the error-path early-return below.
-    # Anthropic charges for tokens whether or not we managed to parse
-    # the response — a 200 OK whose body fails JSON.loads still consumed
-    # input + output tokens. Previously this block lived after the
-    # error guard, which meant every JSON-parse failure (7,668 of them
-    # on 2026-05-21 — the bulk of the Haiku reconciliation gap)
-    # vanished from the meter. Cache hits and exception paths return
-    # input_tokens=0 / output_tokens=0 so they're effectively no-ops.
+    # CACHE HITS ONLY. An actual Anthropic call is metered by the wrapper
+    # above (per call, including errors/retries). A cache hit makes no
+    # call, so the wrapper never runs — record it here to preserve cached-
+    # result billing. Recording a cache MISS here too would double-count.
     if (
-        db is not None
+        pre.cache_hit
+        and db is not None
         and getattr(app, "organization_id", None)
         and (pre.input_tokens or pre.output_tokens or pre.cache_read_tokens or pre.cache_creation_tokens)
     ):
@@ -413,7 +319,7 @@ def execute_pre_screen_only(
                 output_tokens=pre.output_tokens,
                 cache_read_tokens=pre.cache_read_tokens,
                 cache_creation_tokens=pre.cache_creation_tokens,
-                cache_hit=pre.cache_hit,
+                cache_hit=True,
                 entity_id=f"application:{app.id}",
             )
         except Exception:  # pragma: no cover — defensive

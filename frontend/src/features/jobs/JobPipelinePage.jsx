@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
-  ArrowUpDown,
   BriefcaseBusiness,
   Check,
   ChevronDown,
@@ -19,7 +18,9 @@ import { useJobStatus } from '../../contexts/JobStatusContext';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
 import { BreadcrumbsRow } from '../../shared/ui/Breadcrumbs';
 import { CopyLinkButton } from '../../shared/ui/CopyLinkButton';
+import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
+import { useRoleProgressPolling } from './useRoleProgressPolling';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 import RecruiterAnswersLog from './RecruiterAnswersLog';
@@ -1147,9 +1148,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // this; the embedded directory re-mounts via key so its internal
   // `stageFilters` re-seeds from the new initial value.
   const [tableStageFilter, setTableStageFilter] = useState('all');
-  // Sort direction for the candidates table. ``'desc'`` (default) puts
-  // the strongest scores first; ``'asc'`` flips it.
+  // Candidates-table sort: which column (`tableSortField`) and direction
+  // (`tableSortBy`, default desc → strongest score / most-recent first).
   const [tableSortBy, setTableSortBy] = useState('desc');
+  const [tableSortField, setTableSortField] = useState('score');
+  // Click a sortable header → sort on it (desc), or flip direction if active.
+  const handleTableSort = useCallback((field) => {
+    setTableSortBy((dir) => (tableSortField === field ? (dir === 'asc' ? 'desc' : 'asc') : 'desc'));
+    setTableSortField(field);
+  }, [tableSortField]);
   // Per-row Process selection. Non-empty → Process sends just these IDs
   // and ignores stage_filter. Reset on tab switch so off-screen ticks
   // don't silently fire when the recruiter jumps tabs.
@@ -1167,7 +1174,22 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
 
   const loadRoleWorkspace = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
-    setLoading(true);
+    // Stale-while-revalidate: if we've loaded this role before, paint the
+    // cached workspace immediately and revalidate silently in the background.
+    // Only show the full-page spinner on a true cold load. This makes
+    // navigating away and back feel instant instead of re-spinning.
+    const cacheKey = `role-workspace:${numericRoleId}`;
+    const cached = readCache(cacheKey);
+    if (cached?.data) {
+      const c = cached.data;
+      setRole(c.role || null);
+      setRoleTasks(Array.isArray(c.roleTasks) ? c.roleTasks : []);
+      setRoleApplications(Array.isArray(c.roleApplications) ? c.roleApplications : []);
+      setWorkspaceCriteria(Array.isArray(c.workspaceCriteria) ? c.workspaceCriteria : []);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     try {
       // Two separate fetches (open + rejected) at the backend's 2000-row
       // ceiling — splits the budget so a long reject history can't crowd
@@ -1200,13 +1222,23 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           .then((res) => setSuggestedThreshold(res?.data || null))
           .catch(() => setSuggestedThreshold(null));
       } else setSuggestedThreshold(null);
-      setRoleTasks(Array.isArray(tasksRes?.data) ? tasksRes.data : []);
+      const nextTasks = Array.isArray(tasksRes?.data) ? tasksRes.data : [];
+      setRoleTasks(nextTasks);
       // Dedupe by id — defensive against any backend overlap.
       const byId = new Map();
       for (const a of [...(openAppsRes?.data || []), ...(rejectedAppsRes?.data || [])]) {
         if (a?.id != null && !byId.has(a.id)) byId.set(a.id, a);
       }
-      setRoleApplications([...byId.values()]);
+      const nextApps = [...byId.values()];
+      setRoleApplications(nextApps);
+      const nextCriteria = Array.isArray(orgCriteriaRes?.data) ? orgCriteriaRes.data : [];
+      // Refresh the SWR cache so the next visit paints instantly.
+      writeCache(cacheKey, {
+        role: nextRole,
+        roleTasks: nextTasks,
+        roleApplications: nextApps,
+        workspaceCriteria: nextCriteria,
+      });
       // Hand off batch status to the global context — it owns display state.
       // If a batch is already running when this page loads, make the context
       // track it immediately (no waiting for the next 10s discovery poll).
@@ -1217,10 +1249,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setFetchCvsProgress(fetchStatusRes?.data || EMPTY_FETCH_PROGRESS);
       setPreScreenProgress(preScreenStatusRes?.data || EMPTY_PRE_SCREEN_PROGRESS);
     } catch (error) {
-      setRole(null);
-      setRoleTasks([]);
-      setRoleApplications([]);
-      showToast(getErrorMessage(error, 'Failed to load role pipeline.'), 'error');
+      // Don't wipe a cached paint if a background revalidate fails — only
+      // surface a hard failure when there was nothing to show in the first
+      // place (cold load).
+      if (!cached?.data) {
+        setRole(null);
+        setRoleTasks([]);
+        setRoleApplications([]);
+        showToast(getErrorMessage(error, 'Failed to load role pipeline.'), 'error');
+      }
     } finally {
       setLoading(false);
     }
@@ -1230,29 +1267,30 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     void loadRoleWorkspace();
   }, [loadRoleWorkspace]);
 
+  // The org-wide task list only feeds the role-edit drawer's task picker
+  // (<RoleSheet>). It's not needed for the candidate table, so defer the
+  // fetch until the drawer is first opened — one fewer request on every
+  // role-page load. `loadedAllTasksRef` keeps it to a single fetch.
+  const loadedAllTasksRef = useRef(false);
   useEffect(() => {
-    if (!tasksApi?.list) {
-      setAllTasks([]);
-      return undefined;
-    }
+    if (!roleSheetOpen || loadedAllTasksRef.current || !tasksApi?.list) return undefined;
     let cancelled = false;
     const loadAllTasks = async () => {
       try {
         const res = await tasksApi.list();
         if (!cancelled) {
           setAllTasks(Array.isArray(res?.data) ? res.data : []);
+          loadedAllTasksRef.current = true;
         }
       } catch {
-        if (!cancelled) {
-          setAllTasks([]);
-        }
+        if (!cancelled) setAllTasks([]);
       }
     };
     void loadAllTasks();
     return () => {
       cancelled = true;
     };
-  }, [tasksApi]);
+  }, [roleSheetOpen, tasksApi]);
 
   // ── Reload applications when the global context tells us a batch finished ──
   // batchScoreProgress is read from JobStatusContext (single source of truth).
@@ -1269,53 +1307,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   }, [batchScoreProgress?.status, loadRoleWorkspace]);
 
-  // ── Poll fetchCvs + pre-screen progress (these live locally, not in global context) ────
-  // batch-score progress now lives in the global BackgroundJobsToaster context,
-  // so we only poll fetchCvs and pre-screen here.
-  useEffect(() => {
-    if (!Number.isFinite(numericRoleId)) return undefined;
-    const fetchRunning = String(fetchCvsProgress?.status || '').toLowerCase() === 'running';
-    const preScreenRunning = String(preScreenProgress?.status || '').toLowerCase() === 'running';
-    if (!fetchRunning && !preScreenRunning) return undefined;
-
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const [fetchStatusRes, preScreenStatusRes] = await Promise.all([
-          rolesApi.fetchCvsStatus(numericRoleId),
-          rolesApi.batchPreScreenStatus(numericRoleId).catch(() => ({ data: EMPTY_PRE_SCREEN_PROGRESS })),
-        ]);
-        if (cancelled) return;
-        const nextFetch = fetchStatusRes?.data || EMPTY_FETCH_PROGRESS;
-        const nextPre = preScreenStatusRes?.data || EMPTY_PRE_SCREEN_PROGRESS;
-        const fetchWasRunning = String(fetchCvsProgress?.status || '').toLowerCase() === 'running';
-        const preWasRunning = String(preScreenProgress?.status || '').toLowerCase() === 'running';
-        const fetchNowRunning = String(nextFetch.status || '').toLowerCase() === 'running';
-        const preNowRunning = String(nextPre.status || '').toLowerCase() === 'running';
-        setFetchCvsProgress(nextFetch);
-        setPreScreenProgress(nextPre);
-        if (
-          (fetchWasRunning && !fetchNowRunning)
-          || (preWasRunning && !preNowRunning)
-        ) {
-          await loadRoleWorkspace();
-          setRefreshTick((value) => value + 1);
-        }
-      } catch {
-        if (!cancelled) {
-          setFetchCvsProgress((current) => ({ ...current, status: current.status || 'failed' }));
-        }
-      }
-    };
-
-    const intervalId = window.setInterval(() => {
-      void poll();
-    }, 2500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [fetchCvsProgress, preScreenProgress, loadRoleWorkspace, numericRoleId, rolesApi]);
+  // Poll fetchCvs + pre-screen progress while a job runs (pauses when the tab
+  // is hidden, reloads the workspace on completion). Extracted to a hook.
+  useRoleProgressPolling({
+    numericRoleId,
+    rolesApi,
+    fetchCvsProgress,
+    preScreenProgress,
+    setFetchCvsProgress,
+    setPreScreenProgress,
+    loadRoleWorkspace,
+    bumpRefreshTick: () => setRefreshTick((value) => value + 1),
+  });
 
   const rejectedApplications = useMemo(() => (
     roleApplications.filter((application) => application?.application_outcome === 'rejected')
@@ -2356,21 +2359,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 ))}
               </div>
               <div className="ctable-toolbar-grow" />
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                onClick={() => {
-                  // Single sort dimension: score, ascending or descending.
-                  // ``tableSortBy === 'asc'`` means low-to-high; anything
-                  // else (the default) sorts high-to-low.
-                  setTableSortBy((prev) => (prev === 'asc' ? 'desc' : 'asc'));
-                }}
-                aria-label="Sort table by score"
-                title="Sort by score"
-              >
-                <ArrowUpDown size={12} />
-                Sort: Score {tableSortBy === 'asc' ? '↑' : '↓'}
-              </button>
+              {/* Sorting lives on the column headers (Score / Last updated). */}
               {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — primary
                   recruiter action: cascade Process opened via
                   ProcessCandidatesDialog. Label flips live during runs. */}
@@ -2420,8 +2409,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 // raw == null guard: Number(null) === 0 IS finite, so unscored sorts as a real zero without it.
                 return raw != null && Number.isFinite(Number(raw)) ? Number(raw) : -1;
               };
+              // Last-activity sort key — server-computed last_activity_at, with fallbacks.
+              const cmpLastUpdated = (a) => {
+                const raw = a?.last_activity_at || a?.updated_at || a?.created_at;
+                const ms = raw ? new Date(raw).getTime() : NaN;
+                return Number.isFinite(ms) ? ms : -Infinity;
+              };
+              const sortKey = tableSortField === 'last_updated' ? cmpLastUpdated : cmpScore;
               const sorted = [...filteredApps].sort((a, b) => (
-                tableSortBy === 'asc' ? cmpScore(a) - cmpScore(b) : cmpScore(b) - cmpScore(a)
+                tableSortBy === 'asc' ? sortKey(a) - sortKey(b) : sortKey(b) - sortKey(a)
               ));
               if (sorted.length === 0) {
                 return (
@@ -2443,11 +2439,16 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                       <tr>
                         <th aria-label="Select" style={{ width: 28 }}><input type="checkbox" aria-label="Select all visible candidates" checked={allSel} ref={(el) => { if (el) el.indeterminate = !allSel && someSel; }} onChange={(e) => toggleAll(e.target.checked)} /></th>
                         <th>Candidate</th>
-                        <th>Score</th>
+                        <th aria-sort={tableSortField === 'score' ? (tableSortBy === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                          <button type="button" className="ctable-sort" onClick={() => handleTableSort('score')} aria-label="Sort by score" title="Sort by score">Score{tableSortField === 'score' ? <span className="ctable-sort-arrow">{tableSortBy === 'asc' ? '↑' : '↓'}</span> : null}</button>
+                        </th>
                         <th>Stage</th>
                         <th>Workable</th>
                         <th>Status</th>
                         <th>Agent</th>
+                        <th aria-sort={tableSortField === 'last_updated' ? (tableSortBy === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                          <button type="button" className="ctable-sort" onClick={() => handleTableSort('last_updated')} aria-label="Sort by last updated" title="Sort by last updated">Last updated{tableSortField === 'last_updated' ? <span className="ctable-sort-arrow">{tableSortBy === 'asc' ? '↑' : '↓'}</span> : null}</button>
+                        </th>
                         <th aria-label="Open" />
                       </tr>
                     </thead>
@@ -2509,6 +2510,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                                   <span className="ctable-em">—</span>
                                 )}
                               </td>
+                              <td className="ctable-status" title={(application?.last_activity_at || application?.updated_at || application?.created_at) ? new Date(application.last_activity_at || application.updated_at || application.created_at).toLocaleString() : undefined}>{formatRelativeShort(application?.last_activity_at || application?.updated_at || application?.created_at)}</td>
                               <td>
                                 <a
                                   href={candidateReportHref(application, numericRoleId)}
@@ -2524,7 +2526,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                             </tr>
                             {isTriageRow ? (
                               <tr className="ctable-triage-row">
-                                <td colSpan={8} className="ctable-triage-cell">
+                                <td colSpan={9} className="ctable-triage-cell">
                                   <CandidateTriageDrawer {...triageDrawerProps} />
                                 </td>
                               </tr>

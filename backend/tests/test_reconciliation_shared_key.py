@@ -138,3 +138,73 @@ def test_aggregate_internal_multi_with_empty_org_list_returns_zero(db):
     )
     assert result["cost_usd_micro"] == 0
     assert result["event_count"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# claude_call_log as source of truth (2026-05-22)                             #
+# --------------------------------------------------------------------------- #
+#
+# The reconciliation now prefers claude_call_log (every Anthropic call writes
+# a row, unconditional) over usage_events, falling back to usage_events only
+# for days where the call log has zero rows (pre-#237 history).
+
+from sqlalchemy import event as _sa_event  # noqa: E402
+from app.models.claude_call_log import ClaudeCallLog  # noqa: E402
+
+_BIG_PK = {"claude_call_log": 0}
+
+def _assign_big_pk(mapper, connection, target):  # pragma: no cover
+    t = target.__table__.name
+    if target.id is None and t in _BIG_PK:
+        _BIG_PK[t] += 1
+        target.id = _BIG_PK[t]
+
+_sa_event.listen(ClaudeCallLog, "before_insert", _assign_big_pk)
+
+
+def _seed_call_log(db, *, org_id, model, cost_micro, when, status="ok"):
+    db.add(ClaudeCallLog(
+        organization_id=org_id,
+        model=model,
+        input_tokens=100,
+        output_tokens=50,
+        cache_read_tokens=0,
+        cache_creation_tokens=0,
+        cost_usd_micro=cost_micro,
+        feature_hint="score",
+        status=status,
+        created_at=when,
+    ))
+    db.flush()
+
+
+def test_prefers_call_log_when_present(db):
+    """When claude_call_log has rows for the day, it wins over usage_events
+    — even if usage_events shows a different (lower, leaky) number."""
+    org = Organization(name="O", slug=f"o-{id(db)}")
+    db.add(org); db.commit()
+    when = datetime(2026, 5, 22, 10, 0, tzinfo=timezone.utc)
+    # usage_events undercounts (the leak): $2
+    _seed_event(db, org_id=org.id, model="claude-haiku-4-5-20251001", cost_micro=2_000_000, when=when)
+    # call_log has the truth: $10 across 5 calls
+    for _ in range(5):
+        _seed_call_log(db, org_id=org.id, model="claude-haiku-4-5-20251001", cost_micro=2_000_000, when=when)
+    db.commit()
+
+    agg = _aggregate_internal(db, organization_id=int(org.id), model="claude-haiku-4-5-20251001", usage_day=date(2026, 5, 22))
+    assert agg["cost_usd_micro"] == 10_000_000  # call_log, not the $2 usage_events
+    assert agg["event_count"] == 5
+
+
+def test_falls_back_to_usage_events_when_call_log_empty(db):
+    """Pre-#237 day: no call_log rows → fall back to usage_events so
+    historical reconciliation still has an internal number."""
+    org = Organization(name="O", slug=f"o-{id(db)}")
+    db.add(org); db.commit()
+    when = datetime(2026, 5, 19, 10, 0, tzinfo=timezone.utc)  # before call_log existed
+    _seed_event(db, org_id=org.id, model="claude-haiku-4-5-20251001", cost_micro=7_000_000, when=when)
+    db.commit()
+
+    agg = _aggregate_internal(db, organization_id=int(org.id), model="claude-haiku-4-5-20251001", usage_day=date(2026, 5, 19))
+    assert agg["cost_usd_micro"] == 7_000_000  # usage_events fallback
+    assert agg["event_count"] == 1

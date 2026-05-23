@@ -35,6 +35,7 @@ from ..components.integrations.anthropic_admin.usage_reports import (
 )
 from ..models.anthropic_usage_reconciliation import AnthropicUsageReconciliation
 from ..models.organization import Organization
+from ..models.claude_call_log import ClaudeCallLog
 from ..models.usage_event import UsageEvent
 
 logger = logging.getLogger("taali.anthropic_reconciliation")
@@ -297,35 +298,39 @@ def _aggregate_internal(
     model: Optional[str],
     usage_day: date,
 ) -> dict[str, int]:
-    """Sum ``usage_events`` for one org / model / UTC day.
+    """Internal aggregate for one org / model / UTC day. Delegates to the
+    multi-org helper, which prefers ``claude_call_log`` (ground truth)
+    over ``usage_events``."""
+    return _aggregate_internal_multi(
+        db,
+        organization_ids=[organization_id],
+        model=model,
+        usage_day=usage_day,
+    )
 
-    The model filter is permissive — Anthropic reports use the
-    canonical model id (e.g. ``claude-haiku-4-5-20251001``), and our
-    internal events store the same string passed to
-    ``messages.create(model=...)``. If a caller used an alias, the
-    internal aggregate may legitimately split across rows. Surface as
-    drift so it's investigated.
+
+def _sum_table(db, table, *, organization_ids, model, day_start, day_end) -> dict[str, int]:
+    """Sum the token/cost columns of either ``ClaudeCallLog`` or
+    ``UsageEvent`` (same column names) for the org set / model / day.
+
+    The model filter is permissive — Anthropic reports use the dated
+    snapshot id; internal rows sometimes store the short alias.
+    ``_model_match_filter`` accepts both.
     """
-    day_start = datetime.combine(usage_day, time(0, 0), tzinfo=timezone.utc)
-    day_end = day_start + timedelta(days=1)
     q = db.query(
-        func.count(UsageEvent.id).label("event_count"),
-        func.coalesce(func.sum(UsageEvent.input_tokens), 0).label("input_tokens"),
-        func.coalesce(func.sum(UsageEvent.output_tokens), 0).label("output_tokens"),
-        func.coalesce(
-            func.sum(UsageEvent.cache_read_tokens), 0
-        ).label("cache_read_tokens"),
-        func.coalesce(
-            func.sum(UsageEvent.cache_creation_tokens), 0
-        ).label("cache_creation_tokens"),
-        func.coalesce(func.sum(UsageEvent.cost_usd_micro), 0).label("cost_usd_micro"),
+        func.count(table.id).label("event_count"),
+        func.coalesce(func.sum(table.input_tokens), 0).label("input_tokens"),
+        func.coalesce(func.sum(table.output_tokens), 0).label("output_tokens"),
+        func.coalesce(func.sum(table.cache_read_tokens), 0).label("cache_read_tokens"),
+        func.coalesce(func.sum(table.cache_creation_tokens), 0).label("cache_creation_tokens"),
+        func.coalesce(func.sum(table.cost_usd_micro), 0).label("cost_usd_micro"),
     ).filter(
-        UsageEvent.organization_id == organization_id,
-        UsageEvent.created_at >= day_start,
-        UsageEvent.created_at < day_end,
+        table.organization_id.in_(organization_ids),
+        table.created_at >= day_start,
+        table.created_at < day_end,
     )
     if model:
-        q = q.filter(_model_match_filter(UsageEvent.model, model))
+        q = q.filter(_model_match_filter(table.model, model))
     row = q.one()
     return {
         "input": int(row.input_tokens or 0),
@@ -370,44 +375,42 @@ def _aggregate_internal_multi(
     model: Optional[str],
     usage_day: date,
 ) -> dict[str, int]:
-    """Sum ``usage_events`` across multiple orgs for the same (model, day).
+    """Internal aggregate across multiple orgs for one (model, day).
 
-    Used when Anthropic attributes spend to ``workspace_id=None`` (the
-    Default workspace) — that single bucket on the Anthropic side is the
-    sum of every Tali org using the shared API key, so the comparable
-    internal aggregate is the union of those orgs' UsageEvent rows.
+    Used both for the single-org case and for the shared-key
+    (workspace_id=None) case where Anthropic's Default-workspace bucket
+    is the sum of every Tali org on the shared key.
+
+    **Source of truth = ``claude_call_log``.** Every Anthropic call
+    writes a call_log row unconditionally (since PR #237), so it captures
+    spend that ``usage_events`` missed — the whole reason the 2026-05-20
+    reconciliation showed a 73% gap. We prefer it.
+
+    **Fallback = ``usage_events``** for any (org-set, day) where the
+    call_log has zero rows — i.e. dates before #237 deployed. Self-
+    healing: no hardcoded cutover date, just "use call_log if it has
+    anything for this day, else fall back".
     """
     if not organization_ids:
         return _zero_internal()
     day_start = datetime.combine(usage_day, time(0, 0), tzinfo=timezone.utc)
     day_end = day_start + timedelta(days=1)
-    q = db.query(
-        func.count(UsageEvent.id).label("event_count"),
-        func.coalesce(func.sum(UsageEvent.input_tokens), 0).label("input_tokens"),
-        func.coalesce(func.sum(UsageEvent.output_tokens), 0).label("output_tokens"),
-        func.coalesce(
-            func.sum(UsageEvent.cache_read_tokens), 0
-        ).label("cache_read_tokens"),
-        func.coalesce(
-            func.sum(UsageEvent.cache_creation_tokens), 0
-        ).label("cache_creation_tokens"),
-        func.coalesce(func.sum(UsageEvent.cost_usd_micro), 0).label("cost_usd_micro"),
-    ).filter(
-        UsageEvent.organization_id.in_(organization_ids),
-        UsageEvent.created_at >= day_start,
-        UsageEvent.created_at < day_end,
+
+    call_log = _sum_table(
+        db, ClaudeCallLog,
+        organization_ids=organization_ids, model=model,
+        day_start=day_start, day_end=day_end,
     )
-    if model:
-        q = q.filter(_model_match_filter(UsageEvent.model, model))
-    row = q.one()
-    return {
-        "input": int(row.input_tokens or 0),
-        "output": int(row.output_tokens or 0),
-        "cache_read": int(row.cache_read_tokens or 0),
-        "cache_creation": int(row.cache_creation_tokens or 0),
-        "cost_usd_micro": int(row.cost_usd_micro or 0),
-        "event_count": int(row.event_count or 0),
-    }
+    if call_log["event_count"] > 0:
+        return call_log
+
+    # Pre-#237 day (call_log empty): fall back to the legacy usage_events
+    # aggregate so historical reconciliation still has an internal number.
+    return _sum_table(
+        db, UsageEvent,
+        organization_ids=organization_ids, model=model,
+        day_start=day_start, day_end=day_end,
+    )
 
 
 def _percent_drift(*, internal: int, external: int) -> Optional[Decimal]:

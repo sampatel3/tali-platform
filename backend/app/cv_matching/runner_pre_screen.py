@@ -22,8 +22,9 @@ from typing import Literal
 from . import MODEL_VERSION
 from .prompts_pre_screen import (
     PRE_SCREEN_PROMPT_VERSION,
-    build_pre_screen_messages,
     build_pre_screen_prompt,
+    build_pre_screen_system,
+    build_pre_screen_user_messages,
 )
 from .schemas import RequirementInput
 
@@ -191,6 +192,7 @@ def run_pre_screen(
     client=None,
     skip_cache: bool = False,
     workable_context: str | None = None,
+    metering_context: dict | None = None,
 ) -> PreScreenResult:
     """Run the pre-screen LLM call. Never raises.
 
@@ -241,26 +243,32 @@ def run_pre_screen(
                 cache_hit=False,
             )
 
-    messages = build_pre_screen_messages(
-        cv_text, jd_text, requirements, workable_context=workable_context
-    )
+    # Stable instructions + JD + must-haves live in a cached system block
+    # (identical for every candidate in a role batch); the per-candidate
+    # CV is the only uncached part. The old shape put the cacheable content
+    # in a user-message block and produced zero cache hits in prod — the
+    # system-param location is Anthropic's canonical, reliable spot.
+    system_blocks = build_pre_screen_system(jd_text, requirements)
+    messages = build_pre_screen_user_messages(cv_text, workable_context=workable_context)
     started = time.monotonic()
     try:
-        # Pre-screen usage_event is recorded by cv_score_orchestrator.score_application
-        # using the tokens it pulls off ``PreScreenResult``. The runner skips
-        # to avoid double-counting; if a caller bypasses the orchestrator
-        # they should pass `client` from a metered resolver and override
-        # this kwarg via the wrapper-aware client.
+        # The wrapper writes the pre-screen usage_event per call (FK-linked
+        # to claude_call_log) when a metering_context is threaded through —
+        # captures every actual call. The orchestrator records ONLY cache
+        # hits (no Anthropic call → no wrapper run), so no double-count.
+        # Absent a context (direct/test calls with a bare client) we skip
+        # so the bare client doesn't choke on the metering kwarg.
+        if metering_context:
+            call_metering = {**metering_context, "feature": "prescreen"}
+        else:
+            call_metering = {"skip": True, "metered_by": "direct_call_no_context"}
         response = client.messages.create(
             model=MODEL_VERSION,
             max_tokens=256,
             temperature=0,
-            system="You are a fast hiring pre-screener. Respond ONLY with valid JSON.",
+            system=system_blocks,
             messages=messages,
-            metering={
-                "skip": True,
-                "metered_by": "cv_score_orchestrator.score_application",
-            },
+            metering=call_metering,
         )
     except Exception as exc:
         logger.warning("Pre-screen Claude call failed: %s", exc)

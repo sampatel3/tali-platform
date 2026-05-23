@@ -695,10 +695,19 @@ def test_application_cv_match_score_is_returned(client, monkeypatch):
     assert list_resp.status_code == 200, list_resp.text
     apps = list_resp.json()
     assert len(apps) == 1
+    # The list payload keeps the scalar score + timestamp (the table renders
+    # these) but omits the heavy cv_match_details evidence blob to keep the
+    # response small — that lives on the detail endpoint (asserted below).
     assert apps[0]["cv_match_score"] == 84.0
-    assert apps[0]["cv_match_details"]["summary"] == "Strong API and SQL alignment."
-    assert apps[0]["cv_match_details"]["role_fit_score"] == 84.0
     assert apps[0]["cv_match_scored_at"] is not None
+    assert apps[0]["cv_match_details"] is None
+
+    detail_resp = client.get(f"/api/v1/applications/{app['id']}", headers=headers)
+    assert detail_resp.status_code == 200, detail_resp.text
+    detail = detail_resp.json()
+    assert detail["cv_match_score"] == 84.0
+    assert detail["cv_match_details"]["summary"] == "Strong API and SQL alignment."
+    assert detail["cv_match_details"]["role_fit_score"] == 84.0
 
 
 def test_application_detail_exposes_cv_sections_and_document_file(client, db, tmp_path, monkeypatch):

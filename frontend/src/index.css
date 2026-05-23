@@ -1589,7 +1589,8 @@ html[data-theme="dark"] {
   box-shadow: var(--shadow-sm);
 }
 
-.seg button {
+.seg button,
+.seg a {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -1599,14 +1600,18 @@ html[data-theme="dark"] {
   font-size: 13px;
   font-weight: 500;
   white-space: nowrap;
+  text-decoration: none;
 }
 
-.seg button:hover {
+.seg button:hover,
+.seg a:hover {
   color: var(--ink);
 }
 
 .seg button.on,
-.seg button.active {
+.seg button.active,
+.seg a.on,
+.seg a.active {
   background: var(--ink);
   color: var(--bg);
 }
@@ -3304,7 +3309,8 @@ html[data-theme="dark"] {
   box-shadow: var(--shadow-sm);
 }
 
-.sub-tabs .seg button {
+.sub-tabs .seg button,
+.sub-tabs .seg a {
   padding: 6px 14px;
   border-radius: 999px;
   font-size: 13px;
@@ -3312,7 +3318,8 @@ html[data-theme="dark"] {
   color: var(--mute);
 }
 
-.sub-tabs .seg button.active {
+.sub-tabs .seg button.active,
+.sub-tabs .seg a.active {
   background: var(--ink);
   color: var(--bg);
 }
@@ -14392,6 +14399,32 @@ button.eng-badge-button:focus-visible {
   border-bottom: 1px solid var(--line-2);
   background: var(--bg);
   font-weight: 500;
+}
+
+/* Clickable sort headers (Score / Last updated). The button inherits the
+   header's mono-uppercase styling so the column reads identically whether
+   or not it's the active sort; the arrow only appears on the active one. */
+.ctable thead th .ctable-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.ctable thead th .ctable-sort:hover {
+  color: var(--ink);
+}
+
+.ctable thead th .ctable-sort-arrow {
+  color: var(--purple);
+  font-size: 11px;
 }
 
 .ctable tbody tr {

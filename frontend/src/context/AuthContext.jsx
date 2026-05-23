@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { auth as authApi } from '../shared/api';
+import { clearCache } from '../shared/api/resourceCache';
 
 const AuthContext = createContext(null);
 
@@ -41,6 +42,9 @@ export function AuthProvider({ children }) {
   const logout = useCallback(() => {
     localStorage.removeItem('taali_access_token');
     localStorage.removeItem('taali_user');
+    // Drop any cached per-account data (e.g. role workspaces) so the next user
+    // to sign in on this tab can't briefly see the previous user's data.
+    clearCache();
     setUser(null);
   }, []);
 

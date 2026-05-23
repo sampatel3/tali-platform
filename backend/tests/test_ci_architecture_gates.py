@@ -139,6 +139,12 @@ def test_agent_mutation_tools_call_shared_action_layer() -> None:
         "_tool_batch_score_cv",
         "_tool_ask_recruiter",
         "_tool_agent_run_complete",
+        # Internal agent-memory breadcrumb — appends to
+        # role.agent_calibration.notes via calibration.save(). Doesn't
+        # mutate candidate/application state, so it doesn't go through
+        # the shared action layer (which exists for agent/recruiter
+        # parity on candidate-facing actions).
+        "_tool_record_observation",
         # Decision-queueing tools call queue_decision via the _queue() helper
         # rather than directly. We verify _queue itself below.
         "_tool_queue_advance_decision",

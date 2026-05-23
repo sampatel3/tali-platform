@@ -52,12 +52,22 @@ logger = logging.getLogger("taali.cv_match.runner")
 INPUT_TOKEN_CEILING = 32_000
 # Output ceiling: 8K tokens. The new prompt's per-requirement object is
 # ~150 tokens (evidence_quotes list, reasoning, status, tier, etc.).
-# At 8 requirements × 150 = 1200 + 6-dim scores + summary + matching/
-# missing skills lists, real responses land around 3000-5000 tokens.
-# Production showed truncation at 4000 (chars 16K-17K = ~4K tokens).
-# 8K leaves room for 15+ requirements without truncation. At Haiku
-# output pricing ($1.25/1M), 8K output is ~$0.01 per call.
-OUTPUT_TOKEN_CEILING = 8000
+# Each requirement assessment costs ~350 output tokens (evidence_quotes,
+# reasoning, status, match_tier, impact, confidence). The agent-on roles
+# in production carry 20-22 criteria → ~7,700 tokens for the assessment
+# list alone, before the 6-dim scores, summary, and skills lists. At an
+# 8K ceiling those responses truncated mid-JSON → invalid JSON →
+# validation_failed_after_retry → the whole scoring run errored.
+#
+# 2026-05-22 data: 76% of cv_match runs were erroring post the
+# missing-criteria validator fix, almost all "Response was not valid
+# JSON". A truncating role burned ~16K output tokens across two failed
+# attempts ($0.08 at Haiku $5/1M output) and produced ZERO usable score.
+# A single complete 16K-ceiling response uses ~8K tokens ($0.04) and
+# SUCCEEDS — half the cost, real result. Raising the ceiling is a pure
+# win: small responses are unaffected (model stops when done), large
+# ones stop failing.
+OUTPUT_TOKEN_CEILING = 16000
 MAX_RETRIES = 1
 TEMPERATURE = 0.0
 
@@ -122,29 +132,42 @@ def _failed_output(*, error_reason: str, ctx: _RunContext) -> CVMatchOutput:
 _SYSTEM_PROMPT = "You are an expert recruiter. Respond ONLY with valid JSON."
 
 
-def _call_claude(client, *, messages: list[dict], ctx: _RunContext) -> str:
-    # cv_score_orchestrator.score_application records the SCORE usage_event
-    # post-call (it already pulls input_tokens/output_tokens off
-    # CVMatchOutput). We pass `metering={"skip": True}` here to suppress
-    # the auto-meter on the wrapper and avoid double-counting. If the
-    # caller passes a bare anthropic.Anthropic (e.g. tests, evals) the
-    # kwarg is forwarded as-is and ignored — the wrapper is a no-op.
-    # B1: thread retry_attempt + trace_id so claude_call_log rows for
-    # the original + retried call link together. parent_call_log_id is
-    # left None — the row IDs are only known post-write, so the trace_id
-    # is what associates retries across the same _RunContext.
+def _call_claude(
+    client, *, messages: list[dict], ctx: _RunContext, metering_context: dict | None = None
+) -> str:
+    # The wrapper writes one usage_event PER Anthropic call (FK-linked to
+    # the call_log row), so each attempt — including validation retries and
+    # errored runs — is captured. This replaced the old skip-path where
+    # cv_score_orchestrator recorded a single post-call usage_event: that
+    # missed errored/retried calls entirely and left usage_event ~73% short
+    # of actual spend (claude_call_log proved it on 2026-05-22). The
+    # orchestrator now records ONLY cache hits (no Anthropic call → no
+    # wrapper invocation), so there's no double-count.
+    #
+    # When ``metering_context`` is absent (direct run_cv_match calls from
+    # tests / evals with a bare client) we keep skip=True so the bare
+    # client doesn't choke and we don't fabricate org-less events.
+    if metering_context:
+        metering = {
+            **metering_context,
+            "feature": "score",
+            "retry_attempt": int(getattr(ctx, "retry_count", 0) or 0),
+            "trace_id": str(getattr(ctx, "trace_id", "") or "") or None,
+        }
+    else:
+        metering = {
+            "skip": True,
+            "metered_by": "direct_call_no_context",
+            "retry_attempt": int(getattr(ctx, "retry_count", 0) or 0),
+            "trace_id": str(getattr(ctx, "trace_id", "") or "") or None,
+        }
     response = client.messages.create(
         model=MODEL_VERSION,
         max_tokens=OUTPUT_TOKEN_CEILING,
         temperature=TEMPERATURE,
         system=_SYSTEM_PROMPT,
         messages=messages,
-        metering={
-            "skip": True,
-            "metered_by": "cv_score_orchestrator.score_application",
-            "retry_attempt": int(getattr(ctx, "retry_count", 0) or 0),
-            "trace_id": str(getattr(ctx, "trace_id", "") or "") or None,
-        },
+        metering=metering,
     )
 
     usage = getattr(response, "usage", None)
@@ -315,7 +338,10 @@ def run_cv_match(
     current_messages = messages
     for attempt in range(MAX_RETRIES + 1):
         try:
-            raw_text = _call_claude(client, messages=current_messages, ctx=ctx)
+            raw_text = _call_claude(
+                client, messages=current_messages, ctx=ctx,
+                metering_context=metering_context,
+            )
         except Exception as exc:
             logger.exception("Claude call failed (attempt %d)", attempt + 1)
             out = _failed_output(error_reason=f"claude_call_failed: {exc}", ctx=ctx)
