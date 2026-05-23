@@ -777,11 +777,21 @@ def _assessment_history_for_application(app: CandidateApplication) -> list[dict[
     ]
 
 
+# Sentinel so callers can pass an explicit ``score_status`` (including
+# ``None``) and be distinguished from "not supplied — compute it yourself".
+_UNSET = object()
+
+
 def _latest_score_job_status(app: CandidateApplication) -> str | None:
     """Read latest CvScoreJob.status from the eagerly-loaded relationship.
 
     Returns ``None`` if the job log isn't loaded (e.g. detached instance).
     Avoids triggering a lazy DB query so list endpoints stay free of N+1.
+
+    List endpoints that no longer eager-load the full ``score_jobs``
+    collection should instead pass ``score_status`` into
+    :func:`application_to_response` (computed once per page via a grouped
+    DISTINCT ON query) rather than relying on this helper.
     """
     loaded = _loaded_relationship_items(app, "score_jobs")
     if not loaded:
@@ -795,6 +805,7 @@ def application_to_response(
     app: CandidateApplication,
     *,
     use_cached_score_summary: bool = False,
+    score_status: Any = _UNSET,
 ) -> ApplicationResponse:
     ensure_pipeline_fields(app)
     candidate = app.candidate
@@ -803,7 +814,10 @@ def application_to_response(
     cv_match_details = dict(raw_details)
     if cv_match_score is not None and "score_scale" not in cv_match_details:
         cv_match_details["score_scale"] = "0-100"
-    score_status = _latest_score_job_status(app)
+    # When the caller supplied the latest status (list endpoints, which fetch
+    # it in one grouped query) use it; otherwise read the loaded relationship.
+    if score_status is _UNSET:
+        score_status = _latest_score_job_status(app)
     score_summary = score_summary_from_cache(app) if use_cached_score_summary else _score_summary_for_application(app)
     pre_screen = pre_screen_snapshot(app)
     if use_cached_score_summary:
@@ -1066,8 +1080,17 @@ _LIST_OMITTED_HEAVY_FIELDS = (
 )
 
 
-def application_list_payload(app: CandidateApplication, *, include_cv_text: bool) -> dict[str, Any]:
-    data = application_to_response(app, use_cached_score_summary=True)
+def application_list_payload(
+    app: CandidateApplication,
+    *,
+    include_cv_text: bool,
+    score_status: Any = _UNSET,
+) -> dict[str, Any]:
+    data = application_to_response(
+        app,
+        use_cached_score_summary=True,
+        score_status=score_status,
+    )
     payload = data.model_dump()
     if include_cv_text:
         cv = (app.cv_text or "").strip()
