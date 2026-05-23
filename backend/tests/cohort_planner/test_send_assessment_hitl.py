@@ -31,7 +31,7 @@ def _make_run(db, role) -> AgentRun:
 
 
 def test_hitl_gate_queues_decision_instead_of_sending(db):
-    org, role, _, app = make_world(db, send_requires_approval=True)
+    org, role, _, app = make_world(db, send_requires_approval=True, with_task=True)
     run = _make_run(db, role)
     args = {"application_id": int(app.id)}
     with patch("app.agent_runtime.tool_registry.send_assessment.run") as send:
@@ -49,7 +49,7 @@ def test_hitl_gate_queues_decision_instead_of_sending(db):
 
 
 def test_no_gate_auto_executes_send(db):
-    org, role, _, app = make_world(db, send_requires_approval=False)
+    org, role, _, app = make_world(db, send_requires_approval=False, with_task=True)
     run = _make_run(db, role)
     args = {"application_id": int(app.id)}
 
@@ -68,7 +68,7 @@ def test_no_gate_auto_executes_send(db):
 
 def test_hitl_gate_returns_existing_decision_instead_of_duplicating(db):
     """Repeated agent calls for the same candidate hit the dedup branch."""
-    org, role, _, app = make_world(db, send_requires_approval=True)
+    org, role, _, app = make_world(db, send_requires_approval=True, with_task=True)
     run = _make_run(db, role)
     args = {"application_id": int(app.id)}
     with patch("app.agent_runtime.tool_registry.send_assessment.run"):
