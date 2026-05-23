@@ -227,6 +227,11 @@ def role_to_response(
         criteria=criteria,
         source=role.source,
         workable_job_id=role.workable_job_id,
+        workable_job_state=(
+            str(role.workable_job_data.get("state") or "").strip().lower() or None
+            if isinstance(getattr(role, "workable_job_data", None), dict)
+            else None
+        ),
         job_spec_filename=role.job_spec_filename,
         job_spec_text=role.job_spec_text,
         job_spec_uploaded_at=role.job_spec_uploaded_at,

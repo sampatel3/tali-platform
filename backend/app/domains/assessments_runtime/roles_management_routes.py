@@ -610,6 +610,10 @@ def star_role(
     """
     role = get_role(role_id, current_user.organization_id, db)
     role.starred_for_auto_sync = True
+    # A manual star is sticky — it must survive Workable state changes, so it
+    # is never flagged auto-managed (only the published-state automation sets
+    # that flag, and only it removes such stars).
+    role.star_auto_managed = False
     try:
         db.commit()
         db.refresh(role)
@@ -650,7 +654,17 @@ def unstar_role(
     current_user: User = Depends(get_current_user),
 ):
     role = get_role(role_id, current_user.organization_id, db)
+    # Live (published) roles are always kept in continuous sync — ignore
+    # attempts to unstar them. The next jobs-only sync would re-star them
+    # anyway; refusing here avoids a confusing flicker and keeps the
+    # invariant server-side.
+    job_state = ""
+    if isinstance(role.workable_job_data, dict):
+        job_state = str(role.workable_job_data.get("state") or "").strip().lower()
+    if job_state == "published":
+        return role_to_response(role)
     role.starred_for_auto_sync = False
+    role.star_auto_managed = False
     try:
         db.commit()
         db.refresh(role)

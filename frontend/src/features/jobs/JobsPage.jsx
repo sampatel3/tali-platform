@@ -37,6 +37,7 @@ const STAGES = [
 
 const SOURCE_FILTERS = [
   { key: 'all', label: 'All roles' },
+  { key: 'live', label: 'Live' },
   { key: 'workable', label: 'From Workable' },
   { key: 'manual', label: 'Created in Taali' },
   { key: 'active', label: 'Active' },
@@ -49,7 +50,18 @@ const isRoleDraft = (role) => (
   && Number(role?.applications_count || 0) === 0
 );
 
+// Live == the Workable job is published (actively recruiting / posted to job
+// boards). Manual/Taali roles have no Workable state and are never "live".
+const isRoleLive = (role) => String(role?.workable_job_state || '').toLowerCase() === 'published';
+
+// A Workable role that isn't live is a filled/closed/draft posting — greyed
+// out on the grid. Manual roles are never greyed (they aren't Workable-managed).
+const isRoleDimmed = (role) => (
+  String(role?.source || '').toLowerCase() === 'workable' && !isRoleLive(role)
+);
+
 const filterRoleBySource = (role, sourceFilter) => {
+  if (sourceFilter === 'live') return isRoleLive(role);
   if (sourceFilter === 'workable') return String(role?.source || '').toLowerCase() === 'workable';
   if (sourceFilter === 'manual') return String(role?.source || '').toLowerCase() !== 'workable';
   if (sourceFilter === 'active') return Number(role?.active_candidates_count || 0) > 0;
@@ -59,6 +71,7 @@ const filterRoleBySource = (role, sourceFilter) => {
 
 const buildSourceCounts = (roles) => roles.reduce((acc, role) => {
   acc.all += 1;
+  if (isRoleLive(role)) acc.live += 1;
   if (String(role?.source || '').toLowerCase() === 'workable') acc.workable += 1;
   if (String(role?.source || '').toLowerCase() !== 'workable') acc.manual += 1;
   if (Number(role?.active_candidates_count || 0) > 0) acc.active += 1;
@@ -66,6 +79,7 @@ const buildSourceCounts = (roles) => roles.reduce((acc, role) => {
   return acc;
 }, {
   all: 0,
+  live: 0,
   workable: 0,
   manual: 0,
   active: 0,
@@ -689,6 +703,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             {filtered.map((role) => {
               const stageCounts = role?.stage_counts || {};
               const workableRole = String(role?.source || '').toLowerCase() === 'workable';
+              const roleLive = isRoleLive(role);
+              const roleDimmed = isRoleDimmed(role);
               const lastRoleActivity = role?.last_candidate_activity_at || role?.updated_at || orgData?.workable_last_sync_at || null;
               const roleBadgeLabel = getRoleBadgeLabel(role);
               const agentEnabled = Boolean(role?.agentic_mode_enabled);
@@ -709,7 +725,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               return (
                 <div
                   key={role.id}
-                  className={`job-card ${workableRole ? 'from-wk' : ''} ${agentEnabled ? 'agent-on' : ''}`}
+                  className={`job-card ${workableRole ? 'from-wk' : ''} ${agentEnabled ? 'agent-on' : ''} ${roleDimmed ? 'not-live' : ''}`}
                   onClick={() => onNavigate('job-pipeline', { roleId: role.id })}
                   role="button"
                   tabIndex={0}
@@ -725,32 +741,50 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                       ⭐ star · role-name + #id + WORKABLE pill   ·   AGENT ON $X/$Y
                       dept · loc · updated ago */}
                   <div className="job-head">
-                    <button
-                      type="button"
-                      className="job-star"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void handleToggleStar(role);
-                      }}
-                      aria-label={role.starred_for_auto_sync ? 'Unstar role (stop auto-sync)' : 'Star role to enable auto-sync and real-time scoring'}
-                      aria-pressed={Boolean(role.starred_for_auto_sync)}
-                      title={role.starred_for_auto_sync ? 'Auto-sync enabled · click to disable' : 'Star to auto-sync from Workable and score in real-time'}
-                      style={{
-                        background: 'transparent',
-                        border: 'none',
-                        padding: 2,
-                        marginTop: 2,
-                        cursor: 'pointer',
-                        flexShrink: 0,
-                        color: role.starred_for_auto_sync ? 'var(--purple)' : 'var(--ink-soft)',
-                      }}
-                    >
-                      <Star
-                        size={16}
-                        strokeWidth={1.5}
-                        fill={role.starred_for_auto_sync ? 'currentColor' : 'none'}
-                      />
-                    </button>
+                    {roleLive ? (
+                      <span
+                        className="job-star is-locked"
+                        aria-label="Live role · always in continuous sync"
+                        title="Live role · always in continuous sync (auto-starred)"
+                        style={{
+                          padding: 2,
+                          marginTop: 2,
+                          flexShrink: 0,
+                          color: 'var(--purple)',
+                          cursor: 'default',
+                          display: 'inline-flex',
+                        }}
+                      >
+                        <Star size={16} strokeWidth={1.5} fill="currentColor" />
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="job-star"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleToggleStar(role);
+                        }}
+                        aria-label={role.starred_for_auto_sync ? 'Unstar role (stop auto-sync)' : 'Star role to enable auto-sync and real-time scoring'}
+                        aria-pressed={Boolean(role.starred_for_auto_sync)}
+                        title={role.starred_for_auto_sync ? 'Auto-sync enabled · click to disable' : 'Star to auto-sync from Workable and score in real-time'}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          padding: 2,
+                          marginTop: 2,
+                          cursor: 'pointer',
+                          flexShrink: 0,
+                          color: role.starred_for_auto_sync ? 'var(--purple)' : 'var(--ink-soft)',
+                        }}
+                      >
+                        <Star
+                          size={16}
+                          strokeWidth={1.5}
+                          fill={role.starred_for_auto_sync ? 'currentColor' : 'none'}
+                        />
+                      </button>
+                    )}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
                         <h3 className="role-name">{role.name}</h3>
