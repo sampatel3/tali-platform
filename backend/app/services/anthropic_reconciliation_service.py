@@ -356,13 +356,15 @@ def _base_alias_for(anthropic_model: Optional[str]) -> Optional[str]:
     return None
 
 
-def _sum_table(db, table, *, organization_ids, model, day_start, day_end, include_alias=True) -> dict[str, int]:
+def _sum_table(db, table, *, organization_ids, model, day_start, day_end, include_alias=True, extra_filters=None) -> dict[str, int]:
     """Sum the token/cost columns of either ``ClaudeCallLog`` or
     ``UsageEvent`` (same column names) for the org set / model / day.
 
     The model filter is permissive — Anthropic reports use the dated
     snapshot id; internal rows sometimes store the short alias.
-    ``_model_match_filter`` accepts both.
+    ``_model_match_filter`` accepts both. ``extra_filters`` appends extra
+    SQL predicates (e.g. excluding usage_events already linked to a
+    call_log row).
     """
     q = db.query(
         func.count(table.id).label("event_count"),
@@ -378,6 +380,8 @@ def _sum_table(db, table, *, organization_ids, model, day_start, day_end, includ
     )
     if model:
         q = q.filter(_model_match_filter(table.model, model, include_alias=include_alias))
+    for f in (extra_filters or []):
+        q = q.filter(f)
     row = q.one()
     return {
         "input": int(row.input_tokens or 0),
@@ -439,8 +443,15 @@ def _aggregate_internal_multi(
 
     **Fallback = ``usage_events``** for any (org-set, day) where the
     call_log has zero rows — i.e. dates before #237 deployed. Self-
-    healing: no hardcoded cutover date, just "use call_log if it has
-    anything for this day, else fall back".
+    healing: no hardcoded cutover date.
+
+    **Partial-coverage days** (some calls wrote a call_log row, others only
+    a ``usage_event`` — e.g. paths that meter via ``record_event`` without
+    going through the metered client) used to drop the usage-events-only
+    spend entirely. We instead add the ``usage_events`` that are NOT linked
+    to a call_log row (``claude_call_log.usage_event_id``) on top of the
+    call_log totals: linked events are already represented by their call_log
+    row (no double-count), unlinked events are real spend call_log missed.
     """
     if not organization_ids:
         return _zero_internal()
@@ -453,17 +464,37 @@ def _aggregate_internal_multi(
         day_start=day_start, day_end=day_end,
         include_alias=include_alias,
     )
-    if call_log["event_count"] > 0:
-        return call_log
+    if call_log["event_count"] == 0:
+        # Pre-#237 day (no call_log at all): the legacy usage_events
+        # aggregate is the only internal number available.
+        return _sum_table(
+            db, UsageEvent,
+            organization_ids=organization_ids, model=model,
+            day_start=day_start, day_end=day_end,
+            include_alias=include_alias,
+        )
 
-    # Pre-#237 day (call_log empty): fall back to the legacy usage_events
-    # aggregate so historical reconciliation still has an internal number.
-    return _sum_table(
+    # call_log present: add usage_events that have no linked call_log row in
+    # this (org-set, day) so usage-events-only calls aren't dropped, without
+    # double-counting calls that wrote both.
+    linked_usage_event_ids = (
+        db.query(ClaudeCallLog.usage_event_id)
+        .filter(
+            ClaudeCallLog.usage_event_id.isnot(None),
+            ClaudeCallLog.organization_id.in_(organization_ids),
+            ClaudeCallLog.created_at >= day_start,
+            ClaudeCallLog.created_at < day_end,
+        )
+        .scalar_subquery()
+    )
+    unlinked_usage = _sum_table(
         db, UsageEvent,
         organization_ids=organization_ids, model=model,
         day_start=day_start, day_end=day_end,
         include_alias=include_alias,
+        extra_filters=[~UsageEvent.id.in_(linked_usage_event_ids)],
     )
+    return {k: call_log[k] + unlinked_usage[k] for k in call_log}
 
 
 def _percent_drift(*, internal: int, external: int) -> Optional[Decimal]:
