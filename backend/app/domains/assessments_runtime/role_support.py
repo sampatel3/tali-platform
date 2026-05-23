@@ -895,6 +895,8 @@ def application_to_response(
         workable_score_raw=app.workable_score_raw,
         workable_score=app.workable_score,
         workable_score_source=app.workable_score_source,
+        workable_disqualified=app.workable_disqualified,
+        workable_disqualified_at=app.workable_disqualified_at,
         rank_score=app.rank_score,
         candidate_headline=(candidate.headline if candidate else None),
         candidate_image_url=(candidate.image_url if candidate else None),

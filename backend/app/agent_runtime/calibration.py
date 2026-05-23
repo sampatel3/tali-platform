@@ -156,19 +156,33 @@ def _render_last_cycle(last_cycle: dict[str, Any]) -> str:
     return "last cycle: " + ", ".join(bits)
 
 
-def _render_notes(notes: list[dict[str, Any]]) -> str:
+def _render_notes(notes: Any) -> str:
     """Render agent-authored breadcrumbs from prior cycles. Capped to 10
     entries already; rendered most-recent first so the freshest context
-    is at the top of the section."""
-    if not notes:
+    is at the top of the section.
+
+    ``notes`` is persisted JSON whose shape has drifted across versions:
+    it may arrive as a non-list scalar (a bare string was seen in prod on
+    role 31, which iterated char-by-char and crashed run_cycle on
+    ``str.get``), or as a list containing bare-string entries instead of
+    ``{note, kind, recorded_at}`` dicts. Coerce defensively — a malformed
+    breadcrumb must never break the agent cycle."""
+    if not isinstance(notes, list) or not notes:
         return ""
     lines = ["NOTES FROM PRIOR CYCLES (most recent first):"]
     for entry in reversed(notes[-10:]):
-        text = str(entry.get("note") or "").strip()
+        if isinstance(entry, dict):
+            text = str(entry.get("note") or "").strip()
+            kind = str(entry.get("kind") or "context")
+            recorded_at = str(entry.get("recorded_at") or "")[:10]  # YYYY-MM-DD
+        elif isinstance(entry, str):
+            text = entry.strip()
+            kind = "context"
+            recorded_at = ""
+        else:
+            continue
         if not text:
             continue
-        kind = str(entry.get("kind") or "context")
-        recorded_at = str(entry.get("recorded_at") or "")[:10]  # YYYY-MM-DD
         lines.append(f"- [{kind} @ {recorded_at}] {text}")
     return "\n".join(lines) if len(lines) > 1 else ""
 

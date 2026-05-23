@@ -133,6 +133,59 @@ def test_score_cache_miss_writes_one_linked_usage_event(db, monkeypatch):
         check.close()
 
 
+def test_score_with_caller_db_in_context_still_links_call_log(db, monkeypatch):
+    """Regression for the #253 FK race: production threads the caller's
+    open session as ``metering_context["db"]``. The wrapper used to write
+    the usage_event into that *uncommitted* transaction and then write
+    claude_call_log in a *separate* fresh session — which couldn't see
+    the uncommitted parent and raised
+    ``claude_call_log_usage_event_id_fkey`` violation, silently dropping
+    every score + pre-screen call_log row in prod.
+
+    The wrapper now ignores ``db`` and self-manages fresh, committed
+    sessions for both writes, so the call_log row lands FK-linked even
+    when a caller db is supplied. This test pins that: passing ``db`` must
+    NOT regress linkage."""
+    monkeypatch.setattr(archetype_synthesizer, "synthesize_archetype", lambda *a, **kw: None)
+    from app.services import metered_anthropic_client as mac
+    from tests.conftest import TestingSessionLocal
+    monkeypatch.setattr(mac, "SessionLocal", TestingSessionLocal)
+
+    org = Organization(name="O2", slug=f"o2-{id(db)}")
+    db.add(org); db.commit()
+
+    inner = _Inner(messages=_Msgs(body=_valid_cv_match_json()))
+    wrapped = MeteredAnthropicClient(inner=inner, organization_id=int(org.id))
+
+    out = run_cv_match(
+        cv_text="Python developer for 6 years",
+        jd_text="Senior Python role",
+        requirements=[RequirementInput(id="jd_req_1", requirement="5+ years Python", priority=Priority.MUST_HAVE)],
+        client=wrapped,
+        skip_cache=True,
+        metering_context={
+            "organization_id": int(org.id),
+            "role_id": None,
+            "entity_id": "application:99",
+            "db": db,  # prod threads the open caller session here
+        },
+    )
+    assert out.scoring_status.value == "ok"
+
+    check = TestingSessionLocal()
+    try:
+        events = check.query(UsageEvent).filter(
+            UsageEvent.organization_id == org.id, UsageEvent.feature == "score",
+        ).all()
+        assert len(events) == 1
+
+        logs = check.query(ClaudeCallLog).filter(ClaudeCallLog.organization_id == org.id).all()
+        assert len(logs) == 1, "call_log row dropped — FK race regressed"
+        assert logs[0].usage_event_id == events[0].id, "call_log not FK-linked to usage_event"
+    finally:
+        check.close()
+
+
 def test_score_call_does_not_use_skip_when_context_present(monkeypatch):
     """Guard: the runner must NOT pass metering={'skip': True} when a
     metering_context is supplied — that's what caused the leak. Use a
