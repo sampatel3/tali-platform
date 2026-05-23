@@ -92,6 +92,20 @@ def evaluate_auto_reject_decision(
             "config": config,
             "snapshot": snapshot,
         }
+    # Respect the pre-screen verdict. The decision ('yes'/'maybe') is the
+    # authoritative gate result; a passed candidate must never be auto-rejected
+    # even if the numeric ``pre_screen_score`` was contaminated by a cv_match
+    # write that disagrees with it (see app 48632: decision 'yes', llm 75,
+    # but the column held a stale 16.7).
+    _ps_ev = app.pre_screen_evidence if isinstance(getattr(app, "pre_screen_evidence", None), dict) else {}
+    if str(_ps_ev.get("decision") or "").strip().lower() in ("yes", "maybe"):
+        return {
+            "should_trigger": False,
+            "state": "pre_screen_passed",
+            "reason": "Pre-screen decision was 'yes' — candidate passed the gate, not a reject",
+            "config": config,
+            "snapshot": snapshot,
+        }
     if not enabled:
         return {
             "should_trigger": False,
