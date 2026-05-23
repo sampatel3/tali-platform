@@ -3,7 +3,6 @@ import { ArrowLeft, Mail } from 'lucide-react';
 import * as apiClient from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import { Breadcrumbs } from '../../shared/ui/Breadcrumbs';
-import { CopyLinkButton } from '../../shared/ui/CopyLinkButton';
 import { getMetricMeta, buildGlossaryFromMetadata } from '../../lib/scoringGlossary';
 import { normalizeScores } from '../../scoring/scoringDimensions';
 import { ComparisonRadar } from '../../shared/ui/ComparisonRadar';
@@ -1108,10 +1107,7 @@ export const AssessmentResultsPage = ({
     <div>
       {NavComponent ? <NavComponent currentPage="candidates" onNavigate={onNavigate} /> : null}
       <div className="page">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-          <Breadcrumbs items={breadcrumbItems} className="mb-0" />
-          <CopyLinkButton label="Copy link to assessment" successMessage="Assessment link copied." />
-        </div>
+        <Breadcrumbs items={breadcrumbItems} className="mb-0" />
         <button
           type="button"
           className="candidate-detail-back"
