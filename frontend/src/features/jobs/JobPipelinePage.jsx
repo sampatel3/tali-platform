@@ -867,9 +867,6 @@ const RoleAgentSettingsTab = ({
           ))}
         </section>
 
-        {/* Activity for this role now lives in the consolidated org-wide
-            view at Settings → Background jobs → Agents. */}
-
         {/* Save bar */}
         <div className="mc-agent-settings-savebar">
           <span>
