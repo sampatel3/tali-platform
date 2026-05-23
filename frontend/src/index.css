@@ -14857,7 +14857,7 @@ button.eng-badge-button:focus-visible {
 
 .mc-overview-hero {
   display: grid;
-  grid-template-columns: minmax(0, 560px) minmax(48px, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 560px) minmax(40px, 1fr) minmax(0, 2fr);
   align-items: center;
   padding: 24px;
   border-radius: 16px;
@@ -14872,9 +14872,9 @@ button.eng-badge-button:focus-visible {
   grid-template-columns: repeat(2, auto);
   gap: 14px 18px;
   align-content: center;
+  justify-content: center;
   justify-items: center;
   border-left: 1px solid var(--line);
-  padding-left: 24px;
 }
 
 @media (max-width: 960px) {
