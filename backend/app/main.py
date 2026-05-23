@@ -796,6 +796,28 @@ def admin_gate_divergence(request: Request, organization_id: int | None = None):
         db.close()
 
 
+@app.post("/admin/pre-screen-rejects/repair-passed")
+def admin_repair_passed_prescreen(
+    request: Request, organization_id: int | None = None, dry_run: bool = False
+):
+    """Discard reject cards + clear false 'Below threshold' labels for
+    candidates the pre-screen gate actually passed (decision='yes')."""
+    from .platform.database import SessionLocal
+    from .services.pre_screen_decision_emitter import (
+        repair_passed_prescreen_contamination,
+    )
+
+    _require_admin(request)
+    db = SessionLocal()
+    try:
+        result = repair_passed_prescreen_contamination(
+            db, organization_id=organization_id, dry_run=dry_run
+        )
+        return {"ok": True, "dry_run": dry_run, **result}
+    finally:
+        db.close()
+
+
 @app.get("/admin/graphiti/search-debug")
 def graphiti_search_debug(request: Request):
     """Raw Graphiti search result shape for debugging the graph view."""

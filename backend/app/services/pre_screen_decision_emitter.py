@@ -102,6 +102,24 @@ def _format_reasoning(application: CandidateApplication) -> str:
     )
 
 
+def _pre_screen_passed(application: CandidateApplication) -> bool:
+    """True if the pre-screen gate PASSED this candidate (decision 'yes'/'maybe').
+
+    The stored ``decision`` is the authoritative pre-screen verdict. A passed
+    candidate must NEVER be treated as a pre-screen reject — even when the
+    numeric ``pre_screen_score_100`` has been contaminated by a later cv_match
+    write that disagrees with it. (Real case, app 48632: decision 'yes',
+    llm_score 75, yet the column held a stale 16.7 from a cv_match run, which
+    re-created the reject card on the next re-score.)
+    """
+    ev = (
+        application.pre_screen_evidence
+        if isinstance(getattr(application, "pre_screen_evidence", None), dict)
+        else {}
+    )
+    return str(ev.get("decision") or "").strip().lower() in ("yes", "maybe")
+
+
 def queue_pre_screen_reject(
     db: Session,
     *,
@@ -135,6 +153,13 @@ def queue_pre_screen_reject(
     # sat in the reject queue). Backstops the gate-level guard in
     # ``evaluate_auto_reject_decision`` (reconcile/backfill also land here).
     if getattr(application, "cv_match_score", None) is not None:
+        return None
+    # Respect the pre-screen verdict. The decision ('yes'/'maybe') is the
+    # authoritative gate result; never card (or revive) a candidate the gate
+    # passed, even if the numeric ``pre_screen_score_100`` was contaminated by
+    # a later cv_match write that disagrees with it. Placed before the
+    # creation/revival logic so both paths are covered.
+    if _pre_screen_passed(application):
         return None
     try:
         key = _idempotency_key(int(application.id))
@@ -890,6 +915,91 @@ def backfill_summaries_from_cvmatch(
     if updated and not dry_run:
         db.commit()
     return {"updated": updated, "scanned": scanned}
+
+
+def repair_passed_prescreen_contamination(
+    db: Session, *, organization_id: int | None = None, dry_run: bool = False
+) -> dict:
+    """Deterministic repair for candidates the pre-screen gate PASSED
+    (``decision`` 'yes'/'maybe') but who were treated as rejects because a
+    later cv_match write contaminated the numeric ``pre_screen_score_100``.
+
+    Two corrections:
+      1. Discard their pending ``skip_assessment_reject`` cards.
+      2. Clear the false "Below threshold" recommendation, re-labelling from
+         the genuine pre-screen score (never "Below threshold" for a passed
+         candidate — falls back to "Manual review recommended").
+
+    Returns ``{"cards_discarded": int, "recs_fixed": int}``.
+    """
+    from sqlalchemy import func
+
+    from .pre_screening_service import resolved_auto_reject_config
+    from .pre_screening_snapshot import pre_screen_recommendation_label
+
+    now = datetime.now(timezone.utc)
+
+    # (1) Discard pending reject cards for passed candidates.
+    cq = (
+        db.query(AgentDecision, CandidateApplication)
+        .join(CandidateApplication, CandidateApplication.id == AgentDecision.application_id)
+        .filter(
+            AgentDecision.status == "pending",
+            AgentDecision.decision_type == _DECISION_TYPE,
+            AgentDecision.resolved_by_user_id.is_(None),
+        )
+    )
+    if organization_id is not None:
+        cq = cq.filter(AgentDecision.organization_id == int(organization_id))
+    cards_discarded = 0
+    for decision, app in cq.all():
+        if not _pre_screen_passed(app):
+            continue
+        if not dry_run:
+            decision.status = "discarded"
+            decision.resolved_at = now
+            decision.resolution_note = (
+                "superseded: candidate passed pre-screen (decision=yes) — not a reject"
+            )[:500]
+        cards_discarded += 1
+
+    # (2) Clear the false 'Below threshold' label on passed candidates.
+    rq = (
+        db.query(CandidateApplication, Role)
+        .join(Role, Role.id == CandidateApplication.role_id)
+        .filter(
+            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.application_outcome == "open",
+            func.lower(func.trim(func.coalesce(CandidateApplication.pre_screen_recommendation, "")))
+            == "below threshold",
+        )
+    )
+    if organization_id is not None:
+        rq = rq.filter(CandidateApplication.organization_id == int(organization_id))
+    threshold_cache: dict[int, float | None] = {}
+    recs_fixed = 0
+    for app, role in rq.all():
+        if not _pre_screen_passed(app):
+            continue
+        if role.id not in threshold_cache:
+            threshold_cache[role.id] = resolved_auto_reject_config(None, role, db=db)["threshold_100"]
+        ev = app.pre_screen_evidence if isinstance(app.pre_screen_evidence, dict) else {}
+        llm = ev.get("llm_score_100")
+        new_label = (
+            pre_screen_recommendation_label(float(llm), threshold_cache[role.id])
+            if llm is not None
+            else None
+        )
+        # A passed candidate must never carry "Below threshold".
+        if not new_label or new_label == "Below threshold":
+            new_label = "Manual review recommended"
+        if not dry_run:
+            app.pre_screen_recommendation = new_label
+        recs_fixed += 1
+
+    if (cards_discarded or recs_fixed) and not dry_run:
+        db.commit()
+    return {"cards_discarded": cards_discarded, "recs_fixed": recs_fixed}
 
 
 def pre_screen_gate_divergence_report(

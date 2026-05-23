@@ -19,6 +19,7 @@ from app.services.pre_screen_decision_emitter import (
     pre_screen_gate_divergence_report,
     queue_pre_screen_reject,
     reconcile_pre_screen_reject_decisions,
+    repair_passed_prescreen_contamination,
     supersede_mislabeled_pre_screen_rejects,
     supersede_pre_screen_reject_on_full_score,
 )
@@ -1113,3 +1114,94 @@ def test_transition_outcome_discards_pending_decisions(db):
     transition_outcome(db, app=app, to_outcome="rejected", actor_type="system")
     db.flush(); db.refresh(d)
     assert d.status == "discarded"
+
+
+# ---------------------------------------------------------------------------
+# Respect the pre-screen decision (don't card/revive passed candidates)
+# ---------------------------------------------------------------------------
+
+
+def test_emitter_skips_when_pre_screen_decision_yes(db):
+    """A candidate the gate passed (decision='yes') must not get a card, even
+    when the numeric score is below threshold (cv contamination)."""
+    org, role, app = _seed(db, score=16.7, threshold=30.0)
+    app.cv_match_score = None  # not live-scored; column holds a stale low value
+    app.pre_screen_evidence = {"decision": "yes", "llm_score_100": 75.0}
+    db.flush()
+    result = queue_pre_screen_reject(
+        db, organization_id=int(org.id), role=role, application=app,
+        pre_screen_score=16.7, threshold=30.0,
+    )
+    assert result is None
+    assert db.query(AgentDecision).filter(AgentDecision.application_id == app.id).count() == 0
+
+
+def test_emitter_does_not_revive_passed_candidate(db):
+    """A discarded card for a passed candidate stays discarded (no revival)."""
+    org, role, app = _seed(db, score=16.7, threshold=30.0)
+    app.pre_screen_evidence = {"decision": "yes", "llm_score_100": 75.0}
+    db.flush()
+    d = _direct_card(db, org, role, app, 30.0)
+    d.status = "discarded"
+    db.flush()
+    result = queue_pre_screen_reject(
+        db, organization_id=int(org.id), role=role, application=app,
+        pre_screen_score=16.7, threshold=30.0,
+    )
+    assert result is None
+    db.refresh(d)
+    assert d.status == "discarded"  # not revived
+
+
+def test_gate_defers_when_pre_screen_decision_yes(db):
+    from app.decision_policy.auto_reject import evaluate_auto_reject_decision
+
+    org = Organization(name="O", slug=f"o-{id(db)}psp"); db.add(org); db.flush()
+    role = Role(organization_id=org.id, name="R", source="manual", auto_reject=False, agentic_mode_enabled=True, score_threshold=30)
+    db.add(role); db.flush()
+    cand = Candidate(organization_id=org.id, email="psp@x.test", full_name="P", workable_candidate_id="wid-psp")
+    db.add(cand); db.flush()
+    app = CandidateApplication(
+        organization_id=org.id, candidate_id=cand.id, role_id=role.id,
+        status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
+        application_outcome="open", source="manual",
+        pre_screen_score_100=16.7, cv_match_score=None,
+        cv_match_details={"pre_screen_score_100": 16.7},
+        pre_screen_recommendation="Below threshold",
+        pre_screen_evidence={"decision": "yes", "llm_score_100": 75.0},
+    )
+    db.add(app); db.commit()
+    verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
+    assert verdict["should_trigger"] is False, verdict
+    assert verdict["state"] == "pre_screen_passed"
+
+
+def test_repair_passed_prescreen_contamination(db):
+    org = Organization(name="O", slug=f"o-{id(db)}rp"); db.add(org); db.flush()
+    role = Role(organization_id=org.id, name="R", source="manual", auto_reject=False, agentic_mode_enabled=True, score_threshold=30)
+    db.add(role); db.flush()
+
+    def mkapp(email, decision, rec, llm):
+        c = Candidate(organization_id=org.id, email=email, full_name=email); db.add(c); db.flush()
+        a = CandidateApplication(
+            organization_id=org.id, candidate_id=c.id, role_id=role.id,
+            status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
+            application_outcome="open", source="manual",
+            pre_screen_score_100=16.7, pre_screen_recommendation=rec,
+            pre_screen_evidence={"decision": decision, "llm_score_100": llm},
+        )
+        db.add(a); db.flush(); return a
+
+    passed = mkapp("passed@x.test", "yes", "Below threshold", 75.0)   # card + rec fixed
+    failed = mkapp("failed@x.test", "no", "Below threshold", 20.0)    # genuine reject — untouched
+    d_passed = _direct_card(db, org, role, passed, 30.0)
+    d_failed = _direct_card(db, org, role, failed, 30.0)
+
+    res = repair_passed_prescreen_contamination(db, organization_id=int(org.id))
+    assert res["cards_discarded"] == 1
+    assert res["recs_fixed"] == 1
+    db.refresh(d_passed); db.refresh(d_failed); db.refresh(passed); db.refresh(failed)
+    assert d_passed.status == "discarded"
+    assert d_failed.status == "pending"   # genuine reject untouched
+    assert passed.pre_screen_recommendation != "Below threshold"  # relabelled from llm 75
+    assert failed.pre_screen_recommendation == "Below threshold"  # unchanged
