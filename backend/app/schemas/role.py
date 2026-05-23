@@ -156,6 +156,9 @@ class RoleResponse(BaseModel):
     criteria: list[RoleCriterionResponse] = Field(default_factory=list)
     source: Optional[str] = "manual"
     workable_job_id: Optional[str] = None
+    # Workable job lifecycle state: published | draft | archived | closed.
+    # None for manual/Taali-created roles. ``published`` == live/recruiting.
+    workable_job_state: Optional[str] = None
     job_spec_filename: Optional[str] = None
     job_spec_text: Optional[str] = None
     job_spec_uploaded_at: Optional[datetime] = None

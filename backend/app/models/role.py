@@ -68,6 +68,16 @@ class Role(Base):
         default=False,
         index=True,
     )
+    # True when the star was applied automatically because the Workable job
+    # is ``published`` (live). Such stars are dropped automatically when the
+    # job leaves the published state. A recruiter's manual star (or an
+    # agent-activation star) sets this False so it survives state changes.
+    star_auto_managed = Column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+        default=False,
+    )
     agentic_mode_enabled = Column(
         Boolean,
         nullable=False,

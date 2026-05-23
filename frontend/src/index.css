@@ -2141,6 +2141,25 @@ html[data-theme="dark"] {
   border-color: color-mix(in oklab, var(--purple) 50%, var(--line));
 }
 
+/* Filled / closed / draft Workable postings — not actively recruiting.
+   De-emphasised so live (published) roles stand out on the grid. Still
+   fully clickable; the dimming lifts on hover/focus. */
+.job-card.not-live {
+  opacity: 0.55;
+  filter: grayscale(0.3);
+  box-shadow: none;
+}
+
+.job-card.not-live:hover,
+.job-card.not-live:focus-within {
+  opacity: 1;
+  filter: none;
+}
+
+.job-star.is-locked {
+  opacity: 0.95;
+}
+
 .job-head {
   display: flex;
   justify-content: space-between;

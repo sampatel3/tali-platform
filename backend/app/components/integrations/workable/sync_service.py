@@ -1490,6 +1490,26 @@ class WorkableSyncService:
             from ....services.role_criteria_service import sync_derived_criteria
 
             sync_derived_criteria(db, role)
+
+        # Live (published) jobs are always in continuous sync: auto-star them
+        # and mark the star auto-managed so it can be dropped when the job is
+        # no longer live. A recruiter's manual star (star_auto_managed False)
+        # is never touched here, and agent-on roles are never auto-unstarred.
+        job_state = str(
+            (job.get("state") or details.get("state") or "")
+        ).strip().lower()
+        if job_state == "published":
+            if not role.starred_for_auto_sync:
+                role.starred_for_auto_sync = True
+                role.star_auto_managed = True
+        elif job_state in {"archived", "closed", "draft"}:
+            if (
+                role.starred_for_auto_sync
+                and getattr(role, "star_auto_managed", False)
+                and not getattr(role, "agentic_mode_enabled", False)
+            ):
+                role.starred_for_auto_sync = False
+                role.star_auto_managed = False
         return role, created
 
     def _sync_candidate_for_role(
