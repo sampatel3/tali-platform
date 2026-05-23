@@ -25,10 +25,28 @@ from .celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
+# Per-cycle Celery time limits for the cycle-running agent tasks
+# (react_to_event / daily_review_role / cohort_tick_role / manual_run).
+# Sized from real prod data (3-day window): legitimate cycles top out at
+# ~171s (p95 140s, round-cap aborts 129s); genuine hangs ran 400-791s
+# before the 10-min watchdog caught them. A 300s soft limit is ~1.75× the
+# observed legitimate max — ample headroom for Anthropic latency spikes —
+# while sitting cleanly below the hang range, so a stuck cycle is broken
+# out at ~5 min instead of occupying a worker slot for 10. The 360s hard
+# limit force-kills the worker child if the soft handler itself wedges
+# (e.g. the hang is a DB call). SoftTimeLimitExceeded surfaces as a
+# normal exception inside run_cycle's Anthropic try/except, marking the
+# run failed; the watchdog (now 7m) is the backstop for non-LLM hangs.
+AGENT_CYCLE_SOFT_LIMIT_S = 300
+AGENT_CYCLE_HARD_LIMIT_S = 360
+
+
 @celery_app.task(
     name="app.tasks.agent_tasks.agent_react_to_event",
     bind=True,
     max_retries=0,
+    soft_time_limit=AGENT_CYCLE_SOFT_LIMIT_S,
+    time_limit=AGENT_CYCLE_HARD_LIMIT_S,
 )
 def agent_react_to_event(
     self,
@@ -138,6 +156,8 @@ def agent_daily_review_sweep(self) -> dict:
     name="app.tasks.agent_tasks.agent_daily_review_role",
     bind=True,
     max_retries=0,
+    soft_time_limit=AGENT_CYCLE_SOFT_LIMIT_S,
+    time_limit=AGENT_CYCLE_HARD_LIMIT_S,
 )
 def agent_daily_review_role(self, role_id: int) -> dict:
     """Run one daily-review cycle for ``role_id``.
@@ -241,6 +261,8 @@ def agent_cohort_tick_sweep(self) -> dict:
     name="app.tasks.agent_tasks.agent_cohort_tick_role",
     bind=True,
     max_retries=0,
+    soft_time_limit=AGENT_CYCLE_SOFT_LIMIT_S,
+    time_limit=AGENT_CYCLE_HARD_LIMIT_S,
 )
 def agent_cohort_tick_role(self, role_id: int) -> dict:
     """One cohort tick for ``role_id``.
@@ -494,6 +516,8 @@ def _cycle_would_be_noop(db, *, role) -> bool:
     name="app.tasks.agent_tasks.agent_manual_run",
     bind=True,
     max_retries=0,
+    soft_time_limit=AGENT_CYCLE_SOFT_LIMIT_S,
+    time_limit=AGENT_CYCLE_HARD_LIMIT_S,
 )
 def agent_manual_run(self, role_id: int, application_id: Optional[int] = None) -> dict:
     """Recruiter-triggered (or CLI-triggered) one-shot run.
@@ -547,7 +571,12 @@ def agent_manual_run(self, role_id: int, application_id: Optional[int] = None) -
 # reasoning about "is this role currently running" correctly. Every 5 min
 # the watchdog scans for runs older than STUCK_RUN_TIMEOUT and marks them
 # failed.
-STUCK_RUN_TIMEOUT_MINUTES = 10
+# Backstop for rows left in 'running' after a worker is force-killed by the
+# Celery hard time_limit (360s) — or after any crash the time limit can't
+# catch. Set just above the 6-min hard limit so a row is reaped ~1 min
+# after its task is killed, instead of the old 10-min wait. Cycle work
+# tops out ~171s in prod, so 7 min never touches a healthy in-flight run.
+STUCK_RUN_TIMEOUT_MINUTES = 7
 
 
 @celery_app.task(
