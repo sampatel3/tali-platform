@@ -84,6 +84,13 @@ class AgentDecisionPayload(BaseModel):
     candidate_name: Optional[str] = None
     candidate_email: Optional[str] = None
     role_name: Optional[str] = None
+    # The candidate's composite role-fit ("Tali") score, 0–100, joined from
+    # CandidateApplication.role_fit_score_cache_100. This is the number the
+    # advance/reject reasoning cites ("Role-fit score 27.5 is below..."), so
+    # the Hub can render it as a score ring on the card. Null for pre-screen
+    # rejects — those candidates are rejected before role-fit scoring runs, so
+    # there's no score to show.
+    role_fit_score: Optional[float] = None
     # Workable shortcode (= role.workable_job_id) so the home-page modal
     # can fetch this role's Workable stages for the Advance / Skip & advance
     # stage <select> without a second round-trip.
@@ -201,6 +208,7 @@ def _decision_to_payload(
     candidate: Optional[Candidate],
     role: Optional[Role] = None,
     *,
+    application: Optional[CandidateApplication] = None,
     is_stale: bool = False,
     staleness_reasons: Optional[list[str]] = None,
     staleness_summary: Optional[str] = None,
@@ -225,6 +233,12 @@ def _decision_to_payload(
         cost_micro = int(token_spend.get("total_micro_usd") or 0)
     cost_cents = cost_micro // 10_000
 
+    role_fit_score = None
+    if application is not None:
+        raw_fit = getattr(application, "role_fit_score_cache_100", None)
+        if raw_fit is not None:
+            role_fit_score = float(raw_fit)
+
     return AgentDecisionPayload(
         id=int(decision.id),
         role_id=int(decision.role_id),
@@ -246,6 +260,7 @@ def _decision_to_payload(
         candidate_name=getattr(candidate, "full_name", None) if candidate else None,
         candidate_email=getattr(candidate, "email", None) if candidate else None,
         role_name=getattr(role, "name", None) if role else None,
+        role_fit_score=role_fit_score,
         workable_job_id=getattr(role, "workable_job_id", None) if role else None,
         is_stale=is_stale,
         staleness_reasons=staleness_reasons or [],
@@ -347,29 +362,26 @@ def list_agent_decisions(
     # the name as a local for the WHOLE function, so the earlier query
     # reference (the join above) raises UnboundLocalError at runtime.
 
-    # Batch-load applications for the rows we're returning so we don't
-    # round-trip per decision in the staleness service.
-    pending_app_ids = [
-        int(decision.application_id)
-        for decision, _, _ in rows
-        if decision.status == "pending"
-    ]
+    # Batch-load applications for ALL rows we're returning (not just pending)
+    # so we can both compute staleness for pending rows AND surface the
+    # candidate's role-fit score on every card, without a round-trip per row.
+    all_app_ids = [int(decision.application_id) for decision, _, _ in rows]
     apps_by_id: dict[int, CandidateApplication] = {}
-    if pending_app_ids:
+    if all_app_ids:
         for app in (
             db.query(CandidateApplication)
-            .filter(CandidateApplication.id.in_(pending_app_ids))
+            .filter(CandidateApplication.id.in_(all_app_ids))
             .all()
         ):
             apps_by_id[int(app.id)] = app
 
     payloads: list[AgentDecisionPayload] = []
     for decision, candidate, role in rows:
+        app = apps_by_id.get(int(decision.application_id))
         is_stale = False
         reasons: list[str] = []
         summary: Optional[str] = None
         if decision.status == "pending":
-            app = apps_by_id.get(int(decision.application_id))
             try:
                 report = decision_staleness.evaluate(
                     db, decision, application=app, role=role,
@@ -382,6 +394,7 @@ def list_agent_decisions(
         payloads.append(
             _decision_to_payload(
                 decision, candidate, role,
+                application=app,
                 is_stale=is_stale,
                 staleness_reasons=reasons,
                 staleness_summary=summary,
@@ -464,7 +477,12 @@ def approve(
         .first()
     )
     role = db.query(Role).filter(Role.id == decision.role_id).first()
-    return _decision_to_payload(decision, candidate, role)
+    application = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.id == decision.application_id)
+        .first()
+    )
+    return _decision_to_payload(decision, candidate, role, application=application)
 
 
 # ---------------------------------------------------------------------------
@@ -505,7 +523,12 @@ def override(
         .first()
     )
     role = db.query(Role).filter(Role.id == decision.role_id).first()
-    return _decision_to_payload(decision, candidate, role)
+    application = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.id == decision.application_id)
+        .first()
+    )
+    return _decision_to_payload(decision, candidate, role, application=application)
 
 
 # ---------------------------------------------------------------------------

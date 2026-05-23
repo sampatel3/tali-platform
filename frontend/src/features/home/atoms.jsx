@@ -96,26 +96,18 @@ export const ConfBar = ({ value }) => {
   );
 };
 
-// Compact chip surfacing the candidate's Tali pre-screen score for the
-// decisions that carry one (pre-screen rejects). Reads the score + cutoff
-// straight off ``evidence`` and renders nothing when there's no numeric
-// score — agent decisions of other types, or pre-screen rejects whose
-// score was invalidated (must-have miss). Purple tones only: the TypeBadge
-// already carries the red reject signal, so this just reports the number
-// against the cutoff that drove the decision.
-export const ScoreChip = ({ evidence, size = 'md' }) => {
-  const score = Number(evidence?.pre_screen_score_100);
-  if (!Number.isFinite(score)) return null;
-  const thr = Number(evidence?.threshold_100);
-  const hasThr = Number.isFinite(thr);
+// Compact chip surfacing a candidate's role-fit (Tali) score, 0–100, on the
+// decision list rows. Takes the numeric score directly and renders nothing
+// when it's absent — pre-screen rejects have no role-fit score (rejected
+// before scoring runs), so they show no chip. Purple tones only; the
+// TypeBadge already carries the decision's red/green signal.
+export const ScoreChip = ({ score, size = 'md' }) => {
+  if (score == null || !Number.isFinite(Number(score))) return null;
+  const value = Math.round(Number(score));
   const small = size === 'sm';
   return (
     <span
-      title={
-        hasThr
-          ? `Tali pre-screen score ${Math.round(score)} (threshold ${Math.round(thr)})`
-          : `Tali pre-screen score ${Math.round(score)}`
-      }
+      title={`Tali role-fit score ${value} / 100`}
       style={{
         display: 'inline-flex',
         alignItems: 'baseline',
@@ -133,8 +125,7 @@ export const ScoreChip = ({ evidence, size = 'md' }) => {
       }}
     >
       <span style={{ opacity: 0.7 }}>SCORE</span>
-      <span>{Math.round(score)}</span>
-      {hasThr ? <span style={{ opacity: 0.7 }}>/ {Math.round(thr)}</span> : null}
+      <span>{value}</span>
     </span>
   );
 };
