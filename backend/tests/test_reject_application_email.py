@@ -384,9 +384,11 @@ def test_workable_disqualify_success_suppresses_taali_email(db, monkeypatch):
     assert app.application_outcome == "rejected"
 
 
-def test_workable_disqualify_failure_falls_back_to_taali_email(db, monkeypatch):
-    """If the Workable API fails, Taali email is the safety net so the
-    candidate still gets notified. The reject itself stays committed."""
+def test_workable_disqualify_transient_failure_schedules_retry_no_email(db, monkeypatch):
+    """A transient Workable API error (e.g. 429) schedules a background retry
+    and does NOT send the Taali email now — the retry owns notification so the
+    candidate isn't double-emailed if the retry later succeeds (Workable emails
+    on its own disqualify workflow). The reject itself stays committed."""
     from app.platform.config import settings as cfg
 
     monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
@@ -404,13 +406,15 @@ def test_workable_disqualify_failure_falls_back_to_taali_email(db, monkeypatch):
         "success": False,
         "action": "disqualify",
         "code": "api_error",
-        "message": "Workable returned 500",
+        "message": "Client error '429 Too Many Requests'",
     }
 
     with patch(
         "app.services.workable_actions_service.disqualify_candidate_in_workable",
         return_value=fake_failure,
     ) as mock_workable, patch(
+        "app.tasks.workable_tasks.retry_workable_disqualify_task"
+    ) as mock_retry_task, patch(
         "app.actions.reject_application._dispatch_rejection_email"
     ) as mock_email:
         reject_application.run(
@@ -422,7 +426,55 @@ def test_workable_disqualify_failure_falls_back_to_taali_email(db, monkeypatch):
         db.commit()
 
     assert mock_workable.called
-    assert mock_email.called, "Taali email should fire as fallback when Workable fails"
+    assert mock_retry_task.apply_async.called, "transient failure must schedule a retry"
+    assert not mock_email.called, "no immediate email — the retry owns notification"
+
+    db.refresh(app)
+    assert app.application_outcome == "rejected"
+
+
+def test_workable_disqualify_nonretriable_failure_falls_back_to_taali_email(db, monkeypatch):
+    """A non-API failure (bad config / unlinked) won't self-heal, so the Taali
+    email fires immediately as the safety net and no retry is scheduled."""
+    from app.platform.config import settings as cfg
+
+    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
+
+    org = _make_org(db, workable_connected=True)
+    role = _make_role(db, org)
+    app = _make_application(
+        db, org=org, role=role,
+        email="alice@x.test",
+        workable_candidate_id="wkbl_cand_003",
+    )
+    recruiter = _make_recruiter(db, org)
+
+    fake_failure = {
+        "success": False,
+        "action": "disqualify",
+        "code": "missing_candidate_id",
+        "message": "Candidate is not linked to Workable",
+    }
+
+    with patch(
+        "app.services.workable_actions_service.disqualify_candidate_in_workable",
+        return_value=fake_failure,
+    ) as mock_workable, patch(
+        "app.tasks.workable_tasks.retry_workable_disqualify_task"
+    ) as mock_retry_task, patch(
+        "app.actions.reject_application._dispatch_rejection_email"
+    ) as mock_email:
+        reject_application.run(
+            db,
+            Actor.recruiter(recruiter),
+            organization_id=int(org.id),
+            application_id=int(app.id),
+        )
+        db.commit()
+
+    assert mock_workable.called
+    assert not mock_retry_task.apply_async.called
+    assert mock_email.called, "non-retriable failure should fall back to the Taali email"
 
     db.refresh(app)
     assert app.application_outcome == "rejected"

@@ -10,6 +10,8 @@ from app.components.integrations.workable.sync_service import (
     _disqualified_at_from_payload,
     _terminal_outcome,
     _candidate_email,
+    _candidate_phone,
+    _normalize_phone_for_match,
     _normalize_stage_for_terminal,
     WorkableSyncService,
 )
@@ -220,6 +222,36 @@ class TestCandidateEmail:
     def test_no_email(self):
         assert _candidate_email({}) is None
         assert _candidate_email({"name": "John"}) is None
+
+
+class TestNormalizePhoneForMatch:
+    def test_collapses_formatting_and_country_code(self):
+        # The real duplicate-profile case: same person, two phone formats.
+        assert _normalize_phone_for_match("+971 50 202 2165") == "502022165"
+        assert _normalize_phone_for_match("+971 +971 502022165") == "502022165"
+
+    def test_local_prefix_collapses_to_same_key(self):
+        assert _normalize_phone_for_match("0502022165") == "502022165"
+
+    def test_too_short_returns_none(self):
+        assert _normalize_phone_for_match("12345") is None
+        assert _normalize_phone_for_match("") is None
+        assert _normalize_phone_for_match(None) is None
+
+    def test_letters_and_symbols_stripped(self):
+        assert _normalize_phone_for_match("tel: 123-456-789 ext") == "123456789"
+
+
+class TestCandidatePhone:
+    def test_direct_phone(self):
+        assert _candidate_phone({"phone": "+971 50 202 2165"}) == "+971 50 202 2165"
+
+    def test_nested_contact_phone(self):
+        assert _candidate_phone({"contact": {"phone": "12345"}}) == "12345"
+
+    def test_no_phone(self):
+        assert _candidate_phone({}) is None
+        assert _candidate_phone({"phone": ""}) is None
 
 
 class TestNormalizeStageForTerminal:

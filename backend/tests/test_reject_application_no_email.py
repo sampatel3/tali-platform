@@ -70,7 +70,7 @@ def test_workable_disqualify_called_even_when_candidate_email_missing(db):
     actor = Actor.recruiter(user)
     with patch(
         "app.actions.reject_application._try_workable_disqualify",
-        return_value=True,
+        return_value="handled",
     ) as wk, patch(
         "app.actions.reject_application._dispatch_rejection_email"
     ) as email_mock:
@@ -88,12 +88,12 @@ def test_workable_disqualify_called_even_when_candidate_email_missing(db):
 
 
 def test_taali_fallback_only_when_email_present_and_workable_failed(db):
-    """When Workable disqualify fails AND we have an email, send fallback."""
+    """When Workable disqualify fails non-retriably AND we have an email, send fallback."""
     org, user, role, app = _make_world(db, candidate_email="c@x.test")
     actor = Actor.recruiter(user)
     with patch(
         "app.actions.reject_application._try_workable_disqualify",
-        return_value=False,
+        return_value="fallback",
     ) as wk, patch(
         "app.actions.reject_application._dispatch_rejection_email"
     ) as email_mock:

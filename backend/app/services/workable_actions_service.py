@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import re
 from typing import Any
 
@@ -11,6 +13,44 @@ from .document_service import sanitize_text_for_storage
 
 WORKABLE_ALLOWED_SCOPES = ("r_jobs", "r_candidates", "w_candidates")
 WORKABLE_WRITE_SCOPE = "w_candidates"
+
+
+class WorkableWritebackError(Exception):
+    """Raised by a Workable write helper when ``strict_workable_writes`` is
+    active and the write fails.
+
+    Callers that normally *swallow* a Workable failure (record an event, return
+    a falsy result, fall back to email) must re-raise this so the failure can
+    propagate to the decision-dispatch task, which gates the local commit on
+    the Workable write and re-queues the decision on failure. ``retriable`` is
+    True for transient API errors (429/5xx surface as ``code=="api_error"``);
+    config/linkage failures are non-retriable.
+    """
+
+    def __init__(self, *, action: str, code: str, message: str, retriable: bool):
+        super().__init__(f"{action} failed ({code}): {message}")
+        self.action = action
+        self.code = code
+        self.message = message
+        self.retriable = retriable
+
+
+# When set, Workable write helpers raise ``WorkableWritebackError`` instead of
+# returning a failure dict. The decision-dispatch task turns this on so a
+# failed disqualify/move aborts the transaction (nothing half-applied) and
+# re-queues the decision, rather than silently committing a Tali-only change.
+_STRICT_WORKABLE_WRITES: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "strict_workable_writes", default=False
+)
+
+
+@contextlib.contextmanager
+def strict_workable_writes():
+    token = _STRICT_WORKABLE_WRITES.set(True)
+    try:
+        yield
+    finally:
+        _STRICT_WORKABLE_WRITES.reset(token)
 
 _DOUBLE_BRACE_PLACEHOLDER_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 
@@ -180,6 +220,17 @@ def _build_failure_result(
     config: dict[str, Any],
     response: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if _STRICT_WORKABLE_WRITES.get():
+        # api_error covers transient 429/5xx (Workable returns these as a
+        # failure dict, not an exception) — retriable. Config/linkage codes
+        # (not_writeable, missing_candidate_id, missing actor) won't fix
+        # themselves — non-retriable.
+        raise WorkableWritebackError(
+            action=action,
+            code=code,
+            message=message,
+            retriable=(code == "api_error"),
+        )
     return {
         "success": False,
         "action": action,

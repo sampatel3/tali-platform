@@ -32,7 +32,15 @@ from .automation_tasks import (
     generate_role_interview_focus,
     run_application_auto_reject,
 )
-from .workable_tasks import run_workable_sync_run_task
+# Eager-import workable_tasks so the worker registers the sync runner AND the
+# disqualify-retry task. Without this, the retry enqueued from the reject path
+# (on a transient Workable 429) would NotRegistered on the worker and drop —
+# leaving Tali 'rejected' but Workable still active. Same trap as above.
+from .workable_tasks import (
+    run_workable_sync_run_task,
+    retry_workable_disqualify_task,
+    process_decision_batch_task,
+)
 # Eager-import reconciliation_tasks so the daily Anthropic billing
 # reconciliation beat task lands in the worker registry. Same trap as
 # the imports above — beat will fire ``reconcile_anthropic_usage`` on
@@ -88,6 +96,8 @@ __all__ = [
     "generate_application_interview_pack",
     "run_application_auto_reject",
     "run_workable_sync_run_task",
+    "retry_workable_disqualify_task",
+    "process_decision_batch_task",
     "reconcile_anthropic_usage",
     "agent_react_to_event",
     "agent_manual_run",

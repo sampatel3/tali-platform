@@ -7,8 +7,17 @@ from ..platform.database import Base
 JOB_KIND_SCORING_BATCH = "scoring_batch"
 JOB_KIND_CV_FETCH = "cv_fetch"
 JOB_KIND_GRAPH_SYNC = "graph_sync"
+# A recruiter approve / bulk-approve of Hub decisions. One row per request
+# (a 100-decision bulk approve is ONE job), draining the Workable writebacks
+# sequentially in the background.
+JOB_KIND_DECISION_BATCH = "decision_batch"
 
-JOB_KINDS = (JOB_KIND_SCORING_BATCH, JOB_KIND_CV_FETCH, JOB_KIND_GRAPH_SYNC)
+JOB_KINDS = (
+    JOB_KIND_SCORING_BATCH,
+    JOB_KIND_CV_FETCH,
+    JOB_KIND_GRAPH_SYNC,
+    JOB_KIND_DECISION_BATCH,
+)
 
 SCOPE_KIND_ROLE = "role"
 SCOPE_KIND_ORG = "org"

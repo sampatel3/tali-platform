@@ -85,6 +85,59 @@ def test_emitter_defers_when_fully_scored(db):
     assert db.query(AgentDecision).filter(AgentDecision.application_id == app.id).count() == 0
 
 
+def test_emitter_suppresses_for_post_handover_workable_stage(db):
+    """A candidate a human advanced to Technical Interview in Workable must not
+    get a pre-screen reject card — score alone can't reject a human-validated
+    candidate (mirrors the agent's EXTERNAL PIPELINE STAGE rule)."""
+    org, role, app = _seed(db, score=15.0, threshold=50.0)
+    app.workable_stage = "Technical Interview"
+    db.flush()
+    result = queue_pre_screen_reject(
+        db, organization_id=int(org.id), role=role, application=app,
+        pre_screen_score=15.0, threshold=50.0,
+    )
+    assert result is None
+    assert db.query(AgentDecision).filter(AgentDecision.application_id == app.id).count() == 0
+
+
+def test_emitter_still_cards_pre_handover_stage(db):
+    """Sanity: a neutral/pre-handover Workable stage still produces the card."""
+    org, role, app = _seed(db, score=15.0, threshold=50.0)
+    app.workable_stage = "Applied"
+    db.flush()
+    result = queue_pre_screen_reject(
+        db, organization_id=int(org.id), role=role, application=app,
+        pre_screen_score=15.0, threshold=50.0,
+    )
+    assert result is not None and result.status == "pending"
+
+
+def test_reconcile_discards_post_handover_card(db):
+    """An existing pending reject card self-heals (gets discarded) once the
+    candidate is advanced past handover in Workable, even though their score is
+    still below the threshold."""
+    org, role, app = _seed(db, score=15.0, threshold=50.0)
+    card = _direct_card(db, org, role, app, threshold=50.0)
+    app.workable_stage = "Technical Interview"
+    db.flush()
+    out = reconcile_pre_screen_reject_decisions(
+        db, role=role, organization_id=int(org.id), threshold=50.0,
+    )
+    db.refresh(card)
+    assert card.status == "discarded"
+    assert out["discarded"] >= 1
+    # And it is NOT re-created by the emit loop's guard.
+    assert (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.application_id == app.id,
+            AgentDecision.status == "pending",
+        )
+        .count()
+        == 0
+    )
+
+
 def test_supersede_on_full_score_discards_when_cleared(db):
     """A pre-screen reject card is discarded when the full score clears the bar."""
     org, role, app = _seed(db, score=None, threshold=30.0)

@@ -31,6 +31,9 @@ from typing import Any, Optional
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..domains.assessments_runtime.pipeline_service import (
+    is_post_handover_workable_stage,
+)
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.candidate_application_event import CandidateApplicationEvent
@@ -160,6 +163,14 @@ def queue_pre_screen_reject(
     # a later cv_match write that disagrees with it. Placed before the
     # creation/revival logic so both paths are covered.
     if _pre_screen_passed(application):
+        return None
+    # Respect the human-validation signal. A post-handover Workable stage
+    # (phone/technical/final interview, offer, hired) means a recruiter has
+    # already advanced this candidate. The agent prompt forbids rejecting such
+    # a candidate on score alone (system_prompt EXTERNAL PIPELINE STAGE); the
+    # cheap pre-screen reject path runs without that prompt, so it must enforce
+    # the same rule here — never card a reject for someone a human advanced.
+    if is_post_handover_workable_stage(getattr(application, "workable_stage", None)):
         return None
     try:
         key = _idempotency_key(int(application.id))
@@ -609,6 +620,18 @@ def reconcile_pre_screen_reject_decisions(
     )
     discarded = 0
     for decision, app in pending_cards:
+        if is_post_handover_workable_stage(app.workable_stage):
+            # A recruiter advanced them past handover in Workable after this
+            # card was emitted — never ask to reject a human-validated
+            # candidate. Discard so the queue self-heals (the emit loop's
+            # guard then refuses to re-create it).
+            decision.status = "discarded"
+            decision.resolved_at = now
+            decision.resolution_note = (
+                "superseded: candidate advanced past handover in Workable"
+            )[:500]
+            discarded += 1
+            continue
         if _below_threshold(
             app.pre_screen_score_100, app.pre_screen_recommendation, threshold
         ):

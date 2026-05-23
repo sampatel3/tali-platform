@@ -92,6 +92,18 @@ def normalize_pipeline_key(value: str | None) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
+def is_post_handover_workable_stage(value: str | None) -> bool:
+    """True when the Workable stage means a human recruiter has advanced this
+    candidate past Tali's handover point (interview/offer/hired).
+
+    Such a stage is a STRONG POSITIVE signal: a human has already validated the
+    candidate. Per the agent's EXTERNAL PIPELINE STAGE rule, Tali must not
+    reject these on score alone — and the cheap pre-screen reject path must
+    honour the same rule, even though it never runs the agent prompt.
+    """
+    return normalize_pipeline_key(value) in POST_HANDOVER_WORKABLE_STAGES
+
+
 def normalize_pipeline_stage(value: str | None) -> str:
     normalized = normalize_pipeline_key(value)
     if normalized not in PIPELINE_STAGES:
