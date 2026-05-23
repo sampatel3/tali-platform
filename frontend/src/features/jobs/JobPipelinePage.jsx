@@ -618,12 +618,13 @@ const RoleAgentSettingsTab = ({
   const sliderValue = thresholdDraft !== '' ? Number(thresholdDraft) : (thresholdValue ?? 55);
   const thresholdDisplay = Math.max(0, Math.min(100, sliderValue));
   const mustHaves = Array.isArray(role?.must_haves) ? role.must_haves : [];
-  // Budget cap is the role.monthly_usd_budget_cents column on the role
-  // record; live spend comes from /roles/{id}/agent/status. Default cap
-  // ($50) only applies when the role hasn't set one yet.
+  // Read the cap from the role record (the field PATCH writes, refreshed on
+  // save) first; agent/status only echoes it on a 30s poll, so preferring
+  // the poll makes a fresh save look like it didn't take. Spend stays live
+  // from agent/status. Default ($50) applies only when neither is set.
   const monthlyBudgetCents = Number(
-    agentStatus?.monthly_budget_cents
-    ?? role?.monthly_usd_budget_cents
+    role?.monthly_usd_budget_cents
+    ?? agentStatus?.monthly_budget_cents
     ?? 5000
   );
   const monthlySpentCents = Number(agentStatus?.monthly_spent_cents ?? 0);
@@ -670,6 +671,8 @@ const RoleAgentSettingsTab = ({
     try {
       await onSaveBudget(parsed);
       setBudgetEditing(false);
+    } catch {
+      // onSaveBudget already toasted; keep the editor open for a retry.
     } finally {
       setBudgetSaving(false);
     }
@@ -1172,15 +1175,23 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // the same controls inline. See the AgentBar onPause handler below.
   const [savingRoleSheet, setSavingRoleSheet] = useState(false);
   const [addingCandidate, setAddingCandidate] = useState(false);
+  // Only the most recently started loadRoleWorkspace may write state, so a
+  // slow earlier load can't clobber fresher state (e.g. revert an optimistic
+  // agent toggle to OFF). loadedRoleIdRef marks the last fully-loaded role so
+  // a warm revalidate skips the (stale) cache repaint.
+  const loadSeqRef = useRef(0);
+  const loadedRoleIdRef = useRef(null);
 
   const loadRoleWorkspace = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
-    // Stale-while-revalidate: if we've loaded this role before, paint the
-    // cached workspace immediately and revalidate silently in the background.
-    // Only show the full-page spinner on a true cold load. This makes
-    // navigating away and back feel instant instead of re-spinning.
+    const seq = (loadSeqRef.current += 1);
+    // Stale-while-revalidate on a cold load (first visit to this role id):
+    // paint cache, revalidate silently. A warm refresh (revalidate after a
+    // mutation like the agent toggle or budget save) must NOT repaint from
+    // cache — it lags the optimistic state and would flip it back.
     const cacheKey = `role-workspace:${numericRoleId}`;
-    const cached = readCache(cacheKey);
+    const isColdForRole = loadedRoleIdRef.current !== numericRoleId;
+    const cached = isColdForRole ? readCache(cacheKey) : null;
     if (cached?.data) {
       const c = cached.data;
       setRole(c.role || null);
@@ -1188,7 +1199,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setRoleApplications(Array.isArray(c.roleApplications) ? c.roleApplications : []);
       setWorkspaceCriteria(Array.isArray(c.workspaceCriteria) ? c.workspaceCriteria : []);
       setLoading(false);
-    } else {
+      // Painted data for this role — later revalidates are warm (no repaint).
+      loadedRoleIdRef.current = numericRoleId;
+    } else if (isColdForRole) {
       setLoading(true);
     }
     try {
@@ -1212,6 +1225,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         Promise.resolve(apiClient.organizations?.listCriteria?.() ?? { data: [] })
           .catch(() => ({ data: [] })),
       ]);
+      // A newer load started while we were in flight — drop this stale result.
+      if (seq !== loadSeqRef.current) return;
+      loadedRoleIdRef.current = numericRoleId;
       const nextRole = roleRes?.data || null;
       setRole(nextRole);
       setWorkspaceCriteria(Array.isArray(orgCriteriaRes?.data) ? orgCriteriaRes.data : []);
@@ -1252,8 +1268,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     } catch (error) {
       // Don't wipe a cached paint if a background revalidate fails — only
       // surface a hard failure when there was nothing to show in the first
-      // place (cold load).
-      if (!cached?.data) {
+      // place (cold load with no cache).
+      if (isColdForRole && !cached?.data) {
         setRole(null);
         setRoleTasks([]);
         setRoleApplications([]);
@@ -1352,9 +1368,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // role.monthly_usd_budget_cents column.
   const pipelineStats = useMemo(() => {
     const monthlySpentCents = Number(agentStatus?.monthly_spent_cents || 0);
+    // Cap from the role record (refreshed on save); agent/status only echoes
+    // it on a 30s poll and lags a fresh edit.
     const monthlyBudgetCents = Number(
-      agentStatus?.monthly_budget_cents
-      ?? role?.monthly_usd_budget_cents
+      role?.monthly_usd_budget_cents
+      ?? agentStatus?.monthly_budget_cents
       ?? 0
     );
     const spentDollars = Math.round(monthlySpentCents / 100);
@@ -2193,11 +2211,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               if (!Number.isFinite(numericRoleId)) return;
               const cents = Math.max(0, Math.round(Number(dollars) * 100));
               try {
-                await rolesApi.update(numericRoleId, { monthly_usd_budget_cents: cents });
+                const res = await rolesApi.update(numericRoleId, { monthly_usd_budget_cents: cents });
+                // Apply the committed value at once so the cap reflects the
+                // save instead of blocking the spinner on the full workspace
+                // reload; revalidate the rest in the background.
+                const updated = res?.data || { monthly_usd_budget_cents: cents };
+                setRole((cur) => (cur ? { ...cur, ...updated } : cur));
                 showToast('Monthly budget updated.', 'success');
-                await loadRoleWorkspace();
+                void loadRoleWorkspace();
               } catch (error) {
                 showToast(getErrorMessage(error, 'Failed to update budget.'), 'error');
+                throw error;
               }
             }}
             onAutonomyChange={async (key, value) => {

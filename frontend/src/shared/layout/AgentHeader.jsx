@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Pause, Play, Settings as SettingsIcon, Sparkles } from 'lucide-react';
 
 import { useAgentStatus } from './AgentBar';
@@ -45,9 +45,22 @@ const DEFAULT_BUDGET_USD = 50;
 // When no `onActivate` is wired (e.g. Jobs list panel where activation is
 // per-role, not org-wide), we render only the guidance copy so the panel
 // reads as informational, not an unusable input.
-const AgentOffActivator = ({ onActivate, disabledReason }) => {
-  const [budget, setBudget] = useState(String(DEFAULT_BUDGET_USD));
+const AgentOffActivator = ({ onActivate, disabledReason, currentBudgetCents }) => {
+  // Seed from the role's already-saved cap so activating never silently
+  // overwrites it with the $50 default; fall back to the default only when
+  // the role has no cap yet.
+  const seededDollars = Number(currentBudgetCents) > 0
+    ? String(Math.round(Number(currentBudgetCents) / 100))
+    : String(DEFAULT_BUDGET_USD);
+  const [budget, setBudget] = useState(seededDollars);
+  const [touched, setTouched] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
+
+  // Keep mirroring the saved cap (e.g. one edited in the settings tab while
+  // this panel is mounted) until the recruiter edits the field themselves.
+  useEffect(() => {
+    if (!touched) setBudget(seededDollars);
+  }, [seededDollars, touched]);
 
   if (!onActivate) {
     return (
@@ -79,7 +92,7 @@ const AgentOffActivator = ({ onActivate, disabledReason }) => {
           min={1}
           step={5}
           value={budget}
-          onChange={(event) => setBudget(event.target.value)}
+          onChange={(event) => { setTouched(true); setBudget(event.target.value); }}
           aria-label="Role monthly budget in USD"
           inputMode="numeric"
         />
@@ -180,6 +193,7 @@ const AgentPanel = ({
           <AgentOffActivator
             onActivate={onActivate}
             disabledReason={offStateMessage}
+            currentBudgetCents={budgetCents}
           />
         ) : (
           <div className="agent-actions">
