@@ -682,7 +682,7 @@ describe('CandidateDetailPage', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Role fit/i }));
 
     await waitFor(() => {
-      expect(screen.getAllByText('Gaps').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Skill gaps').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Kubernetes').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Terraform').length).toBeGreaterThanOrEqual(1);
     });

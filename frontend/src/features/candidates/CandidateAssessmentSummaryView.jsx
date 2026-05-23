@@ -2,26 +2,16 @@ import React from 'react';
 
 import { Badge, Button, Panel, cx } from '../../shared/ui/TaaliPrimitives';
 import { CandidateReportView } from './CandidateReportView';
+import {
+  ConcernsCallout,
+  RequirementCoverageStrip,
+  RequirementList,
+  SkillChipGroups,
+} from './RoleFitEvidenceSections';
 
 const uniqueItems = (items, limit = 4) => Array.from(
   new Set((Array.isArray(items) ? items : []).filter(Boolean))
 ).slice(0, limit);
-
-const buildRoleFitStrengths = (roleFitModel) => uniqueItems([
-  ...(roleFitModel?.requirementsAssessment || [])
-    .filter((item) => item.status === 'met')
-    .map((item) => item.requirement),
-  ...(roleFitModel?.experienceHighlights || []),
-  ...(roleFitModel?.rationaleBullets || []),
-], 4);
-
-const buildRoleFitGaps = (roleFitModel) => uniqueItems([
-  roleFitModel?.firstRequirementGap?.requirement
-    ? `Gap vs recruiter requirement: ${roleFitModel.firstRequirementGap.requirement}`
-    : null,
-  ...(roleFitModel?.concerns || []),
-  ...(roleFitModel?.missingSkills || []).map((skill) => `Skill gap: ${skill}`),
-], 4);
 
 const SignalList = ({ title, items, emptyLabel, tone = 'default' }) => (
   <div>
@@ -44,21 +34,6 @@ const SignalList = ({ title, items, emptyLabel, tone = 'default' }) => (
   </div>
 );
 
-const SkillChips = ({ title, items, badgeVariant = 'success', emptyLabel }) => (
-  <div>
-    <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{title}</div>
-    {items.length ? (
-      <div className="mt-3 flex flex-wrap gap-2">
-        {items.map((item) => (
-          <Badge key={`${title}-${item}`} variant={badgeVariant}>{item}</Badge>
-        ))}
-      </div>
-    ) : (
-      <p className="mt-3 text-sm text-[var(--taali-muted)]">{emptyLabel}</p>
-    )}
-  </div>
-);
-
 const formatDateTime = (value) => {
   if (!value) return 'Not linked yet';
   const parsed = new Date(value);
@@ -67,10 +42,14 @@ const formatDateTime = (value) => {
 
 const RoleFitSummaryPanel = ({ reportModel }) => {
   const roleFitModel = reportModel?.roleFitModel || {};
-  const strengths = buildRoleFitStrengths(roleFitModel);
-  const gaps = buildRoleFitGaps(roleFitModel);
-  const matchingSkills = uniqueItems(roleFitModel.matchingSkills, 6);
-  const missingSkills = uniqueItems(roleFitModel.missingSkills, 6);
+  const requirements = roleFitModel.requirementsAssessment || [];
+  const coverage = roleFitModel.requirementsCoverage || {};
+  const concerns = roleFitModel.concerns || [];
+  const hasCoverage = (
+    (Number(coverage.met) || 0)
+    + (Number(coverage.partially_met) || 0)
+    + (Number(coverage.missing) || 0)
+  ) > 0;
 
   return (
     <Panel className="p-4">
@@ -88,34 +67,33 @@ const RoleFitSummaryPanel = ({ reportModel }) => {
         ) : null}
       </div>
 
-      <div className="mt-5 grid gap-5 lg:grid-cols-2">
-        <SignalList
-          title="Main strengths"
-          items={strengths}
-          emptyLabel="No strong role-fit positives have been surfaced yet."
-        />
-        <SignalList
-          title="Main gaps"
-          items={gaps}
-          emptyLabel="No major role-fit gaps were surfaced."
-          tone="warning"
+      {hasCoverage ? (
+        <div className="mt-4">
+          <RequirementCoverageStrip coverage={coverage} />
+        </div>
+      ) : null}
+
+      {requirements.length ? (
+        <div className="mt-3">
+          <RequirementList requirements={requirements} limit={4} />
+        </div>
+      ) : (
+        <p className="mt-3 text-sm text-[var(--taali-muted)]">No recruiter requirements have been assessed yet.</p>
+      )}
+
+      <div className="mt-4">
+        <SkillChipGroups
+          matchingSkills={roleFitModel.matchingSkills || []}
+          missingSkills={roleFitModel.missingSkills || []}
+          limit={6}
         />
       </div>
 
-      <div className="mt-5 grid gap-5 lg:grid-cols-2">
-        <SkillChips
-          title="Matching skills"
-          items={matchingSkills}
-          badgeVariant="success"
-          emptyLabel="No matching skills have been extracted yet."
-        />
-        <SkillChips
-          title="Skills gaps"
-          items={missingSkills}
-          badgeVariant="warning"
-          emptyLabel="No explicit skills gaps were extracted."
-        />
-      </div>
+      {concerns.length ? (
+        <div className="mt-4">
+          <ConcernsCallout concerns={concerns} limit={3} />
+        </div>
+      ) : null}
     </Panel>
   );
 };
