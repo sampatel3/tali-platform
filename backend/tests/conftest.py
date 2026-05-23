@@ -89,6 +89,29 @@ try:
 except Exception:  # pragma: no cover — model import shouldn't fail
     pass
 
+
+# Same BigInteger-PK workaround for agent_decisions. Decisions are created
+# from many code paths (the pre-screen emitter, reconcile, the role PATCH
+# reconcile, approve/override), so register the listener globally here
+# rather than in a single test module — otherwise tests that create
+# AgentDecisions only pass when that one module happens to be imported in
+# the same pytest session (an import-order coupling).
+_AGENT_DECISION_PK_COUNTER = {"n": 0}
+
+
+def _assign_agent_decision_pk(mapper, connection, target):  # pragma: no cover
+    if getattr(target, "id", None) is None:
+        _AGENT_DECISION_PK_COUNTER["n"] += 1
+        target.id = _AGENT_DECISION_PK_COUNTER["n"]
+
+
+try:
+    from app.models.agent_decision import AgentDecision as _AgentDecision
+
+    event.listen(_AgentDecision, "before_insert", _assign_agent_decision_pk)
+except Exception:  # pragma: no cover — model import shouldn't fail
+    pass
+
 def override_get_db():
     db = TestingSessionLocal()
     try:

@@ -4,8 +4,6 @@ backfill that catches up historical stranded apps.
 """
 from __future__ import annotations
 
-from sqlalchemy import event
-
 from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
@@ -17,19 +15,9 @@ from app.services.pre_screen_decision_emitter import (
     reconcile_pre_screen_reject_decisions,
 )
 
-
-# SQLite BigInteger PK workaround. ``AgentDecision.id`` is BigInteger, and
-# SQLite only auto-increments INTEGER PRIMARY KEY columns (not BIGINT).
-# Production uses Postgres where this isn't a problem.
-_BIG_PK = {"agent_decisions": 0}
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover — SQLA hook
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK:
-        _BIG_PK[table] += 1
-        target.id = _BIG_PK[table]
-
-event.listen(AgentDecision, "before_insert", _assign_big_pk)
+# The SQLite BigInteger-PK workaround for AgentDecision is registered
+# globally in conftest.py (alongside the claude_call_log one), so this file
+# no longer needs a local listener and tests work regardless of import order.
 
 
 def _seed(db, *, score: float | None = 35.0, threshold: float | None = 50.0, outcome: str = "open"):
