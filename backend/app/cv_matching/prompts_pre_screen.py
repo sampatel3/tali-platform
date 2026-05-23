@@ -118,6 +118,51 @@ def build_pre_screen_prompt(
     )
 
 
+def build_pre_screen_system(
+    jd_text: str,
+    requirements: "list[RequirementInput] | None" = None,
+) -> list[dict]:
+    """Cacheable system blocks for the pre-screen call.
+
+    Anthropic caches most reliably when the stable prefix lives in the
+    ``system`` parameter as a cache_control'd block, rather than as the
+    first block of a user message. The previous shape (cache_control on
+    a user-message text block) produced ZERO cache hits in production
+    despite a byte-identical >2K-token static block — moving it to the
+    system param is the canonical fix.
+
+    Block = the pre-screener instructions + JD + must-haves, identical
+    for every candidate in a role batch. The per-candidate CV stays in
+    the user message (uncached).
+    """
+    static_block = _PRE_SCREEN_STATIC_TEMPLATE.format(
+        prompt_version=PRE_SCREEN_PROMPT_VERSION,
+        jd_text=(jd_text or "").strip(),
+        must_haves_block=render_must_haves_block(requirements),
+    )
+    return [
+        {
+            "type": "text",
+            "text": static_block,
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        }
+    ]
+
+
+def build_pre_screen_user_messages(
+    cv_text: str,
+    workable_context: str | None = None,
+) -> list[dict]:
+    """Per-candidate user message — just the CV + Workable metadata. The
+    stable instructions/JD live in the cached system blocks (see
+    ``build_pre_screen_system``)."""
+    cv_block = _PRE_SCREEN_CV_BLOCK_TEMPLATE.format(
+        cv_text=(cv_text or "").strip(),
+        workable_context_block=_render_workable_context_block(workable_context),
+    )
+    return [{"role": "user", "content": cv_block}]
+
+
 def build_pre_screen_messages(
     cv_text: str,
     jd_text: str,
