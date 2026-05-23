@@ -4690,11 +4690,23 @@ html[data-theme="dark"] {
   padding-top: 4px;
 }
 .ctc-link {
+  display: inline-flex;
+  align-items: center;
   font-size: 12px;
-  color: var(--mute);
+  font-weight: 500;
+  color: var(--purple);
   text-decoration: none;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--purple-soft);
+  border: 1px solid color-mix(in oklab, var(--purple) 22%, transparent);
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
-.ctc-link:hover { color: var(--ink); }
+.ctc-link:hover {
+  color: var(--purple);
+  background: color-mix(in oklab, var(--purple) 14%, var(--purple-soft));
+  border-color: color-mix(in oklab, var(--purple) 38%, transparent);
+}
 .ctc-grow { flex: 1; }
 
 .ctc-confirm-reject {
