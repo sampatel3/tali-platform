@@ -1475,7 +1475,11 @@ class WorkableSyncService:
         role.workable_job_id = job_id or role.workable_job_id
         role.workable_job_data = sanitize_json_for_storage({**job, "details": details} if details else job)
         role.name = title
-        # Build one formatted spec from full API data for display and attachment
+        # Build one formatted spec from full API data for display and attachment.
+        # Capture the prior spec FIRST so we only re-do the expensive, churn-
+        # inducing side effects (attachment re-upload, derived-criteria
+        # re-derive) when the spec actually changed — see ``spec_changed`` below.
+        prev_job_spec = (role.job_spec_text or "")
         formatted_spec = _format_job_spec_from_api(role.workable_job_data or {})
         if formatted_spec:
             safe_spec = sanitize_text_for_storage(formatted_spec)
@@ -1488,9 +1492,15 @@ class WorkableSyncService:
             if stripped:
                 role.job_spec_text = safe_desc
         db.flush()
-        # Save job spec as an attachment (file) for download and consistent display.
-        # Goes straight to object storage — no local hop, no fallback.
-        if (role.job_spec_text or "").strip():
+        spec_changed = (role.job_spec_text or "") != prev_job_spec
+        # Save the job-spec attachment + re-derive criteria ONLY when the spec
+        # actually changed (or the role was just created). ``sync_derived_criteria``
+        # HARD-DELETES and re-inserts the derived criteria with fresh row IDs;
+        # the decision-staleness fingerprint includes those IDs, so re-deriving
+        # an UNCHANGED spec on every sync tick would spuriously invalidate every
+        # pending decision for the role (and needlessly re-upload the file +
+        # restamp job_spec_uploaded_at). Gating on real change stops that churn.
+        if (created or spec_changed) and (role.job_spec_text or "").strip():
             try:
                 spec_content = (role.job_spec_text or "").strip().encode("utf-8")
                 spec_filename = sanitize_text_for_storage(
@@ -1517,7 +1527,7 @@ class WorkableSyncService:
             from ....services.role_criteria_service import sync_all_criteria
 
             sync_all_criteria(db, role)
-        else:
+        elif spec_changed:
             from ....services.role_criteria_service import sync_derived_criteria
 
             sync_derived_criteria(db, role)

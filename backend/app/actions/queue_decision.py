@@ -66,7 +66,7 @@ def _compute_dedup_key(
     import hashlib
     try:
         from ..models.candidate_application import CandidateApplication
-        from ..models.role_criterion import RoleCriterion
+        from ..services.decision_staleness import criteria_content_fingerprint
 
         app = (
             db.query(CandidateApplication)
@@ -76,20 +76,11 @@ def _compute_dedup_key(
         if app is None:
             return None
 
-        criteria_rows = (
-            db.query(RoleCriterion)
-            .filter(
-                RoleCriterion.role_id == app.role_id,
-                RoleCriterion.deleted_at.is_(None),
-            )
-            .order_by(RoleCriterion.id)
-            .all()
-        )
-        criteria_signature = "|".join(
-            f"{c.id}:{(c.text or '').strip()}:{c.bucket or ''}:{c.weight or 0}"
-            for c in criteria_rows
-        )
-        criteria_fp = hashlib.sha256(criteria_signature.encode("utf-8")).hexdigest()
+        # Content-only criteria fingerprint (shared with the staleness
+        # recompute). Excludes volatile row ids so re-deriving identical
+        # criteria doesn't churn the dedup key. None => no criteria; "" keeps
+        # the composite stable.
+        criteria_fp = criteria_content_fingerprint(db, int(app.role_id)) or ""
 
         cv_text = (app.cv_text or "").strip()
         cv_fp = (
@@ -144,8 +135,8 @@ def _capture_input_fingerprint(
     try:
         from ..models.candidate_application import CandidateApplication
         from ..models.role import Role
-        from ..models.role_criterion import RoleCriterion
         from ..models.role_feedback_note import RoleFeedbackNote
+        from ..services.decision_staleness import criteria_content_fingerprint
 
         app = (
             db.query(CandidateApplication)
@@ -156,23 +147,12 @@ def _capture_input_fingerprint(
         if app is None or role is None:
             return ({}, None, None)
 
-        # Criteria fingerprint: hash the stable identity of every active
-        # criterion. Anything that changes the agent's evaluation
-        # (text, bucket, weight) changes the hash; ordering doesn't.
-        criteria_rows = (
-            db.query(RoleCriterion)
-            .filter(
-                RoleCriterion.role_id == role_id,
-                RoleCriterion.deleted_at.is_(None),
-            )
-            .order_by(RoleCriterion.id)
-            .all()
-        )
-        criteria_signature = "|".join(
-            f"{c.id}:{(c.text or '').strip()}:{c.bucket or ''}:{c.weight or 0}"
-            for c in criteria_rows
-        )
-        criteria_fp = hashlib.sha256(criteria_signature.encode("utf-8")).hexdigest()
+        # Criteria fingerprint: content-only hash of every active criterion
+        # (text/bucket/weight/must_have), shared verbatim with the staleness
+        # recompute so queue-time capture and read-time drift can never
+        # diverge. Excludes volatile row ids — re-deriving identical criteria
+        # is a staleness no-op. None when the role has no criteria.
+        criteria_fp = criteria_content_fingerprint(db, int(role_id))
 
         cv_text = (app.cv_text or "").strip()
         cv_fp = (
