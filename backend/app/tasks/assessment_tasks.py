@@ -216,19 +216,21 @@ def send_assessment_expiry_reminders():
 # Workable for a given org at a time. If a task can't get the lock it
 # skips that fire — the next Beat tick (5-15 min away) will retry.
 _WORKABLE_ORG_MUTEX_KEY_PREFIX = "celery:lock:workable_org_sync"
-# 30-min ceiling for the SYNC tasks. Jobs / starred / agent runs typically
-# take seconds to a few minutes; nightly runs may take longer but should still
-# finish well under 30 min thanks to the CV-skip cache. If a worker actually
-# hangs the lock auto-releases after the TTL and the next task can run.
+# Fallback TTL for a mutex acquired WITHOUT a heartbeat. No live caller uses
+# this path: every sync task and the op path now acquire with ``heartbeat=True``
+# (short TTL + renew-while-alive) so a worker SIGKILLed mid-run frees the lock
+# in ~2 min instead of leaking it for the full TTL and blocking every Workable
+# write for the org until then. Do NOT acquire the Workable mutex without a
+# heartbeat.
 _WORKABLE_ORG_MUTEX_TTL_SECONDS = 1800
 
-# Op-path (``run_workable_op_task``) acquires with this SHORT TTL plus a
-# heartbeat thread that re-extends it while the holder is alive. A worker
-# killed mid-write (deploy SIGKILL) takes the heartbeat thread down with it,
-# so the lock auto-expires in ~2 min instead of leaking for the 30-min static
-# TTL above and blocking every Workable write for the org until then. The
-# interval is a third of the TTL so a single missed beat never expires a live
-# lock.
+# The op path (``run_workable_op_task``) AND all four sync tasks acquire with
+# this SHORT TTL plus a heartbeat thread that re-extends it while the holder is
+# alive. A worker killed mid-run (deploy SIGKILL) takes the heartbeat thread
+# down with it, so the lock auto-expires in ~2 min instead of leaking for the
+# full static TTL above and blocking every Workable write for the org until
+# then. The interval is a third of the TTL so a single missed beat never
+# expires a live lock.
 _WORKABLE_OP_MUTEX_TTL_SECONDS = 120
 _WORKABLE_OP_MUTEX_HEARTBEAT_SECONDS = 40
 
@@ -371,7 +373,9 @@ def sync_starred_roles():
             shortcodes = by_org.get(int(org.id)) or []
             if not shortcodes:
                 continue
-            lock_handle = _acquire_workable_org_mutex(int(org.id), source="starred")
+            lock_handle = _acquire_workable_org_mutex(
+                int(org.id), source="starred", heartbeat=True
+            )
             if lock_handle is None:
                 # Another sync task is currently talking to Workable for
                 # this org — skip this fire to avoid 429 races.
@@ -467,7 +471,9 @@ def sync_workable_jobs():
             .all()
         )
         for org in orgs:
-            lock_handle = _acquire_workable_org_mutex(int(org.id), source="jobs")
+            lock_handle = _acquire_workable_org_mutex(
+                int(org.id), source="jobs", heartbeat=True
+            )
             if lock_handle is None:
                 # Another task type is currently hitting Workable for
                 # this org. Skip — next Beat tick will retry.
@@ -551,7 +557,9 @@ def sync_agent_mode_roles():
             shortcodes = by_org.get(int(org.id)) or []
             if not shortcodes:
                 continue
-            lock_handle = _acquire_workable_org_mutex(int(org.id), source="agent")
+            lock_handle = _acquire_workable_org_mutex(
+                int(org.id), source="agent", heartbeat=True
+            )
             if lock_handle is None:
                 skipped += 1
                 continue
@@ -645,7 +653,9 @@ def sync_workable_daily_candidates():
             shortcodes = by_org.get(int(org.id)) or []
             if not shortcodes:
                 continue
-            lock_handle = _acquire_workable_org_mutex(int(org.id), source="nightly")
+            lock_handle = _acquire_workable_org_mutex(
+                int(org.id), source="nightly", heartbeat=True
+            )
             if lock_handle is None:
                 skipped += 1
                 continue

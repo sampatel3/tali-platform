@@ -21,8 +21,10 @@ _DISPATCH_MAX_RETRIES = 12
 # Lock-wait has its OWN, much larger budget — a large approve batch holds the
 # per-org mutex for its WHOLE duration (minutes), so a concurrently-submitted
 # batch must wait that out rather than time out after ~70s and fail. ~60
-# attempts × 5-15s jitter ≈ 10 min; still well under the 30-min mutex TTL so a
-# genuinely leaked lock is given up on. Re-enqueued as fresh tasks (not
+# attempts × 5-15s jitter ≈ 10 min — comfortably longer than the ~2-min
+# heartbeat TTL a holder leaks for on a worker kill, so a waiting batch
+# reliably re-acquires once a leak self-clears, yet still bounded so it gives
+# up if something is genuinely wedged. Re-enqueued as fresh tasks (not
 # self.retry) so this never eats the api-error retry budget.
 _LOCK_WAIT_MAX_ATTEMPTS = 60
 
