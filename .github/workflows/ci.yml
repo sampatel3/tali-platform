@@ -34,6 +34,12 @@ jobs:
         # bad indentation, and broken imports of stdlib/typing names.
         # Does not import third-party deps, so doesn't need pip install.
         run: python -m compileall -q app
+      - name: Alembic single-head gate
+        # Fails fast when two migrations branch from the same parent and
+        # leave main with multiple heads — which makes `alembic upgrade
+        # head` (run on boot) crash-loop the deploy. Stdlib-only, so it
+        # needs no pip install. Fix = add a merge revision.
+        run: python scripts/check_alembic_single_head.py
 
   frontend:
     runs-on: ubuntu-latest

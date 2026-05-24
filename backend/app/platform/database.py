@@ -43,8 +43,16 @@ def _async_database_url() -> str:
 _async_url = _async_database_url()
 _async_engine_kw: dict = {}
 if "sqlite" in _async_url:
-    # Timeout to avoid "database is locked" when sync+async share same file (e.g. tests)
-    _async_engine_kw = {"connect_args": {"timeout": 30}}
+    # Tests only (prod is Postgres). NullPool means every async request
+    # opens a fresh connection to the shared in-memory DB instead of
+    # reusing a pooled one. Pooled connections retain a stale snapshot
+    # across the per-test create_all/drop_all cycle, which intermittently
+    # broke FastAPI-Users' user lookup (→ spurious 401s) when certain
+    # tests ran together. The sync test engine already uses NullPool for
+    # the same reason. Timeout avoids "database is locked" with WAL.
+    from sqlalchemy.pool import NullPool
+
+    _async_engine_kw = {"connect_args": {"timeout": 30}, "poolclass": NullPool}
 else:
     _async_engine_kw = {"pool_pre_ping": True, "pool_size": 10, "max_overflow": 20}
 
