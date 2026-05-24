@@ -382,7 +382,15 @@ def list_agent_decisions(
     if role_id is not None:
         query = query.filter(AgentDecision.role_id == int(role_id))
     if status != "all":
-        query = query.filter(AgentDecision.status == status)
+        if status == "pending":
+            # The Hub queue shows actionable (pending) rows AND in-flight
+            # (processing) ones — the latter rendered greyed/at-bottom so a
+            # recruiter can't double-approve while the background batch runs.
+            query = query.filter(
+                AgentDecision.status.in_(("pending", "processing"))
+            )
+        else:
+            query = query.filter(AgentDecision.status == status)
     # Snooze: when listing pending, hide rows whose snooze hasn't elapsed.
     if status == "pending":
         now = datetime.now(timezone.utc)
@@ -521,18 +529,21 @@ def approve(
         except Exception:  # pragma: no cover — defensive
             pass
 
-    side_effects: dict = {}
     try:
-        decision = approve_decision_action.run(
+        # Optimistic + async: flip to 'processing' (stays in the queue, greyed)
+        # and hand the Workable writeback to the background batch task,
+        # serialized per org. Returns immediately; the task commits the local
+        # change only after Workable confirms, and on failure returns the
+        # decision to the queue. (In tests Celery runs eagerly, so the task has
+        # already finished and the refresh below shows the final status.)
+        decision = approve_decision_action.enqueue_one(
             db,
             Actor.recruiter(current_user),
             organization_id=current_user.organization_id,
             decision_id=decision_id,
             note=body.note,
             workable_target_stage=body.workable_target_stage,
-            collect_side_effects=side_effects,
         )
-        db.commit()
         db.refresh(decision)
     except HTTPException:
         db.rollback()
@@ -540,14 +551,6 @@ def approve(
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"approve failed: {exc}")
-
-    # Slow best-effort side effects (Workable writeback + graph episode) run
-    # off the request path so the recruiter's click returns immediately.
-    _enqueue_decision_side_effects(
-        decision.id,
-        workable_target_stage=body.workable_target_stage,
-        reject_notify=bool(side_effects.get("reject_notify", False)),
-    )
 
     candidate = (
         db.query(Candidate)
@@ -576,9 +579,12 @@ def override(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    side_effects: dict = {}
     try:
-        decision = override_decision_action.run(
+        # Optimistic + async: flip to 'processing' and run the override via the
+        # serialized Workable runner. State-change actions (reject/advance/
+        # skip-advance) are gated on Workable and re-queue on failure — no more
+        # silent 429 drops. (Eager Celery in tests finishes inline.)
+        decision = override_decision_action.enqueue(
             db,
             Actor.recruiter(current_user),
             organization_id=current_user.organization_id,
@@ -586,9 +592,7 @@ def override(
             override_action=body.override_action,
             note=body.note,
             workable_target_stage=body.workable_target_stage,
-            collect_side_effects=side_effects,
         )
-        db.commit()
         db.refresh(decision)
     except HTTPException:
         db.rollback()
@@ -596,13 +600,6 @@ def override(
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"override failed: {exc}")
-
-    # Slow best-effort side effects run off the request path (see approve).
-    _enqueue_decision_side_effects(
-        decision.id,
-        workable_target_stage=body.workable_target_stage,
-        reject_notify=bool(side_effects.get("reject_notify", False)),
-    )
 
     candidate = (
         db.query(Candidate)
@@ -809,7 +806,13 @@ class BulkApproveFailure(BaseModel):
 
 class BulkApproveResult(BaseModel):
     requested: int
-    approved: int
+    # Number accepted for background processing (flipped to 'processing'). The
+    # whole batch becomes ONE background job (job_run_id) that drains the
+    # Workable writebacks sequentially per org; a decision whose writeback
+    # fails is returned to the queue. Track progress via Settings → Background
+    # jobs (GET /background-jobs/runs).
+    accepted: int
+    job_run_id: Optional[int] = None
     failures: list[BulkApproveFailure] = Field(default_factory=list)
 
 
@@ -819,51 +822,34 @@ def bulk_approve(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Approve a list of pending decisions one-by-one.
+    """Accept a list of pending decisions as ONE background approval job.
 
-    Org-scoped: the action layer rejects decisions outside the user's
-    organization. Each decision is approved in its own try/except so a
-    single bad row (already-resolved, missing application, etc.) doesn't
-    halt the batch — callers get a per-failure summary.
+    Each valid decision is flipped to ``processing`` (so the Hub shows it
+    in-flight rather than letting the recruiter double-approve), a single
+    ``BackgroundJobRun`` is recorded for Settings, and one batch task drains
+    the Workable writebacks sequentially per org so a 100-decision batch can't
+    breach the rate limit. Invalid rows (already-resolved, missing) are
+    reported in ``failures`` without halting the batch; a decision whose
+    Workable writeback ultimately fails is returned to the queue by the task.
     """
     requested = list(dict.fromkeys(int(x) for x in body.decision_ids))  # de-dupe, preserve order
     note = (body.note or "").strip() or None
-    approved = 0
-    failures: list[BulkApproveFailure] = []
-    actor = Actor.recruiter(current_user)
-    for decision_id in requested:
-        side_effects: dict = {}
-        try:
-            approve_decision_action.run(
-                db,
-                actor,
-                organization_id=current_user.organization_id,
-                decision_id=decision_id,
-                note=note,
-                collect_side_effects=side_effects,
-            )
-            db.commit()
-            approved += 1
-            _enqueue_decision_side_effects(
-                decision_id,
-                workable_target_stage=None,
-                reject_notify=bool(side_effects.get("reject_notify", False)),
-            )
-        except HTTPException as exc:
-            db.rollback()
-            failures.append(
-                BulkApproveFailure(
-                    decision_id=decision_id,
-                    error=str(exc.detail) if exc.detail else f"HTTP {exc.status_code}",
-                )
-            )
-        except Exception as exc:  # noqa: BLE001 — record + continue, never halt the batch
-            db.rollback()
-            failures.append(
-                BulkApproveFailure(decision_id=decision_id, error=str(exc)[:300])
-            )
+    result = approve_decision_action.enqueue_batch(
+        db,
+        Actor.recruiter(current_user),
+        organization_id=current_user.organization_id,
+        decision_ids=requested,
+        note=note,
+    )
+    failures = [
+        BulkApproveFailure(decision_id=f["decision_id"], error=f["error"])
+        for f in result["failures"]
+    ]
     return BulkApproveResult(
-        requested=len(requested), approved=approved, failures=failures
+        requested=len(requested),
+        accepted=len(result["accepted"]),
+        job_run_id=result["job_run_id"],
+        failures=failures,
     )
 
 

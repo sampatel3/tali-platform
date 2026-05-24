@@ -26,6 +26,7 @@ from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.role import Role
+from ..services.workable_actions_service import WorkableWritebackError
 from ._workable_decision_summary import (
     post_decision_summary_to_workable,
     try_workable_advance,
@@ -78,7 +79,14 @@ def apply_decision_side_effects(
     workable_target_stage: Optional[str] = None,
     reject_notify: bool = True,
 ) -> None:
-    """Run all best-effort side effects for a resolved decision. Never raises.
+    """Run all best-effort side effects for a resolved decision.
+
+    Best-effort and never raises EXCEPT under ``strict_workable_writes`` (the
+    decision-batch path), where a failed critical Workable writeback (stage
+    move / disqualify) raises ``WorkableWritebackError`` so the batch task can
+    abort + re-queue the decision instead of committing a Tali-only change.
+    The activity note (step 2) and graph episode (step 3) stay best-effort
+    regardless.
 
     ``disposition`` is ``"approved"`` or ``"overridden"``. ``reject_notify``
     is the caller's "this resolution is what freshly rejected the candidate"
@@ -106,6 +114,9 @@ def apply_decision_side_effects(
                     reason=(note or "").strip()
                     or "Advanced by recruiter (decision resolution)",
                 )
+            except WorkableWritebackError:
+                # strict (batch) path — propagate so the batch can re-queue.
+                raise
             except Exception:  # pragma: no cover — defensive
                 logger.warning(
                     "workable advance raised for decision_id=%s",
@@ -116,6 +127,9 @@ def apply_decision_side_effects(
                 from .reject_application import notify_rejection
 
                 notify_rejection(db, app=app, actor=actor, reason=note)
+            except WorkableWritebackError:
+                # strict (batch) path — propagate so the batch can re-queue.
+                raise
             except Exception:  # pragma: no cover — defensive
                 logger.warning(
                     "rejection notify raised for decision_id=%s",

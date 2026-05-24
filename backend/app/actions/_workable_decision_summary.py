@@ -96,7 +96,10 @@ def try_workable_advance(
         return False
     assert org is not None  # narrowed by _workable_writeback_ready
 
-    from ..services.workable_actions_service import move_candidate_in_workable
+    from ..services.workable_actions_service import (
+        WorkableWritebackError,
+        move_candidate_in_workable,
+    )
 
     try:
         result = move_candidate_in_workable(
@@ -105,6 +108,10 @@ def try_workable_advance(
             target_stage=target,
             role=role,
         )
+    except WorkableWritebackError:
+        # strict mode (decision-dispatch path): propagate so the dispatch task
+        # aborts + re-queues rather than committing a Tali-only stage change.
+        raise
     except Exception:  # pragma: no cover — defensive
         logger.exception(
             "workable advance raised unexpectedly (application_id=%s)", app.id

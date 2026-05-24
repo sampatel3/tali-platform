@@ -539,6 +539,37 @@ def _candidate_email(payload: dict) -> str | None:
     return None
 
 
+_PHONE_NON_DIGITS = re.compile(r"\D+")
+
+
+def _normalize_phone_for_match(raw: str | None) -> str | None:
+    """The last 9 digits of a phone number — a stable dedup key across the
+    formatting/country-code drift in Workable phones ("+971 50 202 2165",
+    "+971 +971 502022165", "0502022165" all collapse to "502022165").
+
+    Returns None for anything under 9 digits: too little signal to risk
+    merging two different people onto one profile.
+    """
+    digits = _PHONE_NON_DIGITS.sub("", raw or "")
+    return digits[-9:] if len(digits) >= 9 else None
+
+
+def _candidate_phone(payload: dict) -> str | None:
+    """Extract a raw phone string from a Workable candidate payload."""
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get("phone")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    for obj_key in ("contact", "profile", "info", "personal_info", "contact_info", "details"):
+        obj = payload.get(obj_key)
+        if isinstance(obj, dict):
+            v = obj.get("phone")
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+    return None
+
+
 def _candidate_name(payload: dict, fallback: str | None = None) -> str | None:
     name = payload.get("name")
     if isinstance(name, str) and name.strip():
@@ -1717,6 +1748,21 @@ class WorkableSyncService:
                 .first()
             )
         if not candidate:
+            # Phone fallback: the same person sometimes applies to a second job
+            # under a different email, so both workable_candidate_id and email
+            # miss and we'd create a duplicate profile. Match on the normalized
+            # phone (org-scoped) to collapse them onto one candidate.
+            phone_key = _normalize_phone_for_match(_candidate_phone(candidate_payload))
+            if phone_key:
+                candidate = (
+                    db.query(Candidate)
+                    .filter(
+                        Candidate.organization_id == org.id,
+                        Candidate.phone_normalized == phone_key,
+                    )
+                    .first()
+                )
+        if not candidate:
             candidate = Candidate(
                 organization_id=org.id,
                 email=sanitize_text_for_storage(email) if email else None,
@@ -1765,6 +1811,8 @@ class WorkableSyncService:
         extracted = _extract_candidate_fields(candidate_payload)
         for field, value in extracted.items():
             setattr(candidate, field, value)
+        # Keep the phone dedup key in sync with whatever phone we just stored.
+        candidate.phone_normalized = _normalize_phone_for_match(candidate.phone)
 
         # Fetch the activity log on full enrichment. Workable's
         # activities feed is the authoritative source for both timeline

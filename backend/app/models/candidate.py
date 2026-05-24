@@ -26,6 +26,11 @@ class Candidate(Base):
     location_city = Column(String, nullable=True)
     location_country = Column(String, nullable=True)
     phone = Column(String, nullable=True)
+    # Last 9 digits of ``phone``, country-code/formatting stripped. Used as a
+    # dedup fallback when the same person applies under a second email — same
+    # human, different email, so workable_candidate_id + email both miss.
+    # Indexed for equality lookup during sync.
+    phone_normalized = Column(String, nullable=True, index=True)
     profile_url = Column(String, nullable=True)
     social_profiles = Column(JSON, nullable=True)
     tags = Column(JSON, nullable=True)

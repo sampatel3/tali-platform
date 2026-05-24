@@ -87,14 +87,19 @@ def _try_workable_disqualify(
     org: Optional[Organization],
     actor: Actor,
     reason: Optional[str],
-) -> bool:
+) -> str:
     """Attempt to disqualify the candidate in Workable.
 
-    Returns ``True`` if Workable handled the rejection (disqualify
-    succeeded), in which case the caller should NOT send a Taali email
-    — Workable's stage workflow does. Returns ``False`` when Workable
-    isn't applicable (not linked, not configured) or the API failed; the
-    caller should fall back to the Taali email.
+    Returns one of:
+    - ``"handled"`` — disqualify succeeded; the caller must NOT send a Taali
+      email (Workable's stage workflow sends the rejection email).
+    - ``"retry_scheduled"`` — the call failed with a transient API error
+      (e.g. a 429 rate limit) and a bounded background retry was enqueued.
+      The caller must NOT send a Taali email now: the retry owns candidate
+      notification (email on exhaustion), which avoids a double-send if the
+      retry later succeeds and Workable emails.
+    - ``"fallback"`` — Workable isn't applicable (not linked/configured) or
+      the failure isn't retriable; the caller should send the Taali email.
 
     Records a ``workable_disqualified`` or ``workable_writeback_failed``
     application event mirroring the pre-screen auto-reject path so the
@@ -102,19 +107,22 @@ def _try_workable_disqualify(
     """
     workable_candidate_id = (getattr(app, "workable_candidate_id", "") or "").strip()
     if not workable_candidate_id:
-        return False
+        return "fallback"
     if org is None:
-        return False
+        return "fallback"
     if not (
         getattr(org, "workable_connected", False)
         and getattr(org, "workable_access_token", None)
         and getattr(org, "workable_subdomain", None)
     ):
-        return False
+        return "fallback"
     if settings.MVP_DISABLE_WORKABLE:
-        return False
+        return "fallback"
 
-    from ..services.workable_actions_service import disqualify_candidate_in_workable
+    from ..services.workable_actions_service import (
+        WorkableWritebackError,
+        disqualify_candidate_in_workable,
+    )
 
     try:
         result = disqualify_candidate_in_workable(
@@ -124,11 +132,15 @@ def _try_workable_disqualify(
             reason=reason or "Rejected via Taali",
             withdrew=False,
         )
+    except WorkableWritebackError:
+        # strict mode (decision-dispatch path): let the failure propagate so the
+        # dispatch task can abort + re-queue. Never swallowed here.
+        raise
     except Exception:  # pragma: no cover — defensive
         logger.exception(
             "workable disqualify raised unexpectedly (application_id=%s)", app.id
         )
-        return False
+        return "fallback"
 
     if result.get("success"):
         config = result.get("config") or {}
@@ -148,9 +160,9 @@ def _try_workable_disqualify(
                 "source": "reject_application",
             },
         )
-        return True
+        return "handled"
 
-    # Failure: log + record event, fall back to Taali email.
+    # Failure: log + record event.
     append_application_event(
         db,
         app=app,
@@ -166,13 +178,30 @@ def _try_workable_disqualify(
         },
     )
     logger.warning(
-        "workable disqualify failed for application_id=%s code=%s message=%s; "
-        "falling back to Taali rejection email",
+        "workable disqualify failed for application_id=%s code=%s message=%s",
         app.id,
         result.get("code"),
         result.get("message"),
     )
-    return False
+    # A transient API error (notably a 429 rate limit) shouldn't leave Tali
+    # 'rejected' while Workable still shows the candidate active. Enqueue a
+    # bounded, backed-off retry that pushes the disqualify through and owns
+    # candidate notification on exhaustion. Non-API failures (bad config,
+    # unlinked candidate) won't self-heal — fall back to the Taali email.
+    if result.get("code") == "api_error":
+        try:
+            from ..tasks.workable_tasks import retry_workable_disqualify_task
+
+            retry_workable_disqualify_task.apply_async(
+                kwargs={"application_id": int(app.id), "reason": reason},
+                countdown=60,
+            )
+            return "retry_scheduled"
+        except Exception:  # pragma: no cover — best-effort enqueue
+            logger.exception(
+                "failed to enqueue workable disqualify retry application_id=%s", app.id
+            )
+    return "fallback"
 
 
 def notify_rejection(
@@ -203,14 +232,18 @@ def notify_rejection(
     # imported / partially-populated records, but those candidates still
     # need their Workable status moved to rejected. Only the fallback
     # Taali-branded email requires a local email.
-    workable_handled = _try_workable_disqualify(
+    workable_status = _try_workable_disqualify(
         db,
         app=app,
         org=org,
         actor=actor,
         reason=reason,
     )
-    if not workable_handled and send_email and candidate_email:
+    # Send the Taali fallback email only when Workable won't notify the
+    # candidate: "handled" → Workable's disqualify workflow emails;
+    # "retry_scheduled" → the retry task owns the eventual email (avoids a
+    # double-send). Only "fallback" needs the Taali-branded email here.
+    if workable_status == "fallback" and send_email and candidate_email:
         role = app.role
         position = (
             getattr(role, "name", None)

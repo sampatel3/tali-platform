@@ -48,6 +48,61 @@ _OVERRIDE_LEGACY_NOOP = {
 }
 
 
+def enqueue(
+    db: Session,
+    actor: Actor,
+    *,
+    organization_id: int,
+    decision_id: int,
+    override_action: Optional[str] = None,
+    note: Optional[str] = None,
+    workable_target_stage: Optional[str] = None,
+) -> AgentDecision:
+    """Optimistically accept an override and run it via the serialized Workable
+    runner. Flips the decision ``pending → processing`` (stays in the queue,
+    greyed), records a BackgroundJobRun, and enqueues the override op — which
+    for state-change actions (reject/advance/skip-advance) is gated on Workable
+    and re-queues the decision on failure. Returns the ``processing`` decision.
+    """
+    if actor.type != ACTOR_RECRUITER:
+        raise HTTPException(status_code=403, detail="override is recruiter-only")
+
+    q = db.query(AgentDecision).filter(
+        AgentDecision.id == decision_id,
+        AgentDecision.organization_id == organization_id,
+    )
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        q = q.with_for_update()
+    decision = q.first()
+    if decision is None:
+        raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
+    if decision.status not in ("pending", "reverted_for_feedback"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"agent_decision {decision_id} is {decision.status}, not actionable",
+        )
+    decision.status = "processing"
+    if note is not None:
+        decision.resolution_note = note
+    decision.override_action = override_action
+    db.commit()
+
+    from ..services.workable_op_runner import OP_OVERRIDE_DECISION, enqueue_workable_op
+
+    enqueue_workable_op(
+        organization_id=int(organization_id),
+        op_type=OP_OVERRIDE_DECISION,
+        payload={
+            "decision_id": int(decision_id),
+            "user_id": int(actor.user_id) if actor.user_id else None,
+            "override_action": override_action,
+            "note": note,
+            "workable_target_stage": workable_target_stage,
+        },
+    )
+    return decision
+
+
 def run(
     db: Session,
     actor: Actor,
@@ -78,7 +133,9 @@ def run(
         raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
     # ``reverted_for_feedback`` (taught) decisions stay actionable so a
     # recruiter can override the corrected row, not just freshly-pending ones.
-    if decision.status not in ("pending", "reverted_for_feedback"):
+    # ``processing`` is accepted because the async runner flips the row to it
+    # before the background task calls run().
+    if decision.status not in ("pending", "reverted_for_feedback", "processing"):
         raise HTTPException(
             status_code=409,
             detail=f"agent_decision {decision_id} is {decision.status}, not actionable",

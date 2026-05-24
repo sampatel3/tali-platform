@@ -25,6 +25,138 @@ from .types import ACTOR_RECRUITER, Actor
 _REJECT_DECISION_TYPES = ("reject", "skip_assessment_reject")
 
 
+def _accept_for_processing(
+    db: Session, *, organization_id: int, decision_id: int, note: Optional[str]
+) -> AgentDecision:
+    """Lock a pending decision and flip it to ``processing``. Raises 404/409.
+
+    No commit — the caller commits the whole batch's flips at once.
+    """
+    q = db.query(AgentDecision).filter(
+        AgentDecision.id == decision_id,
+        AgentDecision.organization_id == organization_id,
+    )
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        q = q.with_for_update()
+    decision = q.first()
+    if decision is None:
+        raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
+    if decision.status != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail=f"agent_decision {decision_id} is {decision.status}, not pending",
+        )
+    decision.status = "processing"
+    if note is not None:
+        decision.resolution_note = note
+    return decision
+
+
+def enqueue_batch(
+    db: Session,
+    actor: Actor,
+    *,
+    organization_id: int,
+    decision_ids: list[int],
+    note: Optional[str] = None,
+    workable_target_stage: Optional[str] = None,
+) -> dict:
+    """Accept a batch of approvals for background processing.
+
+    A whole request — single approve or a 100-row bulk approve — becomes ONE
+    background job. Each valid pending decision is flipped to ``processing``
+    (so the Hub shows it greyed/in-flight instead of letting the recruiter
+    double-click), a single ``BackgroundJobRun`` (kind ``decision_batch``) is
+    recorded for Settings → Background jobs, and ONE ``process_decision_batch``
+    task drains the Workable writebacks sequentially (serialized per org, so a
+    big batch can't breach the rate limit). A decision whose writeback fails is
+    returned to the queue by the task — never lost.
+
+    The only synchronous work is the status flip + bookkeeping (no Workable
+    calls), so approving 100 decisions returns immediately.
+
+    Returns ``{"job_run_id", "accepted": [ids], "failures": [{decision_id, error}]}``.
+    """
+    if actor.type != ACTOR_RECRUITER:
+        raise HTTPException(status_code=403, detail="approve is recruiter-only")
+
+    requested = list(dict.fromkeys(int(x) for x in decision_ids))
+    accepted: list[int] = []
+    failures: list[dict] = []
+    for decision_id in requested:
+        try:
+            _accept_for_processing(
+                db, organization_id=int(organization_id), decision_id=decision_id, note=note
+            )
+            accepted.append(decision_id)
+        except HTTPException as exc:
+            failures.append(
+                {
+                    "decision_id": decision_id,
+                    "status_code": exc.status_code,
+                    "error": str(exc.detail) if exc.detail else f"HTTP {exc.status_code}",
+                }
+            )
+    # Commit all flips together so the worker (separate session) sees them.
+    db.commit()
+
+    job_run_id = None
+    if accepted:
+        from ..services.workable_op_runner import OP_APPROVE_DECISIONS, enqueue_workable_op
+
+        job_run_id = enqueue_workable_op(
+            organization_id=int(organization_id),
+            op_type=OP_APPROVE_DECISIONS,
+            payload={
+                "decision_ids": accepted,
+                "user_id": int(actor.user_id) if actor.user_id else None,
+                "note": note,
+                "workable_target_stage": workable_target_stage,
+            },
+            counters={"total": len(accepted), "succeeded": 0, "requeued": 0, "failed": 0},
+        )
+    return {"job_run_id": job_run_id, "accepted": accepted, "failures": failures}
+
+
+def enqueue_one(
+    db: Session,
+    actor: Actor,
+    *,
+    organization_id: int,
+    decision_id: int,
+    note: Optional[str] = None,
+    workable_target_stage: Optional[str] = None,
+) -> AgentDecision:
+    """Single-decision wrapper over ``enqueue_batch`` that preserves the
+    route's 404/409 semantics and returns the (now ``processing``) decision."""
+    result = enqueue_batch(
+        db,
+        actor,
+        organization_id=organization_id,
+        decision_ids=[decision_id],
+        note=note,
+        workable_target_stage=workable_target_stage,
+    )
+    if int(decision_id) not in result["accepted"]:
+        failure = next(
+            (f for f in result["failures"] if f["decision_id"] == int(decision_id)),
+            None,
+        )
+        raise HTTPException(
+            status_code=(failure or {}).get("status_code", 409),
+            detail=(failure or {}).get("error", "could not accept decision"),
+        )
+    decision = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.id == int(decision_id),
+            AgentDecision.organization_id == int(organization_id),
+        )
+        .first()
+    )
+    return decision
+
+
 def run(
     db: Session,
     actor: Actor,
@@ -58,10 +190,12 @@ def run(
     decision = decision_query.first()
     if decision is None:
         raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
-    # ``reverted_for_feedback`` is a taught-but-not-yet-resolved decision —
-    # the whole point of "teach" is that the corrected row can then be
-    # approved/overridden, so it must remain actionable alongside ``pending``.
-    if decision.status not in ("pending", "reverted_for_feedback"):
+    # ``reverted_for_feedback`` is a taught-but-not-yet-resolved decision — the
+    # corrected row can then be approved/overridden, so it stays actionable
+    # alongside ``pending``. ``processing`` is accepted because the async
+    # dispatch path flips the row pending→processing before enqueuing the
+    # background task that calls run().
+    if decision.status not in ("pending", "reverted_for_feedback", "processing"):
         raise HTTPException(
             status_code=409,
             detail=f"agent_decision {decision_id} is {decision.status}, not actionable",
