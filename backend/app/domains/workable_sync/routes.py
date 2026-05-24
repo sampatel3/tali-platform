@@ -19,6 +19,7 @@ from ...models.user import User
 from ...models.workable_sync_run import WorkableSyncRun
 from ...platform.config import settings
 from ...platform.database import get_db
+from ...services.document_service import sanitize_json_for_storage
 
 logger = logging.getLogger(__name__)
 
@@ -524,6 +525,28 @@ def workable_stages(
     if settings.MVP_DISABLE_WORKABLE:
         raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
     org = _get_org_for_user(db, current_user)
+
+    # Serve a job's stages straight from our DB cache — the periodic sync keeps
+    # it fresh, so the picker doesn't pay a live, throttled Workable round-trip
+    # on every modal open. This path also works when Workable is briefly
+    # unreachable, since it never touches the API.
+    role = None
+    if shortcode:
+        role = (
+            db.query(Role)
+            .filter(
+                Role.organization_id == org.id,
+                Role.workable_job_id == shortcode,
+                Role.deleted_at.is_(None),
+            )
+            .first()
+        )
+        if role and role.workable_stages:
+            return {"stages": role.workable_stages}
+
+    # Cache miss (role not synced yet, or account-level request with no
+    # shortcode): fetch live, and persist the result for next time so the
+    # slow path only ever runs once per role.
     _assert_workable_connected(org)
     client = WorkableService(access_token=org.workable_access_token, subdomain=org.workable_subdomain)
     try:
@@ -531,6 +554,10 @@ def workable_stages(
     except Exception as exc:
         logger.exception("Failed listing Workable stages for org_id=%s: %s", org.id, exc)
         raise HTTPException(status_code=502, detail="Failed to load Workable stages.") from exc
+    if shortcode and stages and role is not None:
+        role.workable_stages = sanitize_json_for_storage(stages)
+        role.workable_stages_synced_at = datetime.now(timezone.utc)
+        db.commit()
     return {"stages": stages}
 
 

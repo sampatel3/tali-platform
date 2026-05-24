@@ -5,7 +5,7 @@
 // params. Approve / Override / Snooze hit the existing endpoints; Teach
 // opens TeachModal which POSTs /agent/feedback.
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
   Brain,
@@ -596,35 +596,48 @@ export const HomeNow = ({
   // both override flows (Reject / Skip & advance / Advance instead) AND
   // the primary Advance-to-interview confirmation (mode: 'approve').
   const [alternativeFor, setAlternativeFor] = useState(null);
-  // Workable stages keyed by role shortcode. Loaded lazily once per role
-  // so the picker is ready when the modal opens. Failures fall back to
-  // an empty list — the modal shows a "no stages found" placeholder.
+  // Workable stages keyed by role shortcode. Each entry is one of:
+  //   undefined  → never requested
+  //   'loading'  → fetch in flight
+  //   'error'    → fetch failed (retryable — re-requesting refetches)
+  //   array      → loaded (an empty array means the role genuinely has none)
+  // We keep these states distinct so a transient fetch failure can't be
+  // mistaken for "no stages" and, crucially, isn't cached forever: a single
+  // Workable hiccup used to poison the cache so the picker showed "no stages"
+  // until a full page reload.
   const [stagesByShortcode, setStagesByShortcode] = useState({});
+  // Mirror of each shortcode's load status for synchronous dedupe decisions,
+  // so ``ensureStages`` can skip in-flight/loaded fetches without running a
+  // side-effect inside a setState updater (updaters must stay pure).
+  const stagesStatusRef = useRef({});
 
   const selected = useMemo(
     () => decisions.find((d) => d.id === selectedId) || pendingOrdered[0] || null,
     [decisions, selectedId, pendingOrdered],
   );
 
-  // Lazy-load a role's Workable stages, cached by shortcode so we only ever
-  // fetch once per role. Drives both the single-decision modal and the
-  // per-role pickers in the bulk-approve modal. ``undefined`` = not fetched,
-  // ``[]`` = fetched-but-empty / in-flight placeholder, populated array = ready.
+  // Lazy-load a role's Workable stages, keyed by shortcode. Drives both the
+  // single-decision modal and the per-role pickers in the bulk-approve modal.
+  // Skips fetches that are already in flight or successfully loaded, but a
+  // prior 'error' (or never-fetched) shortcode is (re)fetched — so simply
+  // re-opening the modal recovers from a transient Workable failure.
   const ensureStages = useCallback((shortcode) => {
     if (!shortcode) return;
-    setStagesByShortcode((prev) => {
-      if (prev[shortcode] !== undefined) return prev; // already fetched / in-flight
-      orgsApi
-        .getWorkableStages({ shortcode })
-        .then((res) => {
-          const list = Array.isArray(res?.data?.stages) ? res.data.stages : [];
-          setStagesByShortcode((p) => ({ ...p, [shortcode]: list }));
-        })
-        .catch(() => {
-          setStagesByShortcode((p) => ({ ...p, [shortcode]: [] }));
-        });
-      return { ...prev, [shortcode]: [] }; // optimistic placeholder to dedupe in-flight
-    });
+    const status = stagesStatusRef.current[shortcode];
+    if (status === 'loading' || status === 'ready') return;
+    stagesStatusRef.current[shortcode] = 'loading';
+    setStagesByShortcode((p) => ({ ...p, [shortcode]: 'loading' }));
+    orgsApi
+      .getWorkableStages({ shortcode })
+      .then((res) => {
+        const list = Array.isArray(res?.data?.stages) ? res.data.stages : [];
+        stagesStatusRef.current[shortcode] = 'ready';
+        setStagesByShortcode((p) => ({ ...p, [shortcode]: list }));
+      })
+      .catch(() => {
+        stagesStatusRef.current[shortcode] = 'error';
+        setStagesByShortcode((p) => ({ ...p, [shortcode]: 'error' }));
+      });
   }, []);
 
   // Lazy-fetch the selected decision's role stages so the single-decision
@@ -786,15 +799,16 @@ export const HomeNow = ({
     (bulkConfirm?.advanceRoles || []).forEach((r) => ensureStages(r.shortcode));
   }, [bulkConfirm, ensureStages]);
 
-  // Gate the bulk Confirm: every advancing role must either have a stage
-  // picked, or have no stages to pick (load failed / none configured — the
-  // candidate advances on Tali's internal stage, same as the single modal).
-  // While a role's stages are still loading, hold Confirm.
+  // Gate the bulk Confirm: every advancing role must have a stage picked, or
+  // genuinely have no stages to pick (the candidate then advances on Tali's
+  // internal stage only). Hold Confirm while a role is still loading or
+  // errored — an errored role shows a Retry control, so we don't let the
+  // recruiter advance assuming a Workable move that never resolved.
   const bulkStagesReady = useMemo(() => {
     const roles = bulkConfirm?.advanceRoles || [];
     return roles.every((r) => {
       const raw = stagesByShortcode[r.shortcode];
-      if (raw === undefined) return false; // still loading
+      if (raw === undefined || raw === 'loading' || raw === 'error') return false;
       if (normalizeWorkableStages(raw).length === 0) return true; // nothing to pick
       return Boolean(bulkStages[r.role_id]);
     });
@@ -919,7 +933,10 @@ export const HomeNow = ({
         <OverrideModal
           decision={alternativeFor.decision}
           alternative={alternativeFor.alternative}
-          workableStages={stagesByShortcode[alternativeFor.decision?.workable_job_id] || []}
+          workableStages={(() => {
+            const raw = stagesByShortcode[alternativeFor.decision?.workable_job_id];
+            return Array.isArray(raw) ? raw : [];
+          })()}
           onClose={() => setAlternativeFor(null)}
           onSubmitted={async () => {
             showToast?.(
@@ -979,8 +996,21 @@ export const HomeNow = ({
                         <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginBottom: 6 }}>
                           {r.role_name} · {r.count} advancing
                         </div>
-                        {raw === undefined ? (
+                        {raw === undefined || raw === 'loading' ? (
                           <span style={{ fontSize: 12, color: 'var(--mute)' }}>Loading stages…</span>
+                        ) : raw === 'error' ? (
+                          <span style={{ fontSize: 12, color: 'var(--ink-2)', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                            Couldn&apos;t load Workable stages.
+                            <button
+                              type="button"
+                              className="rq-tinybtn"
+                              onClick={() => ensureStages(r.shortcode)}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, width: 'auto', padding: '2px 8px' }}
+                            >
+                              <RefreshCw size={11} strokeWidth={2} aria-hidden="true" />
+                              Retry
+                            </button>
+                          </span>
                         ) : stages.length === 0 ? (
                           <span style={{ fontSize: 12, color: 'var(--mute)' }}>
                             No Workable stages found for this role. These candidates' internal stage will still update; nothing posts to Workable.
