@@ -9,7 +9,7 @@ import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
@@ -985,7 +985,16 @@ class WorkableSyncService:
         run_id: int | None = None,
         mode: str = "metadata",
         selected_job_shortcodes: list[str] | None = None,
+        yield_if_contended: Callable[[], None] | None = None,
     ) -> dict:
+        # ``yield_if_contended`` (set by the periodic sync tasks) lets a
+        # long sync release the shared per-org Workable mutex at its
+        # checkpoints when an interactive write is waiting, then re-acquire
+        # and continue. No-op by default (manual runs / scripts / tests).
+        def _checkpoint_yield() -> None:
+            if yield_if_contended is not None:
+                yield_if_contended()
+
         run = self._get_sync_run(db, run_id)
         requested_mode = (mode or "metadata").strip().lower()
         # ``jobs_only`` upserts role rows and exits before fetching
@@ -1084,6 +1093,10 @@ class WorkableSyncService:
             for job_idx, job in enumerate(jobs):
                 if self._is_cancel_requested(db, org, run):
                     raise WorkableSyncCancelled()
+                # Between jobs the lock is at a clean boundary (no Workable
+                # call in flight) — a good point to hand off to a waiting
+                # interactive write.
+                _checkpoint_yield()
                 try:
                     role, created_role = self._upsert_role(db, org, job)
                     if created_role:
@@ -1187,6 +1200,11 @@ class WorkableSyncService:
                         if (idx + 1) % 5 == 0 or idx == 0:
                             summary["db_snapshot"] = self._build_db_snapshot(db, org)
                             self._persist_progress(db, org, run, summary)
+                            # Yield mid-job too: a single big job's CV loop
+                            # can run for minutes, long enough to starve an
+                            # approval if we only checked between jobs. Safe
+                            # because no Workable call is in flight here.
+                            _checkpoint_yield()
 
                     summary["jobs_processed"] = job_idx + 1
                     summary["db_snapshot"] = self._build_db_snapshot(db, org)

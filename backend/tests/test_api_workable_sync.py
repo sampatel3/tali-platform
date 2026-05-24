@@ -914,35 +914,27 @@ def test_workable_org_mutex_blocks_concurrent_task_types(monkeypatch):
     agent / nightly tasks all share Workable's per-token rate limit.
     The per-org mutex is what stops them from racing into 429s.
     """
+    import sys
+
+    import fakeredis
+
     from app.tasks import assessment_tasks
 
-    # In-process fake of the Redis subset the mutex helpers use.
-    store: dict[str, str] = {}
-
-    class _FakeRedisClient:
-        def set(self, key, value, nx=False, ex=None):
-            if nx and key in store:
-                return False
-            store[key] = value
-            return True
-
-        def get(self, key):
-            return store.get(key)
-
-        def delete(self, key):
-            store.pop(key, None)
-
-    shared_client = _FakeRedisClient()
+    # Shared FakeServer so the new-client-per-acquire helper sees one store.
+    server = fakeredis.FakeServer()
 
     class _FakeRedisModule:
-        Redis = type("_RedisStub", (), {"from_url": staticmethod(lambda url: shared_client)})
+        Redis = type(
+            "_RedisStub",
+            (),
+            {"from_url": staticmethod(lambda url: fakeredis.FakeRedis(server=server))},
+        )
 
-    import sys
     monkeypatch.setitem(sys.modules, "redis", _FakeRedisModule)
 
     # Acquire as "jobs"; the next attempt by any other source should be blocked.
     held = assessment_tasks._acquire_workable_org_mutex(42, source="jobs")
-    assert held is not None, f"First acquire should succeed, got {held}; store={store}"
+    assert held is not None, f"First acquire should succeed, got {held}"
     blocked = assessment_tasks._acquire_workable_org_mutex(42, source="starred")
     assert blocked is None, "A second source must be blocked while jobs holds the lock"
     # Different org isn't blocked.
@@ -953,6 +945,9 @@ def test_workable_org_mutex_blocks_concurrent_task_types(monkeypatch):
     assessment_tasks._release_workable_org_mutex(held)
     after = assessment_tasks._acquire_workable_org_mutex(42, source="agent")
     assert after is not None, "After release, next source can acquire"
+
+    assessment_tasks._release_workable_org_mutex(other)
+    assessment_tasks._release_workable_org_mutex(after)
 
 
 def test_reaper_clears_stale_org_progress_without_running_run(db):
