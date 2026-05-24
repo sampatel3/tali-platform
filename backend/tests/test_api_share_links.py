@@ -224,6 +224,43 @@ def test_public_share_view_returns_full_application_payload(client):
     assert inner["candidate_email"] == "share-link@example.com"
 
 
+def test_recruiter_share_includes_notes_and_timeline_client_does_not(client):
+    """Recruiter shares are the full report: they carry the audit timeline
+    + recruiter notes the authenticated detail view fetches via auth-only
+    endpoints. Client shares must omit both (external, scrubbed)."""
+    headers, _ = auth_headers(client)
+    _, application = _make_role_and_application(client, headers)
+
+    recruiter_link = client.post(
+        f"/api/v1/applications/{application['id']}/share-links",
+        json={"mode": "recruiter", "expiry": "7d"},
+        headers=headers,
+    )
+    assert recruiter_link.status_code == 200, recruiter_link.text
+    recruiter_view = client.get(f"/share/{recruiter_link.json()['token']}")
+    assert recruiter_view.status_code == 200, recruiter_view.text
+    recruiter_payload = recruiter_view.json()
+    assert recruiter_payload["view"] == "recruiter"
+    inner = recruiter_payload["application"]
+    # Both surfaces are embedded (creating the application logs an event,
+    # so the audit timeline is non-empty even without an assessment).
+    assert isinstance(inner.get("application_events"), list)
+    assert len(inner["application_events"]) >= 1
+    assert isinstance(inner.get("recruiter_notes_timeline"), list)
+
+    client_link = client.post(
+        f"/api/v1/applications/{application['id']}/share-links",
+        json={"mode": "client", "expiry": "7d"},
+        headers=headers,
+    )
+    assert client_link.status_code == 200, client_link.text
+    client_view = client.get(f"/share/{client_link.json()['token']}")
+    assert client_view.status_code == 200, client_view.text
+    client_inner = client_view.json()["application"]
+    assert client_inner.get("application_events") is None
+    assert client_inner.get("recruiter_notes_timeline") is None
+
+
 def test_public_share_view_bumps_view_count(client):
     headers, _ = auth_headers(client)
     _, application = _make_role_and_application(client, headers)

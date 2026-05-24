@@ -44,19 +44,22 @@ const resolveAssessmentStatus = (application) => (
 // Candidate file is the single canonical candidate page. Base tabs are
 // always present; assessment-only tabs (requiresAssessment) reveal once a
 // completed assessment is linked — replacing the separate /assessments/:id
-// page. internalOnly tabs are recruiter-only (hidden from client shares).
+// page. Visibility flags:
+//   internalOnly  — recruiter app only; hidden on every share link.
+//   recruiterOnly — recruiter app + recruiter share link; hidden from
+//                   external client shares.
 const REPORT_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'assessment', label: 'Assessment', internalOnly: true, requiresAssessment: true },
   { id: 'evaluate', label: 'Evaluate', internalOnly: true, requiresAssessment: true },
   { id: 'cv', label: 'CV' },
-  { id: 'prep', label: 'Interview prep', recruiterPrep: true },
-  { id: 'notes', label: 'Notes & timeline', internalOnly: true },
+  { id: 'prep', label: 'Interview prep', recruiterOnly: true },
+  { id: 'notes', label: 'Notes & timeline', recruiterOnly: true },
 ];
 
 const INTERNAL_TABS = new Set(REPORT_TABS.filter((tab) => tab.internalOnly).map((tab) => tab.id));
 const CLIENT_HIDDEN_TABS = new Set(
-  REPORT_TABS.filter((tab) => tab.internalOnly || tab.recruiterPrep).map((tab) => tab.id),
+  REPORT_TABS.filter((tab) => tab.internalOnly || tab.recruiterOnly).map((tab) => tab.id),
 );
 const REPORT_TAB_IDS = new Set(REPORT_TABS.map((tab) => tab.id));
 
@@ -890,7 +893,16 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
 
       setCompletedAssessment(assessmentRes?.data || null);
       setOrgData(orgRes?.data || null);
-      setApplicationEvents(Array.isArray(eventsRes?.data) ? eventsRes.data : (eventsRes?.data?.items || []));
+      // Recruiter shares can't call the auth-only /events endpoint, so the
+      // backend embeds the audit timeline in the share payload instead.
+      const sharedEvents = Array.isArray(nextApplication?.application_events)
+        ? nextApplication.application_events
+        : [];
+      setApplicationEvents(
+        Array.isArray(eventsRes?.data)
+          ? eventsRes.data
+          : (eventsRes?.data?.items || sharedEvents)
+      );
     } catch (err) {
       const message = getErrorMessage(err, 'Failed to load candidate report.');
       setApplication(null);
@@ -1379,7 +1391,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             {isClientView ? (
               <span><b>Client view.</b> External, client-safe summary — recruiter notes, scoring breakdown, and interview prep are hidden.</span>
             ) : (
-              <span><b>Interview view.</b> You are seeing the panel-safe version of this Taali report.</span>
+              <span><b>Recruiter view.</b> Full internal report — includes recruiter notes, timeline, and interview prep. Don&apos;t share with candidates.</span>
             )}
           </div>
         ) : null}
@@ -1843,7 +1855,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           ) : null}
         </div>
 
-        <div className={`pane ${activeTab === 'notes' ? 'active' : ''}`} data-p="notes" data-internal-only>
+        <div className={`pane ${activeTab === 'notes' ? 'active' : ''}`} data-p="notes" data-internal-only={isClientView ? '' : undefined}>
           {/* HANDOFF v2 §5.1 / canvas cand-notes — Notes & timeline is:
               (1) HIRING TEAM NOTES column — note cards (who · role · time + body)
                   with a dashed-border textarea + "Add note" CTA at the bottom
@@ -1862,9 +1874,13 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             // and applicationEvents as a fallback for any future
             // recruiter_note event-type emissions.
             const timelineNotes = (() => {
+              // Recruiter shares don't fetch the assessment (auth-only), so the
+              // backend embeds the note-type timeline entries on the payload.
               const entries = Array.isArray(completedAssessment?.timeline)
                 ? completedAssessment.timeline
-                : [];
+                : (Array.isArray(application?.recruiter_notes_timeline)
+                  ? application.recruiter_notes_timeline
+                  : []);
               return entries
                 .filter((entry) => {
                   const type = String(entry?.event_type || entry?.type || '').toLowerCase();
@@ -1946,7 +1962,9 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   <div className="mc-kicker">HIRING TEAM NOTES</div>
                   {recruiterNotes.length === 0 ? (
                     <div className="mc-notes-empty">
-                      No hiring team notes yet. Drop a private note to the team below — it'll land in the audit timeline on the right.
+                      {isInterviewView
+                        ? 'No hiring team notes yet.'
+                        : "No hiring team notes yet. Drop a private note to the team below — it'll land in the audit timeline on the right."}
                     </div>
                   ) : (
                     recruiterNotes.map((note) => (
@@ -1962,27 +1980,31 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                       </div>
                     ))
                   )}
-                  <div className="mc-notes-input">
-                    <textarea
-                      value={noteDraft}
-                      onChange={(event) => setNoteDraft(event.target.value)}
-                      placeholder={assessmentId
-                        ? 'Add a note for the hiring team…'
-                        : 'Notes are saved against the linked assessment — link one to enable.'}
-                      disabled={!assessmentId || savingNote}
-                      rows={3}
-                    />
-                    <div className="mc-notes-input-actions">
-                      <button
-                        type="button"
-                        className="btn btn-purple btn-sm"
-                        onClick={handleSaveNote}
-                        disabled={!assessmentId || savingNote || !noteDraft.trim()}
-                      >
-                        {savingNote ? 'Adding…' : 'Add note'}
-                      </button>
+                  {/* Adding notes hits an auth-only endpoint, so the input is
+                      recruiter-app only — share recipients see notes read-only. */}
+                  {isInterviewView ? null : (
+                    <div className="mc-notes-input">
+                      <textarea
+                        value={noteDraft}
+                        onChange={(event) => setNoteDraft(event.target.value)}
+                        placeholder={assessmentId
+                          ? 'Add a note for the hiring team…'
+                          : 'Notes are saved against the linked assessment — link one to enable.'}
+                        disabled={!assessmentId || savingNote}
+                        rows={3}
+                      />
+                      <div className="mc-notes-input-actions">
+                        <button
+                          type="button"
+                          className="btn btn-purple btn-sm"
+                          onClick={handleSaveNote}
+                          disabled={!assessmentId || savingNote || !noteDraft.trim()}
+                        >
+                          {savingNote ? 'Adding…' : 'Add note'}
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   {workableComments.length > 0 ? (
                     <>

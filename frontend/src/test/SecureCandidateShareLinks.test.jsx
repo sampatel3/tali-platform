@@ -174,7 +174,15 @@ describe('SecureCandidateShareLinks', () => {
         mode: 'recruiter',
         view: 'recruiter',
         expires_at: '2026-05-27T08:20:31.421293+00:00',
-        application: sharedApplication,
+        application: {
+          ...sharedApplication,
+          recruiter_notes_timeline: [
+            { event_type: 'note', text: 'Strong systems-design signal.', author: 'Sam', timestamp: '2026-01-11T09:00:00Z' },
+          ],
+          application_events: [
+            { id: 1, event_type: 'cv_scored', metadata: { role_fit_score: 81 }, created_at: '2026-01-10T10:05:00Z' },
+          ],
+        },
       },
     });
 
@@ -184,6 +192,11 @@ describe('SecureCandidateShareLinks', () => {
       expect(viewShareLink).toHaveBeenCalledWith('shr_candidate_report_12');
       expect(window.location.pathname).toBe('/share/shr_candidate_report_12');
     });
+
+    // Recruiter shares keep the internal Notes & timeline tab — recruiter
+    // notes + the audit timeline travel in the share payload since the
+    // unauth page can't call the auth-only endpoints.
+    expect(await screen.findByRole('tab', { name: 'Notes & timeline' })).toBeInTheDocument();
   });
 
   it('switches to client-scrubbed view when the link mode is client', async () => {
@@ -211,5 +224,8 @@ describe('SecureCandidateShareLinks', () => {
       // when the view mode is "client".
       expect(screen.getByText(/Why we['’]re sharing this candidate/i)).toBeInTheDocument();
     });
+
+    // External client shares must never expose the recruiter Notes & timeline.
+    expect(screen.queryByRole('tab', { name: 'Notes & timeline' })).not.toBeInTheDocument();
   });
 });
