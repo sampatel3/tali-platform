@@ -131,6 +131,7 @@ def _persist_pre_screen_error(
     ``decision: 'error'`` for the existing rendering logic.
     """
     app.pre_screen_score_100 = None
+    app.genuine_pre_screen_score_100 = None
     app.requirements_fit_score_100 = None
     app.cv_match_score = None
     app.cv_match_details = None
@@ -395,10 +396,10 @@ def execute_pre_screen_only(
         summary = sanitize_text_for_storage(str(pre.reason or "").strip()) or None
         decision = pre.decision
 
-    # Persist on the application. We deliberately do NOT touch cv_match_*
-    # so a subsequent score job can still run. Any prior error reason is
-    # cleared because the LLM call succeeded this time.
+    # Persist; don't touch cv_match_* so a later score job still runs.
     app.pre_screen_score_100 = score
+    # Durable genuine pre-screen score — never overwritten by cv_match scoring.
+    app.genuine_pre_screen_score_100 = score
     app.requirements_fit_score_100 = score  # parity with snapshot fallback
     app.pre_screen_recommendation = recommendation
     app.pre_screen_error_reason = None

@@ -101,11 +101,14 @@ def _inputs_for(app, *, role_id, org_id, eff, has_task):
     role_fit = _role_fit_score(app)
     if role_fit is None:
         return None
-    # pre_screen_score_100 is a shared "best available score" column that
-    # full cv_match scoring overwrites, so for a scored candidate it tracks
-    # role-fit. When genuinely absent, fall back to role_fit so the reject
-    # band can still evaluate. A low pre-screen never produces a false
-    # send/advance: the send_assessment rule independently gates on
+    # Send-gate input. The bulk pass only runs on scored candidates, where
+    # pre_screen_score_100 == the full cv_match score — which is the RIGHT
+    # input here: the full score governs a fully-scored candidate, so we must
+    # NOT re-impose the cheap pre-screen gate on them. (Prod data shows the
+    # genuine cheap pre-screen — kept in genuine_pre_screen_score_100 for
+    # audit/labels — runs higher AND can straddle 50 vs the full score; using
+    # it here would wrongly block advances of strongly-scored candidates.)
+    # A low value never causes a false send: the send rule gates on
     # pre_screen_min (50), which apply_effective_threshold leaves untouched.
     pre_screen = (
         float(app.pre_screen_score_100)

@@ -196,6 +196,9 @@ def persist_fraud_filtered_prescreen(app, fraud: CopyPasteResult, *, cap_score: 
         f"verbatim from the job description (threshold {fraud.threshold:.0%})."
     )
     app.pre_screen_score_100 = cap
+    # The fraud-capped score IS the genuine pre-screen verdict; record it in
+    # the durable column too (never overwritten by later cv_match scoring).
+    app.genuine_pre_screen_score_100 = cap
     app.requirements_fit_score_100 = cap
     app.pre_screen_recommendation = "Below threshold"
     app.pre_screen_error_reason = None
