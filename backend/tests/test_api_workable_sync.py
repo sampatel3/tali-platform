@@ -701,6 +701,9 @@ def test_sync_workable_jobs_uses_jobs_only_mode(db, monkeypatch):
     monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
     monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", lambda *a, **kw: False)
     monkeypatch.setattr(assessment_tasks, "_release_workable_org_mutex", lambda *a, **kw: None)
+    # Hermetic: don't let ambient op-pending state in a shared Redis make the
+    # sync task defer the org (the fairness path has its own tests).
+    monkeypatch.setattr(assessment_tasks, "is_workable_op_pending", lambda *a, **kw: False)
     from app.components.integrations.workable import sync_service as sync_service_mod
     monkeypatch.setattr(sync_service_mod, "WorkableSyncService", _FakeService)
 
@@ -758,6 +761,9 @@ def test_sync_agent_mode_roles_filters_to_agentic_unpaused(db, monkeypatch):
     monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
     monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", lambda *a, **kw: False)
     monkeypatch.setattr(assessment_tasks, "_release_workable_org_mutex", lambda *a, **kw: None)
+    # Hermetic: don't let ambient op-pending state in a shared Redis make the
+    # sync task defer the org (the fairness path has its own tests).
+    monkeypatch.setattr(assessment_tasks, "is_workable_op_pending", lambda *a, **kw: False)
     from app.components.integrations.workable import sync_service as sync_service_mod
     monkeypatch.setattr(sync_service_mod, "WorkableSyncService", _FakeService)
 
@@ -818,6 +824,9 @@ def test_sync_workable_daily_candidates_skips_starred_and_active_agent(db, monke
     monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
     monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", lambda *a, **kw: False)
     monkeypatch.setattr(assessment_tasks, "_release_workable_org_mutex", lambda *a, **kw: None)
+    # Hermetic: don't let ambient op-pending state in a shared Redis make the
+    # sync task defer the org (the fairness path has its own tests).
+    monkeypatch.setattr(assessment_tasks, "is_workable_op_pending", lambda *a, **kw: False)
     from app.components.integrations.workable import sync_service as sync_service_mod
     monkeypatch.setattr(sync_service_mod, "WorkableSyncService", _FakeService)
 
@@ -827,6 +836,58 @@ def test_sync_workable_daily_candidates_skips_starred_and_active_agent(db, monke
     assert captured == [["AGTP1", "PLAIN1"]], (
         f"Expected nightly to cover plain + paused-agent only, got: {captured}"
     )
+
+
+def test_sync_starred_roles_defers_when_op_pending(db, monkeypatch):
+    """When a user-facing Workable write is pending for an org, the periodic
+    starred sync must NOT acquire the per-org mutex — it skips the org so the
+    op isn't starved. Regression for the lock-starvation incident."""
+    from app.tasks import assessment_tasks
+
+    org = Organization(
+        name="Defer Org",
+        slug="defer-org",
+        workable_connected=True,
+        workable_access_token="tk",
+        workable_subdomain="defer",
+    )
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+    db.add(
+        Role(
+            organization_id=org.id, name="Starred", source="workable",
+            workable_job_id="S1", starred_for_auto_sync=True,
+        )
+    )
+    db.commit()
+
+    synced_orgs: list[int] = []
+
+    class _FakeService:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def sync_org(self, db_session, org_obj, **kwargs):
+            synced_orgs.append(org_obj.id)
+            return {"jobs_seen": 0}
+
+    monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
+    # Op pending for every org → the sync must defer before acquiring.
+    monkeypatch.setattr(assessment_tasks, "is_workable_op_pending", lambda *a, **kw: True)
+    # If the defer path is broken and we reach acquire, fail loudly.
+    monkeypatch.setattr(
+        assessment_tasks,
+        "_acquire_workable_org_mutex",
+        lambda *a, **kw: pytest.fail("must not acquire the mutex while an op is pending"),
+    )
+    from app.components.integrations.workable import sync_service as sync_service_mod
+    monkeypatch.setattr(sync_service_mod, "WorkableSyncService", _FakeService)
+
+    result = assessment_tasks.sync_starred_roles.run()
+    assert result["status"] == "ok"
+    assert result["skipped"] >= 1
+    assert synced_orgs == [], "sync_org must not run when an op is pending"
 
 
 def test_filter_payloads_missing_cv_excludes_apps_with_existing_cv(db):

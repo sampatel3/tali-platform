@@ -326,6 +326,9 @@ def test_sync_tasks_acquire_mutex_with_heartbeat(db, monkeypatch):
 
     monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
     monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", _spy_acquire)
+    # Hermetic: don't let ambient op-pending state in a shared Redis make a
+    # sync task defer before it reaches the mutex acquire we're spying on.
+    monkeypatch.setattr(assessment_tasks, "is_workable_op_pending", lambda *a, **kw: False)
     from app.components.integrations.workable import sync_service as sync_service_mod
 
     monkeypatch.setattr(sync_service_mod, "WorkableSyncService", _FakeService)

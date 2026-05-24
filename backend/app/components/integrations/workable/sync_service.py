@@ -9,7 +9,7 @@ import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
@@ -992,6 +992,7 @@ class WorkableSyncService:
         run_id: int | None = None,
         mode: str = "metadata",
         selected_job_shortcodes: list[str] | None = None,
+        should_yield: Callable[[], bool] | None = None,
     ) -> dict:
         run = self._get_sync_run(db, run_id)
         requested_mode = (mode or "metadata").strip().lower()
@@ -1091,6 +1092,26 @@ class WorkableSyncService:
             for job_idx, job in enumerate(jobs):
                 if self._is_cancel_requested(db, org, run):
                     raise WorkableSyncCancelled()
+                # Cooperative fairness: a periodic sync holds the per-org
+                # Workable mutex for its whole run, which can starve a waiting
+                # user-facing write (decision approval/override). When one is
+                # pending, stop at this job boundary and release the lock; the
+                # remaining jobs resync on the next Beat tick (idempotent
+                # upserts). Bounds the lock hold to a single job's candidates.
+                if should_yield is not None and should_yield():
+                    logger.info(
+                        "Workable sync yielding the org mutex to a pending op "
+                        "after %d/%d jobs for org_id=%s",
+                        job_idx,
+                        len(jobs),
+                        org.id,
+                    )
+                    summary["errors"].append(
+                        "Paused for a pending Workable write; remaining roles "
+                        "resync on the next sync."
+                    )
+                    final_status = "partial"
+                    break
                 try:
                     role, created_role = self._upsert_role(db, org, job)
                     if created_role:

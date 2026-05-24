@@ -420,8 +420,12 @@ def enqueue_workable_op(
         counters=counters or {"op_type": op_type},
         status="queued",
     )
+    from ..tasks.assessment_tasks import mark_workable_op_pending
     from ..tasks.workable_tasks import run_workable_op_task
 
+    # Tell the periodic Workable syncs to yield the per-org mutex so this
+    # user-facing write isn't starved behind a long candidate sync.
+    mark_workable_op_pending(int(organization_id))
     run_workable_op_task.apply_async(
         kwargs={
             "job_run_id": job_run_id,

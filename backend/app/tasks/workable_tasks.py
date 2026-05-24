@@ -81,9 +81,14 @@ def run_workable_op_task(
     from .assessment_tasks import (
         _acquire_workable_org_mutex,
         _release_workable_org_mutex,
+        mark_workable_op_pending,
     )
 
     eager = bool(getattr(self.request, "is_eager", False))
+    # Refresh the op-pending signal on every run — including each lock-wait
+    # re-enqueue below — so the periodic syncs keep yielding the per-org mutex
+    # for as long as this write is waiting. Self-expires once we stop retrying.
+    mark_workable_op_pending(int(organization_id))
     # Short TTL + heartbeat (deploy-safe): if this worker is SIGKILLed
     # mid-write the heartbeat thread dies with it and the lock auto-expires in
     # ~2 min, instead of leaking for the 30-min static TTL and blocking ALL

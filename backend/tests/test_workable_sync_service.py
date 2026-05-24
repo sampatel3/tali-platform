@@ -803,3 +803,69 @@ def test_brand_new_disqualified_candidate_is_not_imported(db):
         CandidateApplication.workable_candidate_id == "cand_new_dq",
     ).first()
     assert app is None
+
+
+def test_sync_org_yields_to_pending_op_at_job_boundary(db):
+    """A periodic sync holds the per-org Workable mutex for its whole run, which
+    can starve a waiting user-facing write (decision approval/override). sync_org
+    polls ``should_yield`` at each job boundary and, once it fires, stops without
+    touching the remaining jobs so the waiting op can take the lock. Regression
+    for the lock-starvation incident where a long candidate sync timed approve
+    batches out with "Workable lock timeout"."""
+    from app.models.organization import Organization
+
+    class MockClient(WorkableService):
+        def __init__(self):
+            super().__init__(access_token="x", subdomain="test")
+
+        def list_open_jobs(self):
+            return [
+                {"id": "J1", "shortcode": "J1", "title": "Role One"},
+                {"id": "J2", "shortcode": "J2", "title": "Role Two"},
+            ]
+
+        def list_job_candidates(self, job_identifier, *, paginate=False, max_pages=None):
+            return [{"id": f"cand_{job_identifier}", "email": "c@example.com", "name": "C", "stage": "Screening"}]
+
+        def get_job_details(self, job_identifier):
+            return {}
+
+        def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
+            return None, None, None
+
+    org = Organization(
+        name="Yield Org",
+        slug="yield-org-workable-sync",
+        workable_connected=True,
+        workable_access_token="x",
+        workable_subdomain="test",
+    )
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+
+    service = WorkableSyncService(MockClient())
+
+    # An op is already pending: yield at the very first boundary, process no
+    # jobs, and surface the reason.
+    result = service.sync_org(db, org, mode="full", should_yield=lambda: True)
+    assert result["jobs_processed"] == 0
+    assert result["candidates_seen"] == 0
+    assert any("pending Workable write" in e for e in result["errors"])
+
+    # The op arrives mid-sync: finish the current job, then yield before the
+    # next one (bounds the lock hold to a single job's candidates).
+    calls = {"n": 0}
+
+    def yield_after_first() -> bool:
+        calls["n"] += 1
+        return calls["n"] > 1
+
+    result2 = service.sync_org(db, org, mode="full", should_yield=yield_after_first)
+    assert result2["jobs_processed"] == 1
+    assert result2["candidates_seen"] == 1
+
+    # No yield signal → the whole sync runs as before (both jobs).
+    result3 = service.sync_org(db, org, mode="full", should_yield=lambda: False)
+    assert result3["jobs_processed"] == 2
+    assert result3["candidates_seen"] == 2
