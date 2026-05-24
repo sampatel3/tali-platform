@@ -8,7 +8,7 @@ import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -869,6 +869,13 @@ def _extract_candidate_fields(payload: dict) -> dict:
     return fields
 
 
+# How long a role's cached Workable stage list is trusted before the next sync
+# refetches it. Stages change very rarely (recruiters edit a pipeline maybe once
+# a year), so a generous TTL keeps us well under Workable's rate limit while
+# still picking up the occasional pipeline edit within a few hours.
+WORKABLE_STAGES_TTL = timedelta(hours=6)
+
+
 class WorkableSyncService:
     def __init__(self, client: WorkableService):
         self.client = client
@@ -1416,6 +1423,35 @@ class WorkableSyncService:
                 return details
         return {}
 
+    def _refresh_role_stages(self, role: Role, shortcode: str | None) -> None:
+        """Refresh a role's cached Workable stage pipeline, TTL-gated.
+
+        Skips the fetch when we already have a stage list younger than
+        ``WORKABLE_STAGES_TTL``. A failed or empty fetch (Workable hiccup /
+        rate-limit) leaves the last-known list untouched so the picker never
+        regresses to "no stages" — and the missing timestamp means the next
+        sync retries.
+        """
+        if not shortcode:
+            return
+        synced_at = role.workable_stages_synced_at
+        if role.workable_stages and synced_at is not None:
+            if synced_at.tzinfo is None:
+                synced_at = synced_at.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) - synced_at < WORKABLE_STAGES_TTL:
+                return
+        try:
+            stages = self.client.list_job_stages(shortcode)
+        except Exception:
+            logger.exception("Failed to refresh Workable stages for role_id=%s", role.id)
+            return
+        # ``list_job_stages`` returns [] both for a genuinely empty pipeline and
+        # for a swallowed API error, so only commit a non-empty result. Every
+        # real Workable job has stages, so this never strands a valid empty.
+        if stages:
+            role.workable_stages = sanitize_json_for_storage(stages)
+            role.workable_stages_synced_at = datetime.now(timezone.utc)
+
     def _upsert_role(self, db: Session, org: Organization, job: dict) -> tuple[Role, bool]:
         # Prefer shortcode (used by Workable API for /jobs/:shortcode/candidates)
         job_id = sanitize_text_for_storage(str(job.get("shortcode") or job.get("id") or "").strip())
@@ -1473,6 +1509,10 @@ class WorkableSyncService:
         role.deleted_at = None  # restore if was soft-deleted
         role.source = "workable"
         role.workable_job_id = job_id or role.workable_job_id
+        # Cache the role's Workable stage pipeline so the stage pickers serve
+        # from our DB. TTL-gated so even the 5-min starred/agent syncs only hit
+        # Workable for this every few hours per role.
+        self._refresh_role_stages(role, role.workable_job_id)
         role.workable_job_data = sanitize_json_for_storage({**job, "details": details} if details else job)
         role.name = title
         # Build one formatted spec from full API data for display and attachment.

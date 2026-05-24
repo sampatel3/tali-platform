@@ -454,6 +454,81 @@ def test_workable_lookup_endpoints_return_configuration_data(client, db, monkeyp
     assert captured == {"shortcode": "ENG-1", "stage_shortcode": "ENG-1"}
 
 
+def test_stages_endpoint_serves_cached_pipeline_without_calling_workable(client, db, monkeypatch):
+    """A role with cached workable_stages is served from the DB — no live call."""
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+
+    headers, email = auth_headers(client, email="cached@example.com", organization_name="Cached Org")
+    owner = db.query(User).filter(User.email == email).first()
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "example"
+
+    cached = [{"id": "stage-1", "slug": "applied", "name": "Applied"}]
+    db.add(Role(
+        organization_id=org.id,
+        name="Cached Role",
+        source="workable",
+        workable_job_id="CACHED-1",
+        workable_stages=cached,
+    ))
+    db.commit()
+
+    def boom(self, shortcode):  # pragma: no cover - must never run on a cache hit
+        raise AssertionError("live Workable stages call should not happen on a cache hit")
+
+    monkeypatch.setattr(workable_routes.WorkableService, "list_job_stages", boom)
+
+    resp = client.get("/api/v1/workable/stages?shortcode=CACHED-1", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"stages": cached}
+
+
+def test_stages_endpoint_persists_live_result_on_cache_miss(client, db, monkeypatch):
+    """A role with no cached stages fetches live once, then persists for next time."""
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+
+    headers, email = auth_headers(client, email="miss@example.com", organization_name="Miss Org")
+    owner = db.query(User).filter(User.email == email).first()
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "example"
+    db.add(Role(
+        organization_id=org.id,
+        name="Miss Role",
+        source="workable",
+        workable_job_id="MISS-1",
+    ))
+    db.commit()
+
+    calls = {"n": 0}
+    live = [{"id": "stage-9", "slug": "offer", "name": "Offer"}]
+
+    def mock_stages(self, shortcode):
+        calls["n"] += 1
+        return live
+
+    monkeypatch.setattr(workable_routes.WorkableService, "list_job_stages", mock_stages)
+
+    first = client.get("/api/v1/workable/stages?shortcode=MISS-1", headers=headers)
+    assert first.status_code == 200, first.text
+    assert first.json() == {"stages": live}
+    assert calls["n"] == 1
+
+    role = db.query(Role).filter(Role.workable_job_id == "MISS-1").first()
+    db.refresh(role)
+    assert role.workable_stages == live
+    assert role.workable_stages_synced_at is not None
+
+    # Second call now served from the persisted cache — no further live call.
+    second = client.get("/api/v1/workable/stages?shortcode=MISS-1", headers=headers)
+    assert second.status_code == 200, second.text
+    assert second.json() == {"stages": live}
+    assert calls["n"] == 1
+
+
 def test_run_workable_sync_script_exits_without_email():
     """run_workable_sync script exits 1 when no email provided."""
     import sys

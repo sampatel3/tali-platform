@@ -26,6 +26,13 @@ class Role(Base):
     source = Column(String, default="manual", nullable=False)
     workable_job_id = Column(String, nullable=True, index=True)
     workable_job_data = Column(JSON, nullable=True)
+    # Cached Workable recruitment pipeline (the ordered stage list) for this
+    # job. Stored so the stage pickers serve instantly from our DB instead of
+    # making a live, throttled Workable API call on every modal open. Refreshed
+    # by the periodic sync (TTL-gated in _upsert_role) and on-demand for roles
+    # not yet synced.
+    workable_stages = Column(JSON, nullable=True)
+    workable_stages_synced_at = Column(DateTime(timezone=True), nullable=True)
     job_spec_file_url = Column(String, nullable=True)
     job_spec_filename = Column(String, nullable=True)
     job_spec_text = Column(Text, nullable=True)
