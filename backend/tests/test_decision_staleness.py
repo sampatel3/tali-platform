@@ -163,6 +163,86 @@ def test_criteria_edit_marks_stale(db):
     assert report.summary  # human label present
 
 
+def _rederive_criteria(db, role, specs):
+    """Simulate Workable ``_replace_derived_criteria``: hard-delete every
+    active criterion and re-insert ``specs`` with genuinely FRESH row ids.
+
+    Postgres assigns new serial ids on re-insert; SQLite would otherwise reuse
+    the just-freed id, which would mask an id-based-hash regression. We force
+    ids strictly above the prior max so the "content-only" guarantee is
+    actually exercised.
+    """
+    from sqlalchemy import func
+
+    prev_max = db.query(func.max(RoleCriterion.id)).scalar() or 0
+    db.query(RoleCriterion).filter(RoleCriterion.role_id == role.id).delete()
+    db.flush()
+    for offset, (text, bucket, weight) in enumerate(specs, start=1):
+        db.add(
+            RoleCriterion(
+                id=prev_max + offset,
+                role_id=role.id,
+                text=text,
+                bucket=bucket,
+                weight=weight,
+            )
+        )
+    db.flush()
+
+
+def test_criteria_fingerprint_is_content_only_stable_across_id_churn(db):
+    """The fingerprint must hash criteria CONTENT, not row ids.
+
+    Regression for the prod incident: Workable sync hard-deletes + re-inserts
+    derived criteria with new ids on every tick. An id-based hash churned each
+    sync and spuriously marked every pending decision stale. Content-only means
+    re-deriving identical criteria is a no-op.
+    """
+    _, role, _, _ = _seed(db)
+    fp_before = decision_staleness.criteria_content_fingerprint(db, int(role.id))
+    assert fp_before  # baseline present
+
+    # Re-derive the SAME criterion (different row id, identical content).
+    _rederive_criteria(db, role, [("5y Python", "must_have", 2.0)])
+    db.commit()
+    fp_after = decision_staleness.criteria_content_fingerprint(db, int(role.id))
+
+    # New row id but identical content → identical fingerprint.
+    assert fp_after == fp_before
+
+
+def test_criteria_rederive_identical_keeps_decision_fresh(db):
+    """End-to-end: a sync re-derive of unchanged criteria must NOT flip a
+    pending decision to stale (the bug that 409'd advances in prod)."""
+    org, role, _, app = _seed(db)
+    decision = _queue(db, org, role, app)
+    assert decision_staleness.evaluate(db, decision).is_stale is False
+
+    _rederive_criteria(db, role, [("5y Python", "must_have", 2.0)])
+    db.commit()
+
+    report = decision_staleness.evaluate(db, decision)
+    assert report.is_stale is False
+    assert "criteria_changed" not in report.reasons
+
+
+def test_criteria_rederive_with_changed_content_marks_stale(db):
+    """The flip-side guard: a re-derive that actually changes criterion
+    content (new requirement) must still mark the decision stale."""
+    org, role, _, app = _seed(db)
+    decision = _queue(db, org, role, app)
+
+    _rederive_criteria(
+        db, role,
+        [("5y Python", "must_have", 2.0), ("Kubernetes in prod", "nice_to_have", 1.0)],
+    )
+    db.commit()
+
+    report = decision_staleness.evaluate(db, decision)
+    assert report.is_stale is True
+    assert "criteria_changed" in report.reasons
+
+
 def test_pre_screen_score_swing_marks_stale(db):
     org, role, _, app = _seed(db)
     decision = _queue(db, org, role, app)

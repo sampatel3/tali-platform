@@ -76,15 +76,23 @@ def _score_drift(old: Optional[float], new: Optional[float]) -> bool:
         return False
 
 
-def _recompute_criteria_fingerprint(
+def criteria_content_fingerprint(
     db: Session, role_id: int, *, cache: "StalenessCache | None" = None
 ) -> str | None:
-    """Mirror of queue_decision._capture_input_fingerprint's criteria hash.
+    """Content-only fingerprint of a role's active criteria.
 
-    Must stay in sync — if the queue-time hashing changes, this must
-    change identically. Centralising the hashing function in a single
-    place is a follow-up; for now both sides use the same simple
-    ``id:text:bucket:weight`` join.
+    Hashes the SORTED ``text:bucket:weight:must_have`` of each criterion and
+    deliberately EXCLUDES the volatile row ``id``. ``sync_derived_criteria``
+    hard-deletes + re-inserts the derived criteria with fresh ids on every
+    sync; an id-based hash therefore churned on each tick and spuriously marked
+    every pending decision stale even when the job spec (and thus the criteria
+    text) was unchanged. Content-only means re-deriving identical criteria is a
+    no-op for staleness — only a real text/bucket/weight/must-have change flips
+    it.
+
+    This is the single source of truth shared by the queue-time capture
+    (``queue_decision``) and the staleness recompute so the two can never
+    diverge. Returns None when the role has no criteria.
     """
     if cache is not None and role_id in cache.criteria_fp:
         return cache.criteria_fp[role_id]
@@ -94,17 +102,23 @@ def _recompute_criteria_fingerprint(
             RoleCriterion.role_id == role_id,
             RoleCriterion.deleted_at.is_(None),
         )
-        .order_by(RoleCriterion.id)
         .all()
     )
-    signature = "|".join(
-        f"{c.id}:{(c.text or '').strip()}:{c.bucket or ''}:{c.weight or 0}"
-        for c in rows
-    )
-    result = hashlib.sha256(signature.encode("utf-8")).hexdigest()
+    if not rows:
+        result: str | None = None
+    else:
+        parts = sorted(
+            f"{(c.text or '').strip()}:{c.bucket or ''}:{c.weight or 0}:{int(bool(getattr(c, 'must_have', False)))}"
+            for c in rows
+        )
+        result = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
     if cache is not None:
         cache.criteria_fp[role_id] = result
     return result
+
+
+# Back-compat alias: existing internal call sites used this name.
+_recompute_criteria_fingerprint = criteria_content_fingerprint
 
 
 def _latest_recruiter_note_id(
