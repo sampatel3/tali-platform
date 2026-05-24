@@ -20,7 +20,7 @@ import { AlertTriangle, ArrowRight, X } from 'lucide-react';
 
 import { agent as agentApi } from '../../shared/api';
 
-const _normalizeStages = (stages) => {
+export const normalizeWorkableStages = (stages) => {
   if (!Array.isArray(stages)) return [];
   return stages
     .map((stage) => {
@@ -49,7 +49,7 @@ export const OverrideModal = ({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
 
-  const stageOptions = useMemo(() => _normalizeStages(workableStages), [workableStages]);
+  const stageOptions = useMemo(() => normalizeWorkableStages(workableStages), [workableStages]);
 
   useEffect(() => {
     const onKey = (e) => {

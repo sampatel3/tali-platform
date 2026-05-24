@@ -5,7 +5,7 @@
 // params. Approve / Override / Snooze hit the existing endpoints; Teach
 // opens TeachModal which POSTs /agent/feedback.
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
   Brain,
@@ -36,7 +36,7 @@ import {
   TypeBadge,
 } from './atoms';
 import { TeachModal } from './TeachModal';
-import { OverrideModal } from './OverrideModal';
+import { OverrideModal, normalizeWorkableStages } from './OverrideModal';
 import { ActivityFeed } from './ActivityFeed';
 import AgentNeedsInputCard from '../jobs/AgentNeedsInputCard';
 
@@ -603,29 +603,32 @@ export const HomeNow = ({
     [decisions, selectedId, pendingOrdered],
   );
 
-  // Lazy-fetch the selected decision's role stages when it's an advance-
-  // flavored decision. Cached by shortcode so switching between two
-  // decisions on the same role only fetches once.
+  // Lazy-load a role's Workable stages, cached by shortcode so we only ever
+  // fetch once per role. Drives both the single-decision modal and the
+  // per-role pickers in the bulk-approve modal. ``undefined`` = not fetched,
+  // ``[]`` = fetched-but-empty / in-flight placeholder, populated array = ready.
+  const ensureStages = useCallback((shortcode) => {
+    if (!shortcode) return;
+    setStagesByShortcode((prev) => {
+      if (prev[shortcode] !== undefined) return prev; // already fetched / in-flight
+      orgsApi
+        .getWorkableStages({ shortcode })
+        .then((res) => {
+          const list = Array.isArray(res?.data?.stages) ? res.data.stages : [];
+          setStagesByShortcode((p) => ({ ...p, [shortcode]: list }));
+        })
+        .catch(() => {
+          setStagesByShortcode((p) => ({ ...p, [shortcode]: [] }));
+        });
+      return { ...prev, [shortcode]: [] }; // optimistic placeholder to dedupe in-flight
+    });
+  }, []);
+
+  // Lazy-fetch the selected decision's role stages so the single-decision
+  // modal's picker is ready when it opens.
   useEffect(() => {
-    const shortcode = selected?.workable_job_id;
-    if (!shortcode) return undefined;
-    if (stagesByShortcode[shortcode] !== undefined) return undefined;
-    let cancelled = false;
-    setStagesByShortcode((prev) => ({ ...prev, [shortcode]: [] })); // optimistic placeholder to dedupe in-flight
-    orgsApi
-      .getWorkableStages({ shortcode })
-      .then((res) => {
-        if (cancelled) return;
-        const list = Array.isArray(res?.data?.stages) ? res.data.stages : [];
-        setStagesByShortcode((prev) => ({ ...prev, [shortcode]: list }));
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setStagesByShortcode((prev) => ({ ...prev, [shortcode]: [] }));
-      });
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.workable_job_id]);
+    ensureStages(selected?.workable_job_id);
+  }, [selected?.workable_job_id, ensureStages]);
 
   const handleApprove = async (decision) => {
     // ``advance_to_interview`` opens the same confirmation modal as the
@@ -701,6 +704,9 @@ export const HomeNow = ({
   // recruiter saw, even if the queue reloads underneath the modal. Replaces
   // the native window.confirm so the dialog uses the app's design tokens.
   const [bulkConfirm, setBulkConfirm] = useState(null);
+  // Recruiter's per-role Workable stage picks for the bulk-approve modal,
+  // keyed by role_id. Only the advancing roles need one; reset each open.
+  const [bulkStages, setBulkStages] = useState({});
 
   const handleBulkApprove = () => {
     if (bulkBusy || visiblePending.length === 0) return;
@@ -719,16 +725,41 @@ export const HomeNow = ({
       .join(', ');
     const more = count > 3 ? ` and ${count - 3} more` : '';
     const ids = visiblePending.map((d) => Number(d.id));
-    setBulkConfirm({ count, typeLabel, roleScope, sample, more, ids });
+    // Only ``advance_to_interview`` approvals move the candidate in Workable,
+    // and only when the role is linked to a Workable job (has a shortcode).
+    // Group those by role so we can ask for one target stage per role —
+    // a bulk set can span roles, each with its own Workable stage list.
+    const advanceRolesMap = new Map();
+    for (const d of visiblePending) {
+      if (d.decision_type !== 'advance_to_interview' || !d.workable_job_id) continue;
+      const key = Number(d.role_id);
+      if (!advanceRolesMap.has(key)) {
+        advanceRolesMap.set(key, {
+          role_id: key,
+          role_name: d.role_name || `Role #${key}`,
+          shortcode: d.workable_job_id,
+          count: 0,
+        });
+      }
+      advanceRolesMap.get(key).count += 1;
+    }
+    const advanceRoles = [...advanceRolesMap.values()];
+    setBulkStages({});
+    setBulkConfirm({ count, typeLabel, roleScope, sample, more, ids, advanceRoles });
   };
 
   const runBulkApprove = async () => {
     if (!bulkConfirm) return;
     const { ids, count } = bulkConfirm;
+    const stages = { ...bulkStages };
     setBulkConfirm(null);
     setBulkBusy(true);
     try {
-      const res = await agentApi.bulkApproveDecisions(ids);
+      const res = await agentApi.bulkApproveDecisions(
+        ids,
+        null,
+        Object.keys(stages).length ? stages : null,
+      );
       const payload = res?.data || {};
       const approved = Number(payload.approved || 0);
       const failed = Array.isArray(payload.failures) ? payload.failures.length : 0;
@@ -742,8 +773,29 @@ export const HomeNow = ({
       showToast?.(apiErrorMessage(err, 'Bulk approve failed'), 'error');
     } finally {
       setBulkBusy(false);
+      setBulkStages({});
     }
   };
+
+  // When the bulk-confirm modal opens, prefetch the Workable stages for every
+  // advancing role so each role's picker is ready.
+  useEffect(() => {
+    (bulkConfirm?.advanceRoles || []).forEach((r) => ensureStages(r.shortcode));
+  }, [bulkConfirm, ensureStages]);
+
+  // Gate the bulk Confirm: every advancing role must either have a stage
+  // picked, or have no stages to pick (load failed / none configured — the
+  // candidate advances on Tali's internal stage, same as the single modal).
+  // While a role's stages are still loading, hold Confirm.
+  const bulkStagesReady = useMemo(() => {
+    const roles = bulkConfirm?.advanceRoles || [];
+    return roles.every((r) => {
+      const raw = stagesByShortcode[r.shortcode];
+      if (raw === undefined) return false; // still loading
+      if (normalizeWorkableStages(raw).length === 0) return true; // nothing to pick
+      return Boolean(bulkStages[r.role_id]);
+    });
+  }, [bulkConfirm, stagesByShortcode, bulkStages]);
 
   // The action only makes sense when looking at pending rows. Hide
   // otherwise so we don't promise to approve overridden / approved
@@ -910,7 +962,51 @@ export const HomeNow = ({
             </div>
 
             <div className="rq-modal-body">
-              <p style={{ margin: 0, fontSize: 13, color: 'var(--mute)', lineHeight: 1.5 }}>
+              {bulkConfirm.advanceRoles.length > 0 ? (
+                <div className="rq-modal-section">
+                  <span className="rq-modal-label">
+                    Move advancing candidates to which Workable stage? (required)
+                  </span>
+                  {bulkConfirm.advanceRoles.map((r) => {
+                    const raw = stagesByShortcode[r.shortcode];
+                    const stages = normalizeWorkableStages(raw);
+                    const picked = bulkStages[r.role_id];
+                    return (
+                      <div key={r.role_id} style={{ marginTop: 10 }}>
+                        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginBottom: 6 }}>
+                          {r.role_name} · {r.count} advancing
+                        </div>
+                        {raw === undefined ? (
+                          <span style={{ fontSize: 12, color: 'var(--mute)' }}>Loading stages…</span>
+                        ) : stages.length === 0 ? (
+                          <span style={{ fontSize: 12, color: 'var(--mute)' }}>
+                            No Workable stages found for this role. These candidates' internal stage will still update; nothing posts to Workable.
+                          </span>
+                        ) : (
+                          <div className="rq-modal-pills" role="radiogroup" aria-label={`Workable stage for ${r.role_name}`}>
+                            {stages.map((stage) => {
+                              const isOn = picked === stage.value;
+                              return (
+                                <button
+                                  key={stage.value}
+                                  type="button"
+                                  role="radio"
+                                  aria-checked={isOn}
+                                  className={`rq-modal-pill ${isOn ? 'on' : ''}`}
+                                  onClick={() => setBulkStages((prev) => ({ ...prev, [r.role_id]: stage.value }))}
+                                >
+                                  <span>{stage.label}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+              <p style={{ margin: bulkConfirm.advanceRoles.length > 0 ? '12px 0 0' : 0, fontSize: 13, color: 'var(--mute)', lineHeight: 1.5 }}>
                 This runs each approval in turn and reports any failures.
               </p>
             </div>
@@ -919,7 +1015,13 @@ export const HomeNow = ({
               <button type="button" className="rq-btn ghost" onClick={() => setBulkConfirm(null)}>
                 Cancel
               </button>
-              <button type="button" className="rq-btn rq-teach" onClick={runBulkApprove}>
+              <button
+                type="button"
+                className="rq-btn rq-teach"
+                onClick={runBulkApprove}
+                disabled={!bulkStagesReady}
+                title={bulkStagesReady ? undefined : 'Pick a Workable stage for each advancing role first'}
+              >
                 <Check size={13} strokeWidth={2} aria-hidden="true" />
                 {`Approve ${bulkConfirm.count}`}
               </button>

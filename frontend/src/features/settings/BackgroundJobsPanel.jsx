@@ -155,6 +155,45 @@ function GraphCounters({ data }) {
   );
 }
 
+// Recruiter approve / bulk-approve of Hub decisions — one row drains the
+// batch's Workable writebacks sequentially.
+function DecisionBatchCounters({ data }) {
+  const total = Number(data?.total ?? 0);
+  const succeeded = Number(data?.succeeded ?? 0);
+  const requeued = Number(data?.requeued ?? 0);
+  const failed = Number(data?.failed ?? 0);
+  const annot = [];
+  if (requeued) annot.push(`${requeued} requeued`);
+  if (failed) annot.push(`${failed} failed`);
+  return (
+    <div className="bg-jobs-panel-counters">
+      <strong>{succeeded}</strong> / {total} approved
+      {annot.length ? <div className="bg-jobs-panel-breakdown">{annot.join(' · ')}</div> : null}
+    </div>
+  );
+}
+
+// A single Workable write-back op (override, hand-back stage move, manual
+// outcome sync, note) run through the generic serialized runner.
+const WORKABLE_OP_LABELS = {
+  override_decision: 'Override',
+  move_stage: 'Stage move',
+  manual_outcome: 'Outcome sync',
+  post_note: 'Note',
+};
+
+function WorkableOpCounters({ data }) {
+  const opType = String(data?.op_type || '');
+  const label = WORKABLE_OP_LABELS[opType] || (opType ? opType.replace(/_/g, ' ') : 'Workable op');
+  const code = data?.code ? String(data.code) : null;
+  return (
+    <div className="bg-jobs-panel-counters">
+      <strong>{label}</strong>
+      {code ? <div className="bg-jobs-panel-breakdown">{code}</div> : null}
+    </div>
+  );
+}
+
 function WorkableCounters({ data }) {
   const jobsTotal = Number(data?.jobs_total ?? 0);
   const jobsProcessed = Number(data?.jobs_processed ?? 0);
@@ -487,6 +526,52 @@ export default function BackgroundJobsPanel() {
             status={r.status}
             scope="Org-wide"
             counters={<GraphCounters data={{ ...r.counters }} />}
+            startedAt={r.started_at}
+            finishedAt={r.finished_at}
+          />
+        ),
+      });
+    }
+
+    // Decision approve / bulk-approve batches + single Workable write-back
+    // ops. Both run server-side only (no live in-memory source), so they
+    // render purely from history. Scope is org-wide.
+    for (const r of history) {
+      if (r.kind !== 'decision_batch') continue;
+      if (!isRecentTerminal(r.status, r.finished_at, showAllHistory)) continue;
+      rows.push({
+        key: `decision-hist-${r.id}`,
+        type: 'Decision approvals',
+        status: r.status,
+        sortAt: tsValue(r.started_at),
+        node: (
+          <JobRow
+            key={`decision-hist-${r.id}`}
+            type="Decision approvals"
+            status={r.status}
+            scope="Org-wide"
+            counters={<DecisionBatchCounters data={{ ...r.counters }} />}
+            startedAt={r.started_at}
+            finishedAt={r.finished_at}
+          />
+        ),
+      });
+    }
+    for (const r of history) {
+      if (r.kind !== 'workable_op') continue;
+      if (!isRecentTerminal(r.status, r.finished_at, showAllHistory)) continue;
+      rows.push({
+        key: `workable-op-hist-${r.id}`,
+        type: 'Workable update',
+        status: r.status,
+        sortAt: tsValue(r.started_at),
+        node: (
+          <JobRow
+            key={`workable-op-hist-${r.id}`}
+            type="Workable update"
+            status={r.status}
+            scope="Org-wide"
+            counters={<WorkableOpCounters data={{ ...r.counters }} />}
             startedAt={r.started_at}
             finishedAt={r.finished_at}
           />

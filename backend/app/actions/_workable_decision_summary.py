@@ -3,11 +3,11 @@
 Two responsibilities, both invoked from ``approve_decision`` /
 ``override_decision`` after the underlying action has already succeeded:
 
-1. ``try_workable_advance`` — move the candidate in Workable to the org's
-   configured ``advance_stage_name`` whenever the recruiter advanced (or
-   skip-advanced) them. Without this, "Advance" / "Skip & advance" only
-   change Tali's internal pipeline_stage and the recruiter's Workable
-   view is silently out of sync.
+1. ``try_workable_advance`` — move the candidate in Workable to the
+   recruiter-picked ``target_stage`` whenever they advanced (or
+   skip-advanced) them. When no stage is supplied the Workable move is
+   skipped, so "Advance" / "Skip & advance" only change Tali's internal
+   pipeline_stage and the recruiter's Workable view is silently out of sync.
 
 2. ``post_decision_summary_to_workable`` — post a short activity-feed note
    ("TAALI ▸ Advanced by recruiter · score 85 · …  Report (30d): https://…")
