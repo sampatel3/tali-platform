@@ -71,12 +71,26 @@ class SendAssessmentResult:
         }
 
 
+class _RoleTaskMisconfigured(Exception):
+    """Role has 0 or ambiguous (>1) task linkage — recruiter action required.
+
+    Distinct from a bad *explicit* ``task_id`` (a hard input error): a 0/ambiguous
+    linkage is a role-config gap the recruiter has to resolve, so ``run`` degrades
+    it to a soft ``misconfigured`` status instead of raising — otherwise approving
+    the agent's send_assessment recommendation 422s and the decision re-queues in
+    a loop with no usable signal.
+    """
+
+    def __init__(self, detail: str):
+        super().__init__(detail)
+        self.detail = detail
+
+
 def _resolve_task(role: Role, task_id: Optional[int]) -> Task:
     tasks = list(role.tasks or [])
     if not tasks:
-        raise HTTPException(
-            status_code=422,
-            detail=f"role {role.id} has no tasks linked — cannot send assessment",
+        raise _RoleTaskMisconfigured(
+            f"role {role.id} has no tasks linked — cannot send assessment"
         )
     if task_id is not None:
         for t in tasks:
@@ -88,12 +102,9 @@ def _resolve_task(role: Role, task_id: Optional[int]) -> Task:
         )
     if len(tasks) == 1:
         return tasks[0]
-    raise HTTPException(
-        status_code=422,
-        detail=(
-            f"role {role.id} has {len(tasks)} linked tasks; pass task_id explicitly "
-            "to disambiguate (recruiter must pick when there are multiple)."
-        ),
+    raise _RoleTaskMisconfigured(
+        f"role {role.id} has {len(tasks)} linked tasks; pass task_id explicitly "
+        "to disambiguate (recruiter must pick when there are multiple)."
     )
 
 
@@ -146,10 +157,8 @@ def run(
 
     try:
         task = _resolve_task(role, task_id)
-    except HTTPException as exc:
-        if exc.status_code == 422 and "linked tasks" in str(exc.detail or ""):
-            return SendAssessmentResult(None, "misconfigured", str(exc.detail))
-        raise
+    except _RoleTaskMisconfigured as exc:
+        return SendAssessmentResult(None, "misconfigured", exc.detail)
 
     # Idempotency: refuse if a valid assessment already exists.
     existing = latest_valid_role_assessment(

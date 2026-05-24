@@ -449,7 +449,12 @@ def test_approve_decision_dispatches_send_assessment(db):
     db.add(decision)
     db.flush()
 
-    with patch("app.actions.approve_decision.send_assessment.run") as mock_run:
+    # The dispatch must actually succeed ("sent") for the decision to close as
+    # approved — a non-sent status (e.g. misconfigured) raises instead.
+    sent_result = type("_R", (), {"status": "sent", "detail": None})()
+    with patch(
+        "app.actions.approve_decision.send_assessment.run", return_value=sent_result
+    ) as mock_run:
         approve_decision.run(
             db,
             Actor.recruiter(user),
