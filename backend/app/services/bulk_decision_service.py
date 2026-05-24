@@ -3,20 +3,30 @@
 The decision-policy engine verdict is fully deterministic, so we don't
 need the LLM agent (capped at ~1 send + ~5 rejects per 30-min cycle) to
 work through a large cohort one candidate at a time. This pass runs the
-engine over every undecided, pre-screen-passing, scored, open candidate
-using the scores ALREADY stored on the application — no sub-agents, no
-Anthropic calls — and queues the verdict through the normal
-``queue_decision`` guard stack (one-pending-per-app, cross-cycle dedup,
-terminal-state refusal).
+engine over every undecided, scored, open candidate using the scores
+ALREADY stored on the application — no sub-agents, no Anthropic calls —
+and queues the verdict through the normal ``queue_decision`` guard stack
+(one-pending-per-app, cross-cycle dedup, terminal-state refusal).
+
+Coverage is EVERY scored candidate, not just pre-screen-passers. A scored
+candidate below the pre-screen line is owned by nobody else: the
+pre-screen reject emitter defers once a candidate is cv_match-scored
+("agent owns the cv_match decision"), so without this pass it can only be
+decided by the LLM — and strands when the LLM is unreachable. Banding the
+engine on role-fit covers it deterministically.
 
 Banding (after the effective-threshold overlay collapses the boundary):
   - role_fit < threshold              -> reject
-  - role_fit >= threshold, has task   -> send_assessment
-  - role_fit >= threshold, no task    -> advance_to_interview (skip assessment)
+  - role_fit >= threshold, has task   -> send_assessment   (needs pre_screen >= 50)
+  - role_fit >= threshold, no task    -> advance_to_interview (needs pre_screen >= 50)
+  - role_fit >= threshold, pre_screen < 50 -> no_action (left to LLM/recruiter)
 
-The LLM agent still runs afterward for judgment/abstention/recruiter
-questions; ``find_apps_in_state`` already excludes apps that now have a
-pending decision, so there's no double-queue.
+The send_assessment rule independently gates on ``pre_screen_min`` (50),
+which ``apply_effective_threshold`` leaves untouched — so a low-pre-screen
+candidate can never be auto-sent/advanced; it either rejects on role-fit
+or falls through to ``no_action``. The LLM agent still runs afterward for
+those judgment/abstention/recruiter cases; ``find_apps_in_state`` excludes
+apps that now have a pending decision, so there's no double-queue.
 """
 from __future__ import annotations
 
@@ -43,10 +53,6 @@ from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 
 logger = logging.getLogger("taali.bulk_decision")
-
-# Pre-screen "yes" cutoff — only candidates at/above this reach role-fit
-# banding (matches runner_pre_screen + the policy's pre_screen_min).
-PRE_SCREEN_PASS_MIN = 50.0
 
 # Cap per role per pass so one tick can't run unbounded DB work; a 300+
 # cohort still clears in one or two ticks.
@@ -93,9 +99,19 @@ def _inputs_for(app, *, role_id, org_id, eff, has_task):
     scores — no sub-agents, no LLM. Shared by the decide loop and the
     threshold-shift reconcile so both evaluate identically."""
     role_fit = _role_fit_score(app)
-    pre_screen = float(app.pre_screen_score_100) if app.pre_screen_score_100 is not None else None
-    if role_fit is None or pre_screen is None:
+    if role_fit is None:
         return None
+    # pre_screen_score_100 is a shared "best available score" column that
+    # full cv_match scoring overwrites, so for a scored candidate it tracks
+    # role-fit. When genuinely absent, fall back to role_fit so the reject
+    # band can still evaluate. A low pre-screen never produces a false
+    # send/advance: the send_assessment rule independently gates on
+    # pre_screen_min (50), which apply_effective_threshold leaves untouched.
+    pre_screen = (
+        float(app.pre_screen_score_100)
+        if app.pre_screen_score_100 is not None
+        else role_fit
+    )
     return DecisionInputs(
         application_id=int(app.id),
         role_id=int(role_id),
@@ -204,8 +220,6 @@ def decide_role_cohort(
             CandidateApplication.application_outcome == "open",
             CandidateApplication.pipeline_stage.in_(["applied", "review"]),
             CandidateApplication.cv_match_score.isnot(None),
-            CandidateApplication.pre_screen_score_100.isnot(None),
-            CandidateApplication.pre_screen_score_100 >= PRE_SCREEN_PASS_MIN,
             not_(
                 db.query(AgentDecision.id)
                 .filter(

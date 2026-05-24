@@ -230,3 +230,49 @@ def test_reconcile_noop_when_threshold_unchanged(db):
     summary = decide_role_cohort(db, role=role)
     assert summary.get("reconciled_discarded", 0) == 0
     assert len(_pending(db, role)) == 1
+
+
+def test_scored_below_pre_screen_line_still_rejected(db):
+    """A scored candidate below the pre-screen line (pre_screen < 50) is still
+    decided deterministically — previously it was skipped by the pre_screen>=50
+    gate and could only be decided by the (possibly unreachable) LLM."""
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    # Mirrors the stranded prod rows: pre_screen == cv_match, both < 50.
+    _add_app(db, org, role, role_fit=20.0, pre_screen=20.0)
+    _add_app(db, org, role, role_fit=35.0, pre_screen=35.0)
+
+    summary = decide_role_cohort(db, role=role)
+
+    decs = _pending(db, role)
+    assert len(decs) == 2, "sub-50 scored candidates must now be decided"
+    assert sorted(d.decision_type for d in decs) == ["reject", "reject"]
+    assert summary["created"] == 2
+    assert db.query(UsageEvent).count() == 0  # still no LLM
+
+
+def test_high_role_fit_low_pre_screen_is_no_action(db):
+    """Safety: a candidate above the role-fit bar but below pre_screen_min is
+    NOT auto-sent/advanced — the send rule's independent pre_screen_min gate
+    holds, so it falls through to no_action and is left to the LLM/recruiter."""
+    org, role = _seed_role(db, score_threshold=50, with_task=True)
+    _add_app(db, org, role, role_fit=80.0, pre_screen=20.0)
+
+    summary = decide_role_cohort(db, role=role)
+
+    assert summary["candidates"] == 1  # selected (no longer gated out)
+    assert _pending(db, role) == []  # but no decision emitted
+    assert summary.get("created", 0) == 0
+
+
+def test_null_pre_screen_scored_candidate_evaluated(db):
+    """A scored candidate with no stored pre_screen score is still evaluated —
+    pre_screen falls back to role_fit so the reject band applies, rather than
+    the candidate being silently dropped."""
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    _add_app(db, org, role, role_fit=20.0, pre_screen=None)
+
+    decide_role_cohort(db, role=role)
+
+    decs = _pending(db, role)
+    assert len(decs) == 1
+    assert decs[0].decision_type == "reject"
