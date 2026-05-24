@@ -102,6 +102,37 @@ def test_file_size_guard_for_api_and_service_paths() -> None:
     )
 
 
+def test_alembic_resolves_to_a_single_head() -> None:
+    """The migration graph must always reduce to one head.
+
+    Two PRs landing on main with overlapping migration ancestry can leave
+    alembic with multiple heads. ``alembic upgrade head`` then refuses to
+    pick between them, the Railway start script fails fast on the
+    migration step, and uvicorn never boots — production restart-loops.
+    GitHub marks such a pair as a CLEAN merge (the conflict is semantic,
+    not textual), so this is the only thing that catches it.
+
+    The CI ``backend`` job runs ``scripts/check_alembic_single_head.py``
+    (stdlib-only, no pip install) for the same assertion; this test mirrors
+    it for local ``pytest`` runs. When it fails, add a small merge-marker
+    migration whose ``down_revision`` is a tuple of the current heads.
+    """
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
+    # script_location in alembic.ini is relative to the config's directory;
+    # set it explicitly so this test is independent of pytest's cwd.
+    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
+    heads = list(ScriptDirectory.from_config(cfg).get_heads())
+
+    assert len(heads) == 1, (
+        "Alembic must resolve to exactly one head; found "
+        f"{len(heads)}: {heads}. Add a merge migration with these "
+        "as its `down_revision` tuple."
+    )
+
+
 def test_agent_mutation_tools_call_shared_action_layer() -> None:
     """Every agent mutation tool must call into ``app.actions.<name>.run``,
     not implement business logic inline. The same actions are called by
