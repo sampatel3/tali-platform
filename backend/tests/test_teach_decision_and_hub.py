@@ -335,6 +335,56 @@ def test_expired_snooze_returns_to_pending(db):
 
 
 # ---------------------------------------------------------------------------
+# KPI strip: pending decisions grouped by decision_type (the Hub
+# "Pending by type" breakdown). Counts the snooze-aware pending slice only
+# and must reconcile with pending_decisions.
+# ---------------------------------------------------------------------------
+
+
+def test_compute_kpis_pending_by_type_groups_and_reconciles(db):
+    from app.domains.agentic.hub_routes import _compute_kpis
+
+    s = _seed(db)  # one pending advance_to_interview
+    seq = iter(range(1, 1000))
+
+    def _add(decision_type, *, status="pending", snoozed_minutes=None):
+        d = AgentDecision(
+            organization_id=s.org.id,
+            role_id=s.role.id,
+            application_id=s.application.id,
+            decision_type=decision_type,
+            recommendation=decision_type,
+            status=status,
+            reasoning="x",
+            confidence=0.9,
+            model_version="m",
+            prompt_version="p",
+            idempotency_key=f"t:{s.application.id}:{decision_type}:{status}:{next(seq)}",
+        )
+        if snoozed_minutes is not None:
+            d.snoozed_until = datetime.now(timezone.utc) + timedelta(minutes=snoozed_minutes)
+        db.add(d)
+        db.flush()
+        return d
+
+    _add("send_assessment")
+    _add("send_assessment")
+    _add("skip_assessment_reject")
+    _add("reject", status="approved")  # resolved → excluded
+    _add("advance_to_interview", snoozed_minutes=30)  # still snoozed → excluded
+    db.commit()
+
+    kpis = _compute_kpis(db, organization_id=s.org.id, range_days=7)
+
+    assert kpis.pending_by_type == {
+        "advance_to_interview": 1,
+        "send_assessment": 2,
+        "skip_assessment_reject": 1,
+    }
+    assert sum(kpis.pending_by_type.values()) == kpis.pending_decisions
+
+
+# ---------------------------------------------------------------------------
 # approve / override now record human_disposition
 # ---------------------------------------------------------------------------
 

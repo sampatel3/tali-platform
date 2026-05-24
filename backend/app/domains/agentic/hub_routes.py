@@ -69,6 +69,21 @@ def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> 
         pending_filter(now),
     )
     pending_decisions = pending_decisions_q.count()
+    # Same snooze-aware pending slice, split by decision_type. Sums to
+    # ``pending_decisions`` so the Hub "Pending by type" strip reconciles
+    # with the queue count.
+    pending_by_type = {
+        str(dt): int(c)
+        for dt, c in (
+            db.query(AgentDecision.decision_type, func.count(AgentDecision.id))
+            .filter(
+                AgentDecision.organization_id == organization_id,
+                pending_filter(now),
+            )
+            .group_by(AgentDecision.decision_type)
+            .all()
+        )
+    }
     pending_questions = (
         db.query(AgentNeedsInput)
         .filter(
@@ -183,6 +198,7 @@ def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> 
         pending=int(pending),
         pending_decisions=int(pending_decisions),
         pending_questions=int(pending_questions),
+        pending_by_type=pending_by_type,
         today=int(today),
         auto_applied_today=int(auto_applied_today),
         org_budget_spent_cents=int(spent_cents),

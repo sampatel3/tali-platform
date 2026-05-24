@@ -108,6 +108,10 @@ class OrgKpiPayload(BaseModel):
     pending: int
     pending_decisions: int
     pending_questions: int
+    # Snooze-aware pending decisions grouped by raw decision_type
+    # (advance_to_interview / send_assessment / reject / …). Sums to
+    # ``pending_decisions``; the Hub strip buckets these for display.
+    pending_by_type: dict[str, int] = Field(default_factory=dict)
     today: int
     auto_applied_today: int
     org_budget_spent_cents: int
