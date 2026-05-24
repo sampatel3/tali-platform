@@ -189,9 +189,10 @@ def run_workable_op_task(
 # Watchdog timeout for a stuck approve batch. The batch handler
 # (``_op_approve_decisions``) catches per-decision and never raises, so its
 # ``BackgroundJobRun`` is ``running`` ONLY while actively draining the loop —
-# a few minutes for 100 decisions. ``running`` past this means the worker died
-# mid-batch (deploy SIGKILL) and the finally block never ran. 15 min clears
-# the longest realistic legitimate batch with margin.
+# a few minutes for 100 decisions. A run still ``queued``/``running`` past this
+# means a dead task: worker killed mid-batch (deploy SIGKILL, finally never ran)
+# or the lock-wait re-enqueue chain dropped. 15 min clears the longest realistic
+# legitimate batch AND exceeds the max lock-wait window (~60 × 5-15s) with margin.
 _STUCK_DECISION_BATCH_TIMEOUT_MINUTES = 15
 
 
@@ -201,20 +202,34 @@ _STUCK_DECISION_BATCH_TIMEOUT_MINUTES = 15
     max_retries=0,
 )
 def expire_stuck_decision_batches(self) -> dict:
-    """Recover approve batches whose worker was killed mid-run.
+    """Recover approve batches stranded by a worker death — in either state.
 
-    A SIGKILL (deploy) skips ``run_workable_op_task``'s finally block, so the
-    batch's decisions stay ``processing`` and its ``BackgroundJobRun`` stays
-    ``running`` forever. ``acks_late`` re-delivers the task eventually, but
-    Redis visibility-timeout makes that slow (~1h); this recovers within one
-    beat tick: stale-``running`` ``decision_batch`` runs are marked ``failed``
-    and their still-``processing`` decisions returned to the Hub queue.
+    Two failure modes leave a ``decision_batch`` run with its decisions stuck in
+    ``processing`` and no live task left to finish them:
+    - ``running``: a SIGKILL (deploy) skips ``run_workable_op_task``'s finally
+      block mid-write, so the run stays ``running`` forever.
+    - ``queued``: the task died inside the lock-wait re-enqueue loop (mutex held
+      by a concurrent Workable write). Each wait re-enqueues a FRESH countdown
+      task, so a worker restart that drops that in-flight message breaks the
+      chain and the run stays ``queued`` forever — it never reaches ``running``.
+
+    ``acks_late`` re-delivers the running case eventually (slow — ~1h Redis
+    visibility-timeout) but never covers the queued case. This recovers both
+    within one beat tick: stale ``queued``/``running`` ``decision_batch`` runs
+    are marked ``failed`` and their still-``processing`` decisions returned to
+    the Hub queue (from ``counters['decision_ids']``, persisted at enqueue for
+    exactly this).
 
     Scoped to ``decision_batch`` only — single ``workable_op`` runs retry with
     backoff and can be legitimately ``running`` for >2h, so reaping them here
     would false-fail a healthy retry; their worker-death is covered by
     ``acks_late`` re-delivery instead. The leaked Redis mutex is handled
     separately by the op-path heartbeat/short-TTL, not here.
+
+    The 15-min cutoff exceeds the max lock-wait window (~60 attempts × 5-15s),
+    so a healthily-waiting ``queued`` batch isn't reaped before its own chain
+    would self-fail. A late-acquiring task after a boundary race is harmless: the
+    batch handler idempotently skips decisions no longer in ``processing``.
 
     No-op when nothing is stuck. Idempotent — re-running skips decisions
     already moved out of ``processing`` and runs already out of ``running``.
@@ -236,7 +251,7 @@ def expire_stuck_decision_batches(self) -> dict:
             db.query(BackgroundJobRun)
             .filter(
                 BackgroundJobRun.kind == JOB_KIND_DECISION_BATCH,
-                BackgroundJobRun.status == "running",
+                BackgroundJobRun.status.in_(("queued", "running")),
                 BackgroundJobRun.finished_at.is_(None),
                 BackgroundJobRun.started_at < cutoff,
             )
@@ -244,6 +259,7 @@ def expire_stuck_decision_batches(self) -> dict:
         )
         now = datetime.now(timezone.utc)
         for run in stuck:
+            original_status = run.status
             decision_ids = [
                 int(x) for x in ((run.counters or {}).get("decision_ids") or [])
             ]
@@ -262,15 +278,15 @@ def expire_stuck_decision_batches(self) -> dict:
                 decision.status = "pending"
                 decision.resolution_note = (
                     f"Returned to queue by watchdog: approve batch (job {run.id}) "
-                    f"stalled >{_STUCK_DECISION_BATCH_TIMEOUT_MINUTES}m — worker "
-                    "likely killed mid-batch (deploy)."
+                    f"stalled in '{original_status}' >{_STUCK_DECISION_BATCH_TIMEOUT_MINUTES}m "
+                    "— worker killed mid-batch (deploy) or lost the lock-wait chain."
                 )[:500]
                 requeued_ids.append(decision_id)
             run.status = "failed"
             run.finished_at = now
             run.error = (
                 run.error
-                or f"watchdog: still running after {_STUCK_DECISION_BATCH_TIMEOUT_MINUTES}m — worker likely killed mid-batch"
+                or f"watchdog: stuck in '{original_status}' >{_STUCK_DECISION_BATCH_TIMEOUT_MINUTES}m — worker killed mid-batch or lost the lock-wait chain"
             )
             failed_run_ids.append(int(run.id))
         if failed_run_ids:
