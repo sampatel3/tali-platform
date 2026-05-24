@@ -26,7 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import desc, or_
@@ -63,6 +63,77 @@ logger = logging.getLogger("taali.cv_score_orchestrator")
 
 
 _V3_PROMPT_VERSION = "cv_fit_v3_evidence_enriched"
+
+
+# Exponential backoff for the AUTO-scoring path after a job errors.
+#
+# The cohort tick auto-enqueues a score for every open, unscored,
+# has-cv-text candidate every 30 min. Before this, only the *pre-screen*
+# error path engaged a backoff (flat 6h); a full v3 ``cv_match`` failure
+# (the shape an Anthropic credit-balance 400 takes — ``run_cv_match``
+# returns ``scoring_status=failed`` rather than raising) marked the job
+# ``error`` with no backoff marker, so the candidate was retried every
+# tick. During the 2026-05-24 credit outage that burned 50-69 failed
+# jobs per candidate on roles 110-113.
+#
+# Backoff = min(BASE * 2^(error_count-1), MAX), keyed on the last error.
+# BASE is one tick so a genuine transient blip recovers fast; the window
+# doubles each consecutive failure and caps at one attempt/day, so a
+# persistent failure settles to a 48x reduction from the old 30-min churn
+# while still self-healing once the underlying service recovers.
+#
+# Manual rescores (force=True) and CV changes bypass it entirely — the
+# explicit "retry now" escape hatches the task calls for.
+SCORE_ERROR_BACKOFF_BASE = timedelta(minutes=30)
+SCORE_ERROR_BACKOFF_MAX = timedelta(hours=24)
+
+
+def _score_error_backoff(error_count: int) -> timedelta:
+    """Backoff window for the ``error_count``-th consecutive scoring error.
+
+    ``error_count`` is 1-based (1 == first failure). Returns ``0`` for a
+    non-positive count (no errors → no backoff). The exponent is clamped
+    before the shift so a pathological counter can't overflow the
+    ``timedelta`` multiply; the result is capped at ``SCORE_ERROR_BACKOFF_MAX``
+    regardless.
+    """
+    if error_count <= 0:
+        return timedelta(0)
+    exponent = min(error_count - 1, 16)  # 2^16 * 30min already far exceeds the cap
+    return min(SCORE_ERROR_BACKOFF_BASE * (2 ** exponent), SCORE_ERROR_BACKOFF_MAX)
+
+
+def _record_score_attempt_outcome(
+    application: CandidateApplication,
+    job: CvScoreJob,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Update the application's scoring-error backoff state from a finished job.
+
+    Called once per scoring attempt (any stage — pre-screen error, v3
+    failure, pre-screen filter, or full score) so the backoff is keyed on
+    the *job outcome* uniformly rather than on which stage happened to fail:
+
+    - ``error``: bump ``score_error_count`` and push ``score_retry_after``
+      out by the exponential window so the auto path stops re-attempting
+      every tick.
+    - ``done``: a success (full score OR a clean pre-screen filter) clears
+      the backoff so the candidate is treated as healthy again.
+
+    Cancelled/stale jobs are intentionally NOT counted: a recruiter cancel
+    or a staleness invalidation isn't a scoring failure. ``score_retry_after``
+    is only consulted on the auto path; ``force=True`` callers bypass it.
+    """
+    now = now or datetime.now(timezone.utc)
+    if job.status == SCORE_JOB_ERROR:
+        application.score_error_count = int(application.score_error_count or 0) + 1
+        application.score_retry_after = now + _score_error_backoff(
+            application.score_error_count
+        )
+    elif job.status == SCORE_JOB_DONE:
+        application.score_error_count = 0
+        application.score_retry_after = None
 
 
 def _criteria_payload(role: Role | None) -> list[dict]:
@@ -268,6 +339,25 @@ def enqueue_score(
         )
         return None
 
+    # Scoring-error backoff (auto path only). A candidate whose scoring
+    # persistently errors — pre-screen error or full v3 failure — must not
+    # be re-attempted every 30-min cohort tick. ``score_retry_after`` is
+    # pushed out exponentially per consecutive failure by
+    # ``_record_score_attempt_outcome``; until it elapses, the auto path
+    # skips. ``force=True`` (manual rescore) and a CV change (which resets
+    # the marker via ``_clear_application_scores``) are the escape hatches.
+    if not force:
+        retry_after = getattr(application, "score_retry_after", None)
+        if retry_after is not None and datetime.now(timezone.utc) < retry_after:
+            logger.info(
+                "enqueue_score skipped for application=%s: scoring-error backoff "
+                "until %s (consecutive_errors=%s)",
+                application.id,
+                retry_after,
+                getattr(application, "score_error_count", None),
+            )
+            return None
+
     # Pre-flight credit gate. In shadow mode (USAGE_METER_LIVE=False) this
     # is a no-op. In live mode, orgs without enough balance get a silent
     # skip — the caller (batch loops or single-app routes) sees None and
@@ -360,6 +450,12 @@ def _execute_scoring(
     _execute_scoring_v3(
         db, application=application, job=job, force_full_score=force_full_score
     )
+    # Update the scoring-error backoff from this attempt's outcome. Errors
+    # (pre-screen error or v3 failure) push ``score_retry_after`` out
+    # exponentially so the auto path stops re-firing every tick; a success
+    # clears it. Must run before the cache/interview refreshes below so the
+    # backoff state is set even if those raise.
+    _record_score_attempt_outcome(application, job)
     # Sync the cached score columns (role_fit_score_cache_100,
     # taali_score_cache_100, score_mode_cache, pre_screen_score_100) so
     # the candidate-detail endpoint — which reads from the cache — sees
@@ -811,6 +907,11 @@ def _clear_application_scores(app: CandidateApplication) -> None:
     """
     app.pre_screen_run_at = None
     app.pre_screen_error_reason = None
+    # A CV/criteria change is a fresh shot — clear any scoring-error backoff
+    # so the next tick re-attempts immediately instead of waiting out a
+    # window earned by a now-stale CV.
+    app.score_error_count = 0
+    app.score_retry_after = None
 
 
 def supersede_pending_decisions_for_app(

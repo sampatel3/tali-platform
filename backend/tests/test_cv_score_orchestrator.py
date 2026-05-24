@@ -364,3 +364,154 @@ def test_rescore_wrongly_filtered_prescreen_selection(session) -> None:
     res = rescore_wrongly_filtered_prescreen(db, organization_id=int(org.id), dry_run=True)
     assert res["scanned"] == 1
     assert res["rescored"] == 1  # dry_run counts the one wrongly-filtered app
+
+
+# ---------------------------------------------------------------------------
+# Scoring-error backoff — full v3 failures (Anthropic credit outage shape)
+# must not re-enqueue every cohort tick.
+# ---------------------------------------------------------------------------
+
+
+def test_score_error_backoff_grows_exponentially_and_caps() -> None:
+    from datetime import timedelta
+
+    from app.services.cv_score_orchestrator import (
+        SCORE_ERROR_BACKOFF_BASE,
+        SCORE_ERROR_BACKOFF_MAX,
+        _score_error_backoff,
+    )
+
+    assert _score_error_backoff(0) == timedelta(0)
+    assert _score_error_backoff(1) == SCORE_ERROR_BACKOFF_BASE
+    assert _score_error_backoff(2) == SCORE_ERROR_BACKOFF_BASE * 2
+    assert _score_error_backoff(3) == SCORE_ERROR_BACKOFF_BASE * 4
+    # Eventually pins to the cap and never exceeds it, even for a huge count.
+    assert _score_error_backoff(50) == SCORE_ERROR_BACKOFF_MAX
+    assert _score_error_backoff(10_000) == SCORE_ERROR_BACKOFF_MAX
+
+
+def test_errored_full_score_sets_retry_after_backoff(monkeypatch, session) -> None:
+    """A v3 failure (the Anthropic credit-balance 400 shape — run_cv_match
+    returns FAILED, never raises) must stamp the exponential backoff so the
+    auto path stops re-firing every tick."""
+    from datetime import datetime, timezone
+
+    db, _org, _role, app = session
+    monkeypatch.setattr(
+        cv_match_runner,
+        "run_cv_match",
+        lambda *a, **kw: _stub_match_output(0.0, status=ScoringStatus.FAILED, error_reason="credit balance too low"),
+    )
+
+    before = datetime.now(timezone.utc)
+    job = enqueue_score(db, app)
+    db.commit()
+    db.refresh(job)
+    db.refresh(app)
+
+    assert job.status == SCORE_JOB_ERROR
+    assert app.score_error_count == 1
+    assert app.score_retry_after is not None
+    # First failure backs off by one base window (~30 min), not forever.
+    # SQLite drops tzinfo on round-trip (Postgres preserves it); normalise
+    # the stored value to UTC before comparing.
+    retry_after = app.score_retry_after
+    if retry_after.tzinfo is None:
+        retry_after = retry_after.replace(tzinfo=timezone.utc)
+    assert retry_after > before
+
+
+def test_successful_score_clears_backoff(monkeypatch, session) -> None:
+    """A success resets the counter so a recovered candidate is healthy."""
+    from datetime import datetime, timedelta, timezone
+
+    db, _org, _role, app = session
+    # Pretend the app already failed twice and is mid-backoff, but the
+    # window has elapsed so this attempt runs.
+    app.score_error_count = 2
+    app.score_retry_after = datetime.now(timezone.utc) - timedelta(minutes=1)
+    db.commit()
+
+    monkeypatch.setattr(cv_match_runner, "run_cv_match", lambda *a, **kw: _stub_match_output(81.0))
+    job = enqueue_score(db, app)
+    db.commit()
+    db.refresh(job)
+    db.refresh(app)
+
+    assert job.status == SCORE_JOB_DONE
+    assert app.cv_match_score == 81.0
+    assert app.score_error_count == 0
+    assert app.score_retry_after is None
+
+
+def test_enqueue_skipped_during_backoff_window(monkeypatch, session) -> None:
+    """Inside the backoff window the auto path (force=False) must not even
+    create a job — no Celery dispatch, no Anthropic call."""
+    from datetime import datetime, timedelta, timezone
+
+    db, _org, _role, app = session
+    call_count = {"n": 0}
+
+    def fake_run(*args, **kwargs):
+        call_count["n"] += 1
+        return _stub_match_output(70.0)
+
+    monkeypatch.setattr(cv_match_runner, "run_cv_match", fake_run)
+
+    app.score_error_count = 3
+    app.score_retry_after = datetime.now(timezone.utc) + timedelta(hours=2)
+    db.commit()
+    jobs_before = db.query(CvScoreJob).filter(CvScoreJob.application_id == app.id).count()
+
+    result = enqueue_score(db, app)  # force=False
+
+    assert result is None
+    assert call_count["n"] == 0  # never reached the scorer
+    jobs_after = db.query(CvScoreJob).filter(CvScoreJob.application_id == app.id).count()
+    assert jobs_after == jobs_before  # no new job row
+
+
+def test_force_bypasses_backoff_window(monkeypatch, session) -> None:
+    """A manual rescore (force=True) is the escape hatch — it runs even
+    while the auto backoff window is open."""
+    from datetime import datetime, timedelta, timezone
+
+    db, _org, _role, app = session
+    monkeypatch.setattr(cv_match_runner, "run_cv_match", lambda *a, **kw: _stub_match_output(88.0))
+
+    app.score_error_count = 5
+    app.score_retry_after = datetime.now(timezone.utc) + timedelta(hours=12)
+    db.commit()
+
+    job = enqueue_score(db, app, force=True)
+    db.commit()
+    db.refresh(job)
+    db.refresh(app)
+
+    assert job is not None
+    assert job.status == SCORE_JOB_DONE
+    assert app.cv_match_score == 88.0
+    # Success through the escape hatch also clears the backoff.
+    assert app.score_error_count == 0
+    assert app.score_retry_after is None
+
+
+def test_cv_change_clears_backoff(session) -> None:
+    """A CV/criteria change resets the backoff so the next tick retries
+    immediately rather than waiting out a window earned by a stale CV."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.services.cv_score_orchestrator import mark_application_scores_stale
+
+    db, _org, _role, app = session
+    app.cv_match_score = 60.0  # so the stale path treats it as scored
+    app.score_error_count = 4
+    app.score_retry_after = datetime.now(timezone.utc) + timedelta(hours=8)
+    db.commit()
+
+    assert mark_application_scores_stale(db, app.id) is True
+    db.commit()
+    db.refresh(app)
+
+    assert app.score_error_count == 0
+    assert app.score_retry_after is None

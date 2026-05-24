@@ -135,6 +135,20 @@ def score_application_job(
                     refreshed_job.status = SCORE_JOB_ERROR
                     refreshed_job.error_message = f"task_exception: {exc}"
                     refreshed_job.finished_at = datetime.now(timezone.utc)
+                    # The normal outcome recording lives in _execute_scoring,
+                    # whose changes were just rolled back. Record the backoff
+                    # here too so a hard task exception (not just the graceful
+                    # scoring_status=failed path) still throttles re-attempts.
+                    refreshed_app = (
+                        db.query(CandidateApplication)
+                        .filter(CandidateApplication.id == application_id)
+                        .first()
+                    )
+                    if refreshed_app is not None:
+                        from ..services.cv_score_orchestrator import (
+                            _record_score_attempt_outcome,
+                        )
+                        _record_score_attempt_outcome(refreshed_app, refreshed_job)
                     db.commit()
             except Exception:
                 db.rollback()
