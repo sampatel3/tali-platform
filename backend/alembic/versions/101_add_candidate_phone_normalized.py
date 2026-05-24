@@ -10,9 +10,13 @@ formatting stripped) so the sync can match on phone after email. Indexed for
 the equality lookup. Backfilled from existing rows here so the fallback works
 against history, not just new syncs.
 
-Revision ID: 098_add_candidate_phone_normalized
-Revises: 097_add_decision_type_index
+Revision ID: 101_add_candidate_phone_normalized
+Revises: 100_fix_capability_flag_pk
 Create Date: 2026-05-23
+
+Note: re-chained from 097 to 100 — main concurrently added 098/099/100, so the
+original 097-based revision was a second alembic head that crashed the boot
+migration. This now extends the single 100 head linearly.
 """
 
 from __future__ import annotations
@@ -21,8 +25,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision = "098_add_candidate_phone_normalized"
-down_revision = "097_add_decision_type_index"
+revision = "101_add_candidate_phone_normalized"
+down_revision = "100_fix_capability_flag_pk"
 branch_labels = None
 depends_on = None
 
