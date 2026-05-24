@@ -3027,7 +3027,7 @@ html[data-theme="dark"] {
 
 .stat-row {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 20px;
 }
@@ -3059,6 +3059,18 @@ html[data-theme="dark"] {
 .stat.hi {
   background: var(--ink);
   color: var(--bg);
+}
+
+/* Positive-exit accent for the Advanced KPI — candidates Tali has handed
+   back to the recruiter. Faint purple lift (same recipe as the agent-asks
+   card) so it reads as a win, distinct from the neutral Below threshold. */
+.stat.is-handoff {
+  border-color: color-mix(in oklab, var(--purple) 32%, var(--line));
+  background: color-mix(in oklab, var(--purple) 6%, var(--bg-2));
+}
+
+.stat.is-handoff .v {
+  color: var(--purple-2);
 }
 
 .stat .k {
