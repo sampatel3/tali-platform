@@ -14,6 +14,7 @@ import {
   FileText,
   Inbox,
   ListChecks,
+  RefreshCw,
   Repeat,
   Search,
   Send,
@@ -38,6 +39,27 @@ import { TeachModal } from './TeachModal';
 import { OverrideModal } from './OverrideModal';
 import { ActivityFeed } from './ActivityFeed';
 import AgentNeedsInputCard from '../jobs/AgentNeedsInputCard';
+
+
+// The backend returns 409 with a structured detail ({code, message, ...}) when
+// a decision's inputs shifted since it was queued. ``detail`` is then an OBJECT
+// — passing it straight to a toast crashed the page (React can't render an
+// object child → ErrorBoundary "Something went wrong"). These helpers extract a
+// safe string and detect the stale case so we can offer Re-evaluate instead.
+const isDecisionStaleError = (err) => {
+  const detail = err?.response?.data?.detail;
+  const code = typeof detail === 'object' && detail !== null ? detail.code : detail;
+  return err?.response?.status === 409 && code === 'decision_stale';
+};
+
+const apiErrorMessage = (err, fallback = 'Something went wrong') => {
+  const detail = err?.response?.data?.detail;
+  if (typeof detail === 'string') return detail;
+  if (detail && typeof detail === 'object') {
+    return detail.message || detail.detail || detail.code || fallback;
+  }
+  return err?.message || fallback;
+};
 
 
 // Type-aware action set. Each decision_type maps to:
@@ -365,7 +387,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
   );
 };
 
-const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze, onNavigate, busy }) => {
+const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze, onNavigate, onReEvaluate, busy }) => {
   if (!decision) {
     return (
       <section className="rq-hybrid-detail">
@@ -375,6 +397,8 @@ const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze,
   }
   const evidence = Array.isArray(decision.evidence?.cells) ? decision.evidence.cells : [];
   const trace = Array.isArray(decision.evidence?.trace) ? decision.evidence.trace : [];
+  const isStale = Boolean(decision.is_stale);
+  const stalenessSummary = decision.staleness_summary;
 
   return (
     <section className="rq-hybrid-detail">
@@ -438,6 +462,15 @@ const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze,
         {decision.reasoning}
       </p>
 
+      {isStale && (decision.status === 'pending' || decision.status === 'reverted_for_feedback') ? (
+        <div className="rq-stale-banner" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 14px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-bg, rgba(124,92,255,.10))', color: 'var(--purple, #7c5cff)', fontSize: 13, fontWeight: 500 }}>
+          <RefreshCw size={14} strokeWidth={2} aria-hidden="true" />
+          <span>
+            Inputs changed since this was decided{stalenessSummary ? ` · ${stalenessSummary}` : ''}. Re-evaluate before approving.
+          </span>
+        </div>
+      ) : null}
+
       {evidence.length > 0 ? (
         <div className="rq-evidence-grid">
           {evidence.map((e, i) => (
@@ -480,11 +513,23 @@ const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze,
           return (
             <div className="rq-action-bar">
               <div className="rq-action-l">
+                {isStale && onReEvaluate ? (
+                  <button
+                    type="button"
+                    className="rq-btn rq-approve"
+                    onClick={() => onReEvaluate(decision)}
+                    disabled={busy}
+                  >
+                    <RefreshCw size={14} strokeWidth={2.4} aria-hidden="true" />
+                    Re-evaluate
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className={`rq-btn ${spec.primaryClass || 'rq-approve'}`}
                   onClick={() => onApprove(decision)}
-                  disabled={busy}
+                  disabled={busy || isStale}
+                  title={isStale ? 'Inputs changed — re-evaluate before approving' : undefined}
                 >
                   <PrimaryIcon size={14} strokeWidth={2.4} aria-hidden="true" />
                   {spec.primaryLabel}
@@ -597,7 +642,29 @@ export const HomeNow = ({
       showToast?.('Approved.', 'success');
       await reload?.();
     } catch (err) {
-      showToast?.(err?.response?.data?.detail || 'Approve failed', 'error');
+      if (isDecisionStaleError(err)) {
+        // Inputs changed since this decision was queued — don't crash; nudge
+        // the recruiter to re-evaluate (the CTA is rendered inline) and pull
+        // fresh data so the stale badge appears.
+        showToast?.("This decision's inputs changed — re-evaluate to refresh it.", 'warning');
+        await reload?.();
+      } else {
+        showToast?.(apiErrorMessage(err, 'Approve failed'), 'error');
+      }
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // A4: discard a stale decision and re-run the agent on fresh inputs.
+  const handleReEvaluate = async (decision) => {
+    setBusyId(decision.id);
+    try {
+      await agentApi.reEvaluateDecision(decision.id);
+      showToast?.('Re-evaluating with fresh inputs…', 'success');
+      await reload?.();
+    } catch (err) {
+      showToast?.(apiErrorMessage(err, 'Re-evaluate failed'), 'error');
     } finally {
       setBusyId(null);
     }
@@ -617,7 +684,7 @@ export const HomeNow = ({
       showToast?.('Snoozed for 1h.', 'success');
       await reload?.();
     } catch (err) {
-      showToast?.(err?.response?.data?.detail || 'Snooze failed', 'error');
+      showToast?.(apiErrorMessage(err, 'Snooze failed'), 'error');
     } finally {
       setBusyId(null);
     }
@@ -672,7 +739,7 @@ export const HomeNow = ({
       }
       await reload?.();
     } catch (err) {
-      showToast?.(err?.response?.data?.detail || 'Bulk approve failed', 'error');
+      showToast?.(apiErrorMessage(err, 'Bulk approve failed'), 'error');
     } finally {
       setBulkBusy(false);
     }
@@ -767,6 +834,7 @@ export const HomeNow = ({
             busy={busyId === selected?.id}
             onApprove={handleApprove}
             onAlternative={handleAlternative}
+            onReEvaluate={handleReEvaluate}
             onSnooze={handleSnooze}
             onTeach={(d) => setTeachFor(d)}
             onNavigate={onNavigate}

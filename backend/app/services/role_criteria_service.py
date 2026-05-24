@@ -47,7 +47,7 @@ from ..models.role_criterion import (
     CRITERION_SOURCE_RECRUITER,
     RoleCriterion,
 )
-from .spec_normalizer import derive_criteria_texts, normalize_spec
+from .spec_normalizer import DerivedCriterion, derive_criteria, normalize_spec
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +286,7 @@ def _replace_derived_criteria(
     db: Session,
     role: Role,
     *,
-    texts: list[str],
+    criteria: list[DerivedCriterion],
 ) -> None:
     existing = [
         c for c in (role.criteria or [])
@@ -294,16 +294,18 @@ def _replace_derived_criteria(
     ]
     for criterion in existing:
         db.delete(criterion)
-    for ordering, text in enumerate(texts):
+    for ordering, item in enumerate(criteria):
         db.add(
             RoleCriterion(
                 role_id=role.id,
                 source=CRITERION_SOURCE_DERIVED,
                 ordering=ordering,
                 weight=1.0,
-                must_have=False,
-                bucket=BUCKET_PREFERRED,
-                text=text,
+                # The deriver classifies each line; must_have stays in lockstep
+                # with bucket=="must" (the model keeps the two synced too).
+                must_have=item.must_have,
+                bucket=item.bucket,
+                text=item.text,
             )
         )
 
@@ -311,10 +313,14 @@ def _replace_derived_criteria(
 def sync_derived_criteria(db: Session, role: Role) -> None:
     """Re-derive ``derived_from_spec`` criteria from the Requirements section
     of the uploaded job spec. Falls back to no derived criteria when the spec
-    has no recognizable Requirements heading."""
+    has no recognizable Requirements heading.
+
+    Each derived criterion is bucketed (must / preferred / constraint) by the
+    spec_normalizer heuristics rather than blindly defaulting to preferred.
+    """
     spec = normalize_spec(role.job_spec_text)
-    texts = derive_criteria_texts(spec.requirements)
-    _replace_derived_criteria(db, role, texts=texts)
+    criteria = derive_criteria(spec.requirements)
+    _replace_derived_criteria(db, role, criteria=criteria)
 
 
 def sync_all_criteria(db: Session, role: Role) -> None:

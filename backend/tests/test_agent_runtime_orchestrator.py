@@ -22,6 +22,7 @@ from sqlalchemy import event
 
 from app.agent_runtime import orchestrator
 from app.models.agent_decision import AgentDecision
+from app.models.agent_needs_input import AgentNeedsInput
 from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
@@ -30,7 +31,12 @@ from app.models.role import Role
 
 
 # SQLite BigInteger PK workaround (same as other agent_runtime tests).
-_BIG_PK_COUNTERS: dict[str, int] = {"agent_runs": 0, "agent_decisions": 0}
+_BIG_PK_COUNTERS: dict[str, int] = {
+    "agent_runs": 0,
+    "agent_decisions": 0,
+    # The data-readiness gate may raise a missing_cv / missing_job_spec row.
+    "agent_needs_input": 0,
+}
 
 
 def _assign_big_pk(mapper, connection, target):  # pragma: no cover — fired by SQLA
@@ -46,6 +52,8 @@ event.listen(AgentRun, "before_insert", _assign_big_pk)
 # that emits a decision via _tool_queue_advance_decision blew up with
 # NOT NULL on agent_decisions.id. Hook it here too.
 event.listen(AgentDecision, "before_insert", _assign_big_pk)
+# The data-readiness gate raises AgentNeedsInput rows (also BigInteger PK).
+event.listen(AgentNeedsInput, "before_insert", _assign_big_pk)
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +75,8 @@ def _make_role(db, org: Organization) -> Role:
         source="manual",
         agentic_mode_enabled=True,
         monthly_usd_budget_cents=0,  # 0 disables the monthly check
+        # Data-readiness gate requires a job spec before the agent runs.
+        job_spec_text="Requirements\n- 5+ years backend engineering\n",
     )
     db.add(role)
     db.flush()

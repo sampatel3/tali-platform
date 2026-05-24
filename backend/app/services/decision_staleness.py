@@ -121,6 +121,43 @@ def criteria_content_fingerprint(
 _recompute_criteria_fingerprint = criteria_content_fingerprint
 
 
+def rebaseline_pending_criteria_fingerprint(db: Session, *, role_id: int) -> int:
+    """Re-point every pending decision's criteria fingerprint at the role's
+    CURRENT content fingerprint, without re-running the agent.
+
+    Used when criteria change in a way that must NOT invalidate in-flight
+    decisions — e.g. an immaterial Workable spec edit, or the one-time
+    backfill after the id->content fingerprint migration. Touches ONLY the
+    criteria dimension; cv/score/note/cutoff drift on a decision stays as
+    captured, so a decision with a genuine other-input change remains stale.
+
+    Returns the number of decisions updated.
+    """
+    from ..models.agent_decision import AgentDecision
+
+    new_fp = criteria_content_fingerprint(db, int(role_id))
+    pending = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == int(role_id),
+            AgentDecision.status == "pending",
+        )
+        .all()
+    )
+    updated = 0
+    for decision in pending:
+        fp = decision.input_fingerprint or {}
+        if not fp:
+            continue  # pre-A1: no baseline, leave alone
+        if decision.criteria_fingerprint == new_fp and fp.get("criteria_fingerprint") == new_fp:
+            continue
+        decision.criteria_fingerprint = new_fp
+        decision.input_fingerprint = {**fp, "criteria_fingerprint": new_fp}
+        db.add(decision)
+        updated += 1
+    return updated
+
+
 def _latest_recruiter_note_id(
     db: Session, role_id: int, *, cache: "StalenessCache | None" = None
 ) -> int | None:

@@ -25,7 +25,7 @@ from ..platform.config import settings
 from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
 from ..services.usage_metering_service import record_event
-from . import budget_guard, calibration
+from . import budget_guard, calibration, data_readiness
 from .system_prompt import PROMPT_VERSION, build_system_prompt
 from .tool_registry import AGENT_TOOLS, QUEUE_DECISION_TOOL_NAMES, dispatch, is_run_complete
 
@@ -339,6 +339,39 @@ def run_cycle(
             ),
         )
         return run
+
+    # Data-readiness gate: never spend Claude tokens on a role with no job
+    # spec. Aborts BEFORE the first Anthropic call ($0) and raises a HITL
+    # item so the recruiter knows to add one; resolves automatically on the
+    # next cycle that finds a spec. (See agent_runtime.data_readiness.)
+    if not data_readiness.has_job_spec(role):
+        data_readiness.raise_missing_job_spec(db, role=role)
+        run = AgentRun(
+            organization_id=role.organization_id,
+            role_id=role.id,
+            trigger=trigger,
+            trigger_event_id=trigger_event_id,
+            status="aborted",
+            error="missing_job_spec",
+            model_version=model,
+            prompt_version=PROMPT_VERSION,
+            finished_at=datetime.now(timezone.utc),
+        )
+        db.add(run)
+        db.flush()
+        _emit_cycle_abort_event(
+            db, run=run, application_id=application_id,
+            reason=(
+                "Agent held — this role has no job description. Add a job spec "
+                "(or sync it from Workable) and the agent resumes automatically."
+            ),
+        )
+        return run
+
+    # Job spec present: clear any stale missing-spec item and surface (or
+    # clear) the count of candidates the agent can't act on for lack of a CV.
+    data_readiness.resolve_open(db, role=role, kind="missing_job_spec")
+    data_readiness.sync_missing_cv(db, role=role)
 
     snapshot = calibration.load(role)
     run = AgentRun(

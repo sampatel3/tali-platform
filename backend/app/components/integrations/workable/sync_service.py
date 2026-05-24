@@ -1528,9 +1528,20 @@ class WorkableSyncService:
 
             sync_all_criteria(db, role)
         elif spec_changed:
-            from ....services.role_criteria_service import sync_derived_criteria
+            # A real external spec change. For an agent-on role, don't blindly
+            # re-derive (that would invalidate every pending decision + force a
+            # paid re-evaluation). Route through material-change assessment: it
+            # applies silently when immaterial and asks the recruiter to confirm
+            # when the hiring bar actually moved. Agent-off roles keep the
+            # direct re-derive (no decisions in flight to protect).
+            if getattr(role, "agentic_mode_enabled", False):
+                from ....services.material_change import handle_spec_change
 
-            sync_derived_criteria(db, role)
+                handle_spec_change(db, role)
+            else:
+                from ....services.role_criteria_service import sync_derived_criteria
+
+                sync_derived_criteria(db, role)
 
         # Live (published) jobs are always in continuous sync: auto-star them
         # and mark the star auto-managed so it can be dropped when the job is
