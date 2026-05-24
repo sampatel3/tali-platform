@@ -324,7 +324,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
             key={p.id}
             role="button"
             tabIndex={0}
-            className={`rq-split-row ${selectedId === p.id ? 'on' : ''}`.trim()}
+            className={`rq-split-row ${selectedId === p.id ? 'on' : ''} ${p.status === 'processing' ? 'is-processing' : ''}`.trim()}
             onClick={() => onSelect(p.id)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
@@ -336,6 +336,9 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <TypeBadge type={p.decision_type} size="sm" />
               <ScoreChip score={p.taali_score} size="sm" />
+              {p.status === 'processing' ? (
+                <span className="rq-proc-tag">Processing…</span>
+              ) : null}
               <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--mute)', letterSpacing: '.06em', marginLeft: 'auto' }}>
                 {formatRelativeAge(p.created_at)}
               </span>

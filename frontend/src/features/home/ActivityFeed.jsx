@@ -48,12 +48,16 @@ export const ActivityFeed = ({
     ) : (
       <ol className="rq-stream-list">
         {rows.map((row) => {
+          // ``processing`` = approved/overridden and mid-Workable-writeback. It
+          // renders in the same rich layout as pending (candidate + reasoning)
+          // but greyed + non-actionable so the recruiter can see it's in flight.
+          const isProcessing = row.status === 'processing';
           const isPending = row.status === 'pending' || row.status === 'reverted_for_feedback';
-          if (isPending) {
+          if (isPending || isProcessing) {
             return (
               <li
                 key={row.id}
-                className={`rq-stream-item ${selectedId === row.id ? 'rq-stream-active' : ''}`.trim()}
+                className={`rq-stream-item ${selectedId === row.id ? 'rq-stream-active' : ''} ${isProcessing ? 'is-processing' : ''}`.trim()}
                 style={{ cursor: 'pointer' }}
                 onClick={() => onSelect?.(row.id)}
               >
@@ -65,9 +69,11 @@ export const ActivityFeed = ({
                   <div className="rq-stream-meta">
                     <TypeBadge type={row.decision_type} size="sm" />
                     <ScoreChip score={row.taali_score} size="sm" />
-                    {row.status === 'pending'
-                      ? <span className="rq-stream-pendpill">NEEDS YOU</span>
-                      : <span className="rq-stream-teachpill">+ FEEDBACK</span>}
+                    {isProcessing
+                      ? <span className="rq-stream-procpill">Processing</span>
+                      : row.status === 'pending'
+                        ? <span className="rq-stream-pendpill">NEEDS YOU</span>
+                        : <span className="rq-stream-teachpill">+ FEEDBACK</span>}
                     <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--mute)', letterSpacing: '.06em', marginLeft: 'auto' }}>
                       D-{row.id} · {formatRelativeAge(row.created_at)} ago
                     </span>
