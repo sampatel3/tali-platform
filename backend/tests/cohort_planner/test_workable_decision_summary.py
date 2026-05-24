@@ -329,6 +329,36 @@ def test_try_advance_calls_move_with_recruiter_pick(db, monkeypatch):
     assert app.workable_stage == "Phone screen"
 
 
+def test_try_advance_skips_move_when_already_post_handover(db, monkeypatch):
+    """Candidate already in a post-handover Workable stage (recruiter advanced
+    them) → the move is a no-op; skip it (don't 422 / re-queue), return success.
+    The summary comment is posted separately by the caller."""
+    org, role, _, app = make_world(db)
+    user = _make_user(db, org)
+    _enable_workable(db, org)
+    app.workable_candidate_id = "wc-123"
+    app.workable_stage = "Technical Interview"  # already past handover
+    db.flush()
+    monkeypatch.setattr(platform_config.settings, "MVP_DISABLE_WORKABLE", False)
+
+    with patch(
+        "app.services.workable_actions_service.move_candidate_in_workable"
+    ) as mock_move:
+        ok = wds.try_workable_advance(
+            db,
+            Actor.recruiter(user),
+            app=app,
+            org=org,
+            role=role,
+            target_stage="Phone screen",
+            reason="Advanced via override",
+        )
+
+    assert ok is True
+    assert not mock_move.called  # move skipped — no 422, no re-queue
+    assert app.workable_stage == "Technical Interview"  # unchanged
+
+
 # ---------------------------------------------------------------------------
 # End-to-end wiring: approve_decision + override_decision invoke the helper
 # ---------------------------------------------------------------------------

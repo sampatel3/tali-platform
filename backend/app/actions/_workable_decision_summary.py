@@ -32,7 +32,10 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from ..domains.assessments_runtime.pipeline_service import append_application_event
+from ..domains.assessments_runtime.pipeline_service import (
+    append_application_event,
+    is_post_handover_workable_stage,
+)
 from ..domains.integrations_notifications.adapters import build_workable_adapter
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
@@ -95,6 +98,31 @@ def try_workable_advance(
     if not _workable_writeback_ready(app=app, org=org):
         return False
     assert org is not None  # narrowed by _workable_writeback_ready
+
+    # No-op move guard: if the recruiter has already advanced the candidate
+    # past Tali's handover point in Workable (interview/offer flow), the stage
+    # move is redundant — Workable 422s a move to a stage they've already
+    # passed, which under strict (batch) mode raises and re-queues the decision
+    # forever. Skip the move and treat it as a successful advance; the
+    # decision-summary comment is still posted separately by the caller.
+    if is_post_handover_workable_stage(getattr(app, "workable_stage", None)):
+        append_application_event(
+            db,
+            app=app,
+            event_type="workable_move_skipped",
+            actor_type=actor.type,
+            actor_id=actor.event_actor_id,
+            reason=(
+                f"Already in Workable stage '{app.workable_stage}' (past handover) — "
+                "advance stage-move skipped as a no-op; Tali comment still posted."
+            ),
+            metadata={
+                "current_stage": app.workable_stage,
+                "target_stage": target,
+                "source": "decision_summary",
+            },
+        )
+        return True
 
     from ..services.workable_actions_service import (
         WorkableWritebackError,
