@@ -243,6 +243,30 @@ def test_criteria_rederive_with_changed_content_marks_stale(db):
     assert "criteria_changed" in report.reasons
 
 
+def test_rebaseline_pending_criteria_fingerprint_unstales(db):
+    """rebaseline_pending_criteria_fingerprint re-points pending decisions at
+    the current criteria fingerprint without re-running the agent — used for
+    immaterial spec edits + the one-time backfill."""
+    org, role, crit, app = _seed(db)
+    decision = _queue(db, org, role, app)
+    assert decision_staleness.evaluate(db, decision).is_stale is False
+
+    # Criteria content changes (would normally mark the decision stale).
+    crit.text = "8y Python + Go"
+    db.add(crit); db.commit()
+    assert decision_staleness.evaluate(db, decision).is_stale is True
+
+    updated = decision_staleness.rebaseline_pending_criteria_fingerprint(
+        db, role_id=int(role.id)
+    )
+    db.commit()
+    assert updated == 1
+    # No longer stale on the criteria dimension.
+    report = decision_staleness.evaluate(db, decision)
+    assert "criteria_changed" not in report.reasons
+    assert report.is_stale is False
+
+
 def test_pre_screen_score_swing_marks_stale(db):
     org, role, _, app = _seed(db)
     decision = _queue(db, org, role, app)

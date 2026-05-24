@@ -127,6 +127,10 @@ export default function AgentNeedsInputCard({ roleId }) {
                     {opt.label}
                   </button>
                 ))
+              ) : LINK_ONLY_KINDS.has(row.kind) ? (
+                // Data-readiness gaps are fixed by adding the missing data
+                // (via the link), not by typing an answer — so no text box.
+                null
               ) : (
                 <FreeTextAnswer
                   busy={busyId === row.id}
@@ -173,6 +177,11 @@ export default function AgentNeedsInputCard({ roleId }) {
 // get a textarea instead of a single-line input. Single-line still wins
 // for short numeric answers (threshold, budget).
 const LONG_FORM_KINDS = new Set(['intent_slot_missing', 'intent_clarification']);
+
+// Data-readiness gaps: the recruiter resolves them by adding the missing
+// data (job spec / CV) via the link, not by typing an answer — so we render
+// just the link + Skip, no free-text box.
+const LINK_ONLY_KINDS = new Set(['missing_job_spec', 'missing_cv']);
 
 function FreeTextAnswer({ busy, onSubmit, multiline = false, placeholder = 'Your answer…' }) {
   const [text, setText] = useState('');

@@ -256,6 +256,35 @@ def _canonical_for_kind(
             "link_url": f"/jobs/{int(role.id)}?tab=agent-settings",
             "link_label": "Open agent settings",
         }
+    if kind == "missing_job_spec":
+        return {
+            "prompt": (
+                f"'{role.name}' has agent mode on but no job description. "
+                f"I won't score or decide on candidates without one — I'd just "
+                f"be guessing the bar. Add a job spec (or sync it from Workable) "
+                f"and I'll resume automatically on the next cycle."
+            ),
+            "rationale": (
+                "Running the agent with no job spec wastes money and produces "
+                "untrustworthy verdicts, so cycles are held until one exists."
+            ),
+            "link_url": f"/jobs/{int(role.id)}",
+            "link_label": "Add a job spec",
+        }
+    if kind == "missing_cv":
+        # No prompt override: data_readiness authors a prompt with the live
+        # count of CV-less candidates. We only inject the link + rationale.
+        return {
+            "rationale": (
+                "Without a CV there's nothing to evaluate against the role's "
+                "criteria — the candidate is skipped rather than guessed at."
+            ),
+            "link_url": f"/jobs/{int(role.id)}",
+            "link_label": "Review candidates",
+        }
+    # confirm_material_change deliberately has no canonical override: the
+    # prompt + options + proposed-criteria context are authored by
+    # material_change.handle_spec_change (the LLM summary is the question).
     return None
 
 
@@ -377,6 +406,19 @@ def _apply_recruiter_answer(
             user_id=user_id,
         )
         db.flush()
+        return
+
+    if row.kind == "confirm_material_change":
+        # "apply" => re-derive criteria from the new spec. That changes the
+        # content fingerprint, which (by design) marks affected pending
+        # decisions stale so the recruiter re-evaluates them against the new
+        # bar. "ignore" => keep the current criteria frozen (no churn, no
+        # re-eval spend); the new spec text is still saved for display.
+        if text_value.strip().lower() == "apply":
+            from ..services.role_criteria_service import sync_derived_criteria
+
+            sync_derived_criteria(db, role)
+            db.flush()
         return
 
 

@@ -57,6 +57,10 @@ NEEDS_INPUT_KINDS = (
     "threshold_ambiguous",                  # role.score_threshold not set + cohort spread is high
     "task_assignment_missing",              # role has no assessment task linked
     "candidate_tie_break",                  # two near-identical candidates, recruiter picks
+    # --- Data-readiness guardrails (agent refuses to spend on incomplete data) ---
+    "missing_job_spec",                     # agent-on role has no job description; cycles abort until one exists
+    "missing_cv",                           # candidate(s) the agent would act on have no CV on file
+    "confirm_material_change",              # Workable job spec changed; recruiter confirms whether to re-derive + re-evaluate
     "other",
 )
 
