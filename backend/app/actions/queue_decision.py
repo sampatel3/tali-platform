@@ -302,11 +302,15 @@ def run(
     # person twice in the queue (e.g. "advance" + "send_assessment" both
     # waiting). Existing pending wins; return it so the caller treats this
     # as a dedup, not a new emit.
+    # Count 'processing' as well as 'pending': an approved decision whose
+    # Workable writeback is in flight (or stuck after a failed dispatch) must
+    # still block a duplicate, else a stranded 'processing' row lets the next
+    # cycle mint a second decision for the same candidate.
     existing_pending = (
         db.query(AgentDecision)
         .filter(
             AgentDecision.application_id == application_id,
-            AgentDecision.status == "pending",
+            AgentDecision.status.in_(("pending", "processing")),
         )
         .order_by(AgentDecision.created_at.desc())
         .first()
