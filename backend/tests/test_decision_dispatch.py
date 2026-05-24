@@ -381,3 +381,44 @@ def test_post_note_op_raises_retriable_on_failure(db):
                 payload={"application_id": int(app.id), "user_id": int(user.id), "body": "hi"},
             )
     assert ei.value.retriable is True
+
+
+# ---------------------------------------------------------------------------
+# Lock contention: a queued batch waits (re-enqueues) instead of failing while
+# another batch holds the per-org Workable mutex.
+# ---------------------------------------------------------------------------
+
+
+def test_lock_contention_requeues_instead_of_failing(monkeypatch):
+    """When the per-org mutex is held, the task re-enqueues a fresh copy with an
+    incremented lock_attempt (its own large wait budget) rather than timing out
+    and failing the batch."""
+    from app.tasks import assessment_tasks, workable_tasks
+
+    monkeypatch.setattr(
+        assessment_tasks, "_acquire_workable_org_mutex", lambda *a, **k: None
+    )
+    captured: dict = {}
+
+    def _fake_apply_async(*, kwargs=None, countdown=None):
+        captured["kwargs"] = kwargs
+        captured["countdown"] = countdown
+
+    monkeypatch.setattr(
+        workable_tasks.run_workable_op_task, "apply_async", _fake_apply_async
+    )
+
+    out = workable_tasks.run_workable_op_task.run(
+        job_run_id=None,
+        organization_id=1,
+        op_type="approve_decisions",
+        payload={"decision_ids": [1, 2, 3]},
+        lock_attempt=0,
+    )
+
+    assert out["status"] == "lock_wait_requeued"
+    assert out["attempt"] == 1
+    assert captured["kwargs"]["lock_attempt"] == 1
+    assert captured["kwargs"]["op_type"] == "approve_decisions"
+    assert captured["kwargs"]["payload"] == {"decision_ids": [1, 2, 3]}
+    assert 5 <= captured["countdown"] <= 15

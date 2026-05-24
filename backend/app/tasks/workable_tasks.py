@@ -15,17 +15,26 @@ def _disqualify_retry_countdown(retries: int) -> int:
     return min(_DISQUALIFY_BACKOFF_CAP_SECONDS, 60 * (2 ** max(0, retries)))
 
 
-# Max times a Workable-op task waits for the per-org mutex before giving up.
+# Retry budget for transient api-error (429/5xx) backoff on single ops.
 _DISPATCH_MAX_RETRIES = 12
+
+# Lock-wait has its OWN, much larger budget — a large approve batch holds the
+# per-org mutex for its WHOLE duration (minutes), so a concurrently-submitted
+# batch must wait that out rather than time out after ~70s and fail. ~60
+# attempts × 5-15s jitter ≈ 10 min; still well under the 30-min mutex TTL so a
+# genuinely leaked lock is given up on. Re-enqueued as fresh tasks (not
+# self.retry) so this never eats the api-error retry budget.
+_LOCK_WAIT_MAX_ATTEMPTS = 60
 
 
 def _lock_wait_countdown() -> int:
-    """Short, jittered wait when the per-org mutex is simply held by another
-    Workable write. This is NOT a rate-limit backoff — the lock frees in
-    seconds — so a batch drains quickly. Jitter spreads the herd."""
+    """Jittered wait while the per-org mutex is held by another Workable write.
+    NOT a rate-limit backoff. A held lock can persist for the length of a large
+    batch, so we keep re-checking (see _LOCK_WAIT_MAX_ATTEMPTS). Jitter spreads
+    the herd."""
     import random
 
-    return random.randint(3, 9)
+    return random.randint(5, 15)
 
 
 @celery_app.task(
@@ -39,6 +48,7 @@ def run_workable_op_task(
     organization_id: int,
     op_type: str,
     payload: dict,
+    lock_attempt: int = 0,
 ) -> dict:
     """Generic serialized runner shell for ALL Workable write-backs.
 
@@ -64,9 +74,31 @@ def run_workable_op_task(
     eager = bool(getattr(self.request, "is_eager", False))
     lock = _acquire_workable_org_mutex(int(organization_id), source=f"workable_op:{op_type}")
     if lock is None:
-        if self.request.retries < self.max_retries:
-            raise self.retry(countdown=0 if eager else _lock_wait_countdown())
-        # Couldn't get the lock in the window — surface + fail the job.
+        # Held by another Workable write (often a large approve batch that holds
+        # the lock for its whole run). Wait it out: re-enqueue a FRESH task with
+        # an incremented lock_attempt — separate from (and far larger than) the
+        # api-error retry budget — keeping the job 'queued' until the lock frees,
+        # instead of failing after ~70s.
+        if eager:
+            if self.request.retries < self.max_retries:
+                raise self.retry(countdown=0)
+        elif lock_attempt < _LOCK_WAIT_MAX_ATTEMPTS:
+            run_workable_op_task.apply_async(
+                kwargs={
+                    "job_run_id": job_run_id,
+                    "organization_id": int(organization_id),
+                    "op_type": op_type,
+                    "payload": payload,
+                    "lock_attempt": lock_attempt + 1,
+                },
+                countdown=_lock_wait_countdown(),
+            )
+            return {
+                "status": "lock_wait_requeued",
+                "op_type": op_type,
+                "attempt": lock_attempt + 1,
+            }
+        # Couldn't get the lock within the (much larger) wait window — surface + fail.
         db = SessionLocal()
         try:
             err = WorkableWritebackError(
