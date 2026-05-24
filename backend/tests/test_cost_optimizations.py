@@ -204,7 +204,7 @@ def test_cycle_would_be_noop_when_survey_empty(db):
 
     fake_survey = {
         "counts": {"ready_for_assessment_decision": 0, "ready_for_advance_decision": 0, "needs_pre_screen": 0, "needs_score": 0},
-        "open_questions": [],
+        "open_recruiter_questions": [],
         "intent_gaps": [],
     }
     with patch("app.agent_runtime.cohort_tools.survey_role_state", return_value=fake_survey):
@@ -222,7 +222,7 @@ def test_cycle_runs_when_actionable_candidates_exist(db):
 
     fake_survey = {
         "counts": {"ready_for_assessment_decision": 5, "ready_for_advance_decision": 0},
-        "open_questions": [],
+        "open_recruiter_questions": [],
         "intent_gaps": [],
     }
     with patch("app.agent_runtime.cohort_tools.survey_role_state", return_value=fake_survey):
@@ -240,7 +240,7 @@ def test_cycle_runs_when_open_recruiter_questions(db):
 
     fake_survey = {
         "counts": {"ready_for_assessment_decision": 0, "ready_for_advance_decision": 0},
-        "open_questions": [{"id": 1, "kind": "intent_clarification"}],
+        "open_recruiter_questions": [{"id": 1, "kind": "intent_clarification"}],
         "intent_gaps": [],
     }
     with patch("app.agent_runtime.cohort_tools.survey_role_state", return_value=fake_survey):
