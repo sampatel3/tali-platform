@@ -1361,6 +1361,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       return Number.isFinite(score) && score < thresholdValue;
     }).length;
   }, [activeApplications, thresholdValue]);
+  // Handed-back count; matches the Advanced filter tab (off activeApplications).
+  const advancedCount = useMemo(() => activeApplications.filter(
+    (a) => String(a?.pipeline_stage || '').toLowerCase() === 'advanced').length, [activeApplications]);
 
   // HANDOFF v2 §4 — Candidates tab KPI row matches canvas exactly:
   // In pipeline · New CVs · Below threshold · Agent spend (with bar).
@@ -1406,6 +1409,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         description: thresholdValue != null ? `Auto-flagged at <${thresholdValue}` : 'Set a reject threshold',
       },
       {
+        key: 'advanced',
+        label: 'Advanced',
+        value: String(advancedCount),
+        description: advancedCount > 0 ? 'Handed to recruiter' : 'None handed off yet',
+        accent: 'handoff',
+      },
+      {
         key: 'spend',
         label: 'Agent spend',
         // value rendered specially below — we still emit a string fallback
@@ -1418,7 +1428,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           : 'Cap not set',
       },
     ];
-  }, [activeApplications.length, agentStatus, belowThresholdCount, role, thresholdValue, unscoredApplications.length]);
+  }, [activeApplications.length, advancedCount, agentStatus, belowThresholdCount, role, thresholdValue, unscoredApplications.length]);
 
   const groupedApplications = useMemo(() => [
     ...PIPELINE_STAGE_ORDER.map((stage) => ({
@@ -2328,7 +2338,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               {pipelineStats.map((item) => (
                 <div
                   key={item.key}
-                  className={`stat ${item.highlight ? 'hi' : ''} ${item.budgetPct != null ? 'has-bar' : ''}`.trim()}
+                  className={`stat ${item.highlight ? 'hi' : ''} ${item.accent === 'handoff' ? 'is-handoff' : ''} ${item.budgetPct != null ? 'has-bar' : ''}`.trim()}
                 >
                   <div className="k">{item.label}</div>
                   <div className="v">
