@@ -22,6 +22,8 @@ const STATUS_TONE = {
   completed: 'completed',
   success: 'completed',
   failed: 'failed',
+  completed_with_errors: 'warning',
+  partial: 'warning',
   nothing_to_score: 'noop',
   nothing_to_sync: 'noop',
   already_running: 'warning',
@@ -59,8 +61,13 @@ const statusLabel = (status) => {
   return STATUS_LABEL[s] || humanize(s) || 'Idle';
 };
 
+// Finished states. ``completed_with_errors`` / ``partial`` are terminal too —
+// the job is done, some items just need follow-up — so they show a Finished
+// time and auto-clear after the window like ``failed`` (the real signal lives
+// on the requeued decision / its event, and "Show all history" still has them).
 const TERMINAL_STATUSES = new Set([
   'completed', 'success', 'cancelled', 'failed',
+  'completed_with_errors', 'partial',
   'nothing_to_score', 'nothing_to_sync', 'already_running',
 ]);
 
