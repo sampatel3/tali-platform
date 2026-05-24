@@ -46,6 +46,7 @@ export default function PolicyView() {
           <details key={name} className="dp-point" open>
             <summary>{name}</summary>
             <div className="dp-point-body">
+              <div className="table-scroll">
               <table>
                 <thead>
                   <tr>
@@ -62,7 +63,9 @@ export default function PolicyView() {
                   ))}
                 </tbody>
               </table>
+              </div>
               {point.weights && Object.keys(point.weights).length > 0 && (
+                <div className="table-scroll">
                 <table>
                   <thead>
                     <tr>
@@ -79,6 +82,7 @@ export default function PolicyView() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               )}
               {(point.rules || []).map((r, idx) => (
                 <pre key={idx} className="dp-rule">

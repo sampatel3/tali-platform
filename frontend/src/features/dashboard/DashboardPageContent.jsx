@@ -432,6 +432,7 @@ export const DashboardPage = ({
               <Spinner size={32} />
             </div>
           ) : (
+            <div className="table-scroll">
             <table className="w-full">
               <thead>
                 <tr className="border-b border-[var(--taali-border-soft)] bg-[var(--taali-table-header)]">
@@ -526,6 +527,7 @@ export const DashboardPage = ({
                 )}
               </tbody>
             </table>
+            </div>
           )}
         </TableShell>
 

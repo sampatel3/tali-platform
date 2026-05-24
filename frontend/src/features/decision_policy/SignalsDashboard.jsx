@@ -53,6 +53,7 @@ export default function SignalsDashboard() {
       </div>
 
       <h3>Daily counts</h3>
+      <div className="table-scroll">
       <table className="dp-signals-table">
         <thead>
           <tr>
@@ -73,6 +74,7 @@ export default function SignalsDashboard() {
           ))}
         </tbody>
       </table>
+      </div>
 
       <h3>Top failure modes</h3>
       {(data.top_failure_modes || []).length === 0 ? (

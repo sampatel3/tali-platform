@@ -1389,3 +1389,27 @@
   color: var(--mute);
   letter-spacing: 0.04em;
 }
+
+/* ---------------- Mobile (phone) ---------------- */
+@media (max-width: 720px) {
+  .home-body {
+    padding: 18px 16px 40px;
+    gap: 20px;
+  }
+
+  /* The role + history tables use fr columns that crush to nothing on a
+     phone. Keep readable column widths and scroll the card sideways. */
+  .rq-roletable,
+  .rq-history {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .rq-roletable-head,
+  .rq-roletable-row {
+    min-width: 620px;
+  }
+  .rq-history-head,
+  .rq-history-row {
+    min-width: 640px;
+  }
+}
