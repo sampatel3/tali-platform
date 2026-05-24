@@ -1,4 +1,8 @@
 import logging
+import threading
+import time
+import uuid
+
 from .celery_app import celery_app
 from ..platform.config import settings
 
@@ -208,38 +212,180 @@ def send_assessment_expiry_reminders():
 # 15 min (jobs_only), starred-role candidates every 5 min, agent-mode
 # candidates every 5 min, everything else once nightly.
 
-# Single per-org mutex shared by all four Workable sync tasks. Two tasks
-# touching the same Workable token at the same time used to share-rate-
-# limit each other into 429s (each ``sync_org`` calls ``list_open_jobs``
-# which fires 5 endpoint hits, and per-candidate prefetches fan out
-# further). A single mutex means only one task type is talking to
-# Workable for a given org at a time. If a task can't get the lock it
-# skips that fire — the next Beat tick (5-15 min away) will retry.
+# Single per-org mutex shared by all four Workable sync tasks AND every
+# interactive Workable write (decision approve / override / move / note).
+# Two callers touching the same Workable token at the same time used to
+# share-rate-limit each other into 429s (each ``sync_org`` calls
+# ``list_open_jobs`` which fires 5 endpoint hits, and per-candidate
+# prefetches fan out further). A single mutex means only one caller is
+# talking to Workable for a given org at a time. If a sync task can't get
+# the lock it skips that fire — the next Beat tick (5-15 min away) retries.
 _WORKABLE_ORG_MUTEX_KEY_PREFIX = "celery:lock:workable_org_sync"
-# 30-min ceiling. Jobs / starred / agent runs typically take seconds to
-# a few minutes; nightly runs may take longer but should still finish
-# well under 30 min thanks to the CV-skip cache. If a worker actually
-# hangs the lock auto-releases after the TTL and the next task can run.
-_WORKABLE_ORG_MUTEX_TTL_SECONDS = 1800
+# Short TTL so a worker that dies mid-hold (deploy SIGKILL, OOM, container
+# restart) can only leak the lock for ~TTL, not the old 30-min ceiling.
+# This is safe *only* because a live holder keeps its lock alive past the
+# TTL via the heartbeat below — long-but-healthy syncs are unaffected
+# while a dead holder's lock self-heals within ~TTL.
+_WORKABLE_ORG_MUTEX_TTL_SECONDS = 90
+# Heartbeat cadence. Comfortably under the TTL (3x margin) so a couple of
+# delayed refreshes (GIL contention, slow Redis) can't drop a live lock.
+_WORKABLE_ORG_MUTEX_HEARTBEAT_SECONDS = 30
+# A blocked interactive write sets this sibling key to ask a sync that is
+# holding the mutex to yield. TTL > the op's max retry gap so it survives
+# between an op's retries, but auto-clears within a minute if the waiter
+# vanishes (worker died, recruiter navigated away).
+_WORKABLE_ORG_MUTEX_WAITER_TTL_SECONDS = 60
+# Cap on how long a yielding sync keeps deferring to interactive waiters
+# before it forces its way back in, so sync always makes progress even
+# under sustained approval load.
+_WORKABLE_ORG_MUTEX_YIELD_MAX_WAIT_SECONDS = 300
+# Poll cadence while a yielded sync waits for the interactive op to finish.
+_WORKABLE_ORG_MUTEX_YIELD_POLL_SECONDS = 1.0
 
 
-def _acquire_workable_org_mutex(org_id: int, *, source: str):
+def _waiter_key(key: str) -> str:
+    return f"{key}:waiters"
+
+
+def _as_str(value) -> str | None:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return value
+
+
+def _compare_and_delete(client, key: str, token: str) -> None:
+    """Delete ``key`` only while it still holds ``token`` (atomic WATCH/MULTI).
+
+    Guards against deleting a lock that another caller acquired after ours
+    expired — e.g. our heartbeat stalled, the TTL lapsed, someone else
+    grabbed it, and only then did we reach release.
+    """
+
+    def _txn(pipe):
+        current = _as_str(pipe.get(key))
+        pipe.multi()
+        if current == token:
+            pipe.delete(key)
+
+    client.transaction(_txn, key)
+
+
+def _compare_and_extend(client, key: str, token: str, ttl: int) -> None:
+    """Refresh ``key``'s TTL only while it still holds ``token`` (atomic)."""
+
+    def _txn(pipe):
+        current = _as_str(pipe.get(key))
+        pipe.multi()
+        if current == token:
+            pipe.expire(key, ttl)
+
+    client.transaction(_txn, key)
+
+
+class _OrgMutex:
+    """Refreshable per-org Workable lock.
+
+    The value is a unique token so we only ever extend/delete a lock we
+    still own. A daemon heartbeat extends the TTL while the holder is
+    alive; if the holder dies the heartbeat stops with it and the short
+    TTL lets the lock self-heal within ~TTL instead of leaking for 30 min.
+    """
+
+    def __init__(self, client, key: str, source: str):
+        self.client = client
+        self.key = key
+        self.source = source
+        self.token = ""
+        self._stop = threading.Event()
+        self._hb: threading.Thread | None = None
+
+    def _start_heartbeat(self) -> None:
+        self._stop = threading.Event()
+        thread = threading.Thread(
+            target=self._heartbeat_loop,
+            name=f"workable-mutex-hb:{self.key}",
+            daemon=True,
+        )
+        self._hb = thread
+        thread.start()
+
+    def _heartbeat_loop(self) -> None:
+        while not self._stop.wait(_WORKABLE_ORG_MUTEX_HEARTBEAT_SECONDS):
+            try:
+                _compare_and_extend(
+                    self.client, self.key, self.token, _WORKABLE_ORG_MUTEX_TTL_SECONDS
+                )
+            except Exception:
+                logger.exception("Workable mutex heartbeat failed key=%s", self.key)
+
+    def _stop_heartbeat(self) -> None:
+        self._stop.set()
+        thread = self._hb
+        self._hb = None
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2)
+
+    def acquire(self) -> bool:
+        """Try to take the lock once (non-blocking). Starts the heartbeat
+        on success; ``False`` means it's held by someone else."""
+        token = f"{self.source}:{uuid.uuid4().hex}"
+        if self.client.set(self.key, token, nx=True, ex=_WORKABLE_ORG_MUTEX_TTL_SECONDS):
+            self.token = token
+            self._start_heartbeat()
+            return True
+        return False
+
+    def release(self) -> None:
+        self._stop_heartbeat()
+        if self.token:
+            try:
+                _compare_and_delete(self.client, self.key, self.token)
+            except Exception:
+                logger.exception("Failed to release workable-org mutex key=%s", self.key)
+        self.token = ""
+
+    def waiter_present(self) -> bool:
+        try:
+            return bool(self.client.exists(_waiter_key(self.key)))
+        except Exception:
+            return False
+
+
+def _acquire_workable_org_mutex(org_id: int, *, source: str, signal_waiter: bool = False):
     """Acquire the per-org Workable mutex shared across all sync tasks.
 
     ``source`` is a short label (``"jobs"`` / ``"starred"`` / ``"agent"``
-    / ``"nightly"``) recorded as the lock value so we can see in Redis
-    which task is holding the lock when debugging.
+    / ``"nightly"`` / ``"workable_op:*"``) embedded in the lock token so we
+    can see in Redis which caller is holding the lock when debugging.
 
-    Returns the handle on success, ``None`` if held by another task,
-    ``False`` on Redis failure (caller treats as "run unguarded").
+    ``signal_waiter`` is set by interactive writes: when they're blocked
+    they flag a sibling key so a long-running sync holding the lock yields
+    (see ``_yield_workable_org_mutex_if_waiter``).
+
+    Returns the ``_OrgMutex`` handle on success, ``None`` if held by
+    another caller, ``False`` on Redis failure (caller runs unguarded).
     """
     try:
         import redis  # type: ignore
 
         client = redis.Redis.from_url(settings.REDIS_URL)
         key = f"{_WORKABLE_ORG_MUTEX_KEY_PREFIX}:{org_id}"
-        if client.set(key, source, nx=True, ex=_WORKABLE_ORG_MUTEX_TTL_SECONDS):
-            return (client, key)
+        mutex = _OrgMutex(client, key, source)
+        if mutex.acquire():
+            # We hold it now — clear any waiter flag a prior blocked op left.
+            try:
+                client.delete(_waiter_key(key))
+            except Exception:
+                pass
+            return mutex
+        if signal_waiter:
+            # Ask the current holder (a sync) to yield at its next checkpoint.
+            try:
+                client.set(
+                    _waiter_key(key), source, ex=_WORKABLE_ORG_MUTEX_WAITER_TTL_SECONDS
+                )
+            except Exception:
+                pass
         return None
     except Exception:
         logger.exception(
@@ -251,13 +397,40 @@ def _acquire_workable_org_mutex(org_id: int, *, source: str):
 
 
 def _release_workable_org_mutex(handle) -> None:
-    if not handle:
+    if not isinstance(handle, _OrgMutex):
         return
-    try:
-        client, key = handle
-        client.delete(key)
-    except Exception:
-        logger.exception("Failed to release workable-org mutex")
+    handle.release()
+
+
+def _yield_workable_org_mutex_if_waiter(handle, org_id: int) -> None:
+    """Cooperative preemption: if an interactive write is waiting, release
+    the mutex, let the op drain, then re-acquire and continue.
+
+    Called by the long-running sync tasks at their job/candidate
+    checkpoints. A read-heavy sync would otherwise hold the global write
+    mutex for its whole run (observed 1h10m) and starve decision approvals.
+    Bounded by ``_WORKABLE_ORG_MUTEX_YIELD_MAX_WAIT_SECONDS`` so sync still
+    makes progress under sustained approval load.
+    """
+    if not isinstance(handle, _OrgMutex):
+        return
+    if not handle.waiter_present():
+        return
+    logger.info(
+        "Yielding Workable mutex to interactive waiter org_id=%s holder=%s",
+        org_id,
+        handle.source,
+    )
+    handle.release()
+    deadline = time.monotonic() + _WORKABLE_ORG_MUTEX_YIELD_MAX_WAIT_SECONDS
+    while True:
+        # While a waiter is still pending and we're within budget, keep the
+        # lock free so the interactive op wins it. Past the deadline (or
+        # once no waiter remains), grab it back as soon as it's free.
+        deferring = handle.waiter_present() and time.monotonic() < deadline
+        if not deferring and handle.acquire():
+            return
+        time.sleep(_WORKABLE_ORG_MUTEX_YIELD_POLL_SECONDS)
 
 
 @celery_app.task
@@ -345,6 +518,9 @@ def sync_starred_roles():
                     full_resync=False,
                     mode="full",
                     selected_job_shortcodes=shortcodes,
+                    yield_if_contended=lambda h=lock_handle, oid=int(org.id): (
+                        _yield_workable_org_mutex_if_waiter(h, oid)
+                    ),
                 )
                 synced += 1
             except Exception:
@@ -432,7 +608,14 @@ def sync_workable_jobs():
                         subdomain=org.workable_subdomain,
                     )
                 )
-                service.sync_org(db, org, mode="jobs_only")
+                service.sync_org(
+                    db,
+                    org,
+                    mode="jobs_only",
+                    yield_if_contended=lambda h=lock_handle, oid=int(org.id): (
+                        _yield_workable_org_mutex_if_waiter(h, oid)
+                    ),
+                )
                 synced += 1
             except Exception:
                 failed += 1
@@ -520,6 +703,9 @@ def sync_agent_mode_roles():
                     full_resync=False,
                     mode="full",
                     selected_job_shortcodes=shortcodes,
+                    yield_if_contended=lambda h=lock_handle, oid=int(org.id): (
+                        _yield_workable_org_mutex_if_waiter(h, oid)
+                    ),
                 )
                 synced += 1
             except Exception:
@@ -614,6 +800,9 @@ def sync_workable_daily_candidates():
                     full_resync=False,
                     mode="full",
                     selected_job_shortcodes=shortcodes,
+                    yield_if_contended=lambda h=lock_handle, oid=int(org.id): (
+                        _yield_workable_org_mutex_if_waiter(h, oid)
+                    ),
                 )
                 synced += 1
             except Exception:

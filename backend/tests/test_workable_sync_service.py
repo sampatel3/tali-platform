@@ -803,3 +803,53 @@ def test_brand_new_disqualified_candidate_is_not_imported(db):
         CandidateApplication.workable_candidate_id == "cand_new_dq",
     ).first()
     assert app is None
+
+
+def test_sync_org_invokes_yield_callback_at_job_boundaries(db):
+    """The periodic sync tasks pass ``yield_if_contended`` so a long sync can
+    hand the per-org Workable mutex to a waiting approval. ``sync_org`` must
+    actually call it at its job/candidate checkpoints (anti-starvation wiring)."""
+    org = _make_org(db, "yield-callback-org")
+
+    class MockClient(WorkableService):
+        def __init__(self):
+            super().__init__(access_token="x", subdomain="test")
+
+        def list_open_jobs(self):
+            return [
+                {"id": "J1", "shortcode": "J1", "title": "Role One"},
+                {"id": "J2", "shortcode": "J2", "title": "Role Two"},
+            ]
+
+        def list_job_candidates(self, job_identifier, *, paginate=False, max_pages=None):
+            return [{"id": f"cand_{job_identifier}", "email": f"{job_identifier}@x.test",
+                     "name": "C", "stage": "Screening"}]
+
+        def get_job_details(self, job_identifier):
+            return {}
+
+        def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
+            return None, None, None
+
+    calls = {"n": 0}
+
+    def _cb():
+        calls["n"] += 1
+
+    service = WorkableSyncService(MockClient())
+    service.sync_org(db, org, yield_if_contended=_cb)
+
+    # Two jobs → at least one checkpoint per job boundary.
+    assert calls["n"] >= 2, f"expected >=2 yield checkpoints, got {calls['n']}"
+
+
+def test_sync_org_without_callback_is_unchanged(db):
+    """Default (no callback) callers — manual sync, scripts, tests — see no
+    behavior change."""
+    org = _make_org(db, "no-yield-callback-org")
+    MockClient, _ = _client_returning([
+        [{"id": "cand_a", "email": "a@example.com", "name": "A", "stage": "Screening"}],
+    ])
+    service = WorkableSyncService(MockClient())
+    summary = service.sync_org(db, org)  # no yield_if_contended
+    assert summary["candidates_seen"] == 1

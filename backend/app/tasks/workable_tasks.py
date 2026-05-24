@@ -16,7 +16,11 @@ def _disqualify_retry_countdown(retries: int) -> int:
 
 
 # Max times a Workable-op task waits for the per-org mutex before giving up.
-_DISPATCH_MAX_RETRIES = 12
+# Sized so the wait comfortably outlasts a leaked-lock recovery window: a
+# worker that dies mid-hold leaves the lock for at most ~TTL (90s) before
+# the heartbeat lapses and it self-heals, so the op should keep retrying
+# past that rather than prematurely requeueing. 18 * 3-9s ≈ 108-162s.
+_DISPATCH_MAX_RETRIES = 18
 
 
 def _lock_wait_countdown() -> int:
@@ -62,7 +66,12 @@ def run_workable_op_task(
     )
 
     eager = bool(getattr(self.request, "is_eager", False))
-    lock = _acquire_workable_org_mutex(int(organization_id), source=f"workable_op:{op_type}")
+    # signal_waiter=True: interactive writes get priority — when blocked we
+    # flag the per-org lock so a long sync holding it yields at its next
+    # checkpoint instead of starving this approval for the whole sync.
+    lock = _acquire_workable_org_mutex(
+        int(organization_id), source=f"workable_op:{op_type}", signal_waiter=True
+    )
     if lock is None:
         if self.request.retries < self.max_retries:
             raise self.retry(countdown=0 if eager else _lock_wait_countdown())
