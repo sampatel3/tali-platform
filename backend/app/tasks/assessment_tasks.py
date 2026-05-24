@@ -216,31 +216,76 @@ def send_assessment_expiry_reminders():
 # Workable for a given org at a time. If a task can't get the lock it
 # skips that fire — the next Beat tick (5-15 min away) will retry.
 _WORKABLE_ORG_MUTEX_KEY_PREFIX = "celery:lock:workable_org_sync"
-# 30-min ceiling. Jobs / starred / agent runs typically take seconds to
-# a few minutes; nightly runs may take longer but should still finish
-# well under 30 min thanks to the CV-skip cache. If a worker actually
+# 30-min ceiling for the SYNC tasks. Jobs / starred / agent runs typically
+# take seconds to a few minutes; nightly runs may take longer but should still
+# finish well under 30 min thanks to the CV-skip cache. If a worker actually
 # hangs the lock auto-releases after the TTL and the next task can run.
 _WORKABLE_ORG_MUTEX_TTL_SECONDS = 1800
 
+# Op-path (``run_workable_op_task``) acquires with this SHORT TTL plus a
+# heartbeat thread that re-extends it while the holder is alive. A worker
+# killed mid-write (deploy SIGKILL) takes the heartbeat thread down with it,
+# so the lock auto-expires in ~2 min instead of leaking for the 30-min static
+# TTL above and blocking every Workable write for the org until then. The
+# interval is a third of the TTL so a single missed beat never expires a live
+# lock.
+_WORKABLE_OP_MUTEX_TTL_SECONDS = 120
+_WORKABLE_OP_MUTEX_HEARTBEAT_SECONDS = 40
 
-def _acquire_workable_org_mutex(org_id: int, *, source: str):
-    """Acquire the per-org Workable mutex shared across all sync tasks.
 
-    ``source`` is a short label (``"jobs"`` / ``"starred"`` / ``"agent"``
-    / ``"nightly"``) recorded as the lock value so we can see in Redis
-    which task is holding the lock when debugging.
+def _workable_mutex_heartbeat(client, key: str, ttl_seconds: int, stop_event) -> None:
+    """Re-extend the mutex TTL every interval until released (or the process
+    dies). ``expire`` only touches an existing key, so a beat racing with
+    ``delete`` in release can never resurrect a freed lock."""
+    interval = max(1, min(_WORKABLE_OP_MUTEX_HEARTBEAT_SECONDS, ttl_seconds // 3))
+    while not stop_event.wait(interval):
+        try:
+            client.expire(key, ttl_seconds)
+        except Exception:
+            logger.exception("workable mutex heartbeat failed key=%s", key)
+            return
+
+
+def _acquire_workable_org_mutex(
+    org_id: int, *, source: str, ttl: int | None = None, heartbeat: bool = False
+):
+    """Acquire the per-org Workable mutex shared across all sync tasks + ops.
+
+    ``source`` is a short label (``"jobs"`` / ``"starred"`` / ``"agent"`` /
+    ``"nightly"`` / ``"workable_op:<op>"``) recorded as the lock value so we
+    can see in Redis which task is holding the lock when debugging.
+
+    ``heartbeat=True`` (op path) acquires with the short op TTL and spawns a
+    daemon thread that renews it while the holder lives — deploy-safe. Sync
+    callers leave it off and get the static 30-min TTL.
 
     Returns the handle on success, ``None`` if held by another task,
     ``False`` on Redis failure (caller treats as "run unguarded").
     """
+    ttl_seconds = int(
+        ttl
+        if ttl is not None
+        else (_WORKABLE_OP_MUTEX_TTL_SECONDS if heartbeat else _WORKABLE_ORG_MUTEX_TTL_SECONDS)
+    )
     try:
         import redis  # type: ignore
 
         client = redis.Redis.from_url(settings.REDIS_URL)
         key = f"{_WORKABLE_ORG_MUTEX_KEY_PREFIX}:{org_id}"
-        if client.set(key, source, nx=True, ex=_WORKABLE_ORG_MUTEX_TTL_SECONDS):
-            return (client, key)
-        return None
+        if not client.set(key, source, nx=True, ex=ttl_seconds):
+            return None
+        stop_event = None
+        if heartbeat:
+            import threading
+
+            stop_event = threading.Event()
+            threading.Thread(
+                target=_workable_mutex_heartbeat,
+                args=(client, key, ttl_seconds, stop_event),
+                name=f"workable-mutex-hb:{org_id}",
+                daemon=True,
+            ).start()
+        return (client, key, stop_event)
     except Exception:
         logger.exception(
             "Failed to acquire workable-org mutex org_id=%s source=%s; running unguarded",
@@ -254,7 +299,10 @@ def _release_workable_org_mutex(handle) -> None:
     if not handle:
         return
     try:
-        client, key = handle
+        client, key = handle[0], handle[1]
+        stop_event = handle[2] if len(handle) > 2 else None
+        if stop_event is not None:
+            stop_event.set()  # stop the heartbeat before freeing the key
         client.delete(key)
     except Exception:
         logger.exception("Failed to release workable-org mutex")

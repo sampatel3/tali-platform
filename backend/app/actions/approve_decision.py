@@ -121,7 +121,18 @@ def enqueue_batch(
                 "workable_target_stage": workable_target_stage,
                 "workable_target_stages": workable_target_stages or None,
             },
-            counters={"total": len(accepted), "succeeded": 0, "requeued": 0, "failed": 0},
+            # ``decision_ids`` lets the watchdog (expire_stuck_decision_batches)
+            # return exactly this batch's rows to the queue if the worker is
+            # killed mid-run. Overwritten by result counters on completion, so
+            # it only persists while the run is in-flight — which is all the
+            # watchdog needs.
+            counters={
+                "total": len(accepted),
+                "succeeded": 0,
+                "requeued": 0,
+                "failed": 0,
+                "decision_ids": accepted,
+            },
         )
     return {"job_run_id": job_run_id, "accepted": accepted, "failures": failures}
 

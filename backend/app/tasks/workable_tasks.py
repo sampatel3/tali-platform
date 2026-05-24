@@ -41,6 +41,16 @@ def _lock_wait_countdown() -> int:
     bind=True,
     name="app.tasks.workable_tasks.run_workable_op",
     max_retries=_DISPATCH_MAX_RETRIES,
+    # Survive a worker killed mid-batch (deploy SIGKILL). ``acks_late`` keeps
+    # the message un-acked until the task finishes, so a killed task is
+    # re-delivered instead of silently lost; ``reject_on_worker_lost`` is what
+    # actually re-queues it (default False drops acks_late tasks on worker
+    # loss). Set per-task, NOT globally — a task that *crashes* the worker
+    # (OOM/segfault) would otherwise loop forever. Re-delivery is safe: the
+    # approve batch + every single op re-query each decision/application and
+    # skip anything no longer in ``processing`` (idempotent).
+    acks_late=True,
+    reject_on_worker_lost=True,
 )
 def run_workable_op_task(
     self,
@@ -72,7 +82,13 @@ def run_workable_op_task(
     )
 
     eager = bool(getattr(self.request, "is_eager", False))
-    lock = _acquire_workable_org_mutex(int(organization_id), source=f"workable_op:{op_type}")
+    # Short TTL + heartbeat (deploy-safe): if this worker is SIGKILLed
+    # mid-write the heartbeat thread dies with it and the lock auto-expires in
+    # ~2 min, instead of leaking for the 30-min static TTL and blocking ALL
+    # Workable writes for this org until then.
+    lock = _acquire_workable_org_mutex(
+        int(organization_id), source=f"workable_op:{op_type}", heartbeat=True
+    )
     if lock is None:
         # Held by another Workable write (often a large approve batch that holds
         # the lock for its whole run). Wait it out: re-enqueue a FRESH task with
@@ -168,6 +184,117 @@ def run_workable_op_task(
     finally:
         db.close()
         _release_workable_org_mutex(lock)
+
+
+# Watchdog timeout for a stuck approve batch. The batch handler
+# (``_op_approve_decisions``) catches per-decision and never raises, so its
+# ``BackgroundJobRun`` is ``running`` ONLY while actively draining the loop —
+# a few minutes for 100 decisions. ``running`` past this means the worker died
+# mid-batch (deploy SIGKILL) and the finally block never ran. 15 min clears
+# the longest realistic legitimate batch with margin.
+_STUCK_DECISION_BATCH_TIMEOUT_MINUTES = 15
+
+
+@celery_app.task(
+    name="app.tasks.workable_tasks.expire_stuck_decision_batches",
+    bind=True,
+    max_retries=0,
+)
+def expire_stuck_decision_batches(self) -> dict:
+    """Recover approve batches whose worker was killed mid-run.
+
+    A SIGKILL (deploy) skips ``run_workable_op_task``'s finally block, so the
+    batch's decisions stay ``processing`` and its ``BackgroundJobRun`` stays
+    ``running`` forever. ``acks_late`` re-delivers the task eventually, but
+    Redis visibility-timeout makes that slow (~1h); this recovers within one
+    beat tick: stale-``running`` ``decision_batch`` runs are marked ``failed``
+    and their still-``processing`` decisions returned to the Hub queue.
+
+    Scoped to ``decision_batch`` only — single ``workable_op`` runs retry with
+    backoff and can be legitimately ``running`` for >2h, so reaping them here
+    would false-fail a healthy retry; their worker-death is covered by
+    ``acks_late`` re-delivery instead. The leaked Redis mutex is handled
+    separately by the op-path heartbeat/short-TTL, not here.
+
+    No-op when nothing is stuck. Idempotent — re-running skips decisions
+    already moved out of ``processing`` and runs already out of ``running``.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from ..models.agent_decision import AgentDecision
+    from ..models.background_job_run import JOB_KIND_DECISION_BATCH, BackgroundJobRun
+    from ..platform.database import SessionLocal
+
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        minutes=_STUCK_DECISION_BATCH_TIMEOUT_MINUTES
+    )
+    db = SessionLocal()
+    failed_run_ids: list[int] = []
+    requeued_ids: list[int] = []
+    try:
+        stuck = (
+            db.query(BackgroundJobRun)
+            .filter(
+                BackgroundJobRun.kind == JOB_KIND_DECISION_BATCH,
+                BackgroundJobRun.status == "running",
+                BackgroundJobRun.finished_at.is_(None),
+                BackgroundJobRun.started_at < cutoff,
+            )
+            .all()
+        )
+        now = datetime.now(timezone.utc)
+        for run in stuck:
+            decision_ids = [
+                int(x) for x in ((run.counters or {}).get("decision_ids") or [])
+            ]
+            for decision_id in decision_ids:
+                decision = (
+                    db.query(AgentDecision)
+                    .filter(
+                        AgentDecision.id == decision_id,
+                        AgentDecision.organization_id == run.organization_id,
+                    )
+                    .first()
+                )
+                # Idempotent: skip anything already resolved / requeued.
+                if decision is None or decision.status != "processing":
+                    continue
+                decision.status = "pending"
+                decision.resolution_note = (
+                    f"Returned to queue by watchdog: approve batch (job {run.id}) "
+                    f"stalled >{_STUCK_DECISION_BATCH_TIMEOUT_MINUTES}m — worker "
+                    "likely killed mid-batch (deploy)."
+                )[:500]
+                requeued_ids.append(decision_id)
+            run.status = "failed"
+            run.finished_at = now
+            run.error = (
+                run.error
+                or f"watchdog: still running after {_STUCK_DECISION_BATCH_TIMEOUT_MINUTES}m — worker likely killed mid-batch"
+            )
+            failed_run_ids.append(int(run.id))
+        if failed_run_ids:
+            db.commit()
+            logger.warning(
+                "expire_stuck_decision_batches: failed %d run(s) %s, requeued %d decision(s) %s",
+                len(failed_run_ids),
+                failed_run_ids,
+                len(requeued_ids),
+                requeued_ids,
+            )
+    except Exception:
+        db.rollback()
+        logger.exception("expire_stuck_decision_batches failed")
+        return {"status": "error"}
+    finally:
+        db.close()
+    return {
+        "status": "ok",
+        "failed_run_count": len(failed_run_ids),
+        "requeued_decision_count": len(requeued_ids),
+        "job_run_ids": failed_run_ids,
+        "decision_ids": requeued_ids,
+    }
 
 
 @celery_app.task(name="app.tasks.workable_tasks.run_workable_sync_run")
