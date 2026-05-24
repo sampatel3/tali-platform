@@ -244,6 +244,50 @@ def revoke_share_link(
 public_router = APIRouter(tags=["Share links (public)"])
 
 
+def _recruiter_notes_timeline(
+    db: Session,
+    app: CandidateApplication,
+    payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Recruiter notes for the share view's "Hiring team notes" column.
+
+    Notes are appended to ``assessment.timeline`` by
+    ``POST /assessments/{id}/notes`` (not the application_events table), so we
+    resolve the same assessment the recruiter detail view uses and return its
+    note-type entries. Mirrors ``resolveAssessmentId`` on the frontend.
+    """
+    from ...models.assessment import Assessment
+
+    score_summary = payload.get("score_summary")
+    assessment_id = None
+    if isinstance(score_summary, dict):
+        assessment_id = score_summary.get("assessment_id")
+    assessment_id = assessment_id or payload.get("valid_assessment_id")
+    if not assessment_id:
+        return []
+
+    assessment = (
+        db.query(Assessment)
+        .filter(
+            Assessment.id == int(assessment_id),
+            Assessment.organization_id == app.organization_id,
+        )
+        .first()
+    )
+    timeline = assessment.timeline if assessment and isinstance(assessment.timeline, list) else []
+    notes: list[dict[str, Any]] = []
+    for entry in timeline:
+        if not isinstance(entry, dict):
+            continue
+        event_type = str(entry.get("event_type") or entry.get("type") or "").lower()
+        if event_type not in ("note", "recruiter_note"):
+            continue
+        if not str(entry.get("text") or entry.get("prompt") or "").strip():
+            continue
+        notes.append(entry)
+    return notes
+
+
 @public_router.get("/share/{token}", response_model=PublicShareViewResponse)
 def view_share_link(
     token: str,
@@ -293,6 +337,23 @@ def view_share_link(
         include_cv_text=False,
         client_safe=(view == "client"),
     )
+
+    # Recruiter shares are the "full report" — surface the same recruiter
+    # notes + audit timeline the authenticated detail view fetches via
+    # auth-only endpoints (assessment timeline + /events), which the unauth
+    # share page can't call itself. Client shares stay scrubbed.
+    if view == "recruiter":
+        from ..assessments_runtime.pipeline_service import list_application_events
+
+        application_payload["application_events"] = list_application_events(
+            db,
+            organization_id=app.organization_id,
+            application_id=app.id,
+            limit=100,
+        )
+        application_payload["recruiter_notes_timeline"] = _recruiter_notes_timeline(
+            db, app, application_payload
+        )
 
     return {
         "application_id": link.application_id,
