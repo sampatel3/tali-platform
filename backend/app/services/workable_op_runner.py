@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..models.agent_decision import AgentDecision
@@ -149,6 +150,19 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
                 decision_id,
                 organization_id,
                 note=f"Returned to queue: Workable writeback failed ({exc.code}). {exc.message}",
+            )
+            counters["requeued"] += 1
+        except HTTPException as exc:
+            # A deterministic, expected action failure (e.g. send_assessment on a
+            # role with no linked task, missing resend evidence). Re-queue with
+            # the clear message so the recruiter sees *why* on the card and can
+            # act, rather than a generic "unexpected error".
+            db.rollback()
+            _requeue_decision(
+                db,
+                decision_id,
+                organization_id,
+                note=f"Returned to queue: {exc.detail}",
             )
             counters["requeued"] += 1
         except Exception as exc:  # noqa: BLE001 — one bad row must not halt the batch

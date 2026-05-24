@@ -194,21 +194,23 @@ def test_send_assessment_idempotent_when_active_assessment_exists(db):
 # ---------------------------------------------------------------------------
 
 
-def test_send_assessment_refuses_when_role_has_no_tasks(db):
+def test_send_assessment_returns_misconfigured_when_role_has_no_tasks(db):
+    """A role with zero linked tasks is a recruiter-config gap, not a crash:
+    the action returns a soft ``misconfigured`` status (same as the ambiguous
+    multiple-tasks case) so approving the agent's recommendation surfaces a
+    clear signal instead of 422-ing and re-queueing the decision in a loop."""
     org = _make_org(db)
     role = _make_role(db, org, tasks=[])
     app = _make_application(db, org=org, role=role)
     run = _make_agent_run(db, role)
 
-    from fastapi import HTTPException
-
-    with pytest.raises(HTTPException) as exc:
-        send_assessment_run(
-            db, Actor.agent(int(run.id)),
-            organization_id=int(org.id), application_id=int(app.id),
-        )
-    assert exc.value.status_code == 422
-    assert "no tasks linked" in str(exc.value.detail).lower()
+    result = send_assessment_run(
+        db, Actor.agent(int(run.id)),
+        organization_id=int(org.id), application_id=int(app.id),
+    )
+    assert result.status == "misconfigured"
+    assert result.assessment is None
+    assert "no tasks linked" in (result.detail or "").lower()
 
 
 def test_send_assessment_returns_misconfigured_when_role_has_multiple_tasks(db):

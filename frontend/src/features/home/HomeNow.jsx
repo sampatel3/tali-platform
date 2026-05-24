@@ -466,11 +466,22 @@ const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze,
       </p>
 
       {isStale && (decision.status === 'pending' || decision.status === 'reverted_for_feedback') ? (
-        <div className="rq-stale-banner" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 14px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-bg, rgba(124,92,255,.10))', color: 'var(--purple, #7c5cff)', fontSize: 13, fontWeight: 500 }}>
+        <div className="rq-stale-banner" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 14px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: 13, fontWeight: 500 }}>
           <RefreshCw size={14} strokeWidth={2} aria-hidden="true" />
           <span>
             Inputs changed since this was decided{stalenessSummary ? ` · ${stalenessSummary}` : ''}. Re-evaluate before approving.
           </span>
+        </div>
+      ) : null}
+
+      {/* A pending decision with a resolution_note was returned to the queue
+          (the action couldn't complete — e.g. the role has no assessment task).
+          Surface the reason so the recruiter doesn't blindly re-approve into the
+          same failure; a fresh pending decision has no note. */}
+      {decision.status === 'pending' && decision.resolution_note ? (
+        <div className="rq-returned-banner" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, margin: '0 0 14px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: 13, fontWeight: 500, lineHeight: 1.45 }}>
+          <Inbox size={14} strokeWidth={2} aria-hidden="true" style={{ marginTop: 1, flexShrink: 0 }} />
+          <span>{decision.resolution_note}</span>
         </div>
       ) : null}
 

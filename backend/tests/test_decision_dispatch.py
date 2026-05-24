@@ -198,6 +198,29 @@ def test_batch_requeues_failed_decision_to_queue(db):
     assert job.status == "completed_with_errors" and job.counters["requeued"] == 1
 
 
+def test_batch_requeues_send_assessment_when_role_has_no_task(db):
+    """Approving a send_assessment recommendation for a role with no linked task
+    must NOT mark the decision approved (nothing was sent) and must NOT requeue
+    with a generic 'unexpected error' — it returns to the queue with a clear,
+    actionable reason the Hub can surface, so the recruiter doesn't loop on it."""
+    org, role, user = _seed(db)  # role seeded with no tasks
+    app, decision = _add_decision(
+        db, org, role, status="processing", decision_type="send_assessment"
+    )
+    db.commit()
+    out = run_workable_op_task.run(
+        job_run_id=None, organization_id=int(org.id), op_type="approve_decisions",
+        payload={"decision_ids": [int(decision.id)], "user_id": int(user.id)},
+    )
+    assert out["status"] == "completed_with_errors" and out["requeued"] == 1
+    db.expire_all()
+    refreshed = db.query(AgentDecision).get(decision.id)
+    assert refreshed.status == "pending", "must return to the queue, not be approved"
+    note = (refreshed.resolution_note or "").lower()
+    assert "no tasks linked" in note
+    assert "unexpected error" not in note
+
+
 def test_batch_skips_non_processing(db):
     """Idempotent: a row no longer 'processing' is skipped (not re-run)."""
     org, role, user = _seed(db)
