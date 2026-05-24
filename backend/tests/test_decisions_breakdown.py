@@ -109,6 +109,7 @@ def test_decisions_breakdown_by_role(client, db):
     assert conv["reached_offer"] == 2  # offer + hired
     assert conv["hired"] == 1
     assert conv["rejected"] == 0
+    assert conv["by_stage"] == {"final_interview": 1, "offer": 1, "hired": 1}
 
     stages = totals["workable_stages"]
     assert stages["final_interview"] == 1

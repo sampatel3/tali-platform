@@ -1080,6 +1080,18 @@
   margin-top: 3px;
 }
 
+.hbr-caption {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--mute);
+  margin: 0 2px 14px;
+}
+
+.hbr-caption b {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
 .hbr-table {
   border: 1px solid var(--line);
   border-radius: 12px;
