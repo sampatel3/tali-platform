@@ -272,13 +272,75 @@ def test_op_mutex_uses_short_ttl_and_spawns_heartbeat():
     client.delete.assert_called_once_with(handle[1])
 
 
-def test_sync_mutex_keeps_static_ttl_and_no_heartbeat():
-    client = _fake_redis()
-    with patch("redis.Redis.from_url", return_value=client):
-        handle = assessment_tasks._acquire_workable_org_mutex(9, source="starred")
-    _, ex_kwarg = client.set.call_args
-    assert ex_kwarg["ex"] == assessment_tasks._WORKABLE_ORG_MUTEX_TTL_SECONDS
-    assert handle[2] is None  # no heartbeat for sync callers
+def test_sync_tasks_acquire_mutex_with_heartbeat(db, monkeypatch):
+    """All four Workable sync tasks must hold the per-org mutex with a heartbeat
+    (short TTL + renew-while-alive), same as the op path.
+
+    Regression for the 2026-05-24 incident: the sync path acquired with the
+    static 30-min TTL and no heartbeat, so a worker SIGKILLed mid-sync (deploy)
+    leaked the lock for up to 30 min. That starved every decision approve batch
+    (whose lock-wait window is only ~10 min), failing bulk approvals with
+    "Workable lock timeout" / watchdog "stuck in queued" regardless of size.
+    """
+    org = Organization(
+        name="HB Org",
+        slug=f"hb-org-{id(db)}",
+        workable_connected=True,
+        workable_access_token="tk",
+        workable_subdomain="hb",
+    )
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+
+    db.add_all(
+        [
+            Role(
+                organization_id=org.id, name="Starred", source="workable",
+                workable_job_id="STAR1", starred_for_auto_sync=True,
+            ),
+            Role(
+                organization_id=org.id, name="Agent", source="workable",
+                workable_job_id="AGENT1", agentic_mode_enabled=True, agent_paused_at=None,
+            ),
+            Role(
+                organization_id=org.id, name="Plain", source="workable",
+                workable_job_id="PLAIN1",
+            ),
+        ]
+    )
+    db.commit()
+
+    captured: list[dict] = []
+
+    def _spy_acquire(*args, **kwargs):
+        captured.append(kwargs)
+        return False  # "run unguarded" — exercises the call without real Redis
+
+    class _FakeService:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def sync_org(self, *args, **kwargs):
+            return {"jobs_seen": 0}
+
+    monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
+    monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", _spy_acquire)
+    from app.components.integrations.workable import sync_service as sync_service_mod
+
+    monkeypatch.setattr(sync_service_mod, "WorkableSyncService", _FakeService)
+
+    assessment_tasks.sync_starred_roles.run()
+    assessment_tasks.sync_workable_jobs.run()
+    assessment_tasks.sync_agent_mode_roles.run()
+    assessment_tasks.sync_workable_daily_candidates.run()
+
+    assert len(captured) >= 4, (
+        f"each sync task should acquire the mutex for the connected org, got {len(captured)}"
+    )
+    assert all(kw.get("heartbeat") is True for kw in captured), (
+        f"every sync task must acquire the Workable mutex with heartbeat=True, got {captured}"
+    )
 
 
 def test_op_mutex_returns_none_when_held():
