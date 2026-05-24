@@ -896,13 +896,17 @@ def _empty_decisions_bucket() -> Dict[str, Any]:
     return {"total": 0, "approved": 0, "by_type": {}}
 
 
-def _empty_conversion_bucket() -> Dict[str, int]:
+def _empty_conversion_bucket() -> Dict[str, Any]:
     return {
         "advanced_total": 0,
         "reached_final_interview": 0,
         "reached_offer": 0,
         "hired": 0,
         "rejected": 0,
+        # Current Workable stage of the advanced cohort — lets the UI explain
+        # an "Advanced 40 / reached final 0" gap (e.g. "36 still at technical
+        # interview") instead of looking like a bug.
+        "by_stage": {},
     }
 
 
@@ -1034,6 +1038,7 @@ def get_decisions_breakdown(
         reached_offer = is_hired or stage in _OFFER_NORM_STAGES
         reached_final = reached_offer or stage in _FINAL_INTERVIEW_NORM_STAGES
         is_rejected = oc in _REJECT_OUTCOMES or bool(disqualified)
+        stage_key = stage or "unstaged"
         for bucket in (conversion_by_role.setdefault(role_id, _empty_conversion_bucket()), totals_conversion):
             bucket["advanced_total"] += 1
             if reached_final:
@@ -1044,6 +1049,7 @@ def get_decisions_breakdown(
                 bucket["hired"] += 1
             if is_rejected:
                 bucket["rejected"] += 1
+            bucket["by_stage"][stage_key] = bucket["by_stage"].get(stage_key, 0) + 1
 
     # ── Headline score values (taali cache, falling back to cv_match) ──
     headline_score = func.coalesce(

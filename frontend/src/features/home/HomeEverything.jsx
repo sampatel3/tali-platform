@@ -127,14 +127,23 @@ const stageLabel = (key) => STAGE_LABELS[key] || prettyKey(key);
 const typeLabel = (key) => DECISION_TYPE_LABELS[key] || prettyKey(key);
 const pct = (part, whole) => (safeNumber(whole) > 0 ? Math.round((safeNumber(part) / safeNumber(whole)) * 100) : 0);
 
+// Workable stages that count as "final interview or beyond" — used to
+// compare how many candidates reached the finish line vs how many of those
+// Tali actually advanced.
+const FINAL_PLUS_STAGES = ['final_interview', 'offer', 'offer_extended', 'offer_accepted', 'hired'];
+const sumStages = (stages, keys) => keys.reduce((acc, k) => acc + safeNumber(stages?.[k]), 0);
+const sortedEntriesDesc = (obj, valueOf) =>
+  Object.entries(obj || {}).sort((a, b) => valueOf(b[1]) - valueOf(a[1]));
+
 const RoleRow = ({ role, expanded, onToggle }) => {
   const d = role.decisions || {};
   const c = role.advance_conversion || {};
   const s = role.score_stats || {};
   const advanced = safeNumber(c.advanced_total);
   const hired = safeNumber(c.hired);
-  const byType = Object.entries(d.by_type || {}).sort((a, b) => safeNumber(b[1]?.total) - safeNumber(a[1]?.total));
-  const stages = Object.entries(role.workable_stages || {}).sort((a, b) => safeNumber(b[1]) - safeNumber(a[1]));
+  const byType = sortedEntriesDesc(d.by_type, (v) => safeNumber(v?.total));
+  const stages = sortedEntriesDesc(role.workable_stages, (v) => safeNumber(v));
+  const advancedStages = sortedEntriesDesc(c.by_stage, (v) => safeNumber(v));
   return (
     <>
       <div
@@ -175,6 +184,22 @@ const RoleRow = ({ role, expanded, onToggle }) => {
       </div>
       {expanded ? (
         <div className="hbr-detail">
+          <div style={{ gridColumn: '1 / -1' }}>
+            <div className="kicker" style={{ marginBottom: 8 }}>
+              Advanced cohort ({advanced}) now sits at
+            </div>
+            <div className="hbr-chips">
+              {advancedStages.length === 0 ? (
+                <span style={{ fontSize: 12, color: 'var(--mute)' }}>No advances yet</span>
+              ) : (
+                advancedStages.map(([key, n]) => (
+                  <span key={key} className="hbr-chip">
+                    {stageLabel(key)} <b>{safeNumber(n).toLocaleString()}</b>
+                  </span>
+                ))
+              )}
+            </div>
+          </div>
           <div>
             <div className="kicker" style={{ marginBottom: 8 }}>Decisions by type · approved / total</div>
             <div className="hbr-chips">
@@ -223,6 +248,8 @@ const DecisionsByRole = ({ data }) => {
   const tc = totals.advance_conversion || {};
   const ts = totals.score_stats || {};
   const advanced = safeNumber(tc.advanced_total);
+  const totalFinalPlus = sumStages(totals.workable_stages, FINAL_PLUS_STAGES);
+  const totalReachedFinal = safeNumber(tc.reached_final_interview);
   return (
     <div className="home-by-role">
       <div className="kicker">DECISIONS &amp; OUTCOMES BY ROLE · ALL TIME</div>
@@ -253,9 +280,18 @@ const DecisionsByRole = ({ data }) => {
           <div className="kicker" style={{ marginBottom: 6 }}>Headline score</div>
           <div className="hbr-card-value">{ts.avg != null ? ts.avg : '—'}</div>
           <div className="hbr-card-sub">
-            {ts.median != null ? `median ${ts.median} · n=${safeNumber(ts.count).toLocaleString()}` : 'no scores yet'}
+            {ts.median != null ? `median ${ts.median} · n=${safeNumber(ts.count).toLocaleString()} · all-time` : 'no scores yet'}
           </div>
         </div>
+      </div>
+
+      <div className="hbr-caption">
+        Conversion columns (→&nbsp;Final / Offer / Hired) count <b>only candidates Tali advanced</b>; expand a role to
+        see where that cohort sits now plus the full Workable stage mix for everyone in the role.
+        {totalFinalPlus > 0 ? (
+          <> Of {totalFinalPlus.toLocaleString()} candidate{totalFinalPlus === 1 ? '' : 's'} now at final interview or beyond,{' '}
+            <b>{totalReachedFinal.toLocaleString()}</b> {totalReachedFinal === 1 ? 'was' : 'were'} advanced by Tali.</>
+        ) : null}
       </div>
 
       {roles.length === 0 ? (
