@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, desc, or_
+from sqlalchemy import and_, desc, func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from ...agent_runtime import budget_guard
@@ -17,6 +17,7 @@ from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ...models.user import User
+from .pipeline_service import normalize_pipeline_key
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
@@ -862,4 +863,239 @@ def get_reporting_summary(
         "anomalies": anomalies,
         "funnel": funnel,
         "score_buckets": score_buckets,
+    }
+
+
+# ----------------------------------------------------------------------------
+# Decisions & outcomes by role — backs the by-role breakdown the Hub renders
+# inside the "Score distribution & funnel" accordion. All-time (cumulative),
+# because the questions it answers are conversion questions:
+#   a) what decisions were made + approved, per role
+#   b) where the candidates Tali advanced now sit in Workable (live snapshot)
+#   c) how many advance decisions reached final interview / offer / hired
+# Workable-stage placement is always a *current* snapshot regardless of when
+# the decision was made. "Reached X or beyond" is computed monotonically off
+# the current normalized stage (stages are roughly ordered), so e.g. a
+# candidate now at "offer" also counts toward "reached final interview".
+# ----------------------------------------------------------------------------
+
+# Only the explicit "advance" verdict feeds the conversion view.
+_ADVANCE_DECISION_TYPES = {"advance_to_interview"}
+# Statuses that mean the recruiter accepted the agent's recommendation and it
+# was carried out. ``processing`` is the brief in-flight state right after an
+# approve while the Workable writeback dispatches.
+_APPROVED_DECISION_STATUSES = {"approved", "processing"}
+# Normalized Workable stages (see pipeline_service.POST_HANDOVER_WORKABLE_STAGES).
+_FINAL_INTERVIEW_NORM_STAGES = {"final_interview"}
+_OFFER_NORM_STAGES = {"offer", "offer_extended", "offer_accepted"}
+_HIRED_NORM_STAGES = {"hired"}
+_REJECT_OUTCOMES = {"rejected", "withdrawn"}
+
+
+def _empty_decisions_bucket() -> Dict[str, Any]:
+    return {"total": 0, "approved": 0, "by_type": {}}
+
+
+def _empty_conversion_bucket() -> Dict[str, int]:
+    return {
+        "advanced_total": 0,
+        "reached_final_interview": 0,
+        "reached_offer": 0,
+        "hired": 0,
+        "rejected": 0,
+    }
+
+
+def _score_summary(values: Sequence[float]) -> Dict[str, Any]:
+    vals = sorted(float(v) for v in values if isinstance(v, (int, float)))
+    n = len(vals)
+    if n == 0:
+        return {"count": 0, "avg": None, "median": None, "min": None, "max": None, "p25": None, "p75": None}
+    return {
+        "count": n,
+        "avg": round(sum(vals) / n, 1),
+        "median": round(_percentile(vals, 0.50), 1),
+        "min": round(vals[0], 1),
+        "max": round(vals[-1], 1),
+        "p25": round(_percentile(vals, 0.25), 1),
+        "p75": round(_percentile(vals, 0.75), 1),
+    }
+
+
+@router.get("/decisions-breakdown")
+def get_decisions_breakdown(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """All-time decisions + Workable-stage outcomes, grouped by role."""
+    org_id = current_user.organization_id
+    empty = {
+        "window": {"label": "All time", "from": None, "to": None},
+        "score_basis": "taali",
+        "totals": {
+            "decisions": _empty_decisions_bucket(),
+            "workable_stages": {},
+            "advance_conversion": _empty_conversion_bucket(),
+            "score_stats": _score_summary([]),
+        },
+        "roles": [],
+    }
+    if not org_id:
+        return empty
+
+    # ── a) Decisions grouped by role × type × status ───────────────────
+    decision_rows = (
+        db.query(
+            AgentDecision.role_id,
+            AgentDecision.decision_type,
+            AgentDecision.status,
+            func.count(AgentDecision.id),
+        )
+        .filter(AgentDecision.organization_id == org_id)
+        .group_by(AgentDecision.role_id, AgentDecision.decision_type, AgentDecision.status)
+        .all()
+    )
+    decisions_by_role: Dict[int, Dict[str, Any]] = {}
+    totals_decisions = _empty_decisions_bucket()
+    for role_id, dtype, status, count in decision_rows:
+        if role_id is None:
+            continue
+        count = int(count or 0)
+        type_key = str(dtype or "unknown")
+        is_approved = str(status or "").lower() in _APPROVED_DECISION_STATUSES
+        for bucket in (decisions_by_role.setdefault(role_id, _empty_decisions_bucket()), totals_decisions):
+            bucket["total"] += count
+            type_bucket = bucket["by_type"].setdefault(type_key, {"total": 0, "approved": 0})
+            type_bucket["total"] += count
+            if is_approved:
+                bucket["approved"] += count
+                type_bucket["approved"] += count
+
+    # ── Simple Workable-stage counts per role (all live applications) ───
+    stage_rows = (
+        db.query(
+            CandidateApplication.role_id,
+            CandidateApplication.external_stage_normalized,
+            CandidateApplication.workable_stage,
+            func.count(CandidateApplication.id),
+        )
+        .filter(
+            CandidateApplication.organization_id == org_id,
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .group_by(
+            CandidateApplication.role_id,
+            CandidateApplication.external_stage_normalized,
+            CandidateApplication.workable_stage,
+        )
+        .all()
+    )
+    stages_by_role: Dict[int, Dict[str, int]] = {}
+    totals_stages: Dict[str, int] = {}
+    for role_id, norm_stage, raw_stage, count in stage_rows:
+        if role_id is None:
+            continue
+        count = int(count or 0)
+        key = normalize_pipeline_key(norm_stage or raw_stage) or "unstaged"
+        role_stages = stages_by_role.setdefault(role_id, {})
+        role_stages[key] = role_stages.get(key, 0) + count
+        totals_stages[key] = totals_stages.get(key, 0) + count
+
+    # ── b/c) Advance conversion — current stage of advanced candidates ──
+    # Join (not subquery) and select only application columns + id, then
+    # ``distinct`` collapses an application that has several approved advance
+    # decisions down to a single row (id keeps distinct apps separate).
+    advance_apps = (
+        db.query(
+            CandidateApplication.id,
+            CandidateApplication.role_id,
+            CandidateApplication.external_stage_normalized,
+            CandidateApplication.workable_stage,
+            CandidateApplication.application_outcome,
+            CandidateApplication.workable_disqualified,
+        )
+        .join(AgentDecision, AgentDecision.application_id == CandidateApplication.id)
+        .filter(
+            CandidateApplication.organization_id == org_id,
+            AgentDecision.decision_type.in_(_ADVANCE_DECISION_TYPES),
+            AgentDecision.status.in_(_APPROVED_DECISION_STATUSES),
+        )
+        .distinct()
+        .all()
+    )
+    conversion_by_role: Dict[int, Dict[str, int]] = {}
+    totals_conversion = _empty_conversion_bucket()
+    for _app_id, role_id, norm_stage, raw_stage, outcome, disqualified in advance_apps:
+        if role_id is None:
+            continue
+        stage = normalize_pipeline_key(norm_stage or raw_stage)
+        oc = str(outcome or "").lower()
+        is_hired = oc == "hired" or stage in _HIRED_NORM_STAGES
+        reached_offer = is_hired or stage in _OFFER_NORM_STAGES
+        reached_final = reached_offer or stage in _FINAL_INTERVIEW_NORM_STAGES
+        is_rejected = oc in _REJECT_OUTCOMES or bool(disqualified)
+        for bucket in (conversion_by_role.setdefault(role_id, _empty_conversion_bucket()), totals_conversion):
+            bucket["advanced_total"] += 1
+            if reached_final:
+                bucket["reached_final_interview"] += 1
+            if reached_offer:
+                bucket["reached_offer"] += 1
+            if is_hired:
+                bucket["hired"] += 1
+            if is_rejected:
+                bucket["rejected"] += 1
+
+    # ── Headline score values (taali cache, falling back to cv_match) ──
+    headline_score = func.coalesce(
+        CandidateApplication.taali_score_cache_100,
+        CandidateApplication.cv_match_score,
+    )
+    score_rows = (
+        db.query(CandidateApplication.role_id, headline_score)
+        .filter(
+            CandidateApplication.organization_id == org_id,
+            CandidateApplication.deleted_at.is_(None),
+            headline_score.isnot(None),
+        )
+        .all()
+    )
+    scores_by_role: Dict[int, List[float]] = {}
+    all_scores: List[float] = []
+    for role_id, score in score_rows:
+        if role_id is None or score is None:
+            continue
+        scores_by_role.setdefault(role_id, []).append(float(score))
+        all_scores.append(float(score))
+
+    # ── Assemble — one row per role that has made at least one decision ─
+    role_names = {
+        rid: name
+        for rid, name in db.query(Role.id, Role.name).filter(Role.organization_id == org_id).all()
+    }
+    role_ids = sorted(
+        decisions_by_role.keys(),
+        key=lambda rid: decisions_by_role[rid]["total"],
+        reverse=True,
+    )
+    roles: List[Dict[str, Any]] = []
+    for rid in role_ids:
+        roles.append({
+            "role_id": rid,
+            "role_name": role_names.get(rid) or f"Role #{rid}",
+            "decisions": decisions_by_role.get(rid, _empty_decisions_bucket()),
+            "workable_stages": stages_by_role.get(rid, {}),
+            "advance_conversion": conversion_by_role.get(rid, _empty_conversion_bucket()),
+            "score_stats": _score_summary(scores_by_role.get(rid, [])),
+        })
+
+    return {
+        "window": {"label": "All time", "from": None, "to": None},
+        "score_basis": "taali",
+        "totals": {
+            "decisions": totals_decisions,
+            "workable_stages": totals_stages,
+            "advance_conversion": totals_conversion,
+            "score_stats": _score_summary(all_scores),
+        },
+        "roles": roles,
     }

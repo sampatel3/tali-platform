@@ -94,7 +94,202 @@ const HistoryTable = ({ rows, onSelect, onNavigate }) => (
   </div>
 );
 
-const AnalyticsDrillIns = ({ summary }) => {
+const STAGE_LABELS = {
+  applied: 'Applied',
+  phone_screen: 'Phone screen',
+  phone_interview: 'Phone interview',
+  interview: 'Interview',
+  technical_interview: 'Technical interview',
+  final_interview: 'Final interview',
+  onsite: 'Onsite',
+  assessment: 'Assessment',
+  offer: 'Offer',
+  offer_extended: 'Offer extended',
+  offer_accepted: 'Offer accepted',
+  hired: 'Hired',
+  unstaged: 'No Workable stage',
+};
+
+const DECISION_TYPE_LABELS = {
+  advance_to_interview: 'Advance',
+  reject: 'Reject',
+  skip_assessment_reject: 'Pre-screen reject',
+  send_assessment: 'Send assessment',
+  resend_assessment_invite: 'Resend invite',
+  escalate_low_confidence: 'Escalate',
+};
+
+const prettyKey = (key) => {
+  const s = String(key || '').replace(/_/g, ' ');
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : '—';
+};
+const stageLabel = (key) => STAGE_LABELS[key] || prettyKey(key);
+const typeLabel = (key) => DECISION_TYPE_LABELS[key] || prettyKey(key);
+const pct = (part, whole) => (safeNumber(whole) > 0 ? Math.round((safeNumber(part) / safeNumber(whole)) * 100) : 0);
+
+const RoleRow = ({ role, expanded, onToggle }) => {
+  const d = role.decisions || {};
+  const c = role.advance_conversion || {};
+  const s = role.score_stats || {};
+  const advanced = safeNumber(c.advanced_total);
+  const hired = safeNumber(c.hired);
+  const byType = Object.entries(d.by_type || {}).sort((a, b) => safeNumber(b[1]?.total) - safeNumber(a[1]?.total));
+  const stages = Object.entries(role.workable_stages || {}).sort((a, b) => safeNumber(b[1]) - safeNumber(a[1]));
+  return (
+    <>
+      <div
+        className="hbr-row"
+        onClick={onToggle}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onToggle();
+          }
+        }}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 500 }}>
+          {role.role_name}
+        </span>
+        <span className="hbr-num">
+          {safeNumber(d.approved)}<span style={{ color: 'var(--mute)' }}> / {safeNumber(d.total)}</span>
+        </span>
+        <span className="hbr-num">{advanced}</span>
+        <span className="hbr-num">{safeNumber(c.reached_final_interview)}</span>
+        <span className="hbr-num">{safeNumber(c.reached_offer)}</span>
+        <span
+          className="hbr-num"
+          style={{ color: hired > 0 ? 'var(--purple)' : 'var(--ink-2)', fontWeight: hired > 0 ? 600 : 400 }}
+        >
+          {hired}
+        </span>
+        <span className="hbr-num">{advanced > 0 ? `${pct(hired, advanced)}%` : '—'}</span>
+        <span className="hbr-num">
+          {s.avg != null ? s.avg : '—'}
+          {s.median != null ? <span style={{ color: 'var(--mute)' }}> · med {s.median}</span> : null}
+        </span>
+        <span style={{ display: 'flex', justifyContent: 'center', color: 'var(--mute)' }}>
+          {expanded ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+        </span>
+      </div>
+      {expanded ? (
+        <div className="hbr-detail">
+          <div>
+            <div className="kicker" style={{ marginBottom: 8 }}>Decisions by type · approved / total</div>
+            <div className="hbr-chips">
+              {byType.length === 0 ? (
+                <span style={{ fontSize: 12, color: 'var(--mute)' }}>None</span>
+              ) : (
+                byType.map(([key, v]) => (
+                  <span key={key} className="hbr-chip">
+                    {typeLabel(key)} <b>{safeNumber(v.approved)}/{safeNumber(v.total)}</b>
+                  </span>
+                ))
+              )}
+            </div>
+          </div>
+          <div>
+            <div className="kicker" style={{ marginBottom: 8 }}>Current Workable stage mix</div>
+            <div className="hbr-chips">
+              {stages.length === 0 ? (
+                <span style={{ fontSize: 12, color: 'var(--mute)' }}>No Workable data</span>
+              ) : (
+                stages.map(([key, n]) => (
+                  <span key={key} className="hbr-chip">
+                    {stageLabel(key)} <b>{safeNumber(n).toLocaleString()}</b>
+                  </span>
+                ))
+              )}
+            </div>
+            {safeNumber(s.count) > 0 ? (
+              <div style={{ fontSize: 11, color: 'var(--mute)', marginTop: 8 }}>
+                Headline score · n={safeNumber(s.count).toLocaleString()} · min {s.min} · p25 {s.p25} · median {s.median} · p75 {s.p75} · max {s.max}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+};
+
+const DecisionsByRole = ({ data }) => {
+  const [expandedId, setExpandedId] = useState(null);
+  if (!data) return null;
+  const roles = Array.isArray(data.roles) ? data.roles : [];
+  const totals = data.totals || {};
+  const td = totals.decisions || {};
+  const tc = totals.advance_conversion || {};
+  const ts = totals.score_stats || {};
+  const advanced = safeNumber(tc.advanced_total);
+  return (
+    <div className="home-by-role">
+      <div className="kicker">DECISIONS &amp; OUTCOMES BY ROLE · ALL TIME</div>
+      <div className="hbr-totals">
+        <div className="hbr-card">
+          <div className="kicker" style={{ marginBottom: 6 }}>Decisions approved</div>
+          <div className="hbr-card-value">{safeNumber(td.approved).toLocaleString()}</div>
+          <div className="hbr-card-sub">of {safeNumber(td.total).toLocaleString()} made</div>
+        </div>
+        <div className="hbr-card">
+          <div className="kicker" style={{ marginBottom: 6 }}>Advanced</div>
+          <div className="hbr-card-value">{advanced.toLocaleString()}</div>
+          <div className="hbr-card-sub">handed to Workable</div>
+        </div>
+        <div className="hbr-card">
+          <div className="kicker" style={{ marginBottom: 6 }}>Reached final / offer</div>
+          <div className="hbr-card-value">{safeNumber(tc.reached_final_interview)} / {safeNumber(tc.reached_offer)}</div>
+          <div className="hbr-card-sub">
+            {advanced > 0 ? `${pct(tc.reached_final_interview, advanced)}% / ${pct(tc.reached_offer, advanced)}% of advanced` : '—'}
+          </div>
+        </div>
+        <div className="hbr-card">
+          <div className="kicker" style={{ marginBottom: 6 }}>Hired</div>
+          <div className="hbr-card-value">{safeNumber(tc.hired).toLocaleString()}</div>
+          <div className="hbr-card-sub">{advanced > 0 ? `${pct(tc.hired, advanced)}% of advanced` : '—'}</div>
+        </div>
+        <div className="hbr-card">
+          <div className="kicker" style={{ marginBottom: 6 }}>Headline score</div>
+          <div className="hbr-card-value">{ts.avg != null ? ts.avg : '—'}</div>
+          <div className="hbr-card-sub">
+            {ts.median != null ? `median ${ts.median} · n=${safeNumber(ts.count).toLocaleString()}` : 'no scores yet'}
+          </div>
+        </div>
+      </div>
+
+      {roles.length === 0 ? (
+        <div className="signal-empty" style={{ padding: 20, textAlign: 'center' }}>No decisions recorded yet.</div>
+      ) : (
+        <div className="hbr-table">
+          <div className="hbr-scroll">
+            <div className="hbr-head">
+              <span>Role</span>
+              <span>Appr / total</span>
+              <span>Advanced</span>
+              <span>→ Final</span>
+              <span>→ Offer</span>
+              <span>Hired</span>
+              <span>Hire %</span>
+              <span>Score avg</span>
+              <span />
+            </div>
+            {roles.map((role) => (
+              <RoleRow
+                key={role.role_id}
+                role={role}
+                expanded={expandedId === role.role_id}
+                onToggle={() => setExpandedId((cur) => (cur === role.role_id ? null : role.role_id))}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const AnalyticsDrillIns = ({ summary, breakdown }) => {
   const histogramData = useMemo(() => {
     const buckets = summary?.score_buckets;
     return Array.isArray(buckets) && buckets.length
@@ -121,6 +316,7 @@ const AnalyticsDrillIns = ({ summary }) => {
   ), [summary]);
 
   return (
+    <>
     <div className="home-analytics-body">
       <div>
         <div className="kicker" style={{ marginBottom: 8 }}>SCORE DISTRIBUTION · 30 DAYS</div>
@@ -174,6 +370,8 @@ const AnalyticsDrillIns = ({ summary }) => {
         ) : null}
       </div>
     </div>
+    <DecisionsByRole data={breakdown} />
+    </>
   );
 };
 
@@ -181,19 +379,27 @@ export const HomeEverything = ({ rows, onSelect, onNavigate }) => {
   const [sectionOpen, setSectionOpen] = useState(false);
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [analytics, setAnalytics] = useState(null);
+  const [breakdown, setBreakdown] = useState(null);
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
 
   useEffect(() => {
     if (!analyticsOpen) return undefined;
     let cancelled = false;
     setLoadingAnalytics(true);
-    analyticsApi.reportingSummary({})
-      .then((res) => {
+    Promise.all([
+      analyticsApi.reportingSummary({}),
+      analyticsApi.decisionsBreakdown({}),
+    ])
+      .then(([summaryRes, breakdownRes]) => {
         if (cancelled) return;
-        setAnalytics(res?.data || null);
+        setAnalytics(summaryRes?.data || null);
+        setBreakdown(breakdownRes?.data || null);
       })
       .catch(() => {
-        if (!cancelled) setAnalytics(null);
+        if (!cancelled) {
+          setAnalytics(null);
+          setBreakdown(null);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoadingAnalytics(false);
@@ -239,7 +445,7 @@ export const HomeEverything = ({ rows, onSelect, onNavigate }) => {
             {analyticsOpen ? (
               loadingAnalytics
                 ? <div className="signal-empty" style={{ padding: 24, textAlign: 'center' }}>Loading analytics…</div>
-                : <AnalyticsDrillIns summary={analytics} />
+                : <AnalyticsDrillIns summary={analytics} breakdown={breakdown} />
             ) : null}
           </div>
         </>
