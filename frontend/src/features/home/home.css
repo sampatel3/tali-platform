@@ -356,6 +356,21 @@
   border-color: color-mix(in oklab, var(--purple) 30%, var(--line));
 }
 
+/* In-flight decisions (approved/overridden, mid-Workable-writeback). Greyed
+   so the recruiter can see they're processing and not yet final. */
+.rq-split-row.is-processing {
+  opacity: 0.55;
+}
+.rq-split-row.is-processing.on {
+  opacity: 0.72;
+}
+.rq-proc-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--mute);
+}
+
 .rq-hybrid-right {
   display: flex;
   flex-direction: column;
@@ -627,6 +642,24 @@
 
 .rq-stream-item.rq-stream-active {
   background: color-mix(in oklab, var(--purple) 5%, var(--bg-2));
+}
+
+/* In-flight decision in the feed — greyed to match the queue row. */
+.rq-stream-item.is-processing {
+  opacity: 0.55;
+}
+.rq-stream-procpill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--bg-3);
+  color: var(--mute);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  text-transform: uppercase;
 }
 
 .rq-stream-rail {
