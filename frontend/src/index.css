@@ -14969,6 +14969,7 @@ button.eng-badge-button:focus-visible {
   font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
   background: var(--bg-3);
   color: var(--ink-2);
 }
@@ -14986,6 +14987,14 @@ button.eng-badge-button:focus-visible {
 .score-pill.lo {
   background: color-mix(in oklab, #dc2626 18%, transparent);
   color: #b91c1c;
+}
+
+/* Out-of-date scores: drop the hi/mid/lo colour for a neutral grey pill so
+   the number reads as deemphasised rather than an alarming live result. */
+.score-pill.stale {
+  background: var(--bg-3);
+  color: var(--mute);
+  font-weight: 500;
 }
 
 .stage-pill {

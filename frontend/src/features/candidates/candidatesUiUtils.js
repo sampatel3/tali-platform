@@ -116,11 +116,13 @@ export const getPrimaryScorePayload = (application) => {
 // rescore lands — better than blanking the number out from under the
 // recruiter, which orphans Home-page decisions.
 //
-// pending/running/stale all keep the prior score visible (dimmed + with
-// a contextual label) — only no-prior-score apps render text-only
-// ``Scoring…``. Otherwise the score disappears the moment a rescore
-// enqueues, reintroducing the exact "where did my numbers go?" UX the
-// honest-stale change is designed to avoid.
+// pending/running/stale all keep the prior score visible — only
+// no-prior-score apps render text-only ``Scoring…``. Otherwise the score
+// disappears the moment a rescore enqueues, reintroducing the exact
+// "where did my numbers go?" UX the honest-stale change is designed to
+// avoid. In-flight rescores stay on the score's hi/mid/lo colour (dimmed);
+// stale scores drop to a neutral grey pill so the out-of-date number reads
+// as deemphasised rather than alarming-red.
 //
 // React.createElement to avoid JSX (file is .js, not .jsx).
 import React from 'react';
@@ -141,17 +143,19 @@ export const renderJobPipelineScoreCell = (score, scoreClass, status) => {
       '—',
     );
   }
-  const dim = isInFlight || isStale ? { opacity: 0.55 } : undefined;
-  const label = isInFlight
-    ? ` · rescoring`
-    : isStale
-      ? ` · stale`
-      : '';
+  if (isStale) {
+    return React.createElement(
+      'span',
+      { className: 'score-pill stale', title: 'Out of date — rescore pending' },
+      score,
+      ' · stale',
+    );
+  }
+  const dim = isInFlight ? { opacity: 0.55 } : undefined;
+  const label = isInFlight ? ' · rescoring' : '';
   const title = isInFlight
     ? 'Rescore in progress — number will refresh when it lands'
-    : isStale
-      ? 'Out of date — rescore pending'
-      : undefined;
+    : undefined;
   return React.createElement(
     'span',
     { className: `score-pill ${scoreClass}`, style: dim, title },
