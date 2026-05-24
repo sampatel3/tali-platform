@@ -8509,12 +8509,8 @@ button.eng-badge-button:focus-visible {
   100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
 }
 .bg-jobs-panel-status-label {
-  font-family: var(--taali-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--taali-text);
-  background: var(--taali-bg-soft, #f3f4f6);
-  padding: 1px 6px;
-  border-radius: 4px;
 }
 .bg-jobs-panel-counters {
   font-variant-numeric: tabular-nums;

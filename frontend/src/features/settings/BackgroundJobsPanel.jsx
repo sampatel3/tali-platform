@@ -27,6 +27,38 @@ const STATUS_TONE = {
   already_running: 'warning',
 };
 
+// Plain-English label for each backend status string. Anything not listed
+// falls back to a humanized form (underscores → spaces, first letter capped)
+// so we never surface a raw code like ``completed_with_errors`` to a recruiter.
+const STATUS_LABEL = {
+  running: 'Running',
+  started: 'Running',
+  queued: 'Queued',
+  cancelling: 'Cancelling',
+  cancelled: 'Cancelled',
+  completed: 'Completed',
+  success: 'Completed',
+  completed_with_errors: 'Completed with errors',
+  partial: 'Completed with errors',
+  failed: 'Failed',
+  nothing_to_score: 'Nothing to score',
+  nothing_to_sync: 'Nothing to sync',
+  already_running: 'Already running',
+  lock_timeout: 'Workable was busy',
+  idle: 'Idle',
+};
+
+const humanize = (value) => {
+  const s = String(value ?? '').trim();
+  if (!s) return '';
+  return s.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+};
+
+const statusLabel = (status) => {
+  const s = String(status ?? '').toLowerCase();
+  return STATUS_LABEL[s] || humanize(s) || 'Idle';
+};
+
 const TERMINAL_STATUSES = new Set([
   'completed', 'success', 'cancelled', 'failed',
   'nothing_to_score', 'nothing_to_sync', 'already_running',
@@ -57,7 +89,7 @@ const StatusDot = ({ status }) => {
   return (
     <span className="bg-jobs-panel-status">
       <span className={`bg-jobs-panel-dot tone-${tone}`} aria-hidden="true" />
-      <code className="bg-jobs-panel-status-label">{s || 'idle'}</code>
+      <span className="bg-jobs-panel-status-label">{statusLabel(s)}</span>
     </span>
   );
 };
@@ -182,14 +214,25 @@ const WORKABLE_OP_LABELS = {
   post_note: 'Note',
 };
 
+// Plain-English explanation for the failure codes the runner can emit, so the
+// panel never shows a bare code like ``api_error`` / ``not_writeable``.
+const WORKABLE_OP_CODE_LABELS = {
+  api_error: 'Workable API error',
+  not_writeable: 'No Workable write access',
+  lock_timeout: 'Workable was busy',
+  rate_limited: 'Workable rate limit hit',
+  unexpected: 'Unexpected error',
+};
+
 function WorkableOpCounters({ data }) {
   const opType = String(data?.op_type || '');
-  const label = WORKABLE_OP_LABELS[opType] || (opType ? opType.replace(/_/g, ' ') : 'Workable op');
+  const label = WORKABLE_OP_LABELS[opType] || (opType ? humanize(opType) : 'Workable update');
   const code = data?.code ? String(data.code) : null;
+  const codeLabel = code ? (WORKABLE_OP_CODE_LABELS[code] || humanize(code)) : null;
   return (
     <div className="bg-jobs-panel-counters">
       <strong>{label}</strong>
-      {code ? <div className="bg-jobs-panel-breakdown">{code}</div> : null}
+      {codeLabel ? <div className="bg-jobs-panel-breakdown">{codeLabel}</div> : null}
     </div>
   );
 }
