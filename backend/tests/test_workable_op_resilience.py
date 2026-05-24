@@ -122,7 +122,60 @@ def test_watchdog_requeues_stranded_batch_and_fails_run(db):
     reaped = db.query(BackgroundJobRun).get(run.id)
     assert reaped.status == "failed"
     assert reaped.finished_at is not None
-    assert "worker likely killed" in (reaped.error or "")
+    assert "stuck in 'running'" in (reaped.error or "")
+
+
+def test_watchdog_requeues_stranded_queued_batch(db):
+    """A batch that died in the lock-wait re-enqueue loop never reaches
+    'running' — it stays 'queued' with its decisions stranded in 'processing'.
+    The watchdog must reap that state too (regression: it only reaped 'running',
+    so a queued-state death stranded the batch forever)."""
+    org, role = _seed(db)
+    d1 = _add_processing_decision(db, org, role)
+    d2 = _add_processing_decision(db, org, role)
+    run = _make_run(
+        db,
+        org,
+        kind=JOB_KIND_DECISION_BATCH,
+        status="queued",
+        age_minutes=_STUCK_DECISION_BATCH_TIMEOUT_MINUTES + 5,
+        decision_ids=[int(d1.id), int(d2.id)],
+    )
+    db.commit()
+
+    out = expire_stuck_decision_batches()
+
+    assert out["failed_run_count"] == 1
+    assert out["requeued_decision_count"] == 2
+    db.expire_all()
+    assert db.query(AgentDecision).get(d1.id).status == "pending"
+    assert db.query(AgentDecision).get(d2.id).status == "pending"
+    reaped = db.query(BackgroundJobRun).get(run.id)
+    assert reaped.status == "failed"
+    assert reaped.finished_at is not None
+    assert "stuck in 'queued'" in (reaped.error or "")
+
+
+def test_watchdog_ignores_fresh_queued_batch(db):
+    """A queued batch still inside its lock-wait window is healthily waiting out
+    a concurrent Workable write — don't reap it."""
+    org, role = _seed(db)
+    d1 = _add_processing_decision(db, org, role)
+    _make_run(
+        db,
+        org,
+        kind=JOB_KIND_DECISION_BATCH,
+        status="queued",
+        age_minutes=1,
+        decision_ids=[int(d1.id)],
+    )
+    db.commit()
+
+    out = expire_stuck_decision_batches()
+
+    assert out["failed_run_count"] == 0
+    db.expire_all()
+    assert db.query(AgentDecision).get(d1.id).status == "processing"
 
 
 def test_watchdog_ignores_fresh_running_batch(db):
