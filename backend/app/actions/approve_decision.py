@@ -60,6 +60,7 @@ def enqueue_batch(
     decision_ids: list[int],
     note: Optional[str] = None,
     workable_target_stage: Optional[str] = None,
+    workable_target_stages: Optional[dict[str, str]] = None,
 ) -> dict:
     """Accept a batch of approvals for background processing.
 
@@ -74,6 +75,12 @@ def enqueue_batch(
 
     The only synchronous work is the status flip + bookkeeping (no Workable
     calls), so approving 100 decisions returns immediately.
+
+    ``workable_target_stages`` is the per-role advance-stage map (``role_id``
+    string → Workable stage) for a multi-role bulk approve; ``workable_target_stage``
+    is the single-stage fallback used by ``enqueue_one``. The batch handler
+    resolves each advance decision's stage from the map first, then the
+    fallback. Roles in neither advance on Tali's internal stage only.
 
     Returns ``{"job_run_id", "accepted": [ids], "failures": [{decision_id, error}]}``.
     """
@@ -112,6 +119,7 @@ def enqueue_batch(
                 "user_id": int(actor.user_id) if actor.user_id else None,
                 "note": note,
                 "workable_target_stage": workable_target_stage,
+                "workable_target_stages": workable_target_stages or None,
             },
             counters={"total": len(accepted), "succeeded": 0, "requeued": 0, "failed": 0},
         )

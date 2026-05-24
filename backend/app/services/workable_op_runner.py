@@ -96,6 +96,10 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
     ids = [int(x) for x in (payload.get("decision_ids") or [])]
     note = payload.get("note")
     workable_target_stage = payload.get("workable_target_stage")
+    # Per-role advance-stage map (role_id string → Workable stage). A bulk
+    # approve spanning roles carries one stage per role; the single fallback
+    # above covers enqueue_one / single approve.
+    workable_target_stages = payload.get("workable_target_stages") or {}
     actor = _recruiter_actor(payload.get("user_id"))
 
     counters = {"total": len(ids), "succeeded": 0, "requeued": 0, "failed": 0}
@@ -110,6 +114,11 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
         )
         if decision is None or decision.status != "processing":
             continue  # already resolved / requeued elsewhere — idempotent skip
+        stage = (
+            workable_target_stages.get(str(decision.role_id))
+            if decision.role_id is not None
+            else None
+        ) or workable_target_stage
         gated = decision.decision_type in _GATED_DECISION_TYPES
         try:
             if gated:
@@ -120,7 +129,7 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
                         organization_id=int(organization_id),
                         decision_id=int(decision_id),
                         note=note,
-                        workable_target_stage=workable_target_stage,
+                        workable_target_stage=stage,
                     )
             else:
                 approve_decision_action.run(
@@ -129,7 +138,7 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
                     organization_id=int(organization_id),
                     decision_id=int(decision_id),
                     note=note,
-                    workable_target_stage=workable_target_stage,
+                    workable_target_stage=stage,
                 )
             db.commit()
             counters["succeeded"] += 1

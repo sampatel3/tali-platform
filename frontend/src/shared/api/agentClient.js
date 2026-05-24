@@ -12,8 +12,14 @@ export const agent = {
   // Approve a batch of pending decisions in one request. Each is
   // executed independently server-side; the response carries a
   // per-failure summary so the UI can surface partial successes.
-  bulkApproveDecisions: (decisionIds, note = null) =>
-    api.post('/agent-decisions/bulk-approve', { decision_ids: decisionIds, note }),
+  // ``workableTargetStages`` is the per-role advance-stage map
+  // (role_id → Workable stage) for the advancing decisions in the batch.
+  bulkApproveDecisions: (decisionIds, note = null, workableTargetStages = null) =>
+    api.post('/agent-decisions/bulk-approve', {
+      decision_ids: decisionIds,
+      note,
+      workable_target_stages: workableTargetStages,
+    }),
   // Hide a pending decision for 1h. Body intentionally empty — duration is
   // server-fixed; if we ever need 4h/24h we change it there, not per call.
   snoozeDecision: (decisionId) => api.post(`/agent-decisions/${decisionId}/snooze`, {}),

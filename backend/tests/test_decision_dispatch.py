@@ -212,6 +212,45 @@ def test_batch_skips_non_processing(db):
     assert not mock_run.called
 
 
+def test_batch_resolves_per_role_workable_stage(db):
+    """A multi-role bulk approve routes each advance to its own role's picked
+    Workable stage (the per-role map), falling back to the single stage for a
+    role that isn't in the map."""
+    org, role_a, user = _seed(db)
+    role_b = Role(organization_id=org.id, name="RB", source="manual", agentic_mode_enabled=True)
+    role_c = Role(organization_id=org.id, name="RC", source="manual", agentic_mode_enabled=True)
+    db.add_all([role_b, role_c])
+    db.flush()
+    _, da = _add_decision(db, org, role_a, status="processing", decision_type="advance_to_interview")
+    _, db_dec = _add_decision(db, org, role_b, status="processing", decision_type="advance_to_interview")
+    _, dc = _add_decision(db, org, role_c, status="processing", decision_type="advance_to_interview")
+    db.commit()
+
+    seen: dict[int, str | None] = {}
+
+    def _fake_run(db_, actor, *, organization_id, decision_id, note=None, workable_target_stage=None, **kw):
+        seen[int(decision_id)] = workable_target_stage
+        d = db_.query(AgentDecision).get(int(decision_id))
+        d.status = "approved"
+        return d
+
+    with patch("app.actions.approve_decision.run", side_effect=_fake_run):
+        out = run_workable_op_task.run(
+            job_run_id=None, organization_id=int(org.id), op_type="approve_decisions",
+            payload={
+                "decision_ids": [int(da.id), int(db_dec.id), int(dc.id)],
+                "user_id": int(user.id),
+                # role_c absent → falls back to the single stage.
+                "workable_target_stages": {str(role_a.id): "Phone Screen", str(role_b.id): "Onsite"},
+                "workable_target_stage": "Fallback",
+            },
+        )
+    assert out["succeeded"] == 3
+    assert seen[int(da.id)] == "Phone Screen"
+    assert seen[int(db_dec.id)] == "Onsite"
+    assert seen[int(dc.id)] == "Fallback"
+
+
 # --- enqueue (optimistic flip + one job + eager end-to-end) -----------------
 
 

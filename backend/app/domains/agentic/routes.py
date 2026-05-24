@@ -797,6 +797,14 @@ class BulkApproveBody(BaseModel):
 
     decision_ids: list[int] = Field(min_length=1, max_length=500)
     note: Optional[str] = None
+    # Per-role Workable target stage for the advance_to_interview decisions in
+    # the batch, keyed by ``role_id`` (as a string — JSON object keys are
+    # strings). A bulk approve can span roles, each mapped to its own Workable
+    # job with its own stage list, so a single global stage doesn't generalize;
+    # the Hub modal renders one stage picker per distinct advancing role and
+    # sends the picks here. Roles absent from the map (or non-advance decisions)
+    # advance on Tali's internal stage only — no Workable move.
+    workable_target_stages: Optional[dict[str, str]] = None
 
 
 class BulkApproveFailure(BaseModel):
@@ -840,6 +848,7 @@ def bulk_approve(
         organization_id=current_user.organization_id,
         decision_ids=requested,
         note=note,
+        workable_target_stages=body.workable_target_stages or None,
     )
     failures = [
         BulkApproveFailure(decision_id=f["decision_id"], error=f["error"])
