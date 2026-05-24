@@ -20,6 +20,19 @@ import { HomePlatformUpdates } from './HomePlatformUpdates';
 
 const ORG_STATUS_POLL_MS = 30_000;
 
+// Display buckets for the "Pending by type" strip. Each maps one or more
+// raw decision_types to a labelled, type-coloured chip (colours mirror the
+// TypeBadge atom so the strip reads as the same vocabulary as the queue
+// rows below it). resend_assessment_invite folds into "Send assessment";
+// escalate_low_confidence only shows when there's something to escalate.
+const PENDING_TYPE_BUCKETS = [
+  { key: 'advance', label: 'Advance', color: 'var(--green)', types: ['advance_to_interview'] },
+  { key: 'send_assessment', label: 'Send assessment', color: 'var(--purple)', types: ['send_assessment', 'resend_assessment_invite'] },
+  { key: 'reject', label: 'Reject', color: 'var(--red)', types: ['reject'] },
+  { key: 'skip_assessment_reject', label: 'Reject (pre-screen)', color: 'var(--red-deep)', types: ['skip_assessment_reject'] },
+  { key: 'escalate_low_confidence', label: 'Escalate', color: 'var(--purple)', types: ['escalate_low_confidence'], hideWhenZero: true },
+];
+
 // Map a HomeNow filter shape -> the params the existing /agent-decisions
 // endpoint expects. Status='pending' is special: the backend hides
 // snoozed rows automatically.
@@ -249,6 +262,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     pending: pendingOrdered.length,
     pending_decisions: pendingOrdered.length,
     pending_questions: 0,
+    pending_by_type: {},
     today: decisions.filter((d) => {
       const dt = d.created_at ? new Date(d.created_at) : null;
       if (!dt) return false;
@@ -282,6 +296,19 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     const spent = Number(kpis.org_budget_spent_cents || 0);
     return cap > 0 ? Math.min(100, (spent / cap) * 100) : 0;
   }, [kpis.org_budget_cap_cents, kpis.org_budget_spent_cents]);
+
+  const pendingTypeBuckets = useMemo(() => {
+    const counts = kpis.pending_by_type || {};
+    const sumFor = (types) => types.reduce((n, t) => n + (Number(counts[t]) || 0), 0);
+    return PENDING_TYPE_BUCKETS
+      .map((b) => ({ ...b, count: sumFor(b.types) }))
+      .filter((b) => !(b.hideWhenZero && b.count === 0));
+  }, [kpis.pending_by_type]);
+
+  const pendingTypeTotal = useMemo(
+    () => pendingTypeBuckets.reduce((n, b) => n + b.count, 0),
+    [pendingTypeBuckets],
+  );
 
   return (
     <div>
@@ -337,6 +364,28 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
               {orgStatus?.last_decision_at ? ` · last decision ${formatRelativeAge(orgStatus.last_decision_at)} ago` : ''}
             </div>
           </div>
+        </div>
+
+        {/* Pending-by-type breakdown — splits the "awaiting your review"
+            queue into the agent's recommended actions. Sums to
+            pending_decisions (questions are tracked separately). */}
+        <div className="rq-kpi" style={{ marginTop: 12 }}>
+          <div className="l">Pending by type</div>
+          {pendingTypeTotal === 0 ? (
+            <div className="d" style={{ marginTop: 6 }}>Queue is clear — no pending decisions.</div>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 28, marginTop: 10 }}>
+              {pendingTypeBuckets.map((b) => (
+                <div key={b.key} style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: b.color, flexShrink: 0 }} aria-hidden="true" />
+                  <span style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 600, color: 'var(--ink)', lineHeight: 1 }}>
+                    {b.count}
+                  </span>
+                  <span style={{ fontSize: 13, color: 'var(--mute)', whiteSpace: 'nowrap' }}>{b.label}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <HomeNow
