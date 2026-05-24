@@ -310,6 +310,52 @@ def _release_workable_org_mutex(handle) -> None:
         logger.exception("Failed to release workable-org mutex")
 
 
+# ---------------------------------------------------------------------------
+# Op-priority signal. User-facing Workable writes (decision approvals /
+# overrides) are tiny and latency-sensitive, but they share the per-org mutex
+# with the periodic candidate syncs — which hold it for tens of minutes while
+# walking a rate-limited candidate list. With no fairness, a steady drip of
+# 5-min syncs starves an approve batch until it times out ("Workable lock
+# timeout"). This flag lets a pending op tell the syncs to stand aside: it's
+# set when an op is enqueued and refreshed while the op waits for the lock; the
+# sync tasks skip an org whose flag is set, and an in-flight ``sync_org`` yields
+# the lock at the next job boundary. Short TTL so it self-clears once the op
+# finishes (no explicit clear) — the mutex still guarantees correctness if the
+# flag is ever missed.
+_WORKABLE_OP_PENDING_KEY_PREFIX = "celery:lock:workable_op_pending"
+_WORKABLE_OP_PENDING_TTL_SECONDS = 120
+
+
+def mark_workable_op_pending(org_id: int) -> None:
+    """Signal that a user-facing Workable write is queued/waiting for this org
+    so the periodic syncs yield the per-org mutex. Best-effort; never raises."""
+    try:
+        import redis  # type: ignore
+
+        client = redis.Redis.from_url(settings.REDIS_URL)
+        client.set(
+            f"{_WORKABLE_OP_PENDING_KEY_PREFIX}:{org_id}",
+            "1",
+            ex=_WORKABLE_OP_PENDING_TTL_SECONDS,
+        )
+    except Exception:
+        logger.exception("mark_workable_op_pending failed org_id=%s", org_id)
+
+
+def is_workable_op_pending(org_id: int) -> bool:
+    """True if a user-facing Workable write is pending for this org. Fail-open
+    (returns False on Redis error) — a flaky signal must never wedge syncs; the
+    mutex still serializes writes whenever Redis is up."""
+    try:
+        import redis  # type: ignore
+
+        client = redis.Redis.from_url(settings.REDIS_URL)
+        return bool(client.exists(f"{_WORKABLE_OP_PENDING_KEY_PREFIX}:{org_id}"))
+    except Exception:
+        logger.exception("is_workable_op_pending failed org_id=%s", org_id)
+        return False
+
+
 @celery_app.task
 def sync_starred_roles():
     """Periodic task: pull from Workable for orgs with starred roles.
@@ -373,8 +419,15 @@ def sync_starred_roles():
             shortcodes = by_org.get(int(org.id)) or []
             if not shortcodes:
                 continue
+            org_id_int = int(org.id)
+            if is_workable_op_pending(org_id_int):
+                # A user-facing Workable write (decision approval/override) is
+                # waiting on the per-org mutex — defer this fire so it isn't
+                # starved. The next Beat tick retries.
+                skipped += 1
+                continue
             lock_handle = _acquire_workable_org_mutex(
-                int(org.id), source="starred", heartbeat=True
+                org_id_int, source="starred", heartbeat=True
             )
             if lock_handle is None:
                 # Another sync task is currently talking to Workable for
@@ -397,6 +450,7 @@ def sync_starred_roles():
                     full_resync=False,
                     mode="full",
                     selected_job_shortcodes=shortcodes,
+                    should_yield=lambda oid=org_id_int: is_workable_op_pending(oid),
                 )
                 synced += 1
             except Exception:
@@ -471,8 +525,14 @@ def sync_workable_jobs():
             .all()
         )
         for org in orgs:
+            org_id_int = int(org.id)
+            if is_workable_op_pending(org_id_int):
+                # Defer to a pending user-facing Workable write (see
+                # sync_starred_roles).
+                skipped += 1
+                continue
             lock_handle = _acquire_workable_org_mutex(
-                int(org.id), source="jobs", heartbeat=True
+                org_id_int, source="jobs", heartbeat=True
             )
             if lock_handle is None:
                 # Another task type is currently hitting Workable for
@@ -486,7 +546,12 @@ def sync_workable_jobs():
                         subdomain=org.workable_subdomain,
                     )
                 )
-                service.sync_org(db, org, mode="jobs_only")
+                service.sync_org(
+                    db,
+                    org,
+                    mode="jobs_only",
+                    should_yield=lambda oid=org_id_int: is_workable_op_pending(oid),
+                )
                 synced += 1
             except Exception:
                 failed += 1
@@ -557,8 +622,14 @@ def sync_agent_mode_roles():
             shortcodes = by_org.get(int(org.id)) or []
             if not shortcodes:
                 continue
+            org_id_int = int(org.id)
+            if is_workable_op_pending(org_id_int):
+                # Defer to a pending user-facing Workable write (see
+                # sync_starred_roles).
+                skipped += 1
+                continue
             lock_handle = _acquire_workable_org_mutex(
-                int(org.id), source="agent", heartbeat=True
+                org_id_int, source="agent", heartbeat=True
             )
             if lock_handle is None:
                 skipped += 1
@@ -576,6 +647,7 @@ def sync_agent_mode_roles():
                     full_resync=False,
                     mode="full",
                     selected_job_shortcodes=shortcodes,
+                    should_yield=lambda oid=org_id_int: is_workable_op_pending(oid),
                 )
                 synced += 1
             except Exception:
@@ -653,8 +725,14 @@ def sync_workable_daily_candidates():
             shortcodes = by_org.get(int(org.id)) or []
             if not shortcodes:
                 continue
+            org_id_int = int(org.id)
+            if is_workable_op_pending(org_id_int):
+                # Defer to a pending user-facing Workable write (see
+                # sync_starred_roles).
+                skipped += 1
+                continue
             lock_handle = _acquire_workable_org_mutex(
-                int(org.id), source="nightly", heartbeat=True
+                org_id_int, source="nightly", heartbeat=True
             )
             if lock_handle is None:
                 skipped += 1
@@ -672,6 +750,7 @@ def sync_workable_daily_candidates():
                     full_resync=False,
                     mode="full",
                     selected_job_shortcodes=shortcodes,
+                    should_yield=lambda oid=org_id_int: is_workable_op_pending(oid),
                 )
                 synced += 1
             except Exception:
