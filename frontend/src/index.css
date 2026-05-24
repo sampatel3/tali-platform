@@ -3,6 +3,7 @@
 @tailwind utilities;
 
 :root {
+  color-scheme: light;
   --ink: #15121a;
   --ink-2: #3a3343;
   --ink-soft: #6b6478;
@@ -155,6 +156,7 @@
 }
 
 html[data-theme="dark"] {
+  color-scheme: dark;
   --ink: #f3effb;
   --ink-2: #d9d2e8;
   --ink-soft: #b9b1cc;
@@ -8803,7 +8805,18 @@ button.eng-badge-button:focus-visible {
 }
 
 @media (max-width: 720px) {
-  .mc-nav { padding: 0 20px; }
+  .mc-nav { padding: 0 16px; }
+  /* Collapse the desktop chrome into the hamburger drawer. Selectors are
+     scoped under .mc-nav to outrank the single-class base rules that are
+     defined later in this file (equal specificity would lose on order). */
+  .mc-nav .mc-nav-tabs,
+  .mc-nav .mc-nav-search-wrap,
+  .mc-nav .mc-icon-btn,
+  .mc-nav .mc-nav-agent-chip,
+  .mc-nav .mc-nav-avatar-wrap {
+    display: none;
+  }
+  .mc-nav .mc-mobile-trigger { display: inline-flex; }
 }
 
 .mc-nav-logo {
@@ -8881,6 +8894,158 @@ button.eng-badge-button:focus-visible {
   align-items: center;
   gap: 10px;
 }
+
+/* Hamburger trigger — hidden on desktop, shown at <=720px (see media query
+   in the nav section). */
+.mc-mobile-trigger {
+  display: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-2);
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.mc-mobile-trigger:hover { border-color: var(--line); color: var(--purple); }
+
+/* ---- Mobile nav drawer ---- */
+.mc-drawer-root {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+}
+.mc-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 6, 24, 0.5);
+  animation: mc-drawer-fade 0.16s ease;
+}
+.mc-drawer-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: min(320px, 85vw);
+  background: var(--bg-2);
+  border-left: 1px solid var(--line);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
+  overflow-y: auto;
+  outline: none;
+  animation: mc-drawer-slide 0.18s ease;
+}
+@keyframes mc-drawer-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes mc-drawer-slide { from { transform: translateX(100%); } to { transform: translateX(0); } }
+
+.mc-drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.mc-drawer-id {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.mc-drawer-avatar {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--purple-soft);
+  color: var(--purple);
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+.mc-drawer-id-text { min-width: 0; }
+.mc-drawer-id-text .name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mc-drawer-id-text .org {
+  font-size: 12px;
+  color: var(--mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mc-drawer-search { padding: 12px 0; }
+.mc-drawer-search .mc-nav-search-wrap { width: 100%; }
+.mc-drawer-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mc-drawer-tab {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 12px;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink-2);
+  text-decoration: none;
+}
+.mc-drawer-tab:hover { background: var(--bg-3); }
+.mc-drawer-tab.on {
+  background: var(--purple-soft);
+  color: var(--purple);
+}
+.mc-drawer-tab .mc-badge {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: var(--purple-soft);
+  color: var(--purple);
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+.mc-drawer-tab.on .mc-badge { background: var(--bg-2); }
+.mc-drawer-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 12px 0;
+}
+.mc-drawer-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mc-drawer-actions button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+.mc-drawer-actions button:hover { background: var(--bg-3); }
 
 /* Global search — pill input + dropdown popover. The placeholder pill
    used to be a no-op; this is the working version with a typed-word
@@ -15150,5 +15315,51 @@ button.eng-badge-button:focus-visible {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* ============================================================
+   Mobile responsiveness foundation
+   ============================================================ */
+
+/* Horizontal-scroll wrapper for wide data tables: the table keeps its
+   natural column widths and scrolls inside this box rather than pushing
+   the whole page sideways on a phone. */
+.table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.table-scroll > table {
+  min-width: max-content;
+}
+
+@media (max-width: 720px) {
+  /* Knowledge-graph node detail: full-width overlay instead of a sliver. */
+  .graph-side {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  /* Wide tables that live in a rounded, clip-corner card: let them scroll
+     sideways inside the card on phones instead of crushing columns. */
+  .settings-usage-table,
+  .ctable-wrap,
+  .cp-compare {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .settings-usage-table table,
+  .ctable,
+  .cp-compare table {
+    min-width: max-content;
+  }
+}
+
+@media (max-width: 480px) {
+  /* Four tiny stat cells get too narrow on a small phone — go 2x2. */
+  .job-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 

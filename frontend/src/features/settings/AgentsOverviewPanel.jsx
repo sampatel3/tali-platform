@@ -316,6 +316,7 @@ export default function AgentsOverviewPanel() {
           {recent.length === 0 ? (
             <div className="agz-empty">No decisions yet.</div>
           ) : (
+            <div className="table-scroll">
             <table className="agz-table">
               <thead>
                 <tr><th>Time</th><th>Role</th><th>Decision</th><th>Status</th></tr>
@@ -331,6 +332,7 @@ export default function AgentsOverviewPanel() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       </div>

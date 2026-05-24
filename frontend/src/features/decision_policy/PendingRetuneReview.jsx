@@ -70,6 +70,7 @@ export default function PendingRetuneReview() {
           </header>
           {p.notes && <pre className="dp-notes">{p.notes}</pre>}
           <h4>Diff vs. current</h4>
+          <div className="table-scroll">
           <table className="dp-diff">
             <thead>
               <tr>
@@ -90,6 +91,7 @@ export default function PendingRetuneReview() {
               ))}
             </tbody>
           </table>
+          </div>
           <footer className="dp-pending-actions">
             <button
               type="button"

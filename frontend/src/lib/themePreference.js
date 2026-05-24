@@ -9,7 +9,10 @@ export const readDarkModePreference = () => {
   if (stored === 'light') return false;
   const legacyStored = window.localStorage.getItem(LEGACY_THEME_STORAGE_KEY);
   if (legacyStored != null) return legacyStored === '1';
-  return window.matchMedia?.('(prefers-color-scheme: dark)')?.matches ?? false;
+  // Default to light regardless of the OS `prefers-color-scheme`. Mobile
+  // devices commonly report dark, which previously gave first-time mobile
+  // users an unwanted dark UI. Dark is opt-in via the toggle.
+  return false;
 };
 
 export const applyDarkModeClass = (darkMode) => {

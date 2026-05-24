@@ -6,10 +6,12 @@ import {
   ChevronDown,
   Home,
   LogOut,
+  Menu,
   MessageSquare,
   Moon,
   Settings as SettingsIcon,
   Sun,
+  X,
 } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
@@ -155,6 +157,89 @@ const AvatarMenu = ({ user, orgName, onClose, onLogout }) => {
   );
 };
 
+// Phone nav. The desktop top bar (tabs + 380px search pill + bell + avatar)
+// can't fit a ~375px screen, so below 720px those collapse and this slide-in
+// drawer carries the 5 tabs, search, theme toggle, and sign out.
+const MobileNavDrawer = ({
+  open,
+  onClose,
+  initials,
+  displayName,
+  orgName,
+  resolvedPage,
+  homePending,
+  onLogout,
+  onNavigate,
+}) => {
+  const panelRef = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    window.requestAnimationFrame(() => panelRef.current?.focus());
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+  const orgLabel = formatHeaderOrgLabel(orgName, 'No company');
+  return (
+    <div className="mc-drawer-root" role="dialog" aria-modal="true" aria-label="Menu">
+      <div className="mc-drawer-backdrop" onClick={onClose} />
+      <div className="mc-drawer-panel" ref={panelRef} tabIndex={-1}>
+        <div className="mc-drawer-head">
+          <div className="mc-drawer-id">
+            <span className="mc-drawer-avatar" aria-hidden="true">{initials}</span>
+            <div className="mc-drawer-id-text">
+              <div className="name" title={displayName}>{displayName}</div>
+              <div className="org" title={orgName}>{orgLabel}</div>
+            </div>
+          </div>
+          <button type="button" className="mc-icon-btn" onClick={onClose} aria-label="Close menu">
+            <X size={18} strokeWidth={1.8} />
+          </button>
+        </div>
+        <div className="mc-drawer-search">
+          <GlobalSearch onNavigate={(page, opts) => { onClose(); onNavigate?.(page, opts); }} />
+        </div>
+        <nav className="mc-drawer-tabs" aria-label="Primary">
+          {NAV_TABS.map(({ id, label, Icon: TabIcon, badge }) => {
+            const liveBadge = (id === 'home' && homePending > 0) ? String(homePending) : null;
+            const visibleBadge = liveBadge ?? badge;
+            return (
+              <PageLink
+                key={id}
+                page={id}
+                className={`mc-drawer-tab ${resolvedPage === id ? 'on' : ''}`.trim()}
+                aria-current={resolvedPage === id ? 'page' : undefined}
+                onClick={onClose}
+              >
+                <TabIcon size={18} strokeWidth={1.8} aria-hidden="true" />
+                <span>{label}</span>
+                {visibleBadge ? <span className="mc-badge">{visibleBadge}</span> : null}
+              </PageLink>
+            );
+          })}
+        </nav>
+        <div className="mc-drawer-divider" />
+        <div className="mc-drawer-actions">
+          <ThemeMenuItem />
+          <button type="button" onClick={onLogout}>
+            <LogOut size={16} strokeWidth={1.7} />
+            Sign out
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // Drop-in replacement for the legacy DashboardNav. Same prop signature
 // (`currentPage`, `onNavigate`) so pages don't need to change.
 // Renders the Mission Control top nav: logo + 5 tabs with icons + search
@@ -166,6 +251,7 @@ export const Shell = ({ currentPage, onNavigate }) => {
   const displayName = pickUserName(user) || 'User';
   const initials = useMemo(() => initialsFor(displayName, orgName), [displayName, orgName]);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const homePending = useHomePendingCount(Boolean(user));
 
   // Map legacy page identifiers onto canonical tabs.
@@ -178,6 +264,7 @@ export const Shell = ({ currentPage, onNavigate }) => {
       : currentPage;
   const handleLogout = () => {
     setMenuOpen(false);
+    setDrawerOpen(false);
     logout?.();
     onNavigate?.('landing');
   };
@@ -280,8 +367,28 @@ export const Shell = ({ currentPage, onNavigate }) => {
             />
           ) : null}
         </div>
+        <button
+          type="button"
+          className="mc-mobile-trigger"
+          onClick={() => setDrawerOpen(true)}
+          aria-label="Open menu"
+          aria-expanded={drawerOpen}
+        >
+          <Menu size={20} strokeWidth={1.8} />
+        </button>
       </div>
     </header>
+    <MobileNavDrawer
+      open={drawerOpen}
+      onClose={() => setDrawerOpen(false)}
+      initials={initials}
+      displayName={displayName}
+      orgName={orgName}
+      resolvedPage={resolvedPage}
+      homePending={homePending}
+      onLogout={handleLogout}
+      onNavigate={onNavigate}
+    />
     </>
   );
 };
