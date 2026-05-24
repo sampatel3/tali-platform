@@ -78,6 +78,14 @@ celery_app.conf.update(
             "task": "app.tasks.assessment_tasks.reap_stuck_workable_sync_runs",
             "schedule": 1800.0,
         },
+        # Recover approve batches whose worker was SIGKILLed mid-run (deploy):
+        # decisions stranded in 'processing' go back to the Hub queue and the
+        # stuck decision_batch BackgroundJobRun is marked failed. Mirrors
+        # agent_expire_stuck_runs; 5 min surfaces within ~one beat tick.
+        "expire-stuck-decision-batches-every-5-minutes": {
+            "task": "app.tasks.workable_tasks.expire_stuck_decision_batches",
+            "schedule": 300.0,
+        },
         "assessment-expiry-reminders-daily": {
             "task": "app.tasks.assessment_tasks.send_assessment_expiry_reminders",
             "schedule": 86400.0,
