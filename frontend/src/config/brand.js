@@ -2,11 +2,11 @@ export const BRAND = {
   name: 'Taali',
   wordmark: 'taali',
   domain: 'taali.ai',
-  productTagline: 'Technical assessments for AI-native engineering teams.',
-  appTitle: 'AI Technical Assessments That Tally Real Skill',
+  productTagline: 'Agentic hiring that assesses how engineers use AI.',
+  appTitle: 'Agentic hiring & AI-fluency assessments',
 };
 
 export const getDocumentTitle = (pageLabel) => {
-  if (!pageLabel) return `${BRAND.name} - ${BRAND.appTitle}`;
+  if (!pageLabel) return `${BRAND.name} — ${BRAND.appTitle}`;
   return `${pageLabel} | ${BRAND.name}`;
 };
