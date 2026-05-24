@@ -439,6 +439,14 @@ def surface_op_failure(
         if op_type == OP_OVERRIDE_DECISION:
             _requeue_decision(db, int(payload["decision_id"]), int(organization_id), note=note)
             return
+        if op_type == OP_APPROVE_DECISIONS:
+            # The approve batch never ran (e.g. lock timeout) — return every
+            # decision to the queue. Its payload carries ``decision_ids``, not
+            # an ``application_id``, so without this the rows were stranded in
+            # 'processing' forever (no approver, never completed).
+            for d_id in (payload.get("decision_ids") or []):
+                _requeue_decision(db, int(d_id), int(organization_id), note=note)
+            return
         application_id = payload.get("application_id")
         if application_id is None:
             return

@@ -264,6 +264,53 @@ def test_high_role_fit_low_pre_screen_is_no_action(db):
     assert summary.get("created", 0) == 0
 
 
+def test_bulk_skips_workable_disqualified(db):
+    """(c) A candidate disqualified in Workable is frozen — even with a low
+    role-fit that would otherwise reject, the bulk pass must not queue a
+    decision (the recruiter already dismissed them externally)."""
+    from datetime import datetime, timezone
+
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    app = _add_app(db, org, role, role_fit=20.0)
+    app.workable_disqualified_at = datetime.now(timezone.utc)
+    db.commit()
+
+    summary = decide_role_cohort(db, role=role)
+    assert summary["candidates"] == 0
+    assert _pending(db, role) == []
+
+
+def test_bulk_skips_post_handover_interview(db):
+    """(d) A candidate the recruiter advanced past handover in Workable
+    (technical interview) is a positive signal — never reject on role-fit."""
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    app = _add_app(db, org, role, role_fit=20.0)  # low score would reject
+    app.workable_stage = "Technical Interview"
+    db.commit()
+
+    summary = decide_role_cohort(db, role=role)
+    assert summary.get("skipped_post_handover", 0) == 1
+    assert _pending(db, role) == []  # NOT rejected
+
+
+def test_bulk_excludes_processing_decision(db):
+    """(b) A 'processing' decision (approved, writeback in flight/stuck) blocks
+    a duplicate — the cohort must exclude the candidate, not re-decide."""
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    app = _add_app(db, org, role, role_fit=20.0)
+    db.add(AgentDecision(
+        organization_id=org.id, role_id=role.id, application_id=app.id,
+        decision_type="advance_to_interview", recommendation="advance_to_interview",
+        status="processing", reasoning="in flight", model_version="x", prompt_version="x",
+        idempotency_key=f"proc:{app.id}",
+    ))
+    db.commit()
+
+    summary = decide_role_cohort(db, role=role)
+    assert summary["candidates"] == 0
+    assert len(_pending(db, role)) == 0  # _pending only counts pending, not processing
+
+
 def test_null_pre_screen_scored_candidate_evaluated(db):
     """A scored candidate with no stored pre_screen score is still evaluated —
     pre_screen falls back to role_fit so the reject band applies, rather than

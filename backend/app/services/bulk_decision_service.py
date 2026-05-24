@@ -46,6 +46,9 @@ from ..agent_runtime.decision_translation import (
     QUEUEABLE_VERDICTS,
     resolve_persisted_decision_type,
 )
+from ..domains.assessments_runtime.pipeline_service import (
+    is_post_handover_workable_stage,
+)
 from ..decision_policy.engine import DecisionInputs, evaluate
 from ..models.agent_decision import AgentDecision
 from ..models.agent_run import AgentRun
@@ -223,11 +226,19 @@ def decide_role_cohort(
             CandidateApplication.application_outcome == "open",
             CandidateApplication.pipeline_stage.in_(["applied", "review"]),
             CandidateApplication.cv_match_score.isnot(None),
+            # Freeze candidates disqualified in Workable even if Tali's outcome
+            # hasn't synced yet — otherwise we queue (and then have to discard)
+            # advance/reject decisions for someone the recruiter already
+            # dismissed externally.
+            CandidateApplication.workable_disqualified_at.is_(None),
+            # A 'processing' decision (approved, writeback in flight or stuck)
+            # blocks a new one too — counting only 'pending' let stranded
+            # 'processing' rows spawn duplicates.
             not_(
                 db.query(AgentDecision.id)
                 .filter(
                     AgentDecision.application_id == CandidateApplication.id,
-                    AgentDecision.status == "pending",
+                    AgentDecision.status.in_(("pending", "processing")),
                 )
                 .exists()
             ),
@@ -256,6 +267,14 @@ def decide_role_cohort(
     actor = Actor.agent(int(run.id))
 
     for app in candidates:
+        # A human recruiter has already advanced this candidate past Tali's
+        # handover point in Workable (phone screen / interview / offer). That's
+        # a strong positive signal — Tali must NOT reject them on role-fit
+        # alone (the agent prompt's EXTERNAL PIPELINE STAGE rule). Leave them
+        # to the recruiter / agent, don't deterministically decide.
+        if is_post_handover_workable_stage(getattr(app, "workable_stage", None)):
+            summary["skipped_post_handover"] += 1
+            continue
         inputs = _inputs_for(app, role_id=role.id, org_id=org_id, eff=eff, has_task=has_task)
         if inputs is None:
             summary["skipped_missing_score"] += 1
