@@ -629,7 +629,13 @@ export const HomeNow = ({
   const visiblePending = useMemo(() => decisions.filter((d) => d.status === 'pending'), [decisions]);
 
   const [bulkBusy, setBulkBusy] = useState(false);
-  const handleBulkApprove = async () => {
+  // Bulk-approve confirmation target. null = modal closed. We snapshot the
+  // ids/summary at open time so the confirmation reflects the rows the
+  // recruiter saw, even if the queue reloads underneath the modal. Replaces
+  // the native window.confirm so the dialog uses the app's design tokens.
+  const [bulkConfirm, setBulkConfirm] = useState(null);
+
+  const handleBulkApprove = () => {
     if (bulkBusy || visiblePending.length === 0) return;
     const typeLabel = filters.type
       ? (TYPE_OPTIONS.find((o) => o.id === filters.type)?.label || 'decision').toLowerCase()
@@ -645,13 +651,16 @@ export const HomeNow = ({
       .map((d) => d.candidate_name || `#${d.id}`)
       .join(', ');
     const more = count > 3 ? ` and ${count - 3} more` : '';
-    const confirmed = window.confirm(
-      `Approve ${count} ${typeLabel}${count === 1 ? '' : 's'} on ${roleScope}?\n\n${sample}${more}\n\nThis runs each approval in turn and reports any failures.`,
-    );
-    if (!confirmed) return;
+    const ids = visiblePending.map((d) => Number(d.id));
+    setBulkConfirm({ count, typeLabel, roleScope, sample, more, ids });
+  };
+
+  const runBulkApprove = async () => {
+    if (!bulkConfirm) return;
+    const { ids, count } = bulkConfirm;
+    setBulkConfirm(null);
     setBulkBusy(true);
     try {
-      const ids = visiblePending.map((d) => Number(d.id));
       const res = await agentApi.bulkApproveDecisions(ids);
       const payload = res?.data || {};
       const approved = Number(payload.approved || 0);
@@ -691,7 +700,7 @@ export const HomeNow = ({
   // so search-as-you-type stays usable.
   useEffect(() => {
     const onKey = (e) => {
-      if (teachFor) return;  // teach modal owns the keyboard while open
+      if (teachFor || bulkConfirm) return;  // an open modal owns the keyboard
       if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
       const tag = (e.target?.tagName || '').toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
@@ -709,7 +718,19 @@ export const HomeNow = ({
     // — re-binding on each pending row is cheap and keeps the closure
     // pointing at the right target.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, selected?.status, teachFor]);
+  }, [selected?.id, selected?.status, teachFor, bulkConfirm]);
+
+  // Esc cancels / Enter confirms the bulk-approve modal.
+  useEffect(() => {
+    if (!bulkConfirm) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); setBulkConfirm(null); }
+      if (e.key === 'Enter') { e.preventDefault(); runBulkApprove(); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bulkConfirm]);
 
   return (
     <section className="home-section">
@@ -785,6 +806,58 @@ export const HomeNow = ({
             await reload?.();
           }}
         />
+      ) : null}
+
+      {bulkConfirm ? (
+        <div className="rq-modal-backdrop" onClick={() => setBulkConfirm(null)}>
+          <div
+            className="rq-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rq-bulk-title"
+            style={{ width: 'min(480px, 100%)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="rq-modal-head">
+              <div>
+                <span className="kicker" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <Check size={11} aria-hidden="true" />
+                  BULK APPROVE
+                </span>
+                <h3
+                  id="rq-bulk-title"
+                  style={{ margin: '6px 0 2px', fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 600, letterSpacing: '-.02em', color: 'var(--ink)' }}
+                >
+                  {`Approve ${bulkConfirm.count} ${bulkConfirm.typeLabel}${bulkConfirm.count === 1 ? '' : 's'} on ${bulkConfirm.roleScope}?`}
+                </h3>
+                {bulkConfirm.sample ? (
+                  <p style={{ margin: 0, fontSize: 13, color: 'var(--ink-2)', maxWidth: 420, lineHeight: 1.5 }}>
+                    {`${bulkConfirm.sample}${bulkConfirm.more}`}
+                  </p>
+                ) : null}
+              </div>
+              <button type="button" className="rq-tinybtn" onClick={() => setBulkConfirm(null)} aria-label="Close">
+                <X size={12} strokeWidth={2.2} />
+              </button>
+            </div>
+
+            <div className="rq-modal-body">
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--mute)', lineHeight: 1.5 }}>
+                This runs each approval in turn and reports any failures.
+              </p>
+            </div>
+
+            <div className="rq-modal-foot">
+              <button type="button" className="rq-btn ghost" onClick={() => setBulkConfirm(null)}>
+                Cancel
+              </button>
+              <button type="button" className="rq-btn rq-teach" onClick={runBulkApprove}>
+                <Check size={13} strokeWidth={2} aria-hidden="true" />
+                {`Approve ${bulkConfirm.count}`}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </section>
   );
