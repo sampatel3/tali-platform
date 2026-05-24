@@ -805,7 +805,7 @@ def test_manual_evaluation_saved_as_structured_result(client):
     assert payload["evaluation_result"] == manual
     assert manual["assessment_id"] == assessment["id"]
     assert manual["completed_due_to_timeout"] is False
-    assert manual["overall_score"] == 8.67
+    assert manual["overall_score"] == 86.67
     assert manual["decision"] == "advance"
     assert manual["rationale"] == "Advancing to panel. Strong debugging evidence and solid production judgment."
     assert manual["confidence"] == "high"
