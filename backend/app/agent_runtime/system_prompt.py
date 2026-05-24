@@ -19,7 +19,7 @@ from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 from . import calibration as calibration_mod
 
 
-PROMPT_VERSION = "agent.v9.cross-cycle-memory.2026-05-21"
+PROMPT_VERSION = "agent.v9.effective-reject-threshold.2026-05-24"
 
 
 def _render_bucketed_criteria(role: Role) -> str:

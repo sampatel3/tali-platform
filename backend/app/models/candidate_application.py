@@ -75,7 +75,16 @@ class CandidateApplication(Base):
     cv_match_score = Column(Float, nullable=True)
     cv_match_details = Column(JSON, nullable=True)
     cv_match_scored_at = Column(DateTime(timezone=True), nullable=True)
+    # The "best available" display/rank score. Full cv_match scoring
+    # overwrites this for ranking (via refresh_pre_screening_fields), so it
+    # tracks role-fit once scored — NOT a durable record of the pre-screen
+    # verdict. Use ``genuine_pre_screen_score_100`` for the actual cheap
+    # pre-screen score; this column stays the directory/detail display value.
     pre_screen_score_100 = Column(Float, nullable=True)
+    # The genuine cheap pre-screen score, written once by the pre-screen LLM
+    # and NEVER overwritten by full cv_match scoring. This is the durable
+    # pre-screen verdict the decision engine's pre_screen gate reads.
+    genuine_pre_screen_score_100 = Column(Float, nullable=True)
     requirements_fit_score_100 = Column(Float, nullable=True)
     pre_screen_recommendation = Column(String, nullable=True)
     pre_screen_evidence = Column(JSON, nullable=True)

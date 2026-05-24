@@ -97,6 +97,18 @@ def survey_role_state(db: Session, *, organization_id: int, role_id: int) -> dic
     # setting they can change on the role page.
     effective_threshold = role.score_threshold
     effective_budget = role.monthly_usd_budget_cents
+
+    # The single role-fit boundary the decision engine actually rejects /
+    # advances on (auto mode → dynamic; manual → role.score_threshold).
+    # This is the authoritative cutoff — the agent must reason against it,
+    # not role.reject_threshold (legacy/unused by the engine). Lazy import
+    # to avoid a circular at module load.
+    try:
+        from ..services.auto_threshold_service import resolve_role_fit_threshold
+
+        effective_role_fit_threshold = resolve_role_fit_threshold(db, role=role)
+    except Exception:  # pragma: no cover — never break the survey on threshold resolution
+        effective_role_fit_threshold = None
     if effective_threshold is None or effective_budget is None:
         recent = _recent_resolved_answers(
             db, organization_id=organization_id, role_id=role_id
@@ -130,6 +142,9 @@ def survey_role_state(db: Session, *, organization_id: int, role_id: int) -> dic
         # role config column is null. The agent should triage against
         # these, not the raw column.
         "effective_score_threshold": effective_threshold,
+        # The engine's authoritative role-fit reject/advance boundary. Reason
+        # against THIS, not role.reject_threshold (which the engine ignores).
+        "effective_role_fit_threshold": effective_role_fit_threshold,
         "effective_monthly_budget_cents": effective_budget,
         "counts": counts,
         "intent_gaps": intent_gaps,

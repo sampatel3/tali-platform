@@ -140,20 +140,25 @@ def pre_screen_snapshot(app: CandidateApplication) -> dict[str, Any]:
     if cv_fit_score is None:
         cv_fit_score = normalize_score_100(details.get("pre_screen_score_100"))
     pre_screen_score = cv_fit_score
-    # ``details.get("recommendation")`` is the raw cv_match enum (e.g.
-    # 'lean_no') — normalize any raw enum to a proper label so the recruiter
-    # never sees internal jargon. Self-healing: also normalizes an existing
-    # raw value already stored on the app.
-    recommendation = sanitize_text_for_storage(
-        str(
-            normalize_recommendation_label(
-                getattr(app, "pre_screen_recommendation", None)
-                or details.get("recommendation")
-            )
-            or pre_screen_recommendation_label(pre_screen_score)
-            or ""
-        ).strip()
-    ) or None
+    # When the candidate has a real cv_match score, the displayed
+    # recommendation must track that authoritative score — NOT a stale stored
+    # ``pre_screen_recommendation``, which is what let "Strong match" persist
+    # on a candidate the full score put at 22. For not-yet-scored candidates
+    # we keep the stored pre-screen label (their genuine pre-screen verdict),
+    # normalizing any raw cv_match enum to a proper display label.
+    #
+    # Re-deriving for scored candidates is safe w.r.t. the label-keyed
+    # auto-reject hooks: ``evaluate_auto_reject_decision`` defers once
+    # ``cv_match_score`` is set, so a refreshed "Below threshold" never
+    # wrongly disqualifies a scored candidate.
+    if app.cv_match_score is not None:
+        recommendation = pre_screen_recommendation_label(pre_screen_score)
+    else:
+        recommendation = normalize_recommendation_label(
+            getattr(app, "pre_screen_recommendation", None)
+            or details.get("recommendation")
+        ) or pre_screen_recommendation_label(pre_screen_score)
+    recommendation = sanitize_text_for_storage(str(recommendation or "").strip()) or None
     evidence = (
         sanitize_json_for_storage(app.pre_screen_evidence)
         if isinstance(getattr(app, "pre_screen_evidence", None), dict)

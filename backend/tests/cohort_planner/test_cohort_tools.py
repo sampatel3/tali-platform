@@ -42,6 +42,20 @@ def test_survey_flags_needs_score_when_pre_screen_passed(db):
     assert out["counts"]["needs_pre_screen"] == 0
 
 
+def test_survey_exposes_effective_role_fit_threshold(db):
+    """The survey surfaces the engine's authoritative role-fit boundary so the
+    agent reasons against it (not the legacy role.reject_threshold)."""
+    org, role, _, _ = make_world(db)
+    role.score_threshold = 55
+    db.flush()
+    out = survey_role_state(
+        db, organization_id=int(org.id), role_id=int(role.id)
+    )
+    assert "effective_role_fit_threshold" in out
+    # Manual mode (no auto_reject_threshold_mode) resolves to score_threshold.
+    assert out["effective_role_fit_threshold"] == 55.0
+
+
 def test_survey_intent_gaps_lists_missing_config(db):
     org, role, _, _ = make_world(db)
     role.monthly_usd_budget_cents = None
