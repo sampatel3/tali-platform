@@ -232,6 +232,7 @@ def test_batch_skips_non_processing(db):
             payload={"decision_ids": [int(decision.id)], "user_id": int(user.id)},
         )
     assert out["succeeded"] == 0
+    assert out["skipped"] == 1  # counted as already-resolved, not a failure
     assert not mock_run.called
 
 

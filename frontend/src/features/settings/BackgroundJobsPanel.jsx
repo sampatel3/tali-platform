@@ -201,9 +201,18 @@ function DecisionBatchCounters({ data }) {
   const succeeded = Number(data?.succeeded ?? 0);
   const requeued = Number(data?.requeued ?? 0);
   const failed = Number(data?.failed ?? 0);
+  // Decisions already resolved by an earlier overlapping batch are skipped
+  // idempotently. Surface them so "18 / 100 approved" reads as success, not a
+  // partial failure. Computed from the total for older runs whose stored
+  // counters predate the explicit `skipped` key.
+  const skipped =
+    data?.skipped != null
+      ? Number(data.skipped)
+      : Math.max(0, total - succeeded - requeued - failed);
   const annot = [];
   if (requeued) annot.push(`${requeued} requeued`);
   if (failed) annot.push(`${failed} failed`);
+  if (skipped) annot.push(`${skipped} already resolved`);
   return (
     <div className="bg-jobs-panel-counters">
       <strong>{succeeded}</strong> / {total} approved
