@@ -1372,6 +1372,9 @@ def test_role_pipeline_counts_exclude_closed_outcomes(client):
     role_payload = next((item for item in roles_resp.json() if item["id"] == role["id"]), None)
     assert role_payload is not None
     assert role_payload["stage_counts"]["invited"] == 1
+    # `rejected` is an outcome count surfaced alongside the open-stage counts so
+    # the jobs grid can show a Rejected column.
+    assert role_payload["stage_counts"]["rejected"] == 1
     assert role_payload["active_candidates_count"] == 1
     assert role_payload["last_candidate_activity_at"] is not None
 
