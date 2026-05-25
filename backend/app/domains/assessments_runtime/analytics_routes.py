@@ -1160,7 +1160,7 @@ def get_activity_timeseries(
             "window": {"days": days, "from": None, "to": None},
             "series": [],
             "decision_types": [],
-            "pending_now": {"decisions": 0, "questions": 0, "total": 0},
+            "pending_now": {"decisions": 0, "questions": 0, "total": 0, "by_type": {}},
             "workable_errors": {"total": 0, "by_role": []},
         }
 
@@ -1262,6 +1262,19 @@ def get_activity_timeseries(
         pending_questions = pending_questions.filter(AgentNeedsInput.role_id == role_id)
     pending_questions_count = int(pending_questions.scalar() or 0)
 
+    # Pending decisions split by type — backs the "Pending now · by type"
+    # summary chips in the same Hub section (role-aware via the same filter).
+    pending_by_type_q = (
+        db.query(AgentDecision.decision_type, func.count(AgentDecision.id))
+        .filter(AgentDecision.organization_id == org_id, pending_filter(now))
+    )
+    if role_id is not None:
+        pending_by_type_q = pending_by_type_q.filter(AgentDecision.role_id == role_id)
+    pending_by_type = {
+        str(dtype or "unknown"): int(count)
+        for dtype, count in pending_by_type_q.group_by(AgentDecision.decision_type).all()
+    }
+
     # ── Workable-error callout: decisions bounced back to the queue ────────
     err_q = (
         db.query(AgentDecision.role_id, AgentDecision.resolution_note)
@@ -1299,6 +1312,7 @@ def get_activity_timeseries(
             "decisions": pending_decisions_count,
             "questions": pending_questions_count,
             "total": pending_decisions_count + pending_questions_count,
+            "by_type": pending_by_type,
         },
         "workable_errors": workable_errors,
     }

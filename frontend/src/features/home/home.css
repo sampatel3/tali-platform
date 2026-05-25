@@ -1065,6 +1065,62 @@
   border-color: color-mix(in srgb, var(--purple) 40%, var(--line));
 }
 
+/* "Pending now · by type" summary strip — current backlog split, sits at
+   the top of the Decisions & review queue section. */
+.ht-pending {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 28px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+}
+
+.ht-pending-label {
+  flex-shrink: 0;
+}
+
+.ht-pending-empty {
+  font-size: 13px;
+  color: var(--mute);
+}
+
+.ht-pending-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 28px;
+}
+
+.ht-pending-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.ht-pending-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.ht-pending-num {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1;
+}
+
+.ht-pending-cap {
+  font-size: 13px;
+  color: var(--mute);
+  white-space: nowrap;
+}
+
 .ht-callout {
   margin: 0 0 14px;
   padding: 12px 14px;
