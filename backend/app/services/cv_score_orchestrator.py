@@ -659,12 +659,31 @@ def _execute_scoring_v3(
         "role_id": getattr(application, "role_id", None),
         "entity_id": f"application:{application.id}",
     }
+    # Workable metadata (questionnaire answers, recruiter comments, activity
+    # log) carries hard-constraint evidence the CV often lacks — e.g. a salary
+    # expectation given on a LinkedIn apply. Feed it so the full score assesses
+    # those requirements instead of leaving them "unknown". Same source the
+    # pre-screen gate already uses; empty string when there's no footprint.
+    workable_context = ""
+    try:
+        from .workable_context_service import format_workable_context
+
+        workable_context = format_workable_context(
+            candidate=getattr(application, "candidate", None),
+            application=application,
+        )
+    except Exception:  # pragma: no cover — scoring must not break on context render
+        logger.exception(
+            "format_workable_context failed for application=%s; scoring without it",
+            getattr(application, "id", None),
+        )
     output = run_cv_match(
         cv_text,
         job_spec_text,
         requirements,
         client=org_client,
         metering_context=score_metering_context,
+        workable_context=workable_context or None,
     )
     job.cache_hit = "hit" if getattr(output, "cache_hit", False) else "miss"
     # CACHE HITS ONLY: a cache hit makes no Anthropic call, so the wrapper

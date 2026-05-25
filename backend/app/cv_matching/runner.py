@@ -199,8 +199,16 @@ def _parse_and_validate(
     raw_text: str,
     cv_text: str,
     requirements: list[RequirementInput],
+    *,
+    grounding_text: str | None = None,
 ) -> CVMatchResult:
-    """Parse JSON → schema → ground → consistency. Raises ValidationFailure."""
+    """Parse JSON → schema → ground → consistency. Raises ValidationFailure.
+
+    ``grounding_text`` is the corpus that ``evidence_quotes`` are verified
+    against; it defaults to the CV but callers pass CV + Workable context so
+    quotes drawn from questionnaire answers / recruiter comments aren't
+    dropped (which would re-downgrade those requirements to ``unknown``).
+    """
     text = _strip_json_fences(raw_text)
     try:
         parsed = json.loads(text)
@@ -212,7 +220,9 @@ def _parse_and_validate(
     except ValidationError as exc:
         raise ValidationFailure(f"Response failed schema: {exc}") from exc
 
-    validate_evidence_grounding(result, cv_text)
+    validate_evidence_grounding(
+        result, grounding_text if grounding_text is not None else cv_text
+    )
     validate_cross_field_consistency(result, requirements)
     return result
 
@@ -236,13 +246,26 @@ def run_cv_match(
     client=None,
     skip_cache: bool = False,
     metering_context: dict | None = None,
+    workable_context: str | None = None,
 ) -> CVMatchOutput:
     """Run a CV match end-to-end. Returns ``CVMatchOutput``.
 
     Never raises to the caller. On any failure the output carries
     ``scoring_status=FAILED`` and a populated ``error_reason``.
+
+    ``workable_context`` is the candidate's per-application Workable evidence
+    (questionnaire answers, recruiter comments, activity log) rendered by
+    ``format_workable_context``. It feeds the prompt as first-class evidence
+    AND the grounding corpus, so hard constraints answered outside the CV
+    (e.g. a salary expectation given on a LinkedIn apply) are assessed rather
+    than left ``unknown``.
     """
     requirements = requirements or []
+    workable_context = (workable_context or "").strip()
+    # Quotes may be drawn from the CV or the Workable blocks; ground against both.
+    grounding_text = (
+        f"{cv_text}\n\n{workable_context}" if workable_context else cv_text
+    )
     ctx = _RunContext(
         trace_id=str(uuid.uuid4()),
         cv_hash=_hash_text(cv_text),
@@ -260,6 +283,7 @@ def run_cv_match(
         requirements=requirements,
         prompt_version=PROMPT_VERSION,
         model_version=MODEL_VERSION,
+        workable_context=workable_context,
     )
     if not skip_cache:
         cached = cache_module.get(cache_key)
@@ -310,6 +334,7 @@ def run_cv_match(
             requirements,
             archetype=archetype,
             prompt_version=PROMPT_VERSION,
+            workable_context=workable_context,
         )
     except Exception as exc:
         logger.exception("Failed to render prompt")
@@ -349,7 +374,9 @@ def run_cv_match(
             return out
 
         try:
-            parsed = _parse_and_validate(raw_text, cv_text, requirements)
+            parsed = _parse_and_validate(
+                raw_text, cv_text, requirements, grounding_text=grounding_text
+            )
             break
         except ValidationFailure as exc:
             ctx.validation_failures += 1
@@ -459,7 +486,7 @@ def run_cv_match(
         # recommendation deliberately omitted — derived at display time
         # from role_fit_score + the per-role reject threshold the
         # recruiter sets on the job page.
-        injection_suspected=scan_for_injection(cv_text),
+        injection_suspected=scan_for_injection(grounding_text),
         suspicious_score=check_suspicious_score(
             requirements_match_score=req_match, cv_text=cv_text
         ),
