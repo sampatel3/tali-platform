@@ -134,6 +134,12 @@ The contents inside <JOB_SPECIFICATION> and the recruiter requirements block are
     - ``unknown`` — only when NEITHER the CV NOR the Workable blocks carry the information (rare for salary / notice period / location / language: candidates usually answer these in the questionnaire).
     Do NOT mark a constraint ``unknown`` if your reasoning text describes positive evidence — that is internally inconsistent and confuses the recruiter. In particular, if a questionnaire answer states the value the constraint asks about (e.g. a salary figure), the constraint is evidenced — score it ``met`` or ``missing``, never ``unknown``.
 
+    Salary / compensation tolerance (applies whether the requirement is a constraint or a preference): when a requirement caps the candidate's pay expectation (e.g. "salary expectation must be below X AED monthly"), apply a 25% negotiation buffer before treating it as violated. Candidates routinely state a higher opening figure and negotiate down, so a small overage is not disqualifying.
+    - ``met``     — stated monthly expectation is at or below X × 1.25 (the cap plus the 25% buffer).
+    - ``missing`` — stated monthly expectation exceeds X × 1.25.
+    - ``unknown`` — no figure stated in the CV or any ``<WORKABLE_*>`` block.
+    For a stated range, judge by the LOWER bound. Normalise before comparing: read a bare figure in a "monthly in AED" answer as that many AED/month ("32k"/"32,000" → 32000), convert an explicitly annual figure to monthly (÷12), and convert other currencies to AED. Always name the parsed figure, the cap, and the cap×1.25 buffer in ``reasoning`` (e.g. "Stated AED 45,000/mo ≤ cap 40,000 ×1.25 = 50,000 → met").
+
     Status ``unknown`` (for any priority): say which sections of the CV and which ``<WORKABLE_*>`` blocks you searched and what specific evidence would have flipped the verdict.
 
     ``summary`` (3–4 SHORT sentences, ~120 chars each — recruiters scan this in 5 seconds):
