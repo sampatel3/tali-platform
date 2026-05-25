@@ -25,7 +25,7 @@ from ..platform.config import settings
 from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
 from ..services.usage_metering_service import record_event
-from . import budget_guard, calibration, data_readiness
+from . import budget_guard, calibration, data_readiness, kill_switch
 from .system_prompt import PROMPT_VERSION, build_system_prompt
 from .tool_registry import AGENT_TOOLS, QUEUE_DECISION_TOOL_NAMES, dispatch, is_run_complete
 
@@ -311,6 +311,31 @@ def run_cycle(
     org = db.query(Organization).filter(Organization.id == role.organization_id).first()
     if org is None:
         raise ValueError(f"role {role.id} has no organization")
+
+    # Kill switch (incident response). Defense-in-depth: the cycle tasks
+    # already short-circuit before calling run_cycle, but direct callers
+    # (the manual-run CLI, future entry points) flow through here. Aborts
+    # before the first Anthropic call — no LLM spend, no decisions emitted.
+    halt_reason = kill_switch.halt_reason_for_org(org)
+    if halt_reason is not None:
+        run = AgentRun(
+            organization_id=role.organization_id,
+            role_id=role.id,
+            trigger=trigger,
+            trigger_event_id=trigger_event_id,
+            status="aborted",
+            error=halt_reason,
+            model_version=settings.resolved_claude_model,
+            prompt_version=PROMPT_VERSION,
+            finished_at=datetime.now(timezone.utc),
+        )
+        db.add(run)
+        db.flush()
+        _emit_cycle_abort_event(
+            db, run=run, application_id=application_id,
+            reason="Agent halted — kill switch is active for incident response.",
+        )
+        return run
 
     client = get_client_for_org(org)
     # Per-role override (Sonnet for borderline-judgment roles, etc.). Falls

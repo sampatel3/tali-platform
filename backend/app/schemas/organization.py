@@ -61,12 +61,18 @@ class WorkspaceSettings(BaseModel):
     candidate_facing_brand: Optional[str] = Field(default=None, max_length=200)
     primary_domain: Optional[str] = Field(default=None, max_length=200)
     locale: str = Field(default="English (US)", min_length=2, max_length=80)
+    # Org-level agent kill switch (incident response). True halts every
+    # autonomous agent cycle for this org's roles — broader than per-role
+    # pausing, narrower than the global AGENT_GLOBAL_KILL_SWITCH. Default
+    # False = agents run, so existing orgs are unchanged.
+    agent_kill_switch: bool = False
 
 
 class WorkspaceSettingsUpdate(BaseModel):
     candidate_facing_brand: Optional[str] = Field(default=None, min_length=0, max_length=200)
     primary_domain: Optional[str] = Field(default=None, min_length=0, max_length=200)
     locale: Optional[str] = Field(default=None, min_length=2, max_length=80)
+    agent_kill_switch: Optional[bool] = None
 
 
 class ScoringPolicy(BaseModel):
