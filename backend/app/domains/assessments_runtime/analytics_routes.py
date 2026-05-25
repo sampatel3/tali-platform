@@ -541,6 +541,10 @@ def get_reporting_summary(
                 "decisions_made": {"current": 0, "prior": 0, "delta_pct": None},
                 "auto_advanced": {"current": 0, "borderlines_flagged": 0},
                 "auto_rejected": {"current": 0, "below_threshold": 0},
+                "human_review": {
+                    "resolved": 0, "approved": 0, "overridden": 0, "taught": 0,
+                    "override_rate_pct": 0.0, "teach_rate_pct": 0.0,
+                },
                 "org_spend": {
                     "spent_cents": 0, "budget_cents": 0,
                     "over_pct": None, "top_role": None,
@@ -594,6 +598,20 @@ def get_reporting_summary(
         1 for d in decisions if _is_resolved_decision(d) and _decision_kind(d) == "reject"
     )
     flagged_count = sum(1 for d in decisions if _decision_kind(d) == "flag")
+
+    # Human-review KPIs (the HITL loop): of the resolved decisions in the
+    # window, how many did the recruiter approve / override / teach. Drives
+    # the Monitoring summary band's trust signal. Rates are over resolved
+    # decisions (pending/sent-back rows aren't a verdict yet).
+    resolved_decisions = [d for d in decisions if _is_resolved_decision(d)]
+    resolved_count = len(resolved_decisions)
+    approved_count = sum(1 for d in resolved_decisions if str(d.status or "").lower() == "approved")
+    overridden_count = sum(1 for d in resolved_decisions if str(d.status or "").lower() == "overridden")
+    taught_count = sum(
+        1 for d in decisions if str(getattr(d, "human_disposition", "") or "").lower() == "taught"
+    )
+    override_rate_pct = round((overridden_count / resolved_count) * 100.0, 1) if resolved_count else 0.0
+    teach_rate_pct = round((taught_count / resolved_count) * 100.0, 1) if resolved_count else 0.0
     paused_count = sum(1 for d in decisions if _decision_kind(d) == "pause")
 
     # Assessments closed in the window — counted alongside agent decisions
@@ -852,6 +870,14 @@ def get_reporting_summary(
                 "current": auto_rejected_count,
                 "below_threshold": auto_rejected_count,
             },
+            "human_review": {
+                "resolved": resolved_count,
+                "approved": approved_count,
+                "overridden": overridden_count,
+                "taught": taught_count,
+                "override_rate_pct": override_rate_pct,
+                "teach_rate_pct": teach_rate_pct,
+            },
             "org_spend": {
                 "spent_cents": spent_total,
                 "budget_cents": budget_total,
@@ -930,13 +956,35 @@ def _score_summary(values: Sequence[float]) -> Dict[str, Any]:
 
 @router.get("/decisions-breakdown")
 def get_decisions_breakdown(
+    role_id: Optional[int] = Query(default=None),
+    date_from: Optional[str] = Query(default=None, description="ISO date/time (inclusive)"),
+    date_to: Optional[str] = Query(default=None, description="ISO date/time (inclusive)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """All-time decisions + Workable-stage outcomes, grouped by role."""
+    """Decisions + Workable-stage outcomes grouped by role.
+
+    Decision counts and the advance cohort honour the optional role/time
+    window; the Workable-stage mix and score stats stay a *current* snapshot
+    (scoped to the role when given) — "decisions made in this window, where
+    those candidates sit now".
+    """
     org_id = current_user.organization_id
+    parsed_from = _parse_filter_datetime(date_from, end_of_day=False)
+    parsed_to = _parse_filter_datetime(date_to, end_of_day=True)
+    if parsed_from and parsed_to and parsed_from > parsed_to:
+        raise HTTPException(status_code=400, detail="date_from must be before date_to")
+    window_label = "All time"
+    if parsed_from is not None:
+        days = max(1, int(((parsed_to or datetime.now(timezone.utc)) - parsed_from).total_seconds() / 86400))
+        window_label = f"Last {days} days"
+    window = {
+        "label": window_label,
+        "from": parsed_from.isoformat() if parsed_from else None,
+        "to": parsed_to.isoformat() if parsed_to else None,
+    }
     empty = {
-        "window": {"label": "All time", "from": None, "to": None},
+        "window": window,
         "score_basis": "taali",
         "totals": {
             "decisions": _empty_decisions_bucket(),
@@ -949,27 +997,43 @@ def get_decisions_breakdown(
     if not org_id:
         return empty
 
+    def _scope_decisions(q):
+        q = q.filter(AgentDecision.organization_id == org_id)
+        if role_id is not None:
+            q = q.filter(AgentDecision.role_id == role_id)
+        if parsed_from is not None:
+            q = q.filter(AgentDecision.created_at >= parsed_from)
+        if parsed_to is not None:
+            q = q.filter(AgentDecision.created_at <= parsed_to)
+        return q
+
+    def _scope_apps(q):
+        q = q.filter(
+            CandidateApplication.organization_id == org_id,
+            CandidateApplication.deleted_at.is_(None),
+        )
+        if role_id is not None:
+            q = q.filter(CandidateApplication.role_id == role_id)
+        return q
+
     # ── a) Decisions grouped by role × type × status ───────────────────
-    decision_rows = (
+    decision_rows = _scope_decisions(
         db.query(
             AgentDecision.role_id,
             AgentDecision.decision_type,
             AgentDecision.status,
             func.count(AgentDecision.id),
         )
-        .filter(AgentDecision.organization_id == org_id)
-        .group_by(AgentDecision.role_id, AgentDecision.decision_type, AgentDecision.status)
-        .all()
-    )
+    ).group_by(AgentDecision.role_id, AgentDecision.decision_type, AgentDecision.status).all()
     decisions_by_role: Dict[int, Dict[str, Any]] = {}
     totals_decisions = _empty_decisions_bucket()
-    for role_id, dtype, status, count in decision_rows:
-        if role_id is None:
+    for rid, dtype, status, count in decision_rows:
+        if rid is None:
             continue
         count = int(count or 0)
         type_key = str(dtype or "unknown")
         is_approved = str(status or "").lower() in _APPROVED_DECISION_STATUSES
-        for bucket in (decisions_by_role.setdefault(role_id, _empty_decisions_bucket()), totals_decisions):
+        for bucket in (decisions_by_role.setdefault(rid, _empty_decisions_bucket()), totals_decisions):
             bucket["total"] += count
             type_bucket = bucket["by_type"].setdefault(type_key, {"total": 0, "approved": 0})
             type_bucket["total"] += count
@@ -978,32 +1042,26 @@ def get_decisions_breakdown(
                 type_bucket["approved"] += count
 
     # ── Simple Workable-stage counts per role (all live applications) ───
-    stage_rows = (
+    stage_rows = _scope_apps(
         db.query(
             CandidateApplication.role_id,
             CandidateApplication.external_stage_normalized,
             CandidateApplication.workable_stage,
             func.count(CandidateApplication.id),
         )
-        .filter(
-            CandidateApplication.organization_id == org_id,
-            CandidateApplication.deleted_at.is_(None),
-        )
-        .group_by(
-            CandidateApplication.role_id,
-            CandidateApplication.external_stage_normalized,
-            CandidateApplication.workable_stage,
-        )
-        .all()
-    )
+    ).group_by(
+        CandidateApplication.role_id,
+        CandidateApplication.external_stage_normalized,
+        CandidateApplication.workable_stage,
+    ).all()
     stages_by_role: Dict[int, Dict[str, int]] = {}
     totals_stages: Dict[str, int] = {}
-    for role_id, norm_stage, raw_stage, count in stage_rows:
-        if role_id is None:
+    for rid, norm_stage, raw_stage, count in stage_rows:
+        if rid is None:
             continue
         count = int(count or 0)
         key = normalize_pipeline_key(norm_stage or raw_stage) or "unstaged"
-        role_stages = stages_by_role.setdefault(role_id, {})
+        role_stages = stages_by_role.setdefault(rid, {})
         role_stages[key] = role_stages.get(key, 0) + count
         totals_stages[key] = totals_stages.get(key, 0) + count
 
@@ -1011,7 +1069,7 @@ def get_decisions_breakdown(
     # Join (not subquery) and select only application columns + id, then
     # ``distinct`` collapses an application that has several approved advance
     # decisions down to a single row (id keeps distinct apps separate).
-    advance_apps = (
+    advance_q = (
         db.query(
             CandidateApplication.id,
             CandidateApplication.role_id,
@@ -1026,13 +1084,18 @@ def get_decisions_breakdown(
             AgentDecision.decision_type.in_(_ADVANCE_DECISION_TYPES),
             AgentDecision.status.in_(_APPROVED_DECISION_STATUSES),
         )
-        .distinct()
-        .all()
     )
+    if role_id is not None:
+        advance_q = advance_q.filter(AgentDecision.role_id == role_id)
+    if parsed_from is not None:
+        advance_q = advance_q.filter(AgentDecision.created_at >= parsed_from)
+    if parsed_to is not None:
+        advance_q = advance_q.filter(AgentDecision.created_at <= parsed_to)
+    advance_apps = advance_q.distinct().all()
     conversion_by_role: Dict[int, Dict[str, int]] = {}
     totals_conversion = _empty_conversion_bucket()
-    for _app_id, role_id, norm_stage, raw_stage, outcome, disqualified in advance_apps:
-        if role_id is None:
+    for _app_id, rid, norm_stage, raw_stage, outcome, disqualified in advance_apps:
+        if rid is None:
             continue
         stage = normalize_pipeline_key(norm_stage or raw_stage)
         oc = str(outcome or "").lower()
@@ -1041,7 +1104,7 @@ def get_decisions_breakdown(
         reached_final = reached_offer or stage in _FINAL_INTERVIEW_NORM_STAGES
         is_rejected = oc in _REJECT_OUTCOMES or bool(disqualified)
         stage_key = stage or "unstaged"
-        for bucket in (conversion_by_role.setdefault(role_id, _empty_conversion_bucket()), totals_conversion):
+        for bucket in (conversion_by_role.setdefault(rid, _empty_conversion_bucket()), totals_conversion):
             bucket["advanced_total"] += 1
             if reached_final:
                 bucket["reached_final_interview"] += 1
@@ -1058,21 +1121,15 @@ def get_decisions_breakdown(
         CandidateApplication.taali_score_cache_100,
         CandidateApplication.cv_match_score,
     )
-    score_rows = (
+    score_rows = _scope_apps(
         db.query(CandidateApplication.role_id, headline_score)
-        .filter(
-            CandidateApplication.organization_id == org_id,
-            CandidateApplication.deleted_at.is_(None),
-            headline_score.isnot(None),
-        )
-        .all()
-    )
+    ).filter(headline_score.isnot(None)).all()
     scores_by_role: Dict[int, List[float]] = {}
     all_scores: List[float] = []
-    for role_id, score in score_rows:
-        if role_id is None or score is None:
+    for rid, score in score_rows:
+        if rid is None or score is None:
             continue
-        scores_by_role.setdefault(role_id, []).append(float(score))
+        scores_by_role.setdefault(rid, []).append(float(score))
         all_scores.append(float(score))
 
     # ── Assemble — one row per role that has made at least one decision ─
@@ -1097,7 +1154,7 @@ def get_decisions_breakdown(
         })
 
     return {
-        "window": {"label": "All time", "from": None, "to": None},
+        "window": window,
         "score_basis": "taali",
         "totals": {
             "decisions": totals_decisions,

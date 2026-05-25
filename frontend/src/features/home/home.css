@@ -1137,6 +1137,200 @@
   color: var(--ink);
 }
 
+/* ---------------- Monitoring (consolidated Analytics section) ---------------- */
+.hm-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  justify-content: space-between;
+}
+
+.hm-rolefilter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hm-rolefilter .kicker {
+  display: block;
+}
+
+.hm-window {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.hm-window-btn {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 7px 13px;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--line);
+  color: var(--mute);
+  cursor: pointer;
+}
+
+.hm-window-btn:first-child {
+  border-left: 0;
+}
+
+.hm-window-btn.active {
+  background: var(--purple-soft);
+  color: var(--purple-2);
+  font-weight: 600;
+}
+
+.hm-window-btn:hover:not(.active) {
+  background: var(--bg-3);
+  color: var(--ink-2);
+}
+
+.hm-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.hm-stat {
+  flex: 1 1 0;
+  min-width: 130px;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.hm-stat-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mute);
+  margin-bottom: 6px;
+}
+
+.hm-stat-value {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1;
+}
+
+.hm-stat-sub {
+  font-size: 11px;
+  color: var(--mute);
+  margin-top: 4px;
+}
+
+.hm-anomalies {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hm-anom-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--mute);
+}
+
+.hm-anom-clear svg {
+  color: var(--green);
+}
+
+.hm-anom {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  padding: 9px 12px;
+  border-radius: 10px;
+}
+
+.hm-anom b {
+  color: var(--ink);
+}
+
+.hm-anom svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.hm-anom.tone-amber {
+  background: color-mix(in srgb, var(--amber) 12%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--amber) 40%, var(--line));
+  color: var(--ink-2);
+}
+
+.hm-anom.tone-amber svg { color: var(--amber); }
+
+.hm-anom.tone-red {
+  background: color-mix(in srgb, var(--red) 10%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--red) 38%, var(--line));
+  color: var(--ink-2);
+}
+
+.hm-anom.tone-red svg { color: var(--red); }
+
+.hm-anom.tone-neutral {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--mute);
+}
+
+.hm-anom.tone-neutral svg { color: var(--mute); }
+
+.hm-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+}
+
+.hm-tab {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 14px;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--mute);
+  cursor: pointer;
+  margin-bottom: -1px;
+  white-space: nowrap;
+}
+
+.hm-tab:hover:not(.active) {
+  color: var(--ink-2);
+}
+
+.hm-tab.active {
+  color: var(--purple-2);
+  border-bottom-color: var(--purple);
+  font-weight: 600;
+}
+
+.hm-tabpanel {
+  padding-top: 2px;
+}
+
+.hm-tab-caption {
+  font-size: 12.5px;
+  color: var(--mute);
+  line-height: 1.5;
+  margin: 0 0 12px;
+}
+
 /* ---------------- Decisions & outcomes by role ---------------- */
 .home-by-role {
   padding: 16px;

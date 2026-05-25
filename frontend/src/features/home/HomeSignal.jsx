@@ -178,7 +178,7 @@ const OutcomesList = ({ rows }) => {
   );
 };
 
-export const HomeSignal = ({ feedback, outcomes, loading, reload }) => {
+export const HomeSignal = ({ feedback, outcomes, loading, reload, embedded = false }) => {
   const { user } = useAuth() || {};
   const { showToast } = useToast() || { showToast: () => {} };
 
@@ -220,6 +220,32 @@ export const HomeSignal = ({ feedback, outcomes, loading, reload }) => {
     cosignPending.length ? `${cosignPending.length} awaiting co-sign` : null,
   ].filter(Boolean).join(' · ');
 
+  const content = (
+    <>
+      <PendingCosignTray
+        rows={cosignPending}
+        currentUserId={user?.id}
+        onCosign={handleCosign}
+      />
+
+      <div className="signal-grid">
+        <div>
+          <div className="kicker" style={{ marginBottom: 8 }}>RECENT FEEDBACK · WHAT HUMANS CORRECTED</div>
+          {loading ? <div className="signal-empty">Loading…</div> : <FeedbackList rows={feedback} currentUserId={user?.id} onRevert={handleRevert} />}
+        </div>
+        <div>
+          <div className="kicker" style={{ marginBottom: 8 }}>REALISED OUTCOMES · WHAT REALITY CONFIRMED</div>
+          {loading ? <div className="signal-empty">Loading…</div> : <OutcomesList rows={outcomes} />}
+        </div>
+      </div>
+    </>
+  );
+
+  // Embedded as the Monitoring section's "Quality" tab — no section chrome.
+  if (embedded) {
+    return <div className="hm-tabpanel">{content}</div>;
+  }
+
   return (
     <section className="home-section">
       <div className="home-section-head">
@@ -241,26 +267,7 @@ export const HomeSignal = ({ feedback, outcomes, loading, reload }) => {
         </button>
       </div>
 
-      {open ? (
-        <>
-          <PendingCosignTray
-            rows={cosignPending}
-            currentUserId={user?.id}
-            onCosign={handleCosign}
-          />
-
-          <div className="signal-grid">
-            <div>
-              <div className="kicker" style={{ marginBottom: 8 }}>RECENT FEEDBACK · WHAT HUMANS CORRECTED</div>
-              {loading ? <div className="signal-empty">Loading…</div> : <FeedbackList rows={feedback} currentUserId={user?.id} onRevert={handleRevert} />}
-            </div>
-            <div>
-              <div className="kicker" style={{ marginBottom: 8 }}>REALISED OUTCOMES · WHAT REALITY CONFIRMED</div>
-              {loading ? <div className="signal-empty">Loading…</div> : <OutcomesList rows={outcomes} />}
-            </div>
-          </div>
-        </>
-      ) : null}
+      {open ? content : null}
     </section>
   );
 };

@@ -21,7 +21,7 @@ import { pathForPage } from '../../app/routing';
 
 const safeNumber = (v, fb = 0) => (Number.isFinite(Number(v)) ? Number(v) : fb);
 
-const HistoryTable = ({ rows, onSelect, onNavigate }) => (
+export const HistoryTable = ({ rows, onSelect, onNavigate }) => (
   <div className="rq-history">
     <div className="rq-history-head">
       <span>Decision</span>
@@ -239,7 +239,7 @@ const RoleRow = ({ role, expanded, onToggle }) => {
   );
 };
 
-const DecisionsByRole = ({ data }) => {
+export const DecisionsByRole = ({ data }) => {
   const [expandedId, setExpandedId] = useState(null);
   if (!data) return null;
   const roles = Array.isArray(data.roles) ? data.roles : [];
@@ -325,7 +325,7 @@ const DecisionsByRole = ({ data }) => {
   );
 };
 
-const AnalyticsDrillIns = ({ summary, breakdown }) => {
+export const AnalyticsDrillIns = ({ summary, breakdown }) => {
   const histogramData = useMemo(() => {
     const buckets = summary?.score_buckets;
     return Array.isArray(buckets) && buckets.length
@@ -355,7 +355,7 @@ const AnalyticsDrillIns = ({ summary, breakdown }) => {
     <>
     <div className="home-analytics-body">
       <div>
-        <div className="kicker" style={{ marginBottom: 8 }}>SCORE DISTRIBUTION · 30 DAYS</div>
+        <div className="kicker" style={{ marginBottom: 8 }}>SCORE DISTRIBUTION</div>
         <div style={{ height: 240 }}>
           <ResponsiveContainer>
             <BarChart data={histogramData}>
@@ -376,7 +376,7 @@ const AnalyticsDrillIns = ({ summary, breakdown }) => {
         </div>
       </div>
       <div>
-        <div className="kicker" style={{ marginBottom: 8 }}>FUNNEL · 30 DAYS</div>
+        <div className="kicker" style={{ marginBottom: 8 }}>FUNNEL · CURRENT PIPELINE</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {funnel.map((stage) => (
             <div key={stage.label} style={{ display: 'grid', gridTemplateColumns: '110px 1fr auto', alignItems: 'center', gap: 12 }}>

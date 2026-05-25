@@ -44,8 +44,10 @@ const fmtDay = (iso) => {
   });
 };
 
-export const HomeActivityTrends = ({ rolesBreakdown = [] }) => {
-  const [roleId, setRoleId] = useState('');
+// Controlled tab content for the Monitoring section's "Activity" lens. Role
+// and window are owned by the parent (HomeMonitoring); clicking a Workable-
+// error role chip bubbles up via onRoleChange.
+export const HomeActivityTrends = ({ roleId = '', days = 30, onRoleChange }) => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -54,7 +56,7 @@ export const HomeActivityTrends = ({ rolesBreakdown = [] }) => {
     let cancelled = false;
     setLoading(true);
     setError(false);
-    analyticsApi.activityTimeseries({ days: 30, ...(roleId ? { role_id: roleId } : {}) })
+    analyticsApi.activityTimeseries({ days, ...(roleId ? { role_id: roleId } : {}) })
       .then((res) => {
         if (cancelled) return;
         setData(res?.data || null);
@@ -66,7 +68,7 @@ export const HomeActivityTrends = ({ rolesBreakdown = [] }) => {
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [roleId]);
+  }, [roleId, days]);
 
   const chartData = useMemo(() => (
     (data?.series || []).map((d) => {
@@ -86,38 +88,17 @@ export const HomeActivityTrends = ({ rolesBreakdown = [] }) => {
   const tickInterval = chartData.length > 12 ? Math.floor(chartData.length / 6) : 0;
   const pending = data?.pending_now || { decisions: 0, questions: 0, total: 0 };
   const errors = data?.workable_errors || { total: 0, by_role: [] };
-  const roleOptions = Array.isArray(rolesBreakdown) ? rolesBreakdown : [];
 
   return (
-    <section className="home-section">
-      <div className="home-section-head">
-        <div>
-          <span className="kicker">REVIEW QUEUE · LAST 30 DAYS</span>
-          <h3 className="home-section-title">Decision &amp; backlog trend<em>.</em></h3>
-          <p className="home-section-sub">
-            How your review queue has moved: bars are daily decisions by type; the line is the pending backlog (the
-            same count as the Home tab badge — the live split is in the header).{' '}
-            <strong style={{ color: 'var(--ink-2)' }}>
-              Now {safeNumber(pending.total).toLocaleString()} awaiting review
-            </strong>{' '}
-            ({safeNumber(pending.decisions).toLocaleString()} decision{pending.decisions === 1 ? '' : 's'} ·{' '}
-            {safeNumber(pending.questions).toLocaleString()} question{pending.questions === 1 ? '' : 's'}).
-          </p>
-        </div>
-        <label className="ht-rolefilter">
-          <span className="kicker" style={{ marginBottom: 4, display: 'block' }}>Role</span>
-          <select
-            className="ht-select"
-            value={roleId}
-            onChange={(e) => setRoleId(e.target.value)}
-          >
-            <option value="">All roles</option>
-            {roleOptions.map((r) => (
-              <option key={r.role_id} value={r.role_id}>{r.name}</option>
-            ))}
-          </select>
-        </label>
-      </div>
+    <div className="hm-tabpanel">
+      <p className="hm-tab-caption">
+        Bars are daily decisions by type; the line is the pending backlog (the same count as the Home tab badge).{' '}
+        <strong style={{ color: 'var(--ink-2)' }}>
+          Now {safeNumber(pending.total).toLocaleString()} awaiting review
+        </strong>{' '}
+        ({safeNumber(pending.decisions).toLocaleString()} decision{pending.decisions === 1 ? '' : 's'} ·{' '}
+        {safeNumber(pending.questions).toLocaleString()} question{pending.questions === 1 ? '' : 's'}).
+      </p>
 
       {errors.total > 0 ? (
         <div className="ht-callout" role="alert">
@@ -136,7 +117,7 @@ export const HomeActivityTrends = ({ rolesBreakdown = [] }) => {
                 type="button"
                 className="ht-callout-chip"
                 title={r.example || 'Returned to queue after a Workable error'}
-                onClick={() => setRoleId(String(r.role_id))}
+                onClick={() => onRoleChange?.(String(r.role_id))}
               >
                 {r.role_name} <b>{safeNumber(r.count).toLocaleString()}</b>
               </button>
@@ -209,7 +190,7 @@ export const HomeActivityTrends = ({ rolesBreakdown = [] }) => {
           </ResponsiveContainer>
         </div>
       )}
-    </section>
+    </div>
   );
 };
 
