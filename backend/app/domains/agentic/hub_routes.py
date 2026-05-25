@@ -313,6 +313,12 @@ def roles_breakdown(
         .group_by(AgentDecision.role_id)
         .all()
     )
+    total_by_role = dict(
+        db.query(AgentDecision.role_id, func.count(AgentDecision.id))
+        .filter(AgentDecision.organization_id == current_user.organization_id)
+        .group_by(AgentDecision.role_id)
+        .all()
+    )
     spend_by_role = dict(
         db.query(UsageEvent.role_id, func.coalesce(func.sum(UsageEvent.credits_charged), 0))
         .filter(
@@ -360,6 +366,7 @@ def roles_breakdown(
                 pending=int(pending_by_role.get(rid, 0)),
                 today=int(today_by_role.get(rid, 0)),
                 week=int(week_by_role.get(rid, 0)),
+                decisions_total=int(total_by_role.get(rid, 0)),
                 budget_cents=int(spent_micro / 10_000),
                 cap_cents=int(role.monthly_usd_budget_cents or 0),
                 override_rate_pct=round(ovr_pct, 1),
