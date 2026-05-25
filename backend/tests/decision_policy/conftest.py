@@ -7,6 +7,8 @@ from sqlalchemy import event
 from app.decision_policy.bootstrap import bootstrap_org
 from app.models.decision_policy import DecisionPolicy
 from app.models.organization import Organization
+from app.models.policy_version import PolicyVersion
+from app.models.promotion_gate import GoldEvalExample
 from app.models.role import Role
 from app.models.rubric_revision import RubricRevision
 
@@ -15,9 +17,13 @@ from app.models.rubric_revision import RubricRevision
 # Several models in this suite use ``BigInteger`` primary keys; SQLite's
 # autoincrement only works on plain ``INTEGER`` columns, so we hand out
 # monotonically increasing ids per-table via a before_insert listener.
+# The ``target.id is None`` guard keeps this safe even if another test
+# module registers its own listener on the same model.
 _BIG_PK_COUNTERS: dict[str, int] = {
     "rubric_revisions": 0,
     "decision_policies": 0,
+    "policy_versions": 0,
+    "gold_eval_examples": 0,
 }
 
 
@@ -28,7 +34,7 @@ def _assign_big_pk(mapper, connection, target):  # pragma: no cover — SQLA hoo
         target.id = _BIG_PK_COUNTERS[table]
 
 
-for _model in (RubricRevision, DecisionPolicy):
+for _model in (RubricRevision, DecisionPolicy, PolicyVersion, GoldEvalExample):
     event.listen(_model, "before_insert", _assign_big_pk)
 
 
