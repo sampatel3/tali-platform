@@ -1,10 +1,10 @@
-// Home "Decisions & review queue" — a single quick-summary section for the
-// review queue. A "Pending now · by type" strip shows the current backlog
-// split (what's awaiting review right now); stacked bars show the decisions
-// the agent created each day by type; a line tracks the pending backlog (the
-// same count as the Home tab badge). A callout flags decisions that bounced
-// back into the queue after a Workable writeback failed. Everything here —
-// the strip, the chart, the callout — honours the role filter.
+// Home "Decision & backlog trend" — the detailed analytics view of the review
+// queue, parked at the bottom of the Hub with the other analytics. Stacked
+// bars show the decisions the agent created each day by type; a line tracks
+// the pending backlog (the same count as the Home tab badge). A callout flags
+// decisions that bounced back into the queue after a Workable writeback
+// failed. The at-a-glance "pending now · by type" split lives in the purple
+// header (HomePage); this section is role-filterable for the trend + errors.
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
@@ -83,17 +83,6 @@ export const HomeActivityTrends = ({ rolesBreakdown = [] }) => {
     [chartData],
   );
 
-  // "Pending now · by type" strip — the current backlog split, role-aware.
-  // Core buckets always show (so a 0 reads as "nothing of this kind queued");
-  // escalate only appears when there's something to escalate.
-  const pendingBuckets = useMemo(() => {
-    const counts = data?.pending_now?.by_type || {};
-    return TYPE_BUCKETS
-      .map((b) => ({ ...b, count: b.types.reduce((n, t) => n + safeNumber(counts[t]), 0) }))
-      .filter((b) => b.key !== 'escalate' || b.count > 0);
-  }, [data]);
-  const pendingTypeTotal = pendingBuckets.reduce((n, b) => n + safeNumber(b.count), 0);
-
   const tickInterval = chartData.length > 12 ? Math.floor(chartData.length / 6) : 0;
   const pending = data?.pending_now || { decisions: 0, questions: 0, total: 0 };
   const errors = data?.workable_errors || { total: 0, by_role: [] };
@@ -104,11 +93,10 @@ export const HomeActivityTrends = ({ rolesBreakdown = [] }) => {
       <div className="home-section-head">
         <div>
           <span className="kicker">REVIEW QUEUE · LAST 30 DAYS</span>
-          <h3 className="home-section-title">Decisions &amp; review queue<em>.</em></h3>
+          <h3 className="home-section-title">Decision &amp; backlog trend<em>.</em></h3>
           <p className="home-section-sub">
-            A quick read on your review queue — what&rsquo;s pending right now by type, plus how the backlog has
-            moved. Bars are daily decisions by type; the line is the pending backlog (the same count as the Home
-            tab badge).{' '}
+            How your review queue has moved: bars are daily decisions by type; the line is the pending backlog (the
+            same count as the Home tab badge — the live split is in the header).{' '}
             <strong style={{ color: 'var(--ink-2)' }}>
               Now {safeNumber(pending.total).toLocaleString()} awaiting review
             </strong>{' '}
@@ -129,25 +117,6 @@ export const HomeActivityTrends = ({ rolesBreakdown = [] }) => {
             ))}
           </select>
         </label>
-      </div>
-
-      <div className="ht-pending">
-        <span className="kicker ht-pending-label">Pending now · by type</span>
-        {loading ? (
-          <span className="ht-pending-empty">Loading…</span>
-        ) : pendingTypeTotal === 0 ? (
-          <span className="ht-pending-empty">Queue is clear — no pending decisions.</span>
-        ) : (
-          <div className="ht-pending-items">
-            {pendingBuckets.map((b) => (
-              <div key={b.key} className="ht-pending-item">
-                <span className="ht-pending-dot" style={{ background: b.color }} aria-hidden="true" />
-                <span className="ht-pending-num">{safeNumber(b.count).toLocaleString()}</span>
-                <span className="ht-pending-cap">{b.label}</span>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
 
       {errors.total > 0 ? (

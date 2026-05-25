@@ -10239,6 +10239,41 @@ button.eng-badge-button:focus-visible {
 .agent-header-left .ah-pre { margin-bottom: 14px; }
 .agent-header-left .ah-post { margin-top: 14px; }
 
+/* Compact pending-by-type strip in the purple header (Home). Light text on
+   the slab; dot colours carry the decision-type vocabulary. */
+.ah-pending-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+}
+.ah-pending-strip-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+}
+.ah-pending-strip-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.78);
+  white-space: nowrap;
+}
+.ah-pending-strip-item b {
+  font-family: var(--font-display);
+  font-weight: 600;
+  color: #fff;
+}
+.ah-pending-strip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
 /* Candidate detail avatar block lives in the preTitle slot. */
 .ah-cand-pre {
   display: flex;
