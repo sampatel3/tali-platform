@@ -177,9 +177,9 @@ export const HomeActivityTrends = ({ rolesBreakdown = [] }) => {
       ) : null}
 
       {loading ? (
-        <div className="signal-empty" style={{ padding: 24, textAlign: 'center' }}>Loading activity…</div>
+        <div className="home-empty">Loading activity…</div>
       ) : error ? (
-        <div className="signal-empty" style={{ padding: 24, textAlign: 'center' }}>Couldn’t load activity.</div>
+        <div className="home-empty">Couldn’t load activity.</div>
       ) : (
         <div style={{ height: 300 }}>
           <ResponsiveContainer>

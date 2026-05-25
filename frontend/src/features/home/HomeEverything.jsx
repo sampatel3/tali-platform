@@ -295,7 +295,7 @@ const DecisionsByRole = ({ data }) => {
       </div>
 
       {roles.length === 0 ? (
-        <div className="signal-empty" style={{ padding: 20, textAlign: 'center' }}>No decisions recorded yet.</div>
+        <div className="home-empty">No decisions recorded yet.</div>
       ) : (
         <div className="hbr-table">
           <div className="hbr-scroll">
@@ -491,7 +491,7 @@ export const HomeEverything = ({ onSelect, onNavigate }) => {
       {sectionOpen ? (
         <>
           {loadingHistory
-            ? <div className="signal-empty" style={{ padding: 24, textAlign: 'center' }}>Loading history…</div>
+            ? <div className="home-empty">Loading history…</div>
             : <HistoryTable rows={historyRows} onSelect={onSelect} onNavigate={onNavigate} />}
 
           <div className="home-analytics-accordion">
@@ -506,7 +506,7 @@ export const HomeEverything = ({ onSelect, onNavigate }) => {
             </button>
             {analyticsOpen ? (
               loadingAnalytics
-                ? <div className="signal-empty" style={{ padding: 24, textAlign: 'center' }}>Loading analytics…</div>
+                ? <div className="home-empty">Loading analytics…</div>
                 : <AnalyticsDrillIns summary={analytics} breakdown={breakdown} />
             ) : null}
           </div>

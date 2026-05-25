@@ -428,7 +428,7 @@ const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze,
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 14 }}>
         <Avatar initials={initialsFrom(decision.candidate_name)} size={48} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <h2 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 600, letterSpacing: '-.02em', lineHeight: 1.2, color: 'var(--ink)' }}>
+          <h2 className="home-title-md" style={{ margin: 0, lineHeight: 1.2 }}>
             <a
               href={pathForPage('candidate-report', { candidateApplicationId: decision.application_id, fromHome: true })}
               target="_blank"
@@ -977,7 +977,8 @@ export const HomeNow = ({
                 </span>
                 <h3
                   id="rq-bulk-title"
-                  style={{ margin: '6px 0 2px', fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 600, letterSpacing: '-.02em', color: 'var(--ink)' }}
+                  className="home-title-md"
+                  style={{ margin: '6px 0 2px' }}
                 >
                   {`Approve ${bulkConfirm.count} ${bulkConfirm.typeLabel}${bulkConfirm.count === 1 ? '' : 's'} on ${bulkConfirm.roleScope}?`}
                 </h3>
