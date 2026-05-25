@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from .schemas import RequirementInput
 
 
-PRE_SCREEN_PROMPT_VERSION = "cv_pre_screen_v2.2"
+PRE_SCREEN_PROMPT_VERSION = "cv_pre_screen_v2.3"
 
 
 # ── Prompt caching layout ─────────────────────────────────────────────────────
@@ -53,6 +53,7 @@ Score meaning:
 Rules:
 - Be PERMISSIVE. When uncertain, score 70 and let full scoring decide.
 - Score below 30 ONLY for obvious mismatches (e.g. a marketing CV for a software engineer role) or unambiguous hard-constraint violations clearly stated by the candidate (e.g. salary expectation above the role's cap, location/relocation refusal, missing work authorisation, notice period far beyond the role's window).
+- Salary tolerance: apply a 25% negotiation buffer to any stated salary cap — only treat salary as a disqualifying violation when the candidate's stated monthly expectation exceeds the cap × 1.25 (e.g. cap 40,000 AED → only filter above 50,000). Read a bare figure as monthly AED, convert annual figures to monthly, and judge a range by its lower bound.
 - Hard-constraint evidence may live OUTSIDE the CV — in WORKABLE_QUESTIONNAIRE_ANSWERS (filled by the candidate at apply time, including LinkedIn applies), WORKABLE_RECRUITER_COMMENTS, or WORKABLE_ACTIVITY_LOG. Use all of those alongside the CV when judging must-haves and constraints. The candidate's own answers and recruiter notes carry the same weight as the CV.
 - Base the score on must-have requirements only, ignoring nice-to-haves.
 - Set `unverified_extraordinary_claim` to true ONLY when the candidate's apparent qualification leans on an extraordinary, externally-unverifiable claim (winning a named hackathon/competition, an award, a publication) that the CV does not corroborate with surrounding context. This is a FLAG only — keep scoring on must-haves and do NOT tank the score for it. Default false.
