@@ -336,6 +336,26 @@ def run(
     decision.resolution_note = note
     decision.human_disposition = "approved"
 
+    # Realised-outcome learning. The pipeline transition fired by the action
+    # dispatch above already ran the outcome_learning hooks, but at that point
+    # this decision was still ``processing`` — so the hooks' approved-decision
+    # lookup found nothing. Now that it's stamped ``approved`` we record the
+    # outcome against it directly. Best-effort: calibration bookkeeping must
+    # never block an approval.
+    if app is not None:
+        try:
+            from ..agent_runtime import outcome_learning
+
+            outcome_learning.record_outcome_for_approved_decision(
+                db, decision=decision, application=app,
+            )
+        except Exception:
+            import logging
+
+            logging.getLogger("taali.actions.approve_decision").exception(
+                "realised-outcome recording failed (decision_id=%s)", decision.id,
+            )
+
     # Best-effort side effects (Workable writeback + recruiter-action graph
     # episode). By default they run inline (agent runs, tests). When the
     # caller passes ``collect_side_effects`` — the approve / bulk-approve

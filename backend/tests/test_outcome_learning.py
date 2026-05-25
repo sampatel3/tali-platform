@@ -24,6 +24,8 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import event
 
+from app.actions import approve_decision
+from app.actions.types import ACTOR_RECRUITER, Actor
 from app.agent_runtime import calibration as calibration_mod
 from app.agent_runtime import outcome_learning
 from app.domains.assessments_runtime.pipeline_service import (
@@ -35,6 +37,7 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.user import User
 
 
 # Standard SQLite BigInteger PK workaround.
@@ -292,6 +295,160 @@ def test_outcome_transition_to_withdrawn_does_not_record(db):
     db.refresh(role)
     outcomes = (role.agent_calibration or {}).get("outcomes") or []
     assert outcomes == []
+
+
+# ---------------------------------------------------------------------------
+# Through the approve action (regression for the ordering bug)
+#
+# The transition tests above pre-seed an *already-approved* decision, so they
+# never exercise the real approve flow — where the pipeline transition fires
+# BEFORE the decision is stamped approved, so the in-transition hook's
+# approved-decision lookup finds nothing. approve_decision.run must record the
+# outcome itself after stamping approved.
+# ---------------------------------------------------------------------------
+
+
+def _recruiter(db, org: Organization) -> Actor:
+    user = User(
+        email=f"rec-{id(object())}@x.test",
+        hashed_password="x",
+        full_name="Rec",
+        organization_id=org.id,
+        is_active=True,
+        is_verified=True,
+        is_superuser=False,
+    )
+    db.add(user)
+    db.flush()
+    return Actor(type=ACTOR_RECRUITER, user_id=int(user.id))
+
+
+def _pending_decision(
+    db,
+    *,
+    org: Organization,
+    role: Role,
+    application: CandidateApplication,
+    decision_type: str,
+) -> AgentDecision:
+    decision = AgentDecision(
+        organization_id=org.id,
+        role_id=role.id,
+        application_id=application.id,
+        agent_run_id=None,
+        decision_type=decision_type,
+        recommendation=decision_type,
+        status="processing",
+        reasoning="test reasoning",
+        confidence=0.85,
+        evidence={},
+        model_version="test-model",
+        prompt_version="test-prompt",
+        idempotency_key=f"approve-test:{application.id}:{decision_type}",
+    )
+    db.add(decision)
+    db.flush()
+    return decision
+
+
+def test_approve_advance_records_interviewed_outcome(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(db, org=org, role=role, stage="review")
+    decision = _pending_decision(
+        db, org=org, role=role, application=app, decision_type="advance_to_interview"
+    )
+    actor = _recruiter(db, org)
+
+    # collect_side_effects skips the inline Workable/graph side effects — we
+    # only care that the realised outcome is recorded.
+    approve_decision.run(
+        db,
+        actor,
+        organization_id=int(org.id),
+        decision_id=int(decision.id),
+        collect_side_effects={},
+    )
+    db.commit()
+
+    db.refresh(decision)
+    db.refresh(role)
+    assert decision.status == "approved"
+    outcomes = (role.agent_calibration or {}).get("outcomes") or []
+    assert len(outcomes) == 1
+    assert outcomes[0]["outcome"] == "interviewed"
+    assert outcomes[0]["decision_id"] == int(decision.id)
+
+
+def test_approve_reject_records_rejected_confirmed_outcome(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(db, org=org, role=role, stage="review")
+    decision = _pending_decision(
+        db, org=org, role=role, application=app, decision_type="skip_assessment_reject"
+    )
+    actor = _recruiter(db, org)
+
+    approve_decision.run(
+        db,
+        actor,
+        organization_id=int(org.id),
+        decision_id=int(decision.id),
+        collect_side_effects={},
+    )
+    db.commit()
+
+    db.refresh(decision)
+    db.refresh(role)
+    assert decision.status == "approved"
+    outcomes = (role.agent_calibration or {}).get("outcomes") or []
+    assert len(outcomes) == 1
+    assert outcomes[0]["outcome"] == "rejected_confirmed"
+    assert outcomes[0]["decision_type"] == "skip_assessment_reject"
+
+
+# ---------------------------------------------------------------------------
+# Backfill script
+# ---------------------------------------------------------------------------
+
+
+def test_backfill_records_and_is_idempotent(db):
+    from app.scripts import backfill_realised_outcomes as backfill
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    adv_app = _make_application(db, org=org, role=role, stage="advanced")
+    _approved_decision(
+        db, org=org, role=role, application=adv_app, decision_type="advance_to_interview"
+    )
+    rej_app = _make_application(
+        db, org=org, role=role, stage="applied", outcome="rejected"
+    )
+    _approved_decision(
+        db, org=org, role=role, application=rej_app, decision_type="skip_assessment_reject"
+    )
+    db.commit()
+
+    # Dry run writes nothing.
+    dry = backfill.backfill_realised_outcomes(db, apply=False)
+    assert dry["entries_added"] == 2
+    db.refresh(role)
+    assert (role.agent_calibration or {}).get("outcomes") in (None, [])
+
+    # Apply writes both outcomes.
+    out = backfill.backfill_realised_outcomes(db, apply=True)
+    assert out["entries_added"] == 2
+    assert out["by_outcome"] == {"interviewed": 1, "rejected_confirmed": 1}
+    db.refresh(role)
+    outcomes = (role.agent_calibration or {}).get("outcomes") or []
+    assert {o["outcome"] for o in outcomes} == {"interviewed", "rejected_confirmed"}
+
+    # Re-run is a no-op (dedup on decision_id + outcome).
+    again = backfill.backfill_realised_outcomes(db, apply=True)
+    assert again["entries_added"] == 0
+    assert again["skipped_existing"] == 2
+    db.refresh(role)
+    assert len((role.agent_calibration or {}).get("outcomes") or []) == 2
 
 
 # ---------------------------------------------------------------------------
