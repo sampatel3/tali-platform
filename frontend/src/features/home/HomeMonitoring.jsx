@@ -17,6 +17,7 @@ import { formatUsd } from './atoms';
 import { HomeActivityTrends } from './HomeActivityTrends';
 import { HomeSignal } from './HomeSignal';
 import { HomeRoles } from './HomeRoles';
+import { HomeExperiments } from './HomeExperiments';
 import { AnalyticsDrillIns, HistoryTable } from './HomeEverything';
 
 const WINDOWS = [
@@ -30,6 +31,7 @@ const TABS = [
   { key: 'activity', label: 'Activity' },
   { key: 'outcomes', label: 'Outcomes' },
   { key: 'quality', label: 'Quality' },
+  { key: 'experiments', label: 'A/B' },
   { key: 'history', label: 'History' },
 ];
 
@@ -231,6 +233,8 @@ export const HomeMonitoring = ({
               : <div className="hm-tabpanel"><AnalyticsDrillIns summary={summary} breakdown={breakdown} /></div>
           ) : tab === 'quality' ? (
             <HomeSignal embedded feedback={feedback} outcomes={outcomes} loading={loadingSignal} reload={reload} />
+          ) : tab === 'experiments' ? (
+            <HomeExperiments roleId={roleId} dateFrom={dateFrom} />
           ) : (
             loading
               ? <div className="home-empty">Loading…</div>

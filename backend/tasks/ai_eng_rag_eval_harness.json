@@ -1,0 +1,180 @@
+{
+  "task_id": "ai_eng_rag_eval_harness",
+  "name": "RAG Evaluation Harness Recovery",
+  "role": "ai_engineer",
+  "duration_minutes": 30,
+  "calibration_prompt": "You have 2 minutes. Ask Claude to help you define a precise, testable specification for a single RAG evaluation metric (for example recall@k or answer faithfulness). State the inputs, the exact formula or decision rule, and one worked example with the expected numeric output, so a reviewer could implement it without ambiguity.",
+  "scenario": "You joined Deeplight as a GenAI / AI Engineer and inherited the evaluation harness that gates our RAG support bot's releases.\n\n**Message from the ML Lead:**\n\n> Our RAG support bot shipped v1.4 last week with a green evaluation report — recall@k 1.00, faithfulness 1.00, gate PASSED. Then support started getting tickets: the bot cites the wrong knowledge-base articles and invented a \"2 business day refund\" SLA that exists nowhere in our KB.\n>\n> The harness is supposed to catch exactly this. Instead it greenlit a broken release. I think the metrics and the release gate are stubbed — they report success no matter what.\n>\n> The local reproduction strips the live retriever and LLM; retrieval results and answers are fixtures so the logic is deterministic. I don't want a new eval framework. I want THIS one to tell the truth.\n>\n> In 30 minutes, tell me:\n> 1. Why did the harness greenlight a broken release?\n> 2. Which metrics/gates can you make honest right now?\n> 3. Does the harness now correctly FAIL the bad fixture dataset?\n\n**Your mission:**\nMake the evaluation harness correctly measure retrieval quality and answer faithfulness, and make the release gate fail when the system is below threshold. You are assessed on evaluation judgment, correctness, and whether your fixes would actually have caught the v1.4 regression.",
+  "repo_structure": {
+    "name": "rag-eval-harness",
+    "files": {
+      ".gitignore": ".venv/\n.pytest_cache/\n__pycache__/\n",
+      "README.md": "# RAG Evaluation Harness\n\nA local reproduction of our retrieval-augmented-generation evaluation harness.\nThe harness is supposed to gate RAG releases: score retrieval quality, detect\nungrounded (hallucinated) answers, and FAIL the release when metrics fall below\nthreshold.\n\n## The problem\nThe harness currently greenlights everything. The last release report\n(`diagnostics/eval_report.md`) shows all-green even though the system it scored\nwas visibly retrieving the wrong documents and answering with unsupported\nclaims. The metrics and the gate are stubbed.\n\n## Local workflow\n1. Create a virtualenv\n2. Install `requirements.txt`\n3. Run `pytest -q --tb=short`\n\nNo API keys or network access are required — retrieval/answers are fixtures.\nTreat this as time-boxed: make the harness tell the truth, don't rebuild it.\n",
+      "EVAL_SPEC.md": "# Evaluation Spec\n\nThe harness scores each example and aggregates across the dataset.\n\n## Metrics\n- **recall@k** = |relevant ∩ retrieved[:k]| / |relevant|. Perfect retrieval is\n  1.0; missing every relevant doc is 0.0.\n- **precision@k** = |relevant ∩ retrieved[:k]| / k.\n- **faithfulness** (per example) = 1.0 if every answer claim is supported by the\n  retrieved context, else 0.0. A claim is \"supported\" if its text appears in the\n  context (case-insensitive).\n\n## Gate\n`eval_gate(metrics, thresholds)` must return `passed=False` and list the failing\nmetric names whenever any aggregate metric is below its threshold. Default\nthresholds: recall@k ≥ 0.7, faithfulness ≥ 0.9.\n\nA release is safe to ship ONLY when the gate passes on the eval dataset.\n",
+      "diagnostics/eval_report.md": "# Last Eval Report (suspicious)\n\nrelease: rag-support-bot v1.4\nrecall@k: 1.00  ✅\nfaithfulness: 1.00  ✅\ngate: PASSED ✅\n\nReviewer note: this is not believable. Spot-checks show the bot citing the wrong\nKB articles and inventing a \"2 business day\" refund SLA that appears nowhere in\nthe knowledge base. Either the metrics or the gate (or both) are lying.\n",
+      "harness/__init__.py": "",
+      "harness/metrics.py": "from __future__ import annotations\n\nfrom typing import Iterable, List, Set\n\n\ndef recall_at_k(retrieved_ids: List[str], relevant_ids: Set[str], k: int) -> float:\n    \"\"\"Fraction of relevant docs found in the top-k retrieved.\n\n    recall@k = |relevant ∩ retrieved[:k]| / |relevant|\n    \"\"\"\n    # BUG: always reports perfect recall regardless of what was retrieved.\n    return 1.0\n\n\ndef precision_at_k(retrieved_ids: List[str], relevant_ids: Set[str], k: int) -> float:\n    \"\"\"Fraction of the top-k retrieved docs that are relevant.\"\"\"\n    # BUG: always reports perfect precision.\n    return 1.0\n\n\ndef mean(values: Iterable[float]) -> float:\n    values = list(values)\n    return sum(values) / len(values) if values else 0.0\n",
+      "harness/faithfulness.py": "from __future__ import annotations\n\nfrom typing import List\n\n\ndef unsupported_claims(answer_claims: List[str], context: str) -> List[str]:\n    \"\"\"Return the answer claims NOT supported by the retrieved context.\n\n    A claim is supported if its text appears in the context (case-insensitive).\n    \"\"\"\n    # BUG: returns [] — ungrounded/hallucinated claims are never flagged.\n    return []\n\n\ndef faithfulness_score(answer_claims: List[str], context: str) -> float:\n    \"\"\"1.0 if every claim is supported by the context, else 0.0.\"\"\"\n    return 0.0 if unsupported_claims(answer_claims, context) else 1.0\n",
+      "harness/gate.py": "from __future__ import annotations\n\nfrom typing import Dict\n\n\ndef eval_gate(metrics: Dict[str, float], thresholds: Dict[str, float]) -> Dict[str, object]:\n    \"\"\"Fail the release if any metric is below its threshold.\n\n    Returns {\"passed\": bool, \"failures\": [metric names below threshold]}.\n    \"\"\"\n    # BUG: always passes — thresholds are ignored.\n    return {\"passed\": True, \"failures\": []}\n",
+      "harness/dataset.py": "from __future__ import annotations\n\n# Fixture eval set. q1 retrieves well and is grounded; q2 retrieves the wrong\n# docs AND answers with an unsupported claim — a correct harness must fail on it.\nSAMPLE_DATASET = [\n    {\n        \"id\": \"q1\",\n        \"retrieved_ids\": [\"kb_refund_policy\", \"kb_returns\", \"kb_shipping\"],\n        \"relevant_ids\": [\"kb_refund_policy\"],\n        \"k\": 3,\n        \"context\": \"Refunds are issued to the original payment method within 30 days of purchase.\",\n        \"answer_claims\": [\"Refunds are issued to the original payment method within 30 days of purchase.\"],\n    },\n    {\n        \"id\": \"q2\",\n        \"retrieved_ids\": [\"kb_shipping\", \"kb_careers\", \"kb_about\"],\n        \"relevant_ids\": [\"kb_refund_policy\"],\n        \"k\": 3,\n        \"context\": \"Standard shipping takes 5 to 7 business days.\",\n        \"answer_claims\": [\"Refunds take 2 business days.\"],\n    },\n]\n\nDEFAULT_THRESHOLDS = {\"recall_at_k\": 0.7, \"faithfulness\": 0.9}\n",
+      "harness/runner.py": "from __future__ import annotations\n\nfrom typing import Dict, List\n\nfrom harness.faithfulness import faithfulness_score\nfrom harness.gate import eval_gate\nfrom harness.metrics import mean, recall_at_k\n\n\ndef run_eval(dataset: List[dict], thresholds: Dict[str, float]) -> Dict[str, object]:\n    \"\"\"Score the dataset and run the release gate.\n\n    Returns {\"metrics\": {...}, \"gate\": {...}}.\n    \"\"\"\n    recalls = []\n    faiths = []\n    for ex in dataset:\n        recalls.append(recall_at_k(ex[\"retrieved_ids\"], set(ex[\"relevant_ids\"]), ex.get(\"k\", 3)))\n        faiths.append(faithfulness_score(ex[\"answer_claims\"], ex[\"context\"]))\n    metrics = {\"recall_at_k\": mean(recalls), \"faithfulness\": mean(faiths)}\n    gate = eval_gate(metrics, thresholds)\n    return {\"metrics\": metrics, \"gate\": gate}\n",
+      "tests/__init__.py": "",
+      "tests/test_metrics.py": "from harness.metrics import precision_at_k, recall_at_k\n\n\ndef test_recall_at_k_is_partial_when_some_relevant_missing():\n    # only kb_a is relevant and present in top-3 of two relevant docs -> 0.5\n    assert recall_at_k([\"kb_a\", \"kb_b\", \"kb_c\"], {\"kb_a\", \"kb_z\"}, 3) == 0.5\n\n\ndef test_recall_at_k_respects_k_cutoff():\n    # relevant doc sits at rank 2 but k=1 -> not found -> 0.0\n    assert recall_at_k([\"kb_x\", \"kb_a\"], {\"kb_a\"}, 1) == 0.0\n\n\ndef test_precision_at_k_counts_only_relevant_in_top_k():\n    assert abs(precision_at_k([\"kb_a\", \"kb_b\", \"kb_c\"], {\"kb_a\"}, 3) - (1.0 / 3.0)) < 1e-6\n",
+      "tests/test_faithfulness.py": "from harness.faithfulness import faithfulness_score, unsupported_claims\n\n\ndef test_unsupported_claims_flags_ungrounded_claim():\n    context = \"Refunds are issued to the original payment method within 30 days.\"\n    claims = [\n        \"Refunds are issued to the original payment method within 30 days.\",\n        \"Refunds take 2 business days.\",\n    ]\n    assert unsupported_claims(claims, context) == [\"Refunds take 2 business days.\"]\n\n\ndef test_faithfulness_score_zero_when_any_claim_unsupported():\n    context = \"Standard shipping takes 5 to 7 business days.\"\n    assert faithfulness_score([\"Refunds take 2 business days.\"], context) == 0.0\n",
+      "tests/test_gate.py": "from harness.gate import eval_gate\n\n\ndef test_gate_fails_when_metric_below_threshold():\n    result = eval_gate({\"recall_at_k\": 0.4, \"faithfulness\": 1.0}, {\"recall_at_k\": 0.7, \"faithfulness\": 0.9})\n    assert result[\"passed\"] is False\n    assert \"recall_at_k\" in result[\"failures\"]\n\n\ndef test_gate_passes_when_all_metrics_meet_threshold():\n    result = eval_gate({\"recall_at_k\": 0.8, \"faithfulness\": 0.95}, {\"recall_at_k\": 0.7, \"faithfulness\": 0.9})\n    assert result[\"passed\"] is True\n",
+      "tests/test_runner.py": "from harness.dataset import DEFAULT_THRESHOLDS, SAMPLE_DATASET\nfrom harness.runner import run_eval\n\n\ndef test_runner_fails_release_on_bad_dataset():\n    \"\"\"A truthful harness must FAIL the gate on the fixture dataset, which\n    contains a wrong-retrieval, ungrounded example.\"\"\"\n    report = run_eval(SAMPLE_DATASET, DEFAULT_THRESHOLDS)\n    assert report[\"gate\"][\"passed\"] is False\n",
+      "requirements.txt": "pytest>=8.0.0\n"
+    }
+  },
+  "evaluation_rubric": {
+    "system_risk_assessment": {
+      "weight": 0.22,
+      "criteria": {
+        "excellent": "Reads EVAL_SPEC.md and diagnostics/eval_report.md before coding. Correctly diagnoses that the harness greenlights unsafe releases because the metrics AND the gate are stubbed, and frames this as a release-safety risk, not a cosmetic bug.",
+        "good": "Identifies that the harness over-reports but misses one root cause (e.g. fixes metrics but not the gate, or vice versa).",
+        "poor": "Edits code without reading the spec; cannot explain why a broken release passed."
+      }
+    },
+    "retrieval_evaluation": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Implements recall@k and precision@k per the spec, respecting the k cutoff and relevant-set semantics. Matches the worked examples exactly.",
+        "good": "Implements recall@k correctly but precision@k is off or ignores k.",
+        "poor": "Leaves the retrieval metrics returning hardcoded 1.0."
+      }
+    },
+    "faithfulness_grounding": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Implements unsupported_claims so ungrounded answer claims are detected against the retrieved context, and faithfulness_score reflects them.",
+        "good": "Detects ungrounded claims but with a brittle rule that misses the fixture case.",
+        "poor": "Leaves unsupported_claims returning [] — hallucinations are never flagged."
+      }
+    },
+    "eval_gate_design": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Implements eval_gate so it fails and names the failing metrics whenever an aggregate is below threshold, and confirms run_eval now FAILS the bad fixture dataset.",
+        "good": "Gate fails on low metrics but does not surface which metric failed.",
+        "poor": "Gate still passes everything; the runner still greenlights the bad dataset."
+      }
+    },
+    "communication_clarity": {
+      "weight": 0.18,
+      "criteria": {
+        "excellent": "Writes an ML-Lead-facing summary: why v1.4 passed a broken release, what is now measured honestly, and what remains unmeasured (e.g. answer relevance, latency). Plain language plus specifics.",
+        "good": "Clear engineering summary but light on what is still unmeasured.",
+        "poor": "Cannot explain what was fixed or whether the regression would now be caught."
+      }
+    }
+  },
+  "expected_candidate_journey": {
+    "first_8_minutes": [
+      "Read EVAL_SPEC.md and diagnostics/eval_report.md before editing code.",
+      "Run pytest -q --tb=short and map each failing test to a stub: recall_at_k/precision_at_k, unsupported_claims, eval_gate.",
+      "Recognise the business risk: the harness greenlights unsafe RAG releases."
+    ],
+    "minutes_8_to_20": [
+      "Implement recall@k and precision@k per the spec with correct k handling.",
+      "Implement unsupported_claims so ungrounded answer claims are detected against the context.",
+      "Implement eval_gate to fail and list metrics below threshold.",
+      "Confirm run_eval now fails the bad fixture dataset."
+    ],
+    "minutes_20_to_28": [
+      "Re-run pytest --tb=short and verify the harness now fails the bad dataset.",
+      "Note what is still unmeasured (answer relevance, latency, cost) for follow-up."
+    ],
+    "final_2_minutes": [
+      "Write an ML-Lead-facing summary: why v1.4 slipped through, what is now honest, and what remains unmeasured."
+    ]
+  },
+  "interviewer_signals": {
+    "strong_positive": [
+      "Reads EVAL_SPEC.md and quotes the metric definitions before editing code.",
+      "Explains that BOTH the metrics and the gate were lying, not just one.",
+      "Verifies run_eval now FAILS the bad fixture dataset, not just unit tests.",
+      "Distinguishes retrieval quality (recall/precision) from answer faithfulness.",
+      "Names what is still unmeasured instead of declaring the harness complete."
+    ],
+    "red_flags": [
+      "Edits metrics without reading the spec and breaks the worked-example semantics.",
+      "Leaves the gate passing everything.",
+      "Treats faithfulness/hallucination detection as out of scope.",
+      "Claims success without re-running the dataset-level evaluation.",
+      "Rewrites the harness instead of making the existing one honest."
+    ]
+  },
+  "scoring_hints": {
+    "min_reading_time_seconds": 240
+  },
+  "test_runner": {
+    "command": "./.venv/bin/python -m pytest -q --tb=short",
+    "working_dir": "/workspace/rag-eval-harness",
+    "parse_pattern": "(?P<passed>\\d+)\\s+passed(?:,\\s+(?P<failed>\\d+)\\s+failed)?",
+    "timeout_seconds": 120
+  },
+  "workspace_bootstrap": {
+    "commands": [
+      "python3 -m venv .venv",
+      "./.venv/bin/python -m pip install --upgrade pip",
+      "./.venv/bin/python -m pip install -r requirements.txt"
+    ],
+    "working_dir": "/workspace/rag-eval-harness",
+    "timeout_seconds": 240,
+    "must_succeed": true
+  },
+  "role_alignment": {
+    "source_user_email": "sampatel@deeplight.ae",
+    "source_role_name": "GenAI / AI Engineer",
+    "source_role_identifier": "workable:genai-ai-engineer",
+    "captured_at": "2026-05-25T00:00:00Z",
+    "must_cover": [
+      "Build and maintain evaluation harnesses for RAG / LLM systems.",
+      "Measure retrieval quality (recall@k, precision@k) and answer faithfulness/grounding.",
+      "Design release gates that block unsafe model/system changes.",
+      "Reason about hallucination and grounding risk in production GenAI.",
+      "Communicate evaluation findings and remaining risk to ML stakeholders."
+    ],
+    "must_not_cover": [
+      "Training or fine-tuning foundation models",
+      "Vector-database infrastructure provisioning",
+      "Prompt-engineering the support bot itself",
+      "Live LLM/provider integration and key management"
+    ],
+    "jd_to_signal_map": [
+      {
+        "job_requirement": "Own the evaluation and release-safety process for production GenAI features.",
+        "task_artifact": "EVAL_SPEC.md + diagnostics/eval_report.md — a harness that greenlit a broken release",
+        "rubric_dimension": "system_risk_assessment"
+      },
+      {
+        "job_requirement": "Measure retrieval quality for RAG systems with standard IR metrics.",
+        "task_artifact": "harness/metrics.py — recall_at_k/precision_at_k stubs; tests/test_metrics.py",
+        "rubric_dimension": "retrieval_evaluation"
+      },
+      {
+        "job_requirement": "Detect hallucination / ungrounded answers against retrieved context.",
+        "task_artifact": "harness/faithfulness.py — unsupported_claims stub; tests/test_faithfulness.py",
+        "rubric_dimension": "faithfulness_grounding"
+      },
+      {
+        "job_requirement": "Build release gates that block changes failing evaluation thresholds.",
+        "task_artifact": "harness/gate.py + harness/runner.py — eval_gate stub; tests/test_gate.py and test_runner.py",
+        "rubric_dimension": "eval_gate_design"
+      },
+      {
+        "job_requirement": "Communicate evaluation results and residual risk to ML stakeholders.",
+        "task_artifact": "Required ML-Lead-facing written summary",
+        "rubric_dimension": "communication_clarity"
+      }
+    ]
+  },
+  "human_testing_checklist": {
+    "candidate_clarity": true,
+    "repo_boot_ok": true,
+    "tests_collect_ok": true,
+    "baseline_failures_meaningful": true,
+    "rubric_matches_role": true,
+    "timebox_realistic": true
+  }
+}
