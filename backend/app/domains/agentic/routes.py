@@ -369,7 +369,7 @@ def list_agent_decisions(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if status not in AGENT_DECISION_STATUSES and status != "all":
+    if status not in AGENT_DECISION_STATUSES and status not in ("all", "resolved"):
         raise HTTPException(status_code=422, detail=f"unsupported status={status!r}")
 
     query = (
@@ -388,6 +388,14 @@ def list_agent_decisions(
             # recruiter can't double-approve while the background batch runs.
             query = query.filter(
                 AgentDecision.status.in_(("pending", "processing"))
+            )
+        elif status == "resolved":
+            # History: the inverse of the queue — every decision that has
+            # left the recruiter's queue (approved / overridden / taught /
+            # discarded / expired). Excludes the live queue states
+            # (pending, processing) which are still actionable elsewhere.
+            query = query.filter(
+                AgentDecision.status.notin_(("pending", "processing"))
             )
         else:
             query = query.filter(AgentDecision.status == status)

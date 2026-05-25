@@ -375,17 +375,14 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
         <HomePlatformUpdates />
 
         <HomeEverything
-          rows={decisions}
           onNavigate={onNavigate}
           onSelect={(id) => {
             setSelectedId(id);
-            // Force a status reset to 'all' if the row is non-pending so
-            // it shows up in the activity feed of the NOW section.
+            // History rows are always resolved (non-pending). If the NOW
+            // feed is on its default pending view, widen it to 'all' so the
+            // selected row is visible there after we scroll up.
             if (filters.status === 'pending') {
-              const row = decisions.find((d) => d.id === id);
-              if (row && row.status !== 'pending') {
-                setFilters((f) => ({ ...f, status: 'all' }));
-              }
+              setFilters((f) => ({ ...f, status: 'all' }));
             }
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}

@@ -15,7 +15,7 @@ import {
   YAxis,
 } from 'recharts';
 
-import { analytics as analyticsApi } from '../../shared/api';
+import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
 import { formatRelativeAge, FeedbackPill, TypeBadge } from './atoms';
 import { pathForPage } from '../../app/routing';
 
@@ -33,7 +33,7 @@ const HistoryTable = ({ rows, onSelect, onNavigate }) => (
     </div>
     {rows.length === 0 ? (
       <div className="home-empty" style={{ borderRadius: 0, border: 0 }}>
-        Nothing matches the current filters.
+        No actioned decisions yet — approved, overridden, and taught decisions will land here.
       </div>
     ) : (
       rows.map((row) => (
@@ -411,12 +411,36 @@ const AnalyticsDrillIns = ({ summary, breakdown }) => {
   );
 };
 
-export const HomeEverything = ({ rows, onSelect, onNavigate }) => {
+export const HomeEverything = ({ onSelect, onNavigate }) => {
   const [sectionOpen, setSectionOpen] = useState(false);
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [analytics, setAnalytics] = useState(null);
   const [breakdown, setBreakdown] = useState(null);
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
+  // History is the inverse of the live queue: only decisions that have
+  // already been actioned (approved / overridden / taught / discarded /
+  // expired). Pending/processing rows live in the review queue above, so
+  // they're deliberately excluded here — history is "things you can't see
+  // anymore". Self-fetched (status=resolved) rather than reusing the
+  // queue's pending list.
+  const [historyRows, setHistoryRows] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingHistory(true);
+    agentApi.listDecisions({ status: 'resolved', limit: 100 })
+      .then((res) => {
+        if (!cancelled) setHistoryRows(Array.isArray(res?.data) ? res.data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setHistoryRows([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingHistory(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (!analyticsOpen) return undefined;
@@ -450,7 +474,7 @@ export const HomeEverything = ({ rows, onSelect, onNavigate }) => {
           <span className="kicker">EVERYTHING · FULL TRACKING</span>
           <h3 className="home-section-title">History &amp; analytics<em>.</em></h3>
           <p className="home-section-sub">
-            Every decision the agent has made, who reviewed it, what they did. The score histogram and funnel live in the panel below — they used to be on /reporting.
+            Decisions the agent made that have already been actioned — approved, overridden, or taught by you (and auto-applied ones). Anything still awaiting you lives in the review queue above, not here. The score histogram and funnel live in the panel below.
           </p>
         </div>
         <button
@@ -459,14 +483,16 @@ export const HomeEverything = ({ rows, onSelect, onNavigate }) => {
           onClick={() => setSectionOpen((v) => !v)}
           aria-expanded={sectionOpen}
         >
-          <span>{sectionOpen ? 'Hide' : 'Show'} history ({rows.length})</span>
+          <span>{sectionOpen ? 'Hide' : 'Show'} history ({historyRows.length})</span>
           {sectionOpen ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
         </button>
       </div>
 
       {sectionOpen ? (
         <>
-          <HistoryTable rows={rows} onSelect={onSelect} onNavigate={onNavigate} />
+          {loadingHistory
+            ? <div className="signal-empty" style={{ padding: 24, textAlign: 'center' }}>Loading history…</div>
+            : <HistoryTable rows={historyRows} onSelect={onSelect} onNavigate={onNavigate} />}
 
           <div className="home-analytics-accordion">
             <button
