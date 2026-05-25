@@ -480,13 +480,17 @@ def run(
 
 
 def _emit_decision_episode_safe(db: Session, *, decision: AgentDecision) -> None:
-    """Best-effort consolidated decision episode emit. Never raises.
+    """Durably enqueue the consolidated decision episode. Never raises.
 
     Looks up candidate + role context inline so the orchestrator caller
-    doesn't have to thread them through.
+    doesn't have to thread them through, then writes a
+    ``graph_episode_outbox`` row in the caller's transaction instead of
+    dispatching to Graphiti inline. A Celery drain task ships it with
+    retry, so a graph outage no longer silently drops the episode. See
+    candidate_graph.episode_outbox.
     """
     try:
-        from ..candidate_graph import agent_episodes
+        from ..candidate_graph import episode_outbox
         from ..models.candidate import Candidate
         from ..models.candidate_application import CandidateApplication
 
@@ -508,7 +512,8 @@ def _emit_decision_episode_safe(db: Session, *, decision: AgentDecision) -> None
         # falls back to weaker Postgres labels.
         from ..decision_policy.nightly_policy_fit import _features_for_decision
 
-        agent_episodes.emit_decision_event(
+        episode_outbox.enqueue_decision(
+            db,
             organization_id=int(decision.organization_id),
             candidate_full_name=full_name,
             candidate_taali_id=candidate_id,

@@ -79,6 +79,11 @@ from .calibration_tasks import (
 # enqueue it after commit; without this import the worker NotRegistered's it
 # and the Workable writeback + graph episode silently never run.
 from .decision_tasks import apply_decision_side_effects
+# Eager-import graph_outbox_tasks so the worker registers the durable
+# episode-outbox drain. The beat schedule references this task name; without
+# the import the worker NotRegistered's it and the irreplaceable realised-
+# outcome episodes never reach Graphiti. Same trap as the imports above.
+from .graph_outbox_tasks import drain_graph_episode_outbox
 
 __all__ = [
     "celery_app",
@@ -111,4 +116,5 @@ __all__ = [
     "sample_prescreen_for_calibration",
     "recalibrate_cv_match",
     "apply_decision_side_effects",
+    "drain_graph_episode_outbox",
 ]

@@ -166,6 +166,16 @@ celery_app.conf.update(
             "task": "app.tasks.calibration_tasks.sample_prescreen_for_calibration",
             "schedule": crontab(hour=2, minute=30, day_of_week=0),
         },
+        # Drain the durable Graphiti episode outbox. Realised-outcome (and
+        # decision) episodes are written to graph_episode_outbox in the
+        # producer's transaction so a graph outage can't drop the
+        # irreplaceable signal; this ships pending rows to Graphiti with
+        # retry. Every 5 min keeps the graph fresh while a backlog from an
+        # outage drains quickly once Graphiti recovers.
+        "drain-graph-episode-outbox-every-5-minutes": {
+            "task": "app.tasks.graph_outbox_tasks.drain_graph_episode_outbox",
+            "schedule": 300.0,
+        },
     },
 )
 

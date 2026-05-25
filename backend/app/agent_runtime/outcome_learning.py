@@ -95,14 +95,20 @@ def _append_outcome(
     }
     calibration_mod.save(db, role=role, updates={"outcomes": [entry]})
 
-    # Phase 2 §6.7: emit a HiringOutcome episode (irreplaceable training
-    # signal, low volume — one per realised outcome).
-    _emit_outcome_episode_safe(
+    # Phase 2 §6.7: durably enqueue a HiringOutcome episode. This is the
+    # irreplaceable training signal (one per realised outcome) — what
+    # actually happened to a candidate after an approved decision, which
+    # cannot be re-derived months later. The old path emitted to Graphiti
+    # fire-and-forget, so a graph outage silently dropped it. Now we write
+    # to a local outbox in THIS transaction (no graph call here, so it
+    # lands even when Graphiti is down/unconfigured) and a Celery drain
+    # task ships it to Graphiti with retry. See candidate_graph.episode_outbox.
+    _enqueue_outcome_episode(
         db, decision=decision, application_id=application_id, outcome=outcome, observed_at=now,
     )
 
 
-def _emit_outcome_episode_safe(
+def _enqueue_outcome_episode(
     db: Session,
     *,
     decision: AgentDecision,
@@ -110,51 +116,50 @@ def _emit_outcome_episode_safe(
     outcome: str,
     observed_at: datetime,
 ) -> None:
-    """Best-effort HiringOutcome episode emit. Never raises.
+    """Enqueue a HiringOutcome episode into the durable graph outbox.
 
     Maps the v1 outcome vocabulary
     (``hired`` / ``interviewed`` / ``rejected_confirmed``) to the v2
     outcome_type values defined in
-    ``app.agent_runtime.contracts.HiringOutcome``.
+    ``app.agent_runtime.contracts.HiringOutcome``, then writes a
+    ``graph_episode_outbox`` row. Does NOT contact Graphiti — the drain
+    task does — so the signal survives a graph outage. Participates in the
+    caller's transaction (the calibration write and this enqueue commit or
+    roll back together); callers wrap it best-effort.
     """
-    try:
-        from ..candidate_graph import agent_episodes
-        from ..models.candidate import Candidate
-        outcome_type_map = {
-            "hired": "hired",
-            "interviewed": "reached_interview",
-            "rejected_confirmed": "rejected_late",
-        }
-        outcome_type = outcome_type_map.get(outcome, outcome)
-        app = (
-            db.query(CandidateApplication)
-            .filter(CandidateApplication.id == application_id)
-            .one_or_none()
-        )
-        if app is None:
-            return
-        candidate = (
-            db.query(Candidate).filter(Candidate.id == app.candidate_id).one_or_none()
-        )
-        full_name = candidate.full_name if candidate is not None else None
-        candidate_id = (
-            int(candidate.id) if candidate is not None else int(app.candidate_id)
-        )
-        agent_episodes.emit_hiring_outcome_event(
-            organization_id=int(decision.organization_id),
-            candidate_full_name=full_name,
-            candidate_taali_id=candidate_id,
-            decision_id=int(decision.id),
-            outcome_type=outcome_type,
-            quality_signal=None,
-            observed_at=observed_at,
-        )
-    except Exception:
-        logger.warning(
-            "outcome episode emit failed for decision_id=%s outcome=%s",
-            getattr(decision, "id", None),
-            outcome,
-        )
+    from ..candidate_graph import episode_outbox
+    from ..models.candidate import Candidate
+
+    outcome_type_map = {
+        "hired": "hired",
+        "interviewed": "reached_interview",
+        "rejected_confirmed": "rejected_late",
+    }
+    outcome_type = outcome_type_map.get(outcome, outcome)
+    app = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.id == application_id)
+        .one_or_none()
+    )
+    if app is None:
+        return
+    candidate = (
+        db.query(Candidate).filter(Candidate.id == app.candidate_id).one_or_none()
+    )
+    full_name = candidate.full_name if candidate is not None else None
+    candidate_id = (
+        int(candidate.id) if candidate is not None else int(app.candidate_id)
+    )
+    episode_outbox.enqueue_hiring_outcome(
+        db,
+        organization_id=int(decision.organization_id),
+        candidate_full_name=full_name,
+        candidate_taali_id=candidate_id,
+        decision_id=int(decision.id),
+        outcome_type=outcome_type,
+        quality_signal=None,
+        observed_at=observed_at,
+    )
 
 
 def record_advance_outcome_on_stage(
