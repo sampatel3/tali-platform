@@ -11,16 +11,19 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Sequence
 
 from sqlalchemy.orm import Session
 
 from ..models.decision_policy import DecisionPolicy
 from ..models.organization import Organization
+from ..models.policy_version import PolicyVersion
 from ..models.rubric_revision import RubricRevision
 from ..models.role import Role
+from .bias_audit import AuditExample
 from .engine import load_active_policy
 from .feedback_aggregator import aggregate_signals
+from .promotion_gate import evaluate_auto_apply
 from .retuner import HeuristicRetuner, RetuneProposal, Retuner
 from .schema import PolicyJson
 
@@ -36,6 +39,10 @@ class NightlyResult:
     revision_id: int | None
     policy_id: int | None
     activated: bool
+    # When auto-apply was requested but the safety gate withheld
+    # activation, this records why (bias-audit / gold-set failure, or a
+    # cold-start vacuum). None when not applicable.
+    gate_blocked_reason: str | None = None
 
 
 def _resolve_min_signals(org: Organization) -> int | None:
@@ -54,6 +61,32 @@ def _auto_apply_enabled(org: Organization) -> bool:
         org.workspace_settings if isinstance(org.workspace_settings, dict) else None
     )
     return bool((settings or {}).get("decision_policy_auto_apply", False))
+
+
+def _latest_fitted_policy_version(
+    db: Session, *, organization_id: int, role_id: int | None, statuses: tuple[str, ...]
+) -> PolicyVersion | None:
+    """Most recent fitted ``PolicyVersion`` for (org, role) in ``statuses``.
+
+    The auto-apply gate judges the org's *current learned signal* via the
+    nightly fitter's output. ``candidate``/``shadow`` rows are the model
+    we'd audit; ``live`` is the baseline to compare gold-set log-loss
+    against.
+    """
+    return (
+        db.query(PolicyVersion)
+        .filter(
+            PolicyVersion.organization_id == organization_id,
+            (
+                PolicyVersion.role_id == role_id
+                if role_id is not None
+                else PolicyVersion.role_id.is_(None)
+            ),
+            PolicyVersion.status.in_(statuses),
+        )
+        .order_by(PolicyVersion.trained_at.desc())
+        .first()
+    )
 
 
 def _had_recent_run(db: Session, *, organization_id: int) -> bool:
@@ -79,7 +112,18 @@ def run_for_org(
     *,
     organization_id: int,
     retuner: Retuner | None = None,
+    audit_examples: Sequence[AuditExample] | None = None,
 ) -> NightlyResult:
+    """Run the nightly retune for one org.
+
+    ``audit_examples`` is the protected-attribute holdout the bias audit
+    runs against when auto-apply is enabled. Protected attributes are
+    deliberately kept out of production data (see
+    ``graph_writeback.sensitivity``), so this is a *curated compliance
+    set* supplied by the caller rather than something we can derive from
+    the warehouse. When it's absent the auto-apply gate fails closed
+    (cold start) and the proposal is written inactive for human review.
+    """
     org = (
         db.query(Organization)
         .filter(Organization.id == organization_id)
@@ -155,8 +199,43 @@ def run_for_org(
     db.add(revision)
     db.flush()
 
-    auto_apply = _auto_apply_enabled(org)
-    activated_at = datetime.now(timezone.utc) if auto_apply else None
+    # Auto-apply removes the human approval click — but NOT the safety
+    # checks. Before flipping a proposal live we run the promotion gate's
+    # synchronous checks (non-bypassable bias audit + gold-set log-loss)
+    # against the org's latest fitted candidate. A failing or cold-start
+    # gate leaves the proposal inactive, identical to the default path.
+    activate = False
+    gate_blocked_reason: str | None = None
+    if _auto_apply_enabled(org):
+        candidate_pv = _latest_fitted_policy_version(
+            db,
+            organization_id=organization_id,
+            role_id=None,
+            statuses=("candidate", "shadow"),
+        )
+        live_pv = _latest_fitted_policy_version(
+            db,
+            organization_id=organization_id,
+            role_id=None,
+            statuses=("live",),
+        )
+        gate = evaluate_auto_apply(
+            db,
+            candidate=candidate_pv,
+            live=live_pv,
+            audit_examples=audit_examples or [],
+        )
+        activate = gate.passed
+        if not gate.passed:
+            detail = "; ".join(gate.reasons) or "blocked"
+            prefix = "cold start: " if gate.cold_start else ""
+            gate_blocked_reason = f"auto-apply gate withheld activation ({prefix}{detail})"
+            logger.info(
+                "org=%s auto-apply gate withheld activation: cold_start=%s reasons=%s",
+                organization_id, gate.cold_start, gate.reasons,
+            )
+
+    activated_at = datetime.now(timezone.utc) if activate else None
     new_policy = DecisionPolicy(
         organization_id=organization_id,
         role_id=None,
@@ -168,7 +247,7 @@ def run_for_org(
     db.add(new_policy)
     db.flush()
 
-    if auto_apply:
+    if activate:
         # Deactivate the prior policy in the same transaction.
         policy_row.deactivated_at = datetime.now(timezone.utc)
         db.add(policy_row)
@@ -180,7 +259,8 @@ def run_for_org(
         proposal=proposal,
         revision_id=int(revision.id),
         policy_id=int(new_policy.id),
-        activated=auto_apply,
+        activated=activate,
+        gate_blocked_reason=gate_blocked_reason,
     )
 
 

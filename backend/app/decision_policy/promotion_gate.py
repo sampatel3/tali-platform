@@ -27,6 +27,7 @@ from ..models.promotion_gate import (
 from .bias_audit import (
     AuditExample,
     BiasThresholds,
+    audit,
     load_thresholds,
     write_audit_result,
 )
@@ -51,6 +52,24 @@ class GateResult:
     gold_passed: bool = False
     bias_passed: bool = False
     shadow_passed: bool = False
+
+
+@dataclass
+class AutoApplyGateResult:
+    """Outcome of the synchronous auto-apply safety gate.
+
+    ``passed`` is the only thing the caller must honour: auto-apply may
+    flip the policy live iff ``passed`` is True. ``cold_start`` flags the
+    "no data to judge yet" case (no fitted candidate, no gold set, or no
+    audit holdout) so the caller can record it distinctly from an actual
+    safety failure — both block, but for different reasons.
+    """
+
+    passed: bool
+    cold_start: bool
+    reasons: list[str]
+    gold_passed: bool = False
+    bias_passed: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -225,10 +244,93 @@ def run_gate(
     return result
 
 
+def evaluate_auto_apply(
+    db: Session,
+    *,
+    candidate: PolicyVersion | None,
+    live: PolicyVersion | None,
+    audit_examples: Sequence[AuditExample],
+    thresholds: BiasThresholds | None = None,
+    require_gold: bool = True,
+) -> AutoApplyGateResult:
+    """Synchronous safety gate for the *auto-apply* retune path.
+
+    Auto-apply removes the human approval click, not the safety checks.
+    Unlike :func:`run_gate` this:
+
+    - does NOT require a concluded shadow run (there isn't one at
+      proposal time — shadow mode is a multi-day process), and
+    - does NOT mutate any ``PolicyVersion.status`` (the fitted-model
+      lifecycle is owned by the real promotion flow; here we only read
+      the candidate to judge whether shipping a learned change is safe).
+
+    It runs the two checks that *can* be evaluated synchronously against
+    the org's latest fitted candidate model:
+
+    1. Bias audit — **non-bypassable**. An empty audit holdout yields a
+       blocker violation, so it fails closed.
+    2. Gold-set log-loss check — enforced when ``require_gold`` (default).
+
+    Cold start: when there is no fitted candidate model, no gold set, or
+    no audit holdout, the gate refuses (``passed=False``,
+    ``cold_start=True``). Auto-apply must never activate into a vacuum —
+    the caller falls back to writing an inactive proposal for human
+    review, exactly like the non-auto-apply path.
+    """
+    if candidate is None:
+        return AutoApplyGateResult(
+            passed=False,
+            cold_start=True,
+            reasons=["no_fitted_candidate_model"],
+        )
+
+    thr = thresholds or load_thresholds()
+    candidate_model = FittedModel.from_dict(candidate.model_json or {})
+    live_model = (
+        FittedModel.from_dict(live.model_json or {}) if live is not None else None
+    )
+
+    reasons: list[str] = []
+
+    # 1. Bias audit (non-bypassable). ``audit`` returns a blocker
+    # violation for an empty example set, so this fails closed.
+    _, violations = audit(
+        model=candidate_model, examples=audit_examples, thresholds=thr
+    )
+    bias_passed = not violations
+    if not bias_passed:
+        reasons.append(f"bias_audit_failed: {len(violations)} violation(s)")
+
+    # 2. Gold-set log-loss check.
+    gold_passed, gold_metrics = evaluate_gold_set(
+        db,
+        candidate=candidate_model,
+        live=live_model,
+        organization_id=int(candidate.organization_id),
+        role_id=int(candidate.role_id) if candidate.role_id else None,
+    )
+    if require_gold and not gold_passed:
+        reasons.append(f"gold_eval_failed: {gold_metrics}")
+
+    cold_start = (not audit_examples) or (
+        require_gold and gold_metrics.get("reason") == "no_gold_eval_examples"
+    )
+    passed = bias_passed and (gold_passed or not require_gold)
+    return AutoApplyGateResult(
+        passed=passed,
+        cold_start=cold_start,
+        reasons=reasons,
+        gold_passed=gold_passed,
+        bias_passed=bias_passed,
+    )
+
+
 __all__ = [
+    "AutoApplyGateResult",
     "GateResult",
     "GOLD_EVAL_LOG_LOSS_TOLERANCE",
     "SHADOW_DISAGREEMENT_CEILING",
+    "evaluate_auto_apply",
     "evaluate_gold_set",
     "run_gate",
 ]
