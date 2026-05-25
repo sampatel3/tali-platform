@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
+from collections import deque
 from typing import Any
 from urllib.parse import parse_qsl, urlparse
 
@@ -12,17 +14,91 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Workable: 10 requests per 10 seconds (https://workable.readme.io/reference/rate-limits)
-# Use 0.3s to allow ~3 req/sec while staying under limit for bursts
-WORKABLE_THROTTLE_SEC = 0.3
-WORKABLE_429_RETRY_AFTER_SEC = 11
+# Workable rate-limits per OAuth token at 10 requests / 10 seconds
+# (https://workable.readme.io/reference/rate-limits). Every outbound call is
+# paced through a shared sliding-window limiter (see _WorkableRateLimiter) keyed
+# by subdomain, kept one slot under the cap for headroom.
+WORKABLE_RATE_WINDOW_SEC = 10.0
+WORKABLE_RATE_MAX_REQUESTS = 9
 WORKABLE_JOBS_LIMIT = 100
+
+# 429 backoff: honor the server's Retry-After header when present, else
+# exponential backoff. Bounded so a wedged token can't hang a sync forever.
+WORKABLE_MAX_ATTEMPTS = 4
+WORKABLE_BACKOFF_BASE_SEC = 2.0
+WORKABLE_BACKOFF_CAP_SEC = 30.0
 
 _NUMERIC_RE = re.compile(r"^-?\d+(\.\d+)?$")
 
 
 class WorkableRateLimitError(RuntimeError):
     """Raised when Workable returns HTTP 429."""
+
+
+class _WorkableRateLimiter:
+    """Process-global sliding-window limiter, one instance per Workable token.
+
+    A single org sync fans out across a prefetch thread-pool, so blind per-call
+    sleeps let several threads burst past Workable's 10 req/10s limit and trip
+    429s — which in turn starve the user-facing write path sharing the same
+    token. This limiter coordinates all in-process callers for a subdomain:
+    ``acquire`` blocks until a slot is free within the rolling window.
+
+    The per-org Redis mutex already prevents two *worker tasks* from hitting the
+    same token concurrently, so an in-process limiter is enough to cap the burst
+    from one task's threads; the headroom slot absorbs the occasional
+    cross-process caller (e.g. an API request hitting the same token).
+    """
+
+    def __init__(self, max_requests: int, window_sec: float):
+        self._max = max(1, int(max_requests))
+        self._window = float(window_sec)
+        self._calls: deque[float] = deque()
+        self._lock = threading.Lock()
+
+    def acquire(self) -> None:
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                cutoff = now - self._window
+                while self._calls and self._calls[0] <= cutoff:
+                    self._calls.popleft()
+                if len(self._calls) < self._max:
+                    self._calls.append(now)
+                    return
+                wait = self._calls[0] + self._window - now
+            if wait > 0:
+                time.sleep(wait)
+
+
+_rate_limiters: dict[str, _WorkableRateLimiter] = {}
+_rate_limiters_lock = threading.Lock()
+
+
+def _get_rate_limiter(subdomain: str) -> _WorkableRateLimiter:
+    """Return the shared limiter for a subdomain (one budget per OAuth token)."""
+    key = (subdomain or "").strip().lower()
+    with _rate_limiters_lock:
+        limiter = _rate_limiters.get(key)
+        if limiter is None:
+            limiter = _WorkableRateLimiter(
+                WORKABLE_RATE_MAX_REQUESTS, WORKABLE_RATE_WINDOW_SEC
+            )
+            _rate_limiters[key] = limiter
+        return limiter
+
+
+def _retry_after_seconds(response: httpx.Response | None, attempt: int) -> float:
+    """Seconds to wait before retrying a 429: honor Retry-After, else backoff."""
+    header = response.headers.get("Retry-After") if response is not None else None
+    if header:
+        try:
+            return min(float(header), WORKABLE_BACKOFF_CAP_SEC)
+        except (TypeError, ValueError):
+            pass  # Retry-After may be an HTTP-date — fall through to backoff
+    return min(
+        WORKABLE_BACKOFF_BASE_SEC * (2 ** max(0, attempt)), WORKABLE_BACKOFF_CAP_SEC
+    )
 
 
 
@@ -57,27 +133,27 @@ class WorkableService:
             "Content-Type": "application/json",
         }
         self._ratings_supported: bool | None = None
-
-    def _throttle(self) -> None:
-        time.sleep(WORKABLE_THROTTLE_SEC)
+        self._rate_limiter = _get_rate_limiter(subdomain)
 
     def _request(self, method: str, path: str, *, json: dict | None = None, params: dict | None = None) -> dict:
         url = f"{self.base_url}{path}"
-        for attempt in range(2):
+        for attempt in range(WORKABLE_MAX_ATTEMPTS):
+            self._rate_limiter.acquire()
             try:
                 with httpx.Client(timeout=30.0) as client:
                     response = client.request(method, url, json=json, params=params, headers=self.headers)
                 response.raise_for_status()
-                self._throttle()
                 return response.json() if response.content else {}
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code == 429 and attempt == 0:
-                    logger.warning("Workable 429, waiting %ss then retry", WORKABLE_429_RETRY_AFTER_SEC)
-                    time.sleep(WORKABLE_429_RETRY_AFTER_SEC)
+                if exc.response.status_code == 429 and attempt < WORKABLE_MAX_ATTEMPTS - 1:
+                    wait = _retry_after_seconds(exc.response, attempt)
+                    logger.warning(
+                        "Workable 429 on %s %s; waiting %.1fs then retry (attempt %d/%d)",
+                        method, path, wait, attempt + 1, WORKABLE_MAX_ATTEMPTS,
+                    )
+                    time.sleep(wait)
                     continue
-                self._throttle()
                 raise
-        self._throttle()
         return {}
 
     def _request_optional(self, method: str, path: str, *, json: dict | None = None, params: dict | None = None) -> dict:
@@ -90,15 +166,13 @@ class WorkableService:
             if status_code == 429:
                 raise WorkableRateLimitError("Workable API rate limited (429)")
             logger.exception("Workable request failed: %s %s", method, path)
-            self._throttle()
             return {}
         except Exception:
             logger.exception("Workable request failed: %s %s", method, path)
-            self._throttle()
             return {}
 
     def _download(self, url: str) -> bytes:
-        self._throttle()
+        self._rate_limiter.acquire()
         with httpx.Client(timeout=30.0, follow_redirects=True) as client:
             response = client.get(url, headers=self.headers)
             # Workable often returns a presigned URL for resumes; these reject extra auth headers.
@@ -170,7 +244,6 @@ class WorkableService:
                 next_url = paging.get("next") if isinstance(paging, dict) else None
                 if not isinstance(next_url, str) or not next_url.strip():
                     break
-                self._throttle()
                 payload = self._get_next_page(next_url)
             # Do not return early: aggregate jobs from all states
         return all_jobs
@@ -184,15 +257,19 @@ class WorkableService:
         url = next_url.strip()
         if not url:
             return {}
-        self._throttle()
-        for attempt in range(2):
+        for attempt in range(WORKABLE_MAX_ATTEMPTS):
+            self._rate_limiter.acquire()
             with httpx.Client(timeout=30.0, follow_redirects=True) as client:
                 response = client.get(url, headers=self.headers)
-            if response.status_code == 429 and attempt == 0:
-                logger.warning("Workable 429 on next page, waiting %ss", WORKABLE_429_RETRY_AFTER_SEC)
-                time.sleep(WORKABLE_429_RETRY_AFTER_SEC)
-                continue
             if response.status_code == 429:
+                if attempt < WORKABLE_MAX_ATTEMPTS - 1:
+                    wait = _retry_after_seconds(response, attempt)
+                    logger.warning(
+                        "Workable 429 on next page; waiting %.1fs (attempt %d/%d)",
+                        wait, attempt + 1, WORKABLE_MAX_ATTEMPTS,
+                    )
+                    time.sleep(wait)
+                    continue
                 raise WorkableRateLimitError("Workable API rate limited (429)")
             if response.status_code != 200:
                 logger.warning("Workable next page returned %s for %s", response.status_code, url[:80])

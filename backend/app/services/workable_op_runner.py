@@ -103,7 +103,7 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
     workable_target_stages = payload.get("workable_target_stages") or {}
     actor = _recruiter_actor(payload.get("user_id"))
 
-    counters = {"total": len(ids), "succeeded": 0, "requeued": 0, "failed": 0}
+    counters = {"total": len(ids), "succeeded": 0, "requeued": 0, "failed": 0, "skipped": 0}
     for decision_id in ids:
         decision = (
             db.query(AgentDecision)
@@ -114,7 +114,12 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
             .first()
         )
         if decision is None or decision.status != "processing":
-            continue  # already resolved / requeued elsewhere — idempotent skip
+            # Already resolved / requeued elsewhere (e.g. approved by an earlier
+            # overlapping batch) — idempotent skip. Counted separately so a run
+            # with succeeded < total reads as "X approved, Y already resolved"
+            # instead of looking like a partial failure.
+            counters["skipped"] += 1
+            continue
         stage = (
             workable_target_stages.get(str(decision.role_id))
             if decision.role_id is not None
