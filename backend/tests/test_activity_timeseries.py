@@ -117,7 +117,10 @@ def test_activity_timeseries(client, db):
     assert five_days_ago["resolved"] == 1  # D2
     assert five_days_ago["by_type"].get("reject") == 1
 
-    assert p["pending_now"] == {"decisions": 4, "questions": 1, "total": 5}
+    assert p["pending_now"] == {
+        "decisions": 4, "questions": 1, "total": 5,
+        "by_type": {"advance_to_interview": 3, "reject": 1},
+    }
     assert set(p["decision_types"]) >= {"advance_to_interview", "reject"}
 
     assert p["workable_errors"]["total"] == 1
@@ -130,7 +133,10 @@ def test_activity_timeseries(client, db):
     # Role-scoped: only role1's rows.
     r2 = client.get(f"/api/v1/analytics/activity-timeseries?days=30&role_id={role.id}", headers=headers)
     p2 = r2.json()
-    assert p2["pending_now"] == {"decisions": 3, "questions": 1, "total": 4}  # D1, D3, D4 + question
+    assert p2["pending_now"] == {
+        "decisions": 3, "questions": 1, "total": 4,  # D1, D3, D4 + question
+        "by_type": {"advance_to_interview": 3},
+    }
     today2 = p2["series"][-1]
     assert today2["backlog"] == 4  # D1, D3, D4 + question
     assert today2["created"] == 1  # D1 only
@@ -145,4 +151,5 @@ def test_activity_timeseries_empty_org(client, db):
     assert len(p["series"]) == 30
     assert all(row["created"] == 0 and row["backlog"] == 0 for row in p["series"])
     assert p["pending_now"]["total"] == 0
+    assert p["pending_now"]["by_type"] == {}
     assert p["workable_errors"]["total"] == 0

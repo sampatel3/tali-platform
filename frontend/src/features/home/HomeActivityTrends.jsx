@@ -1,8 +1,10 @@
-// Home "Decisions & notifications over time" — a daily activity trend that
-// answers "why is my review queue growing?" Stacked bars show the decisions
+// Home "Decisions & review queue" — a single quick-summary section for the
+// review queue. A "Pending now · by type" strip shows the current backlog
+// split (what's awaiting review right now); stacked bars show the decisions
 // the agent created each day by type; a line tracks the pending backlog (the
 // same count as the Home tab badge). A callout flags decisions that bounced
-// back into the queue after a Workable writeback failed. Role-filterable.
+// back into the queue after a Workable writeback failed. Everything here —
+// the strip, the chart, the callout — honours the role filter.
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
@@ -81,6 +83,17 @@ export const HomeActivityTrends = ({ rolesBreakdown = [] }) => {
     [chartData],
   );
 
+  // "Pending now · by type" strip — the current backlog split, role-aware.
+  // Core buckets always show (so a 0 reads as "nothing of this kind queued");
+  // escalate only appears when there's something to escalate.
+  const pendingBuckets = useMemo(() => {
+    const counts = data?.pending_now?.by_type || {};
+    return TYPE_BUCKETS
+      .map((b) => ({ ...b, count: b.types.reduce((n, t) => n + safeNumber(counts[t]), 0) }))
+      .filter((b) => b.key !== 'escalate' || b.count > 0);
+  }, [data]);
+  const pendingTypeTotal = pendingBuckets.reduce((n, b) => n + safeNumber(b.count), 0);
+
   const tickInterval = chartData.length > 12 ? Math.floor(chartData.length / 6) : 0;
   const pending = data?.pending_now || { decisions: 0, questions: 0, total: 0 };
   const errors = data?.workable_errors || { total: 0, by_role: [] };
@@ -90,11 +103,12 @@ export const HomeActivityTrends = ({ rolesBreakdown = [] }) => {
     <section className="home-section">
       <div className="home-section-head">
         <div>
-          <span className="kicker">ACTIVITY · LAST 30 DAYS</span>
-          <h3 className="home-section-title">Decisions &amp; notifications over time<em>.</em></h3>
+          <span className="kicker">REVIEW QUEUE · LAST 30 DAYS</span>
+          <h3 className="home-section-title">Decisions &amp; review queue<em>.</em></h3>
           <p className="home-section-sub">
-            Why your review queue moves: daily decisions by type (bars) against the pending backlog (line — the
-            same count as the Home tab badge).{' '}
+            A quick read on your review queue — what&rsquo;s pending right now by type, plus how the backlog has
+            moved. Bars are daily decisions by type; the line is the pending backlog (the same count as the Home
+            tab badge).{' '}
             <strong style={{ color: 'var(--ink-2)' }}>
               Now {safeNumber(pending.total).toLocaleString()} awaiting review
             </strong>{' '}
@@ -115,6 +129,25 @@ export const HomeActivityTrends = ({ rolesBreakdown = [] }) => {
             ))}
           </select>
         </label>
+      </div>
+
+      <div className="ht-pending">
+        <span className="kicker ht-pending-label">Pending now · by type</span>
+        {loading ? (
+          <span className="ht-pending-empty">Loading…</span>
+        ) : pendingTypeTotal === 0 ? (
+          <span className="ht-pending-empty">Queue is clear — no pending decisions.</span>
+        ) : (
+          <div className="ht-pending-items">
+            {pendingBuckets.map((b) => (
+              <div key={b.key} className="ht-pending-item">
+                <span className="ht-pending-dot" style={{ background: b.color }} aria-hidden="true" />
+                <span className="ht-pending-num">{safeNumber(b.count).toLocaleString()}</span>
+                <span className="ht-pending-cap">{b.label}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {errors.total > 0 ? (
