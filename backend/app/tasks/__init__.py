@@ -59,6 +59,7 @@ from .agent_tasks import (
     agent_cohort_tick_sweep,
     agent_cohort_tick_role,
     agent_expire_stuck_runs,
+    agent_expire_stale_decisions,
 )
 # Eager-import decision_policy_tasks for the nightly retune beat. Same
 # trap as above — the beat schedule references this task name, but
@@ -111,6 +112,7 @@ __all__ = [
     "agent_cohort_tick_sweep",
     "agent_cohort_tick_role",
     "agent_expire_stuck_runs",
+    "agent_expire_stale_decisions",
     "nightly_retune_sweep",
     "score_terminal_for_calibration",
     "sample_prescreen_for_calibration",
