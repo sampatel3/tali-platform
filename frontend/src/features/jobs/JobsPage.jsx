@@ -33,6 +33,10 @@ const STAGES = [
   { key: 'invited', label: 'Invited' },
   { key: 'in_assessment', label: 'Assessing' },
   { key: 'review', label: 'Review' },
+  { key: 'advanced', label: 'Advanced' },
+  // `rejected` is an application_outcome (not a pipeline_stage), counted
+  // separately by the backend across every stage.
+  { key: 'rejected', label: 'Rejected' },
 ];
 
 const SOURCE_FILTERS = [

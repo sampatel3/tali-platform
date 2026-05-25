@@ -2126,21 +2126,14 @@ html[data-theme="dark"] {
   border-color: color-mix(in oklab, #2d8cff 25%, var(--line));
 }
 
-/* Mirrors the bright agent-running hero overlay (.ah-bright-overlay) —
-   same two radial glows + breathing pulse — at ~50% intensity and laid
-   over the card's light base so it reads as a tinted white card rather
-   than a dark slab. */
+/* Agent-on roles are flagged with a bright purple border (no gradient fill) so
+   they read as "active" against the plain card base. */
 .job-card.agent-on {
-  background:
-    radial-gradient(ellipse 80% 60% at 75% 0%,  rgba(196,165,253,0.35) 0%, transparent 60%),
-    radial-gradient(ellipse 70% 80% at 10% 100%, rgba(180,80,255,0.27) 0%, transparent 65%),
-    var(--bg-2);
-  border-color: color-mix(in oklab, var(--purple) 30%, var(--line));
-  animation: agentHeaderPulse 6s ease-in-out infinite;
+  border: 2px solid var(--purple);
 }
 
 .job-card.agent-on:hover {
-  border-color: color-mix(in oklab, var(--purple) 50%, var(--line));
+  border-color: var(--purple-2);
 }
 
 /* Filled / closed / draft Workable postings — not actively recruiting.
@@ -2180,14 +2173,14 @@ html[data-theme="dark"] {
 
 .job-stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   gap: 6px;
   padding-top: 10px;
   border-top: 1px solid var(--line-2);
 }
 
 .js-cell {
-  padding: 4px 4px 0;
+  padding: 4px 2px 0;
   text-align: center;
 }
 

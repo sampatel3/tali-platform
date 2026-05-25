@@ -683,4 +683,17 @@ def role_pipeline_counts(
         normalized = normalize_pipeline_key(stage)
         if normalized in counts:
             counts[normalized] = int(total or 0)
+    # `rejected` is an application_outcome, orthogonal to pipeline_stage, so it is
+    # counted across all stages rather than via the open-stage query above.
+    rejected_total = (
+        db.query(func.count(CandidateApplication.id))
+        .filter(
+            CandidateApplication.organization_id == organization_id,
+            CandidateApplication.role_id == role_id,
+            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.application_outcome == "rejected",
+        )
+        .scalar()
+    )
+    counts["rejected"] = int(rejected_total or 0)
     return counts

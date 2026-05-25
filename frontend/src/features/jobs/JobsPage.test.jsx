@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -28,7 +28,9 @@ const baseRoles = [
     id: 101,
     name: 'Backend Engineer',
     source: 'workable',
-    stage_counts: { applied: 3, invited: 1, in_assessment: 1, review: 0 },
+    stage_counts: {
+      applied: 3, invited: 1, in_assessment: 1, review: 0, advanced: 2, rejected: 4,
+    },
     active_candidates_count: 5,
   },
 ];
@@ -106,6 +108,25 @@ describe('JobsPage Workable sync states', () => {
     });
     expect(screen.queryByText('Workable sync could not be started.')).not.toBeInTheDocument();
     expect(apiClient.organizations.getWorkableSyncStatus).toHaveBeenCalledWith(88);
+  });
+
+  it('surfaces the advanced and rejected counts on the job card', async () => {
+    apiClient.organizations.getWorkableSyncStatus.mockResolvedValue({
+      data: {
+        run_id: null,
+        sync_in_progress: false,
+        workable_last_sync_at: '2026-04-25T13:00:00Z',
+        workable_last_sync_status: 'success',
+        workable_last_sync_summary: { jobs_seen: 79, candidates_seen: 83217, errors: [] },
+      },
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    const advancedCell = (await screen.findByText('Advanced')).closest('.js-cell');
+    expect(within(advancedCell).getByText('2')).toBeInTheDocument();
+    const rejectedCell = screen.getByText('Rejected').closest('.js-cell');
+    expect(within(rejectedCell).getByText('4')).toBeInTheDocument();
   });
 
   it('opens the new role sheet from the jobs hub', async () => {
