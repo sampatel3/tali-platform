@@ -314,13 +314,23 @@ def find_apps_in_state(
     _tool_send_assessment, and never advances down the list. Triage
     states also sort by cv_match_score so high-signal candidates land
     at the top regardless of insertion order.
+
+    BUG-1: triage states also exclude apps the recruiter has already said
+    "no" to — a discarded/overridden decision whose cited inputs are
+    unchanged. That suppression releases the moment a new score /
+    assessment / CV / criteria edit / recruiter note makes a fresh verdict
+    legitimate (see ``decision_staleness``), so the agent stops re-queuing a
+    verdict the human just rejected without locking the candidate out
+    forever.
     """
     if state not in COHORT_STATES:
         return []
     q = _state_query(db, organization_id=organization_id, role_id=role_id, state=state)
     if q is None:
         return []
-    if state in ("ready_for_assessment_decision", "ready_for_advance_decision"):
+
+    is_triage = state in ("ready_for_assessment_decision", "ready_for_advance_decision")
+    if is_triage:
         pending_subq = (
             db.query(AgentDecision.application_id)
             .filter(
@@ -335,8 +345,83 @@ def find_apps_in_state(
         q = q.order_by(CandidateApplication.cv_match_score.desc().nullslast())
     elif state == "ready_for_advance_decision":
         q = q.order_by(CandidateApplication.assessment_score_cache_100.desc().nullslast())
-    rows = q.with_entities(CandidateApplication.id).limit(int(limit)).all()
-    return [int(r[0]) for r in rows]
+
+    if not is_triage:
+        rows = q.with_entities(CandidateApplication.id).limit(int(limit)).all()
+        return [int(r[0]) for r in rows]
+
+    suppressed = _human_suppressed_app_ids(
+        db, organization_id=organization_id, role_id=role_id
+    )
+    if not suppressed:
+        rows = q.with_entities(CandidateApplication.id).limit(int(limit)).all()
+        return [int(r[0]) for r in rows]
+
+    # Over-read so the post-filter still returns a full page when some of the
+    # top-ranked rows are suppressed. At most ``len(suppressed)`` rows can be
+    # dropped, so reading that many extra guarantees ``limit`` survivors when
+    # that many unsuppressed apps exist (no starvation of lower-ranked apps).
+    over_read = int(limit) + len(suppressed)
+    rows = q.with_entities(CandidateApplication.id).limit(over_read).all()
+    out: list[int] = []
+    for (app_id,) in rows:
+        if int(app_id) in suppressed:
+            continue
+        out.append(int(app_id))
+        if len(out) >= int(limit):
+            break
+    return out
+
+
+def _human_suppressed_app_ids(
+    db: Session, *, organization_id: int, role_id: int
+) -> set[int]:
+    """App ids in this role with a *live* discarded/overridden decision.
+
+    "Live" = the most-recently-resolved discarded/overridden decision for the
+    app has cited inputs that have NOT materially changed since (per
+    ``decision_staleness``). Such apps are kept out of the triage cohort so
+    the agent doesn't re-surface a verdict the recruiter already rejected.
+    The set releases an app the instant its inputs drift, letting the agent
+    re-decide on fresh information.
+    """
+    from ..services.decision_staleness import (
+        StalenessCache,
+        is_human_suppression_live,
+    )
+
+    rows = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.organization_id == organization_id,
+            AgentDecision.role_id == role_id,
+            AgentDecision.status.in_(("discarded", "overridden")),
+        )
+        .order_by(
+            AgentDecision.application_id.asc(),
+            AgentDecision.resolved_at.desc().nullslast(),
+            AgentDecision.id.desc(),
+        )
+        .all()
+    )
+    cache = StalenessCache()
+    suppressed: set[int] = set()
+    seen: set[int] = set()
+    for decision in rows:
+        app_id = int(decision.application_id)
+        if app_id in seen:
+            continue  # only the most-recent resolution per app matters
+        seen.add(app_id)
+        try:
+            if is_human_suppression_live(db, decision, cache=cache):
+                suppressed.add(app_id)
+        except Exception:  # pragma: no cover — never break the survey
+            logger.warning(
+                "human-suppression check failed app=%s role=%s",
+                app_id, role_id, exc_info=True,
+            )
+            suppressed.add(app_id)  # fail safe toward honouring the human "no"
+    return suppressed
 
 
 def _count_in_state(

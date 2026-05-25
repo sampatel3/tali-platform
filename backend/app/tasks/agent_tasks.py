@@ -714,3 +714,150 @@ def agent_expire_stuck_runs(self) -> dict:
     finally:
         db.close()
     return {"status": "ok", "expired_count": len(expired_ids), "agent_run_ids": expired_ids}
+
+
+# Stale pending decisions. BUG-2: ``expired`` is a valid AgentDecision status
+# but nothing ever set it — a pending verdict could sit in the recruiter's Hub
+# queue forever with no SLA. ``agent_expire_stuck_runs`` above reaps stuck
+# AgentRun rows, NOT stale decisions. This sweep ages out stale *pending*
+# decisions:
+#   * normal verdicts older than DECISION_PENDING_SLA_DAYS → status='expired'
+#   * escalations (``escalate_low_confidence``) are NEVER silently expired —
+#     an escalation is a "human MUST decide" signal, so we re-surface
+#     (re-prioritise) it instead, throttled to once per window so a
+#     long-ignored escalation doesn't spam the activity feed.
+# Snoozed rows (recruiter explicitly parked them) and non-pending rows are
+# left alone.
+DECISION_PENDING_SLA_DAYS = 14
+ESCALATION_REESCALATE_AFTER_DAYS = 3
+
+
+@celery_app.task(
+    name="app.tasks.agent_tasks.agent_expire_stale_decisions",
+    bind=True,
+    max_retries=0,
+)
+def agent_expire_stale_decisions(self) -> dict:
+    """Age out stale pending AgentDecisions; re-surface stale escalations.
+
+    No-op when nothing is stale. Idempotent — re-running only touches rows
+    still past their SLA, and the re-escalation event is keyed per window so
+    a second run in the same window doesn't duplicate it.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import or_
+
+    from ..models.agent_decision import AgentDecision
+    from ..models.candidate_application_event import CandidateApplicationEvent
+    from ..platform.database import SessionLocal
+
+    now = datetime.now(timezone.utc)
+    expiry_cutoff = now - timedelta(days=DECISION_PENDING_SLA_DAYS)
+    escalation_cutoff = now - timedelta(days=ESCALATION_REESCALATE_AFTER_DAYS)
+
+    db = SessionLocal()
+    expired_ids: list[int] = []
+    reescalated_ids: list[int] = []
+    try:
+        # A pending row is "live in the queue" only when it isn't snoozed into
+        # the future — a snooze is the recruiter explicitly parking it.
+        not_snoozed = or_(
+            AgentDecision.snoozed_until.is_(None),
+            AgentDecision.snoozed_until <= now,
+        )
+
+        # 1. Expire stale non-escalation verdicts.
+        stale = (
+            db.query(AgentDecision)
+            .filter(
+                AgentDecision.status == "pending",
+                AgentDecision.decision_type != "escalate_low_confidence",
+                AgentDecision.created_at < expiry_cutoff,
+                not_snoozed,
+            )
+            .all()
+        )
+        for decision in stale:
+            decision.status = "expired"
+            decision.resolved_at = now
+            decision.resolution_note = (
+                decision.resolution_note
+                or f"Expired — no recruiter action within {DECISION_PENDING_SLA_DAYS}d SLA"
+            )
+            expired_ids.append(int(decision.id))
+
+        # 2. Re-surface stale escalations rather than expiring them. Bump them
+        # back into view and record a re-escalation event, throttled to once
+        # per ESCALATION_REESCALATE_AFTER_DAYS window via a window-bucketed
+        # idempotency key so an ignored escalation doesn't spam the feed on
+        # every sweep.
+        stale_escalations = (
+            db.query(AgentDecision)
+            .filter(
+                AgentDecision.status == "pending",
+                AgentDecision.decision_type == "escalate_low_confidence",
+                AgentDecision.created_at < escalation_cutoff,
+            )
+            .all()
+        )
+        for decision in stale_escalations:
+            created = decision.created_at
+            if created is not None and created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            age_days = (now - created).days if created is not None else 0
+            bucket = age_days // ESCALATION_REESCALATE_AFTER_DAYS
+            idem = f"agent_decision_reescalated:{int(decision.id)}:{bucket}"
+            already = (
+                db.query(CandidateApplicationEvent.id)
+                .filter(
+                    CandidateApplicationEvent.application_id == int(decision.application_id),
+                    CandidateApplicationEvent.idempotency_key == idem,
+                )
+                .first()
+            )
+            if already is not None:
+                continue  # already re-escalated this window
+            # Un-snooze so it's visible, and stamp a fresh activity event so
+            # the Hub re-surfaces it for recruiter review.
+            decision.snoozed_until = None
+            db.add(
+                CandidateApplicationEvent(
+                    application_id=int(decision.application_id),
+                    organization_id=int(decision.organization_id),
+                    event_type="agent_decision_reescalated",
+                    actor_type="system",
+                    actor_id=None,
+                    reason=(
+                        f"Escalation unresolved after {age_days}d — re-prioritised "
+                        "for recruiter review"
+                    ),
+                    idempotency_key=idem,
+                    event_metadata={
+                        "decision_id": int(decision.id),
+                        "age_days": age_days,
+                    },
+                )
+            )
+            reescalated_ids.append(int(decision.id))
+
+        if expired_ids or reescalated_ids:
+            db.commit()
+            logger.warning(
+                "agent_expire_stale_decisions expired %d decision(s), re-escalated %d: "
+                "expired=%s reescalated=%s",
+                len(expired_ids), len(reescalated_ids), expired_ids, reescalated_ids,
+            )
+    except Exception:
+        db.rollback()
+        logger.exception("agent_expire_stale_decisions failed")
+        return {"status": "error"}
+    finally:
+        db.close()
+    return {
+        "status": "ok",
+        "expired_count": len(expired_ids),
+        "expired_decision_ids": expired_ids,
+        "reescalated_count": len(reescalated_ids),
+        "reescalated_decision_ids": reescalated_ids,
+    }

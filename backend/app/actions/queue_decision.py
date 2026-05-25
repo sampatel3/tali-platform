@@ -231,6 +231,66 @@ def _capture_active_capabilities(
         return {}
 
 
+def _human_suppressed(
+    db: Session, *, application_id: int, decision_type: str
+) -> AgentDecision | None:
+    """BUG-1: honour an explicit human "no" until the inputs change.
+
+    When a recruiter discards or overrides a decision, re-queuing the same
+    verdict next cycle silently overrides that signal. Suppress a same-type
+    re-emit while a discarded/overridden decision exists whose cited inputs
+    have NOT materially changed (per the staleness service). A material
+    change — new score, new assessment, new CV, edited criteria, a recruiter
+    note — releases the suppression so the agent can re-decide on fresh
+    information.
+
+    Returns the suppressing decision (caller dedups to it) or None when a
+    fresh emit is allowed.
+    """
+    suppressing = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.application_id == application_id,
+            AgentDecision.decision_type == decision_type,
+            AgentDecision.status.in_(("discarded", "overridden")),
+        )
+        .order_by(
+            AgentDecision.resolved_at.desc().nullslast(),
+            AgentDecision.id.desc(),
+        )
+        .first()
+    )
+    if suppressing is None:
+        return None
+
+    # Fingerprinted rows (the only kind new decisions produce): suppress
+    # until the staleness service reports the cited inputs have drifted.
+    if suppressing.input_fingerprint or {}:
+        try:
+            from ..services.decision_staleness import is_human_suppression_live
+
+            return suppressing if is_human_suppression_live(db, suppressing) else None
+        except Exception:
+            import logging
+            logging.getLogger("taali.actions.queue_decision").warning(
+                "discard-suppression staleness check failed app=%s type=%s",
+                application_id, decision_type, exc_info=True,
+            )
+            # Fail safe toward honouring the human "no".
+            return suppressing
+
+    # Pre-A1 rows have no fingerprint baseline to compare against — fall back
+    # to the original short cooldown so a months-old discard can't suppress
+    # forever.
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    floor = _dt.now(_tz.utc) - _td(minutes=10)
+    resolved_at = suppressing.resolved_at
+    if resolved_at is not None and resolved_at >= floor:
+        return suppressing
+    return None
+
+
 def run(
     db: Session,
     actor: Actor,
@@ -319,38 +379,27 @@ def run(
         existing_pending._just_created = False  # type: ignore[attr-defined]
         return existing_pending
 
-    # C3: recently-discarded suppression. When a recruiter discards a
-    # decision and the agent — mid-cycle on the same candidate — re-emits
-    # an identical decision 30s later, the recruiter perceives this as
-    # "the agent didn't listen". The next ~10 minutes after a discard,
-    # treat a same-type re-emit as a dedup. Beyond the window the agent
-    # is welcome to try again (input may have changed, recruiter may
-    # have moved on). Saves a fresh cycle's worth of Anthropic spend
-    # every time a recruiter dismisses.
-    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
-    discard_window_floor = _dt.now(_tz.utc) - _td(minutes=10)
-    recently_discarded = (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.application_id == application_id,
-            AgentDecision.decision_type == decision_type,
-            AgentDecision.status == "discarded",
-            AgentDecision.resolved_at >= discard_window_floor,
-        )
-        .order_by(AgentDecision.resolved_at.desc())
-        .first()
+    # C3 (BUG-1): honour discard/override as an explicit human "no" until
+    # the candidate's inputs materially change. The old guard was a flat
+    # 10-minute cooldown that only covered ``discarded`` — past the window
+    # (cohort ticks fire every 30 min, well outside it) the agent re-queued
+    # the same verdict the recruiter had just rejected, silently overriding
+    # the human signal. Now we suppress a same-type re-emit while a
+    # discarded/overridden decision exists whose cited inputs are unchanged,
+    # releasing only when a new score / assessment / CV / criteria edit /
+    # recruiter note makes a fresh verdict legitimate.
+    human_suppressed = _human_suppressed(
+        db, application_id=application_id, decision_type=decision_type
     )
-    if recently_discarded is not None:
-        recently_discarded._just_created = False  # type: ignore[attr-defined]
-        return recently_discarded
+    if human_suppressed is not None:
+        human_suppressed._just_created = False  # type: ignore[attr-defined]
+        return human_suppressed
 
     # C4: cross-cycle dedup. If a decision with the same dedup_key
-    # (same inputs, same decision type) was approved in the last 7 days
-    # OR discarded in the last 10 min (C3 window — belt-and-braces for
-    # cases where decision_type matches but the dedup_key differs by
-    # bucket boundaries), dedup. We pre-fetch the application+role
-    # once so the fingerprint and dedup_key compute share the same
-    # baseline state.
+    # (same inputs, same decision type) was approved in the last 7 days,
+    # dedup. We pre-fetch the application+role once so the fingerprint and
+    # dedup_key compute share the same baseline state.
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
     dedup_key = _compute_dedup_key(
         db,
         application_id=application_id,

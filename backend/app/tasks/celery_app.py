@@ -131,6 +131,16 @@ celery_app.conf.update(
             "task": "app.tasks.agent_tasks.agent_expire_stuck_runs",
             "schedule": 300.0,  # every 5 min — fast enough to surface within one cohort tick
         },
+        # SLA sweep for stale pending decisions (BUG-2). Ages out pending
+        # verdicts older than the SLA to status='expired', and re-surfaces
+        # stale ``escalate_low_confidence`` rows (re-prioritised, never
+        # silently expired) so a "human must decide" signal can't rot in the
+        # queue forever. Hourly is ample for the day-scale SLA and keeps the
+        # sweep cheap.
+        "agent-expire-stale-decisions-hourly": {
+            "task": "app.tasks.agent_tasks.agent_expire_stale_decisions",
+            "schedule": 3600.0,
+        },
         # Safety net: find applications whose scores have been invalidated
         # (NULL pre_screen_score with cv_text present + stale CvScoreJob
         # row) and re-enqueue them. Hooks at the role-criteria, CV

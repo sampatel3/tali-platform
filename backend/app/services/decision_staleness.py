@@ -311,6 +311,39 @@ def evaluate(
     )
 
 
+def is_human_suppression_live(
+    db: Session,
+    decision: AgentDecision,
+    *,
+    application: CandidateApplication | None = None,
+    role: Role | None = None,
+    cache: "StalenessCache | None" = None,
+) -> bool:
+    """Whether a discarded/overridden decision should still suppress re-emit.
+
+    A discard or override is an explicit human "no". It must hold until the
+    inputs the decision was based on materially change — otherwise the agent
+    re-queues the same verdict next cycle and silently overrides the human
+    signal. Any staleness reason (new pre-screen / assessment score, new CV,
+    edited criteria, recruiter note, cutoff change) counts as a material
+    change that releases the suppression so the agent can legitimately
+    re-decide on fresh inputs.
+
+    Returns:
+      True  — inputs unchanged → keep suppressing the re-emit.
+      False — inputs drifted, OR there's no fingerprint baseline to compare
+              against (pre-A1 rows). The caller may still apply its own
+              cooldown for the no-baseline case.
+    """
+    if not (decision.input_fingerprint or {}):
+        # No baseline captured — can't tell if inputs changed. Don't let an
+        # ancient, fingerprint-less row suppress forever; defer to the caller.
+        return False
+    return not evaluate(
+        db, decision, application=application, role=role, cache=cache
+    ).is_stale
+
+
 _REASON_LABELS = {
     "criteria_changed": "Role criteria edited",
     "cv_replaced": "Candidate uploaded a new CV",
