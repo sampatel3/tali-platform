@@ -160,11 +160,30 @@ class CvScoringSubAgent:
         if exemplars:
             jd_text = f"{jd_text}\n\n{exemplars}"
 
+        # Feed the candidate's Workable metadata (questionnaire answers,
+        # recruiter comments, activity log) so hard constraints answered
+        # outside the CV (e.g. salary expectation on a LinkedIn apply) are
+        # scored, not left "unknown" — matching the orchestrator path.
+        workable_context = ""
+        try:
+            from ..services.workable_context_service import format_workable_context
+
+            workable_context = format_workable_context(
+                candidate=getattr(app, "candidate", None),
+                application=app,
+            )
+        except Exception:  # pragma: no cover — defensive
+            logger.exception(
+                "format_workable_context failed for application=%s; scoring without it",
+                app.id,
+            )
+
         result = run_cv_match(
             cv_text,
             jd_text,
             skip_cache=req.skip_cache,
             metering_context=req.metering_context,
+            workable_context=workable_context or None,
         )
         if str(result.scoring_status) not in {"OK", "ScoringStatus.OK", "ok"}:
             return SubAgentResult(

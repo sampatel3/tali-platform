@@ -31,8 +31,15 @@ def compute_cache_key(
     requirements: "list[RequirementInput]",
     prompt_version: str,
     model_version: str,
+    workable_context: str = "",
 ) -> str:
-    """Stable SHA256 over normalized inputs."""
+    """Stable SHA256 over normalized inputs.
+
+    ``workable_context`` (questionnaire answers, recruiter comments, activity
+    log) is part of the candidate evidence the prompt now scores against, so
+    it MUST key the cache: the same CV with a newer questionnaire answer or
+    recruiter comment is a genuinely different score.
+    """
     payload = {
         "cv": cv_text or "",
         "jd": jd_text or "",
@@ -41,6 +48,7 @@ def compute_cache_key(
         ],
         "prompt_version": prompt_version,
         "model_version": model_version,
+        "workable_context": workable_context or "",
     }
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
