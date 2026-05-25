@@ -13,6 +13,7 @@ import { useToast } from '../../context/ToastContext';
 import './home.css';
 import { formatRelativeAge, formatUsd } from './atoms';
 import { HomeNow } from './HomeNow';
+import { HomeActivityTrends } from './HomeActivityTrends';
 import { HomeRoles } from './HomeRoles';
 import { HomeSignal } from './HomeSignal';
 import { HomeEverything } from './HomeEverything';
@@ -387,6 +388,8 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
             </div>
           )}
         </div>
+
+        <HomeActivityTrends rolesBreakdown={rolesBreakdown} />
 
         <HomeNow
           decisions={decisions}

@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session, joinedload
 from ...agent_runtime import budget_guard
 from ...platform.database import get_db
 from ...deps import get_current_user
+from ...domains.agentic._hub_shared import open_needs_input_filter, pending_filter
 from ...models.agent_decision import AgentDecision
+from ...models.agent_needs_input import AgentNeedsInput
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
@@ -1104,4 +1106,199 @@ def get_decisions_breakdown(
             "score_stats": _score_summary(all_scores),
         },
         "roles": roles,
+    }
+
+
+# ----------------------------------------------------------------------------
+# Activity timeseries — backs the Home "Decisions & notifications over time"
+# section. Answers "why did my review queue grow from 300 to 500?" with a
+# daily curve of the backlog (the pending count shown on the Home tab badge),
+# the decisions the agent created each day (by type), and a current callout of
+# decisions that bounced back into the queue because a Workable writeback
+# failed. Role-filterable; daily granularity over a trailing window.
+# ----------------------------------------------------------------------------
+
+# A decision with no ``resolved_at`` is still "in the queue" while in one of
+# these states; any other terminal state with no timestamp is treated as
+# closed at creation (it only blips the backlog on its creation day).
+_OPEN_DECISION_STATUSES = {"pending", "processing", "reverted_for_feedback"}
+# resolution_note prefix written by workable_op_runner._requeue_decision when a
+# Workable writeback fails and the decision is bounced back to the queue.
+_WORKABLE_REQUEUE_NOTE_PREFIX = "Returned to queue"
+
+
+def _open_at_day_ends(
+    intervals: Sequence[Tuple[Optional[datetime], Optional[datetime]]],
+    day_ends: Sequence[datetime],
+) -> List[int]:
+    """Count how many [start, end) intervals are open at each day boundary.
+
+    ``end is None`` means still open (no close yet). An interval is open at a
+    day end ``de`` when ``start <= de < end``.
+    """
+    counts = [0] * len(day_ends)
+    for start, end in intervals:
+        if start is None:
+            continue
+        for i, de in enumerate(day_ends):
+            if start <= de and (end is None or end > de):
+                counts[i] += 1
+    return counts
+
+
+@router.get("/activity-timeseries")
+def get_activity_timeseries(
+    role_id: Optional[int] = Query(default=None),
+    days: int = Query(default=30, ge=1, le=120),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Daily decisions + notification-backlog curve, plus a Workable-error callout."""
+    org_id = current_user.organization_id
+    if not org_id:
+        return {
+            "window": {"days": days, "from": None, "to": None},
+            "series": [],
+            "decision_types": [],
+            "pending_now": {"decisions": 0, "questions": 0, "total": 0},
+            "workable_errors": {"total": 0, "by_role": []},
+        }
+
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_starts = [today_start - timedelta(days=days - 1 - i) for i in range(days)]
+    day_ends = [ds + timedelta(days=1) for ds in day_starts]
+    window_start = day_starts[0]
+    window_start_date = window_start.date()
+
+    def _day_index(ts: Optional[datetime]) -> Optional[int]:
+        ts = _ensure_utc(ts)
+        if ts is None:
+            return None
+        idx = (ts.date() - window_start_date).days
+        return idx if 0 <= idx < days else None
+
+    # ── Decisions (role-scoped): created/resolved timestamps + type/status ──
+    dq = db.query(
+        AgentDecision.created_at,
+        AgentDecision.resolved_at,
+        AgentDecision.status,
+        AgentDecision.decision_type,
+    ).filter(AgentDecision.organization_id == org_id)
+    if role_id is not None:
+        dq = dq.filter(AgentDecision.role_id == role_id)
+    decision_rows = dq.all()
+
+    # ── Agent questions (role-scoped) — the other half of the badge count ──
+    nq = db.query(
+        AgentNeedsInput.created_at,
+        AgentNeedsInput.resolved_at,
+        AgentNeedsInput.dismissed_at,
+    ).filter(AgentNeedsInput.organization_id == org_id)
+    if role_id is not None:
+        nq = nq.filter(AgentNeedsInput.role_id == role_id)
+    needs_rows = nq.all()
+
+    created_total = [0] * days
+    resolved_total = [0] * days
+    by_type: List[Dict[str, int]] = [dict() for _ in range(days)]
+    type_keys: set[str] = set()
+    dec_intervals: List[Tuple[Optional[datetime], Optional[datetime]]] = []
+
+    for created, resolved, status, dtype in decision_rows:
+        created = _ensure_utc(created)
+        ci = _day_index(created)
+        if ci is not None:
+            created_total[ci] += 1
+            key = str(dtype or "unknown")
+            by_type[ci][key] = by_type[ci].get(key, 0) + 1
+            type_keys.add(key)
+        if resolved is not None:
+            ri = _day_index(resolved)
+            if ri is not None:
+                resolved_total[ri] += 1
+        # Backlog interval close time.
+        if resolved is not None:
+            end = _ensure_utc(resolved)
+        elif str(status or "").lower() in _OPEN_DECISION_STATUSES:
+            end = None
+        else:
+            end = created
+        dec_intervals.append((created, end))
+
+    needs_intervals: List[Tuple[Optional[datetime], Optional[datetime]]] = []
+    for created, resolved, dismissed in needs_rows:
+        created = _ensure_utc(created)
+        close = resolved or dismissed
+        needs_intervals.append((created, _ensure_utc(close) if close is not None else None))
+
+    backlog = _open_at_day_ends(dec_intervals + needs_intervals, day_ends)
+
+    series = [
+        {
+            "date": day_starts[i].date().isoformat(),
+            "created": created_total[i],
+            "resolved": resolved_total[i],
+            "backlog": backlog[i],
+            "by_type": by_type[i],
+        }
+        for i in range(days)
+    ]
+
+    # ── Current pending (reconciles with the Home tab badge) ───────────────
+    pending_decisions = (
+        db.query(func.count(AgentDecision.id))
+        .filter(AgentDecision.organization_id == org_id, pending_filter(now))
+    )
+    if role_id is not None:
+        pending_decisions = pending_decisions.filter(AgentDecision.role_id == role_id)
+    pending_decisions_count = int(pending_decisions.scalar() or 0)
+
+    pending_questions = (
+        db.query(func.count(AgentNeedsInput.id))
+        .filter(AgentNeedsInput.organization_id == org_id, open_needs_input_filter())
+    )
+    if role_id is not None:
+        pending_questions = pending_questions.filter(AgentNeedsInput.role_id == role_id)
+    pending_questions_count = int(pending_questions.scalar() or 0)
+
+    # ── Workable-error callout: decisions bounced back to the queue ────────
+    err_q = (
+        db.query(AgentDecision.role_id, AgentDecision.resolution_note)
+        .filter(
+            AgentDecision.organization_id == org_id,
+            AgentDecision.status == "pending",
+            AgentDecision.resolution_note.ilike(f"{_WORKABLE_REQUEUE_NOTE_PREFIX}%"),
+        )
+    )
+    if role_id is not None:
+        err_q = err_q.filter(AgentDecision.role_id == role_id)
+    err_rows = err_q.all()
+    role_names = {
+        rid: name
+        for rid, name in db.query(Role.id, Role.name).filter(Role.organization_id == org_id).all()
+    }
+    err_by_role: Dict[int, Dict[str, Any]] = {}
+    for rid, note in err_rows:
+        bucket = err_by_role.setdefault(
+            rid, {"role_id": rid, "role_name": role_names.get(rid) or f"Role #{rid}", "count": 0, "example": None}
+        )
+        bucket["count"] += 1
+        if not bucket["example"] and note:
+            bucket["example"] = str(note)[:200]
+    workable_errors = {
+        "total": len(err_rows),
+        "by_role": sorted(err_by_role.values(), key=lambda b: b["count"], reverse=True),
+    }
+
+    return {
+        "window": {"days": days, "from": window_start.isoformat(), "to": now.isoformat()},
+        "series": series,
+        "decision_types": sorted(type_keys),
+        "pending_now": {
+            "decisions": pending_decisions_count,
+            "questions": pending_questions_count,
+            "total": pending_decisions_count + pending_questions_count,
+        },
+        "workable_errors": workable_errors,
     }
