@@ -86,6 +86,16 @@ from .graph_writeback import (
     GRAPH_WRITEBACK_STATUSES,
     GraphWritebackQueueItem,
 )
+from .graph_episode_outbox import (
+    EPISODE_KIND_DECISION,
+    EPISODE_KIND_HIRING_OUTCOME,
+    GRAPH_EPISODE_KINDS,
+    GRAPH_OUTBOX_STATUSES,
+    OUTBOX_STATUS_FAILED,
+    OUTBOX_STATUS_PENDING,
+    OUTBOX_STATUS_SENT,
+    GraphEpisodeOutbox,
+)
 from .capability_flag import CapabilityFlag
 from .role_intent import RoleIntent
 from .role_feedback_note import RoleFeedbackNote
@@ -170,6 +180,14 @@ __all__ = [
     "AgentNeedsInput",
     "NEEDS_INPUT_KINDS",
     "AnthropicUsageReconciliation",
+    "GraphEpisodeOutbox",
+    "EPISODE_KIND_HIRING_OUTCOME",
+    "EPISODE_KIND_DECISION",
+    "GRAPH_EPISODE_KINDS",
+    "OUTBOX_STATUS_PENDING",
+    "OUTBOX_STATUS_SENT",
+    "OUTBOX_STATUS_FAILED",
+    "GRAPH_OUTBOX_STATUSES",
     "ShareLink",
     "SHARE_LINK_MODE_RECRUITER",
     "SHARE_LINK_MODE_CLIENT",

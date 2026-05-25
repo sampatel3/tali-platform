@@ -112,6 +112,26 @@ try:
 except Exception:  # pragma: no cover — model import shouldn't fail
     pass
 
+
+# Same BigInteger-PK workaround for graph_episode_outbox — the durable
+# Graphiti episode outbox. Rows are written from the outcome-learning and
+# decision-queueing paths (many test modules), so register globally here.
+_GRAPH_EPISODE_OUTBOX_PK_COUNTER = {"n": 0}
+
+
+def _assign_graph_episode_outbox_pk(mapper, connection, target):  # pragma: no cover
+    if getattr(target, "id", None) is None:
+        _GRAPH_EPISODE_OUTBOX_PK_COUNTER["n"] += 1
+        target.id = _GRAPH_EPISODE_OUTBOX_PK_COUNTER["n"]
+
+
+try:
+    from app.models.graph_episode_outbox import GraphEpisodeOutbox as _GraphEpisodeOutbox
+
+    event.listen(_GraphEpisodeOutbox, "before_insert", _assign_graph_episode_outbox_pk)
+except Exception:  # pragma: no cover — model import shouldn't fail
+    pass
+
 def override_get_db():
     db = TestingSessionLocal()
     try:
