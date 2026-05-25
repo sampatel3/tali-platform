@@ -106,7 +106,7 @@ export const TeachModal = ({ decision, onClose, onSubmitted }) => {
         <div className="rq-modal-head">
           <div>
             <span className="kicker">TEACH THE AGENT</span>
-            <h3 style={{ margin: '6px 0 2px', fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 600, letterSpacing: '-.02em', color: 'var(--ink)' }}>
+            <h3 className="home-title-md" style={{ margin: '6px 0 2px' }}>
               What did the agent get wrong?
             </h3>
             <p style={{ margin: 0, fontSize: 13, color: 'var(--mute)', maxWidth: 520, lineHeight: 1.5 }}>

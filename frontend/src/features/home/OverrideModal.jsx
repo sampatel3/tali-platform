@@ -123,7 +123,7 @@ export const OverrideModal = ({
               <KickerIcon size={11} aria-hidden="true" />
               {alternative.kicker || (mode === 'approve' ? 'ADVANCE' : 'OVERRIDE')}
             </span>
-            <h3 style={{ margin: '6px 0 2px', fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 600, letterSpacing: '-.02em', color: 'var(--ink)' }}>
+            <h3 className="home-title-md" style={{ margin: '6px 0 2px' }}>
               {alternative.headline.replace('{name}', candidateName)}
             </h3>
             <p style={{ margin: 0, fontSize: 13, color: 'var(--mute)', maxWidth: 520, lineHeight: 1.5 }}>

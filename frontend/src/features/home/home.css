@@ -46,6 +46,18 @@
   font-style: normal;
 }
 
+/* Shared 22px display title for non-section surfaces (modals, the decision
+   detail pane, bulk-confirm) — single source for what was an identical
+   inline style repeated across HomeNow, OverrideModal and TeachModal.
+   Callers keep their own margins so spacing is unchanged. */
+.home-title-md {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
 .home-section-sub {
   font-size: 13px;
   color: var(--mute);
