@@ -260,7 +260,52 @@ def record_outcome_on_outcome_change(
         )
 
 
+def record_outcome_for_approved_decision(
+    db: Session,
+    *,
+    decision: AgentDecision,
+    application: CandidateApplication,
+) -> None:
+    """Record the realised outcome at the moment a decision is approved.
+
+    The transition hooks above look the decision up by ``status="approved"``
+    and exist for genuinely-later downstream transitions (e.g. a hire weeks
+    after an advance). They miss the agent's own approve action, because
+    approving an advance *is* what moves the candidate to ``advanced`` and
+    approving a reject *is* what sets ``application_outcome="rejected"`` —
+    there is no separate later transition to key on, and at hook time the
+    decision is still ``processing`` (the approve action stamps it
+    ``approved`` only afterwards). So the approve action calls this with the
+    decision in hand, mapping its type + the resulting application state to an
+    outcome label. Records nothing for any other state.
+    """
+    role_id = getattr(application, "role_id", None)
+    if role_id is None:
+        return
+    dtype = str(decision.decision_type)
+    if dtype == "advance_to_interview" and str(application.pipeline_stage) == "advanced":
+        outcome = "interviewed"
+    elif (
+        dtype in ("reject", "skip_assessment_reject")
+        and str(application.application_outcome) == "rejected"
+    ):
+        outcome = "rejected_confirmed"
+    else:
+        return
+    role = db.query(Role).filter(Role.id == int(role_id)).first()
+    if role is None:
+        return
+    _append_outcome(
+        db,
+        role=role,
+        decision=decision,
+        outcome=outcome,
+        application_id=int(application.id),
+    )
+
+
 __all__ = [
     "record_advance_outcome_on_stage",
     "record_outcome_on_outcome_change",
+    "record_outcome_for_approved_decision",
 ]
