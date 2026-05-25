@@ -13,10 +13,7 @@ import { useToast } from '../../context/ToastContext';
 import './home.css';
 import { formatRelativeAge, formatUsd } from './atoms';
 import { HomeNow } from './HomeNow';
-import { HomeActivityTrends } from './HomeActivityTrends';
-import { HomeRoles } from './HomeRoles';
-import { HomeSignal } from './HomeSignal';
-import { HomeEverything } from './HomeEverything';
+import { HomeMonitoring } from './HomeMonitoring';
 import { HomePlatformUpdates } from './HomePlatformUpdates';
 
 const ORG_STATUS_POLL_MS = 30_000;
@@ -385,22 +382,15 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           onNavigate={onNavigate}
         />
 
-        <HomeRoles
-          rows={rolesBreakdown}
-          loading={loadingRoles}
-          onNavigate={onNavigate}
-        />
-
-        <HomeSignal
+        {/* One consolidated analytics surface — Activity / Outcomes / Quality
+            / History, scoped by a shared role + window. Replaces the former
+            By-role, Signal, History & analytics, and backlog-trend sections. */}
+        <HomeMonitoring
+          rolesBreakdown={rolesBreakdown}
           feedback={feedback}
           outcomes={outcomes}
-          loading={loadingSignal}
+          loadingSignal={loadingSignal}
           reload={reloadAll}
-        />
-
-        <HomePlatformUpdates />
-
-        <HomeEverything
           onNavigate={onNavigate}
           onSelect={(id) => {
             setSelectedId(id);
@@ -414,10 +404,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           }}
         />
 
-        {/* Full decisions/backlog trend lives at the bottom with the other
-            analytics — the at-a-glance pending split is in the purple header,
-            so the top of the page stays focused on making decisions. */}
-        <HomeActivityTrends rolesBreakdown={rolesBreakdown} />
+        <HomePlatformUpdates />
       </div>
     </div>
   );

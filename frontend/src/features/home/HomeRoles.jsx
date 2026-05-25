@@ -20,35 +20,15 @@ const humanizePausedReason = (reason) => {
   return String(reason).slice(0, 32);
 };
 
-export const HomeRoles = ({ rows, loading, onNavigate }) => {
+export const HomeRoles = ({ rows, loading, onNavigate, embedded = false }) => {
   const [open, setOpen] = useState(false);
   const totalPending = rows.reduce((sum, r) => sum + (Number(r.pending) || 0), 0);
-  return (
-  <section className="home-section">
-    <div className="home-section-head">
-      <div>
-        <span className="kicker">ROLES · WHERE THE AGENT IS WORKING</span>
-        <h3 className="home-section-title">By role<em>.</em></h3>
-        <p className="home-section-sub">
-          Live counts per role: what's pending, what landed today, where humans are correcting the agent.
-        </p>
-      </div>
-      <button
-        type="button"
-        className="home-section-toggle"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-      >
-        <span>{open ? 'Hide' : 'Show'} roles ({rows.length}{totalPending > 0 ? ` · ${totalPending} pending` : ''})</span>
-        {open ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
-      </button>
-    </div>
 
-    {!open ? null : loading ? (
-      <div className="home-empty">Loading…</div>
-    ) : rows.length === 0 ? (
-      <div className="home-empty">No roles configured yet — create one from the Jobs tab.</div>
-    ) : (
+  const body = loading ? (
+    <div className="home-empty">Loading…</div>
+  ) : rows.length === 0 ? (
+    <div className="home-empty">No roles configured yet — create one from the Jobs tab.</div>
+  ) : (
       <div className="rq-roletable">
         <div className="rq-roletable-head">
           <span>Role</span>
@@ -130,7 +110,35 @@ export const HomeRoles = ({ rows, loading, onNavigate }) => {
           );
         })}
       </div>
-    )}
+  );
+
+  // Embedded as the Monitoring section's by-role comparison — table only.
+  if (embedded) {
+    return <div className="hm-tabpanel">{body}</div>;
+  }
+
+  return (
+  <section className="home-section">
+    <div className="home-section-head">
+      <div>
+        <span className="kicker">ROLES · WHERE THE AGENT IS WORKING</span>
+        <h3 className="home-section-title">By role<em>.</em></h3>
+        <p className="home-section-sub">
+          Live counts per role: what's pending, what landed today, where humans are correcting the agent.
+        </p>
+      </div>
+      <button
+        type="button"
+        className="home-section-toggle"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <span>{open ? 'Hide' : 'Show'} roles ({rows.length}{totalPending > 0 ? ` · ${totalPending} pending` : ''})</span>
+        {open ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+      </button>
+    </div>
+
+    {open ? body : null}
   </section>
   );
 };
