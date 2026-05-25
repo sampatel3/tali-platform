@@ -134,6 +134,9 @@ class RoleBreakdownRow(BaseModel):
     pending: int
     today: int
     week: int
+    # All-time decision count for the role — lets the Hub hide roles the agent
+    # has never acted on from the by-role comparison table.
+    decisions_total: int = 0
     budget_cents: int
     cap_cents: int
     override_rate_pct: float

@@ -22,12 +22,19 @@ const humanizePausedReason = (reason) => {
 
 export const HomeRoles = ({ rows, loading, onNavigate, embedded = false }) => {
   const [open, setOpen] = useState(false);
-  const totalPending = rows.reduce((sum, r) => sum + (Number(r.pending) || 0), 0);
+  // Embedded (Monitoring) view only lists roles the agent has actually acted
+  // on — roles with zero lifetime decisions are noise in the comparison.
+  const visibleRows = embedded
+    ? rows.filter((r) => Number(r.decisions_total) > 0)
+    : rows;
+  const totalPending = visibleRows.reduce((sum, r) => sum + (Number(r.pending) || 0), 0);
 
   const body = loading ? (
     <div className="home-empty">Loading…</div>
-  ) : rows.length === 0 ? (
-    <div className="home-empty">No roles configured yet — create one from the Jobs tab.</div>
+  ) : visibleRows.length === 0 ? (
+    <div className="home-empty">
+      {embedded ? 'No roles have made a decision yet.' : 'No roles configured yet — create one from the Jobs tab.'}
+    </div>
   ) : (
       <div className="rq-roletable">
         <div className="rq-roletable-head">
@@ -39,7 +46,7 @@ export const HomeRoles = ({ rows, loading, onNavigate, embedded = false }) => {
           <span>Override / Teach 7d</span>
           <span />
         </div>
-        {rows.map((r) => {
+        {visibleRows.map((r) => {
           const cap = Number(r.cap_cents || 0);
           const spent = Number(r.budget_cents || 0);
           const overBudget = cap > 0 && spent > cap;
