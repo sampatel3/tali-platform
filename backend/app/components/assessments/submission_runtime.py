@@ -647,6 +647,89 @@ def submit_assessment_impl(
     else:
         score_mode = "assessment_plus_role_fit" if role_fit_score_100 is not None else "assessment_only_fallback"
 
+    # --- 3b. Rubric-driven scoring (#37): grade against the task's
+    # ``evaluation_rubric.dimensions`` via the Claude-driven RubricScorer
+    # shipped in #419. Overrides ``assessment_score_100`` when the rubric
+    # grades cleanly; falls back to the heuristic composite when grading
+    # fails (so the candidate is never blocked from a score by a transient
+    # Anthropic error).
+    rubric_breakdown: Dict[str, Any] = {}
+    if task.evaluation_rubric and settings_obj.ANTHROPIC_API_KEY:
+        try:
+            from .rubric_scoring import RubricScorer, ScoringArtifacts
+
+            # Build artifacts from the actual submission state.
+            repo_files_for_grader: Dict[str, str] = {}
+            for snap in (assessment.code_snapshots or []) + [{"final": final_code}]:
+                if not isinstance(snap, dict):
+                    continue
+                for k, v in snap.items():
+                    if isinstance(v, str) and "/" in k:
+                        repo_files_for_grader[k] = v
+            # Pull DESIGN.md-style files from final_code if it was the last edit
+            # (legacy path; new tasks don't ship scaffolds, transcript IS the doc).
+            design_doc = ""
+            for snap in reversed(assessment.code_snapshots or []):
+                if isinstance(snap, dict) and "final" in snap and isinstance(snap["final"], str):
+                    if "DESIGN" in snap["final"] or "LIBRARY_DESIGN" in snap["final"] or "LAUNCH_DECISION" in snap["final"] or "INCIDENT_DECISION" in snap["final"] or "EVAL_DESIGN" in snap["final"]:
+                        design_doc = snap["final"]
+                        break
+
+            artifacts = ScoringArtifacts(
+                repo_files=repo_files_for_grader,
+                design_doc=design_doc,
+                prompt_transcript=prompts,
+                test_results_summary=f"{passed} of {total} tests passed",
+                task_scenario=task.scenario or "",
+                candidate_role=str(task.role or ""),
+            )
+            scorer = RubricScorer(
+                api_key=settings_obj.ANTHROPIC_API_KEY,
+                organization_id=int(assessment.organization_id),
+                assessment_id=int(assessment.id),
+            )
+            rubric_result = scorer.grade_rubric(task.evaluation_rubric, artifacts)
+            if rubric_result.dimensions:
+                # The rubric weighted score becomes the authoritative
+                # ``assessment_score_100`` going forward — heuristics are
+                # kept in score_breakdown for the radar chart but the
+                # final number reflects the criteria-graded judgment.
+                old_score = assessment_score_100
+                assessment_score_100 = round(float(rubric_result.weighted_score_100), 2)
+                assessment_score_10 = round(assessment_score_100 / 10.0, 1)
+                rubric_breakdown = {
+                    "weighted_score_100": rubric_result.weighted_score_100,
+                    "model_used": rubric_result.model_used,
+                    "fully_graded": rubric_result.fully_graded,
+                    "failed_dimension_ids": rubric_result.failed_dimension_ids,
+                    "dimensions": [
+                        {
+                            "id": d.dimension_id,
+                            "score": d.score,
+                            "rating": d.rating,
+                            "reasoning": d.reasoning,
+                            "evidence_citations": d.evidence_citations,
+                            "weight": d.weight,
+                            "error": d.error,
+                        }
+                        for d in rubric_result.dimensions
+                    ],
+                    "heuristic_score_for_comparison": old_score,
+                }
+                logger.info(
+                    "RubricScorer applied assessment=%s heuristic=%.2f rubric=%.2f failed=%s",
+                    assessment.id, old_score, assessment_score_100,
+                    rubric_result.failed_dimension_ids,
+                )
+                # Recompute downstream blends with the new assessment score.
+                taali_score_100 = compute_taali_score(assessment_score_100, role_fit_score_100) or round(float(assessment_score_100), 1)
+        except Exception:
+            logger.exception(
+                "RubricScorer wire-in failed (falling back to heuristic) assessment_id=%s",
+                assessment.id,
+            )
+            rubric_breakdown = {"error": "rubric_scoring_failed"}
+
     # --- 4. Persist ---
     completion_ts = datetime.now(timezone.utc)
     assessment.status = AssessmentStatus.COMPLETED
@@ -734,12 +817,13 @@ def submit_assessment_impl(
     )
 
     # Store the full breakdown: component scores (0-100) + 8 category scores (0-10) +
-    # detailed per-metric scores + explanations + fit match
+    # detailed per-metric scores + explanations + fit match + rubric grades (#37).
     assessment.score_breakdown = {
         **component_scores,
         "category_scores": category_scores,
         "detailed_scores": detailed_scores,
         "explanations": explanations,
+        "rubric_grading": rubric_breakdown,
         "score_formula_version": TAALI_SCORING_RUBRIC_VERSION,
         "score_mode": score_mode,
         "score_components": {

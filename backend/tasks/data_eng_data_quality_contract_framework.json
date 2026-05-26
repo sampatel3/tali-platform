@@ -22,8 +22,7 @@
       "tests/test_contract.py": "from dq.contract import validate_schema\n\nSCHEMA = {\n    \"order_id\": {\"type\": \"int\", \"required\": True},\n    \"customer_id\": {\"type\": \"int\", \"required\": True},\n    \"status\": {\"type\": \"str\", \"required\": True},\n}\n\n\ndef test_fails_when_required_column_missing():\n    records = [{\"order_id\": 1, \"customer_id\": 10, \"status\": \"open\"}, {\"order_id\": 2, \"status\": \"open\"}]\n    result = validate_schema(records, SCHEMA)\n    assert result[\"passed\"] is False\n    assert any(\"customer_id\" in e for e in result[\"errors\"])\n\n\ndef test_fails_on_type_mismatch():\n    records = [{\"order_id\": \"oops\", \"customer_id\": 10, \"status\": \"open\"}]\n    result = validate_schema(records, SCHEMA)\n    assert result[\"passed\"] is False\n\n\ndef test_passes_when_contract_satisfied():\n    records = [{\"order_id\": 1, \"customer_id\": 10, \"status\": \"open\"}]\n    assert validate_schema(records, SCHEMA)[\"passed\"] is True\n",
       "tests/test_checks.py": "from datetime import datetime\n\nfrom dq.checks import accepted_values_check, freshness_check, not_null_check, unique_check\n\n\ndef test_not_null_check_flags_nulls():\n    res = not_null_check([{\"x\": 1}, {\"x\": None}, {}], \"x\")\n    assert res.passed is False\n\n\ndef test_unique_check_flags_duplicates():\n    res = unique_check([{\"id\": 1}, {\"id\": 2}, {\"id\": 1}], \"id\")\n    assert res.passed is False\n\n\ndef test_accepted_values_check_flags_unknown_value():\n    res = accepted_values_check([{\"s\": \"open\"}, {\"s\": \"WEIRD\"}], \"s\", [\"open\", \"closed\"])\n    assert res.passed is False\n\n\ndef test_freshness_check_flags_stale_partition():\n    res = freshness_check([{\"ts\": \"2026-05-15\"}], \"ts\", max_age_days=7, now=datetime(2026, 5, 24))\n    assert res.passed is False\n",
       "tests/test_gate.py": "from dq.gate import promotion_gate\nfrom dq.registry import CheckResult\nfrom dq.severity import ERROR, WARN\n\n\ndef test_gate_blocks_on_error_severity_failure():\n    results = [\n        CheckResult(check=\"not_null:customer_id\", passed=False, severity=ERROR, failing=[1]),\n        CheckResult(check=\"freshness:created_at\", passed=True, severity=WARN),\n    ]\n    gate = promotion_gate(results)\n    assert gate[\"passed\"] is False\n    assert \"not_null:customer_id\" in gate[\"blockers\"]\n\n\ndef test_gate_allows_warning_only_failures():\n    results = [CheckResult(check=\"freshness:created_at\", passed=False, severity=WARN, failing=[\"2026-05-15\"])]\n    gate = promotion_gate(results)\n    assert gate[\"passed\"] is True\n",
-      "requirements.txt": "pytest>=8.0.0\n",
-      "LIBRARY_DESIGN.md": "# LIBRARY_DESIGN.md — Data Quality Contract Framework\n\n> Fill this in as you work. The rubric reads it. A submission where this\n> doc is empty or vague will not score \"excellent\" on\n> ``library_design_doc`` regardless of test pass-rate.\n\n## 1. ``promotion_gate()`` return shape\n\nWhat shape did you settle on? Show a representative example (Python dict,\ndataclass, or whatever you chose):\n\n```python\n# Your example here\n```\n\nWhich downstream consumer is **sub-optimally** served by your choice, and\nwhy did you accept that trade-off?\n\n## 2. Severity tiers\n\nIs ERROR / WARN enough, or did you introduce additional tiers (SOFT_BLOCK,\nINFO, etc.)? Justify in 1–3 sentences.\n\n## 3. Composability guarantee\n\nState what your library guarantees to callers (e.g. \"checks are pure,\nno I/O\"; \"results are JSON-serialisable\"; \"gate output is independent\nof CheckResult ordering\"). 3–5 bullets.\n\n## 4. Freshness severity — contradiction you resolved\n\nThe spec says freshness is WARN. The finance partner said ERROR. What did\nyou ship as the default? Who would you check with before merging this\nchange in a real team? Why?\n\n## 5. What I did NOT implement and why\n\nRow-level quarantine, anomaly detection, schema-drift alerts, etc.\nWhat did you intentionally defer, and why is deferring safe given the\n30-minute time-box?\n"
+      "requirements.txt": "pytest>=8.0.0\n"
     }
   },
   "evaluation_rubric": {
@@ -59,12 +58,12 @@
         "poor": "Gate still passes everything."
       }
     },
-    "library_design_doc": {
+    "design_decisions_articulated": {
       "weight": 0.3,
       "criteria": {
-        "excellent": "LIBRARY_DESIGN.md is filled out in detail. The candidate names which of the three downstream consumers their promotion_gate return shape sub-optimises and accepts the trade-off explicitly. The freshness-severity contradiction between the spec and the finance partner is named, a resolution is chosen, and the candidate states who they would check with before merging. Composability guarantees are concrete (purity, JSON-serialisability, ordering independence) rather than hand-waved.",
-        "good": "LIBRARY_DESIGN.md is filled out but skims one of the named decisions (gate shape OR severity contradiction OR composability guarantee). Trade-offs are mentioned without being defended.",
-        "poor": "LIBRARY_DESIGN.md is empty, copy-pasted from the scaffold with no candidate-specific reasoning, or fails to mention either the gate-shape decision or the freshness contradiction. Indicates the candidate let the model drive without making the design decisions themselves."
+        "excellent": "The candidate engaged substantively with EVERY decision Claude opened with. For each: a specific choice was named (not a hedge like 'maybe' or 'depends'), the choice was justified in 1-3 sentences referencing the actual constraints in the scenario (the conflicting consumers, the residency rule, the lock window, etc.), and any stakeholder consultations were named. The chat transcript reads like the candidate is steering Claude, not the other way around.",
+        "good": "Most decisions answered substantively but at least one answer is thin (a choice without a justification, or a justification that doesn't reference the named constraints). The candidate is engaged but not driving every decision.",
+        "poor": "Decisions answered with one-word replies ('yes', 'sure', 'whatever you think'), unanswered, or visibly delegated back to Claude ('what would you suggest?'). The transcript shows the model driving the decisions, not the candidate. Pasting the brief back to Claude with no added context is the canonical poor signal."
       }
     }
   },
@@ -164,8 +163,8 @@
       },
       {
         "job_requirement": "Data Platform Engineering: own shared libraries used across pipelines. Make explicit API design decisions and communicate trade-offs to internal consumers (orchestrator, on-call, dashboard).",
-        "task_artifact": "LIBRARY_DESIGN.md — required design document covering gate-return-shape choice, severity-tier policy, composability guarantee, and the freshness-severity contradiction resolution.",
-        "rubric_dimension": "library_design_doc"
+        "task_artifact": "Chat transcript — Claude opens with the gate-shape and freshness-severity decisions; candidate's answers in the transcript are the design evidence.",
+        "rubric_dimension": "design_decisions_articulated"
       }
     ]
   },
@@ -176,5 +175,6 @@
     "baseline_failures_meaningful": true,
     "rubric_matches_role": true,
     "timebox_realistic": true
-  }
+  },
+  "task_opener": "Before I touch any code, two decisions that need to come from you — not from me. These shape everything else; I'm not going to write the gate or the checks until you've made a call on each.\n\n**1. The gate's return shape.** Three downstream systems consume the gate's output and they want different things:\n\n- **Airflow's promotion task** calls `gate(results)[\"passed\"]` and branches on the bool.\n- **The Slack router** (the on-call gets paged from here) wants the severity of each failing check, the first failing row when available, and grouping so the page is human-readable.\n- **The executive dashboard** wants a daily score it can aggregate over time — fraction of batches that passed, weighted by severity.\n\nWhatever single shape we return, one of them is going to be sub-optimally served. Which consumer are you optimising for, and which one are you accepting will get a less clean API? Don't say \"support all three\" — pick.\n\n**2. Freshness severity.** The spec lists `freshness_check` as WARN. A finance partner emailed last week asking us to default it to ERROR (\"freshness is the most important check for us\"). Both positions are defensible. Two things to decide:\n\n- WARN or ERROR as the default?\n- Would you check back with the finance partner before merging your change, or is the spec canonical enough that you'd just ship?\n\nOnce I have your answers I'll write the implementation that matches your choices. If you tell me \"whatever you think\" I'll push back — these need to come from you."
 }
