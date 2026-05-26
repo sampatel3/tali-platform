@@ -55,9 +55,6 @@ from .types import ACTOR_AGENT, Actor
 logger = logging.getLogger("taali.actions.send_assessment")
 
 
-_DEFAULT_DURATION_MINUTES = 90
-
-
 class SendAssessmentResult:
     """Lightweight result wrapper so callers can inspect status without re-querying."""
 
@@ -81,9 +78,13 @@ def run(
     organization_id: int,
     application_id: int,
     task_id: Optional[int] = None,
-    duration_minutes: int = _DEFAULT_DURATION_MINUTES,
+    duration_minutes: Optional[int] = None,
 ) -> SendAssessmentResult:
     """Send an assessment invite for ``application_id``.
+
+    ``duration_minutes`` defaults to the resolved task's ``duration_minutes``
+    (typically 30 — the time budget the task was designed for). Callers can
+    override with an explicit value in the 15–180 range.
 
     Returns ``SendAssessmentResult`` with ``status`` one of:
     - ``"sent"``: assessment created and invite dispatched
@@ -93,7 +94,7 @@ def run(
     - ``"misconfigured"``: role has 0 or ambiguous task linkage; recruiter
       action required
     """
-    if duration_minutes < 15 or duration_minutes > 180:
+    if duration_minutes is not None and (duration_minutes < 15 or duration_minutes > 180):
         raise HTTPException(
             status_code=422, detail="duration_minutes must be between 15 and 180"
         )
@@ -133,12 +134,17 @@ def run(
         return SendAssessmentResult(None, "misconfigured", exc.detail)
     task = choice.task
 
-    # Apply the design-knob "duration" override at invite time (frozen on the
-    # assessment). Knob is clamped to the same 15–180 bound as the arg.
+    # Resolution order for the assessment's time budget:
+    #   experiment-arm knob override       ── A/B design knob (wins for trial integrity)
+    #   > explicit ``duration_minutes`` arg ── caller override
+    #   > task.duration_minutes             ── what the task was designed for (default)
     knobs = choice.knob_overrides or {}
-    effective_duration = int(duration_minutes)
     if knobs.get("duration_minutes") is not None:
         effective_duration = max(15, min(180, int(knobs["duration_minutes"])))
+    elif duration_minutes is not None:
+        effective_duration = int(duration_minutes)
+    else:
+        effective_duration = max(15, min(180, int(task.duration_minutes or 30)))
 
     # Idempotency: refuse if a valid assessment already exists.
     existing = latest_valid_role_assessment(
