@@ -1276,6 +1276,12 @@ export default function AssessmentPage({
             claudePromptSending={claudePromptSending}
             claudePromptSlow={claudePromptSlow}
             claudePromptDisabled={isTimerPaused || submitted}
+            assessmentId={assessment?.id || assessmentId}
+            assessmentToken={assessmentTokenForApi}
+            claudeBudget={claudeBudget}
+            onClaudeBudgetUpdate={setClaudeBudget}
+            selectedFilePath={selectedRepoPath}
+            codeContext={editorContent}
             lightMode={assessmentLightMode}
             branchName={assessment?.branch_name}
           />
