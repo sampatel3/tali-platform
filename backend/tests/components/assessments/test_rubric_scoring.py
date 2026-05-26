@@ -1,0 +1,366 @@
+"""Unit tests for the rubric-driven scoring engine.
+
+These exercise the grader logic + aggregation + error resilience without
+hitting Anthropic. The Claude client is patched to return canned JSON;
+metering is patched to no-op.
+"""
+
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from app.components.assessments.rubric_scoring import (
+    DimensionGrade,
+    RubricResult,
+    RubricScorer,
+    ScoringArtifacts,
+)
+
+
+@pytest.fixture
+def sample_rubric():
+    """Mirror of the canonical task-spec shape (per
+    ``data_eng_data_quality_contract_framework`` today)."""
+    return {
+        "framework_assessment": {
+            "weight": 0.22,
+            "criteria": {
+                "excellent": "Reads spec + diagnostics before coding.",
+                "good": "Identifies the issue but misses one layer.",
+                "poor": "Edits without reading the spec.",
+            },
+        },
+        "contract_validation": {
+            "weight": 0.20,
+            "criteria": {
+                "excellent": "Validates required columns + types.",
+                "good": "One of columns/types only.",
+                "poor": "Leaves stub returning True.",
+            },
+        },
+        "quality_checks": {
+            "weight": 0.20,
+            "criteria": {
+                "excellent": "All 4 checks correct with failing rows.",
+                "good": "Most correct; one incorrect.",
+                "poor": "Checks still rubber-stamp.",
+            },
+        },
+        "severity_gating": {
+            "weight": 0.20,
+            "criteria": {
+                "excellent": "Blocks on ERROR only; names blockers.",
+                "good": "Blocks but ignores severity.",
+                "poor": "Gate still passes everything.",
+            },
+        },
+        "communication_clarity": {
+            "weight": 0.18,
+            "criteria": {
+                "excellent": "Platform-Lead-facing summary.",
+                "good": "Engineering summary, light on gaps.",
+                "poor": "Cannot explain what was fixed.",
+            },
+        },
+    }
+
+
+@pytest.fixture
+def sample_artifacts():
+    return ScoringArtifacts(
+        repo_files={
+            "dq/gate.py": "def promotion_gate(results):\n    return {'passed': True}\n",
+            "dq/checks.py": "def not_null_check(records, col):\n    return {'passed': True}\n",
+        },
+        design_doc="# LIBRARY_DESIGN\nI chose dict-shape because Airflow wanted bool.",
+        prompt_transcript=[
+            {"message": "fix it", "response": "I'll read the files and fix them."},
+            {"message": "all done?", "response": "Yes, all tests pass."},
+        ],
+        test_results_summary="9 of 9 tests passed",
+        task_scenario="Implement DQ framework primitives.",
+        candidate_role="data_engineer",
+    )
+
+
+def _grader_response(score, rating, reasoning="ok", citations=None):
+    """Build a Claude messages.create-shaped response object."""
+    payload = {
+        "score": score, "rating": rating, "reasoning": reasoning,
+        "evidence_citations": citations or [],
+    }
+    return SimpleNamespace(content=[SimpleNamespace(text=json.dumps(payload))])
+
+
+@pytest.fixture
+def patched_metered_client():
+    """Patch ``MeteredAnthropicClient`` so we can inject grader responses
+    without touching Anthropic. Returns a holder dict — tests populate
+    ``responses_to_yield`` IN ORDER (one per dimension graded)."""
+    holder = {
+        "responses_to_yield": [],
+        "calls": [],
+    }
+
+    def factory(*args, **kwargs):
+        instance = MagicMock()
+
+        def messages_create(**call_kwargs):
+            holder["calls"].append(call_kwargs)
+            if not holder["responses_to_yield"]:
+                raise RuntimeError("No more canned responses queued")
+            return holder["responses_to_yield"].pop(0)
+
+        instance.messages = MagicMock()
+        instance.messages.create = messages_create
+        return instance
+
+    with patch(
+        "app.components.assessments.rubric_scoring.MeteredAnthropicClient",
+        side_effect=factory,
+    ), patch(
+        "app.components.assessments.rubric_scoring.Anthropic",
+        MagicMock(),
+    ):
+        yield holder
+
+
+# ---- ScoringArtifacts ------------------------------------------------------
+
+
+def test_artifacts_repo_files_excerpt_respects_caps(sample_artifacts):
+    # Build artifacts with way more files than the cap
+    many_files = {f"file_{i:03d}.py": f"content_{i}" for i in range(50)}
+    art = ScoringArtifacts(repo_files=many_files)
+    excerpt = art.repo_files_excerpt()
+    # Should mention the omission count
+    assert "more files omitted" in excerpt
+    # First file should be present, far-tail file should not
+    assert "file_000.py" in excerpt
+    assert "file_049.py" not in excerpt
+
+
+def test_artifacts_empty_excerpts_are_human_readable():
+    art = ScoringArtifacts()
+    assert "no repo files" in art.repo_files_excerpt()
+    assert "no DESIGN.md" in art.design_doc_excerpt()
+    assert "no prompts" in art.prompt_transcript_excerpt()
+
+
+def test_artifacts_design_doc_truncates_long_docs():
+    huge = "x" * 50_000
+    art = ScoringArtifacts(design_doc=huge)
+    excerpt = art.design_doc_excerpt()
+    assert "truncated" in excerpt
+    assert len(excerpt) < len(huge)
+
+
+# ---- RubricScorer.grade_dimension ------------------------------------------
+
+
+def test_grade_dimension_returns_typed_result(
+    patched_metered_client, sample_artifacts,
+):
+    patched_metered_client["responses_to_yield"] = [
+        _grader_response(
+            7.5, "good",
+            reasoning="Code is correct but design doc is thin.",
+            citations=["dq/gate.py:5", "transcript turn 1"],
+        ),
+    ]
+    scorer = RubricScorer(api_key="sk-fake", organization_id=42, assessment_id=99)
+    grade = scorer.grade_dimension(
+        dimension_id="quality_checks",
+        criteria={"excellent": "x", "good": "y", "poor": "z"},
+        artifacts=sample_artifacts,
+        weight=0.20,
+    )
+    assert isinstance(grade, DimensionGrade)
+    assert grade.dimension_id == "quality_checks"
+    assert grade.score == 7.5
+    assert grade.rating == "good"
+    assert "thin" in grade.reasoning
+    assert grade.evidence_citations == ["dq/gate.py:5", "transcript turn 1"]
+    assert grade.weight == 0.20
+    assert grade.error is None
+
+
+def test_grade_dimension_clamps_out_of_range_scores(
+    patched_metered_client, sample_artifacts,
+):
+    patched_metered_client["responses_to_yield"] = [
+        _grader_response(99, "excellent", reasoning="ok"),
+    ]
+    scorer = RubricScorer(api_key="sk-fake", organization_id=1)
+    grade = scorer.grade_dimension("d", {}, sample_artifacts)
+    assert grade.score == 10.0
+
+
+def test_grade_dimension_handles_invalid_rating(
+    patched_metered_client, sample_artifacts,
+):
+    patched_metered_client["responses_to_yield"] = [
+        _grader_response(5, "mediocre", reasoning="x"),
+    ]
+    scorer = RubricScorer(api_key="sk-fake", organization_id=1)
+    grade = scorer.grade_dimension("d", {}, sample_artifacts)
+    # Unknown ratings collapse to ``poor`` — safer floor than letting bad
+    # ratings leak into recruiter-facing UI.
+    assert grade.rating == "poor"
+
+
+def test_grade_dimension_tolerates_markdown_fenced_json(
+    patched_metered_client, sample_artifacts,
+):
+    """Graders occasionally wrap their JSON in ```json fences despite
+    the system prompt. The parser must tolerate it."""
+    fenced = SimpleNamespace(content=[SimpleNamespace(
+        text='```json\n{"score": 6, "rating": "good", "reasoning": "x", "evidence_citations": []}\n```'
+    )])
+    patched_metered_client["responses_to_yield"] = [fenced]
+    scorer = RubricScorer(api_key="sk-fake", organization_id=1)
+    grade = scorer.grade_dimension("d", {}, sample_artifacts)
+    assert grade.score == 6.0
+    assert grade.rating == "good"
+    assert grade.error is None
+
+
+def test_grade_dimension_error_returns_zero_with_error_set(
+    patched_metered_client, sample_artifacts,
+):
+    """A grader call exception MUST NOT raise out of grade_dimension —
+    must return a typed result so the aggregator can flag a gap rather
+    than failing the whole submit flow."""
+    # No responses queued → factory raises on the call
+    scorer = RubricScorer(api_key="sk-fake", organization_id=1)
+    grade = scorer.grade_dimension("d", {}, sample_artifacts)
+    assert grade.score == 0.0
+    assert grade.rating == "poor"
+    assert grade.error is not None
+    assert "No more canned responses" in grade.error
+
+
+def test_grade_dimension_threads_metering_kwargs(
+    patched_metered_client, sample_artifacts,
+):
+    """Per the metering invariant, every Anthropic call must pass
+    ``metering={feature, organization_id, sub_feature, ...}`` through
+    to the wrapper so a ``UsageEvent`` lands. ``dimension`` MUST be
+    tagged so we can attribute per-dimension spend later."""
+    patched_metered_client["responses_to_yield"] = [
+        _grader_response(8, "good"),
+    ]
+    scorer = RubricScorer(api_key="sk-fake", organization_id=42, assessment_id=99)
+    scorer.grade_dimension("framework_assessment", {}, sample_artifacts)
+
+    call = patched_metered_client["calls"][0]
+    assert "metering" in call
+    meta = call["metering"]
+    assert meta["feature"] == "assessment"
+    assert meta["sub_feature"] == "rubric_scoring"
+    assert meta["organization_id"] == 42
+    assert meta["dimension"] == "framework_assessment"
+    assert meta["entity_id"] == "assessment:99"
+
+
+# ---- RubricScorer.grade_rubric (aggregation) -------------------------------
+
+
+def test_grade_rubric_aggregates_with_weights(
+    patched_metered_client, sample_rubric, sample_artifacts,
+):
+    # 5 dimensions, scores [8, 6, 7, 5, 9] with weights [0.22, 0.20, 0.20, 0.20, 0.18]
+    # weighted_sum = 8*.22 + 6*.20 + 7*.20 + 5*.20 + 9*.18 = 1.76 + 1.20 + 1.40 + 1.00 + 1.62 = 6.98
+    # weights sum to 1.00 → score_10 = 6.98 → score_100 = 69.8
+    patched_metered_client["responses_to_yield"] = [
+        _grader_response(8, "good"),
+        _grader_response(6, "good"),
+        _grader_response(7, "good"),
+        _grader_response(5, "good"),
+        _grader_response(9, "excellent"),
+    ]
+    scorer = RubricScorer(api_key="sk-fake", organization_id=1)
+    result = scorer.grade_rubric(sample_rubric, sample_artifacts)
+
+    assert isinstance(result, RubricResult)
+    assert len(result.dimensions) == 5
+    assert result.weighted_score_100 == pytest.approx(69.8, abs=0.05)
+    assert result.fully_graded
+    assert result.failed_dimension_ids == []
+
+
+def test_grade_rubric_normalizes_when_weights_dont_sum_to_one(
+    patched_metered_client, sample_artifacts,
+):
+    """If a future task spec lands with weights that don't sum to 1.0
+    (e.g. 0.95 from rounding), the aggregator should defensively
+    normalize so the final score isn't off."""
+    rubric = {
+        "a": {"weight": 0.45, "criteria": {}},
+        "b": {"weight": 0.50, "criteria": {}},
+    }
+    patched_metered_client["responses_to_yield"] = [
+        _grader_response(10, "excellent"),
+        _grader_response(10, "excellent"),
+    ]
+    scorer = RubricScorer(api_key="sk-fake", organization_id=1)
+    result = scorer.grade_rubric(rubric, sample_artifacts)
+    # Two 10/10 scores should yield 100/100 regardless of total weight
+    assert result.weighted_score_100 == pytest.approx(100.0, abs=0.05)
+
+
+def test_grade_rubric_continues_after_single_dimension_failure(
+    patched_metered_client, sample_rubric, sample_artifacts,
+):
+    """A grader exception on ONE dimension must NOT block scoring the
+    rest. The failed dimension records score=0 + error; the others
+    grade normally. Failure list is surfaced via
+    ``failed_dimension_ids`` so the recruiter UI can flag the gap."""
+    # 5 dimensions; queue 5 responses but make the 3rd one un-parseable
+    patched_metered_client["responses_to_yield"] = [
+        _grader_response(8, "good"),
+        _grader_response(7, "good"),
+        SimpleNamespace(content=[SimpleNamespace(text="not even close to JSON")]),
+        _grader_response(6, "good"),
+        _grader_response(5, "good"),
+    ]
+    scorer = RubricScorer(api_key="sk-fake", organization_id=1)
+    result = scorer.grade_rubric(sample_rubric, sample_artifacts)
+    assert len(result.dimensions) == 5
+    assert not result.fully_graded
+    assert "quality_checks" in result.failed_dimension_ids
+    # 4 dimensions should be graded normally
+    successful = [d for d in result.dimensions if d.error is None]
+    assert len(successful) == 4
+
+
+def test_grade_rubric_handles_empty_rubric(
+    patched_metered_client, sample_artifacts,
+):
+    scorer = RubricScorer(api_key="sk-fake", organization_id=1)
+    result = scorer.grade_rubric({}, sample_artifacts)
+    assert result.dimensions == []
+    assert result.weighted_score_100 == 0.0
+
+
+def test_grade_rubric_zero_weights_falls_back_to_equal_weighting(
+    patched_metered_client, sample_artifacts,
+):
+    """Defensive: if every dimension has weight 0 (misconfigured task),
+    treat them as equal-weighted rather than dividing by zero."""
+    rubric = {
+        "a": {"weight": 0.0, "criteria": {}},
+        "b": {"weight": 0.0, "criteria": {}},
+    }
+    patched_metered_client["responses_to_yield"] = [
+        _grader_response(10, "excellent"),
+        _grader_response(0, "poor"),
+    ]
+    scorer = RubricScorer(api_key="sk-fake", organization_id=1)
+    result = scorer.grade_rubric(rubric, sample_artifacts)
+    # Average of 10 and 0 = 5/10 = 50/100
+    assert result.weighted_score_100 == pytest.approx(50.0, abs=0.05)
