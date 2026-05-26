@@ -8,8 +8,10 @@ Single scoring path. No version flags. Iterate by bumping ``PROMPT_VERSION``
 and (when relevant) ``MODEL_VERSION``.
 """
 
+from ..llm.models import FAST_MODEL
+
 PROMPT_VERSION = "cv_match_v16"
-MODEL_VERSION = "claude-haiku-4-5-20251001"
+MODEL_VERSION = FAST_MODEL
 
 
 def __getattr__(name: str):

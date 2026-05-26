@@ -40,64 +40,62 @@ def _reqs():
     ]
 
 
-def _valid_response_json() -> str:
+# Runner uses forced tool-use; the gateway derives this tool name from
+# ``CVMatchResult`` (acronym-aware snake_case).
+TOOL_NAME = "emit_cv_match_result"
+
+
+def _valid_response_dict() -> dict:
+    """CVMatchResult payload dict — fed as the forced tool_use's ``.input``."""
     quote = "AWS Glue experience"
-    return json.dumps(
-        {
-            "prompt_version": PROMPT_VERSION,
-            "dimension_scores": {
-                "skills_coverage": 90.0,
-                "skills_depth": 85.0,
-                "title_trajectory": 80.0,
-                "seniority_alignment": 80.0,
-                "industry_match": 80.0,
-                "tenure_pattern": 80.0,
-            },
-            "skills_match_score": 0,
-            "experience_relevance_score": 0,
-            "requirements_assessment": [
-                {
-                    "requirement_id": "req_1",
-                    "requirement": "AWS Glue",
-                    "priority": "must_have",
-                    "evidence_quotes": [quote],
-                    "evidence_start_char": CV.find(quote),
-                    "evidence_end_char": CV.find(quote) + len(quote),
-                    "reasoning": "Glue named in candidate experience.",
-                    "status": "met",
-                    "match_tier": "exact",
-                    "impact": "Direct match.",
-                    "confidence": "high",
-                }
-            ],
-            "matching_skills": ["AWS Glue", "Python"],
-            "missing_skills": [],
-            "experience_highlights": ["AWS Glue experience"],
-            "concerns": [],
-            "summary": "Direct match on AWS Glue.",
-        }
-    )
+    return {
+        "prompt_version": PROMPT_VERSION,
+        "dimension_scores": {
+            "skills_coverage": 90.0,
+            "skills_depth": 85.0,
+            "title_trajectory": 80.0,
+            "seniority_alignment": 80.0,
+            "industry_match": 80.0,
+            "tenure_pattern": 80.0,
+        },
+        "skills_match_score": 0,
+        "experience_relevance_score": 0,
+        "requirements_assessment": [
+            {
+                "requirement_id": "req_1",
+                "requirement": "AWS Glue",
+                "priority": "must_have",
+                "evidence_quotes": [quote],
+                "evidence_start_char": CV.find(quote),
+                "evidence_end_char": CV.find(quote) + len(quote),
+                "reasoning": "Glue named in candidate experience.",
+                "status": "met",
+                "match_tier": "exact",
+                "impact": "Direct match.",
+                "confidence": "high",
+            }
+        ],
+        "matching_skills": ["AWS Glue", "Python"],
+        "missing_skills": [],
+        "experience_highlights": ["AWS Glue experience"],
+        "concerns": [],
+        "summary": "Direct match on AWS Glue.",
+    }
 
 
-# ---------- Stub client (mirrors test_cv_matching_runner) ----------
-
-
-@dataclass
-class _StubResponse:
-    text: str
-
-    @property
-    def content(self):
-        return [_StubBlock(text=self.text)]
-
-    @property
-    def usage(self):
-        return _StubUsage(100, 200)
+# ---------- Stub client (forced-tool-use shape, mirrors test_cv_matching_runner) ----------
 
 
 @dataclass
 class _StubBlock:
     text: str
+
+
+@dataclass
+class _ToolUseBlock:
+    name: str
+    input: dict
+    type: str = "tool_use"
 
 
 @dataclass
@@ -112,13 +110,28 @@ class _StubCount:
 
 
 @dataclass
+class _StubResponse:
+    blocks: list[Any]
+
+    @property
+    def content(self):
+        return self.blocks
+
+    @property
+    def usage(self):
+        return _StubUsage(100, 200)
+
+
+@dataclass
 class _StubMessages:
-    body: str
+    tool_input: dict
     calls: list[dict[str, Any]] = field(default_factory=list)
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
-        return _StubResponse(text=self.body)
+        return _StubResponse(
+            blocks=[_ToolUseBlock(name=TOOL_NAME, input=self.tool_input)]
+        )
 
     def count_tokens(self, **kwargs):
         return _StubCount(100)
@@ -260,7 +273,7 @@ def test_runner_caches_and_reuses(db, monkeypatch):
         archetype_synthesizer, "synthesize_archetype", lambda *a, **kw: None
     )
 
-    client = _StubClient(messages=_StubMessages(body=_valid_response_json()))
+    client = _StubClient(messages=_StubMessages(tool_input=_valid_response_dict()))
 
     out1 = run_cv_match(CV, JD, _reqs(), client=client, skip_cache=False)
     assert out1.scoring_status == ScoringStatus.OK
@@ -295,7 +308,7 @@ def test_runner_skip_cache_bypasses(db, monkeypatch):
         archetype_synthesizer, "synthesize_archetype", lambda *a, **kw: None
     )
 
-    client = _StubClient(messages=_StubMessages(body=_valid_response_json()))
+    client = _StubClient(messages=_StubMessages(tool_input=_valid_response_dict()))
 
     run_cv_match(CV, JD, _reqs(), client=client, skip_cache=True)
     run_cv_match(CV, JD, _reqs(), client=client, skip_cache=True)

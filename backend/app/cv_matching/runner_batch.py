@@ -34,8 +34,10 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Iterable, Literal
 
+from ..llm import parse_structured
 from . import MODEL_VERSION, PROMPT_VERSION
 from .aggregation import aggregate
 from .prompts import build_cv_match_messages
@@ -47,12 +49,12 @@ from .runner import (
     _count_input_tokens,
     _failed_output,
     _hash_text,
-    _parse_and_validate,
     _resolve_anthropic_client,
     _RunContext,
 )
 from .schemas import (
     CVMatchOutput,
+    CVMatchResult,
     RequirementInput,
     ScoringStatus,
 )
@@ -60,6 +62,8 @@ from .validation import (
     ValidationFailure,
     check_suspicious_score,
     scan_for_injection,
+    validate_cross_field_consistency,
+    validate_evidence_grounding,
 )
 
 logger = logging.getLogger("taali.cv_match.runner_batch")
@@ -410,7 +414,14 @@ def retrieve_cv_match_batch(
             raw_text = ""
 
         try:
-            parsed = _parse_and_validate(raw_text, job.cv_text, job.requirements)
+            parsed = parse_structured(
+                raw_text,
+                CVMatchResult,
+                semantic_validators=[
+                    partial(validate_evidence_grounding, cv_text=job.cv_text),
+                    partial(validate_cross_field_consistency, requirements=job.requirements),
+                ],
+            )
         except ValidationFailure as exc:
             logger.warning(
                 "Batch result validation failed for custom_id=%s: %s", custom_id, exc

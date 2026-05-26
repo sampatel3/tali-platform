@@ -12,8 +12,10 @@ reranked by Claude for soft criteria using graph-neighbourhood context.
 Bumping ``PROMPT_VERSION`` invalidates parser cache entries cleanly.
 """
 
+from ..llm.models import FAST_MODEL
+
 PROMPT_VERSION = "candidate_search_v1"
-MODEL_VERSION = "claude-haiku-4-5-20251001"
+MODEL_VERSION = FAST_MODEL
 
 
 def __getattr__(name: str):

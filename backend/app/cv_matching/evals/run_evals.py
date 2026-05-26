@@ -207,7 +207,7 @@ def _print_agreement_metrics(
     cases: list[dict], results: list[CaseResult]
 ) -> None:
     """Compute and print Krippendorff α, Cohen's κ, Spearman ρ, Brier, ECE."""
-    from .metrics import (
+    from ...evals.metrics import (
         brier_score,
         cohens_kappa,
         expected_calibration_error,

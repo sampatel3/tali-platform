@@ -1,4 +1,8 @@
-"""Tests for the eval harness (single scoring path)."""
+"""Tests for the eval harness (single scoring path).
+
+Stubs return forced-tool-use ``tool_use`` content blocks because the
+cv_matching runner runs in tool-use mode (Phase 2).
+"""
 
 from __future__ import annotations
 
@@ -19,10 +23,19 @@ from app.cv_matching.evals.run_evals import _build_requirements, run_one
 # Stub Anthropic client                                                        #
 # --------------------------------------------------------------------------- #
 
+TOOL_NAME = "emit_cv_match_result"
+
 
 @dataclass
 class _StubBlock:
     text: str
+
+
+@dataclass
+class _ToolUseBlock:
+    name: str
+    input: dict
+    type: str = "tool_use"
 
 
 @dataclass
@@ -33,25 +46,30 @@ class _StubUsage:
 
 @dataclass
 class _StubResponse:
-    text: str
+    blocks: list[Any]
 
     @property
     def content(self):
-        return [_StubBlock(text=self.text)]
+        return self.blocks
 
     @property
     def usage(self):
         return _StubUsage()
 
 
+def _tu(input_dict: dict, name: str = TOOL_NAME) -> _StubResponse:
+    return _StubResponse(blocks=[_ToolUseBlock(name=name, input=input_dict)])
+
+
 @dataclass
 class _StubMessages:
-    body: str
+    responses: list[_StubResponse]
     calls: list[dict[str, Any]] = field(default_factory=list)
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
-        return _StubResponse(text=self.body)
+        idx = len(self.calls) - 1
+        return self.responses[min(idx, len(self.responses) - 1)]
 
     def count_tokens(self, **kwargs):
         @dataclass
@@ -64,6 +82,10 @@ class _StubMessages:
 @dataclass
 class _StubClient:
     messages: _StubMessages
+
+
+def _stub_client(*responses: _StubResponse) -> _StubClient:
+    return _StubClient(messages=_StubMessages(responses=list(responses)))
 
 
 def _build_passing_response(cv_text: str) -> dict:
@@ -187,8 +209,7 @@ def test_run_one_passes_against_stub(monkeypatch, placeholder_case):
         / placeholder_case["cv_file"]
     ).read_text(encoding="utf-8")
 
-    response_body = json.dumps(_build_passing_response(cv_text))
-    stub = _StubClient(messages=_StubMessages(body=response_body))
+    stub = _stub_client(_tu(_build_passing_response(cv_text)))
 
     monkeypatch.setattr(
         "app.cv_matching.runner._resolve_anthropic_client",
@@ -217,7 +238,7 @@ def test_run_one_records_failure_when_must_meet_misses(monkeypatch, placeholder_
     payload["requirements_assessment"][0]["evidence_quotes"] = []
     payload["requirements_assessment"][0]["evidence_start_char"] = -1
     payload["requirements_assessment"][0]["evidence_end_char"] = -1
-    stub = _StubClient(messages=_StubMessages(body=json.dumps(payload)))
+    stub = _stub_client(_tu(payload))
     monkeypatch.setattr(
         "app.cv_matching.runner._resolve_anthropic_client",
         lambda: stub,
@@ -239,8 +260,7 @@ def test_main_writes_baseline_snapshot(monkeypatch, tmp_path):
         / "placeholder_eng.txt"
     )
     cv_text = cv_path.read_text(encoding="utf-8")
-    body = json.dumps(_build_passing_response(cv_text))
-    stub = _StubClient(messages=_StubMessages(body=body))
+    stub = _stub_client(_tu(_build_passing_response(cv_text)))
     monkeypatch.setattr(
         "app.cv_matching.runner._resolve_anthropic_client",
         lambda: stub,
@@ -270,8 +290,7 @@ def test_main_baseline_md_writes_markdown(monkeypatch, tmp_path):
         / "placeholder_eng.txt"
     )
     cv_text = cv_path.read_text(encoding="utf-8")
-    body = json.dumps(_build_passing_response(cv_text))
-    stub = _StubClient(messages=_StubMessages(body=body))
+    stub = _stub_client(_tu(_build_passing_response(cv_text)))
     monkeypatch.setattr(
         "app.cv_matching.runner._resolve_anthropic_client",
         lambda: stub,

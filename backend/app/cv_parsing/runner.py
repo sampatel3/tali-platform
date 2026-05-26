@@ -5,15 +5,18 @@ Public entry point: ``parse_cv(cv_text) -> ParsedCV``.
 Failure shape: returns ``ParsedCV(parse_failed=True, error_reason=...)``.
 Never raises to the caller — the parser is best-effort and the candidate
 page falls back to raw text when ``parse_failed`` is set.
+
+The call -> parse -> schema-validate -> bounded-retry lifecycle is
+delegated to the shared ``app.llm`` gateway. This module owns only the
+CV-specific concerns: the prompt, the ``ParsedCVSections`` schema,
+caching of the wrapped ``ParsedCV``, and the never-raise failure shape.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import re
-from pydantic import ValidationError
 
+from ..llm import MeteringContext, generate_structured
 from . import MODEL_VERSION, PROMPT_VERSION
 from .prompts import build_cv_parse_prompt
 from .schemas import ParsedCV, ParsedCVSections
@@ -23,19 +26,8 @@ logger = logging.getLogger("taali.cv_parsing.runner")
 OUTPUT_TOKEN_CEILING = 4096
 MAX_RETRIES = 1
 TEMPERATURE = 0.0
-INPUT_TOKEN_CEILING = 8000  # CVs can be longer than scoring prompts
 
-
-def _strip_json_fences(raw: str) -> str:
-    text = (raw or "").strip()
-    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-    if fence_match:
-        text = fence_match.group(1).strip()
-    if not text.startswith("{"):
-        obj_match = re.search(r"\{[\s\S]*\}", text)
-        if obj_match:
-            text = obj_match.group(0)
-    return text
+_SYSTEM_PROMPT = "You are a CV parser. Respond ONLY with valid JSON."
 
 
 def _resolve_anthropic_client():
@@ -47,22 +39,6 @@ def _resolve_anthropic_client():
     from ..services.claude_client_resolver import get_shared_client
 
     return get_shared_client()
-
-
-def _call_claude(client, *, prompt: str, metering: dict | None = None) -> str:
-    system = "You are a CV parser. Respond ONLY with valid JSON."
-    response = client.messages.create(
-        model=MODEL_VERSION,
-        max_tokens=OUTPUT_TOKEN_CEILING,
-        temperature=TEMPERATURE,
-        system=system,
-        messages=[{"role": "user", "content": prompt}],
-        metering=metering or {"feature": "cv_parse"},
-    )
-    try:
-        return response.content[0].text  # type: ignore[attr-defined]
-    except (AttributeError, IndexError):
-        return ""
 
 
 def parse_cv(
@@ -83,9 +59,9 @@ def parse_cv(
             ``{"feature": Feature.CV_PARSE, "organization_id": org.id,
             "user_id": user.id, "entity_id": str(application_id)}`` so
             the usage_event is attributed correctly. If absent, the call
-            still records (default: ``{"feature": "cv_parse"}``) but
-            without per-org / per-application attribution — fine for
-            tests, not fine for production.
+            still records (default feature ``"cv_parse"``) but without
+            per-org / per-application attribution — fine for tests, not
+            fine for production.
 
     Returns:
         ParsedCV. Always returns; never raises. On failure the result has
@@ -136,59 +112,32 @@ def parse_cv(
                 model_version=MODEL_VERSION,
             )
 
-    last_err = ""
-    parsed_sections: ParsedCVSections | None = None
-    current_prompt = prompt
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            raw = _call_claude(client, prompt=current_prompt, metering=metering)
-        except Exception as exc:
-            logger.exception("CV parse Claude call failed (attempt %d)", attempt + 1)
-            return ParsedCV.failed(
-                reason=f"claude_call_failed: {exc}",
-                prompt_version=PROMPT_VERSION,
-                model_version=MODEL_VERSION,
-            )
+    # Forced tool-use: the model emits ParsedCVSections as the tool's
+    # ``.input`` dict — no JSON parsing, no fence stripping, no syntactic
+    # retry path. ParsedCVSections's Pydantic JSON schema is the single
+    # wire contract; semantic ``model_validate`` still runs server-side.
+    result = generate_structured(
+        client,
+        model=MODEL_VERSION,
+        system=_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+        output_model=ParsedCVSections,
+        metering=MeteringContext.from_dict(metering, default_feature="cv_parse"),
+        max_tokens=OUTPUT_TOKEN_CEILING,
+        temperature=TEMPERATURE,
+        max_retries=MAX_RETRIES,
+        use_tool_use=True,
+    )
 
-        text = _strip_json_fences(raw)
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError as exc:
-            last_err = f"invalid_json: {exc}"
-            logger.warning("CV parse attempt %d failed: %s", attempt + 1, last_err)
-            if attempt < MAX_RETRIES:
-                current_prompt = (
-                    prompt
-                    + "\n\nYour previous response was not valid JSON. "
-                    + "Return a corrected JSON response. Do not include any commentary."
-                )
-                continue
-            break
-
-        try:
-            parsed_sections = ParsedCVSections.model_validate(payload)
-            break
-        except ValidationError as exc:
-            last_err = f"schema_validation: {exc}"
-            logger.warning("CV parse attempt %d failed: %s", attempt + 1, last_err)
-            if attempt < MAX_RETRIES:
-                current_prompt = (
-                    prompt
-                    + f"\n\nYour previous response failed schema validation: {last_err}\n"
-                    + "Return a corrected JSON response. Do not include any commentary."
-                )
-                continue
-            break
-
-    if parsed_sections is None:
+    if not result.ok or result.value is None:
         return ParsedCV.failed(
-            reason=f"validation_failed_after_retry: {last_err}",
+            reason=result.error_reason or "parse_failed",
             prompt_version=PROMPT_VERSION,
             model_version=MODEL_VERSION,
         )
 
     parsed = ParsedCV.from_sections(
-        parsed_sections,
+        result.value,
         prompt_version=PROMPT_VERSION,
         model_version=MODEL_VERSION,
     )

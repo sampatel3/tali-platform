@@ -19,6 +19,7 @@ from anthropic import Anthropic
 
 from ....services.metered_anthropic_client import MeteredAnthropicClient
 from ....platform.config import settings
+from ....llm import strip_json_fences
 from .model_fallback import candidate_models_for, is_model_not_found_error
 
 logger = logging.getLogger(__name__)
@@ -345,22 +346,18 @@ class ClaudeService:
 
             raw_text = response.content[0].text
 
+            # strip_json_fences pulls the object out of markdown / chatty
+            # wrapping (same job as the old inline regex), then we parse.
             try:
-                result = json.loads(raw_text)
+                result = json.loads(strip_json_fences(raw_text))
             except json.JSONDecodeError:
-                # Try to extract JSON from potential markdown wrapping
-                import re
-                json_match = re.search(r'\{[\s\S]*\}', raw_text)
-                if json_match:
-                    result = json.loads(json_match.group())
-                else:
-                    logger.warning("Claude returned non-JSON for prompt analysis")
-                    return {
-                        "success": False,
-                        "scores": {},
-                        "per_prompt_scores": [],
-                        "fraud_flags": [],
-                    }
+                logger.warning("Claude returned non-JSON for prompt analysis")
+                return {
+                    "success": False,
+                    "scores": {},
+                    "per_prompt_scores": [],
+                    "fraud_flags": [],
+                }
 
             scores = result.get("scores", {})
             per_prompt = result.get("per_prompt_scores", [])

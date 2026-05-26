@@ -13,12 +13,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import re
 import time
 import uuid
 from dataclasses import dataclass
 from typing import Literal
 
+from ..llm import CallUsage, MeteringContext, one_call, strip_json_fences
 from . import MODEL_VERSION
 from .prompts_pre_screen import (
     PRE_SCREEN_PROMPT_VERSION,
@@ -74,18 +74,6 @@ def compute_pre_screen_cache_key(
     }
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
-
-
-def _strip_json_fences(raw: str) -> str:
-    text = (raw or "").strip()
-    fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-    if fence:
-        text = fence.group(1).strip()
-    if not text.startswith("{"):
-        match = re.search(r"\{[\s\S]*\}", text)
-        if match:
-            text = match.group(0)
-    return text
 
 
 def _normalize_decision(value: str) -> PreScreenDecision:
@@ -258,24 +246,33 @@ def run_pre_screen(
     system_blocks = build_pre_screen_system(jd_text, requirements)
     messages = build_pre_screen_user_messages(cv_text, workable_context=workable_context)
     started = time.monotonic()
+    # The wrapper writes the pre-screen usage_event per call (FK-linked to
+    # claude_call_log) when a metering_context is threaded through — captures
+    # every actual call. The orchestrator records ONLY cache hits (no
+    # Anthropic call → no wrapper run), so no double-count. Absent a context
+    # (direct/test calls with a bare client) we skip so the bare client
+    # doesn't choke on the metering kwarg.
+    if metering_context:
+        pre_metering = MeteringContext(
+            feature="prescreen",
+            organization_id=metering_context.get("organization_id"),
+            role_id=metering_context.get("role_id"),
+            entity_id=metering_context.get("entity_id"),
+            user_id=metering_context.get("user_id"),
+        )
+    else:
+        pre_metering = MeteringContext.skipped(metered_by="direct_call_no_context")
+    usage = CallUsage()
     try:
-        # The wrapper writes the pre-screen usage_event per call (FK-linked
-        # to claude_call_log) when a metering_context is threaded through —
-        # captures every actual call. The orchestrator records ONLY cache
-        # hits (no Anthropic call → no wrapper run), so no double-count.
-        # Absent a context (direct/test calls with a bare client) we skip
-        # so the bare client doesn't choke on the metering kwarg.
-        if metering_context:
-            call_metering = {**metering_context, "feature": "prescreen"}
-        else:
-            call_metering = {"skip": True, "metered_by": "direct_call_no_context"}
-        response = client.messages.create(
+        response = one_call(
+            client,
             model=MODEL_VERSION,
-            max_tokens=256,
-            temperature=0,
             system=system_blocks,
             messages=messages,
-            metering=call_metering,
+            max_tokens=256,
+            temperature=0,
+            metering=pre_metering,
+            usage_sink=usage,
         )
     except Exception as exc:
         logger.warning("Pre-screen Claude call failed: %s", exc)
@@ -294,17 +291,12 @@ def run_pre_screen(
     except (AttributeError, IndexError):
         raw = ""
 
-    usage = getattr(response, "usage", None)
-    in_tok = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
-    out_tok = int(getattr(usage, "output_tokens", 0) or 0) if usage else 0
-    cache_read_tok = (
-        int(getattr(usage, "cache_read_input_tokens", 0) or 0) if usage else 0
-    )
-    cache_creation_tok = (
-        int(getattr(usage, "cache_creation_input_tokens", 0) or 0) if usage else 0
-    )
+    in_tok = usage.input_tokens
+    out_tok = usage.output_tokens
+    cache_read_tok = usage.cache_read_tokens
+    cache_creation_tok = usage.cache_creation_tokens
 
-    text = _strip_json_fences(raw)
+    text = strip_json_fences(raw)
     decision: PreScreenDecision = "error"
     reason = ""
     parsed_score: float | None = None

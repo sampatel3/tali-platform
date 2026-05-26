@@ -1,15 +1,19 @@
-"""Agreement metrics for the v4 eval harness (RALPH 3.10).
+"""Agreement metrics shared across eval harnesses.
 
 Pure-Python (no scipy / sklearn). Sufficient for golden-case batch
 sizes (tens of cases). For production-scale calibrator monitoring,
 swap in the sklearn equivalents — the call signatures match.
 
 Implemented:
-- spearman_rho(predictions, ground_truth)
-- cohens_kappa(predictions, ground_truth)        # categorical
-- krippendorff_alpha_nominal(coders, items)      # nominal data
-- brier_score(predictions, labels)
-- expected_calibration_error(predictions, labels, n_bins=10)
+- ``spearman_rho(predictions, ground_truth)``        — rank correlation
+- ``cohens_kappa(predictions, ground_truth)``        — categorical agreement
+- ``krippendorff_alpha_nominal(coders, items)``      — multi-coder reliability
+- ``brier_score(predictions, labels)``               — calibration loss
+- ``expected_calibration_error(predictions, labels)`` — ECE across bins
+
+Lifted from ``cv_matching/evals/metrics.py`` (Phase 6) so any pipeline's
+eval harness can import the same functions instead of each maintaining
+its own copy.
 """
 
 from __future__ import annotations

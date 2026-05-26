@@ -22,6 +22,7 @@ from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.organization import Organization
 from ..models.role import Role
 from ..platform.config import settings
+from ..llm import CallUsage, MeteringContext, one_call
 from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
 from ..services.usage_metering_service import record_event
@@ -435,26 +436,33 @@ def run_cycle(
         trigger_context=trigger_context,
     )
 
+    # Skip the wrapper's usage_event write per round — the explicit
+    # ``record_event`` below carries richer context (role_id, entity_id,
+    # agent_run_id, round_idx) and is the canonical source for agent
+    # spend. Without skip we'd get TWO UsageEvent rows per Anthropic call
+    # (one as Feature.OTHER from the wrapper fallback, one as
+    # Feature.AGENT_AUTONOMOUS here) — the platform metered Sonnet 4.5 at
+    # exactly 2× Anthropic billing on 2026-05-21 because of this exact bug.
+    round_metering = MeteringContext.skipped(
+        metered_by="agent_runtime.orchestrator.run_cycle"
+    )
+
     for round_idx in range(MAX_TOOL_ROUNDS):
         rounds_used = round_idx + 1
 
+        # Fresh sink per round so we can read per-round deltas for
+        # ``record_event``; cumulative tokens land on the ``AgentRun`` row.
+        round_usage = CallUsage()
         try:
-            # ``metering={"skip": True}`` so the MeteredAnthropicClient
-            # wrapper doesn't auto-record an event — the explicit
-            # ``record_event`` below carries richer context (role_id,
-            # entity_id, agent_run_id metadata) and is the canonical
-            # source. Without skip we get TWO UsageEvent rows per
-            # Anthropic call (one as Feature.OTHER from the wrapper
-            # fallback, one as Feature.AGENT_AUTONOMOUS here) — the
-            # platform metered Sonnet 4.5 at exactly 2× Anthropic billing
-            # for 2026-05-21 because of this exact bug.
-            response = client.messages.create(
+            response = one_call(
+                client,
                 model=model,
-                max_tokens=MAX_TOKENS_PER_ROUND,
                 system=system,
-                tools=AGENT_TOOLS,
                 messages=messages,
-                metering={"skip": True, "metered_by": "agent_runtime.orchestrator.run_cycle"},
+                max_tokens=MAX_TOKENS_PER_ROUND,
+                tools=AGENT_TOOLS,
+                metering=round_metering,
+                usage_sink=round_usage,
             )
         except Exception as exc:  # pragma: no cover — defensive
             logger.exception("agent_runtime: anthropic call failed role=%s", role.id)
@@ -462,16 +470,10 @@ def run_cycle(
             run.error = f"anthropic call failed: {exc}"
             break
 
-        usage = getattr(response, "usage", None)
-        round_input = int(getattr(usage, "input_tokens", 0) or 0)
-        round_output = int(getattr(usage, "output_tokens", 0) or 0)
-        round_cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
-        round_cache_creation = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
-
-        run.input_tokens += round_input
-        run.output_tokens += round_output
-        run.cache_read_tokens += round_cache_read
-        run.cache_creation_tokens += round_cache_creation
+        run.input_tokens += round_usage.input_tokens
+        run.output_tokens += round_usage.output_tokens
+        run.cache_read_tokens += round_usage.cache_read_tokens
+        run.cache_creation_tokens += round_usage.cache_creation_tokens
 
         try:
             event = record_event(
@@ -480,10 +482,10 @@ def run_cycle(
                 role_id=int(role.id),
                 feature=Feature.AGENT_AUTONOMOUS,
                 model=model,
-                input_tokens=round_input,
-                output_tokens=round_output,
-                cache_read_tokens=round_cache_read,
-                cache_creation_tokens=round_cache_creation,
+                input_tokens=round_usage.input_tokens,
+                output_tokens=round_usage.output_tokens,
+                cache_read_tokens=round_usage.cache_read_tokens,
+                cache_creation_tokens=round_usage.cache_creation_tokens,
                 user_id=None,
                 entity_id=str(role.id),
                 metadata={"agent_run_id": int(run.id), "round": int(round_idx)},

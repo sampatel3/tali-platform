@@ -1,8 +1,17 @@
-"""Tests for the unified ``runner.run_cv_match`` (single scoring path)."""
+"""Tests for the unified ``runner.run_cv_match`` (single scoring path).
+
+The runner runs in forced tool-use mode (Phase 2), so the pipeline-test
+stubs return ``tool_use`` blocks carrying ``CVMatchResult`` payload dicts
+as the tool's ``.input``. The ``_text()`` helper is kept for the negative
+tests that simulate a model that emitted prose instead of using the tool.
+
+The validation tests (grounding / consistency / partial-coverage) do not
+exercise the runner — they construct ``CVMatchResult`` directly and call
+the validators — so the tool-use flip doesn't touch them.
+"""
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -28,10 +37,21 @@ from app.cv_matching.validation import (
 # Stub Anthropic client                                                        #
 # --------------------------------------------------------------------------- #
 
+# Tool name derived by the gateway from ``CVMatchResult``. Stable across
+# calls so the prompt-cached tool definition stays warm.
+TOOL_NAME = "emit_cv_match_result"
+
 
 @dataclass
 class _StubBlock:
     text: str
+
+
+@dataclass
+class _ToolUseBlock:
+    name: str
+    input: dict
+    type: str = "tool_use"
 
 
 @dataclass
@@ -42,27 +62,41 @@ class _StubUsage:
 
 @dataclass
 class _StubResponse:
-    text: str
+    """Anthropic-shaped response carrying arbitrary content blocks."""
+
+    blocks: list[Any]
 
     @property
     def content(self):
-        return [_StubBlock(text=self.text)]
+        return self.blocks
 
     @property
     def usage(self):
         return _StubUsage()
 
 
+def _text(text: str) -> _StubResponse:
+    """Response with a single text block — simulates a model that emitted
+    prose instead of using the tool (the gateway treats this as a
+    ``ValidationFailure`` and retries)."""
+    return _StubResponse(blocks=[_StubBlock(text=text)])
+
+
+def _tu(input_dict: dict, name: str = TOOL_NAME) -> _StubResponse:
+    """Response with a single ``tool_use`` block carrying ``CVMatchResult``
+    fields as the tool's ``.input`` dict (the happy path)."""
+    return _StubResponse(blocks=[_ToolUseBlock(name=name, input=input_dict)])
+
+
 @dataclass
 class _StubMessages:
-    responses: list[str]
+    responses: list[_StubResponse]
     calls: list[dict[str, Any]] = field(default_factory=list)
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
         idx = len(self.calls) - 1
-        body = self.responses[min(idx, len(self.responses) - 1)]
-        return _StubResponse(text=body)
+        return self.responses[min(idx, len(self.responses) - 1)]
 
     def count_tokens(self, **kwargs):
         @dataclass
@@ -77,8 +111,8 @@ class _StubClient:
     messages: _StubMessages
 
 
-def _stub_client(responses: list[str]) -> _StubClient:
-    return _StubClient(messages=_StubMessages(responses=responses))
+def _stub_client(*responses: _StubResponse) -> _StubClient:
+    return _StubClient(messages=_StubMessages(responses=list(responses)))
 
 
 def _payload(
@@ -87,42 +121,42 @@ def _payload(
     quotes: list[str] | None = None,
     status: str = "met",
     match_tier: str = "exact",
-) -> str:
-    return json.dumps(
-        {
-            "prompt_version": PROMPT_VERSION,
-            "dimension_scores": {
-                "skills_coverage": 80.0,
-                "skills_depth": 75.0,
-                "title_trajectory": 70.0,
-                "seniority_alignment": 65.0,
-                "industry_match": 60.0,
-                "tenure_pattern": 55.0,
-            },
-            "skills_match_score": 0,
-            "experience_relevance_score": 0,
-            "requirements_assessment": [
-                {
-                    "requirement_id": "jd_req_1",
-                    "requirement": "5+ years Python",
-                    "priority": "must_have",
-                    "evidence_quotes": quotes if quotes is not None else [cv_text],
-                    "evidence_start_char": 0,
-                    "evidence_end_char": len(cv_text),
-                    "reasoning": "Candidate evidences Python.",
-                    "status": status,
-                    "match_tier": match_tier,
-                    "impact": "Core requirement.",
-                    "confidence": "high",
-                }
-            ],
-            "matching_skills": ["Python"],
-            "missing_skills": [],
-            "experience_highlights": [],
-            "concerns": [],
-            "summary": "Strong fit.",
-        }
-    )
+) -> dict:
+    """Build a CVMatchResult payload dict (used as tool_use input AND in
+    direct validation tests via ``CVMatchResult.model_validate``)."""
+    return {
+        "prompt_version": PROMPT_VERSION,
+        "dimension_scores": {
+            "skills_coverage": 80.0,
+            "skills_depth": 75.0,
+            "title_trajectory": 70.0,
+            "seniority_alignment": 65.0,
+            "industry_match": 60.0,
+            "tenure_pattern": 55.0,
+        },
+        "skills_match_score": 0,
+        "experience_relevance_score": 0,
+        "requirements_assessment": [
+            {
+                "requirement_id": "jd_req_1",
+                "requirement": "5+ years Python",
+                "priority": "must_have",
+                "evidence_quotes": quotes if quotes is not None else [cv_text],
+                "evidence_start_char": 0,
+                "evidence_end_char": len(cv_text),
+                "reasoning": "Candidate evidences Python.",
+                "status": status,
+                "match_tier": match_tier,
+                "impact": "Core requirement.",
+                "confidence": "high",
+            }
+        ],
+        "matching_skills": ["Python"],
+        "missing_skills": [],
+        "experience_highlights": [],
+        "concerns": [],
+        "summary": "Strong fit.",
+    }
 
 
 def _disable_archetype(monkeypatch):
@@ -141,7 +175,7 @@ def _disable_archetype(monkeypatch):
 def test_runner_returns_canonical_output(monkeypatch):
     _disable_archetype(monkeypatch)
     cv = "Python developer for 6 years"
-    client = _stub_client([_payload(cv_text=cv)])
+    client = _stub_client(_tu(_payload(cv_text=cv)))
     out = run_cv_match(
         cv_text=cv,
         jd_text="Senior Python role",
@@ -165,14 +199,21 @@ def test_runner_returns_canonical_output(monkeypatch):
     assert abs(out.skills_match_score - 77.5) < 0.01
     assert abs(out.experience_relevance_score - 62.5) < 0.01
 
+    # Forced tool-use: gateway sent a single synthetic tool whose
+    # input_schema is CVMatchResult.model_json_schema().
+    sent = client.messages.calls[0]
+    assert sent["tool_choice"] == {"type": "tool", "name": TOOL_NAME}
+    assert sent["tools"][0]["name"] == TOOL_NAME
+    assert sent["tools"][0]["input_schema"]["type"] == "object"
+
 
 def _payload_with_integrity(
     *,
     claims: list[dict] | None = None,
     timeline: list[dict] | None = None,
-) -> str:
+) -> dict:
     cv = "Python developer for 6 years"
-    body = json.loads(_payload(cv_text=cv))
+    body = _payload(cv_text=cv)
     if timeline is not None:
         body["candidate_snapshot"] = {
             "years_experience": 6,
@@ -181,10 +222,10 @@ def _payload_with_integrity(
         }
     if claims is not None:
         body["claims_to_verify"] = claims
-    return json.dumps(body)
+    return body
 
 
-def _run_with_payload(monkeypatch, payload: str) -> CVMatchOutput:
+def _run_with_payload(monkeypatch, payload: dict) -> CVMatchOutput:
     _disable_archetype(monkeypatch)
     return run_cv_match(
         cv_text="Python developer for 6 years",
@@ -194,7 +235,7 @@ def _run_with_payload(monkeypatch, payload: str) -> CVMatchOutput:
                 id="jd_req_1", requirement="5+ years Python", priority=Priority.MUST_HAVE
             )
         ],
-        client=_stub_client([payload]),
+        client=_stub_client(_tu(payload)),
         skip_cache=True,
     )
 
@@ -265,7 +306,7 @@ def test_runner_does_not_penalise_corroborated_known_claim(monkeypatch):
 def test_runner_sends_untrusted_cv_wrapper(monkeypatch):
     _disable_archetype(monkeypatch)
     cv = "Python developer for 6 years"
-    client = _stub_client([_payload(cv_text=cv)])
+    client = _stub_client(_tu(_payload(cv_text=cv)))
     run_cv_match(
         cv_text=cv,
         jd_text="JD",
@@ -292,7 +333,7 @@ def test_runner_failure_on_input_token_ceiling(monkeypatch):
     # Drive the ceiling to 1 so even a tiny input exceeds it.
     monkeypatch.setattr(runner_module, "INPUT_TOKEN_CEILING", 1)
     cv = "x"
-    client = _stub_client([_payload()])
+    client = _stub_client(_tu(_payload()))
     out = run_cv_match(
         cv_text=cv, jd_text="JD", requirements=[], client=client, skip_cache=True
     )
@@ -300,9 +341,12 @@ def test_runner_failure_on_input_token_ceiling(monkeypatch):
     assert "input_token_ceiling_exceeded" in out.error_reason
 
 
-def test_runner_failure_on_invalid_json_after_retry(monkeypatch):
+def test_runner_failure_when_model_never_uses_the_tool(monkeypatch):
+    """Both attempts emit prose instead of using the forced tool → runner
+    surfaces ``validation_failed_after_retry``. Equivalent to the old
+    'invalid JSON twice' case under tool-use semantics."""
     _disable_archetype(monkeypatch)
-    client = _stub_client(["not json", "still not json"])
+    client = _stub_client(_text("no tool here"), _text("still no tool"))
     out = run_cv_match(
         cv_text="cv", jd_text="JD", requirements=[], client=client, skip_cache=True
     )
@@ -316,9 +360,7 @@ def test_runner_failure_on_invalid_json_after_retry(monkeypatch):
 
 
 def test_grounding_drops_hallucinated_quotes():
-    payload = json.loads(
-        _payload(quotes=["Python developer for 6 years", "Built a quantum compiler"])
-    )
+    payload = _payload(quotes=["Python developer for 6 years", "Built a quantum compiler"])
     result = CVMatchResult.model_validate(payload)
     cv_text = "Python developer for 6 years at FinTechCo"
     downgraded = validate_evidence_grounding(result, cv_text)
@@ -329,9 +371,7 @@ def test_grounding_drops_hallucinated_quotes():
 
 
 def test_grounding_downgrades_when_no_quote_survives():
-    payload = json.loads(
-        _payload(quotes=["Built a quantum compiler", "Authored a NeurIPS paper"])
-    )
+    payload = _payload(quotes=["Built a quantum compiler", "Authored a NeurIPS paper"])
     result = CVMatchResult.model_validate(payload)
     cv_text = "Python developer for 6 years at FinTechCo"
     downgraded = validate_evidence_grounding(result, cv_text)
@@ -341,7 +381,7 @@ def test_grounding_downgrades_when_no_quote_survives():
 
 
 def test_consistency_rejects_match_tier_status_mismatch():
-    payload = json.loads(_payload(status="met", match_tier="missing"))
+    payload = _payload(status="met", match_tier="missing")
     result = CVMatchResult.model_validate(payload)
     try:
         validate_cross_field_consistency(result, requirements=[])
@@ -352,7 +392,7 @@ def test_consistency_rejects_match_tier_status_mismatch():
 
 
 def test_consistency_requires_evidence_for_met():
-    payload = json.loads(_payload(quotes=[]))
+    payload = _payload(quotes=[])
     result = CVMatchResult.model_validate(payload)
     try:
         validate_cross_field_consistency(result, requirements=[])

@@ -19,14 +19,15 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import re
 from typing import Any, Iterable
 
+from ..llm import strip_json_fences
+from ..llm.models import FAST_MODEL
 from ..platform.config import settings
 
 logger = logging.getLogger("taali.interview_tech")
 
-MODEL_VERSION = "claude-haiku-4-5-20251001"
+MODEL_VERSION = FAST_MODEL
 PROMPT_VERSION = "interview_tech_v1.0"
 OUTPUT_TOKEN_CEILING = 1600
 TRANSCRIPT_CHAR_CAP = 2000
@@ -202,18 +203,6 @@ def build_prompt(
     )
 
 
-def _strip_json_fences(raw: str) -> str:
-    text = (raw or "").strip()
-    fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-    if fence:
-        text = fence.group(1).strip()
-    if not text.startswith("{"):
-        match = re.search(r"\{[\s\S]*\}", text)
-        if match:
-            text = match.group(0)
-    return text
-
-
 def _normalize_question(item: Any) -> dict[str, Any] | None:
     if not isinstance(item, dict):
         return None
@@ -328,7 +317,7 @@ def generate_tech_questions(
     except (AttributeError, IndexError):
         raw = ""
 
-    text = _strip_json_fences(raw)
+    text = strip_json_fences(raw)
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
