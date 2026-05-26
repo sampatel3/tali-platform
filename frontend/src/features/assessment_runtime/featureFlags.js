@@ -11,20 +11,23 @@
 // inject the value into the runtime payload by setting the global
 // before the SPA boots.
 
-const readWindowFlag = (key) => {
-  if (typeof window === 'undefined') return false;
-  try {
-    return window[key] === true;
-  } catch {
-    return false;
-  }
-};
-
 /**
  * Returns true when the new HTTP-based Claude chat component should be
- * mounted in place of the legacy WebSocket-on-PTY chat. Defaults to off.
+ * mounted in place of the legacy WebSocket-on-PTY chat.
  *
- * Toggle in browser devtools:
- *   window.__TAALI_AGENTIC_CHAT__ = true; // then reload
+ * **Defaults to ON.** No historical assessments existed to regress against,
+ * so the rollout strategy is: turn it on by default for everyone, validate
+ * with the test candidate, then delete the legacy CLI/PTY path in a
+ * follow-up cleanup PR.
+ *
+ * Disable in browser devtools if a hot rollback is ever needed:
+ *   window.__TAALI_AGENTIC_CHAT__ = false; // then reload
  */
-export const useAgenticClaudeChat = () => readWindowFlag('__TAALI_AGENTIC_CHAT__');
+export const useAgenticClaudeChat = () => {
+  if (typeof window === 'undefined') return true;
+  try {
+    return window.__TAALI_AGENTIC_CHAT__ !== false;
+  } catch {
+    return true;
+  }
+};
