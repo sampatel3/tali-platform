@@ -197,6 +197,24 @@ class ClaudeRequest(BaseModel):
     time_since_last_prompt_ms: Optional[int] = None  # Time since previous prompt in ms
 
 
+class ClaudeChatRequest(BaseModel):
+    """Request body for the new agentic ``/claude/chat`` endpoint.
+
+    Differs from ``ClaudeRequest`` in two ways: no client-side
+    ``conversation_history`` (the backend reads ``ai_prompts`` directly so the
+    client can't tamper) and no client-side ``repo_files`` (Claude fetches what
+    it needs via tool-use against the live sandbox).
+    """
+
+    message: str = Field(min_length=1, max_length=4000)
+    code_context: Optional[str] = Field(default=None, max_length=12000)
+    selected_file_path: Optional[str] = Field(default=None, max_length=500)
+    paste_detected: bool = False
+    browser_focused: bool = True
+    time_since_last_prompt_ms: Optional[int] = None
+    request_id: Optional[str] = Field(default=None, max_length=128)
+
+
 class SubmitRequest(BaseModel):
     final_code: str = Field(min_length=1, max_length=100000)
     selected_file_path: Optional[str] = Field(default=None, max_length=500)
