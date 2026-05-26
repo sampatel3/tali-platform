@@ -503,7 +503,16 @@ export const AssessmentWorkspace = ({
     <section
       className={`overflow-hidden rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] shadow-[var(--shadow-md)] ${className}`.trim()}
     >
-      <div className="flex min-h-[620px] flex-col">
+      {/* Cap the workspace at a viewport-relative height so the chat
+          panel inside is bounded. Without this, the page itself grows
+          as Claude's messages stack up and the candidate has to scroll
+          the whole page instead of the chat scrolling internally
+          (Sam, 2026-05-26). 220px reserves room for the top nav, the
+          assessment header, and the task-context window above. The
+          ``min-h-[620px]`` keeps the previous floor for short windows
+          (laptops at 800px tall stay usable). ``100dvh`` over ``vh``
+          so mobile address-bar collapse doesn't leave a gap. */}
+      <div className="flex min-h-[620px] max-h-[calc(100dvh-220px)] flex-col">
         <div
           className="grid min-h-0 flex-1 xl:[grid-template-columns:var(--workspace-grid)]"
           style={workspaceGridStyle}
