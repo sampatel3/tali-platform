@@ -64,13 +64,21 @@ _MIN_NEXT_CALL_ESTIMATE_USD = 0.01
 
 # Brief filler text appended when we hit the tool-turn cap. Surfaces to
 # the candidate as the final assistant message so they aren't left with
-# an empty response.
+# an empty response. Worded so it doesn't sound like a $ budget — the
+# candidate gets a $5 budget for the assessment; this cap is a per-turn
+# tool-call count.
 _MAX_TURNS_FALLBACK_TEXT = (
-    "I couldn't complete that within the tool-use budget for this turn. "
-    "Try narrowing your request or breaking it into smaller steps."
+    "I made several tool calls but couldn't finish answering — the answer may "
+    "not be in the repo at all, or it lives somewhere I haven't looked. "
+    "Try asking about a specific file or pointing me at the right area."
 )
 
-_BUDGET_EXHAUSTED_TEXT = "Budget exhausted — partial response above."
+# Distinct from the turn-cap above: this fires when the candidate's per-
+# assessment USD budget is actually drained, not just the per-turn count.
+_BUDGET_EXHAUSTED_TEXT = (
+    "Your Claude budget for this assessment is exhausted. Submit when you're "
+    "ready — the partial response above is what I got to before the cap."
+)
 
 
 @dataclass
@@ -140,7 +148,11 @@ class AgenticChatService:
         self._organization_id = organization_id
         self._executor = executor
         self._tools = tools if tools is not None else _DEFAULT_TOOLS
-        self._model = settings.resolved_claude_model
+        # The candidate chat picks its own model independent of CLAUDE_MODEL
+        # (which prod overrides to Sonnet for the recruitment agent). Default
+        # to Haiku for chat — faster + cheaper, fully capable for read/edit-
+        # file tool-use.
+        self._model = settings.resolved_claude_chat_model
         self._max_turns = int(max_turns if max_turns is not None else settings.CLAUDE_TOOL_MAX_TURNS)
         logger.info(
             "AgenticChatService initialised model=%s org=%s max_turns=%d tool_count=%d",

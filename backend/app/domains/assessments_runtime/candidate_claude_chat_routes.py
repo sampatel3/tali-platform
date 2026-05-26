@@ -62,7 +62,12 @@ def _build_agentic_system_prompt(task: Task) -> str:
     return "\n".join(
         [
             "You are helping a candidate complete a time-boxed technical assessment in a live code workspace.",
-            "Be concise. The candidate is on a clock.",
+            "",
+            "STYLE:",
+            "- Be concise. The candidate is on a clock.",
+            "- Answer the question that was asked. Don't pre-emptively explore the whole repo.",
+            "- Use the fewest tool calls that get to the answer. Stop searching as soon as you can answer.",
+            "- If the answer doesn't exist (e.g. asked about code that generates a static doc), say so plainly after 2–3 tool calls — don't keep digging.",
             "",
             "Task scenario:",
             scenario,

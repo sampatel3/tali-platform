@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     CLAUDE_SCORING_MODEL: str = ""
     # Batch-scoring override (cost optimized). If empty, falls back to CLAUDE_MODEL.
     CLAUDE_SCORING_BATCH_MODEL: str = "claude-3-5-haiku-latest"
+    # Candidate-facing agentic chat model. Independent of CLAUDE_MODEL (which
+    # the recruitment agent overrides to Sonnet on prod for reasoning quality).
+    # Defaults to Haiku because: (a) ~5× faster round-trip — candidate UX gets
+    # ~30s → ~5s per tool-using prompt; (b) ~10× cheaper inside the $5/assessment
+    # budget; (c) Haiku is fully capable for the read/edit-file tool-use shape
+    # the chat exercises.
+    CLAUDE_CHAT_MODEL: str = "claude-3-5-haiku-latest"
     MAX_TOKENS_PER_RESPONSE: int = 1024
     # Terminal-native Claude Code runtime
     ASSESSMENT_TERMINAL_ENABLED: bool = True
@@ -56,10 +63,13 @@ class Settings(BaseSettings):
     CLAUDE_CLI_PROVIDER_USAGE_GRACE_OUTPUT_EVENTS: int = 40
     # Agentic chat (terminal-removal replacement) — multi-turn tool-use loop.
     # CLAUDE_TOOL_MAX_TURNS caps how many ``messages.create`` calls one
-    # candidate→assistant turn can fan into. 8 covers virtually every
-    # legitimate session in the pilot data (95th pct = 4) while still
-    # short-circuiting prompt-injection loops.
-    CLAUDE_TOOL_MAX_TURNS: int = 8
+    # candidate→assistant turn can fan into. Bumped 8 → 12 after the
+    # 2026-05-26 dry-run: the test candidate's first prompt ("where is
+    # quality_report.md created?") fanned to 11 tool calls because the
+    # answer is "it's not — that's a static doc" and Claude needed several
+    # reads to confirm. 12 gives enough headroom for legitimate exploration
+    # while still short-circuiting prompt-injection loops.
+    CLAUDE_TOOL_MAX_TURNS: int = 12
     # Per-tool wall-clock cap inside the executor (leaf A enforces;
     # surfaced here so the timeout is grep-able alongside the loop cap).
     CLAUDE_TOOL_TIMEOUT_SECONDS: int = 10
@@ -93,6 +103,14 @@ class Settings(BaseSettings):
     def resolved_claude_model(self) -> str:
         """Claude model for assessment terminal, chat, and general use. Defaults to claude-3-5-haiku-latest."""
         model = (self.CLAUDE_MODEL or "").strip()
+        return model or "claude-3-5-haiku-latest"
+
+    @property
+    def resolved_claude_chat_model(self) -> str:
+        """Candidate agentic-chat model. Independent of CLAUDE_MODEL — prod
+        overrides CLAUDE_MODEL to Sonnet for the recruitment agent, but the
+        candidate chat should stay on Haiku for speed + cost."""
+        model = (self.CLAUDE_CHAT_MODEL or "").strip()
         return model or "claude-3-5-haiku-latest"
 
     @property
