@@ -200,11 +200,23 @@ def _read_sandbox_repo_files(sandbox: Any, repo_root: str, max_files: int = 200,
     or `None` on failure.
     """
     try:
+        # Exclude generated / vendored content. Without this, ``.venv/``
+        # bytecode + pip cache leaks into the candidate's file explorer
+        # and drowns the actual repo content (assessment 77,
+        # 2026-05-26 — 100+ ``.cpython-312.pyc`` rows in the tree).
         result = sandbox.run_code(
             "import json, os, pathlib\n"
             f"repo_root = pathlib.Path({repo_root!r})\n"
             f"MAX_FILES = {int(max_files)}\n"
             f"MAX_BYTES = {int(max_bytes)}\n"
+            "EXCLUDE_DIR_NAMES = {\n"
+            "  '.git', '.venv', 'venv', '.tox', '.mypy_cache',\n"
+            "  '.pytest_cache', '.ruff_cache', '__pycache__',\n"
+            "  'node_modules', '.next', 'dist', 'build', '.idea',\n"
+            "  '.vscode',\n"
+            "}\n"
+            "EXCLUDE_SUFFIXES = ('.pyc', '.pyo', '.pyd')\n"
+            "EXCLUDE_NAMES = {'.DS_Store'}\n"
             "files = {}\n"
             "skipped = []\n"
             "if repo_root.exists():\n"
@@ -212,7 +224,10 @@ def _read_sandbox_repo_files(sandbox: Any, repo_root: str, max_files: int = 200,
             "    if not path.is_file():\n"
             "      continue\n"
             "    rel = path.relative_to(repo_root).as_posix()\n"
-            "    if rel.startswith('.git/') or rel == '.git' or '/.git/' in '/'+rel:\n"
+            "    parts = rel.split('/')\n"
+            "    if any(p in EXCLUDE_DIR_NAMES for p in parts[:-1]):\n"
+            "      continue\n"
+            "    if path.name in EXCLUDE_NAMES or rel.endswith(EXCLUDE_SUFFIXES):\n"
             "      continue\n"
             "    if len(files) >= MAX_FILES:\n"
             "      skipped.append(rel)\n"
