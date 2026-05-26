@@ -1303,6 +1303,7 @@ export default function AssessmentPage({
             codeContext={editorContent}
             lightMode={assessmentLightMode}
             branchName={assessment?.branch_name}
+            initialAiPrompts={assessment?.ai_prompts || null}
           />
 
           <section className="mt-4 grid gap-4 rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] px-5 py-5 shadow-[var(--shadow-sm)] lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center lg:px-6">

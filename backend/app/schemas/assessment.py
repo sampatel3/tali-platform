@@ -158,6 +158,11 @@ class AssessmentStart(BaseModel):
     repo_url: Optional[str] = None
     branch_name: Optional[str] = None
     clone_command: Optional[str] = None
+    # Existing chat transcript including any ``opener`` turn the backend
+    # persisted at /start time (interrogative mode, #422). The frontend
+    # hydrates the chat panel from this so the candidate sees Claude's
+    # decision questions immediately on first open.
+    ai_prompts: Optional[List[Dict[str, Any]]] = None
 
 
 class AssessmentStartRequest(BaseModel):

@@ -398,6 +398,10 @@ export const AssessmentWorkspace = ({
   codeContext,
   lightMode = false,
   branchName,
+  // Existing transcript including the task_opener Claude wrote at /start
+  // time. Threaded into AssessmentClaudeChat as initialAiPrompts so the
+  // candidate sees the decision questions on first chat open (#37).
+  initialAiPrompts = null,
 }) => {
   const agenticChatEnabled = useAgenticClaudeChat();
   const modifiedPathSet = useMemo(
@@ -774,6 +778,7 @@ export const AssessmentWorkspace = ({
                     claudeBudget={claudeBudget}
                     onBudgetUpdate={onClaudeBudgetUpdate}
                     disabled={claudePromptDisabled}
+                    initialAiPrompts={initialAiPrompts}
                   />
                 </div>
               ) : (
