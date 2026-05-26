@@ -35,6 +35,14 @@ export const assessments = {
     api.post(`/assessments/${id}/claude`, payload, {
       headers: { 'X-Assessment-Token': assessmentToken },
     }),
+  // New HTTP-based Claude chat that talks to the agentic backend
+  // route. Lives alongside `claude` (the legacy non-tool helper) while
+  // the terminal-removal refactor lands; the route rewrite in a later
+  // PR will decide which helper survives.
+  claudeChat: (assessmentId, payload, assessmentToken) =>
+    api.post(`/assessments/${assessmentId}/claude/chat`, payload, {
+      headers: { 'X-Assessment-Token': assessmentToken },
+    }),
   terminalWsUrl: (id /*, assessmentToken */) => buildTerminalWsUrl(id),
   submit: (id, payloadOrFinalCode, assessmentToken, metadata = {}) =>
     api.post(

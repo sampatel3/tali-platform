@@ -12,6 +12,9 @@ import {
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
+import { AssessmentClaudeChat } from './AssessmentClaudeChat';
+import { useAgenticClaudeChat } from './featureFlags';
+
 const LazyCodeEditor = lazy(() => import('../../components/assessment/CodeEditor'));
 const LazyAssessmentTerminal = lazy(() =>
   import('./AssessmentTerminal').then((module) => ({ default: module.AssessmentTerminal }))
@@ -383,9 +386,20 @@ export const AssessmentWorkspace = ({
   claudePromptSending = false,
   claudePromptSlow = false,
   claudePromptDisabled = false,
+  // Agentic chat (leaf C of the terminal-removal refactor): only used
+  // when the runtime feature flag `__TAALI_AGENTIC_CHAT__` is on. The
+  // legacy WebSocket-on-PTY chat path above stays wired so we can
+  // toggle back without a rebuild while the backend route lands.
+  assessmentId,
+  assessmentToken,
+  claudeBudget,
+  onClaudeBudgetUpdate,
+  selectedFilePath,
+  codeContext,
   lightMode = false,
   branchName,
 }) => {
+  const agenticChatEnabled = useAgenticClaudeChat();
   const modifiedPathSet = useMemo(
     () => new Set(Array.isArray(modifiedRepoPaths) ? modifiedRepoPaths : []),
     [modifiedRepoPaths],
@@ -649,6 +663,18 @@ export const AssessmentWorkspace = ({
                   <div className="text-[11px] leading-5 text-[var(--mute)]">
                     Expand for chat
                   </div>
+                </div>
+              ) : agenticChatEnabled ? (
+                <div className="min-h-0 flex-1 px-4 py-4">
+                  <AssessmentClaudeChat
+                    assessmentId={assessmentId}
+                    token={assessmentToken}
+                    selectedFilePath={selectedFilePath}
+                    codeContext={codeContext}
+                    claudeBudget={claudeBudget}
+                    onBudgetUpdate={onClaudeBudgetUpdate}
+                    disabled={claudePromptDisabled}
+                  />
                 </div>
               ) : (
                 <>
