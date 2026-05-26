@@ -86,6 +86,15 @@ class Settings(BaseSettings):
     # surfaced by the Anthropic reconciliation panel as -75% drift.
     CLAUDE_INPUT_COST_PER_MILLION_USD: float = 1.0
     CLAUDE_OUTPUT_COST_PER_MILLION_USD: float = 5.0
+    # Anthropic prompt-cache pricing (Haiku 4.5 official rates). Cache
+    # reads are ~10x cheaper than uncached input; cache writes are
+    # ~1.25x. The candidate-facing budget UI was undercounting by ~2x
+    # because it priced only ``input_tokens`` and ``output_tokens``,
+    # ignoring the large ``cache_read_input_tokens`` value the SDK
+    # streams back (assessment 77, 2026-05-26 — real spend was $0.149
+    # but budget UI said $0.075).
+    CLAUDE_CACHE_READ_COST_PER_MILLION_USD: float = 0.10
+    CLAUDE_CACHE_CREATION_COST_PER_MILLION_USD: float = 1.25
 
     # Usage-based pricing (2026-04-29 cutover from Lemon Squeezy).
     # When False, every Claude call writes a usage_events row but the
