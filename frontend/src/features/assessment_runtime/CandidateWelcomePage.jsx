@@ -27,6 +27,22 @@ const getFirstName = (fullName) => {
   return first || 'there';
 };
 
+// The preview API returns ``task.role`` as the slug we store in the DB
+// (``data_engineer``, ``ai_engineer``, etc.) — a backend enum key, not
+// a label. Render it as a human title (``Data Engineer``) for the
+// candidate. Sam, 2026-05-26: "why is it data_engineer?" — yeah, slug
+// leaking into UI.
+const formatRoleLabel = (slug) => {
+  const raw = String(slug || '').trim();
+  if (!raw) return 'Engineering';
+  return raw
+    .replace(/[_-]+/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+};
+
 const formatDeadline = (value) => {
   if (!value) return 'No hard deadline listed';
   const date = new Date(value);
@@ -144,7 +160,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
   const visibleError = startError || (isStartBlocked ? startBlockedMessage : previewError);
   const metaTitle = [
     organizationName || 'TAALI',
-    taskPreview?.role || 'Candidate assessment',
+    taskPreview?.role ? formatRoleLabel(taskPreview.role) : 'Candidate assessment',
     candidateName || null,
   ].filter(Boolean).join(' · ');
 
@@ -183,7 +199,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
               </p>
 
               <div className="mt-6 grid gap-4 md:grid-cols-3">
-                <InfoRow label="Role" value={taskPreview?.role || 'Engineering'} />
+                <InfoRow label="Role" value={formatRoleLabel(taskPreview?.role)} />
                 <InfoRow label="Duration" value={`${durationMinutes} min`} />
                 <InfoRow label="Submit by" value={formatDeadline(previewData?.expires_at)} />
               </div>
