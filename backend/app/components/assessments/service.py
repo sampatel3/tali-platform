@@ -794,6 +794,38 @@ def start_or_resume_assessment(
                 "assessment_started",
                 {"type": "started"},
             )
+            # Conversational interrogation (#37): if the task spec defines a
+            # ``task_opener``, persist it as ai_prompts[0] so the candidate
+            # sees Claude's decision questions BEFORE typing anything. The
+            # chat flattener treats an opener (empty ``message``) as an
+            # assistant-only turn — Claude sees that it asked something and
+            # is waiting for an answer. The system prompt teaches Claude to
+            # refuse to write substantive code until the candidate engages
+            # with every named decision. Without this opener, candidates
+            # delegate by pasting the brief ("can you help with this?" —
+            # assessment 80, 2026-05-26).
+            task_for_opener = (
+                db.query(Task).filter(Task.id == assessment.task_id).first()
+                if assessment.task_id
+                else None
+            )
+            opener_text = ""
+            if task_for_opener is not None:
+                extra = task_for_opener.extra_data if isinstance(task_for_opener.extra_data, dict) else {}
+                opener_text = str(extra.get("task_opener") or "").strip()
+            if opener_text and not (assessment.ai_prompts or []):
+                assessment.ai_prompts = [
+                    {
+                        "message": "",
+                        "response": opener_text,
+                        "opener": True,
+                        "transport": "task_opener",
+                        "timestamp": utcnow().isoformat(),
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "tool_calls_made": [],
+                    }
+                ]
         if started_now and assessment.application_id:
             app = (
                 db.query(CandidateApplication)

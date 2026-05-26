@@ -29,8 +29,7 @@
       "tests/test_quality.py": "from glue_jobs.quality import duplicate_transaction_ids, quality_gate\n\n\ndef test_duplicate_transaction_ids_returns_repeat_ids():\n    records = [\n        {'transaction_id': 'TXN-1'},\n        {'transaction_id': 'TXN-2'},\n        {'transaction_id': 'TXN-1'},\n    ]\n\n    assert duplicate_transaction_ids(records) == ['TXN-1']\n\n\ndef test_quality_gate_fails_when_duplicates_exist():\n    records = [\n        {'transaction_id': 'TXN-9001'},\n        {'transaction_id': 'TXN-9001'},\n    ]\n\n    result = quality_gate(records)\n    assert result['passed'] is False\n    assert result['duplicate_ids'] == ['TXN-9001']\n",
       "tests/test_loading_strategy.py": "from glue_jobs.loading_strategy import select_load_method\n\n\ndef test_selects_delta_for_recovery_run_with_primary_key():\n    \"\"\"Recovery runs with a primary key should use delta replay, not full_load.\"\"\"\n    method = select_load_method(\n        is_recovery_run=True,\n        has_primary_key=True,\n        source_supports_cdc=False,\n    )\n    assert method == 'delta'\n\n\ndef test_selects_cdc_when_source_supports_it_and_not_recovery():\n    \"\"\"Non-recovery runs should use CDC when the source supports it.\"\"\"\n    method = select_load_method(\n        is_recovery_run=False,\n        has_primary_key=True,\n        source_supports_cdc=True,\n    )\n    assert method == 'cdc'\n",
       "tests/test_data_contract.py": "from glue_jobs.data_contract import validate_contract\n\n\ndef test_fails_when_required_column_is_missing_from_records():\n    \"\"\"Records missing created_at should fail contract validation.\"\"\"\n    records = [\n        {'transaction_id': 'TXN-1', 'amount': 100},\n        {'transaction_id': 'TXN-2', 'amount': 200},\n    ]\n    result = validate_contract(records, required_columns=['transaction_id', 'amount', 'created_at'])\n\n    assert result['passed'] is False\n    assert 'created_at' in result['missing_columns']\n\n\ndef test_passes_when_all_required_columns_present():\n    records = [\n        {'transaction_id': 'TXN-1', 'amount': 100, 'created_at': '2026-02-27'},\n    ]\n    result = validate_contract(records, required_columns=['transaction_id', 'amount', 'created_at'])\n\n    assert result['passed'] is True\n",
-      "requirements.txt": "pytest>=8.0.0\n",
-      "INCIDENT_DECISION.md": "# INCIDENT_DECISION.md — Orders Pipeline Recovery\n\n> The on-call reads this at 06:00. Be specific.\n\n## 1. What blocks the next scheduled run (file:line)\n\nList each blocker with the file and line you fixed. One bullet each.\n\n## 2. Load-method choice + named trade-off\n\nWhich method did you pick (CDC / delta / full_load / other)? What\ntrade-off did you accept (e.g. \"delta replay + tightened dedup window\nbecause the 40-min full-load lock would clash with finance close\")?\nWhat would change your choice (e.g. \"if finance close moved to 07:00,\nI would have picked full_load instead\")?\n\n## 3. Dedup strategy under Iceberg + lock-contention constraint\n\nHow does your dedup work without row-level deletes during finance close?\nPre-load filter? MERGE INTO with a deduped staging table? Be specific.\n\n## 4. Idempotency: bookmark vs. quality-gate write ordering\n\nDynamoDB is eventually consistent. If the bookmark write succeeds but the\nquality_gate write fails, what does the next scheduled run do? Is your\nfix idempotent under that failure mode?\n\n## 5. Deferred — what is NOT in this window\n\nWhat did you see but choose to defer? Why is deferring safe before the\n05:30 finance pre-close?\n\n## 6. On-call handover (2 sentences)\n\nWhat does the on-call need to know at 06:01?\n"
+      "requirements.txt": "pytest>=8.0.0\n"
     }
   },
   "evaluation_rubric": {
@@ -66,12 +65,12 @@
         "poor": "Leaves failing tests or introduces new failures. Cannot explain what the code change does in terms the VP can understand."
       }
     },
-    "incident_decision_doc": {
+    "design_decisions_articulated": {
       "weight": 0.3,
       "criteria": {
-        "excellent": "INCIDENT_DECISION.md defends the load-method choice with a named trade-off that references the actual constraints (CDC gap, Iceberg lock contention, 40-min full-load window vs. 05:30 finance pre-close). The dedup strategy works under Iceberg's row-level-delete contention rule. The bookmark/quality-gate idempotency story is concrete — names the failure mode and what the next run does. On-call handover is two sentences a tired engineer can act on at 06:01.",
-        "good": "INCIDENT_DECISION.md is filled out and picks a load method but the trade-off is mentioned without being defended, OR one of the named constraints (Iceberg, DynamoDB EC, no new packages) isn't reflected in the decision.",
-        "poor": "INCIDENT_DECISION.md is empty, names the load method without justification, or fails to address the bookmark idempotency question. Indicates the candidate delegated the incident-response decision to the model rather than owning the on-call handover themselves."
+        "excellent": "The candidate engaged substantively with EVERY decision Claude opened with. For each: a specific choice was named (not a hedge like 'maybe' or 'depends'), the choice was justified in 1-3 sentences referencing the actual constraints in the scenario (the conflicting consumers, the residency rule, the lock window, etc.), and any stakeholder consultations were named. The chat transcript reads like the candidate is steering Claude, not the other way around.",
+        "good": "Most decisions answered substantively but at least one answer is thin (a choice without a justification, or a justification that doesn't reference the named constraints). The candidate is engaged but not driving every decision.",
+        "poor": "Decisions answered with one-word replies ('yes', 'sure', 'whatever you think'), unanswered, or visibly delegated back to Claude ('what would you suggest?'). The transcript shows the model driving the decisions, not the candidate. Pasting the brief back to Claude with no added context is the canonical poor signal."
       }
     }
   },
@@ -177,8 +176,8 @@
       },
       {
         "job_requirement": "Incident-response ownership for production data pipelines. Make defensible load-method / dedup / idempotency choices under named operational constraints, and hand off cleanly to the next on-call.",
-        "task_artifact": "INCIDENT_DECISION.md — required incident document covering load-method choice, dedup strategy under Iceberg lock contention, bookmark/quality-gate idempotency, deferred items, and on-call handover.",
-        "rubric_dimension": "incident_decision_doc"
+        "task_artifact": "Chat transcript — Claude opens with the load-method and bookmark-idempotency decisions; candidate's answers in the transcript are the incident-handover evidence.",
+        "rubric_dimension": "design_decisions_articulated"
       }
     ]
   },
@@ -189,5 +188,6 @@
     "baseline_failures_meaningful": true,
     "rubric_matches_role": true,
     "timebox_realistic": true
-  }
+  },
+  "task_opener": "It's 22:30 and finance close is at 06:00. Before I touch the pipeline, two decisions only you can make:\n\n**1. Load method.** The CDC binlog tail between 19:00 and 22:00 was paused — no consistent stream to replay for that 3-hour window. Three options, none clean:\n\n- **Delta replay**: possible, but the gap window has 4 known duplicate `transaction_id` values from upstream retries; dedup must handle them.\n- **CDC**: what the job was originally configured to do, but with the gap, the replay produces an incomplete tail.\n- **Full load**: safe, but locks the orders table for ~40 minutes during Iceberg compaction, and finance pre-close starts at 05:30.\n\nWhich one are you picking, and what trade-off are you explicitly accepting? Don't say \"depends\" — pick.\n\n**2. Bookmark idempotency.** DynamoDB is eventually consistent. Today `should_advance_bookmark()` advances if records were loaded, ignoring `quality_passed`. If the bookmark write succeeds but the quality_gate write fails, what does the next scheduled run do? Spell out the failure mode you want to handle and the failure mode you're willing to accept.\n\nOnce I have your answers I'll implement. The on-call who picks this up at 06:01 needs to know *why* you chose what you chose, not just *what* you chose — your answers go into the handover. If you tell me \"whatever you think\" I'll push back."
 }
