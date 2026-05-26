@@ -374,7 +374,6 @@ function AppContent() {
       <Suspense fallback={lazyFallback}>
         <CandidateWelcomePage
           token={token || null}
-          assessmentId={null}
           onNavigate={navigateToPage}
           onStarted={handleCandidateStarted}
         />
@@ -390,14 +389,12 @@ function AppContent() {
   };
 
   const CandidateWelcomeWithIdRoute = () => {
-    const { assessmentId } = useParams();
     const token = searchParams.get('token');
     if (!token) return <Navigate to="/" replace />;
     return (
       <Suspense fallback={lazyFallback}>
         <CandidateWelcomePage
           token={token}
-          assessmentId={Number(assessmentId)}
           onNavigate={navigateToPage}
           onStarted={handleCandidateStarted}
         />

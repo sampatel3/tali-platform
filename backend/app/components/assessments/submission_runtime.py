@@ -530,11 +530,19 @@ def submit_assessment_impl(
                         )
                 except Exception:
                     criteria_payload = []
+            # NB: the local actually bound above is ``application_row`` (line 506).
+            # The earlier code referenced a bare ``application``, which raised
+            # NameError whenever cv_text + job_spec_text were both present —
+            # masked by the broad ``except`` below ("CV-job match failed,
+            # continuing without fit score" in assessment-71 submit logs,
+            # 2026-05-26).
             fit_metering = {
                 "feature": "fit_matching",
-                "organization_id": getattr(application, "organization_id", None),
-                "role_id": getattr(application, "role_id", None),
-                "entity_id": f"application:{application.id}",
+                "organization_id": getattr(application_row, "organization_id", None),
+                "role_id": getattr(application_row, "role_id", None),
+                "entity_id": (
+                    f"application:{application_row.id}" if application_row is not None else None
+                ),
             }
             if criteria_payload:
                 spec = normalize_spec(job_spec_text)

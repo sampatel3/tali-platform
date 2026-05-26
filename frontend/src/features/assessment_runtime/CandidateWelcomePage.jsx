@@ -7,7 +7,6 @@ import {
   Monitor,
   Shield,
   Sparkles,
-  UploadCloud,
   Wifi,
 } from 'lucide-react';
 
@@ -50,16 +49,12 @@ const detectBrowser = (userAgent) => {
   return 'Compatible browser';
 };
 
-export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarted }) => {
+export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewData, setPreviewData] = useState(null);
   const [previewError, setPreviewError] = useState('');
   const [loadingStart, setLoadingStart] = useState(false);
   const [startError, setStartError] = useState('');
-  const [cvUploading, setCvUploading] = useState(false);
-  const [cvUploadError, setCvUploadError] = useState('');
-  const [cvUploadSuccess, setCvUploadSuccess] = useState('');
-  const [hasCvOnFile, setHasCvOnFile] = useState(false);
   const [systemCheck, setSystemCheck] = useState({
     browser: 'Checking...',
     connection: 'Checking...',
@@ -77,12 +72,10 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
         const res = await assessmentsApi.preview(token);
         if (!cancelled) {
           setPreviewData(res?.data || null);
-          setHasCvOnFile(Boolean(res?.data?.task?.has_cv_on_file));
         }
       } catch (err) {
         if (!cancelled) {
           setPreviewData(null);
-          setHasCvOnFile(false);
           setPreviewError(err?.response?.data?.detail || 'Task preview is not available yet.');
         }
       } finally {
@@ -145,24 +138,6 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
       setStartError(err?.response?.data?.detail || 'Failed to start assessment.');
     } finally {
       setLoadingStart(false);
-    }
-  };
-
-  const handleCvUpload = async (event) => {
-    const file = event?.target?.files?.[0];
-    if (!file || !token) return;
-    setCvUploading(true);
-    setCvUploadError('');
-    setCvUploadSuccess('');
-    try {
-      await assessmentsApi.uploadCv(assessmentId, token, file);
-      setHasCvOnFile(true);
-      setCvUploadSuccess(`Uploaded ${file.name}.`);
-    } catch (err) {
-      setCvUploadError(err?.response?.data?.detail || 'Failed to upload CV.');
-    } finally {
-      setCvUploading(false);
-      if (event?.target) event.target.value = '';
     }
   };
 
@@ -254,22 +229,6 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
                 {metaTitle || 'Candidate workspace'}
               </div>
             </div>
-
-            {!hasCvOnFile ? (
-              <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
-                <div className="text-[20px] font-semibold tracking-[-0.02em]">Optional CV upload</div>
-                <p className="mt-2 text-[13px] leading-6 text-[var(--mute)]">
-                  Uploading your CV helps the role-fit analysis. You can still continue without it.
-                </p>
-                <label className="mt-4 flex cursor-pointer items-center justify-center gap-2 rounded-[14px] border border-dashed border-[var(--line)] bg-[var(--bg)] px-4 py-4 text-[13px] font-medium text-[var(--ink-2)] transition-colors hover:border-[var(--purple)] hover:text-[var(--purple)]">
-                  <UploadCloud size={16} />
-                  <span>{cvUploading ? 'Uploading...' : 'Choose PDF, DOC, or DOCX'}</span>
-                  <input type="file" accept=".pdf,.doc,.docx" onChange={handleCvUpload} disabled={cvUploading} className="hidden" />
-                </label>
-                {cvUploadSuccess ? <div className="mt-3 font-mono text-[11px] text-[var(--green)]">{cvUploadSuccess}</div> : null}
-                {cvUploadError ? <div className="mt-3 font-mono text-[11px] text-[var(--red)]">{cvUploadError}</div> : null}
-              </div>
-            ) : null}
 
             <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
               <div className="text-[20px] font-semibold tracking-[-0.02em]">System check</div>
