@@ -249,15 +249,15 @@ describe('AssessmentPage tracking metadata', () => {
 
     expect(await screen.findByText('Assessment brief')).toBeInTheDocument();
     expect(screen.getByText(/Use Claude for scoped help, then validate the patch path yourself/i)).toBeInTheDocument();
-    expect(screen.getByText(/Clone command:/i)).toBeInTheDocument();
+    // Clone command + "Clone command available" chip were removed
+    // 2026-05-26 (Sam: "hide it for candidates"). The repo URL is a
+    // backend artifact — candidates work in-browser. The replacement
+    // copy is the submission-clarity line.
+    expect(screen.queryByText(/Clone command:/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Clone command available/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/code in the workspace when you submit/i)).toBeInTheDocument();
     expect(screen.queryByText('exploration')).not.toBeInTheDocument();
     expect(screen.queryByText(/should never render/i)).not.toBeInTheDocument();
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Collapse brief/i }));
-    });
-    expect(screen.queryByText(/Clone command:/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/Clone command available/i)).toBeInTheDocument();
   });
 
   it('keeps candidate rubric and inferred tests out of the runtime context window', async () => {

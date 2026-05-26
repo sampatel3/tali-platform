@@ -102,12 +102,22 @@ export const AssessmentContextWindow = forwardRef(({
               <div className="mt-2 text-[13px] leading-6 text-[var(--mute)]">
                 {repoFileCount > 0 ? `${repoFileCount} repo files loaded into the live workspace.` : 'The live workspace will load when the session starts.'}
               </div>
-              {cloneCommand ? (
-                <div className="mt-3 rounded-[10px] border border-[var(--line)] bg-[var(--bg-2)] px-3 py-3 font-mono text-[11px] leading-5 text-[var(--mute)]">
-                  Clone command:
-                  <div className="mt-1 break-all text-[var(--ink-2)]">{cloneCommand}</div>
-                </div>
-              ) : null}
+              {/* What gets submitted — making this explicit so the
+                  candidate knows the chat transcript counts as evidence,
+                  not just the final code state. Sam, 2026-05-26: "if
+                  we understand task completion based on the github repo
+                  code base and the claude prompts then it is fine, but
+                  we should state that clearly somewhere." */}
+              <div className="mt-3 rounded-[10px] border border-[var(--line)] bg-[var(--bg-2)] px-3 py-3 text-[12px] leading-5 text-[var(--mute)]">
+                The hiring team reviews two things: the code in the
+                workspace when you submit, and your chat transcript with
+                Claude — how you steered the work counts as evidence.
+              </div>
+              {/* The clone-command (``git clone --branch …``) was
+                  previously rendered here. It's a backend artifact
+                  (taali-ai repo URL) that has no purpose in the
+                  candidate flow — they work in the in-browser editor.
+                  Hidden 2026-05-26 (Sam: "hide it for candidates"). */}
             </div>
           </div>
         </div>
@@ -119,11 +129,8 @@ export const AssessmentContextWindow = forwardRef(({
           <div className="rounded-full border border-[var(--line)] bg-[var(--bg)] px-3 py-1.5 text-[12px] text-[var(--ink-2)]">
             Use Claude for scoped help, then validate in the dock before you submit.
           </div>
-          {cloneCommand ? (
-            <div className="max-w-full truncate rounded-full border border-[var(--line)] bg-[var(--bg)] px-3 py-1.5 font-mono text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">
-              Clone command available
-            </div>
-          ) : null}
+          {/* "Clone command available" chip removed 2026-05-26 — the
+              clone URL is a backend artifact, not candidate-facing. */}
         </div>
       )}
     </section>

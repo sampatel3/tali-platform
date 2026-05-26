@@ -66,11 +66,11 @@ _EMPTY_REPLY_FALLBACK = (
     "submit when you're ready."
 )
 
-# Default model — Sonnet 4.5. The bundled CLI passes the id straight
-# to the API; unknown ids surface as the confusing ``is_error=true /
-# subtype=success`` (assessment 73, 2026-05-26). 4.5's actual release
-# is 2025-09-29 — NOT 2025-10-01. ``CLAUDE_CHAT_MODEL`` env overrides.
-_DEFAULT_AGENT_SDK_MODEL = "claude-sonnet-4-5-20250929"
+# Default model — Haiku 4.5. Swapped from Sonnet (#412) after #75:
+# Sonnet took ~30s per response, Haiku lands in ~3-5s. Acceptable
+# trade — the surface measures candidate steering, not model alone.
+# ``CLAUDE_CHAT_MODEL`` env overrides.
+_DEFAULT_AGENT_SDK_MODEL = "claude-haiku-4-5-20251001"
 
 # Cap on prior turns replayed via system-prompt history (SDK ``query()``
 # is stateless, so we resend). 20 msgs ≈ 10 exchanges — enough context
