@@ -977,6 +977,10 @@ def start_or_resume_assessment(
         "repo_url": getattr(assessment, "assessment_repo_url", None),
         "branch_name": getattr(assessment, "assessment_branch", None),
         "clone_command": getattr(assessment, "clone_command", None),
+        # Existing transcript (incl. task_opener Claude wrote at /start
+        # time) — frontend hydrates the chat panel from this so the
+        # decision questions appear immediately on first open (#37).
+        "ai_prompts": list(assessment.ai_prompts or []),
     }
 
 

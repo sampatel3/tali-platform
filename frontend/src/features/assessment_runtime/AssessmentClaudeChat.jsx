@@ -117,6 +117,32 @@ const MessageRow = ({ entry }) => {
  *   - onBudgetUpdate(snapshot): called with `claude_budget` from the response
  *   - disabled: parent-driven disable (timer paused, submitted, etc.)
  */
+// Hydrate the chat component's ``messages`` state from existing
+// ``assessment.ai_prompts``. Each backend record yields one user
+// message (skipped if empty — covers the ``opener`` case where Claude
+// asked unprompted at /start) and one assistant message.
+//
+// Critical for interrogative mode (#422): the ``task_opener`` lives in
+// ``ai_prompts[0]`` with ``message=""``, ``response=<opener text>``.
+// Without this preload the candidate opens chat and sees a blank panel
+// instead of Claude's decision questions (assessment 81, 2026-05-26).
+const hydrateMessagesFromAiPrompts = (aiPrompts) => {
+  if (!Array.isArray(aiPrompts)) return [];
+  const out = [];
+  for (const entry of aiPrompts) {
+    if (!entry || typeof entry !== 'object') continue;
+    const userMsg = String(entry.message || '').trim();
+    if (userMsg) {
+      out.push({ role: 'user', content: userMsg });
+    }
+    const assistantMsg = String(entry.response || '').trim();
+    if (assistantMsg) {
+      out.push({ role: 'assistant', content: assistantMsg });
+    }
+  }
+  return out;
+};
+
 export const AssessmentClaudeChat = ({
   assessmentId,
   token,
@@ -125,8 +151,9 @@ export const AssessmentClaudeChat = ({
   claudeBudget,
   onBudgetUpdate,
   disabled = false,
+  initialAiPrompts = null,
 }) => {
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState(() => hydrateMessagesFromAiPrompts(initialAiPrompts));
   const [pending, setPending] = useState(false);
   const [inputValue, setInputValue] = useState('');
   const [pasteDetected, setPasteDetected] = useState(false);
