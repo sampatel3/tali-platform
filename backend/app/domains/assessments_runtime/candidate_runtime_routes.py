@@ -60,11 +60,13 @@ from ...schemas.assessment import (
     SubmitRequest,
 )
 
+from .candidate_claude_chat_routes import router as candidate_claude_chat_router
 from .candidate_claude_routes import router as candidate_claude_router
 from .candidate_terminal_routes import router as candidate_terminal_router
 
 router = APIRouter()
 router.include_router(candidate_claude_router)
+router.include_router(candidate_claude_chat_router)
 router.include_router(candidate_terminal_router)
 
 logger = logging.getLogger(__name__)
