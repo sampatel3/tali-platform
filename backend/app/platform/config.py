@@ -63,13 +63,13 @@ class Settings(BaseSettings):
     CLAUDE_CLI_PROVIDER_USAGE_GRACE_OUTPUT_EVENTS: int = 40
     # Agentic chat (terminal-removal replacement) — multi-turn tool-use loop.
     # CLAUDE_TOOL_MAX_TURNS caps how many ``messages.create`` calls one
-    # candidate→assistant turn can fan into. Bumped 8 → 12 after the
-    # 2026-05-26 dry-run: the test candidate's first prompt ("where is
-    # quality_report.md created?") fanned to 11 tool calls because the
-    # answer is "it's not — that's a static doc" and Claude needed several
-    # reads to confirm. 12 gives enough headroom for legitimate exploration
-    # while still short-circuiting prompt-injection loops.
-    CLAUDE_TOOL_MAX_TURNS: int = 12
+    # candidate→assistant turn can fan into. Lowered 12 → 6 after the
+    # 2026-05-26 SDK retest: at 12, "how is quality_report.md produced?"
+    # fanned to 19 tool calls and 52s of latency. The candidate is on a
+    # 30-min clock — 60s per question makes the surface unusable. 6 is
+    # enough for read → grep → confirm; the prompt now tells the model
+    # to STOP after 3 tool calls if the answer isn't found.
+    CLAUDE_TOOL_MAX_TURNS: int = 6
     # Per-tool wall-clock cap inside the executor (leaf A enforces;
     # surfaced here so the timeout is grep-able alongside the loop cap).
     CLAUDE_TOOL_TIMEOUT_SECONDS: int = 10

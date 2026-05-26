@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useMemo } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronLeft,
@@ -421,11 +421,77 @@ export const AssessmentWorkspace = ({
   const showOutputPanel = Boolean(outputPanelOpen || executing);
   const showTerminalPanel = Boolean(terminalSurfaceEnabled && terminalPanelOpen);
   const showDock = showOutputPanel || showTerminalPanel;
-  const workspaceGridStyle = useMemo(() => ({
-    '--workspace-grid': hasRepoStructure
-      ? `${repoPanelCollapsed ? '72px' : '248px'} minmax(0,1fr) ${assistantPanelCollapsed ? '76px' : '380px'}`
-      : `minmax(0,1fr) ${assistantPanelCollapsed ? '76px' : '380px'}`,
-  }), [assistantPanelCollapsed, hasRepoStructure, repoPanelCollapsed]);
+
+  // Resizable assistant panel — Sam called out (2026-05-26) that the
+  // fixed 380px chat column was too narrow to read longer Claude
+  // replies. Drag the bar between editor and chat to widen up to
+  // 720px or shrink back to 320px. Persist per browser via
+  // localStorage so the choice survives reloads. When the panel is
+  // collapsed by the chevron button, we still expose the small 76px
+  // rail, ignoring the saved width until uncollapsed.
+  const ASSISTANT_PANEL_MIN = 320;
+  const ASSISTANT_PANEL_MAX = 720;
+  const ASSISTANT_PANEL_DEFAULT = 380;
+  const ASSISTANT_PANEL_STORAGE_KEY = 'taali.assessmentRuntime.assistantPanelWidth';
+  const [assistantPanelWidth, setAssistantPanelWidth] = useState(() => {
+    if (typeof window === 'undefined') return ASSISTANT_PANEL_DEFAULT;
+    const raw = window.localStorage?.getItem(ASSISTANT_PANEL_STORAGE_KEY);
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed >= ASSISTANT_PANEL_MIN && parsed <= ASSISTANT_PANEL_MAX) {
+      return parsed;
+    }
+    return ASSISTANT_PANEL_DEFAULT;
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage?.setItem(ASSISTANT_PANEL_STORAGE_KEY, String(assistantPanelWidth));
+    } catch {
+      // localStorage may be disabled (private mode); the runtime width
+      // still works in-session, just doesn't persist.
+    }
+  }, [assistantPanelWidth]);
+
+  const resizingRef = useRef(null);
+  const handleResizeStart = useCallback((event) => {
+    if (assistantPanelCollapsed) return;
+    event.preventDefault();
+    resizingRef.current = {
+      startX: event.clientX,
+      startWidth: assistantPanelWidth,
+    };
+    const handleMove = (moveEvt) => {
+      const ctx = resizingRef.current;
+      if (!ctx) return;
+      // Drag-left widens the panel (the panel is on the right edge).
+      const delta = ctx.startX - moveEvt.clientX;
+      const next = Math.max(
+        ASSISTANT_PANEL_MIN,
+        Math.min(ASSISTANT_PANEL_MAX, ctx.startWidth + delta),
+      );
+      setAssistantPanelWidth(next);
+    };
+    const handleEnd = () => {
+      resizingRef.current = null;
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleEnd);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleEnd);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, [assistantPanelCollapsed, assistantPanelWidth]);
+
+  const workspaceGridStyle = useMemo(() => {
+    const assistantTrack = assistantPanelCollapsed ? '76px' : `${assistantPanelWidth}px`;
+    return {
+      '--workspace-grid': hasRepoStructure
+        ? `${repoPanelCollapsed ? '72px' : '248px'} minmax(0,1fr) ${assistantTrack}`
+        : `minmax(0,1fr) ${assistantTrack}`,
+    };
+  }, [assistantPanelCollapsed, assistantPanelWidth, hasRepoStructure, repoPanelCollapsed]);
 
   const handleOpenTerminal = () => {
     if (terminalSurfaceEnabled && !showTerminalPanel) {
@@ -613,9 +679,28 @@ export const AssessmentWorkspace = ({
           </main>
 
           <aside
-            className="min-h-0"
+            className="relative min-h-0"
             style={{ background: 'color-mix(in oklab, var(--bg) 60%, transparent)' }}
           >
+            {/* Drag handle for the Claude panel — absolutely positioned
+                on the aside's left edge so it doesn't disturb the grid
+                column count. Hidden while collapsed (no useful resize
+                range). Sam called out (2026-05-26) that the fixed
+                380px column was too narrow for longer replies. */}
+            {!assistantPanelCollapsed ? (
+              <div
+                role="separator"
+                aria-label="Resize Claude panel"
+                aria-orientation="vertical"
+                tabIndex={0}
+                onMouseDown={handleResizeStart}
+                onDoubleClick={() => setAssistantPanelWidth(ASSISTANT_PANEL_DEFAULT)}
+                className="group absolute inset-y-0 left-0 z-10 hidden w-[7px] -translate-x-[3px] cursor-col-resize xl:block"
+                title="Drag to resize · double-click to reset"
+              >
+                <div className="pointer-events-none absolute left-1/2 top-1/2 h-12 w-[2px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--line-2)] transition-colors group-hover:bg-[var(--purple)]" />
+              </div>
+            ) : null}
             <div className="flex h-full min-h-[420px] flex-col">
               <div className={`flex items-center gap-3 border-b border-[var(--line)] py-4 ${assistantPanelCollapsed ? 'justify-center px-2' : 'justify-between px-5'}`}>
                 {assistantPanelCollapsed ? (

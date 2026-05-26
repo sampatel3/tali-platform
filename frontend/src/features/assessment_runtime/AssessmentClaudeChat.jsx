@@ -6,20 +6,6 @@ import { assessments } from '../../shared/api';
 
 const MESSAGE_BUFFER_LIMIT = 30;
 
-// Tool-name -> small label/icon for the inline chip strip. Keeps the
-// surface decorative without leaking raw tool internals to the
-// candidate.
-const TOOL_ICONS = {
-  read_file: { icon: '📂', label: 'read_file' },
-  read_many_files: { icon: '📂', label: 'read_files' },
-  list_dir: { icon: '📁', label: 'list_dir' },
-  glob_search: { icon: '🔎', label: 'glob_search' },
-  grep_search: { icon: '🔎', label: 'grep_search' },
-  search_files: { icon: '🔎', label: 'search_files' },
-  run_command: { icon: '⚙️', label: 'run_command' },
-  open_file: { icon: '📂', label: 'open_file' },
-};
-
 const MARKDOWN_COMPONENTS = {
   p: ({ children }) => (
     <p className="whitespace-pre-line text-[13.5px] leading-6 text-[var(--ink-2)] [&:not(:first-child)]:mt-3">
@@ -83,47 +69,9 @@ const errorMessageFromException = (err) => {
   return 'Claude prompt failed.';
 };
 
-const summarizeToolCall = (call) => {
-  if (!call || typeof call !== 'object') return null;
-  const name = String(call.name || '').trim();
-  if (!name) return null;
-  const meta = TOOL_ICONS[name] || { icon: '🛠', label: name };
-  const input = call.input && typeof call.input === 'object' ? call.input : {};
-  const target = String(input.path || input.target || input.query || input.command || '').trim();
-  return {
-    icon: meta.icon,
-    label: meta.label,
-    target,
-    ok: call.result_ok !== false,
-  };
-};
-
-const ToolCallChip = ({ call }) => {
-  const summary = summarizeToolCall(call);
-  if (!summary) return null;
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-[10.5px] uppercase tracking-[0.06em] ${
-        summary.ok
-          ? 'border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-muted)] text-[var(--mute)]'
-          : 'border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] text-[var(--red)]'
-      }`}
-    >
-      <span aria-hidden="true">{summary.icon}</span>
-      <span className="text-[var(--ink-2)]">{summary.label}</span>
-      {summary.target ? (
-        <span className="max-w-[160px] truncate normal-case tracking-normal text-[var(--mute)]">
-          {summary.target}
-        </span>
-      ) : null}
-    </span>
-  );
-};
-
 const MessageRow = ({ entry }) => {
   const isUser = String(entry?.role || '').toLowerCase() === 'user';
   const content = String(entry?.content || '');
-  const toolCalls = Array.isArray(entry?.toolCalls) ? entry.toolCalls : [];
 
   return (
     <div className={`text-[13.5px] ${isUser ? 'text-right' : ''}`}>
@@ -147,13 +95,6 @@ const MessageRow = ({ entry }) => {
           <ReactMarkdown components={MARKDOWN_COMPONENTS}>{content}</ReactMarkdown>
         )}
       </div>
-      {!isUser && toolCalls.length > 0 ? (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {toolCalls.map((call, idx) => (
-            <ToolCallChip key={`tool-${idx}-${call?.name || 'unknown'}`} call={call} />
-          ))}
-        </div>
-      ) : null}
     </div>
   );
 };
@@ -242,7 +183,6 @@ export const AssessmentClaudeChat = ({
       const res = await assessments.claudeChat(assessmentId, requestPayload, token);
       const payload = res?.data || {};
       const reply = String(payload.content || '').trim() || 'No response from Claude.';
-      const toolCalls = Array.isArray(payload.tool_calls_made) ? payload.tool_calls_made : [];
 
       if (payload.claude_budget && typeof payload.claude_budget === 'object') {
         try {
@@ -253,7 +193,7 @@ export const AssessmentClaudeChat = ({
       }
 
       setMessages((prev) => {
-        const next = [...prev, { role: 'assistant', content: reply, toolCalls }];
+        const next = [...prev, { role: 'assistant', content: reply }];
         return next.slice(-MESSAGE_BUFFER_LIMIT);
       });
     } catch (err) {

@@ -110,7 +110,12 @@ describe('AssessmentClaudeChat', () => {
     expect(screen.getByText(/^Help$/)).toBeInTheDocument();
   });
 
-  it('renders tool-call chips below the assistant message when present in the response', async () => {
+  it('hides raw tool-call internals from the candidate (only the model text shows)', async () => {
+    // Tool chips were removed 2026-05-26 — Sam called out that the
+    // candidate doesn't need to see raw MCP/tool names like
+    // ``mcp__sandbox__Bash ls -la``. We persist ``tool_calls_made``
+    // in ``ai_prompts`` server-side for analytics; the candidate UI
+    // shows only the assistant's narrative reply.
     mockClaudeChat.mockResolvedValue({
       data: {
         content: 'I checked the quality report.',
@@ -127,9 +132,9 @@ describe('AssessmentClaudeChat', () => {
     await waitFor(() => {
       expect(screen.getByText(/I checked the quality report/i)).toBeInTheDocument();
     });
-    expect(screen.getByText('read_file')).toBeInTheDocument();
-    expect(screen.getByText('diagnostics/quality_report.md')).toBeInTheDocument();
-    expect(screen.getByText('grep_search')).toBeInTheDocument();
+    expect(screen.queryByText('read_file')).not.toBeInTheDocument();
+    expect(screen.queryByText('diagnostics/quality_report.md')).not.toBeInTheDocument();
+    expect(screen.queryByText('grep_search')).not.toBeInTheDocument();
   });
 
   it('caps the rolling buffer at the last 30 messages', async () => {
