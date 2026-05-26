@@ -158,17 +158,24 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
             <div className="absolute right-[-60px] top-[-60px] h-56 w-56 rounded-full bg-[radial-gradient(circle,var(--purple-soft),transparent_68%)] opacity-80" />
             <div className="relative">
               <div className="kicker">{organizationName ? `Invited by ${organizationName}` : 'Candidate assessment'}</div>
-              {/* Gate the named greeting on the preview API resolving.
-                  Otherwise the H1 paints "Hi there - ready to show your
-                  work?" for the ~300ms it takes the request to return
-                  and then jumps to "Hi Sam - ...", a flash the candidate
-                  notices on every visit. While loading, show the
-                  name-free phrasing so there's no name pop-in. */}
-              <h1 className="mt-4 font-[var(--font-display)] text-[clamp(42px,5vw,64px)] font-semibold leading-[0.96] tracking-[-0.04em]">
-                {previewLoading || !candidateName ? (
-                  <>Ready to show your <em>work</em>?</>
-                ) : (
+              {/* No text-swap flash on the greeting. Earlier attempts
+                  (#408, #410) rendered different placeholders during
+                  load — still visibly changed once the preview API
+                  resolved. Now the H1 stays mounted with the final
+                  named greeting but opacity-fades in once data lands,
+                  so the candidate sees nothing → "Hi Sam — ready to
+                  show your work?" with no intermediate text. The
+                  ``aria-busy`` flag tells screen readers to wait for
+                  the loaded state before announcing the heading. */}
+              <h1
+                className="mt-4 font-[var(--font-display)] text-[clamp(42px,5vw,64px)] font-semibold leading-[0.96] tracking-[-0.04em] transition-opacity duration-300 ease-out"
+                style={{ opacity: previewLoading ? 0 : 1 }}
+                aria-busy={previewLoading}
+              >
+                {candidateName ? (
                   <>Hi {getFirstName(candidateName)} - ready to show your <em>work</em>?</>
+                ) : (
+                  <>Ready to show your <em>work</em>?</>
                 )}
               </h1>
               <p className="mt-4 max-w-[620px] text-[15px] leading-7 text-[var(--mute)]">
@@ -235,7 +242,16 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
               <p className="mt-4 text-[14px] leading-7 text-white/72">
                 We record prompts, accept/reject decisions, and validation runs so the hiring team can review your process with context.
               </p>
-              <div className="mt-5 rounded-[14px] border border-white/10 bg-white/10 px-4 py-3 font-mono text-[11px] uppercase tracking-[0.12em] text-white/80">
+              {/* Same fade-in pattern as the H1 — metaTitle assembles
+                  org · role · candidate-name, all of which arrive
+                  with the preview API. Fading from opacity-0 prevents
+                  the "Candidate workspace" fallback from briefly
+                  flashing before the real label. */}
+              <div
+                className="mt-5 rounded-[14px] border border-white/10 bg-white/10 px-4 py-3 font-mono text-[11px] uppercase tracking-[0.12em] text-white/80 transition-opacity duration-300 ease-out"
+                style={{ opacity: previewLoading ? 0 : 1 }}
+                aria-busy={previewLoading}
+              >
                 {metaTitle || 'Candidate workspace'}
               </div>
             </div>
