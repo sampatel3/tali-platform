@@ -206,7 +206,10 @@ def test_send_assessment_happy_path_creates_assessment_and_advances_to_invited(d
     assert result.assessment.candidate_id == app.candidate_id
     assert result.assessment.role_id == role.id
     assert result.assessment.task_id == task.id
-    assert result.assessment.duration_minutes == 90
+    # Default duration now comes from task.duration_minutes (30) rather than a
+    # hardcoded 90 — Sam's "60 min is way too long" feedback after the pilot
+    # dry-run. Explicit override + experiment-knob still take precedence.
+    assert result.assessment.duration_minutes == 30
 
     # Application moved to invited.
     db.refresh(app)
