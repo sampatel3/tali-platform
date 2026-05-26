@@ -240,6 +240,13 @@ async def chat_with_claude_agentic(
         "response_latency_ms": latency_ms,
         "input_tokens": int(getattr(chat_turn, "input_tokens", 0) or 0),
         "output_tokens": int(getattr(chat_turn, "output_tokens", 0) or 0),
+        # Prompt-cache token counts. The SDK loop reuses a lot of prior
+        # tool-result context across turns, so these are usually 5-15x
+        # bigger than raw input_tokens. Persisting here lets the
+        # candidate budget UI price them correctly (#416 — was
+        # undercounting by ~2x).
+        "cache_read_input_tokens": int(getattr(chat_turn, "cache_read_input_tokens", 0) or 0),
+        "cache_creation_input_tokens": int(getattr(chat_turn, "cache_creation_input_tokens", 0) or 0),
         "timestamp": utcnow().isoformat(),
         # Analytics: the whole tool loop = one user-visible turn. Scoring
         # already reads ``message``/``response``/``input_tokens``/etc.; the
