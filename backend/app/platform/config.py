@@ -63,13 +63,18 @@ class Settings(BaseSettings):
     CLAUDE_CLI_PROVIDER_USAGE_GRACE_OUTPUT_EVENTS: int = 40
     # Agentic chat (terminal-removal replacement) — multi-turn tool-use loop.
     # CLAUDE_TOOL_MAX_TURNS caps how many ``messages.create`` calls one
-    # candidate→assistant turn can fan into. Lowered 12 → 6 after the
-    # 2026-05-26 SDK retest: at 12, "how is quality_report.md produced?"
-    # fanned to 19 tool calls and 52s of latency. The candidate is on a
-    # 30-min clock — 60s per question makes the surface unusable. 6 is
-    # enough for read → grep → confirm; the prompt now tells the model
-    # to STOP after 3 tool calls if the answer isn't found.
-    CLAUDE_TOOL_MAX_TURNS: int = 6
+    # candidate→assistant turn can fan into. History:
+    #   12 (#398): worked but Sonnet fanned to 19 tool calls (52s latency)
+    #    6 (#409): cut latency but the SDK started raising
+    #              "Reached maximum number of turns" mid-answer for any
+    #              genuinely 3-step question (assessment 76, 2026-05-26)
+    #   10 (now): safety net only — the system prompt already tells the
+    #             model to stop at 3 tool calls. Haiku 4.5 keeps even a
+    #             full 10-turn loop under ~15s. The agent_service
+    #             gracefully recovers a partial answer when this cap
+    #             IS hit, so this is now a soft safety net not a hard
+    #             failure surface.
+    CLAUDE_TOOL_MAX_TURNS: int = 10
     # Per-tool wall-clock cap inside the executor (leaf A enforces;
     # surfaced here so the timeout is grep-able alongside the loop cap).
     CLAUDE_TOOL_TIMEOUT_SECONDS: int = 10
