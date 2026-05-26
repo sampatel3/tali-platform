@@ -30,9 +30,15 @@ export const AssessmentStatusScreen = ({
     <div className={`taali-runtime ${lightMode ? 'taali-runtime-light' : 'taali-runtime-dark'} flex h-screen items-center justify-center bg-[var(--taali-runtime-bg)] px-4`}>
       <div className="max-w-md rounded-[var(--radius-xl)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] p-10 text-center shadow-[var(--shadow-lg)]">
         <div className="mx-auto mb-6 w-fit">
-          {/* The 'lines' variant is the bare brand mark — no tile, no drop-shadow
-              glow — so it reads as identity rather than a 64px UI sticker. */}
-          <AssessmentBrandGlyph variant="lines" sizeClass="w-10 h-10" />
+          {/* Purple background tile variant — Sam's preference. ``compactSquare``
+              has no drop-shadow glow (vs. the default ``primarySquareRounded``
+              which does), so the tile reads as identity rather than a glowing
+              UI sticker. */}
+          <AssessmentBrandGlyph
+            variant="compactSquare"
+            sizeClass="w-14 h-14"
+            markSizeClass="w-9 h-9"
+          />
         </div>
         <div className="mb-3 font-mono text-[10.5px] uppercase tracking-[0.14em] text-[var(--purple)]">
           ASSESSMENT · COMPLETE
