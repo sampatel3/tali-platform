@@ -624,7 +624,6 @@ const buildEvidenceSections = ({ application, completedAssessment, roleFitModel,
     assessment.prompt_quality_score != null ? `Prompt clarity ${Math.round(assessment.prompt_quality_score * 10)} / 100` : null,
     assessment.browser_focus_ratio != null ? `Browser focus ${Math.round(assessment.browser_focus_ratio * 100)}%` : null,
     assessment.tab_switch_count != null ? `${assessment.tab_switch_count} tab switches recorded` : null,
-    assessment.calibration_score != null ? `Calibration ${Math.round(assessment.calibration_score * 10)} / 100` : null,
     Array.isArray(assessment.prompt_fraud_flags) && assessment.prompt_fraud_flags.length
       ? `${assessment.prompt_fraud_flags.length} integrity flags need review`
       : null,

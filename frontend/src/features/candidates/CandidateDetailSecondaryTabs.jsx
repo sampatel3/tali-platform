@@ -52,7 +52,7 @@ const promptEmptyMessageForStatus = (status) => {
   return 'No prompt activity is available for this assessment yet.';
 };
 
-export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
+export const CandidateAiUsageTab = ({ candidate }) => {
   const assessment = candidate?._raw || {};
   const assessmentStatus = normalizeAssessmentStatus(assessment.status || candidate?.status);
   const promptEmptyMessage = promptEmptyMessageForStatus(assessmentStatus);
@@ -80,11 +80,6 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
         <Card className="p-3.5">
           <div className="font-mono text-xs text-[var(--taali-muted)]">Tab Switches</div>
           <div className={`text-xl font-bold ${assessment.tab_switch_count > 5 ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-text)]'}`}>{assessment.tab_switch_count ?? '--'}</div>
-        </Card>
-        <Card className="p-3.5">
-          <div className="font-mono text-xs text-[var(--taali-muted)]">Calibration</div>
-          <div className="text-xl font-bold text-[var(--taali-text)]">{assessment.calibration_score != null ? `${Math.round(assessment.calibration_score * 10)} / 100` : '--'}</div>
-          <div className="mt-1 font-mono text-xs text-[var(--taali-muted)]">vs avg {avgCalibrationScore != null ? `${Math.round(avgCalibrationScore * 10)} / 100` : '--'}</div>
         </Card>
       </div>
 

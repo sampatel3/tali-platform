@@ -272,7 +272,7 @@ def test_start_assessment_response_includes_workspace_branch_metadata(client, db
     db.commit()
     token = assessment.token
 
-    def fake_start_or_resume(assessment, _db, calibration_warmup_prompt=None):
+    def fake_start_or_resume(assessment, _db):
         return {
             "assessment_id": assessment.id,
             "token": assessment.token,
@@ -289,7 +289,6 @@ def test_start_assessment_response_includes_workspace_branch_metadata(client, db
                 "rubric_categories": [],
                 "evaluation_rubric": None,
                 "extra_data": None,
-                "calibration_prompt": None,
                 "proctoring_enabled": False,
                 "claude_budget_limit_usd": None,
             },
@@ -399,7 +398,6 @@ def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
                 "rubric_categories": [],
                 "evaluation_rubric": None,
                 "extra_data": None,
-                "calibration_prompt": None,
                 "proctoring_enabled": False,
                 "claude_budget_limit_usd": None,
             },
@@ -499,7 +497,6 @@ def test_demo_start_uses_selected_track_task(client, db, monkeypatch):
                 "rubric_categories": [],
                 "evaluation_rubric": None,
                 "extra_data": None,
-                "calibration_prompt": None,
                 "proctoring_enabled": False,
                 "claude_budget_limit_usd": None,
             },
@@ -674,7 +671,6 @@ def test_demo_start_accepts_legacy_track_keys(client, db, monkeypatch):
                 "rubric_categories": [],
                 "evaluation_rubric": None,
                 "extra_data": None,
-                "calibration_prompt": None,
                 "proctoring_enabled": False,
                 "claude_budget_limit_usd": None,
             },

@@ -539,11 +539,7 @@ def start_assessment(
     if bool(getattr(assessment, "is_voided", False)):
         raise HTTPException(status_code=400, detail="assessment_voided")
     try:
-        return start_or_resume_assessment(
-            assessment,
-            db,
-            calibration_warmup_prompt=(payload.calibration_warmup_prompt if payload else None),
-        )
+        return start_or_resume_assessment(assessment, db)
     except HTTPException as exc:
         if exc.status_code == 402:
             raise HTTPException(status_code=402, detail=CANDIDATE_INSUFFICIENT_CREDITS_MESSAGE) from exc
@@ -566,11 +562,6 @@ def preview_assessment(token: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Task not found")
 
     extra_data = task.extra_data if isinstance(task.extra_data, dict) else {}
-    task_calibration_prompt = (
-        (task.calibration_prompt or "").strip()
-        or str(extra_data.get("calibration_prompt") or "").strip()
-        or (settings.DEFAULT_CALIBRATION_PROMPT or "").strip()
-    )
     start_gate = get_assessment_start_gate(assessment, db)
     return {
         "assessment_id": assessment.id,
@@ -595,8 +586,6 @@ def preview_assessment(token: str, db: Session = Depends(get_db)):
             "repo_structure": _preview_repo_structure(task.repo_structure),
             "rubric_categories": candidate_rubric_view(task.evaluation_rubric),
             "expected_candidate_journey": extra_data.get("expected_candidate_journey"),
-            "calibration_enabled": not settings.MVP_DISABLE_CALIBRATION,
-            "calibration_prompt": task_calibration_prompt if not settings.MVP_DISABLE_CALIBRATION else None,
             "has_cv_on_file": bool(
                 assessment.cv_filename
                 or (assessment.candidate.cv_filename if getattr(assessment, "candidate", None) else None)

@@ -718,9 +718,13 @@ def get_assessment_start_gate(
 def start_or_resume_assessment(
     assessment: Assessment,
     db: Session,
-    calibration_warmup_prompt: str | None = None,
 ) -> Dict[str, Any]:
-    """Start a new assessment or resume an in-progress one. Returns AssessmentStart payload."""
+    """Start a new assessment or resume an in-progress one. Returns AssessmentStart payload.
+
+    The ``calibration_warmup_prompt`` arg was removed when the separate warmup
+    scoring path was dropped — the in-session prompts produce the same
+    ``prompt_clarity`` signal across every real prompt.
+    """
     if assessment.status == AssessmentStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Assessment has already been submitted")
     if assessment.expires_at and ensure_utc(assessment.expires_at) < utcnow():
@@ -766,9 +770,6 @@ def start_or_resume_assessment(
         if was_pending or not assessment.started_at:
             assessment.started_at = utcnow()
             started_now = True
-        warmup_text = (calibration_warmup_prompt or "").strip()
-        if warmup_text and (started_now or not getattr(assessment, "calibration_warmup_prompt", None)):
-            assessment.calibration_warmup_prompt = warmup_text[:4000]
         # Assessments are terminal-only.
         assessment.ai_mode = required_ai_mode
         assessment.e2b_session_id = sandbox_id
@@ -891,11 +892,6 @@ def start_or_resume_assessment(
         is_demo=bool(getattr(assessment, "is_demo", False)),
         task_budget_limit_usd=getattr(task, "claude_budget_limit_usd", None),
     )
-    task_extra_data = _task_extra_data(task)
-    task_calibration_prompt = (
-        (task.calibration_prompt or "").strip()
-        or str(task_extra_data.get("calibration_prompt") or "").strip()
-    )
     claude_budget = build_claude_budget_snapshot(
         budget_limit_usd=effective_budget_limit,
         prompts=assessment.ai_prompts or [],
@@ -920,12 +916,6 @@ def start_or_resume_assessment(
             "rubric_categories": candidate_rubric_view(task.evaluation_rubric),
             "evaluation_rubric": None,
             "extra_data": None,
-            "calibration_prompt": (
-                None
-                if settings.MVP_DISABLE_CALIBRATION
-                or getattr(assessment, "calibration_enabled", None) is False
-                else (task_calibration_prompt or None)
-            ),
             "proctoring_enabled": False if settings.MVP_DISABLE_PROCTORING else (task.proctoring_enabled if task else False),
             "claude_budget_limit_usd": effective_budget_limit,
         },

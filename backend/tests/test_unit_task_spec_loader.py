@@ -137,7 +137,9 @@ def test_canonical_task_catalog_loads_all_shipped_specs():
     specs = load_task_specs(canonical_task_catalog_dir())
     expected_keys = {
         "ai_eng_genai_production_readiness",
+        "ai_eng_rag_eval_harness",
         "data_eng_aws_glue_pipeline_recovery",
+        "data_eng_data_quality_contract_framework",
         "platform_eng_aws_eks_misconfig_triage",
         "platform_eng_azure_aks_misconfig_triage",
         "scrum_master_sprint_recovery_scenario",
