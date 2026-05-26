@@ -64,17 +64,18 @@ class Settings(BaseSettings):
     # Agentic chat (terminal-removal replacement) — multi-turn tool-use loop.
     # CLAUDE_TOOL_MAX_TURNS caps how many ``messages.create`` calls one
     # candidate→assistant turn can fan into. History:
-    #   12 (#398): worked but Sonnet fanned to 19 tool calls (52s latency)
-    #    6 (#409): cut latency but SDK raised mid-answer (no partial recovery)
-    #   10 (#414): added partial recovery; Haiku used the full 10 on a
-    #              3-question prompt (60s latency, assessment 77, 2026-05-26)
-    #    4 (now): hard cap aligned with the system prompt's "AT MOST 3
-    #             tool calls" rule (one buffer turn). If the model wants
-    #             more, the soft-recovery in ``agent_service`` returns
-    #             the partial answer with a "ask a tighter follow-up"
-    #             trailer — fast iteration beats a slow exhaustive
-    #             reply on the candidate's 30-min clock.
-    CLAUDE_TOOL_MAX_TURNS: int = 4
+    #   12 (#398): Sonnet fanned to 19 tool calls (52s latency)
+    #    6 (#409): cut latency but SDK raised mid-answer (no recovery)
+    #   10 (#414): added partial recovery; Haiku used full 10 (60s)
+    #    4 (#415): too low for "fix it" — model burned 4 reads before
+    #              edits, hit cap with no text, soft-recovery fell
+    #              through to generic retry (assessment 77, 2026-05-26)
+    #    8 (now): enough for a typical read-N + edit-N round-trip
+    #             while staying ~20s on Haiku 4.5. The empty-text soft
+    #             recovery path in error_recovery now also handles the
+    #             tool-heavy case when this IS hit (names the tools
+    #             used + asks for a tighter follow-up).
+    CLAUDE_TOOL_MAX_TURNS: int = 8
     # Per-tool wall-clock cap inside the executor (leaf A enforces;
     # surfaced here so the timeout is grep-able alongside the loop cap).
     CLAUDE_TOOL_TIMEOUT_SECONDS: int = 10
