@@ -66,11 +66,11 @@ _EMPTY_REPLY_FALLBACK = (
     "submit when you're ready."
 )
 
-# Default model. Sonnet for room to do real tool-use (Read/Write/Edit/Bash).
-# The bundled CLI is stricter than Messages-API about aliases and rejected
-# plain ``claude-sonnet-4-5`` with exit-1 on assessment 71 (2026-05-26) —
-# pin to the dated id. ``CLAUDE_CHAT_MODEL`` env var overrides at runtime.
-_DEFAULT_AGENT_SDK_MODEL = "claude-sonnet-4-5-20251001"
+# Default model — Sonnet 4.5. The bundled CLI passes the id straight
+# to the API; unknown ids surface as the confusing ``is_error=true /
+# subtype=success`` (assessment 73, 2026-05-26). 4.5's actual release
+# is 2025-09-29 — NOT 2025-10-01. ``CLAUDE_CHAT_MODEL`` env overrides.
+_DEFAULT_AGENT_SDK_MODEL = "claude-sonnet-4-5-20250929"
 
 # Cap on prior turns replayed via system-prompt history (SDK ``query()``
 # is stateless, so we resend). 20 msgs ≈ 10 exchanges — enough context
