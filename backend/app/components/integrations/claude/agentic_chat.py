@@ -29,6 +29,7 @@ does no DB I/O.
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -431,21 +432,31 @@ class AgenticChatService:
     def _format_tool_result_block(*, tool_use_id: str, dispatch_result: dict) -> dict:
         """Render an executor result as a ``tool_result`` content block.
 
-        Anthropic's expected shape:
-        ``{"type": "tool_result", "tool_use_id": "...", "content": "...", "is_error": bool}``
+        Anthropic's ``tool_result.content`` accepts ONE of:
+          - a string (treated as text), OR
+          - a list of content-block OBJECTS (each ``{"type":"text","text":...}``
+            or ``{"type":"image",...}``).
 
-        On ok=True we serialize ``dispatch_result["result"]`` (could be a
-        string or structured data — Claude tolerates both). On ok=False
-        we set ``is_error=True`` and surface the error string so Claude
-        can self-correct.
+        It does **not** accept a list of strings, dicts, or arbitrary values —
+        the 2026-05-26 incident on assessment 66 was a 400 ``messages.2.
+        content.0.tool_result.content.0: Input should be an object`` because
+        ``list_dir`` returned ``["file1","file2"]`` and we passed that list
+        straight through, so each item had to be a content-block object but
+        was a bare string.
+
+        Fix: stringify anything that isn't already a ``str`` — JSON when it's
+        structured (dict/list), ``str()`` as a last-resort fallback. Claude
+        reads JSON fine; we lose nothing by serializing.
         """
         if dispatch_result.get("ok", False):
             result_payload = dispatch_result.get("result", "")
-            content = (
-                result_payload
-                if isinstance(result_payload, (str, list))
-                else str(result_payload)
-            )
+            if isinstance(result_payload, str):
+                content: str = result_payload
+            else:
+                try:
+                    content = json.dumps(result_payload, ensure_ascii=False, default=str)
+                except (TypeError, ValueError):
+                    content = str(result_payload)
             return {
                 "type": "tool_result",
                 "tool_use_id": tool_use_id,

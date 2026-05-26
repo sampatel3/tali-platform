@@ -518,3 +518,67 @@ def test_tool_result_block_is_error_flag(patched_anthropic):
     assert tool_result_blocks[0]["is_error"] is True
     assert "not_found" in tool_result_blocks[0]["content"]
     assert tool_result_blocks[0]["tool_use_id"] == "tu_err"
+
+
+# ---------------------------------------------------------------------------
+# Regression: tool_result content shape MUST be a string for structured
+# executor results (lists, dicts). The 2026-05-26 prod 400 came from passing
+# a list-of-strings (``list_dir`` output) straight through, which Anthropic
+# rejects: "messages.N.content.0.tool_result.content.0: Input should be an
+# object" — because a list value requires each item to be a content-block
+# OBJECT, not a raw string.
+# ---------------------------------------------------------------------------
+
+
+def _fmt(dispatch_result):
+    from app.components.integrations.claude.agentic_chat import AgenticChatService
+
+    return AgenticChatService._format_tool_result_block(
+        tool_use_id="tu_test",
+        dispatch_result=dispatch_result,
+    )
+
+
+def test_tool_result_string_payload_passes_through_unchanged():
+    block = _fmt({"ok": True, "result": "hello world"})
+    assert block["type"] == "tool_result"
+    assert block["tool_use_id"] == "tu_test"
+    assert block["content"] == "hello world"
+    assert "is_error" not in block
+
+
+def test_tool_result_list_payload_is_json_stringified():
+    # This is the exact shape that broke assessment 66 in prod.
+    block = _fmt({"ok": True, "result": ["src/main.py", "dq/checks.py", "tests/"]})
+    assert isinstance(block["content"], str), (
+        "content must be a string; a raw list breaks Anthropic with "
+        "'content.0: Input should be an object'"
+    )
+    import json
+    parsed = json.loads(block["content"])
+    assert parsed == ["src/main.py", "dq/checks.py", "tests/"]
+
+
+def test_tool_result_dict_payload_is_json_stringified():
+    block = _fmt({"ok": True, "result": {"stdout": "ok", "stderr": "", "exit_code": 0}})
+    assert isinstance(block["content"], str)
+    import json
+    parsed = json.loads(block["content"])
+    assert parsed == {"stdout": "ok", "stderr": "", "exit_code": 0}
+
+
+def test_tool_result_non_jsonable_falls_back_to_str():
+    class _Weird:
+        def __repr__(self):
+            return "<weird>"
+
+    block = _fmt({"ok": True, "result": _Weird()})
+    # json.dumps(default=str) handles this fine — we should still get a string.
+    assert isinstance(block["content"], str)
+    assert "weird" in block["content"]
+
+
+def test_tool_result_error_path_unchanged():
+    block = _fmt({"ok": False, "error": "no_match"})
+    assert block["content"] == "no_match"
+    assert block["is_error"] is True
