@@ -46,6 +46,12 @@ class ClaudeCallLog(Base):
     output_tokens = Column(Integer, default=0, nullable=False)
     cache_read_tokens = Column(Integer, default=0, nullable=False)
     cache_creation_tokens = Column(Integer, default=0, nullable=False)
+    # Anthropic prompt-cache writes have two TTLs that bill at different
+    # rates (5m: 1.25× input, 1h: 2.00× input). ``cache_creation_tokens``
+    # is the total; this column carries the 1-hour portion so pricing
+    # can split it correctly. NULL on rows written before #387 — treated
+    # as "unknown split" and priced at the conservative 1.25× default.
+    cache_creation_1h_tokens = Column(Integer, default=0, nullable=True)
     cost_usd_micro = Column(BigInteger, default=0, nullable=False)
     feature_hint = Column(String, nullable=True)
     # 'ok' | 'sdk_error' | 'no_usage_on_response'

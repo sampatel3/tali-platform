@@ -95,3 +95,56 @@ def test_raw_cost_without_model_uses_env_var_defaults():
         output_tokens=0,
     )
     assert cost_micro > 0
+
+
+def test_cache_creation_1h_priced_at_2x_input_rate():
+    """1-hour cache writes bill at 2.00× input rate vs 1.25× for 5-minute.
+    Pre-#387 the wrapper always assumed 1.25×; pre-screen / cv_match /
+    agent prompts all use ttl=1h so this systematically under-counted.
+    """
+    # 1M cache_creation tokens, ALL 1h: 1M × $3 (Sonnet input) × 2.00 = $6.00
+    all_1h = raw_cost_usd_micro(
+        input_tokens=0,
+        output_tokens=0,
+        cache_creation_tokens=1_000_000,
+        cache_creation_1h_tokens=1_000_000,
+        model="claude-sonnet-4-5",
+    )
+    assert 6_000_000 - 100 <= all_1h <= 6_000_000 + 100
+
+    # 1M cache_creation tokens, ALL 5m: 1M × $3 × 1.25 = $3.75
+    all_5m = raw_cost_usd_micro(
+        input_tokens=0,
+        output_tokens=0,
+        cache_creation_tokens=1_000_000,
+        cache_creation_1h_tokens=0,
+        model="claude-sonnet-4-5",
+    )
+    assert 3_750_000 - 100 <= all_5m <= 3_750_000 + 100
+
+    # Mixed 50/50: 0.5M × 1.25 × $3 + 0.5M × 2.00 × $3 = 1.875 + 3.000 = $4.875
+    mixed = raw_cost_usd_micro(
+        input_tokens=0,
+        output_tokens=0,
+        cache_creation_tokens=1_000_000,
+        cache_creation_1h_tokens=500_000,
+        model="claude-sonnet-4-5",
+    )
+    assert 4_875_000 - 100 <= mixed <= 4_875_000 + 100
+
+
+def test_cache_creation_1h_none_falls_back_to_legacy_1_25x():
+    """When ``cache_creation_1h_tokens`` is None (legacy row, older SDK),
+    pricing falls back to applying 1.25× to the whole cache_creation
+    total. This preserves pre-#387 behaviour exactly so we don't
+    silently retroactively re-price historical rows the wrong way.
+    """
+    cost = raw_cost_usd_micro(
+        input_tokens=0,
+        output_tokens=0,
+        cache_creation_tokens=1_000_000,
+        cache_creation_1h_tokens=None,
+        model="claude-sonnet-4-5",
+    )
+    # 1M × $3 × 1.25 = $3.75 — the legacy under-counted answer.
+    assert 3_750_000 - 100 <= cost <= 3_750_000 + 100

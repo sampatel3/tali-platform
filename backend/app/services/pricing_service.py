@@ -304,26 +304,53 @@ def raw_cost_usd_micro(
     output_tokens: int,
     cache_read_tokens: int = 0,
     cache_creation_tokens: int = 0,
+    cache_creation_1h_tokens: Optional[int] = None,
     model: Optional[str] = None,
 ) -> int:
     """Compute Claude cost in micro-USD (millionths of a dollar).
 
     Anthropic prompt-cache pricing:
-    - cache_read_tokens: 10% of input rate (cache hit on Anthropic's side)
-    - cache_creation_tokens: 125% of input rate (one-time write cost)
+    - cache_read_tokens: 0.10× input rate (cache hit)
+    - cache_creation 5-minute TTL: 1.25× input rate
+    - cache_creation 1-hour TTL: 2.00× input rate
 
-    Per-model rates: input/output cost per MTok varies by model family. See
-    ``_MODEL_RATES``. ``model`` is optional only for legacy call sites and
-    tests; production paths MUST pass it or Sonnet/Opus calls are booked
-    at Haiku rates (the 2026-05 bug that produced -34% Sonnet drift in
-    reconciliation against Anthropic billing).
+    ``cache_creation_tokens`` is the TOTAL written to cache;
+    ``cache_creation_1h_tokens`` is the slice of that total written
+    with ``cache_control: {"type": "ephemeral", "ttl": "1h"}``. The
+    5-minute portion is ``total - 1h`` and priced at 1.25×; the 1-hour
+    portion at 2.00×. When ``cache_creation_1h_tokens`` is None (legacy
+    call sites that haven't been updated yet, or DB rows from before
+    the split column was added), the function falls back to pricing
+    the WHOLE ``cache_creation_tokens`` total at 1.25× — the
+    conservative (under-counting) choice that matches pre-#387
+    behaviour exactly.
+
+    Per-model rates: see ``_MODEL_RATES``. ``model`` is optional only
+    for legacy call sites; production paths MUST pass it or Sonnet/Opus
+    calls are booked at Haiku rates (the 2026-05 bug that produced -34%
+    Sonnet drift in reconciliation against Anthropic billing).
     """
     input_rate, output_rate = _resolve_model_rates(model)
 
     standard_input = Decimal(input_tokens) * input_rate
     standard_output = Decimal(output_tokens) * output_rate
     cache_read = Decimal(cache_read_tokens) * input_rate * Decimal("0.10")
-    cache_creation = Decimal(cache_creation_tokens) * input_rate * Decimal("1.25")
+
+    if cache_creation_1h_tokens is None:
+        # No split available — treat as all-5m. Backwards compat for
+        # legacy rows and any call sites that haven't been updated.
+        cache_creation = Decimal(cache_creation_tokens) * input_rate * Decimal("1.25")
+    else:
+        cc_1h = Decimal(int(cache_creation_1h_tokens or 0))
+        cc_5m = Decimal(int(cache_creation_tokens or 0)) - cc_1h
+        # Guard against negative cc_5m if a caller passes an inconsistent
+        # split (1h > total). Price the negative slice at the 5m rate so
+        # the math stays monotonic without raising — same effect as
+        # clamping to 0 and warning, with less ops noise.
+        cache_creation = (
+            cc_5m * input_rate * Decimal("1.25")
+            + cc_1h * input_rate * Decimal("2.00")
+        )
 
     total_usd = (standard_input + standard_output + cache_read + cache_creation) / Decimal(1_000_000)
     micro = total_usd * Decimal(1_000_000)

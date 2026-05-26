@@ -76,6 +76,30 @@ from .usage_metering_service import record_event
 logger = logging.getLogger("taali.metered_anthropic")
 
 
+def _extract_cache_creation_1h(usage: Any) -> Optional[int]:
+    """Pull the 1-hour cache_creation token count off ``response.usage``.
+
+    Anthropic exposes the breakdown at
+    ``usage.cache_creation.ephemeral_1h_input_tokens`` (and
+    ``ephemeral_5m_input_tokens``). When the field is absent (older SDK,
+    no cache_creation on this call, etc.) we return None so pricing
+    falls back to the conservative 1.25×-on-total default — matches
+    pre-#387 behaviour.
+    """
+    if usage is None:
+        return None
+    cache_creation = getattr(usage, "cache_creation", None)
+    if cache_creation is None:
+        return None
+    val = getattr(cache_creation, "ephemeral_1h_input_tokens", None)
+    if val is None:
+        return None
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return None
+
+
 # Sentinel returned by ``MeteredMessages._extract_metering`` when a caller
 # explicitly opts out (``metering={"skip": True}``). We still strip the
 # kwarg from the SDK call but skip recording. Used by tests and by the
@@ -414,12 +438,20 @@ class _MeteredMessages:
         cache_creation_tokens = (
             int(getattr(usage, "cache_creation_input_tokens", 0) or 0) if usage else 0
         )
+        # Anthropic returns the 5m/1h split nested under
+        # ``usage.cache_creation`` (CacheCreation object). We persist
+        # the 1h slice separately so pricing can apply the 2.00× rate
+        # to it (vs 1.25× for 5m). The legacy combined
+        # ``cache_creation_tokens`` stays as the source of truth for
+        # the total — pricing derives 5m = total - 1h.
+        cache_creation_1h_tokens = _extract_cache_creation_1h(usage)
         try:
             cost_micro = raw_cost_usd_micro(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cache_read_tokens=cache_read_tokens,
                 cache_creation_tokens=cache_creation_tokens,
+                cache_creation_1h_tokens=cache_creation_1h_tokens,
                 model=model,
             )
         except Exception:
@@ -432,6 +464,7 @@ class _MeteredMessages:
             output_tokens=output_tokens,
             cache_read_tokens=cache_read_tokens,
             cache_creation_tokens=cache_creation_tokens,
+            cache_creation_1h_tokens=cache_creation_1h_tokens,
             cost_usd_micro=int(cost_micro),
             feature_hint=feature_hint,
             status=status,
@@ -489,6 +522,7 @@ class _MeteredMessages:
         cache_creation_tokens = int(
             getattr(usage, "cache_creation_input_tokens", 0) or 0
         )
+        cache_creation_1h_tokens = _extract_cache_creation_1h(usage)
         cache_hit = bool(metering.get("cache_hit", False))
 
         org_id = int(
@@ -505,6 +539,7 @@ class _MeteredMessages:
             output_tokens=output_tokens,
             cache_read_tokens=cache_read_tokens,
             cache_creation_tokens=cache_creation_tokens,
+            cache_creation_1h_tokens=cache_creation_1h_tokens,
             cache_hit=cache_hit,
             user_id=metering.get("user_id"),
             role_id=metering.get("role_id"),
@@ -522,6 +557,7 @@ class _MeteredMessages:
         output_tokens: int,
         cache_read_tokens: int,
         cache_creation_tokens: int,
+        cache_creation_1h_tokens: Optional[int],
         cache_hit: bool,
         user_id: Optional[int],
         role_id: Optional[int],
@@ -550,6 +586,7 @@ class _MeteredMessages:
                     output_tokens=output_tokens,
                     cache_read_tokens=cache_read_tokens,
                     cache_creation_tokens=cache_creation_tokens,
+                    cache_creation_1h_tokens=cache_creation_1h_tokens,
                     cache_hit=cache_hit,
                     user_id=user_id,
                     role_id=role_id,
@@ -616,8 +653,9 @@ class _MeteredStreamCtx:
         result = self._inner.__exit__(exc_type, exc, tb)
 
         if exc_type is None and usage is not None:
+            usage_event: Optional[UsageEvent] = None
             try:
-                self._messages._record_from_usage(
+                usage_event = self._messages._record_from_usage(
                     usage=usage,
                     model=self._model,
                     metering=self._metering,
@@ -626,7 +664,35 @@ class _MeteredStreamCtx:
                 logger.exception(
                     "metered_anthropic: stream meter write failed"
                 )
+            # Stream path used to ONLY write a usage_event — the
+            # claude_call_log row was silently skipped. That meant the
+            # taali_chat path (the only streaming caller in prod) bypassed
+            # the #237 "every call writes a call_log row" invariant, so
+            # those calls never showed up in reconciliation. Volume is
+            # small (taali_chat = $0.01/day over 3 days as of 2026-05-26)
+            # but it's a latent leak — closing it now so any future
+            # streaming caller doesn't reopen the gap.
+            try:
+                self._messages._record_call_log_safe(
+                    organization_id=self._call_org_id(self._metering),
+                    model=self._model,
+                    usage=usage,
+                    feature_hint=self._messages._feature_hint_from(self._metering),
+                    status="ok",
+                    error_reason=None,
+                    anthropic_request_id=None,
+                    usage_event_id=int(usage_event.id) if usage_event is not None else None,
+                )
+            except Exception:
+                logger.exception(
+                    "metered_anthropic: stream call_log write failed"
+                )
         return result
+
+    def _call_org_id(self, metering: dict[str, Any]) -> Optional[int]:
+        # Delegate to the messages helper so org-resolution stays in
+        # one place (handles both client-bound and per-call org_id).
+        return self._messages._call_org_id(metering)
 
 
 class MeteredAnthropicClient:

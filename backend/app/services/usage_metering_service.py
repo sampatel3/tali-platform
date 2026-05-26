@@ -99,6 +99,7 @@ def record_event(
     output_tokens: int,
     cache_read_tokens: int = 0,
     cache_creation_tokens: int = 0,
+    cache_creation_1h_tokens: Optional[int] = None,
     cache_hit: bool = False,
     user_id: Optional[int] = None,
     role_id: Optional[int] = None,
@@ -127,6 +128,7 @@ def record_event(
         output_tokens=output_tokens,
         cache_read_tokens=cache_read_tokens,
         cache_creation_tokens=cache_creation_tokens,
+        cache_creation_1h_tokens=cache_creation_1h_tokens,
         model=model,
     )
     charged = credits_charged(
@@ -148,6 +150,7 @@ def record_event(
         output_tokens=output_tokens,
         cache_read_tokens=cache_read_tokens,
         cache_creation_tokens=cache_creation_tokens,
+        cache_creation_1h_tokens=cache_creation_1h_tokens,
         cost_usd_micro=cost_usd_micro,
         markup_multiplier=multiplier,
         credits_charged=charged,
