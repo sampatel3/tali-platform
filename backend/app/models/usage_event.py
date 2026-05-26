@@ -29,6 +29,11 @@ class UsageEvent(Base):
     output_tokens = Column(Integer, default=0, nullable=False)
     cache_read_tokens = Column(Integer, default=0, nullable=False)
     cache_creation_tokens = Column(Integer, default=0, nullable=False)
+    # 1-hour portion of cache_creation_tokens — needed because Anthropic
+    # bills 5m writes at 1.25× input and 1h writes at 2.00×.
+    # ``cache_creation_tokens`` is the total; this is the 1h slice.
+    # NULL on pre-#387 rows = "unknown split" → priced at 1.25× default.
+    cache_creation_1h_tokens = Column(Integer, default=0, nullable=True)
     cost_usd_micro = Column(BigInteger, default=0, nullable=False)
     markup_multiplier = Column(Numeric(4, 2), nullable=False)
     credits_charged = Column(BigInteger, default=0, nullable=False)

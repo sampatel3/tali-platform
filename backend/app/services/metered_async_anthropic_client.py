@@ -34,6 +34,7 @@ from anthropic import AsyncAnthropic
 from ..models.claude_call_log import ClaudeCallLog
 from ..models.usage_event import UsageEvent
 from ..platform.database import SessionLocal
+from .metered_anthropic_client import _extract_cache_creation_1h
 from .pricing_service import Feature, raw_cost_usd_micro
 from .usage_metering_service import record_event
 
@@ -138,12 +139,14 @@ class _AsyncMeteredMessages:
         cache_creation_tokens = (
             int(getattr(usage, "cache_creation_input_tokens", 0) or 0) if usage else 0
         )
+        cache_creation_1h_tokens = _extract_cache_creation_1h(usage)
         try:
             cost_micro = raw_cost_usd_micro(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cache_read_tokens=cache_read_tokens,
                 cache_creation_tokens=cache_creation_tokens,
+                cache_creation_1h_tokens=cache_creation_1h_tokens,
                 model=model,
             )
         except Exception:
@@ -156,6 +159,7 @@ class _AsyncMeteredMessages:
             output_tokens=output_tokens,
             cache_read_tokens=cache_read_tokens,
             cache_creation_tokens=cache_creation_tokens,
+            cache_creation_1h_tokens=cache_creation_1h_tokens,
             cost_usd_micro=int(cost_micro),
             feature_hint="graph_sync",
             status=status,
@@ -200,6 +204,7 @@ class _AsyncMeteredMessages:
         cache_creation_tokens = int(
             getattr(usage, "cache_creation_input_tokens", 0) or 0
         )
+        cache_creation_1h_tokens = _extract_cache_creation_1h(usage)
         try:
             with SessionLocal() as fresh:
                 event = record_event(
@@ -211,6 +216,7 @@ class _AsyncMeteredMessages:
                     output_tokens=output_tokens,
                     cache_read_tokens=cache_read_tokens,
                     cache_creation_tokens=cache_creation_tokens,
+                    cache_creation_1h_tokens=cache_creation_1h_tokens,
                     user_id=ctx.user_id,
                     role_id=ctx.role_id,
                     entity_id=str(ctx.candidate_id) if ctx.candidate_id else None,
