@@ -65,16 +65,16 @@ class Settings(BaseSettings):
     # CLAUDE_TOOL_MAX_TURNS caps how many ``messages.create`` calls one
     # candidate→assistant turn can fan into. History:
     #   12 (#398): worked but Sonnet fanned to 19 tool calls (52s latency)
-    #    6 (#409): cut latency but the SDK started raising
-    #              "Reached maximum number of turns" mid-answer for any
-    #              genuinely 3-step question (assessment 76, 2026-05-26)
-    #   10 (now): safety net only — the system prompt already tells the
-    #             model to stop at 3 tool calls. Haiku 4.5 keeps even a
-    #             full 10-turn loop under ~15s. The agent_service
-    #             gracefully recovers a partial answer when this cap
-    #             IS hit, so this is now a soft safety net not a hard
-    #             failure surface.
-    CLAUDE_TOOL_MAX_TURNS: int = 10
+    #    6 (#409): cut latency but SDK raised mid-answer (no partial recovery)
+    #   10 (#414): added partial recovery; Haiku used the full 10 on a
+    #              3-question prompt (60s latency, assessment 77, 2026-05-26)
+    #    4 (now): hard cap aligned with the system prompt's "AT MOST 3
+    #             tool calls" rule (one buffer turn). If the model wants
+    #             more, the soft-recovery in ``agent_service`` returns
+    #             the partial answer with a "ask a tighter follow-up"
+    #             trailer — fast iteration beats a slow exhaustive
+    #             reply on the candidate's 30-min clock.
+    CLAUDE_TOOL_MAX_TURNS: int = 4
     # Per-tool wall-clock cap inside the executor (leaf A enforces;
     # surfaced here so the timeout is grep-able alongside the loop cap).
     CLAUDE_TOOL_TIMEOUT_SECONDS: int = 10
