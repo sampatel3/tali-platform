@@ -5,13 +5,11 @@ import { CandidateWelcomePage } from './CandidateWelcomePage';
 
 const mockPreview = vi.fn();
 const mockStart = vi.fn();
-const mockUploadCv = vi.fn();
 
 vi.mock('../../shared/api', () => ({
   assessments: {
     preview: (...args) => mockPreview(...args),
     start: (...args) => mockStart(...args),
-    uploadCv: (...args) => mockUploadCv(...args),
   },
 }));
 
@@ -46,7 +44,6 @@ describe('CandidateWelcomePage', () => {
       },
     });
     mockStart.mockResolvedValue({ data: {} });
-    mockUploadCv.mockResolvedValue({ data: {} });
   });
 
   it('shows the candidate-safe credit blocker and disables start', async () => {

@@ -66,15 +66,11 @@ _EMPTY_REPLY_FALLBACK = (
     "submit when you're ready."
 )
 
-# Default model when no override is configured. Sonnet gives the SDK
-# room to do meaningful tool-use (Read/Write/Edit/Bash) without going
-# in circles. We bypass ``settings.resolved_claude_chat_model`` (which
-# defaults to Haiku for the hand-rolled chat) because the SDK route is
-# expected to be Sonnet-first when it lands behind the feature flag —
-# see the rollout plan. If ``CLAUDE_CHAT_MODEL`` env var is *explicitly*
-# set, that takes precedence so ops can pin a specific model without
-# code changes.
-_DEFAULT_AGENT_SDK_MODEL = "claude-sonnet-4-5"
+# Default model. Sonnet for room to do real tool-use (Read/Write/Edit/Bash).
+# The bundled CLI is stricter than Messages-API about aliases and rejected
+# plain ``claude-sonnet-4-5`` with exit-1 on assessment 71 (2026-05-26) —
+# pin to the dated id. ``CLAUDE_CHAT_MODEL`` env var overrides at runtime.
+_DEFAULT_AGENT_SDK_MODEL = "claude-sonnet-4-5-20251001"
 
 # Cap on how many prior turns we replay in the system-prompt history
 # block. SDK's ``query()`` is stateless across calls, so we resend the
@@ -162,15 +158,8 @@ class AgentSDKChatService:
     def _resolve_default_model() -> str:
         """Pick the model when the caller didn't supply one.
 
-        Priority:
-        1. ``$CLAUDE_CHAT_MODEL`` env var explicitly set → honour it
-           (ops escape hatch; works without code changes).
-        2. Otherwise → ``claude-sonnet-4-5`` (this module's chosen
-           default, NOT ``settings.resolved_claude_chat_model`` which
-           defaults to Haiku for the legacy chat path).
-
-        Documented in the module docstring; tested in
-        ``test_agent_service.py::test_default_model_resolution``.
+        Priority: ``$CLAUDE_CHAT_MODEL`` env var → ``_DEFAULT_AGENT_SDK_MODEL``.
+        Documented in module docstring; tested in ``test_default_model_resolution``.
         """
         env_value = os.environ.get("CLAUDE_CHAT_MODEL", "").strip()
         if env_value:
@@ -272,6 +261,26 @@ class AgentSDKChatService:
         mcp_server = mcp_factory(self._executor)
         capped_budget = min(float(budget_remaining_usd), float(max_budget_usd))
 
+        # Capture CLI stderr — without this, ProcessError surfaces only
+        # "Check stderr output for details" (assessment 71, 2026-05-26).
+        stderr_lines: list[str] = []
+
+        def _on_stderr(line: str) -> None:
+            try:
+                trimmed = (line or "").rstrip()
+                if not trimmed:
+                    return
+                stderr_lines.append(trimmed)
+                logger.warning(
+                    "claude_agent_sdk CLI stderr org=%s assessment=%s: %s",
+                    self._organization_id, self._assessment_id, trimmed[:1000],
+                )
+            except Exception:  # pragma: no cover
+                pass
+
+        # Skip SDK→CLI version check (avoid transient network turning into 500).
+        os.environ.setdefault("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK", "1")
+
         options = ClaudeAgentOptions(
             model=self._model,
             system_prompt=full_system,
@@ -294,6 +303,7 @@ class AgentSDKChatService:
             max_turns=self._max_turns,
             max_budget_usd=capped_budget,
             env={"ANTHROPIC_API_KEY": self._api_key},
+            stderr=_on_stderr,
         )
 
         # 4. Drive the stream -------------------------------------------------
@@ -312,17 +322,21 @@ class AgentSDKChatService:
                 elif isinstance(msg, ResultMessage):
                     final = msg
         except Exception as exc:
+            stderr_tail = "\n".join(stderr_lines[-12:]) if stderr_lines else ""
             logger.exception(
-                "AgentSDKChatService query() raised org=%s assessment=%s",
+                "AgentSDKChatService query() raised org=%s assessment=%s "
+                "stderr_tail=%s",
                 self._organization_id,
                 self._assessment_id,
+                stderr_tail[:2000] or "<empty>",
             )
             # No UsageEvent — the SDK didn't get far enough to report
             # token usage. If it did fire billable calls before crashing,
             # the daily Admin-API reconciliation will surface it.
+            user_msg = "The chat service hit an error. Please retry in a moment."
             return ChatTurn(
                 success=False,
-                content=f"The chat service hit an error: {exc!s}",
+                content=user_msg,
                 tool_calls_made=tool_calls,
                 input_tokens=0,
                 output_tokens=0,
