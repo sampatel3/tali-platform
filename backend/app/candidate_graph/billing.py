@@ -1,26 +1,29 @@
-"""Estimate and record Graphiti episode cost into UsageEvent.
+"""DEPRECATED 2026-05-26 — heuristic Graphiti billing.
 
-Graphiti's Anthropic client makes LLM calls inside ``add_episode`` that we
-can't directly observe (no token counts come back). We estimate cost per
-episode from body length:
+This module estimated Graphiti episode cost from ``len(body) // 4``,
+which massively under-counted (Graphiti's actual extraction prompts
+are 15-30k tokens). On 2026-05-23 the heuristic hid 16M of 19M Haiku
+input tokens behind a $0.41 estimate, producing -41% reconciliation
+drift on Haiku.
 
-  input_tokens  ≈ len(body) // 4 + EXTRACTION_PROMPT_OVERHEAD_TOKENS
-  output_tokens ≈ EXTRACTION_OUTPUT_TOKENS
+The replacement is ``services/metered_async_anthropic_client``:
+``MeteredAsyncAnthropic`` wraps Graphiti's underlying ``AsyncAnthropic``
+and writes a ``claude_call_log`` row PER REAL Anthropic call with
+exact tokens from ``response.usage``. When ``graph_metering_ctx`` is
+set by the dispatch path it also writes a ``usage_event`` so the
+spend flows into the org's role budget the same way it always did,
+but with real numbers.
 
-The estimate is rough but lets the spend flow into the role's monthly
-budget so recruiters see semantic-search cost alongside scoring and
-pre-screen. Reconcile against Anthropic's bill periodically and tune
-the constants.
+This module is kept only so external callers that imported it
+continue to load; ``record_episode_cost`` is now a no-op that logs a
+deprecation warning. Once we confirm no caller invokes it (search:
+``grep -rn record_episode_cost``), delete the whole file.
 """
 from __future__ import annotations
 
 import logging
 
 from sqlalchemy.orm import Session
-
-from ..platform.config import settings
-from ..services.pricing_service import Feature
-from ..services.usage_metering_service import record_event
 
 logger = logging.getLogger("taali.candidate_graph.billing")
 
@@ -43,20 +46,17 @@ def record_episode_cost(
     episode_name: str,
     episode_body: str,
 ) -> None:
-    input_tokens, output_tokens = estimate_episode_tokens(episode_body)
-    try:
-        record_event(
-            db,
-            organization_id=organization_id,
-            feature=Feature.GRAPH_SYNC,
-            model=settings.GRAPHITI_LLM_MODEL,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            user_id=user_id,
-            role_id=role_id,
-            entity_id=str(candidate_id) if candidate_id else None,
-            metadata={"episode": episode_name, "estimate": True},
-        )
-    except Exception:
-        db.rollback()
-        logger.exception("Failed to record graph_sync usage for %s", episode_name)
+    """DEPRECATED — no-op. Real metering now happens in
+    ``services/metered_async_anthropic_client``, which wraps Graphiti's
+    underlying ``AsyncAnthropic`` and writes a claude_call_log row per
+    real Anthropic call with exact tokens. See module docstring.
+    """
+    logger.warning(
+        "candidate_graph.billing.record_episode_cost is deprecated and "
+        "no longer records spend (called for episode=%s, org=%s). "
+        "Real metering is in MeteredAsyncAnthropic since 2026-05-26.",
+        episode_name, organization_id,
+    )
+    # Reference unused params to keep linters quiet; this function
+    # is a deliberate no-op pending deletion.
+    _ = (db, role_id, user_id, candidate_id, episode_body)
