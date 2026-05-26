@@ -363,7 +363,32 @@ def dispatch(
         return 0
 
     graphiti = graph_client.get_graphiti()
+    # Import here so the module loads cleanly even when Graphiti / our
+    # async wrapper aren't configured (test environments).
+    from ..services.metered_async_anthropic_client import (
+        GraphMeteringContext,
+        graph_metering_ctx,
+    )
+
     for episode in episodes:
+        # Populate the contextvar BEFORE invoking add_episode so the
+        # metered async wrapper around Graphiti's LLM client picks up
+        # org/role/candidate attribution for every claude_call_log row
+        # it writes. Without this, the call_log row still lands (so
+        # reconciliation against Anthropic billing closes) but it
+        # carries no org_id and no usage_event is written — surfaced
+        # as a metering-attribution gap in the dashboard.
+        meter_ctx_token = None
+        if bill_organization_id is not None:
+            meter_ctx_token = graph_metering_ctx.set(
+                GraphMeteringContext(
+                    organization_id=int(bill_organization_id),
+                    role_id=bill_role_id,
+                    candidate_id=bill_candidate_id,
+                    user_id=bill_user_id,
+                    episode_name=episode.name,
+                )
+            )
         try:
             graph_client.run_async(
                 graphiti.add_episode(
@@ -377,21 +402,21 @@ def dispatch(
                 timeout=120.0,
             )
             sent += 1
-            if db is not None and bill_organization_id is not None:
-                from . import billing
-                billing.record_episode_cost(
-                    db,
-                    organization_id=bill_organization_id,
-                    role_id=bill_role_id,
-                    user_id=bill_user_id,
-                    candidate_id=bill_candidate_id,
-                    episode_name=episode.name,
-                    episode_body=episode.body,
-                )
+            # NOTE: the heuristic ``billing.record_episode_cost`` write
+            # is gone — the metered async wrapper now writes a
+            # claude_call_log row PER actual Anthropic call with real
+            # tokens, and writes a usage_event when the contextvar is
+            # populated. Heuristic estimates (len(body)//4 + 800)
+            # massively under-counted Graphiti's actual prompt overhead
+            # (typically 15-30k tokens/call) — see #237 / 2026-05-23
+            # reconciliation. Real tokens via the wrapper supersede.
         except Exception as exc:
             logger.warning(
                 "Graphiti add_episode failed name=%s reason=%s", episode.name, exc
             )
+        finally:
+            if meter_ctx_token is not None:
+                graph_metering_ctx.reset(meter_ctx_token)
     return sent
 
 

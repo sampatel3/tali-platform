@@ -4011,7 +4011,21 @@ def _run_sync_graph(org_id: int, *, refresh: bool = False) -> None:
                 if cand is None:
                     progress["errors"] = progress.get("errors", 0) + 1
                 else:
-                    sent = graph_sync.sync_candidate(cand, db=db, include_cv_text=True)
+                    # Pass bill_organization_id so the metered async
+                    # wrapper around Graphiti's LLM client tags each
+                    # claude_call_log row with the right org. Without
+                    # this the admin "rebuild graph" sweep produces
+                    # un-attributed call_log rows — reconciliation
+                    # against Anthropic billing still closes, but the
+                    # per-org usage tab misses the rows entirely.
+                    sent = graph_sync.sync_candidate(
+                        cand,
+                        db=db,
+                        include_cv_text=True,
+                        bill_organization_id=int(cand.organization_id)
+                        if cand.organization_id is not None else None,
+                        bill_candidate_id=int(cand.id) if cand.id is not None else None,
+                    )
                     if sent == 0:
                         # Treat as error if Graphiti dropped everything (likely
                         # due to LLM extraction failure / API credit issues).

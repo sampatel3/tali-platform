@@ -290,3 +290,44 @@ def test_no_bare_anthropic_client_construction() -> None:
         "spend (reconciliation gap on 2026-05-20 was 73% via this exact "
         f"pattern). Violations: {violations}"
     )
+
+
+def test_no_bare_async_anthropic_client_construction() -> None:
+    """The async sister rule: ``AsyncAnthropic(...)`` must be wrapped in
+    ``MeteredAsyncAnthropic(inner=...)`` in the same file.
+
+    Background: Graphiti's ``AnthropicClient`` accepts an ``AsyncAnthropic``
+    instance and runs all entity-extraction calls through it. Until
+    2026-05-26 we built a bare ``AsyncAnthropic`` inside
+    ``candidate_graph/client.py``, so every candidate sync's Haiku calls
+    bypassed the meter entirely (no call_log, no usage_event). On
+    2026-05-23 this hid 16.15M of 19.18M Haiku input tokens — Anthropic
+    billed $60.31, our records showed $35.48. The async wrapper closes
+    that hole; this gate prevents it from re-opening.
+
+    Approved sites mirror the sync gate: the wrapper itself, and the
+    candidate_graph client factory (constructs + immediately wraps).
+    """
+    approved = {
+        "app/services/metered_async_anthropic_client.py",
+        "app/candidate_graph/client.py",
+    }
+
+    constructor_re = re.compile(r"\bAsyncAnthropic\s*\(")
+    wrapper_re = re.compile(r"MeteredAsyncAnthropic\s*\(\s*inner\s*=")
+
+    violations: list[tuple[str, str]] = []
+    for path in _python_files(PROJECT_ROOT / "app"):
+        rel = path.relative_to(PROJECT_ROOT).as_posix()
+        if rel in approved:
+            continue
+        content = path.read_text(encoding="utf-8")
+        if constructor_re.search(content) and not wrapper_re.search(content):
+            violations.append((rel, "constructs AsyncAnthropic(...) without wrapping in MeteredAsyncAnthropic(inner=...)"))
+
+    assert not violations, (
+        "Every AsyncAnthropic client must flow through "
+        "MeteredAsyncAnthropic so claude_call_log captures the spend. "
+        "Bare AsyncAnthropic produces invisible Haiku spend (Graphiti "
+        f"path leaked 16M tokens/day before this gate). Violations: {violations}"
+    )

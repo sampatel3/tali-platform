@@ -124,7 +124,22 @@ def sync_interview(interview: ApplicationInterview, *, db: Session | None = None
     if not graph_client.is_configured():
         return 0
     episodes = episode_module.build_interview_episodes(interview)
-    return episode_module.dispatch(episodes)
+    # Resolve org via the interview's application → candidate chain so
+    # the metered async wrapper can tag the claude_call_log rows with
+    # the right org. Best-effort; fall through unattributed when the
+    # relationships aren't loaded.
+    bill_org_id: int | None = None
+    try:
+        application = getattr(interview, "application", None)
+        if application is not None and application.organization_id is not None:
+            bill_org_id = int(application.organization_id)
+    except Exception:
+        bill_org_id = None
+    return episode_module.dispatch(
+        episodes,
+        db=db,
+        bill_organization_id=bill_org_id,
+    )
 
 
 def sync_event(event: CandidateApplicationEvent) -> int:
@@ -134,7 +149,16 @@ def sync_event(event: CandidateApplicationEvent) -> int:
     episode = episode_module.build_event_episode(event)
     if episode is None:
         return 0
-    return episode_module.dispatch([episode])
+    # Resolve org via the event's application; same best-effort pattern
+    # as ``sync_interview``.
+    bill_org_id: int | None = None
+    try:
+        application = getattr(event, "application", None)
+        if application is not None and application.organization_id is not None:
+            bill_org_id = int(application.organization_id)
+    except Exception:
+        bill_org_id = None
+    return episode_module.dispatch([episode], bill_organization_id=bill_org_id)
 
 
 def sync_organization(

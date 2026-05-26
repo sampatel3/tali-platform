@@ -56,7 +56,20 @@ def _sync_candidate_async(candidate_id: int) -> None:
             # candidates are skipped to keep Graphiti extraction bounded.
             if not sync_module.should_sync_candidate_to_graph(candidate, db):
                 return
-            sync_module.sync_candidate(candidate, db=db)
+            # Pass bill_organization_id so the metered async wrapper
+            # around Graphiti's LLM client tags each claude_call_log
+            # row with the right org (and writes a usage_event so the
+            # graph-sync spend flows into the role's monthly budget).
+            # Without this, Graphiti calls land in claude_call_log with
+            # organization_id=NULL — reconciliation closes but
+            # per-org spend display is wrong.
+            sync_module.sync_candidate(
+                candidate,
+                db=db,
+                bill_organization_id=int(candidate.organization_id)
+                if candidate.organization_id is not None else None,
+                bill_candidate_id=int(candidate.id),
+            )
         finally:
             db.close()
     except Exception as exc:

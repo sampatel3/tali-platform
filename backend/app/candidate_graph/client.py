@@ -108,6 +108,7 @@ async def _init_graphiti_async():
     background loop so there is never a cross-loop Future mismatch when
     subsequent calls dispatch coroutines via run_async.
     """
+    from anthropic import AsyncAnthropic
     from graphiti_core import Graphiti  # type: ignore[import-not-found]
     from graphiti_core.driver.neo4j_driver import Neo4jDriver  # type: ignore[import-not-found]
     from graphiti_core.llm_client.anthropic_client import AnthropicClient  # type: ignore[import-not-found]
@@ -115,13 +116,29 @@ async def _init_graphiti_async():
     from graphiti_core.embedder.voyage import VoyageAIEmbedder, VoyageAIEmbedderConfig  # type: ignore[import-not-found]
 
     from ..platform.config import settings
+    from ..services.metered_async_anthropic_client import MeteredAsyncAnthropic
 
+    # Graphiti makes Haiku 4.5 calls inside ``add_episode`` (entity +
+    # edge extraction). Until 2026-05-26 those calls bypassed our
+    # metering entirely — Graphiti's AnthropicClient builds its own
+    # AsyncAnthropic, and our sync MeteredAnthropicClient can't
+    # intercept async coroutines. Symptom in reconciliation: Anthropic
+    # billed 19.18M Haiku input tokens on 2026-05-23; our claude_call_log
+    # captured 3.03M — Graphiti accounted for the missing 16M.
+    #
+    # Wrap the AsyncAnthropic instance so every Graphiti LLM call writes
+    # a claude_call_log row (and a usage_event when graph_metering_ctx
+    # is set by the dispatch path).
+    metered_async = MeteredAsyncAnthropic(
+        inner=AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    )
     llm_client = AnthropicClient(
         config=LLMConfig(
             api_key=settings.ANTHROPIC_API_KEY,
             model=settings.GRAPHITI_LLM_MODEL,
             small_model=settings.GRAPHITI_LLM_SMALL_MODEL,
-        )
+        ),
+        client=metered_async,  # type: ignore[arg-type]
     )
     embedder = VoyageAIEmbedder(
         config=VoyageAIEmbedderConfig(
