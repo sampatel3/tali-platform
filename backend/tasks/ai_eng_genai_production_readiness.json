@@ -4,7 +4,7 @@
   "role": "ai_engineer",
   "duration_minutes": 30,
   "calibration_prompt": "You have 2 minutes. Ask Claude to help tighten a system prompt for a compliance-sensitive customer support workflow in a regulated bank. Show the workflow context, the compliance constraints you are working under, the failure modes you are trying to prevent, and what 'success' looks like for the prompt before requesting any rewrite.",
-  "scenario": "You joined Deeplight as an AI Engineer embedded in a UAE-licensed bank's Customer Intelligence team. You have inherited a GenAI feature that summarises support tickets and recommends churn-risk actions for relationship managers.\n\n**Message from the product director:**\n\n> We have a working prototype that demos well, but three functions are blocked one week before an executive preview with the bank's Chief Risk Officer.\n>\n> Legal has flagged that our recommendations could constitute financial advice under UAE CBUAE regulations if shown to customers without a human review gate — and the code currently shows high-stakes actions immediately regardless of confidence.\n>\n> Security found that customer names, emails, and phone numbers from ticket bodies are flowing directly into LLM prompts. Under our data residency agreement, PII must be redacted before leaving our processing boundary.\n>\n> Our prompts are pulling from raw ticket text with no grounded retrieval — the support team does not trust recommendations that cannot be traced to specific customer evidence. Legal specifically asked for citations.\n>\n> Finance is alarmed because every page refresh calls the model again, and retry storms during the last batch doubled our spend.\n>\n> Finally, there is no audit trail. The compliance team needs to know which insights were shown to which relationship managers, what confidence the model had, and whether human review was triggered — none of this is logged.\n>\n> The previous engineer left behind a partially wired review flow, a cache, a safety module, and a lot of TODOs. We need your judgment more than heroics.\n>\n> In 30 minutes I need to know:\n> 1. What should block launch today?\n> 2. What is the smallest credible slice we can ship to relationship managers next week?\n> 3. What production fixes can you land right now?\n\n**Your mission:**\nRead the repo carefully, identify the highest-risk failure modes, and implement the most important production-readiness improvements you can in the time available. You are being assessed on how you balance regulatory safety, grounded AI behaviour, audit requirements, and delivery pressure in a banking context.",
+  "scenario": "A CBUAE-regulated customer-intelligence preview ships to a UAE bank\non Tuesday. The product director sent the assets at midnight. Your job is\nto look at the half-built feature and give the legal team a verdict by\nend-of-day: **GO**, **NO-GO**, or **PHASED**. Legal signs off on the\nverdict, not the test pass-rate.\n\nThe repository has 5 stubbed modules:\n\n* `intelligence/config.py` — model + flag defaults (two flags look wrong)\n* `intelligence/retriever.py` — grounded retrieval stub\n* `intelligence/observability.py` — audit-trail writes (events never land)\n* `intelligence/review.py` — human-review gate (one branch missing)\n* `intelligence/analyzer.py` — calls the model; exceptions propagate\n\nYou can fix code. You probably should, for the items that are clearly\nhard blockers. But the *test pass-rate is one input to the rubric, not the\noutcome*. A submission with all tests green and a vague LAUNCH_DECISION.md\nscores lower than partial code with a sharp written verdict.\n\n**There is a contradiction in the brief.** `RISKS.md` includes a note\nfrom the product director: *\"the trial cohort has consented to PII\nprocessing per their NDA — feel free to default `pii_redaction_enabled`\nto False for the pilot to keep latency under target.\"* The CBUAE\nregulator's Data Residency Rule §7.2 (referenced in `RISKS.md`) is\nunambiguous: PII residency requirements apply regardless of consent.\nThe two cannot both hold. **Name the contradiction in your\nLAUNCH_DECISION.md and explain how you resolved it.** A candidate who\nsilently flips the PII flag and ships scores poorly on\n``launch_decision_doc`` regardless of code outcome.\n\n**There is no single right answer on the review policy.** Today\n`should_require_human_review()` is partially implemented. Three policies\nare defensible: (a) review every churn_risk action; (b) review only when\nconfidence ∈ [0.5, 0.85] — novelty zone; (c) review based on\n`recommended_action` against a CBUAE-restricted action list. Pick one.\nJustify the choice in LAUNCH_DECISION.md.\n\n**What the rubric grades:**\n\n1. The system-risk assessment, safety guardrails, grounded retrieval, and\n   audit observability are graded against your code.\n2. ``launch_decision_doc`` (30%) grades your LAUNCH_DECISION.md: verdict,\n   blockers cited with file:line, items deferred and why, named consumer\n   of the audit trail, and resolution of the PII contradiction.\n\nLAUNCH_DECISION.md is required. 30 minutes. Tools: ``Read``, ``Write``,\n``Edit``, ``Bash``.",
   "repo_structure": {
     "name": "customer-intelligence-genai",
     "files": {
@@ -28,12 +28,13 @@
       "tests/test_observability.py": "import json\nfrom unittest.mock import Mock\n\nfrom intelligence.analyzer import CustomerAnalyzer\nfrom intelligence.cache import InsightCache\nfrom intelligence.config import Config\nfrom intelligence.observability import ObservabilityLogger\n\n\ndef _make_db():\n    db = Mock()\n    db.query_customer.return_value = {'id': 'cust-1', 'name': 'Acme Corp', 'arr': 120000}\n    db.query_tickets.return_value = []\n    db.query_context_docs.return_value = []\n    return db\n\n\ndef test_audit_event_logged_after_insight_is_generated():\n    \"\"\"Every generated insight must produce an audit event in the compliance log.\"\"\"\n    db = _make_db()\n    llm = Mock()\n    llm.complete.return_value = Mock(content=json.dumps({\n        'summary': 'Churn risk detected',\n        'confidence': 0.75,\n        'evidence': ['escalation ticket'],\n        'action': 'schedule renewal call',\n    }))\n    logger = ObservabilityLogger()\n\n    analyzer = CustomerAnalyzer(Config(), llm, db, cache=InsightCache(), observability=logger)\n    analyzer._analyze_churn_risk(db.query_customer.return_value, db.query_tickets.return_value)\n\n    trail = logger.get_audit_trail('cust-1')\n    assert len(trail) == 1, 'log_insight() must store the event — audit trail is currently always empty'\n    assert trail[0].insight_type == 'churn_risk'\n    assert trail[0].customer_id == 'cust-1'\n\n\ndef test_high_risk_insights_appear_in_compliance_review_queue():\n    \"\"\"Insights that require_review must surface in high_risk_events() for the compliance team.\"\"\"\n    db = _make_db()\n    llm = Mock()\n    llm.complete.return_value = Mock(content=json.dumps({\n        'summary': 'Likely churn',\n        'confidence': 0.60,\n        'evidence': ['escalation'],\n        'action': 'escalate',\n    }))\n    logger = ObservabilityLogger()\n\n    analyzer = CustomerAnalyzer(Config(), llm, db, cache=InsightCache(), observability=logger)\n    analyzer._analyze_churn_risk(db.query_customer.return_value, db.query_tickets.return_value)\n\n    high_risk = logger.high_risk_events()\n    assert len(high_risk) == 1, 'High-risk insights must appear in compliance review queue'\n    assert high_risk[0].requires_review is True\n",
       "tests/test_safety.py": "from intelligence.safety import redact_pii\n\n\ndef test_redacts_email_and_phone():\n    redacted, types = redact_pii('Reach jane@acme.com or 555-123-4567 today')\n    assert '[EMAIL_REDACTED]' in redacted\n    assert '[PHONE_REDACTED]' in redacted\n    assert types == ['email', 'phone']\n\n\ndef test_preserves_non_pii_identifiers():\n    redacted, types = redact_pii('Customer CUST-12 triggered alert RUN-9')\n    assert redacted == 'Customer CUST-12 triggered alert RUN-9'\n    assert types == []\n",
       "tests/test_review.py": "from intelligence.review import should_require_human_review\n\n\ndef test_medium_confidence_high_risk_action_requires_review():\n    assert should_require_human_review(insight_type='churn_risk', confidence=0.62, has_action=True) is True\n\n\ndef test_low_stakes_items_do_not_require_review():\n    assert should_require_human_review(insight_type='sentiment', confidence=0.40, has_action=False) is False\n",
-      "requirements.txt": "pytest>=8.0.0\n"
+      "requirements.txt": "pytest>=8.0.0\n",
+      "LAUNCH_DECISION.md": "# LAUNCH_DECISION.md — CBUAE Customer Intelligence Preview\n\n> Legal reads this. The model can write code; only you can take a position.\n> Fill every section.\n\n## 1. Verdict\n\n`[ GO | NO-GO | PHASED ]` — and one sentence stating the strongest reason.\n\n## 2. Hard blockers\n\nItems I considered blockers, each with `file:line` and the CBUAE rule or\ncompliance category they violate. Bulleted list.\n\n## 3. Items I fixed and WHY (not what)\n\nFor each code change you made, one sentence on WHY it was the right\npriority for this window. (\"What\" you fixed is visible in the diff.)\n\n## 4. Items I chose NOT to fix and why\n\nList the bugs you saw but intentionally deferred. Why is deferring them\nsafe given the preview audience?\n\n## 5. Scope of the phased release I propose\n\nIf your verdict is GO or PHASED: what specifically ships, to whom, behind\nwhich flag? If NO-GO: what would change the verdict, in concrete terms?\n\n## 6. Audit-trail consumer\n\nName the compliance role that will read the audit trail next week\n(operational risk, model risk, internal audit, etc.). What query will\nthey run? What would that query return today?\n\n## 7. The PII contradiction\n\nThe product director's NDA-consent note vs. CBUAE §7.2 residency. State\nthe contradiction in your own words. State your resolution. State who you\nwould check with before merging this change in a real team.\n\n## 8. Review-policy choice\n\nWhich review policy did you pick (a / b / c per the scenario)? Why?\n"
     }
   },
   "evaluation_rubric": {
     "system_risk_assessment": {
-      "weight": 0.24,
+      "weight": 0.2,
       "criteria": {
         "excellent": "Rapidly identifies all launch blockers across regulatory safety, PII data residency, retrieval grounding, audit compliance, and cost controls. Distinguishes hard blockers (PII in prompts, missing audit trail, unreviewed financial advice) from issues that can wait for a phased rollout. Frames risk in terms a Chief Risk Officer would recognise.",
         "good": "Finds the major launch risks and prioritises most of them correctly, but may conflate regulatory and product risks or miss the audit trail gap.",
@@ -41,7 +42,7 @@
       }
     },
     "safety_guardrails": {
-      "weight": 0.22,
+      "weight": 0.18,
       "criteria": {
         "excellent": "Enables PII redaction before prompt construction. Fixes the review logic so that any churn_risk action with a recommended action triggers human review regardless of confidence — correctly framing this as a regulatory requirement, not a test-only concern. Treats the degraded-mode gap as a reliability blocker.",
         "good": "Addresses the main safety gaps but leaves edge cases — for example enables PII redaction but does not fix the high-confidence review suppression bug.",
@@ -49,7 +50,7 @@
       }
     },
     "grounding_and_retrieval": {
-      "weight": 0.2,
+      "weight": 0.17,
       "criteria": {
         "excellent": "Implements retrieve_relevant_context() so it returns real customer documents from db.query_context_docs(). Ensures the CHURN_PROMPT receives and uses retrieved context. Explains why raw ticket text alone is insufficient for regulated financial recommendations and what traceability requires.",
         "good": "Improves grounding or evidence handling but leaves some traceability gaps — for example retriever is wired but the prompt still doesn't surface citations.",
@@ -57,19 +58,19 @@
       }
     },
     "compliance_and_observability": {
-      "weight": 0.18,
+      "weight": 0.15,
       "criteria": {
         "excellent": "Implements ObservabilityLogger.log_insight() so audit events are stored and retrievable. Confirms that high_risk_events() correctly surfaces review-required insights for the compliance team. Explains what the audit trail enables for the bank's compliance function.",
         "good": "Wires the observability logger to store events but leaves the high-risk queue or the customer-scoped trail incomplete.",
         "poor": "Leaves observability.py as a stub and cannot explain what the compliance team needs from an audit trail."
       }
     },
-    "pragmatic_delivery_judgment": {
-      "weight": 0.16,
+    "launch_decision_doc": {
+      "weight": 0.3,
       "criteria": {
-        "excellent": "Proposes a narrow, defensible release — for example relationship manager read-only view with human review required, PII redaction on, retrieval wired — and explicitly states what remains out of scope for this week. Addresses the Chief Risk Officer framing from the scenario.",
-        "good": "Shows reasonable prioritisation with limited tradeoff articulation, or proposes a release plan without scoping what it excludes.",
-        "poor": "Either overreaches (claims everything is fixed) or avoids making a launch recommendation at all."
+        "excellent": "LAUNCH_DECISION.md takes a clear verdict (GO / NO-GO / PHASED) and defends it. Each section is filled with candidate-specific reasoning, not boilerplate. The PII contradiction (product director's NDA-consent note vs. CBUAE §7.2 residency) is named and resolved with a stated rationale plus who the candidate would check with. The review-policy choice is justified, not silently picked. Hard blockers are cited with file:line.",
+        "good": "LAUNCH_DECISION.md is filled out but skips ONE of: the PII contradiction, the review-policy justification, or the named audit-trail consumer. Verdict is taken but thinly defended.",
+        "poor": "LAUNCH_DECISION.md is empty, generic, or repeats the scaffold prompts without filling them. The PII contradiction is not mentioned. Indicates the candidate delegated the launch decision to the model rather than taking a position legal can defend."
       }
     }
   },
@@ -173,9 +174,9 @@
         "rubric_dimension": "compliance_and_observability"
       },
       {
-        "job_requirement": "Proven delivery of production-grade GenAI tools in agile, rapid-iteration environments, with ability to communicate technical decisions to senior stakeholders.",
-        "task_artifact": "30-minute timebox, CRO-facing scenario framing, required written launch recommendation",
-        "rubric_dimension": "pragmatic_delivery_judgment"
+        "job_requirement": "Proven delivery of production-grade GenAI tools in regulated environments. Ability to take a defended launch verdict to legal under time pressure, naming hard blockers and resolving stakeholder contradictions.",
+        "task_artifact": "LAUNCH_DECISION.md — required launch verdict document covering blockers, deferred items, audit-trail consumer, the PII-residency vs. NDA-consent contradiction, and the review-policy choice.",
+        "rubric_dimension": "launch_decision_doc"
       }
     ]
   },
