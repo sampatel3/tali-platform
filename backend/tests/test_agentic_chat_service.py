@@ -275,8 +275,11 @@ def test_max_turns_cap_appends_fallback(patched_anthropic):
 
     # Exactly max_turns calls fired.
     assert len(fake.created_calls) == 8
-    # Fallback text is present so the candidate sees *something*.
-    assert "couldn't complete" in turn.content.lower()
+    # Fallback text is present so the candidate sees *something*. Assert
+    # against the module's constant rather than a brittle substring so future
+    # copy edits don't break the test.
+    from app.components.integrations.claude.agentic_chat import _MAX_TURNS_FALLBACK_TEXT
+    assert _MAX_TURNS_FALLBACK_TEXT in turn.content
     assert len(turn.tool_calls_made) == 8
 
 
@@ -322,8 +325,10 @@ def test_mid_loop_budget_exhaustion_breaks(patched_anthropic):
     assert len(fake.created_calls) == 1
     # Tool dispatch still happened (we don't undo a turn that already ran).
     executor.dispatch.assert_called_once()
-    # The budget-exhausted suffix is present.
-    assert "budget exhausted" in turn.content.lower()
+    # The budget-exhausted suffix is present. Compare against the module
+    # constant so copy edits don't break the test.
+    from app.components.integrations.claude.agentic_chat import _BUDGET_EXHAUSTED_TEXT
+    assert _BUDGET_EXHAUSTED_TEXT in turn.content
     # Tokens reflect only the one call.
     assert turn.input_tokens == 100_000
     assert turn.output_tokens == 10_000
