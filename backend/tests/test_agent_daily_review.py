@@ -66,6 +66,10 @@ def _make_role(
         source="manual",
         agentic_mode_enabled=agentic,
         monthly_usd_budget_cents=0,
+        # Satisfy data_readiness.has_job_spec so the cron cycle proceeds
+        # past the missing_job_spec guardrail and exercises the path
+        # under test.
+        description="Test role description.",
     )
     if paused:
         role.agent_paused_at = datetime.now(timezone.utc)

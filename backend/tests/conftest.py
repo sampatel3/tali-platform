@@ -132,6 +132,27 @@ try:
 except Exception:  # pragma: no cover — model import shouldn't fail
     pass
 
+
+# Same BigInteger-PK workaround for agent_needs_input — recruiter-facing
+# clarifying-question rows the orchestrator writes when it can't proceed
+# (e.g. data_readiness.raise_missing_job_spec). Inserted from many test
+# code paths (any cycle that hits a guardrail), so register globally.
+_AGENT_NEEDS_INPUT_PK_COUNTER = {"n": 0}
+
+
+def _assign_agent_needs_input_pk(mapper, connection, target):  # pragma: no cover
+    if getattr(target, "id", None) is None:
+        _AGENT_NEEDS_INPUT_PK_COUNTER["n"] += 1
+        target.id = _AGENT_NEEDS_INPUT_PK_COUNTER["n"]
+
+
+try:
+    from app.models.agent_needs_input import AgentNeedsInput as _AgentNeedsInput
+
+    event.listen(_AgentNeedsInput, "before_insert", _assign_agent_needs_input_pk)
+except Exception:  # pragma: no cover — model import shouldn't fail
+    pass
+
 def override_get_db():
     db = TestingSessionLocal()
     try:
