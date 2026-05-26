@@ -326,7 +326,7 @@ class AgentSDKChatService:
         except Exception as exc:
             # Classification + recovery rules in error_recovery.classify (#76).
             from .error_recovery import classify
-            recovered = classify(str(exc), content_parts)
+            recovered = classify(str(exc), content_parts, tool_calls=tool_calls)
             log = logger.info if recovered.success else logger.exception
             log("AgentSDKChatService exception org=%s assessment=%s stop=%s stderr=%s",
                 self._organization_id, self._assessment_id, recovered.stop_reason,

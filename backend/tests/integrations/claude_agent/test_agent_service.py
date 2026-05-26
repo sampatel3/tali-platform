@@ -370,6 +370,50 @@ def test_hard_sdk_crash_no_content_returns_generic_retry(patched_sdk, patched_me
     assert turn.stop_reason == "sdk_exception"
 
 
+def test_max_turns_hit_with_tool_calls_but_no_text_returns_progress_message(
+    patched_sdk, patched_meter,
+):
+    """When the model uses all turns on tool calls (e.g. multi-file
+    "fix it" requests) and never emits text, the SOFT cap should still
+    surface a successful turn — with a "I made N tool calls, retry
+    tighter" message naming the tools the model invoked.
+
+    Regression for assessment 77 retry (2026-05-26): model used 4 tool
+    calls to inspect files for a "fix it" request, hit max_turns=4 with
+    zero text content, candidate saw "The chat service hit an error.
+    Please retry." instead of useful guidance.
+    """
+    async def raising_query(*, prompt, options, transport=None):
+        patched_sdk["query_calls"] += 1
+        yield _FakeAssistantMessage(content=[
+            _FakeToolUseBlock(id="t1", name="mcp__sandbox__Read", input={"path": "dq/checks.py"}),
+        ])
+        yield _FakeAssistantMessage(content=[
+            _FakeToolUseBlock(id="t2", name="mcp__sandbox__Read", input={"path": "dq/contract.py"}),
+        ])
+        raise Exception("Claude Code returned an error result: Reached maximum number of turns (4)")
+
+    import claude_agent_sdk
+    with patch.object(claude_agent_sdk, "query", raising_query):
+        svc, _factory = _build_service()
+        turn = asyncio.run(svc.run(
+            messages=[{"role": "user", "content": "fix it"}],
+            system="task",
+            budget_remaining_usd=1.0,
+        ))
+
+    assert turn.success is True, "soft cap + tool calls should be a successful turn"
+    assert turn.stop_reason == "max_turns_soft_no_text"
+    assert "2 tool call" in turn.content
+    # Tool summary mentions the actual files the model was investigating
+    assert "Read(dq/checks.py)" in turn.content
+    assert "Read(dq/contract.py)" in turn.content
+    # Helpful retry guidance present
+    assert "one file at a time" in turn.content
+    assert len(turn.tool_calls_made) == 2
+    patched_meter.assert_not_called()
+
+
 # ---- 4. No ResultMessage -----------------------------------------------------
 
 
