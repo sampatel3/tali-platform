@@ -30,7 +30,9 @@ export const AssessmentStatusScreen = ({
     <div className={`taali-runtime ${lightMode ? 'taali-runtime-light' : 'taali-runtime-dark'} flex h-screen items-center justify-center bg-[var(--taali-runtime-bg)] px-4`}>
       <div className="max-w-md rounded-[var(--radius-xl)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] p-10 text-center shadow-[var(--shadow-lg)]">
         <div className="mx-auto mb-6 w-fit">
-          <AssessmentBrandGlyph sizeClass="w-16 h-16" markSizeClass="w-[2.7rem] h-[2.7rem]" />
+          {/* The 'lines' variant is the bare brand mark — no tile, no drop-shadow
+              glow — so it reads as identity rather than a 64px UI sticker. */}
+          <AssessmentBrandGlyph variant="lines" sizeClass="w-10 h-10" />
         </div>
         <div className="mb-3 font-mono text-[10.5px] uppercase tracking-[0.14em] text-[var(--purple)]">
           ASSESSMENT · COMPLETE
@@ -43,7 +45,7 @@ export const AssessmentStatusScreen = ({
         </p>
         <button
           type="button"
-          className="inline-flex items-center justify-center rounded-full bg-[var(--ink)] px-7 py-3 text-sm font-medium text-[var(--bg)] transition-colors hover:bg-[var(--purple)]"
+          className="inline-flex items-center justify-center rounded-full bg-[var(--purple)] px-7 py-3 text-sm font-medium text-white transition-colors hover:bg-[var(--purple-hover,var(--purple))]"
           onClick={handleClose}
         >
           Close window
