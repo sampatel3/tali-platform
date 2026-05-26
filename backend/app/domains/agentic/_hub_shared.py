@@ -125,6 +125,12 @@ class OrgKpiPayload(BaseModel):
 
 class OrgStatusPayload(OrgKpiPayload):
     last_decision_at: Optional[datetime]
+    # Kill-switch banner inputs. ``kill_switch_scope`` is "global" when
+    # the env-var switch is on, "org" when the org row has agent_paused_at,
+    # else None. The recruiter Hub renders a top-of-page banner whenever
+    # this is non-null so paused cycles aren't silent skips.
+    kill_switch_scope: Optional[str] = None
+    kill_switch_reason: Optional[str] = None
 
 
 class RoleBreakdownRow(BaseModel):

@@ -66,6 +66,16 @@ class Organization(Base):
     two_factor_required = Column(Boolean, default=False, nullable=False)
     saml_metadata_url = Column(String, nullable=True)
     candidate_feedback_enabled = Column(Boolean, default=True, nullable=False)
+    # Org-level autonomous-agent kill switch. When ``agent_paused_at`` is
+    # non-null, ``app.agent_runtime.orchestrator.run_cycle`` short-circuits
+    # every new cycle for this org with ``status="kill_switched"`` BEFORE
+    # the first Anthropic call. Drain semantics: rejects NEW cycles only —
+    # in-flight cycles run to completion (the tool loop is bounded by
+    # MAX_TOOL_ROUNDS and has per-round commits, so they finish within
+    # minutes). One layer above the per-role pause (``Role.agent_paused_at``);
+    # the env-only ``settings.AGENT_KILL_SWITCH`` sits above both.
+    agent_paused_at = Column(DateTime(timezone=True), nullable=True)
+    agent_paused_reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

@@ -714,3 +714,188 @@ def test_record_observation_survives_aborted_cycle(db):
     assert len(notes) == 1
     assert notes[0]["note"] == "must remember this"
     assert notes[0]["kind"] == "todo"
+
+
+# ---------------------------------------------------------------------------
+# Kill switches — global env-var + per-org row.
+#
+# The orchestrator gate fires BEFORE the first Anthropic call so a kill
+# costs $0. Placed AFTER the overlap-lock check (so a currently-running
+# cycle is recorded as ``skipped_overlap``, not kill_switched). First match
+# wins, precedence: global > org > overlap > budget > readiness.
+# ---------------------------------------------------------------------------
+
+
+def test_run_cycle_kill_switched_when_global_setting_on(db):
+    """``settings.AGENT_KILL_SWITCH=True`` short-circuits every cycle.
+
+    No Anthropic client call should be made; the run should record
+    ``status="kill_switched"`` with the global-switch error, and the
+    candidate timeline should see the abort event.
+    """
+    from app.models.candidate_application_event import CandidateApplicationEvent
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+
+    client = MagicMock()
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ), patch.object(orchestrator.settings, "AGENT_KILL_SWITCH", True, create=True):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+    db.commit()
+
+    assert run.status == "kill_switched"
+    assert run.error == "global kill switch on"
+    assert run.finished_at is not None
+    # No Anthropic call should have happened.
+    assert client.messages.create.call_count == 0
+
+    events = (
+        db.query(CandidateApplicationEvent)
+        .filter(CandidateApplicationEvent.application_id == app.id)
+        .all()
+    )
+    assert any(e.event_type == "agent_cycle_aborted" for e in events)
+
+
+def test_run_cycle_kill_switched_when_org_paused_at_set(db):
+    """``Organization.agent_paused_at`` short-circuits cycles for that org."""
+    from datetime import datetime, timezone
+
+    org = _make_org(db)
+    org.agent_paused_at = datetime.now(timezone.utc)
+    org.agent_paused_reason = "incident response"
+    db.add(org)
+    db.flush()
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+
+    client = MagicMock()
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+    db.commit()
+
+    assert run.status == "kill_switched"
+    assert "org kill switch on" in (run.error or "")
+    assert "incident response" in (run.error or "")
+    assert client.messages.create.call_count == 0
+
+
+def test_run_cycle_global_kill_switch_wins_over_org(db):
+    """When both layers are tripped, the global switch wins (first match).
+
+    The error string should reflect the global cause; the org cause
+    isn't surfaced because it's a lower-precedence rung.
+    """
+    from datetime import datetime, timezone
+
+    org = _make_org(db)
+    org.agent_paused_at = datetime.now(timezone.utc)
+    org.agent_paused_reason = "org pause"
+    db.add(org)
+    db.flush()
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org",
+        return_value=MagicMock(),
+    ), patch.object(orchestrator.settings, "AGENT_KILL_SWITCH", True, create=True):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+    db.commit()
+
+    assert run.status == "kill_switched"
+    assert run.error == "global kill switch on"
+
+
+def test_run_cycle_kill_switch_is_idempotent_across_calls(db):
+    """A second cycle attempt under an active switch writes a second row
+    but does NOT accumulate extra side-effects on the first run."""
+    from datetime import datetime, timezone
+
+    from app.models.candidate_application_event import CandidateApplicationEvent
+
+    org = _make_org(db)
+    org.agent_paused_at = datetime.now(timezone.utc)
+    db.add(org)
+    db.flush()
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org",
+        return_value=MagicMock(),
+    ):
+        run_a = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+        db.commit()
+        run_b = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+        db.commit()
+
+    assert run_a.id != run_b.id
+    assert run_a.status == run_b.status == "kill_switched"
+    # Idempotency: the abort event uses agent_run_id in its idempotency_key,
+    # so two cycles write two distinct events (one per run row) — and crucially,
+    # a second call to run_cycle does NOT add a second event to run_a.
+    events = (
+        db.query(CandidateApplicationEvent)
+        .filter(CandidateApplicationEvent.application_id == app.id)
+        .all()
+    )
+    run_a_events = [
+        e for e in events
+        if (e.event_metadata or {}).get("agent_run_id") == int(run_a.id)
+    ]
+    assert len(run_a_events) == 1
+
+
+def test_run_cycle_overlap_lock_wins_over_kill_switch(db):
+    """An in-flight cycle is recorded as ``skipped_overlap``, not kill_switched.
+
+    Drain semantics: the orchestrator placed the kill-switch checks AFTER
+    the overlap-lock check on purpose — a busy role's NEW attempt is
+    accounted as the no-op-overlap path it would have been without the
+    switch, instead of being double-counted as a kill_switched cycle.
+    Documents the chosen precedence: overlap > global > org > budget.
+    """
+    from datetime import datetime, timezone
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+
+    # Plant a 'running' row in the in-flight window for this role.
+    in_flight = AgentRun(
+        organization_id=org.id,
+        role_id=role.id,
+        trigger="cron",
+        status="running",
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(in_flight)
+    db.flush()
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org",
+        return_value=MagicMock(),
+    ), patch.object(orchestrator.settings, "AGENT_KILL_SWITCH", True, create=True):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+    db.commit()
+
+    assert run.status == "aborted"
+    assert run.error == "skipped_overlap"

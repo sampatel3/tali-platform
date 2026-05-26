@@ -167,13 +167,19 @@ def build_activity_feed(
             title = f"Cycle finished — {n} decision{'s' if n != 1 else ''}"
         elif run.status == "budget_paused":
             title = "Cycle paused — budget"
+        elif run.status == "kill_switched":
+            title = "Cycle paused — kill switch"
         elif run.status == "failed":
             title = "Cycle failed"
         elif run.status == "aborted":
             title = "Cycle aborted"
         else:
             title = f"Cycle · {run.status}"
-        detail = (run.error or None) if run.status in ("failed", "aborted") else None
+        detail = (
+            (run.error or None)
+            if run.status in ("failed", "aborted", "kill_switched")
+            else None
+        )
         entries.append(
             AgentActivityEntry(
                 kind="run",

@@ -313,6 +313,65 @@ def run_cycle(
     if org is None:
         raise ValueError(f"role {role.id} has no organization")
 
+    # Kill-switch gate. Mirrors the budget_paused shape but lives one (or
+    # two) layers above the per-role pause: a platform-on-fire env var
+    # (``settings.AGENT_KILL_SWITCH``) and an org-level operator toggle
+    # (``Organization.agent_paused_at``). Placed AFTER the overlap-lock
+    # check so a currently-running cycle isn't double-counted as
+    # kill_switched; BEFORE the org's first Anthropic call so the kill
+    # costs $0. Drain semantics: rejects NEW cycles only — in-flight
+    # cycles complete naturally (MAX_TOOL_ROUNDS bounds them and they
+    # commit per round, so half-applied state isn't a risk). First-match
+    # precedence: global > org > role > budget.
+    if bool(getattr(settings, "AGENT_KILL_SWITCH", False)):
+        run = AgentRun(
+            organization_id=role.organization_id,
+            role_id=role.id,
+            trigger=trigger,
+            trigger_event_id=trigger_event_id,
+            status="kill_switched",
+            error="global kill switch on",
+            model_version=settings.resolved_claude_model,
+            prompt_version=PROMPT_VERSION,
+            finished_at=datetime.now(timezone.utc),
+        )
+        db.add(run)
+        db.flush()
+        _emit_cycle_abort_event(
+            db, run=run, application_id=application_id,
+            reason=(
+                "Agent paused — platform-wide kill switch is on. Operators "
+                "have temporarily halted every autonomous cycle. Cycles "
+                "resume automatically once the switch is cleared."
+            ),
+        )
+        return run
+
+    if org.agent_paused_at is not None:
+        reason_text = (org.agent_paused_reason or "").strip() or "no reason given"
+        run = AgentRun(
+            organization_id=role.organization_id,
+            role_id=role.id,
+            trigger=trigger,
+            trigger_event_id=trigger_event_id,
+            status="kill_switched",
+            error=f"org kill switch on: {reason_text}",
+            model_version=settings.resolved_claude_model,
+            prompt_version=PROMPT_VERSION,
+            finished_at=datetime.now(timezone.utc),
+        )
+        db.add(run)
+        db.flush()
+        _emit_cycle_abort_event(
+            db, run=run, application_id=application_id,
+            reason=(
+                f"Agent paused — your organization's kill switch is on "
+                f"({reason_text}). Cycles resume automatically once an "
+                f"admin clears it."
+            ),
+        )
+        return run
+
     client = get_client_for_org(org)
     # Per-role override (Sonnet for borderline-judgment roles, etc.). Falls
     # back to the global setting when unset.

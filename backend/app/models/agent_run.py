@@ -6,7 +6,19 @@ from ..platform.database import Base
 
 
 AGENT_RUN_TRIGGERS = ("event", "cron", "manual")
-AGENT_RUN_STATUSES = ("running", "succeeded", "failed", "budget_paused", "aborted")
+AGENT_RUN_STATUSES = (
+    "running",
+    "succeeded",
+    "failed",
+    "budget_paused",
+    "aborted",
+    # kill_switched: cycle short-circuited by the global env-var switch
+    # (``settings.AGENT_KILL_SWITCH``) or the org-level pause
+    # (``Organization.agent_paused_at``). Mirrors the budget_paused shape —
+    # a row is written so the candidate timeline + Hub banner can surface
+    # the skip, but no Anthropic call was made.
+    "kill_switched",
+)
 
 
 class AgentRun(Base):

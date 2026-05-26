@@ -37,9 +37,11 @@ from ._hub_shared import (
 from ...deps import get_current_user
 from ...models.agent_decision import AgentDecision
 from ...models.agent_needs_input import AgentNeedsInput
+from ...models.organization import Organization
 from ...models.role import Role
 from ...models.usage_event import UsageEvent
 from ...models.user import User
+from ...platform.config import settings
 from ...platform.database import get_db
 
 
@@ -234,9 +236,30 @@ def org_status(
         .limit(1)
         .scalar()
     )
+
+    # Kill-switch banner inputs. Global trumps org so the recruiter sees
+    # the most-actionable message ("platform-wide" beats "your org"); the
+    # orchestrator gate enforces the same precedence.
+    kill_switch_scope: Optional[str] = None
+    kill_switch_reason: Optional[str] = None
+    if bool(getattr(settings, "AGENT_KILL_SWITCH", False)):
+        kill_switch_scope = "global"
+        kill_switch_reason = "Platform-wide kill switch is on."
+    else:
+        org_row = (
+            db.query(Organization.agent_paused_at, Organization.agent_paused_reason)
+            .filter(Organization.id == current_user.organization_id)
+            .first()
+        )
+        if org_row is not None and org_row.agent_paused_at is not None:
+            kill_switch_scope = "org"
+            kill_switch_reason = (org_row.agent_paused_reason or "").strip() or None
+
     return OrgStatusPayload(
         **base.model_dump(),
         last_decision_at=last_decision,
+        kill_switch_scope=kill_switch_scope,
+        kill_switch_reason=kill_switch_reason,
     )
 
 

@@ -168,6 +168,16 @@ class Settings(BaseSettings):
     # Admin
     ADMIN_SECRET: str = ""
 
+    # Global autonomous-agent kill switch. When True, every call to
+    # ``app.agent_runtime.orchestrator.run_cycle`` short-circuits with
+    # ``status="kill_switched"`` BEFORE the first Anthropic call. This is
+    # the "platform is on fire" toggle — flip it via env-var (no DB hop,
+    # no admin endpoint round-trip). For per-org pauses use
+    # ``Organization.agent_paused_at``; for per-role use ``Role.agent_paused_at``.
+    # Toggling requires a deploy or env-var hot-reload, which is fine for
+    # the only case this exists for.
+    AGENT_KILL_SWITCH: bool = False
+
     # URLs
     FRONTEND_URL: str = "http://localhost:5173"
     BACKEND_URL: str = "http://localhost:8000"

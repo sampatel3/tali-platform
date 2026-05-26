@@ -1086,3 +1086,87 @@ def graphiti_test_episode(request: Request):
             "error": str(exc),
             "traceback": traceback.format_exc(),
         }
+
+
+# ---------------------------------------------------------------------------
+# Agent kill switches
+#
+# Two layers sit above the per-role pause already enforced by
+# ``app.agent_runtime.budget_guard.pause_role``:
+#
+#   - ``/admin/org/{id}/agent-pause`` — toggles ``Organization.agent_paused_at``
+#     for a single org. Survives across deploys; the Hub banner reads it.
+#   - ``/admin/agent-kill-switch``     — reports the env-only global switch
+#     (``settings.AGENT_KILL_SWITCH``). The toggle itself requires changing
+#     the env var; we don't mutate it from a request handler because
+#     pydantic-settings reads it once at boot and the value is process-local.
+#
+# Both are gated by ``X-Admin-Secret``.
+# ---------------------------------------------------------------------------
+
+
+@app.post("/admin/org/{organization_id}/agent-pause")
+def admin_org_agent_pause(
+    organization_id: int,
+    request: Request,
+    paused: bool = True,
+    reason: str | None = None,
+):
+    """Toggle the org-level autonomous-agent pause.
+
+    ``paused=true`` sets ``Organization.agent_paused_at = now()`` and
+    stores ``reason``; ``paused=false`` clears both. Idempotent — calling
+    pause twice doesn't move the timestamp once set.
+
+    First match wins in the orchestrator gate: global env switch > this
+    org pause > per-role pause > budget. In-flight cycles are NOT
+    aborted (drain semantics); only new cycles for the org short-circuit
+    with ``status="kill_switched"``.
+    """
+    from datetime import datetime, timezone
+
+    from .platform.database import SessionLocal
+    from .models.organization import Organization
+
+    _require_admin(request)
+    db = SessionLocal()
+    try:
+        org = db.query(Organization).filter(Organization.id == organization_id).first()
+        if org is None:
+            raise HTTPException(status_code=404, detail="organization not found")
+        if paused:
+            if org.agent_paused_at is None:
+                org.agent_paused_at = datetime.now(timezone.utc)
+            org.agent_paused_reason = (reason or "").strip() or None
+        else:
+            org.agent_paused_at = None
+            org.agent_paused_reason = None
+        db.add(org)
+        db.commit()
+        return {
+            "ok": True,
+            "organization_id": organization_id,
+            "paused": org.agent_paused_at is not None,
+            "paused_at": org.agent_paused_at.isoformat() if org.agent_paused_at else None,
+            "reason": org.agent_paused_reason,
+        }
+    finally:
+        db.close()
+
+
+@app.get("/admin/agent-kill-switch")
+def admin_agent_kill_switch_status(request: Request):
+    """Read the env-only global kill switch.
+
+    There is no mutation endpoint: ``AGENT_KILL_SWITCH`` is read from
+    env at boot by pydantic-settings, so flipping it requires a deploy
+    (or env-var hot-reload). For per-org pause without a deploy, use
+    ``/admin/org/{id}/agent-pause``.
+    """
+    from .platform.config import settings as _settings
+
+    _require_admin(request)
+    return {
+        "ok": True,
+        "kill_switch_active": bool(getattr(_settings, "AGENT_KILL_SWITCH", False)),
+    }
