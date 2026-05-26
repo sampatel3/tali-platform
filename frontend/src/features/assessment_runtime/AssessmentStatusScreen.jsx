@@ -1,6 +1,18 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 import { AssessmentBrandGlyph } from './AssessmentBrandGlyph';
+
+// Modern browsers block ``window.close()`` on any tab the user opened
+// themselves (only windows spawned via ``window.open`` can self-close).
+// The candidate landed on this tab from an email link, so the call
+// almost always no-ops. Detect the platform so we can show the right
+// keyboard shortcut as the fallback ask (Sam, 2026-05-26).
+const detectMacShortcut = () => {
+  if (typeof navigator === 'undefined') return false;
+  const platform = String(navigator.platform || '').toLowerCase();
+  const ua = String(navigator.userAgent || '').toLowerCase();
+  return platform.includes('mac') || ua.includes('mac os');
+};
 
 export const AssessmentStatusScreen = ({
   mode,
@@ -21,9 +33,27 @@ export const AssessmentStatusScreen = ({
     );
   }
 
+  // Two-step close: first click tries ``window.close()`` (works for the
+  // rare case the candidate's email client opened the link in a new
+  // window via ``target="_blank"`` with the opener retained). If the
+  // tab is still here after a short tick, swap the button for the
+  // keyboard-shortcut hint — the only honest path left.
+  const [closeAttempted, setCloseAttempted] = useState(false);
+  const isMac = detectMacShortcut();
+  const shortcutLabel = isMac ? '⌘W' : 'Ctrl+W';
+
   const handleClose = () => {
     if (typeof window === 'undefined') return;
-    window.close();
+    try {
+      window.close();
+    } catch {
+      // Some embedded views throw — fall through to the hint UI.
+    }
+    // Give the browser a tick to actually close. If we're still here,
+    // surface the keyboard shortcut.
+    window.setTimeout(() => {
+      setCloseAttempted(true);
+    }, 200);
   };
 
   return (
@@ -47,15 +77,25 @@ export const AssessmentStatusScreen = ({
           Task submitted<span className="text-[var(--purple)]">.</span>
         </h1>
         <p className="mb-6 text-[14px] leading-[1.55] text-[var(--taali-runtime-muted)]">
-          Your work is locked in. The hiring team will review the transcript, your prompts, and the evidence — you can close this tab.
+          Your work is locked in. The hiring team will review the transcript, your prompts, and the evidence.
         </p>
-        <button
-          type="button"
-          className="inline-flex items-center justify-center rounded-full bg-[var(--purple)] px-7 py-3 text-sm font-medium text-white transition-colors hover:bg-[var(--purple-hover,var(--purple))]"
-          onClick={handleClose}
-        >
-          Close window
-        </button>
+        {closeAttempted ? (
+          <div className="rounded-[14px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-bg)] px-5 py-4 text-[13.5px] leading-6 text-[var(--taali-runtime-text)]">
+            Your browser doesn’t allow this page to close itself. Press{' '}
+            <kbd className="mx-1 rounded-md border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt,var(--taali-runtime-panel))] px-2 py-0.5 font-mono text-[12px] text-[var(--taali-runtime-text)]">
+              {shortcutLabel}
+            </kbd>
+            to close this tab.
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="inline-flex items-center justify-center rounded-full bg-[var(--purple)] px-7 py-3 text-sm font-medium text-white transition-colors hover:bg-[var(--purple-hover,var(--purple))]"
+            onClick={handleClose}
+          >
+            Close window
+          </button>
+        )}
       </div>
     </div>
   );
