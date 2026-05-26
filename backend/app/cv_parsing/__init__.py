@@ -12,6 +12,7 @@ candidate page can render structured experience/education/skills blocks.
 Per memory: all Claude calls use ``settings.ANTHROPIC_API_KEY``.
 """
 
+from ..llm.models import FAST_MODEL
 from .schemas import (
     EducationEntry,
     ExperienceEntry,
@@ -19,7 +20,7 @@ from .schemas import (
 )
 
 PROMPT_VERSION = "cv_parse_v1.0"
-MODEL_VERSION = "claude-haiku-4-5-20251001"
+MODEL_VERSION = FAST_MODEL
 
 
 def __getattr__(name: str):

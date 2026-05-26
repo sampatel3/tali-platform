@@ -7,12 +7,9 @@ gets best-effort ILIKE matches.
 
 from __future__ import annotations
 
-import json
 import logging
-import re
 
-from pydantic import ValidationError
-
+from ..llm import MeteringContext, generate_structured
 from . import MODEL_VERSION
 from .prompts import (
     build_parser_prompt,
@@ -25,18 +22,6 @@ logger = logging.getLogger("taali.candidate_search.parser")
 
 PARSER_MAX_TOKENS = 512
 PARSER_TEMPERATURE = 0.0
-
-
-def _strip_json_fences(raw: str) -> str:
-    text = (raw or "").strip()
-    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-    if fence_match:
-        text = fence_match.group(1).strip()
-    if not text.startswith("{"):
-        obj_match = re.search(r"\{[\s\S]*\}", text)
-        if obj_match:
-            text = obj_match.group(0)
-    return text
 
 
 def _normalise(filter_obj: ParsedFilter, query: str) -> ParsedFilter:
@@ -133,44 +118,24 @@ def parse_nl_query(
         }
     ]
 
-    try:
-        response = client.messages.create(
-            model=MODEL_VERSION,
-            max_tokens=PARSER_MAX_TOKENS,
-            temperature=PARSER_TEMPERATURE,
-            system=system_blocks,
-            messages=[{"role": "user", "content": user_prompt}],
-            metering=metering or {"feature": "search_parse"},
-        )
-        usage = getattr(response, "usage", None)
-        if usage is not None:
-            cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
-            cache_write = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
-            input_tok = int(getattr(usage, "input_tokens", 0) or 0)
-            logger.debug(
-                "Parser usage: input=%d cache_read=%d cache_write=%d",
-                input_tok, cache_read, cache_write,
-            )
-        raw_text = ""
-        try:
-            raw_text = response.content[0].text  # type: ignore[attr-defined]
-        except (AttributeError, IndexError):
-            raw_text = ""
-    except Exception as exc:
-        logger.warning("Parser Claude call failed: %s", exc)
+    # No retry: the parser fast-fails to a keyword-only filter on any
+    # call / parse / schema failure, so the user still gets ILIKE matches.
+    # Forced tool-use: the model emits ParsedFilter as the tool's ``.input``
+    # dict — one schema source, no JSON repair.
+    result = generate_structured(
+        client,
+        model=MODEL_VERSION,
+        system=system_blocks,
+        messages=[{"role": "user", "content": user_prompt}],
+        output_model=ParsedFilter,
+        metering=MeteringContext.from_dict(metering, default_feature="search_parse"),
+        max_tokens=PARSER_MAX_TOKENS,
+        temperature=PARSER_TEMPERATURE,
+        max_retries=0,
+        use_tool_use=True,
+    )
+    if not result.ok or result.value is None:
+        logger.warning("Parser failed (%s); falling back to keywords", result.error_reason)
         return _fallback_filter(cleaned_query)
 
-    text = _strip_json_fences(raw_text)
-    try:
-        parsed_dict = json.loads(text)
-    except json.JSONDecodeError as exc:
-        logger.warning("Parser returned non-JSON: %s", exc)
-        return _fallback_filter(cleaned_query)
-
-    try:
-        parsed_filter = ParsedFilter.model_validate(parsed_dict)
-    except ValidationError as exc:
-        logger.warning("Parser output failed schema: %s", exc)
-        return _fallback_filter(cleaned_query)
-
-    return _normalise(parsed_filter, cleaned_query)
+    return _normalise(result.value, cleaned_query)

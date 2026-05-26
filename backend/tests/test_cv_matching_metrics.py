@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from app.cv_matching.evals.metrics import (
+from app.evals.metrics import (
     brier_score,
     cohens_kappa,
     expected_calibration_error,

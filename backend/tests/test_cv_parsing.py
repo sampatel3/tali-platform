@@ -1,11 +1,13 @@
 """Tests for backend/app/cv_parsing/{schemas, runner}.
 
-Stub Anthropic client; never hits the real API.
+Stub Anthropic client; never hits the real API. ``parse_cv`` runs in
+forced tool-use mode (Phase 2), so the stubs return ``tool_use`` content
+blocks instead of text. The ``_text()`` helper is kept for the negative
+tests that simulate a model that emitted prose instead of using the tool.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -22,6 +24,10 @@ from app.cv_parsing.schemas import EducationEntry, ExperienceEntry, ParsedCVSect
 
 # ---------- Stub Anthropic client ----------
 
+# Tool name derived by the gateway from the Pydantic class
+# ``ParsedCVSections``. Stable so cached tool definitions stay warm.
+TOOL_NAME = "emit_parsed_cv_sections"
+
 
 @dataclass
 class _StubBlock:
@@ -29,22 +35,45 @@ class _StubBlock:
 
 
 @dataclass
+class _ToolUseBlock:
+    name: str
+    input: dict
+    type: str = "tool_use"
+
+
+@dataclass
 class _StubResponse:
-    text: str
+    """Anthropic-shaped response carrying arbitrary content blocks."""
+
+    blocks: list[Any]
 
     @property
     def content(self):
-        return [_StubBlock(text=self.text)]
+        return self.blocks
+
+
+def _text(text: str) -> _StubResponse:
+    """Response with a single text block — simulates a model that emitted
+    prose instead of using the tool (the gateway treats this as a
+    ``ValidationFailure`` and retries)."""
+    return _StubResponse(blocks=[_StubBlock(text=text)])
+
+
+def _tu(input_dict: dict, name: str = TOOL_NAME) -> _StubResponse:
+    """Response with a single ``tool_use`` block carrying the structured
+    output as the tool's ``.input`` dict (the happy path)."""
+    return _StubResponse(blocks=[_ToolUseBlock(name=name, input=input_dict)])
 
 
 @dataclass
 class _StubMessages:
-    body: str
+    responses: list[_StubResponse]
     calls: list[dict[str, Any]] = field(default_factory=list)
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
-        return _StubResponse(text=self.body)
+        idx = len(self.calls) - 1
+        return self.responses[min(idx, len(self.responses) - 1)]
 
 
 @dataclass
@@ -52,8 +81,8 @@ class _StubClient:
     messages: _StubMessages
 
 
-def _stub(body: str) -> _StubClient:
-    return _StubClient(messages=_StubMessages(body=body))
+def _stub(*responses: _StubResponse) -> _StubClient:
+    return _StubClient(messages=_StubMessages(responses=list(responses)))
 
 
 # ---------- Sample CV ----------
@@ -163,7 +192,7 @@ def test_experience_entry_extra_forbid():
 
 
 def test_parser_happy_path():
-    client = _stub(json.dumps(VALID_PARSE_PAYLOAD))
+    client = _stub(_tu(VALID_PARSE_PAYLOAD))
     out = parse_cv(SAMPLE_CV, client=client, skip_cache=True)
 
     assert isinstance(out, ParsedCV)
@@ -174,9 +203,16 @@ def test_parser_happy_path():
     assert out.skills == ["Python", "SQL", "AWS Glue", "Spark", "Airflow", "dbt"]
     assert out.prompt_version == PROMPT_VERSION
     assert out.model_version == MODEL_VERSION
+
     assert len(client.messages.calls) == 1
-    assert client.messages.calls[0]["model"] == MODEL_VERSION
-    assert client.messages.calls[0]["temperature"] == 0.0
+    sent = client.messages.calls[0]
+    assert sent["model"] == MODEL_VERSION
+    assert sent["temperature"] == 0.0
+    # Forced tool-use: gateway sends a single synthetic tool whose
+    # input_schema is ParsedCVSections.model_json_schema().
+    assert sent["tool_choice"] == {"type": "tool", "name": TOOL_NAME}
+    assert sent["tools"][0]["name"] == TOOL_NAME
+    assert sent["tools"][0]["input_schema"]["type"] == "object"
 
 
 def test_parser_returns_failed_on_empty_cv_text():
@@ -185,37 +221,35 @@ def test_parser_returns_failed_on_empty_cv_text():
     assert out.error_reason == "empty_cv_text"
 
 
-def test_parser_retries_on_invalid_json_then_succeeds():
-    bad = "not json at all"
-    good = json.dumps(VALID_PARSE_PAYLOAD)
-    client = _StubClient(messages=_StubMessages(body=good))
-    # Replace .create to return bad first, good second
-    response_iter = iter([bad, good])
-
-    def _alternating_create(**kwargs):
-        client.messages.calls.append(kwargs)
-        return _StubResponse(text=next(response_iter))
-
-    client.messages.create = _alternating_create  # type: ignore[assignment]
-
+def test_parser_retries_when_first_response_is_text_then_succeeds():
+    """Model emits prose first (no tool_use) → gateway treats as
+    ValidationFailure → retries → second attempt is a proper tool_use."""
+    client = _stub(
+        _text("Sure, here's the CV — but no tool call."),
+        _tu(VALID_PARSE_PAYLOAD),
+    )
     out = parse_cv(SAMPLE_CV, client=client, skip_cache=True)
     assert out.parse_failed is False
+    assert out.headline == "Senior Data Engineer"
     assert len(client.messages.calls) == 2
 
 
-def test_parser_returns_failed_after_two_invalid_responses():
-    client = _stub("not json")
+def test_parser_returns_failed_when_model_never_uses_the_tool():
+    """Both attempts emit prose; runner fails with validation_failed_after_retry."""
+    client = _stub(_text("no tool here"), _text("still no tool"))
     out = parse_cv(SAMPLE_CV, client=client, skip_cache=True)
     assert out.parse_failed is True
     assert "validation_failed_after_retry" in out.error_reason
 
 
-def test_parser_returns_failed_when_schema_mismatch_persists():
-    # Valid JSON but missing required structure (extra field that's forbidden)
-    bad_payload = json.dumps({"headline": "X", "extra": "should_fail"})
-    client = _stub(bad_payload)
+def test_parser_returns_failed_when_tool_input_schema_mismatch_persists():
+    """tool_use input fails Pydantic schema both times (ParsedCVSections
+    forbids unknown fields)."""
+    bad_input = {"headline": "X", "extra": "should_fail"}
+    client = _stub(_tu(bad_input), _tu(bad_input))
     out = parse_cv(SAMPLE_CV, client=client, skip_cache=True)
     assert out.parse_failed is True
+    assert "validation_failed_after_retry" in out.error_reason
 
 
 def test_parser_returns_failed_on_claude_exception():
@@ -227,11 +261,3 @@ def test_parser_returns_failed_on_claude_exception():
     out = parse_cv(SAMPLE_CV, client=client, skip_cache=True)
     assert out.parse_failed is True
     assert "claude_call_failed" in out.error_reason
-
-
-def test_parser_strips_markdown_fences():
-    fenced = "```json\n" + json.dumps(VALID_PARSE_PAYLOAD) + "\n```"
-    client = _stub(fenced)
-    out = parse_cv(SAMPLE_CV, client=client, skip_cache=True)
-    assert out.parse_failed is False
-    assert out.headline == "Senior Data Engineer"

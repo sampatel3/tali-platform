@@ -37,15 +37,16 @@ from ..models.agent_needs_input import AgentNeedsInput
 from ..models.organization import Organization
 from ..models.role import Role
 from ..models.role_criterion import CRITERION_SOURCE_DERIVED, RoleCriterion
+from ..llm.models import FAST_MODEL
 from .claude_client_resolver import get_client_for_org
 from .pricing_service import Feature
 from .spec_normalizer import DerivedCriterion, derive_criteria, normalize_spec
 
 logger = logging.getLogger("taali.material_change")
 
-# Cheap, current Haiku build — mirrors intent_chip_parser's hard-pin so we
+# Cheap, current Haiku build — shared ``llm.models.FAST_MODEL`` pin so we
 # don't fall into a retired-alias trap on some orgs.
-MATERIAL_CHANGE_MODEL = "claude-haiku-4-5-20251001"
+MATERIAL_CHANGE_MODEL = FAST_MODEL
 
 
 @dataclass(frozen=True)

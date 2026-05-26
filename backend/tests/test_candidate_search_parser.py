@@ -1,46 +1,83 @@
 """Parser unit tests.
 
-Mocks the Anthropic client so tests never touch the network. Asserts:
-- Each example query parses to the expected ``ParsedFilter``.
-- Malformed JSON falls back to keywords-only.
-- Empty queries produce an empty filter without calling Claude.
-- Country and region aliases normalise.
+Mocks the Anthropic client so tests never touch the network. The parser
+runs in forced tool-use mode (Phase 2): the model emits ParsedFilter as
+the tool's ``.input`` dict. Stubs return ``tool_use`` blocks; the
+fallback tests use a text response to simulate a model that refused the
+tool (the parser fast-fails to keywords-only on any failure).
 """
 
 from __future__ import annotations
 
-import json
-from types import SimpleNamespace
-
-import pytest
+from dataclasses import dataclass, field
+from typing import Any
 
 from app.candidate_search.parser import _normalise, parse_nl_query
 from app.candidate_search.schemas import ParsedFilter
 
 
+# Tool name the gateway derives from ``ParsedFilter``.
+TOOL_NAME = "emit_parsed_filter"
+
+
+@dataclass
+class _StubBlock:
+    text: str
+
+
+@dataclass
+class _ToolUseBlock:
+    name: str
+    input: dict
+    type: str = "tool_use"
+
+
+@dataclass
+class _StubResponse:
+    blocks: list[Any]
+
+    @property
+    def content(self):
+        return self.blocks
+
+
+def _text(text: str) -> _StubResponse:
+    """Simulate a model that emitted prose instead of using the tool."""
+    return _StubResponse(blocks=[_StubBlock(text=text)])
+
+
+def _tu(input_dict: dict, name: str = TOOL_NAME) -> _StubResponse:
+    return _StubResponse(blocks=[_ToolUseBlock(name=name, input=input_dict)])
+
+
 class _FakeClient:
     """Mimics the Anthropic SDK shape used by the parser."""
 
-    def __init__(self, response_text: str | None = None, raise_exc: Exception | None = None):
-        self._response_text = response_text or ""
+    def __init__(
+        self,
+        *,
+        response: _StubResponse | None = None,
+        raise_exc: Exception | None = None,
+    ):
+        self._response = response
         self._raise = raise_exc
 
         class _Messages:
             def __init__(inner_self):
                 inner_self._parent = self
+                inner_self.calls: list[dict[str, Any]] = []
 
             def create(inner_self, **kwargs):
                 if inner_self._parent._raise is not None:
                     raise inner_self._parent._raise
-                return SimpleNamespace(
-                    content=[SimpleNamespace(text=inner_self._parent._response_text)]
-                )
+                inner_self.calls.append(kwargs)
+                return inner_self._parent._response
 
         self.messages = _Messages()
 
 
 def _client_for(payload: dict) -> _FakeClient:
-    return _FakeClient(response_text=json.dumps(payload))
+    return _FakeClient(response=_tu(payload))
 
 
 def test_parses_skill_only_query():
@@ -95,15 +132,18 @@ def test_parses_graph_predicates():
     assert all(p.type == "worked_at" for p in parsed.graph_predicates)
 
 
-def test_malformed_json_falls_back_to_keywords():
-    parsed = parse_nl_query("anything", client=_FakeClient(response_text="not json at all"))
+def test_text_instead_of_tool_use_falls_back_to_keywords():
+    """Model emits prose instead of using the forced tool → parser fast-fails
+    to a keyword-only filter so the user still gets ILIKE matches."""
+    parsed = parse_nl_query("anything", client=_FakeClient(response=_text("not json at all")))
     assert parsed.skills_all == []
     assert parsed.keywords == ["anything"]
     assert parsed.free_text == "anything"
 
 
 def test_invalid_schema_falls_back_to_keywords():
-    # min_years_experience out of range — ValidationError → fallback.
+    # min_years_experience out of range — schema validation on the tool
+    # input fails → fallback.
     parsed = parse_nl_query(
         "ten thousand years",
         client=_client_for({"min_years_experience": 9999}),

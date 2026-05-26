@@ -15,18 +15,25 @@ Single linear pipeline:
 
 from __future__ import annotations
 
-import json
+import hashlib
 import logging
-import re
 import time
 import uuid
 from dataclasses import dataclass
+from functools import partial
 
-from pydantic import ValidationError
-
+from ..llm import MeteringContext, generate_structured
+from ..platform.config import settings
+from ..services.fraud_detection import (
+    apply_integrity_penalty,
+    compute_integrity_penalty,
+    detect_timeline_inconsistencies,
+)
 from . import MODEL_VERSION, PROMPT_VERSION
+from . import cache as cache_module
+from . import telemetry as telemetry_module
 from .aggregation import aggregate
-from .prompts import build_cv_match_messages, build_cv_match_prompt
+from .prompts import build_cv_match_messages
 from .schemas import (
     CVMatchOutput,
     CVMatchResult,
@@ -34,7 +41,6 @@ from .schemas import (
     ScoringStatus,
 )
 from .validation import (
-    ValidationFailure,
     check_suspicious_score,
     scan_for_injection,
     validate_cross_field_consistency,
@@ -88,22 +94,7 @@ class _RunContext:
 
 
 def _hash_text(text: str) -> str:
-    import hashlib
-
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:16]
-
-
-def _strip_json_fences(raw: str) -> str:
-    """Pull JSON object out of a possibly-fenced response."""
-    text = (raw or "").strip()
-    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-    if fence_match:
-        text = fence_match.group(1).strip()
-    if not text.startswith("{"):
-        obj_match = re.search(r"\{[\s\S]*\}", text)
-        if obj_match:
-            text = obj_match.group(0)
-    return text
 
 
 def _count_input_tokens(messages: list[dict], system: str) -> int:
@@ -130,101 +121,6 @@ def _failed_output(*, error_reason: str, ctx: _RunContext) -> CVMatchOutput:
 
 
 _SYSTEM_PROMPT = "You are an expert recruiter. Respond ONLY with valid JSON."
-
-
-def _call_claude(
-    client, *, messages: list[dict], ctx: _RunContext, metering_context: dict | None = None
-) -> str:
-    # The wrapper writes one usage_event PER Anthropic call (FK-linked to
-    # the call_log row), so each attempt — including validation retries and
-    # errored runs — is captured. This replaced the old skip-path where
-    # cv_score_orchestrator recorded a single post-call usage_event: that
-    # missed errored/retried calls entirely and left usage_event ~73% short
-    # of actual spend (claude_call_log proved it on 2026-05-22). The
-    # orchestrator now records ONLY cache hits (no Anthropic call → no
-    # wrapper invocation), so there's no double-count.
-    #
-    # When ``metering_context`` is absent (direct run_cv_match calls from
-    # tests / evals with a bare client) we keep skip=True so the bare
-    # client doesn't choke and we don't fabricate org-less events.
-    if metering_context:
-        metering = {
-            **metering_context,
-            "feature": "score",
-            "retry_attempt": int(getattr(ctx, "retry_count", 0) or 0),
-            "trace_id": str(getattr(ctx, "trace_id", "") or "") or None,
-        }
-    else:
-        metering = {
-            "skip": True,
-            "metered_by": "direct_call_no_context",
-            "retry_attempt": int(getattr(ctx, "retry_count", 0) or 0),
-            "trace_id": str(getattr(ctx, "trace_id", "") or "") or None,
-        }
-    response = client.messages.create(
-        model=MODEL_VERSION,
-        max_tokens=OUTPUT_TOKEN_CEILING,
-        temperature=TEMPERATURE,
-        system=_SYSTEM_PROMPT,
-        messages=messages,
-        metering=metering,
-    )
-
-    usage = getattr(response, "usage", None)
-    if usage is not None:
-        # ACCUMULATE across retries — previously these were ``=`` which
-        # silently overwrote the first attempt's tokens whenever the
-        # validation loop fired a retry. Anthropic billed for both calls
-        # but cv_score_orchestrator only saw the last attempt's tokens
-        # → ~50% under-counting on every retried score, contributing to
-        # the 4× Haiku reconciliation gap observed on 2026-05-21.
-        ctx.input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
-        ctx.output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
-        ctx.cache_read_tokens += int(
-            getattr(usage, "cache_read_input_tokens", 0) or 0
-        )
-        ctx.cache_creation_tokens += int(
-            getattr(usage, "cache_creation_input_tokens", 0) or 0
-        )
-
-    raw_text = ""
-    try:
-        raw_text = response.content[0].text  # type: ignore[attr-defined]
-    except (AttributeError, IndexError):
-        raw_text = ""
-    return raw_text
-
-
-def _parse_and_validate(
-    raw_text: str,
-    cv_text: str,
-    requirements: list[RequirementInput],
-    *,
-    grounding_text: str | None = None,
-) -> CVMatchResult:
-    """Parse JSON → schema → ground → consistency. Raises ValidationFailure.
-
-    ``grounding_text`` is the corpus that ``evidence_quotes`` are verified
-    against; it defaults to the CV but callers pass CV + Workable context so
-    quotes drawn from questionnaire answers / recruiter comments aren't
-    dropped (which would re-downgrade those requirements to ``unknown``).
-    """
-    text = _strip_json_fences(raw_text)
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValidationFailure(f"Response was not valid JSON: {exc}") from exc
-
-    try:
-        result = CVMatchResult.model_validate(parsed)
-    except ValidationError as exc:
-        raise ValidationFailure(f"Response failed schema: {exc}") from exc
-
-    validate_evidence_grounding(
-        result, grounding_text if grounding_text is not None else cv_text
-    )
-    validate_cross_field_consistency(result, requirements)
-    return result
 
 
 def _resolve_anthropic_client():
@@ -273,9 +169,6 @@ def run_cv_match(
         started_at=time.monotonic(),
     )
 
-    from . import cache as cache_module
-    from . import telemetry as telemetry_module
-
     # 1. Cache lookup
     cache_key = cache_module.compute_cache_key(
         cv_text=cv_text,
@@ -308,6 +201,10 @@ def run_cv_match(
     archetype = None
     archetype_weights = None
     try:
+        # Function-level import preserved so test ``monkeypatch.setattr``
+        # against ``app.cv_matching.archetype_synthesizer.synthesize_archetype``
+        # reaches this call — a top-level binding would freeze the original
+        # at module load and bypass the patch.
         from .archetype_synthesizer import synthesize_archetype
 
         archetype_metering = (
@@ -342,74 +239,82 @@ def run_cv_match(
         telemetry_module.emit_trace(ctx, final_status=out.scoring_status)
         return out
 
-    # 5. Token ceiling check
-    counted_in = _count_input_tokens(messages, _SYSTEM_PROMPT)
-    if counted_in > INPUT_TOKEN_CEILING:
-        out = _failed_output(
-            error_reason=(
-                f"input_token_ceiling_exceeded: counted={counted_in}, "
-                f"ceiling={INPUT_TOKEN_CEILING}"
-            ),
-            ctx=ctx,
+    # 5. Metering for the score call. With a metering_context the wrapper
+    # records a usage_event (feature="score"); without one (direct test/eval
+    # calls on a bare client) we skip so no org-less event is fabricated.
+    if metering_context:
+        gw_metering = MeteringContext(
+            feature="score",
+            organization_id=metering_context.get("organization_id"),
+            role_id=metering_context.get("role_id"),
+            entity_id=metering_context.get("entity_id"),
+            user_id=metering_context.get("user_id"),
+            trace_id=ctx.trace_id,
         )
+    else:
+        gw_metering = MeteringContext.skipped(
+            metered_by="direct_call_no_context", trace_id=ctx.trace_id
+        )
+
+    # 6. Call + parse + ground + consistency-check via the shared gateway
+    # (one validation retry). On retry the error is appended to the dynamic
+    # CV block ONLY, so the cached static block still gets a cache hit.
+    def _retry_append_to_cv_block(base_messages, error):
+        suffix = (
+            "\n\nYour previous response failed validation with this error:\n"
+            + error
+            + "\nReturn a corrected JSON response. Do not include any commentary."
+        )
+        base_content = base_messages[0]["content"]
+        return [
+            {
+                "role": "user",
+                "content": [
+                    base_content[0],  # cached static block (unchanged)
+                    {"type": "text", "text": base_content[1]["text"] + suffix},
+                ],
+            }
+        ]
+
+    # Forced tool-use: the model emits CVMatchResult as the tool's
+    # ``.input`` dict, killing the "Response was not valid JSON" failure
+    # class behind the 2026-05-22 validation storm. Pydantic schema is the
+    # single wire contract; grounding + consistency still run server-side.
+    result = generate_structured(
+        client,
+        model=MODEL_VERSION,
+        system=_SYSTEM_PROMPT,
+        messages=messages,
+        output_model=CVMatchResult,
+        metering=gw_metering,
+        max_tokens=OUTPUT_TOKEN_CEILING,
+        temperature=TEMPERATURE,
+        max_retries=MAX_RETRIES,
+        max_input_tokens=INPUT_TOKEN_CEILING,
+        estimate_input_tokens=_count_input_tokens,
+        semantic_validators=[
+            partial(validate_evidence_grounding, cv_text=grounding_text),
+            partial(validate_cross_field_consistency, requirements=requirements),
+        ],
+        retry_message_builder=_retry_append_to_cv_block,
+        use_tool_use=True,
+    )
+
+    # Mirror the gateway's token + retry accounting onto the run context so
+    # telemetry and the typed output carry the same numbers as before.
+    ctx.input_tokens = result.usage.input_tokens
+    ctx.output_tokens = result.usage.output_tokens
+    ctx.cache_read_tokens = result.usage.cache_read_tokens
+    ctx.cache_creation_tokens = result.usage.cache_creation_tokens
+    ctx.retry_count = result.retry_count
+    ctx.validation_failures = result.validation_failures
+
+    if not result.ok or result.value is None:
+        out = _failed_output(error_reason=result.error_reason, ctx=ctx)
         telemetry_module.emit_trace(ctx, final_status=out.scoring_status)
         return out
 
-    # 6. Call Claude with at most one retry on validation failure.
-    # On retry, append the error to the CV block so the static block stays
-    # cached (no need to re-send JD / rules / schema).
-    last_err: str = ""
-    parsed: CVMatchResult | None = None
-    current_messages = messages
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            raw_text = _call_claude(
-                client, messages=current_messages, ctx=ctx,
-                metering_context=metering_context,
-            )
-        except Exception as exc:
-            logger.exception("Claude call failed (attempt %d)", attempt + 1)
-            out = _failed_output(error_reason=f"claude_call_failed: {exc}", ctx=ctx)
-            telemetry_module.emit_trace(ctx, final_status=out.scoring_status)
-            return out
-
-        try:
-            parsed = _parse_and_validate(
-                raw_text, cv_text, requirements, grounding_text=grounding_text
-            )
-            break
-        except ValidationFailure as exc:
-            ctx.validation_failures += 1
-            last_err = str(exc)
-            logger.warning("Validation failed on attempt %d: %s", attempt + 1, last_err)
-            if attempt >= MAX_RETRIES:
-                break
-            ctx.retry_count += 1
-            # Keep the cached static block; append the correction request only
-            # to the dynamic CV block so the next call still gets a cache hit.
-            retry_suffix = (
-                "\n\nYour previous response failed validation with this error:\n"
-                + last_err
-                + "\nReturn a corrected JSON response. Do not include any commentary."
-            )
-            base_content = messages[0]["content"]
-            retry_cv_text = base_content[1]["text"] + retry_suffix
-            current_messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        base_content[0],  # cached static block (unchanged)
-                        {"type": "text", "text": retry_cv_text},
-                    ],
-                }
-            ]
-
-    if parsed is None:
-        out = _failed_output(
-            error_reason=f"validation_failed_after_retry: {last_err}", ctx=ctx
-        )
-        telemetry_module.emit_trace(ctx, final_status=out.scoring_status)
-        return out
+    parsed = result.value
 
     # 7. Aggregate
     (
@@ -426,18 +331,10 @@ def run_cv_match(
 
     # 7b. CV integrity — deterministic, bounded soft penalty on role_fit.
     # Two signals: unverified extraordinary claims the model flagged, and
-    # timeline inconsistencies over the extracted career timeline. Capped so
-    # fraud can't inflate a candidate into interview, but a false positive
-    # (LLM-extracted timeline, model-prior familiarity) can't auto-reject.
-    # Function-level imports keep cv_matching free of a load-time dependency
-    # on the services layer (which imports cv_matching).
-    from ..platform.config import settings
-    from ..services.fraud_detection import (
-        apply_integrity_penalty,
-        compute_integrity_penalty,
-        detect_timeline_inconsistencies,
-    )
-
+    # timeline inconsistencies over the extracted career timeline. Capped
+    # so fraud can't inflate a candidate into interview, but a false
+    # positive (LLM-extracted timeline, model-prior familiarity) can't
+    # auto-reject.
     timeline_entries = (
         parsed.candidate_snapshot.timeline if parsed.candidate_snapshot else []
     )

@@ -29,17 +29,17 @@ from ..models.org_criterion import (
 )
 from ..models.organization import Organization
 from ..models.role import Role
+from ..llm.models import FAST_MODEL
 from .claude_client_resolver import get_client_for_org
 from .pricing_service import Feature
 
 
-# Match the other Tali services that hit Claude directly
-# (cv_matching, cv_parsing, candidate_search). ``resolved_claude_scoring_model``
-# routes through CLAUDE_SCORING_BATCH_MODEL which on some orgs still
-# resolves to retired Haiku aliases — and the official fallback chain is
-# Haiku-3.5 only. Hard-pinning to the current Haiku 4.5 build avoids the
-# trap.
-INTENT_CHIP_MODEL = "claude-haiku-4-5-20251001"
+# Shared pin (``llm.models.FAST_MODEL``) to the current Haiku 4.5 build —
+# the same constant cv_matching / cv_parsing / candidate_search use.
+# Deliberately NOT ``resolved_claude_scoring_model``, which routes through
+# CLAUDE_SCORING_BATCH_MODEL and on some orgs still resolves to retired
+# Haiku aliases.
+INTENT_CHIP_MODEL = FAST_MODEL
 
 
 logger = logging.getLogger("taali.intent_chip_parser")

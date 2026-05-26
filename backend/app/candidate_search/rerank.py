@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 
 from sqlalchemy.orm import Session
 
+from ..llm import strip_json_fences
 from . import MODEL_VERSION
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
@@ -28,18 +28,6 @@ logger = logging.getLogger("taali.candidate_search.rerank")
 
 RERANK_MAX_TOKENS = 256
 RERANK_TEMPERATURE = 0.0
-
-
-def _strip_json_fences(raw: str) -> str:
-    text = (raw or "").strip()
-    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-    if fence_match:
-        text = fence_match.group(1).strip()
-    if not text.startswith("{"):
-        obj_match = re.search(r"\{[\s\S]*\}", text)
-        if obj_match:
-            text = obj_match.group(0)
-    return text
 
 
 def _resolve_anthropic_client(*, organization_id: int | None = None):
@@ -206,7 +194,7 @@ def _evaluate_one(
             raw = response.content[0].text  # type: ignore[attr-defined]
         except (AttributeError, IndexError):
             raw = ""
-        text = _strip_json_fences(raw)
+        text = strip_json_fences(raw)
         decision = json.loads(text)
     except Exception as exc:
         logger.debug("Rerank call failed: %s", exc)
