@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Type
 
@@ -142,18 +143,24 @@ def _execution_stdout_text(result: Any) -> str:
     return str(getattr(result, "stdout", "") or "")
 
 
-def _parse_test_runner_results(output: str, parse_pattern: str | None) -> Dict[str, int]:
+def _parse_test_runner_results(output: str, parse_pattern: str | None) -> Dict[str, Any]:
     if not parse_pattern:
-        return {"passed": 0, "failed": 0, "total": 0}
+        return {"passed": 0, "failed": 0, "total": 0, "parse_error": False}
 
     passed = 0
     failed = 0
     total = 0
+    parse_error = False
 
     try:
         match = re.search(parse_pattern, output or "", re.IGNORECASE | re.MULTILINE)
-    except re.error:
+    except re.error as exc:
+        # An invalid authored parse_pattern would otherwise silently yield
+        # "0 passed / 0 failed" — flag it so the recruiter sees a runner error
+        # instead of a misleading zero score.
+        logger.warning("Invalid test_runner parse_pattern %r: %s", parse_pattern, exc)
         match = None
+        parse_error = True
     if match:
         groups = match.groupdict() if hasattr(match, "groupdict") else {}
         if groups:
@@ -194,7 +201,12 @@ def _parse_test_runner_results(output: str, parse_pattern: str | None) -> Dict[s
         if total == 0 and passed > 0:
             total = passed
 
-    return {"passed": max(0, passed), "failed": max(0, failed), "total": max(0, total)}
+    return {
+        "passed": max(0, passed),
+        "failed": max(0, failed),
+        "total": max(0, total),
+        "parse_error": parse_error,
+    }
 
 
 def _run_task_test_runner(
@@ -243,6 +255,7 @@ def _run_task_test_runner(
             "passed": passed,
             "failed": failed,
             "total": total,
+            "parse_error": parsed.get("parse_error", False),
         }
     except Exception as exc:
         stdout, stderr, exit_code = _extract_process_output(exc)
@@ -260,7 +273,38 @@ def _run_task_test_runner(
             "passed": parsed["passed"],
             "failed": parsed["failed"],
             "total": parsed["total"],
+            "parse_error": parsed.get("parse_error", False),
         }
+
+
+def _is_transient_anthropic_error(exc: Exception) -> bool:
+    """True for rate-limit / timeout / connection / 5xx errors worth retrying.
+
+    Auth (401/403) and bad-request (400) errors are NOT transient — retrying
+    them just burns time and budget, so we fail fast on those.
+    """
+    name = type(exc).__name__.lower()
+    if "timeout" in name or "connection" in name or "ratelimit" in name:
+        return True
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status == 429 or status >= 500
+    return False
+
+
+def _retry_transient(fn: Callable[[], Any], *, attempts: int = 3, base_delay: float = 0.5) -> Any:
+    """Call ``fn`` with bounded exponential backoff on transient Anthropic errors."""
+    last_exc: Exception | None = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001 — classified below
+            last_exc = exc
+            if not _is_transient_anthropic_error(exc) or i == attempts - 1:
+                raise
+            time.sleep(base_delay * (2 ** i))
+    if last_exc is not None:  # pragma: no cover — loop always returns or raises
+        raise last_exc
 
 
 def submit_assessment_impl(
@@ -278,6 +322,26 @@ def submit_assessment_impl(
     """Run tests, compute scores, persist results, and trigger notifications."""
     if assessment.status != AssessmentStatus.IN_PROGRESS:
         raise HTTPException(status_code=400, detail="Assessment cannot be submitted in current state")
+
+    # Atomically claim the submission to close the duplicate-submit race: two
+    # rapid POST /submit calls would otherwise both pass the check above and each
+    # run the full (expensive) scoring pipeline. The winning UPDATE flips the
+    # status; a losing caller sees rowcount 0 and 409s.
+    claimed = (
+        db.query(Assessment)
+        .filter(
+            Assessment.id == assessment.id,
+            Assessment.status == AssessmentStatus.IN_PROGRESS,
+        )
+        .update(
+            {Assessment.status: AssessmentStatus.COMPLETED},
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    if not claimed:
+        raise HTTPException(status_code=409, detail="Assessment already submitted")
+    db.refresh(assessment)
 
     task = db.query(Task).filter(Task.id == assessment.task_id).first()
     if not task:
@@ -310,6 +374,9 @@ def submit_assessment_impl(
         test_results = e2b.run_tests(sandbox, task.test_code)
     if not isinstance(test_results, dict):
         test_results = {"passed": 0, "failed": 0, "total": 0}
+
+    if test_results.get("parse_error"):
+        assessment.test_parse_error = True
 
     passed = test_results.get("passed", 0)
     total = test_results.get("total", 0)
@@ -432,9 +499,13 @@ def submit_assessment_impl(
     else:
         claude = claude_service_cls(settings_obj.ANTHROPIC_API_KEY)
         try:
-            quality = claude.analyze_code_quality(final_code)
+            quality = _retry_transient(lambda: claude.analyze_code_quality(final_code))
         except Exception:
+            logger.exception(
+                "Code-quality scoring failed after retries assessment_id=%s", assessment.id
+            )
             quality = {"success": False, "analysis": None}
+            assessment.scoring_partial = True
         code_quality_score = 5.0
         if quality.get("success") and quality.get("analysis"):
             try:
@@ -448,9 +519,14 @@ def submit_assessment_impl(
         task_desc = task.description or task.name or ""
         if prompts:
             try:
-                prompt_analysis = claude.analyze_prompt_session(prompts, task_desc)
+                prompt_analysis = _retry_transient(
+                    lambda: claude.analyze_prompt_session(prompts, task_desc)
+                )
             except Exception:
-                pass
+                logger.exception(
+                    "Prompt-session scoring failed after retries assessment_id=%s", assessment.id
+                )
+                assessment.scoring_partial = True
         ai_scores = prompt_analysis.get("scores", {})
 
         if calibration_prompt and calibration_subject_prompt:
@@ -571,7 +647,11 @@ def submit_assessment_impl(
     if isinstance(task_extra_data.get("scoring_hints"), dict):
         task_scoring_hints = task_extra_data.get("scoring_hints")
 
-    score_weights = dict(task.score_weights or {})
+    # A per-assessment knob override (set by an A/B experiment arm at invite
+    # time) wins over the task's default weights; NULL falls back to the task.
+    score_weights = dict(
+        getattr(assessment, "score_weights_override", None) or task.score_weights or {}
+    )
     # CV-match contribution is layered in via the TAALI role-fit blend below,
     # so the inner composite always treats cv_match weight as zero. If a task
     # configures a non-zero cv_match weight it would be double-counted; clamp.

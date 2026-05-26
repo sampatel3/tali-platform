@@ -465,6 +465,10 @@ def _auto_submit_on_timeout(assessment: Assessment, task: Task, db: Session) -> 
     except Exception:
         logger.exception("Timeout finalization failed to collect git evidence")
         assessment.git_evidence = assessment.git_evidence or {"error": "git_evidence_capture_failed"}
+        # Flag so the recruiter UI shows "final repo not captured" instead of
+        # silently scoring against a NULL/empty repo state.
+        if not assessment.final_repo_state:
+            assessment.repo_capture_failed = True
 
     assessment.completed_due_to_timeout = True
     assessment.status = AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
@@ -916,7 +920,12 @@ def start_or_resume_assessment(
             "rubric_categories": candidate_rubric_view(task.evaluation_rubric),
             "evaluation_rubric": None,
             "extra_data": None,
-            "calibration_prompt": None if settings.MVP_DISABLE_CALIBRATION else (task_calibration_prompt or None),
+            "calibration_prompt": (
+                None
+                if settings.MVP_DISABLE_CALIBRATION
+                or getattr(assessment, "calibration_enabled", None) is False
+                else (task_calibration_prompt or None)
+            ),
             "proctoring_enabled": False if settings.MVP_DISABLE_PROCTORING else (task.proctoring_enabled if task else False),
             "claude_budget_limit_usd": effective_budget_limit,
         },

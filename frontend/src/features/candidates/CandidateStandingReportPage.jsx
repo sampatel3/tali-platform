@@ -17,6 +17,7 @@ import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
 import { RadarChart } from '../../shared/ui/RadarChart';
 import { ScoreRing } from '../../shared/ui/ScoreRing';
+import { ErrorBoundary } from '../../shared/ui/ErrorBoundary';
 import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAssessmentToCandidateView } from './assessmentViewModels';
 import { AssessmentEvidencePanels, EvaluatePanel, InterviewTranscriptCapture } from './CandidateAssessmentDetailPanels';
 import { CandidateSnapshotCard } from './CandidateSnapshotCard';
@@ -1725,21 +1726,39 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               page: AI-usage analytics, code/git, and the prompt-by-prompt
               timeline. Recruiter-only (this pane is internalOnly). */}
           {candidateView ? (
-            <AssessmentEvidencePanels candidate={candidateView} />
+            <ErrorBoundary
+              fallback={
+                <div className="mc-notes-empty">
+                  Scoring is incomplete for this assessment, so the evidence can’t be rendered.
+                  Try “Rescore” from the assessment, or refresh.
+                </div>
+              }
+            >
+              <AssessmentEvidencePanels candidate={candidateView} />
+            </ErrorBoundary>
           ) : null}
         </div>
 
         <div className={`pane ${activeTab === 'evaluate' ? 'active' : ''}`} data-p="evaluate" data-internal-only>
           {candidateView ? (
-            <EvaluatePanel
-              candidate={candidateView}
-              evaluationRubric={evaluationRubric}
-              assessmentId={assessmentId}
-              assessmentsApi={assessmentsApi}
-              roleFitCriteria={reportModel?.roleFitModel?.requirementsAssessment || []}
-              recommendation={reportModel?.recommendation}
-              recruiterSummary={reportModel?.recruiterSummaryText || ''}
-            />
+            <ErrorBoundary
+              fallback={
+                <div className="mc-notes-empty">
+                  This evaluation can’t be rendered — the assessment scoring may be incomplete.
+                  Try “Rescore”, or refresh.
+                </div>
+              }
+            >
+              <EvaluatePanel
+                candidate={candidateView}
+                evaluationRubric={evaluationRubric}
+                assessmentId={assessmentId}
+                assessmentsApi={assessmentsApi}
+                roleFitCriteria={reportModel?.roleFitModel?.requirementsAssessment || []}
+                recommendation={reportModel?.recommendation}
+                recruiterSummary={reportModel?.recruiterSummaryText || ''}
+              />
+            </ErrorBoundary>
           ) : (
             <div className="mc-notes-empty">Evaluation opens once a completed assessment is linked.</div>
           )}

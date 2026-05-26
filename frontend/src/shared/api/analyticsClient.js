@@ -15,4 +15,8 @@ export const analytics = {
   benchmarks: (taskId, params = {}) => api.get('/analytics/benchmarks', {
     params: { task_id: taskId, ...params },
   }),
+  // A/B experiment arm comparison (discrimination + completion/time + outcome +
+  // candidate experience). Without experiment_id, returns the org's experiments
+  // so the UI can populate a selector.
+  experimentsComparison: (params = {}) => api.get('/analytics/experiments/comparison', { params }),
 };

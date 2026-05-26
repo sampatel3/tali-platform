@@ -142,6 +142,26 @@ def update_manual_evaluation(
     if category_scores is not None and not isinstance(category_scores, dict):
         raise HTTPException(status_code=400, detail="category_scores must be an object")
 
+    # Optimistic lock: two recruiters editing the same evaluation must not
+    # silently clobber each other. The client echoes the ``version`` it loaded;
+    # if it no longer matches the stored one, 409 so it can reload & merge.
+    stored_eval = assessment.manual_evaluation if isinstance(assessment.manual_evaluation, dict) else {}
+    stored_version = int(stored_eval.get("version", 0) or 0)
+    expected_version = body.get("expected_version")
+    if expected_version is not None:
+        try:
+            expected_version_int = int(expected_version)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="expected_version must be an integer")
+        if expected_version_int != stored_version:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This evaluation was updated by someone else. "
+                    "Reload to see the latest before saving again."
+                ),
+            )
+
     rubric = (assessment.task.evaluation_rubric if assessment.task else None) or {}
     try:
         evaluation_result = build_evaluation_result(
@@ -153,6 +173,8 @@ def update_manual_evaluation(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    if isinstance(evaluation_result, dict):
+        evaluation_result["version"] = stored_version + 1
     assessment.manual_evaluation = evaluation_result
     try:
         db.commit()
@@ -169,6 +191,76 @@ def update_manual_evaluation(
         "success": True,
         "manual_evaluation": normalized,
         "evaluation_result": normalized,
+        "version": stored_version + 1,
+    }
+
+
+@router.post("/{assessment_id}/rescore")
+def rescore_assessment(
+    assessment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Re-run automated scoring on a completed assessment.
+
+    For when scoring hard-failed or only partially completed (e.g. a transient
+    Anthropic error mid-submit, surfaced as ``scoring_failed``/``scoring_partial``).
+    Reuses the same submit pipeline against the candidate's last submitted code;
+    note it re-runs the task test runner, so the candidate's workspace/sandbox
+    must still be reachable for the test counts to be meaningful.
+    """
+    assessment = (
+        db.query(Assessment)
+        .filter(
+            Assessment.id == assessment_id,
+            Assessment.organization_id == current_user.organization_id,
+        )
+        .first()
+    )
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    if not _is_completed(assessment):
+        raise HTTPException(
+            status_code=409,
+            detail="Only a completed assessment can be re-scored.",
+        )
+
+    # Recover the candidate's last submitted code from the stored snapshots.
+    final_code = ""
+    snapshots = assessment.code_snapshots if isinstance(assessment.code_snapshots, list) else []
+    for snap in reversed(snapshots):
+        if isinstance(snap, dict) and "final" in snap:
+            final_code = snap.get("final") or ""
+            break
+
+    # Reset failure flags and re-open so the submit pipeline's atomic claim passes.
+    assessment.scoring_failed = False
+    assessment.scoring_partial = False
+    assessment.status = AssessmentStatus.IN_PROGRESS
+    db.commit()
+
+    from ...components.assessments.service import submit_assessment as _submit_service
+
+    try:
+        _submit_service(assessment, final_code, int(assessment.tab_switch_count or 0), db)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        assessment.scoring_failed = True
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+        raise HTTPException(status_code=502, detail=f"Rescore failed: {exc}") from exc
+
+    db.refresh(assessment)
+    return {
+        "success": True,
+        "assessment_id": int(assessment.id),
+        "taali_score": getattr(assessment, "taali_score", None),
+        "assessment_score": getattr(assessment, "assessment_score", None),
+        "scoring_partial": bool(getattr(assessment, "scoring_partial", False)),
     }
 
 

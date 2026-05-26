@@ -18,6 +18,13 @@ export class ErrorBoundary extends React.Component {
 
   render() {
     if (this.state.hasError) {
+      // A scoped fallback lets callers wrap a single panel without taking over
+      // the whole screen (e.g. a failed-scoring assessment pane).
+      if (this.props.fallback) {
+        return typeof this.props.fallback === 'function'
+          ? this.props.fallback(this.state.error)
+          : this.props.fallback;
+      }
       return (
         <div className="min-h-screen flex items-center justify-center px-6 py-10 bg-[var(--taali-bg)]">
           <div className="max-w-md w-full border-2 border-[var(--taali-border)] bg-[var(--taali-surface)] p-6 text-center">

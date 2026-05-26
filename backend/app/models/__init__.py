@@ -33,6 +33,23 @@ from .cv_score_job import (
     SCORE_JOB_STATUSES,
 )
 from .task import Task
+from .assessment_experiment import (
+    ASSIGNMENT_METHOD_FORCED,
+    ASSIGNMENT_METHOD_NO_EXPERIMENT,
+    ASSIGNMENT_METHOD_RANDOM,
+    ASSIGNMENT_METHOD_SINGLE_TASK_DEFAULT,
+    ASSIGNMENT_METHODS,
+    EXPERIMENT_STATUS_ACTIVE,
+    EXPERIMENT_STATUS_COMPLETED,
+    EXPERIMENT_STATUS_DRAFT,
+    EXPERIMENT_STATUS_PAUSED,
+    EXPERIMENT_STATUSES,
+    EXPERIMENT_TYPE_KNOB,
+    EXPERIMENT_TYPE_TASK,
+    EXPERIMENT_TYPES,
+    AssessmentExperiment,
+    AssessmentExperimentArm,
+)
 from .session import AssessmentSession
 from .billing_credit_ledger import BillingCreditLedger
 from .usage_event import UsageEvent
@@ -142,6 +159,21 @@ __all__ = [
     "SCORE_JOB_STALE",
     "SCORE_JOB_STATUSES",
     "Task",
+    "AssessmentExperiment",
+    "AssessmentExperimentArm",
+    "EXPERIMENT_STATUS_DRAFT",
+    "EXPERIMENT_STATUS_ACTIVE",
+    "EXPERIMENT_STATUS_PAUSED",
+    "EXPERIMENT_STATUS_COMPLETED",
+    "EXPERIMENT_STATUSES",
+    "EXPERIMENT_TYPE_TASK",
+    "EXPERIMENT_TYPE_KNOB",
+    "EXPERIMENT_TYPES",
+    "ASSIGNMENT_METHOD_RANDOM",
+    "ASSIGNMENT_METHOD_FORCED",
+    "ASSIGNMENT_METHOD_SINGLE_TASK_DEFAULT",
+    "ASSIGNMENT_METHOD_NO_EXPERIMENT",
+    "ASSIGNMENT_METHODS",
     "AssessmentSession",
     "BillingCreditLedger",
     "UsageEvent",

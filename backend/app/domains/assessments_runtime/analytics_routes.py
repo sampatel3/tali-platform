@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, desc, func, or_
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from ...agent_runtime import budget_guard
 from ...platform.database import get_db
@@ -15,6 +15,7 @@ from ...domains.agentic._hub_shared import open_needs_input_filter, pending_filt
 from ...models.agent_decision import AgentDecision
 from ...models.agent_needs_input import AgentNeedsInput
 from ...models.assessment import Assessment, AssessmentStatus
+from ...models.assessment_experiment import AssessmentExperiment
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
@@ -1372,4 +1373,241 @@ def get_activity_timeseries(
             "by_type": pending_by_type,
         },
         "workable_errors": workable_errors,
+    }
+
+
+# ---------------------------------------------------------------------------
+# A/B experiment comparison (Phase 2 trial)
+# ---------------------------------------------------------------------------
+
+# Minimum completed-per-arm before any ranking is meaningful. Mirrors the
+# benchmarks gate; during a pilot we stay below this and never declare a winner.
+MIN_AB_SAMPLE = 20
+
+
+def _rate(numer: int, denom: int) -> Optional[float]:
+    if not denom:
+        return None
+    return round(numer / denom, 3)
+
+
+def _avg(values: Sequence[float], ndigits: int = 1) -> Optional[float]:
+    vals = [float(v) for v in values if isinstance(v, (int, float))]
+    if not vals:
+        return None
+    return round(sum(vals) / len(vals), ndigits)
+
+
+def _ab_arm_metrics(arm, arm_assessments, apps_by_id, *, min_sample: int) -> Dict[str, Any]:
+    """All three win-signal families for one experiment arm.
+
+    Rates carry their denominator ``n`` so the UI can show "3/5" not "60%".
+    The cohort is random-assignment only (forced recruiter picks are excluded
+    upstream) so the comparison is apples-to-apples.
+    """
+    assigned = list(arm_assessments)
+    n_assigned = len(assigned)
+    started = [a for a in assigned if getattr(a, "started_at", None) is not None]
+    completed = [a for a in assigned if _is_completed(a)]
+    invited_not_started = [a for a in assigned if getattr(a, "started_at", None) is None]
+    abandoned = [a for a in started if not _is_completed(a)]
+    timed_out = [a for a in completed if bool(getattr(a, "completed_due_to_timeout", False))]
+
+    scores = [s for s in (_score_100(a) for a in completed) if s is not None]
+    durations = [
+        int(a.total_duration_seconds)
+        for a in completed
+        if isinstance(getattr(a, "total_duration_seconds", None), (int, float))
+    ]
+    score_sum = _score_summary(scores)
+    spread_iqr = (
+        round(score_sum["p75"] - score_sum["p25"], 1)
+        if score_sum.get("p25") is not None and score_sum.get("p75") is not None
+        else None
+    )
+
+    apps = [apps_by_id.get(a.application_id) for a in assigned if a.application_id]
+    apps = [ap for ap in apps if ap is not None]
+    n_with_app = len(apps)
+
+    def _stage(ap) -> str:
+        return str(getattr(ap, "pipeline_stage", "") or "").lower()
+
+    def _outcome(ap) -> str:
+        return str(getattr(ap, "application_outcome", "") or "").lower()
+
+    advanced = sum(1 for ap in apps if _stage(ap) == "advanced" or _outcome(ap) == "hired")
+    hired = sum(1 for ap in apps if _outcome(ap) == "hired")
+    rejected = sum(1 for ap in apps if _outcome(ap) == "rejected")
+    n_with_outcome = sum(1 for ap in apps if _outcome(ap) in {"hired", "rejected", "withdrawn"})
+
+    tab_switches = [int(getattr(a, "tab_switch_count", 0) or 0) for a in started]
+    focus = [
+        float(a.browser_focus_ratio)
+        for a in started
+        if isinstance(getattr(a, "browser_focus_ratio", None), (int, float))
+    ]
+    ttfp = [
+        int(a.time_to_first_prompt_seconds)
+        for a in started
+        if isinstance(getattr(a, "time_to_first_prompt_seconds", None), (int, float))
+    ]
+    has_feedback = sum(1 for a in completed if getattr(a, "candidate_feedback_json", None))
+
+    return {
+        "arm_id": int(arm.id),
+        "arm_key": arm.arm_key,
+        "task_id": int(arm.task_id),
+        "task_name": getattr(getattr(arm, "task", None), "name", None),
+        "knob_overrides": arm.knob_overrides or None,
+        "n_assigned": n_assigned,
+        "n_started": len(started),
+        "n_completed": len(completed),
+        "discrimination": {"score": score_sum, "spread_iqr": spread_iqr},
+        "completion": {
+            "never_started": len(invited_not_started),
+            "never_started_rate": _rate(len(invited_not_started), n_assigned),
+            "abandoned": len(abandoned),
+            "abandonment_rate": _rate(len(abandoned), n_assigned),
+            "timed_out": len(timed_out),
+            "timeout_rate": _rate(len(timed_out), len(completed)),
+            "time_to_complete_seconds": _score_summary(durations),
+        },
+        "outcome": {
+            "n_with_application": n_with_app,
+            "advanced": advanced,
+            "advanced_rate": _rate(advanced, n_with_app),
+            "hired": hired,
+            "hired_rate": _rate(hired, n_with_app),
+            "rejected": rejected,
+            "rejected_rate": _rate(rejected, n_with_app),
+            "n_with_outcome": n_with_outcome,
+        },
+        "experience": {
+            "instructions_dropoff_rate": _rate(len(invited_not_started), n_assigned),
+            "avg_tab_switches": _avg(tab_switches, 1),
+            "avg_browser_focus_ratio": _avg(focus, 2),
+            "avg_time_to_first_prompt_seconds": _avg(ttfp, 1),
+            "has_feedback_count": has_feedback,
+        },
+        "small_sample": len(completed) < min_sample,
+    }
+
+
+@router.get("/experiments/comparison")
+def get_experiment_comparison(
+    experiment_id: Optional[int] = Query(default=None),
+    role_id: Optional[int] = Query(default=None),
+    date_from: Optional[str] = Query(default=None, description="ISO date/time (inclusive)"),
+    date_to: Optional[str] = Query(default=None, description="ISO date/time (inclusive)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Compare A/B experiment arms across the three win-signal families.
+
+    Without ``experiment_id`` returns the org's experiments (optionally filtered
+    by ``role_id``) so the UI can populate a selector. With it, returns per-arm
+    discrimination / completion+time / downstream-outcome / candidate-experience
+    metrics over the random-assignment cohort only. Never declares a winner while
+    any arm is below the minimum sample — pilot honesty.
+    """
+    org_id = current_user.organization_id
+
+    if experiment_id is None:
+        q = db.query(AssessmentExperiment).filter(
+            AssessmentExperiment.organization_id == org_id
+        )
+        if role_id is not None:
+            q = q.filter(AssessmentExperiment.role_id == role_id)
+        exps = (
+            q.options(selectinload(AssessmentExperiment.arms))
+            .order_by(AssessmentExperiment.id.desc())
+            .all()
+        )
+        return {
+            "experiments": [
+                {
+                    "id": int(e.id),
+                    "key": e.key,
+                    "name": e.name,
+                    "role_id": int(e.role_id),
+                    "status": e.status,
+                    "experiment_type": e.experiment_type,
+                    "arm_count": len(e.arms),
+                }
+                for e in exps
+            ]
+        }
+
+    exp = (
+        db.query(AssessmentExperiment)
+        .options(selectinload(AssessmentExperiment.arms))
+        .filter(
+            AssessmentExperiment.id == experiment_id,
+            AssessmentExperiment.organization_id == org_id,
+        )
+        .first()
+    )
+    if exp is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    dt_from = _parse_filter_datetime(date_from)
+    dt_to = _parse_filter_datetime(date_to, end_of_day=True)
+
+    aq = db.query(Assessment).filter(
+        Assessment.experiment_id == exp.id,
+        Assessment.organization_id == org_id,
+        Assessment.assignment_method == "random",
+        Assessment.is_voided.is_(False),
+    )
+    if dt_from is not None:
+        aq = aq.filter(Assessment.created_at >= dt_from)
+    if dt_to is not None:
+        aq = aq.filter(Assessment.created_at <= dt_to)
+    assessments = aq.all()
+
+    app_ids = {a.application_id for a in assessments if a.application_id}
+    apps_by_id: Dict[int, CandidateApplication] = {}
+    if app_ids:
+        for ap in (
+            db.query(CandidateApplication)
+            .filter(CandidateApplication.id.in_(app_ids))
+            .all()
+        ):
+            apps_by_id[int(ap.id)] = ap
+
+    by_arm: Dict[int, List[Assessment]] = {}
+    for a in assessments:
+        by_arm.setdefault(int(a.experiment_arm_id or 0), []).append(a)
+
+    arms_out = [
+        _ab_arm_metrics(arm, by_arm.get(int(arm.id), []), apps_by_id, min_sample=MIN_AB_SAMPLE)
+        for arm in exp.arms
+    ]
+
+    any_small = (not arms_out) or any(arm["small_sample"] for arm in arms_out)
+    assigned_counts = [arm["n_assigned"] for arm in arms_out]
+    cohort_drift = False
+    if assigned_counts and max(assigned_counts) > 0:
+        mn, mx = min(assigned_counts), max(assigned_counts)
+        cohort_drift = (mx - mn) >= max(5, 0.5 * mx)
+
+    return {
+        "experiment": {
+            "id": int(exp.id),
+            "key": exp.key,
+            "name": exp.name,
+            "role_id": int(exp.role_id),
+            "status": exp.status,
+            "experiment_type": exp.experiment_type,
+        },
+        "min_sample_threshold": MIN_AB_SAMPLE,
+        "arms": arms_out,
+        "winner": None,
+        "cohort_drift": cohort_drift,
+        "guidance": (
+            "Pilot — sample too small to call a winner."
+            if any_small
+            else "All arms meet the minimum sample; compare with care (no winner is auto-declared)."
+        ),
     }

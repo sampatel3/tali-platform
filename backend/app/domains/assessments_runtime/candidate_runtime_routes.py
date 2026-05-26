@@ -210,15 +210,44 @@ def _ensure_assessment_workspace_ready(e2b: object, sandbox: object, assessment:
     return repo_root
 
 
+def _create_sandbox_with_retry(e2b: object, assessment: Assessment, *, attempts: int = 3) -> object:
+    """Create a fresh E2B sandbox with bounded exponential backoff.
+
+    A raw ``create_sandbox`` failure used to surface as an opaque 500 on every
+    code-execution/submit call during an E2B incident. We retry transient
+    failures a few times, then raise a typed 503 so the candidate sees a clear
+    "temporarily unavailable, your work is saved" message instead.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return e2b.create_sandbox()
+        except Exception as exc:  # noqa: BLE001 — E2B raises a variety of transient errors
+            last_exc = exc
+            logger.warning(
+                "E2B create_sandbox failed (attempt %s/%s) assessment_id=%s: %s",
+                attempt + 1, attempts, assessment.id, exc,
+            )
+            if attempt < attempts - 1:
+                time.sleep(0.5 * (2 ** attempt))
+    logger.error(
+        "E2B create_sandbox exhausted retries assessment_id=%s", assessment.id, exc_info=last_exc
+    )
+    raise HTTPException(
+        status_code=503,
+        detail="Workspace is temporarily unavailable. Your work is saved — please retry in a moment.",
+    )
+
+
 def _connect_assessment_sandbox(e2b: object, assessment: Assessment, task: Task, db: Session) -> tuple[object, str]:
     if assessment.e2b_session_id:
         try:
             sandbox = e2b.connect_sandbox(assessment.e2b_session_id)
         except Exception:
-            sandbox = e2b.create_sandbox()
+            sandbox = _create_sandbox_with_retry(e2b, assessment)
             assessment.e2b_session_id = e2b.get_sandbox_id(sandbox)
     else:
-        sandbox = e2b.create_sandbox()
+        sandbox = _create_sandbox_with_retry(e2b, assessment)
         assessment.e2b_session_id = e2b.get_sandbox_id(sandbox)
 
     repo_root = _ensure_assessment_workspace_ready(e2b, sandbox, assessment, task)
@@ -870,6 +899,9 @@ def submit_assessment_endpoint(
     assessment = get_active_assessment(assessment_id, db)
     validate_assessment_token(assessment, x_assessment_token)
     enforce_not_paused(assessment)
+    # If the clock ran out before this request landed, auto-submit on the
+    # timeout path and 409 — never score a late submit against an expired timer.
+    enforce_active_or_timeout(assessment, db)
     task = db.query(Task).filter(Task.id == assessment.task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")

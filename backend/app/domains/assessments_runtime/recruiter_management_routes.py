@@ -17,6 +17,7 @@ from ...domains.integrations_notifications.adapters import build_workable_adapte
 from ...services.workable_actions_service import resolve_workable_actor_member_id
 from ...domains.integrations_notifications.invite_flow import dispatch_assessment_invite
 from ...models.assessment import Assessment
+from ...models.assessment_experiment import ASSIGNMENT_METHOD_FORCED
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.organization import Organization
@@ -212,6 +213,9 @@ def create_assessment(
             ),
             workable_job_id=(resolved_role.workable_job_id if resolved_role else None),
             candidate_feedback_enabled=org_feedback_enabled,
+            # Recruiter explicitly picked this task — a forced assignment,
+            # excluded from any active experiment's randomized analysis cohort.
+            assignment_method=ASSIGNMENT_METHOD_FORCED,
         )
         db.add(assessment)
         db.flush()

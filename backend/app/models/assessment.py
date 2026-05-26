@@ -137,6 +137,24 @@ class Assessment(Base):
     is_demo = Column(Boolean, default=False, nullable=False)
     demo_track = Column(String, nullable=True)
     demo_profile = Column(JSON, nullable=True)
+    # A/B experiment assignment (Phase 2 trial). Co-located on the assessment row;
+    # written in the same txn that creates the assessment.
+    experiment_id = Column(
+        Integer, ForeignKey("assessment_experiments.id"), nullable=True, index=True
+    )
+    experiment_arm_id = Column(
+        Integer, ForeignKey("assessment_experiment_arms.id"), nullable=True, index=True
+    )
+    assignment_method = Column(String, nullable=True)  # random|forced|single_task_default|no_experiment
+    assignment_key = Column(String, nullable=True)  # stable hash input used for the draw (audit)
+    knob_variant_applied = Column(JSON, nullable=True)  # frozen copy of the arm's knob_overrides
+    score_weights_override = Column(JSON, nullable=True)  # per-assessment weights knob (NULL = use task.score_weights)
+    calibration_enabled = Column(Boolean, nullable=True)  # NULL = inherit global/task default
+    # Scoring/runtime failure flags (hardening). NULL/False = no failure.
+    scoring_failed = Column(Boolean, default=False, nullable=True)
+    scoring_partial = Column(Boolean, default=False, nullable=True)
+    repo_capture_failed = Column(Boolean, default=False, nullable=True)
+    test_parse_error = Column(Boolean, default=False, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

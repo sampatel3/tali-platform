@@ -24,6 +24,14 @@ from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.task import Task
+from app.models.assessment_experiment import (
+    ASSIGNMENT_METHOD_FORCED,
+    ASSIGNMENT_METHOD_RANDOM,
+    ASSIGNMENT_METHOD_SINGLE_TASK_DEFAULT,
+    EXPERIMENT_STATUS_ACTIVE,
+    AssessmentExperiment,
+    AssessmentExperimentArm,
+)
 
 
 # Same SQLite-PK workaround as test_agent_runtime_tools.
@@ -109,6 +117,44 @@ def _make_application(
     db.add(app)
     db.flush()
     return app
+
+
+def _make_experiment(
+    db,
+    org: Organization,
+    role: Role,
+    arm_tasks: list[Task],
+    *,
+    status: str = EXPERIMENT_STATUS_ACTIVE,
+    knob_overrides: list[dict | None] | None = None,
+    weights: list[int] | None = None,
+    key: str = "exp-ab",
+    salt: str = "fixed-salt",
+) -> AssessmentExperiment:
+    exp = AssessmentExperiment(
+        organization_id=org.id,
+        role_id=role.id,
+        key=key,
+        name="A/B trial",
+        status=status,
+        experiment_type="task",
+        salt=salt,
+    )
+    db.add(exp)
+    db.flush()
+    for idx, task in enumerate(arm_tasks):
+        arm = AssessmentExperimentArm(
+            experiment_id=exp.id,
+            arm_key=chr(ord("A") + idx),
+            task_id=task.id,
+            weight=(weights[idx] if weights else 1),
+            knob_overrides=(knob_overrides[idx] if knob_overrides else None),
+            is_active=True,
+        )
+        db.add(arm)
+    db.flush()
+    db.refresh(exp)
+    return exp
 
 
 def _make_agent_run(db, role: Role) -> AgentRun:
@@ -325,6 +371,152 @@ def test_send_assessment_rejects_out_of_range_duration(db):
                 duration_minutes=bad,
             )
         assert exc.value.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# A/B experiment assignment
+# ---------------------------------------------------------------------------
+
+
+def test_send_assessment_legacy_single_task_records_method(db):
+    """Role with one task and no experiment → single_task_default, no experiment."""
+    org = _make_org(db)
+    task = _make_task(db, org, task_key="legacy-single")
+    role = _make_role(db, org, tasks=[task])
+    app = _make_application(db, org=org, role=role)
+    run = _make_agent_run(db, role)
+
+    result = send_assessment_run(
+        db, Actor.agent(int(run.id)),
+        organization_id=int(org.id), application_id=int(app.id),
+    )
+    db.commit()
+    assert result.status == "sent"
+    assert result.assessment.assignment_method == ASSIGNMENT_METHOD_SINGLE_TASK_DEFAULT
+    assert result.assessment.experiment_id is None
+    assert result.assessment.experiment_arm_id is None
+
+
+def test_send_assessment_random_assignment_records_arm_metadata(db):
+    org = _make_org(db)
+    t1 = _make_task(db, org, task_key="ab-a", name="Arm A")
+    t2 = _make_task(db, org, task_key="ab-b", name="Arm B")
+    role = _make_role(db, org, tasks=[t1, t2])
+    exp = _make_experiment(db, org, role, [t1, t2])
+    app = _make_application(db, org=org, role=role)
+    run = _make_agent_run(db, role)
+
+    result = send_assessment_run(
+        db, Actor.agent(int(run.id)),
+        organization_id=int(org.id), application_id=int(app.id),
+    )
+    db.commit()
+    assert result.status == "sent"
+    a = result.assessment
+    assert a.assignment_method == ASSIGNMENT_METHOD_RANDOM
+    assert a.experiment_id == exp.id
+    assert a.experiment_arm_id is not None
+    assert a.assignment_key == f"{exp.id}:{app.candidate_id}:{role.id}"
+    assert a.task_id in (t1.id, t2.id)
+
+
+def test_send_assessment_random_split_uses_both_arms(db):
+    """Across many candidates the deterministic hash spreads over both arms."""
+    org = _make_org(db)
+    t1 = _make_task(db, org, task_key="split-a", name="Arm A")
+    t2 = _make_task(db, org, task_key="split-b", name="Arm B")
+    role = _make_role(db, org, tasks=[t1, t2])
+    _make_experiment(db, org, role, [t1, t2])
+    run = _make_agent_run(db, role)
+
+    seen: set[int] = set()
+    for i in range(24):
+        app = _make_application(db, org=org, role=role, email=f"split-{i}@x.test")
+        result = send_assessment_run(
+            db, Actor.agent(int(run.id)),
+            organization_id=int(org.id), application_id=int(app.id),
+        )
+        db.commit()
+        assert result.status == "sent"
+        seen.add(result.assessment.task_id)
+    assert seen == {t1.id, t2.id}
+
+
+def test_send_assessment_forced_task_id_under_active_experiment(db):
+    """An explicit task_id is recorded as forced (excluded from the random cohort)."""
+    org = _make_org(db)
+    t1 = _make_task(db, org, task_key="forced-a", name="Arm A")
+    t2 = _make_task(db, org, task_key="forced-b", name="Arm B")
+    role = _make_role(db, org, tasks=[t1, t2])
+    _make_experiment(db, org, role, [t1, t2])
+    app = _make_application(db, org=org, role=role)
+    run = _make_agent_run(db, role)
+
+    result = send_assessment_run(
+        db, Actor.agent(int(run.id)),
+        organization_id=int(org.id), application_id=int(app.id),
+        task_id=int(t1.id),
+    )
+    db.commit()
+    assert result.status == "sent"
+    assert result.assessment.assignment_method == ASSIGNMENT_METHOD_FORCED
+    assert result.assessment.task_id == t1.id
+
+
+def test_send_assessment_knob_override_duration_and_weights(db):
+    org = _make_org(db)
+    t1 = _make_task(db, org, task_key="knob-a", name="Arm A")
+    t2 = _make_task(db, org, task_key="knob-b", name="Arm B")
+    role = _make_role(db, org, tasks=[t1, t2])
+    knobs = {"duration_minutes": 45, "score_weights": {"task_completion": 0.5}, "calibration_enabled": False}
+    _make_experiment(db, org, role, [t1, t2], knob_overrides=[knobs, knobs])
+    app = _make_application(db, org=org, role=role)
+    run = _make_agent_run(db, role)
+
+    result = send_assessment_run(
+        db, Actor.agent(int(run.id)),
+        organization_id=int(org.id), application_id=int(app.id),
+        duration_minutes=90,  # overridden by the knob
+    )
+    db.commit()
+    a = result.assessment
+    assert a.duration_minutes == 45
+    assert a.knob_variant_applied == knobs
+    assert a.score_weights_override == {"task_completion": 0.5}
+    assert a.calibration_enabled is False
+
+
+def test_send_assessment_arm_stable_across_void_and_reinvite(db):
+    org = _make_org(db)
+    t1 = _make_task(db, org, task_key="reinvite-a", name="Arm A")
+    t2 = _make_task(db, org, task_key="reinvite-b", name="Arm B")
+    role = _make_role(db, org, tasks=[t1, t2])
+    _make_experiment(db, org, role, [t1, t2])
+    app = _make_application(db, org=org, role=role)
+    run = _make_agent_run(db, role)
+
+    first = send_assessment_run(
+        db, Actor.agent(int(run.id)),
+        organization_id=int(org.id), application_id=int(app.id),
+    )
+    db.commit()
+    first_arm = first.assessment.experiment_arm_id
+
+    # Void the first attempt, then re-invite.
+    voided = db.query(Assessment).filter(Assessment.id == first.assessment.id).first()
+    voided.is_voided = True
+    from app.components.assessments.repository import utcnow
+    voided.voided_at = utcnow()
+    db.commit()
+
+    second = send_assessment_run(
+        db, Actor.agent(int(run.id)),
+        organization_id=int(org.id), application_id=int(app.id),
+    )
+    db.commit()
+    assert second.status == "sent"
+    assert second.assessment.id != first.assessment.id
+    assert second.assessment.experiment_arm_id == first_arm
 
 
 def test_send_assessment_refuses_application_without_candidate_email(db):

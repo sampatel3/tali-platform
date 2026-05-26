@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict
@@ -82,6 +83,35 @@ class AssessmentRepositoryService:
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
+    @staticmethod
+    def _is_rate_limited(response: httpx.Response) -> bool:
+        if response.status_code == 429:
+            return True
+        if response.status_code == 403:
+            if response.headers.get("X-RateLimit-Remaining") == "0":
+                return True
+            body = (response.text or "").lower()
+            return "rate limit" in body or "secondary rate" in body
+        return False
+
+    def _rate_limit_delay(self, response: httpx.Response, attempt: int) -> float:
+        """Honor Retry-After / X-RateLimit-Reset where present, capped."""
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return min(float(retry_after), 15.0)
+            except ValueError:
+                pass
+        reset = response.headers.get("X-RateLimit-Reset")
+        if reset:
+            try:
+                delta = float(reset) - time.time()
+                if delta > 0:
+                    return min(delta, 15.0)
+            except ValueError:
+                pass
+        return float(min(2 ** attempt, 8))
+
     def _request(
         self,
         method: str,
@@ -91,17 +121,32 @@ class AssessmentRepositoryService:
         expected_statuses: tuple[int, ...] = (200,),
     ) -> httpx.Response:
         url = f"{self.api_base}{path}"
-        try:
-            response = httpx.request(
-                method,
-                url,
-                headers=self._headers(),
-                json=json_payload,
-                timeout=self.http_timeout_seconds,
-            )
-        except httpx.HTTPError as exc:
-            raise AssessmentRepositoryError(f"GitHub API request failed for {path}: {exc}") from exc
+        attempts = 4
+        response: httpx.Response | None = None
+        for attempt in range(attempts):
+            try:
+                response = httpx.request(
+                    method,
+                    url,
+                    headers=self._headers(),
+                    json=json_payload,
+                    timeout=self.http_timeout_seconds,
+                )
+            except httpx.HTTPError as exc:
+                raise AssessmentRepositoryError(f"GitHub API request failed for {path}: {exc}") from exc
 
+            # Back off on GitHub primary/secondary rate limits rather than
+            # surfacing an opaque error when many candidates start at once.
+            if (
+                self._is_rate_limited(response)
+                and response.status_code not in expected_statuses
+                and attempt < attempts - 1
+            ):
+                time.sleep(self._rate_limit_delay(response, attempt))
+                continue
+            break
+
+        assert response is not None  # loop always assigns or raises
         if response.status_code not in expected_statuses:
             detail = response.text.strip()[:500]
             raise AssessmentRepositoryError(

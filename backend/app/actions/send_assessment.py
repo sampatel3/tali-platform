@@ -40,11 +40,14 @@ from ..domains.assessments_runtime.role_support import (
 )
 from ..models.assessment import Assessment
 from ..models.role import Role
-from ..models.task import Task
 from ..platform.config import settings
 from ..services.assessment_repository_service import (
     AssessmentRepositoryError,
     AssessmentRepositoryService,
+)
+from ..services.experiment_assignment import (
+    RoleTaskMisconfigured,
+    resolve_task_and_variant,
 )
 from .types import ACTOR_AGENT, Actor
 
@@ -69,43 +72,6 @@ class SendAssessmentResult:
             "status": self.status,
             "detail": self.detail,
         }
-
-
-class _RoleTaskMisconfigured(Exception):
-    """Role has 0 or ambiguous (>1) task linkage — recruiter action required.
-
-    Distinct from a bad *explicit* ``task_id`` (a hard input error): a 0/ambiguous
-    linkage is a role-config gap the recruiter has to resolve, so ``run`` degrades
-    it to a soft ``misconfigured`` status instead of raising — otherwise approving
-    the agent's send_assessment recommendation 422s and the decision re-queues in
-    a loop with no usable signal.
-    """
-
-    def __init__(self, detail: str):
-        super().__init__(detail)
-        self.detail = detail
-
-
-def _resolve_task(role: Role, task_id: Optional[int]) -> Task:
-    tasks = list(role.tasks or [])
-    if not tasks:
-        raise _RoleTaskMisconfigured(
-            f"role {role.id} has no tasks linked — cannot send assessment"
-        )
-    if task_id is not None:
-        for t in tasks:
-            if int(t.id) == int(task_id):
-                return t
-        raise HTTPException(
-            status_code=422,
-            detail=f"task_id={task_id} is not linked to role {role.id}",
-        )
-    if len(tasks) == 1:
-        return tasks[0]
-    raise _RoleTaskMisconfigured(
-        f"role {role.id} has {len(tasks)} linked tasks; pass task_id explicitly "
-        "to disambiguate (recruiter must pick when there are multiple)."
-    )
 
 
 def run(
@@ -156,9 +122,23 @@ def run(
         )
 
     try:
-        task = _resolve_task(role, task_id)
-    except _RoleTaskMisconfigured as exc:
+        choice = resolve_task_and_variant(
+            db,
+            role,
+            candidate_id=int(candidate.id),
+            organization_id=organization_id,
+            task_id=task_id,
+        )
+    except RoleTaskMisconfigured as exc:
         return SendAssessmentResult(None, "misconfigured", exc.detail)
+    task = choice.task
+
+    # Apply the design-knob "duration" override at invite time (frozen on the
+    # assessment). Knob is clamped to the same 15–180 bound as the arg.
+    knobs = choice.knob_overrides or {}
+    effective_duration = int(duration_minutes)
+    if knobs.get("duration_minutes") is not None:
+        effective_duration = max(15, min(180, int(knobs["duration_minutes"])))
 
     # Idempotency: refuse if a valid assessment already exists.
     existing = latest_valid_role_assessment(
@@ -203,6 +183,8 @@ def run(
         metadata={
             "assessment_mode": "agent_send" if actor.type == ACTOR_AGENT else "manual",
             "task_id": int(task.id),
+            "assignment_method": choice.method,
+            "experiment_id": int(choice.experiment.id) if choice.experiment is not None else None,
         },
     )
 
@@ -215,11 +197,18 @@ def run(
         role_id=int(role.id),
         application_id=int(app.id),
         token=token,
-        duration_minutes=int(duration_minutes),
+        duration_minutes=effective_duration,
         expires_at=utcnow() + timedelta(days=settings.ASSESSMENT_EXPIRY_DAYS),
         workable_candidate_id=app.workable_candidate_id,
         workable_job_id=role.workable_job_id,
         candidate_feedback_enabled=org_feedback_enabled,
+        experiment_id=int(choice.experiment.id) if choice.experiment is not None else None,
+        experiment_arm_id=int(choice.arm.id) if choice.arm is not None else None,
+        assignment_method=choice.method,
+        assignment_key=choice.assignment_key,
+        knob_variant_applied=choice.knob_overrides,
+        score_weights_override=knobs.get("score_weights"),
+        calibration_enabled=knobs.get("calibration_enabled"),
     )
     db.add(assessment)
     try:
