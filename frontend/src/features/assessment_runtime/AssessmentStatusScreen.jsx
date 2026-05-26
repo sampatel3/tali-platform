@@ -40,10 +40,10 @@ export const AssessmentStatusScreen = ({
             markSizeClass="w-9 h-9"
           />
         </div>
-        <div className="mb-3 font-mono text-[10.5px] uppercase tracking-[0.14em] text-[var(--purple)]">
+        <div className="mb-3 font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--purple)]">
           ASSESSMENT · COMPLETE
         </div>
-        <h1 className="mb-4 font-display text-[34px] font-semibold tracking-[-0.025em] text-[var(--taali-runtime-text)]">
+        <h1 className="mb-4 font-[var(--font-display)] text-[34px] font-semibold leading-[1] tracking-[-0.025em] text-[var(--taali-runtime-text)]">
           Task submitted<span className="text-[var(--purple)]">.</span>
         </h1>
         <p className="mb-6 text-[14px] leading-[1.55] text-[var(--taali-runtime-muted)]">

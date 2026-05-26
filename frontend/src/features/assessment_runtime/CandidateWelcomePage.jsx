@@ -17,7 +17,7 @@ const CANDIDATE_START_BLOCKED_MESSAGE = 'This assessment is not available yet. P
 
 const InfoRow = ({ label, value }) => (
   <div className="rounded-[16px] border border-[var(--line)] bg-[var(--bg)] p-4">
-    <div className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">{label}</div>
+    <div className="font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--mute)]">{label}</div>
     <div className="mt-2 text-[14px] font-medium text-[var(--ink-2)]">{value}</div>
   </div>
 );
@@ -158,7 +158,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
             <div className="absolute right-[-60px] top-[-60px] h-56 w-56 rounded-full bg-[radial-gradient(circle,var(--purple-soft),transparent_68%)] opacity-80" />
             <div className="relative">
               <div className="kicker">{organizationName ? `Invited by ${organizationName}` : 'Candidate assessment'}</div>
-              <h1 className="mt-4 font-[var(--font-display)] text-[clamp(42px,5vw,64px)] leading-[0.96] tracking-[-0.04em]">
+              <h1 className="mt-4 font-[var(--font-display)] text-[clamp(42px,5vw,64px)] font-semibold leading-[0.96] tracking-[-0.04em]">
                 Hi {getFirstName(candidateName)} - ready to show your <em>work</em>?
               </h1>
               <p className="mt-4 max-w-[620px] text-[15px] leading-7 text-[var(--mute)]">
@@ -218,14 +218,14 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
 
           <div className="space-y-4">
             <div className="rounded-[var(--radius-xl)] bg-[var(--ink)] p-6 text-[var(--bg)] shadow-[var(--shadow-lg)]">
-              <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-[var(--purple-2)]">What to expect</div>
-              <h2 className="mt-4 font-[var(--font-display)] text-[30px] leading-[1] tracking-[-0.03em]">
+              <div className="font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--purple-2)]">What to expect</div>
+              <h2 className="mt-4 font-[var(--font-display)] text-[30px] font-semibold leading-[1] tracking-[-0.03em]">
                 Repo, editor, and Claude - all in one workspace.
               </h2>
               <p className="mt-4 text-[14px] leading-7 text-white/72">
                 We record prompts, accept/reject decisions, and validation runs so the hiring team can review your process with context.
               </p>
-              <div className="mt-5 rounded-[14px] border border-white/10 bg-white/10 px-4 py-3 font-mono text-[11px] uppercase tracking-[0.08em] text-white/80">
+              <div className="mt-5 rounded-[14px] border border-white/10 bg-white/10 px-4 py-3 font-mono text-[11px] uppercase tracking-[0.12em] text-white/80">
                 {metaTitle || 'Candidate workspace'}
               </div>
             </div>
