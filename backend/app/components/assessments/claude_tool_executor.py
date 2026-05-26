@@ -1,13 +1,12 @@
-"""Dispatcher that turns Anthropic ``tool_use`` blocks into E2B sandbox
+"""Dispatcher that turns tool-name + input dicts into E2B sandbox
 operations on a candidate's assessment repo.
 
-This is leaf A of the terminal-removal refactor. The legacy PTY/terminal
-flow (``terminal_runtime.py``) is being replaced by Claude agentic-chat:
-the model emits ``tool_use`` blocks naming one of the tools defined in
-``app.components.integrations.claude.tool_definitions.TOOLS`` and the
-caller (agentic-chat service, separate PR) routes the call through
-:class:`AssessmentToolExecutor` to read/write files and run commands
-inside the candidate's E2B sandbox.
+Originally built as leaf A of the terminal-removal refactor and consumed
+by the hand-rolled tool loop. Now reused by the ``claude-agent-sdk``
+integration: the sandbox MCP server (``components.integrations.claude_agent
+.sandbox_tools``) calls :meth:`AssessmentToolExecutor.dispatch` for each
+``mcp__sandbox__Read|Write|Edit|Bash`` invocation, and the dict result is
+serialised back to the model as a ``tool_result`` content block.
 
 Design contract
 ---------------
@@ -339,7 +338,8 @@ class AssessmentToolExecutor:
 
     # ------------------------------------------------------------------
     # Dispatch table — kept at class scope so it's bound once at import
-    # time. Names mirror tool_definitions.TOOLS exactly.
+    # time. Tool names are the internal verbs; the agent SDK MCP layer in
+    # ``sandbox_tools.py`` maps Read/Write/Edit/Bash → these.
     # ------------------------------------------------------------------
 
     _HANDLERS: Dict[str, Any] = {
