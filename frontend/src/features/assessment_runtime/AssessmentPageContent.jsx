@@ -440,10 +440,23 @@ export default function AssessmentPage({
   const hasRepoStructure = repoFiles.length > 0;
   const aiMode = assessment?.ai_mode || 'claude_cli_terminal';
   const showTerminal = aiMode === 'claude_cli_terminal';
+  // ``task.role`` is a DB enum slug (``data_engineer``); render it as
+  // a human title for the candidate-facing meta line. Sam called this
+  // out on assessment 79 (2026-05-26).
+  const formatRoleLabel = (slug) => {
+    const raw = String(slug || '').trim();
+    if (!raw) return '';
+    return raw
+      .replace(/[_-]+/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join(' ');
+  };
   const runtimeMetaLine = useMemo(
     () => [
       assessment?.organization_name || BRAND.name,
-      assessment?.task?.role || assessment?.task_name || 'Assessment',
+      formatRoleLabel(assessment?.task?.role) || assessment?.task_name || 'Assessment',
       assessment?.candidate_name || null,
     ].filter(Boolean).join(' · '),
     [assessment?.candidate_name, assessment?.organization_name, assessment?.task?.role, assessment?.task_name],
