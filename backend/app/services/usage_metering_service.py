@@ -127,6 +127,7 @@ def record_event(
         output_tokens=output_tokens,
         cache_read_tokens=cache_read_tokens,
         cache_creation_tokens=cache_creation_tokens,
+        model=model,
     )
     charged = credits_charged(
         feature=feature_enum, cost_usd_micro=cost_usd_micro, cache_hit=cache_hit

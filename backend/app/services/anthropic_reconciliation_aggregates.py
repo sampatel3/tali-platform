@@ -191,6 +191,29 @@ def _aggregate_internal_multi(
     # call_log present: add usage_events that have no linked call_log row in
     # this (org-set, day) so usage-events-only calls aren't dropped, without
     # double-counting calls that wrote both.
+    #
+    # Two categories of unlinked usage_events MUST be excluded — they're
+    # not Anthropic spend, and the original (#251) union counted them
+    # anyway, producing reconciliation drift up to +138% on Haiku
+    # (2026-05-25, caught 2026-05-26):
+    #
+    # 1. ``cache_hit=1`` — cv_score_orchestrator / pre_screening_service
+    #    write a usage_event on a cache HIT (no Anthropic call made; we
+    #    just charge the customer for the cached result). Including it
+    #    inflates "internal Anthropic cost" with money Anthropic never
+    #    billed us for.
+    #
+    # 2. ``feature='agent_autonomous'`` — the agent orchestrator passes
+    #    ``metering={"skip": True}`` to the wrapper (so the wrapper writes
+    #    only the call_log row) and then writes its OWN usage_event via
+    #    ``record_event`` for richer attribution (role_id, agent_run_id).
+    #    Both rows represent the SAME Anthropic call. Counting the
+    #    unlinked usage_event on top of the call_log row double-counts
+    #    the agent path.
+    #
+    # Both exclusions are safe: (1) cache hits by definition didn't talk to
+    # Anthropic; (2) the agent path is fully represented in claude_call_log
+    # via the wrapper's unconditional write since #237.
     linked_usage_event_ids = (
         db.query(ClaudeCallLog.usage_event_id)
         .filter(
@@ -206,7 +229,11 @@ def _aggregate_internal_multi(
         organization_ids=organization_ids, model=model,
         day_start=day_start, day_end=day_end,
         include_alias=include_alias,
-        extra_filters=[~UsageEvent.id.in_(linked_usage_event_ids)],
+        extra_filters=[
+            ~UsageEvent.id.in_(linked_usage_event_ids),
+            UsageEvent.cache_hit == 0,
+            UsageEvent.feature != "agent_autonomous",
+        ],
     )
     return {k: call_log[k] + unlinked_usage[k] for k in call_log}
 

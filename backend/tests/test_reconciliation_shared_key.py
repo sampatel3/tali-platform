@@ -45,6 +45,7 @@ def _seed_event(
     cost_micro: int,
     when: datetime,
     feature: str = "score",
+    cache_hit: int = 0,
 ):
     ev = UsageEvent(
         organization_id=org_id,
@@ -57,7 +58,7 @@ def _seed_event(
         cost_usd_micro=cost_micro,
         markup_multiplier=1,
         credits_charged=cost_micro,
-        cache_hit=0,
+        cache_hit=cache_hit,
         created_at=when,
     )
     db.add(ev)
@@ -229,3 +230,52 @@ def test_falls_back_to_usage_events_when_call_log_empty(db):
     agg = _aggregate_internal(db, organization_id=int(org.id), model="claude-haiku-4-5-20251001", usage_day=date(2026, 5, 19))
     assert agg["cost_usd_micro"] == 7_000_000  # usage_events fallback
     assert agg["event_count"] == 1
+
+
+def test_excludes_cache_hit_usage_events_from_internal_cost(db):
+    """cache_hit=1 usage_events represent a CACHE replay — cv_score_orchestrator
+    charges the customer for the cached result but Anthropic was never called.
+    Including them in the internal-vs-Anthropic comparison inflates internal
+    spend with money Anthropic never billed. The 2026-05-25 prod symptom was
+    +138% Haiku drift driven by 733 cache-hit usage_events at $37.76.
+    """
+    org = Organization(name="O", slug=f"o-{id(db)}")
+    db.add(org); db.commit()
+    when = datetime(2026, 5, 25, 10, 0, tzinfo=timezone.utc)
+    # 3 real Anthropic calls → call_log rows ($2 each).
+    for _ in range(3):
+        ev = _seed_event(db, org_id=org.id, model="claude-haiku-4-5-20251001", cost_micro=2_000_000, when=when)
+        _seed_call_log(db, org_id=org.id, model="claude-haiku-4-5-20251001", cost_micro=2_000_000, when=when, usage_event_id=int(ev.id))
+    # 5 cache-HIT usage_events ($5 each) — NO call_log row, charged at retail.
+    for _ in range(5):
+        _seed_event(db, org_id=org.id, model="claude-haiku-4-5-20251001", cost_micro=5_000_000, when=when, cache_hit=1)
+    db.commit()
+
+    agg = _aggregate_internal(db, organization_id=int(org.id), model="claude-haiku-4-5-20251001", usage_day=date(2026, 5, 25))
+    assert agg["cost_usd_micro"] == 6_000_000  # only the 3 call_log rows; cache hits excluded
+    assert agg["event_count"] == 3
+
+
+def test_excludes_agent_autonomous_unlinked_usage_events(db):
+    """The agent orchestrator passes ``metering={"skip": True}`` to the
+    wrapper (so the wrapper writes ONLY a call_log row) and then writes
+    its own usage_event via record_event for richer attribution. Both
+    rows represent the SAME Anthropic call. The old reconciliation
+    counted both, producing 2× drift on the agent path (e.g. 2026-05-25
+    Sonnet: $9.07 call_log + $9.07 unlinked agent_autonomous = $18.15).
+    """
+    org = Organization(name="O", slug=f"o-{id(db)}")
+    db.add(org); db.commit()
+    when = datetime(2026, 5, 25, 10, 0, tzinfo=timezone.utc)
+    # 4 agent calls: each writes a call_log (skip path) AND an unlinked
+    # agent_autonomous usage_event. Same call, two rows.
+    for _ in range(4):
+        _seed_event(db, org_id=org.id, model="claude-sonnet-4-5", cost_micro=3_000_000, when=when, feature="agent_autonomous")
+        _seed_call_log(db, org_id=org.id, model="claude-sonnet-4-5", cost_micro=3_000_000, when=when, usage_event_id=None)
+    db.commit()
+
+    agg = _aggregate_internal(db, organization_id=int(org.id), model="claude-sonnet-4-5", usage_day=date(2026, 5, 25))
+    # call_log only: 4 × $3 = $12. agent_autonomous unlinked usage_events
+    # are excluded so we don't double-count.
+    assert agg["cost_usd_micro"] == 12_000_000
+    assert agg["event_count"] == 4
