@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -125,10 +125,10 @@ def _patch_stack():
 
 def test_chat_happy_path_persists_one_ai_prompts_record(client, db, assessment_in_progress):
     with patch(
-        "app.domains.assessments_runtime.candidate_claude_chat_routes.AgenticChatService"
+        "app.domains.assessments_runtime.candidate_claude_chat_routes.AgentSDKChatService"
     ) as mock_svc_cls:
         svc = MagicMock()
-        svc.run.return_value = _stub_chat_turn()
+        svc.run = AsyncMock(return_value=_stub_chat_turn())
         mock_svc_cls.return_value = svc
         with _patch_stack()[0], _patch_stack()[1], _patch_stack()[2], _patch_stack()[3], _patch_stack()[4], _patch_stack()[5]:
             resp = client.post(
@@ -158,7 +158,7 @@ def test_chat_happy_path_persists_one_ai_prompts_record(client, db, assessment_i
     assert record["response"] == "Sure — here's what I found."
     assert record["input_tokens"] == 120
     assert record["output_tokens"] == 80
-    assert record["transport"] == "anthropic_tools"
+    assert record["transport"] == "claude_agent_sdk"
     assert len(record["tool_calls_made"]) == 1
     assert assessment_in_progress.total_input_tokens == 120
     assert assessment_in_progress.total_output_tokens == 80
@@ -173,10 +173,10 @@ def test_chat_flattens_prior_prompts_to_messages(client, db, assessment_in_progr
     db.refresh(assessment_in_progress)
 
     with patch(
-        "app.domains.assessments_runtime.candidate_claude_chat_routes.AgenticChatService"
+        "app.domains.assessments_runtime.candidate_claude_chat_routes.AgentSDKChatService"
     ) as mock_svc_cls:
         svc = MagicMock()
-        svc.run.return_value = _stub_chat_turn(content="third reply")
+        svc.run = AsyncMock(return_value=_stub_chat_turn(content="third reply"))
         mock_svc_cls.return_value = svc
         with _patch_stack()[0], _patch_stack()[1], _patch_stack()[2], _patch_stack()[3], _patch_stack()[4], _patch_stack()[5]:
             resp = client.post(
@@ -234,10 +234,10 @@ def test_chat_returns_402_when_role_budget_exhausted(client, db, assessment_in_p
 
 def test_chat_embeds_editor_context_when_provided(client, db, assessment_in_progress):
     with patch(
-        "app.domains.assessments_runtime.candidate_claude_chat_routes.AgenticChatService"
+        "app.domains.assessments_runtime.candidate_claude_chat_routes.AgentSDKChatService"
     ) as mock_svc_cls:
         svc = MagicMock()
-        svc.run.return_value = _stub_chat_turn()
+        svc.run = AsyncMock(return_value=_stub_chat_turn())
         mock_svc_cls.return_value = svc
         with _patch_stack()[0], _patch_stack()[1], _patch_stack()[2], _patch_stack()[3], _patch_stack()[4], _patch_stack()[5]:
             resp = client.post(
