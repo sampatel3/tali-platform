@@ -412,8 +412,14 @@ export const AssessmentWorkspace = ({
     () => repoEntries.reduce((total, [, paths]) => total + paths.length, 0),
     [repoEntries],
   );
+  // When the agentic Claude chat is on (the default post-#394), the legacy
+  // PTY-backed terminal panel is dead weight — the new chat already does
+  // everything the terminal did, via tool-use against the live sandbox. Drop
+  // the bottom-dock Terminal tab entirely for that path. Keep the Output
+  // panel (Run / Run tests) untouched.
+  const terminalSurfaceEnabled = Boolean(showTerminal) && !agenticChatEnabled;
   const showOutputPanel = Boolean(outputPanelOpen || executing);
-  const showTerminalPanel = Boolean(showTerminal && terminalPanelOpen);
+  const showTerminalPanel = Boolean(terminalSurfaceEnabled && terminalPanelOpen);
   const showDock = showOutputPanel || showTerminalPanel;
   const workspaceGridStyle = useMemo(() => ({
     '--workspace-grid': hasRepoStructure
@@ -422,7 +428,7 @@ export const AssessmentWorkspace = ({
   }), [assistantPanelCollapsed, hasRepoStructure, repoPanelCollapsed]);
 
   const handleOpenTerminal = () => {
-    if (showTerminal && !showTerminalPanel) {
+    if (terminalSurfaceEnabled && !showTerminalPanel) {
       onToggleTerminal?.();
     }
   };
@@ -791,7 +797,9 @@ export const AssessmentWorkspace = ({
             <div>
               <div className="font-mono text-[10.5px] uppercase tracking-[0.12em] text-[var(--mute)]">Workspace dock</div>
               <div className="mt-1 text-[12px] text-[var(--mute)]">
-                Open the output pane after each run, or use the terminal for repo commands and tests.
+                {terminalSurfaceEnabled
+                  ? 'Open the output pane after each run, or use the terminal for repo commands and tests.'
+                  : 'Open the output pane to see results from Run and Run tests.'}
               </div>
             </div>
 
@@ -803,7 +811,7 @@ export const AssessmentWorkspace = ({
               >
                 Output
               </DockToggleButton>
-              {showTerminal ? (
+              {terminalSurfaceEnabled ? (
                 <DockToggleButton
                   active={showTerminalPanel}
                   icon={showTerminalPanel ? <ChevronUp size={12} /> : <TerminalSquare size={12} />}
