@@ -1339,24 +1339,27 @@ export default function AssessmentPage({
           aria-modal="true"
           aria-labelledby="assessment-submit-confirm-title"
         >
-          <div className="w-full max-w-xl rounded-[var(--taali-radius-panel)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] p-6 text-[var(--taali-runtime-text)] shadow-[var(--taali-shadow-strong)] backdrop-blur-sm">
-            <h2 id="assessment-submit-confirm-title" className="font-mono text-sm font-bold uppercase tracking-wide text-[var(--taali-purple)]">
-              Confirm Submission
+          <div className="w-full max-w-xl rounded-[var(--taali-radius-panel)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] p-7 text-[var(--taali-runtime-text)] shadow-[var(--taali-shadow-strong)] backdrop-blur-sm">
+            <h2
+              id="assessment-submit-confirm-title"
+              className="font-display text-[24px] font-semibold tracking-[-0.02em] text-[var(--taali-runtime-text)]"
+            >
+              Submit assessment<span className="text-[var(--taali-purple)]">?</span>
             </h2>
-            <p className="mt-3 font-mono text-sm text-[var(--taali-runtime-muted)]">
-              Are you sure you want to submit? You cannot make changes after submitting.
+            <p className="mt-3 text-[14px] leading-[1.6] text-[var(--taali-runtime-muted)]">
+              Your work will be locked in and the hiring team will start their review. You won&rsquo;t be able to make further changes.
             </p>
-            <div className="mt-5 flex items-center justify-end gap-3">
+            <div className="mt-6 flex items-center justify-end gap-3">
               <button
                 type="button"
-                className="rounded-[var(--taali-radius-control)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-4 py-2 font-mono text-xs font-bold uppercase tracking-wide text-[var(--taali-runtime-text)] transition-colors hover:border-[var(--taali-purple)] hover:text-[var(--taali-purple)]"
+                className="inline-flex items-center justify-center rounded-full border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-5 py-2.5 text-sm font-medium text-[var(--taali-runtime-text)] transition-colors hover:border-[var(--taali-purple)] hover:text-[var(--taali-purple)]"
                 onClick={() => setSubmitConfirmOpen(false)}
               >
                 Cancel
               </button>
               <button
                 type="button"
-                className="rounded-[var(--taali-radius-control)] border border-[var(--taali-purple)] bg-[var(--taali-purple)] px-4 py-2 font-mono text-xs font-bold uppercase tracking-wide text-white transition-colors hover:bg-[var(--taali-purple-hover)]"
+                className="inline-flex items-center justify-center rounded-full bg-[var(--taali-purple)] px-6 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[var(--taali-purple-hover)]"
                 onClick={() => handleSubmit(true)}
               >
                 Submit
