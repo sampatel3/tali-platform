@@ -9,6 +9,7 @@ Two layers:
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_UP
 from enum import Enum
@@ -16,8 +17,83 @@ from typing import Optional
 
 from ..platform.config import settings
 
+logger = logging.getLogger("taali.pricing")
+
 
 CREDITS_PER_USD = 1_000_000
+
+
+# ---- Per-model Anthropic rates (USD per million tokens) -------------------
+# Keyed by the base alias (the model id without the ``-YYYYMMDD`` snapshot
+# suffix). Anthropic returns the dated snapshot id (e.g. ``claude-sonnet-4-5-20250929``);
+# ``_resolve_model_rates`` strips it before lookup so a model rev change
+# doesn't silently fall back to the env-var Haiku default.
+#
+# The historical bug (fixed 2026-05-26): ``raw_cost_usd_micro`` used a single
+# global env-var rate ($1 input / $5 output — Haiku's), so every Sonnet call
+# was booked at ~⅓ of its real cost. Reconciliation against Anthropic billing
+# showed -34% on Sonnet for weeks before this was caught.
+#
+# Source: https://www.anthropic.com/pricing — keep aligned when Anthropic
+# changes rates. cache_read = 0.10× input rate, cache_creation = 1.25× input
+# rate (handled below, applies uniformly across the family).
+_MODEL_RATES: dict[str, tuple[Decimal, Decimal]] = {
+    # Claude 4.5 family
+    "claude-haiku-4-5": (Decimal("1"), Decimal("5")),
+    "claude-sonnet-4-5": (Decimal("3"), Decimal("15")),
+    # Claude 4.6 / 4.7 — Sonnet 4.6+ keeps the Sonnet-family price point;
+    # add Opus when we start using it.
+    "claude-sonnet-4-6": (Decimal("3"), Decimal("15")),
+    "claude-sonnet-4-7": (Decimal("3"), Decimal("15")),
+    "claude-opus-4": (Decimal("15"), Decimal("75")),
+    "claude-opus-4-5": (Decimal("15"), Decimal("75")),
+    # Legacy / pre-4.5 — kept for historical recompute. New code shouldn't
+    # call these models.
+    "claude-3-5-haiku": (Decimal("0.80"), Decimal("4")),
+    "claude-3-5-sonnet": (Decimal("3"), Decimal("15")),
+    "claude-3-7-sonnet": (Decimal("3"), Decimal("15")),
+    "claude-3-opus": (Decimal("15"), Decimal("75")),
+}
+
+
+def _strip_snapshot_suffix(model: str) -> str:
+    """Strip a trailing ``-YYYYMMDD`` snapshot tag from a model id.
+
+    Anthropic publishes a snapshot suffix (e.g. ``claude-sonnet-4-5-20250929``)
+    that drifts forward as they cut new versions of the same model. We rate
+    on the base alias so a new snapshot doesn't trigger the fallback path.
+    """
+    if not model:
+        return ""
+    parts = model.rsplit("-", 1)
+    if len(parts) == 2 and len(parts[1]) == 8 and parts[1].isdigit():
+        return parts[0]
+    return model
+
+
+def _resolve_model_rates(model: Optional[str]) -> tuple[Decimal, Decimal]:
+    """Return ``(input_rate, output_rate)`` per MTok for ``model``.
+
+    Strips the snapshot suffix and looks up the base alias. Unknown models
+    fall back to the env-var defaults with a logged warning — so a new
+    family doesn't silently mis-price, but the system stays runnable.
+    """
+    base = _strip_snapshot_suffix(model or "")
+    rates = _MODEL_RATES.get(base)
+    if rates is not None:
+        return rates
+    # Unknown model: surface a warning so we add it to the table before
+    # spend ramps. Default to env-var values for backwards compat.
+    if model:
+        logger.warning(
+            "pricing: no rate table entry for model=%r (base=%r) — "
+            "falling back to env-var defaults. Add it to _MODEL_RATES.",
+            model, base,
+        )
+    return (
+        Decimal(str(settings.CLAUDE_INPUT_COST_PER_MILLION_USD)),
+        Decimal(str(settings.CLAUDE_OUTPUT_COST_PER_MILLION_USD)),
+    )
 
 
 class Feature(str, Enum):
@@ -228,6 +304,7 @@ def raw_cost_usd_micro(
     output_tokens: int,
     cache_read_tokens: int = 0,
     cache_creation_tokens: int = 0,
+    model: Optional[str] = None,
 ) -> int:
     """Compute Claude cost in micro-USD (millionths of a dollar).
 
@@ -235,10 +312,13 @@ def raw_cost_usd_micro(
     - cache_read_tokens: 10% of input rate (cache hit on Anthropic's side)
     - cache_creation_tokens: 125% of input rate (one-time write cost)
 
-    We charge customers based on Anthropic's bill, so we mirror these rates.
+    Per-model rates: input/output cost per MTok varies by model family. See
+    ``_MODEL_RATES``. ``model`` is optional only for legacy call sites and
+    tests; production paths MUST pass it or Sonnet/Opus calls are booked
+    at Haiku rates (the 2026-05 bug that produced -34% Sonnet drift in
+    reconciliation against Anthropic billing).
     """
-    input_rate = Decimal(str(settings.CLAUDE_INPUT_COST_PER_MILLION_USD))
-    output_rate = Decimal(str(settings.CLAUDE_OUTPUT_COST_PER_MILLION_USD))
+    input_rate, output_rate = _resolve_model_rates(model)
 
     standard_input = Decimal(input_tokens) * input_rate
     standard_output = Decimal(output_tokens) * output_rate

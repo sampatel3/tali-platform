@@ -420,6 +420,7 @@ class _MeteredMessages:
                 output_tokens=output_tokens,
                 cache_read_tokens=cache_read_tokens,
                 cache_creation_tokens=cache_creation_tokens,
+                model=model,
             )
         except Exception:
             cost_micro = 0

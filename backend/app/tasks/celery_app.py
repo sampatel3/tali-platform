@@ -90,14 +90,20 @@ celery_app.conf.update(
             "task": "app.tasks.assessment_tasks.send_assessment_expiry_reminders",
             "schedule": 86400.0,
         },
-        # Anthropic billing reconciliation. Runs once a day; pulls the
-        # last 48h so late-arriving Anthropic data on the previous day
-        # gets re-checked. Crontab would be tighter than `schedule:
-        # 86400.0` (which drifts), but the project doesn't use
-        # ``celery.schedules.crontab`` elsewhere — keeping it consistent.
+        # Anthropic billing reconciliation. Pulls the last 48h so
+        # late-arriving Anthropic data on the previous day gets re-checked.
+        #
+        # Switched from ``schedule: 86400.0`` to a fixed-time crontab on
+        # 2026-05-26. The 24h interval timer is RESET on every beat
+        # restart — so a deploy/redeploy that happens before the 24h
+        # tick fires silently skips that day's run. Symptom (2026-05-23
+        # → 2026-05-26): three consecutive missed reconciliations until
+        # someone noticed the table hadn't moved. A fixed-time crontab
+        # fires at the same wall-clock moment regardless of when the
+        # beat was last restarted.
         "anthropic-usage-reconciliation-daily": {
             "task": "app.tasks.reconciliation_tasks.reconcile_anthropic_usage",
-            "schedule": 86400.0,
+            "schedule": crontab(hour=3, minute=0),
         },
         # Phase 7 cohort planner tick: every 30 min, fan a tick to each
         # agent-enabled, non-paused role. The orchestrator surveys
