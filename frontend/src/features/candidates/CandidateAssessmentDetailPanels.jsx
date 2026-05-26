@@ -47,13 +47,13 @@ const buildManualEvaluationDraft = (storedEvaluation = null, evaluationRubric = 
 
 // AI-usage analytics, code/git evidence, and the prompt-by-prompt assessment
 // timeline. These leaf components only need the mapped `candidate` view.
-export const AssessmentEvidencePanels = ({ candidate = null, avgCalibrationScore = null }) => {
+export const AssessmentEvidencePanels = ({ candidate = null }) => {
   if (!candidate) return null;
   return (
     <div className="report-assessment-evidence space-y-4">
       <section>
         <div className="mc-kicker">AI USAGE &amp; PROMPT QUALITY</div>
-        <CandidateAiUsageTab candidate={candidate} avgCalibrationScore={avgCalibrationScore} />
+        <CandidateAiUsageTab candidate={candidate} />
       </section>
       <section>
         <div className="mc-kicker">CODE &amp; GIT EVIDENCE</div>

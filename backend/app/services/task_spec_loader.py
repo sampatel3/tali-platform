@@ -15,7 +15,6 @@ REQUIRED_TASK_FIELDS = (
     "name",
     "role",
     "duration_minutes",
-    "calibration_prompt",
     "scenario",
     "repo_structure",
     "evaluation_rubric",

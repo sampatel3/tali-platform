@@ -237,7 +237,6 @@ def get_analytics(
             "top_score": None,
             "avg_score": None,
             "avg_time_minutes": None,
-            "avg_calibration_score": None,
             "score_buckets": _build_score_buckets([]),
             "dimension_averages": _build_dimension_averages([]),
         }
@@ -288,12 +287,6 @@ def get_analytics(
     scores_100 = [score for score in (_score_100(assessment) for assessment in completed) if score is not None]
     top_score = max(scores_10) if scores_10 else None
     avg_score = round(sum(scores_10) / len(scores_10), 1) if scores_10 else None
-    calibration_scores = [
-        float(assessment.calibration_score)
-        for assessment in completed
-        if isinstance(assessment.calibration_score, (int, float))
-    ]
-    avg_calibration_score = round(sum(calibration_scores) / len(calibration_scores), 1) if calibration_scores else None
 
     times_min = []
     for assessment in completed:
@@ -317,7 +310,6 @@ def get_analytics(
         "top_score": top_score,
         "avg_score": avg_score,
         "avg_time_minutes": avg_time_minutes,
-        "avg_calibration_score": avg_calibration_score,
         "score_buckets": _build_score_buckets(scores_100),
         "dimension_averages": _build_dimension_averages(completed),
     }
