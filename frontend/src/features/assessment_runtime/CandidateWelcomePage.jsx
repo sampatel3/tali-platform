@@ -158,8 +158,18 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
             <div className="absolute right-[-60px] top-[-60px] h-56 w-56 rounded-full bg-[radial-gradient(circle,var(--purple-soft),transparent_68%)] opacity-80" />
             <div className="relative">
               <div className="kicker">{organizationName ? `Invited by ${organizationName}` : 'Candidate assessment'}</div>
+              {/* Gate the named greeting on the preview API resolving.
+                  Otherwise the H1 paints "Hi there - ready to show your
+                  work?" for the ~300ms it takes the request to return
+                  and then jumps to "Hi Sam - ...", a flash the candidate
+                  notices on every visit. While loading, show the
+                  name-free phrasing so there's no name pop-in. */}
               <h1 className="mt-4 font-[var(--font-display)] text-[clamp(42px,5vw,64px)] font-semibold leading-[0.96] tracking-[-0.04em]">
-                Hi {getFirstName(candidateName)} - ready to show your <em>work</em>?
+                {previewLoading || !candidateName ? (
+                  <>Ready to show your <em>work</em>?</>
+                ) : (
+                  <>Hi {getFirstName(candidateName)} - ready to show your <em>work</em>?</>
+                )}
               </h1>
               <p className="mt-4 max-w-[620px] text-[15px] leading-7 text-[var(--mute)]">
                 This is a real engineering task, not a puzzle. You’ll work in a browser-based IDE with the same repo, runtime, and AI tooling your hiring team wants to evaluate. The brief opens when you click start.
