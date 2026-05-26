@@ -21,7 +21,10 @@ import {
 
 const ASSESSMENT_THEME_STORAGE_KEY = 'taali_assessment_theme';
 const CLAUDE_PROMPT_SLOW_MS = 10000;
-const CLAUDE_PROMPT_STALL_MS = 45000;
+// Realistic upper bound for Claude Code's first prompt in a fresh PTY session
+// (cold-start + tool discovery + multi-step repo exploration easily takes 60–90 s).
+// Was 45 s — caused legitimate late responses to be silently dropped.
+const CLAUDE_PROMPT_STALL_MS = 120000;
 
 const readAssessmentLightModePreference = () => {
   if (typeof window === 'undefined') return true;
@@ -204,19 +207,22 @@ export default function AssessmentPage({
       }
     }, CLAUDE_PROMPT_SLOW_MS);
     claudePromptStallTimerRef.current = setTimeout(() => {
+      // Critical: do NOT mark the requestId as ignored, do NOT clear
+      // ``pendingClaudeRequestIdRef``, do NOT flip ``claudePromptSending`` off.
+      // Doing any of those at this point causes the genuine response — when it
+      // finally arrives — to be silently dropped by the ``claude_chat_done``
+      // handler below. The fix is to surface a non-blocking note in the
+      // conversation and keep waiting; the candidate can click Restart
+      // terminal if they genuinely believe it's wedged.
       if (pendingClaudeRequestIdRef.current !== requestId) {
         return;
       }
-      ignoredClaudeRequestIdsRef.current.add(requestId);
-      pendingClaudeRequestIdRef.current = null;
-      setClaudePromptSending(false);
-      setClaudePromptSlow(false);
       setClaudeConversation((prev) => {
         const next = [
           ...prev,
           {
             role: 'assistant',
-            content: '[Error] Claude is taking longer than expected in the live repo session. Open the terminal dock to inspect progress, or click Restart terminal and try again.',
+            content: 'Claude is still working on this — it can take a minute or two on the first prompt. The answer will appear here when it arrives. Click Restart terminal if it really seems stuck.',
           },
         ];
         return next.slice(-30);
