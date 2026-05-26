@@ -324,27 +324,23 @@ class AgentSDKChatService:
                 elif isinstance(msg, ResultMessage):
                     final = msg
         except Exception as exc:
-            stderr_tail = "\n".join(stderr_lines[-12:]) if stderr_lines else ""
-            logger.exception(
-                "AgentSDKChatService query() raised org=%s assessment=%s "
-                "stderr_tail=%s",
-                self._organization_id,
-                self._assessment_id,
-                stderr_tail[:2000] or "<empty>",
-            )
-            # No UsageEvent — the SDK didn't get far enough to report
-            # token usage. If it did fire billable calls before crashing,
-            # the daily Admin-API reconciliation will surface it.
-            user_msg = "The chat service hit an error. Please retry in a moment."
+            # Classification + recovery rules in error_recovery.classify (#76).
+            from .error_recovery import classify
+            recovered = classify(str(exc), content_parts)
+            log = logger.info if recovered.success else logger.exception
+            log("AgentSDKChatService exception org=%s assessment=%s stop=%s stderr=%s",
+                self._organization_id, self._assessment_id, recovered.stop_reason,
+                ("\n".join(stderr_lines[-12:]))[:2000] or "<empty>")
+            # Skip UsageEvent — no ResultMessage means no token totals.
             return ChatTurn(
-                success=False,
-                content=user_msg,
+                success=recovered.success,
+                content=recovered.content,
                 tool_calls_made=tool_calls,
                 input_tokens=0,
                 output_tokens=0,
                 total_cost_usd=0.0,
-                num_turns=0,
-                stop_reason="sdk_exception",
+                num_turns=len(tool_calls) if recovered.success else 0,
+                stop_reason=recovered.stop_reason,
             )
 
         # 5. Build ChatTurn ----------------------------------------------------

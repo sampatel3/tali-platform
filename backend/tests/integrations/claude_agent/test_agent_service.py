@@ -275,6 +275,101 @@ def test_sdk_error_returns_failure_but_still_writes_meter(patched_sdk, patched_m
     patched_meter.assert_called_once()
 
 
+# ---- 3b. SDK soft-error recovery ---------------------------------------------
+
+
+def test_max_turns_hit_returns_partial_text_as_success(patched_sdk, patched_meter):
+    """When the SDK raises ``Reached maximum number of turns`` AFTER the
+    model already produced useful text + tool calls, the service must
+    surface that work as a successful turn instead of throwing it away.
+
+    Regression for assessment 76 (2026-05-26): the model had explained
+    the bug across two text blocks AND invoked Read 6 times, but the
+    candidate saw "The chat service hit an error. Please retry." because
+    the SDK's ``Reached maximum number of turns`` raise short-circuited
+    our exception handler.
+    """
+    # Stream some legitimate text + tool calls, then have ``query``
+    # raise mid-stream the same way the real SDK does.
+    async def raising_query(*, prompt, options, transport=None):
+        patched_sdk["prompt_received"] = prompt
+        patched_sdk["options_received"] = options
+        patched_sdk["query_calls"] += 1
+        yield _FakeAssistantMessage(content=[
+            _FakeTextBlock("The gate is hardcoded to return passed."),
+            _FakeToolUseBlock(id="tool-1", name="mcp__sandbox__Read", input={"path": "dq/gate.py"}),
+        ])
+        yield _FakeAssistantMessage(content=[
+            _FakeTextBlock("It ignores the severity input entirely."),
+        ])
+        raise Exception("Claude Code returned an error result: Reached maximum number of turns (6)")
+
+    import claude_agent_sdk
+    with patch.object(claude_agent_sdk, "query", raising_query):
+        svc, _factory = _build_service()
+        turn = asyncio.run(svc.run(
+            messages=[{"role": "user", "content": "why is the gate broken?"}],
+            system="task",
+            budget_remaining_usd=1.0,
+        ))
+
+    assert turn.success is True, "max-turns hit with content should NOT be a failure"
+    assert "The gate is hardcoded to return passed." in turn.content
+    assert "ignores the severity input" in turn.content
+    assert "tool budget" in turn.content.lower(), "should include the soft-recovery trailer"
+    assert turn.stop_reason == "max_turns_soft"
+    assert len(turn.tool_calls_made) == 1
+    # No ResultMessage was emitted, so no meter write (Admin-API
+    # reconciliation catches the spend).
+    patched_meter.assert_not_called()
+
+
+def test_hard_sdk_crash_with_partial_content_returns_partial_failure(patched_sdk, patched_meter):
+    """A non-soft SDK crash with already-emitted content still returns
+    the partial reply (with a hard-fail trailer) instead of the generic
+    'please retry' message. Better signal than nothing."""
+    async def crashing_query(*, prompt, options, transport=None):
+        patched_sdk["query_calls"] += 1
+        yield _FakeAssistantMessage(content=[_FakeTextBlock("I see the issue: ")])
+        raise RuntimeError("transport process died unexpectedly")
+
+    import claude_agent_sdk
+    with patch.object(claude_agent_sdk, "query", crashing_query):
+        svc, _factory = _build_service()
+        turn = asyncio.run(svc.run(
+            messages=[{"role": "user", "content": "diagnose"}],
+            system="task",
+            budget_remaining_usd=1.0,
+        ))
+
+    assert turn.success is False
+    assert "I see the issue:" in turn.content
+    assert "errored mid-response" in turn.content.lower()
+    assert turn.stop_reason == "sdk_exception_partial"
+
+
+def test_hard_sdk_crash_no_content_returns_generic_retry(patched_sdk, patched_meter):
+    """A crash with no text yet falls back to the generic retry copy."""
+    async def crashing_query(*, prompt, options, transport=None):
+        patched_sdk["query_calls"] += 1
+        if False:  # pragma: no cover — generator must be a real async gen
+            yield None
+        raise RuntimeError("CLI startup failed")
+
+    import claude_agent_sdk
+    with patch.object(claude_agent_sdk, "query", crashing_query):
+        svc, _factory = _build_service()
+        turn = asyncio.run(svc.run(
+            messages=[{"role": "user", "content": "x"}],
+            system="task",
+            budget_remaining_usd=1.0,
+        ))
+
+    assert turn.success is False
+    assert turn.content == "The chat service hit an error. Please retry in a moment."
+    assert turn.stop_reason == "sdk_exception"
+
+
 # ---- 4. No ResultMessage -----------------------------------------------------
 
 
