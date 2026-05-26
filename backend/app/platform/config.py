@@ -54,6 +54,15 @@ class Settings(BaseSettings):
     # Require provider-reported usage in CLI transcript for cost/budget enforcement.
     CLAUDE_CLI_REQUIRE_PROVIDER_USAGE: bool = True
     CLAUDE_CLI_PROVIDER_USAGE_GRACE_OUTPUT_EVENTS: int = 40
+    # Agentic chat (terminal-removal replacement) — multi-turn tool-use loop.
+    # CLAUDE_TOOL_MAX_TURNS caps how many ``messages.create`` calls one
+    # candidate→assistant turn can fan into. 8 covers virtually every
+    # legitimate session in the pilot data (95th pct = 4) while still
+    # short-circuiting prompt-injection loops.
+    CLAUDE_TOOL_MAX_TURNS: int = 8
+    # Per-tool wall-clock cap inside the executor (leaf A enforces;
+    # surfaced here so the timeout is grep-able alongside the loop cap).
+    CLAUDE_TOOL_TIMEOUT_SECONDS: int = 10
 
     # Cost model defaults (all overridable via environment).
     # Rates match Claude Haiku 4.5 — the model the platform actually
