@@ -4,7 +4,7 @@
   "role": "data_engineer",
   "duration_minutes": 30,
   "calibration_prompt": "You have 2 minutes. Ask Claude to help you write a query or validation step that detects duplicate transaction IDs in a daily batch table called `payments_raw`. Show the table schema (columns and types), your assumptions about what 'duplicate' means in this context, and exactly what output you expect the check to produce.",
-  "scenario": "You joined Deeplight as an AWS Glue Data Engineer and were dropped into a failing revenue pipeline on your first week.\n\n**Message from the VP of Engineering:**\n\n> Finance close is tomorrow morning and our Glue revenue-recovery job has been unstable for days.\n>\n> The current failures are painful because they combine three problems:\n> - the source schema changed and downstream code is behind — `payment_method` is missing and type mappings for `double` and `integer` are silently falling back to STRING,\n> - duplicate records are inflating totals on every retry because our deduplication logic is a no-op,\n> - the audit team cannot explain which runs are trustworthy because the bookmark advances even when the quality gate hasn't actually checked anything.\n>\n> There is also a fourth problem: nobody chose a loading method for this recovery window. The job is defaulting to full load when it should be using delta replay. And we have no data contract validation at all — the source team added `created_at` as a required column two sprints ago and nothing catches when it is missing.\n>\n> This is a Bronze-layer ingestion flow built in AWS Glue with PySpark under the hood. The local reproduction strips AWS infrastructure but mirrors all the logic decisions the Glue job has to make.\n>\n> I do not need a hero rewrite. I need a senior data engineer to triage the situation, make the highest-value fixes, and tell me what still blocks us.\n>\n> In 30 minutes, tell me:\n> 1. What should block the next scheduled run right now?\n> 2. What is the smallest fix set that restores trust for finance close?\n> 3. What production fixes can you land right now?\n\n**Your mission:**\nUse the local reproduction to improve the pipeline's correctness and operational safety. You are being assessed on prioritisation, data reliability judgment, and whether your fixes are credible under finance-close pressure.",
+  "scenario": "Finance close is at 06:00. It is now 22:30.\n\nThe orders → analytics Glue pipeline crashed at 19:47 mid-run. The CDC\nbinlog tail between 19:00 and 22:00 was paused for maintenance — there\nis *no consistent CDC stream to replay* for that 3-hour window.\n\nSource-side analysis: the gap window contains 4 known duplicate\n`transaction_id` values, products of upstream retries. Whatever load\nstrategy you pick must handle them or finance reconciliation breaks.\n\n**Decide the load method.** None of the three available strategies is\nunambiguously right:\n\n  - **CDC** — what the job was originally configured to do, but the gap\n    means CDC replay produces an incomplete tail.\n  - **Delta replay** — possible, but the source's 4 duplicate transaction_ids\n    in the window will land if your dedup step is wrong. Today\n    `deduplicate_records()` is a no-op.\n  - **Full load** — safe, but locks the orders table for ~40 minutes during\n    Iceberg compaction, and finance pre-close starts at 05:30. A full\n    load now means contention with finance close.\n\n`select_load_method()` currently always returns `full_load`. You decide\nwhat it should return given THIS incident. Justify in\n`INCIDENT_DECISION.md`. There is no \"right answer\" — the rubric grades\nthe named trade-off you accept, not which option you pick.\n\n**Production constraints you must respect:**\n\n* The warehouse is Iceberg on S3. `MERGE INTO` is supported but row-level\n  deletes during finance close trigger lock contention. Your dedup\n  strategy needs to be defensible under that constraint.\n* The bookmark store is DynamoDB with eventual consistency. If the\n  bookmark write succeeds but the quality-gate write fails, what's your\n  idempotency story? Today `should_advance_bookmark()` advances if records\n  loaded, ignoring `quality_passed` entirely.\n* **No new pip packages.** Stdlib only. `pandas` is not available; you\n  cannot import it.\n\n**What the rubric grades:**\n\n1. Did you fix the obvious stubs? (`select_load_method`, `validate_contract`,\n  `deduplicate_records`, `should_advance_bookmark`, `TYPE_MAPPING`)\n2. Did `INCIDENT_DECISION.md` defend a load-method choice given the named\n   trade-offs? (30%)\n\nIf `INCIDENT_DECISION.md` is empty or vague, the assessment scores in the\n*good* band even if every test passes. The on-call who reads your handover\nnote at 06:01 needs the reasoning, not just the diff.\n\n30 minutes. Tools: `Read`, `Write`, `Edit`, `Bash`.",
   "repo_structure": {
     "name": "aws-glue-revenue-recovery",
     "files": {
@@ -29,12 +29,13 @@
       "tests/test_quality.py": "from glue_jobs.quality import duplicate_transaction_ids, quality_gate\n\n\ndef test_duplicate_transaction_ids_returns_repeat_ids():\n    records = [\n        {'transaction_id': 'TXN-1'},\n        {'transaction_id': 'TXN-2'},\n        {'transaction_id': 'TXN-1'},\n    ]\n\n    assert duplicate_transaction_ids(records) == ['TXN-1']\n\n\ndef test_quality_gate_fails_when_duplicates_exist():\n    records = [\n        {'transaction_id': 'TXN-9001'},\n        {'transaction_id': 'TXN-9001'},\n    ]\n\n    result = quality_gate(records)\n    assert result['passed'] is False\n    assert result['duplicate_ids'] == ['TXN-9001']\n",
       "tests/test_loading_strategy.py": "from glue_jobs.loading_strategy import select_load_method\n\n\ndef test_selects_delta_for_recovery_run_with_primary_key():\n    \"\"\"Recovery runs with a primary key should use delta replay, not full_load.\"\"\"\n    method = select_load_method(\n        is_recovery_run=True,\n        has_primary_key=True,\n        source_supports_cdc=False,\n    )\n    assert method == 'delta'\n\n\ndef test_selects_cdc_when_source_supports_it_and_not_recovery():\n    \"\"\"Non-recovery runs should use CDC when the source supports it.\"\"\"\n    method = select_load_method(\n        is_recovery_run=False,\n        has_primary_key=True,\n        source_supports_cdc=True,\n    )\n    assert method == 'cdc'\n",
       "tests/test_data_contract.py": "from glue_jobs.data_contract import validate_contract\n\n\ndef test_fails_when_required_column_is_missing_from_records():\n    \"\"\"Records missing created_at should fail contract validation.\"\"\"\n    records = [\n        {'transaction_id': 'TXN-1', 'amount': 100},\n        {'transaction_id': 'TXN-2', 'amount': 200},\n    ]\n    result = validate_contract(records, required_columns=['transaction_id', 'amount', 'created_at'])\n\n    assert result['passed'] is False\n    assert 'created_at' in result['missing_columns']\n\n\ndef test_passes_when_all_required_columns_present():\n    records = [\n        {'transaction_id': 'TXN-1', 'amount': 100, 'created_at': '2026-02-27'},\n    ]\n    result = validate_contract(records, required_columns=['transaction_id', 'amount', 'created_at'])\n\n    assert result['passed'] is True\n",
-      "requirements.txt": "pytest>=8.0.0\n"
+      "requirements.txt": "pytest>=8.0.0\n",
+      "INCIDENT_DECISION.md": "# INCIDENT_DECISION.md — Orders Pipeline Recovery\n\n> The on-call reads this at 06:00. Be specific.\n\n## 1. What blocks the next scheduled run (file:line)\n\nList each blocker with the file and line you fixed. One bullet each.\n\n## 2. Load-method choice + named trade-off\n\nWhich method did you pick (CDC / delta / full_load / other)? What\ntrade-off did you accept (e.g. \"delta replay + tightened dedup window\nbecause the 40-min full-load lock would clash with finance close\")?\nWhat would change your choice (e.g. \"if finance close moved to 07:00,\nI would have picked full_load instead\")?\n\n## 3. Dedup strategy under Iceberg + lock-contention constraint\n\nHow does your dedup work without row-level deletes during finance close?\nPre-load filter? MERGE INTO with a deduped staging table? Be specific.\n\n## 4. Idempotency: bookmark vs. quality-gate write ordering\n\nDynamoDB is eventually consistent. If the bookmark write succeeds but the\nquality_gate write fails, what does the next scheduled run do? Is your\nfix idempotent under that failure mode?\n\n## 5. Deferred — what is NOT in this window\n\nWhat did you see but choose to defer? Why is deferring safe before the\n05:30 finance pre-close?\n\n## 6. On-call handover (2 sentences)\n\nWhat does the on-call need to know at 06:01?\n"
     }
   },
   "evaluation_rubric": {
     "situational_assessment": {
-      "weight": 0.22,
+      "weight": 0.18,
       "criteria": {
         "excellent": "Reads diagnostics/audit_findings.md and job_run.log before touching code. Correctly identifies the four failure modes — quality gate stub, dedup no-op, bookmark ignoring quality_passed, and loading method hardcoded to full_load — and treats the data contract gap as a fifth. Keeps DPU tuning explicitly out of scope.",
         "good": "Finds the main incident themes with minor gaps — for example identifies duplicates and bookmark issues but misses the loading method decision or data contract violation.",
@@ -42,7 +43,7 @@
       }
     },
     "prioritisation_judgment": {
-      "weight": 0.2,
+      "weight": 0.18,
       "criteria": {
         "excellent": "Fixes what restores trust in the next finance-close run first: quality gate, dedup logic, and bookmark gating before schema DDL or loading strategy. Clearly separates near-term incident recovery from backlog items like DPU tuning and Terraform automation.",
         "good": "Picks a mostly sensible order with limited tradeoff explanation — for example fixes dedup but leaves the bookmark bug or contract validation untouched.",
@@ -50,7 +51,7 @@
       }
     },
     "technical_design": {
-      "weight": 0.2,
+      "weight": 0.17,
       "criteria": {
         "excellent": "Implements credible logic for: duplicate detection by transaction_id, bookmark gating on quality_passed, loading method selection (delta for recovery with primary key, CDC when supported), and required-column contract validation. Changes are focused and explainable under pressure.",
         "good": "Improves the design meaningfully — fixes dedup and quality gate — but leaves one major gap such as loading method or contract validation.",
@@ -58,19 +59,19 @@
       }
     },
     "implementation_quality": {
-      "weight": 0.2,
+      "weight": 0.17,
       "criteria": {
         "excellent": "Ships focused code changes that make the failing tests pass. Type mapping additions are correct (DOUBLE, INT). Dedup keeps latest updated_at. Bookmark only advances when quality_passed is True. Contract check returns meaningful missing_columns list.",
         "good": "Fixes the main failing behaviours with some rough edges — for example correct dedup but an off-by-one in the updated_at comparison.",
         "poor": "Leaves failing tests or introduces new failures. Cannot explain what the code change does in terms the VP can understand."
       }
     },
-    "communication_clarity": {
-      "weight": 0.18,
+    "incident_decision_doc": {
+      "weight": 0.3,
       "criteria": {
-        "excellent": "Produces a written summary the VP and Finance lead can act on: what blocks the next run, what was fixed, what remains risky, and what the next handover step is. Uses plain business language alongside technical specifics.",
-        "good": "Provides a clear engineering summary but uses jargon that would require translation for the Finance lead.",
-        "poor": "Cannot clearly explain what was fixed or what still blocks trust for the next scheduled run."
+        "excellent": "INCIDENT_DECISION.md defends the load-method choice with a named trade-off that references the actual constraints (CDC gap, Iceberg lock contention, 40-min full-load window vs. 05:30 finance pre-close). The dedup strategy works under Iceberg's row-level-delete contention rule. The bookmark/quality-gate idempotency story is concrete — names the failure mode and what the next run does. On-call handover is two sentences a tired engineer can act on at 06:01.",
+        "good": "INCIDENT_DECISION.md is filled out and picks a load method but the trade-off is mentioned without being defended, OR one of the named constraints (Iceberg, DynamoDB EC, no new packages) isn't reflected in the decision.",
+        "poor": "INCIDENT_DECISION.md is empty, names the load method without justification, or fails to address the bookmark idempotency question. Indicates the candidate delegated the incident-response decision to the model rather than owning the on-call handover themselves."
       }
     }
   },
@@ -175,9 +176,9 @@
         "rubric_dimension": "implementation_quality"
       },
       {
-        "job_requirement": "Prepare documentation and handover to operational support teams while collaborating across stakeholder levels.",
-        "task_artifact": "RUNBOOK.md framing and required written VP-facing incident summary",
-        "rubric_dimension": "communication_clarity"
+        "job_requirement": "Incident-response ownership for production data pipelines. Make defensible load-method / dedup / idempotency choices under named operational constraints, and hand off cleanly to the next on-call.",
+        "task_artifact": "INCIDENT_DECISION.md — required incident document covering load-method choice, dedup strategy under Iceberg lock contention, bookmark/quality-gate idempotency, deferred items, and on-call handover.",
+        "rubric_dimension": "incident_decision_doc"
       }
     ]
   },

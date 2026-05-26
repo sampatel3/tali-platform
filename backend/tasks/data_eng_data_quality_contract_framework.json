@@ -4,7 +4,7 @@
   "role": "data_engineer",
   "duration_minutes": 30,
   "calibration_prompt": "You have 2 minutes. Ask Claude to help you specify a single data-quality check (for example a uniqueness or freshness check). State the inputs, the exact pass/fail rule, the severity, and one worked example with the expected result, so it could be implemented unambiguously.",
-  "scenario": "You joined Deeplight as a Data Engineer and own the shared data-quality + contract framework every pipeline calls before promoting a batch from staging to production.\n\n**Message from the Data Platform Lead:**\n\n> Our promotion gate is supposed to be the last line of defence before bad data reaches production dashboards. Last night it promoted `orders_2026_05_24` with a clean report (`diagnostics/quality_report.md`) — and this morning finance dashboards are wrong.\n>\n> Manual SQL on that batch shows ~120 null `customer_id`, duplicate `order_id` from a retry, a `status` value of 'WEIRD', and a `created_at` partition that is 9 days stale. The framework passed all of it.\n>\n> The contract validator, the quality checks, and the promotion gate are stubbed to pass. This is a reusable library many pipelines depend on, so the primitives have to be correct and composable — not a one-off patch.\n>\n> In 30 minutes, tell me:\n> 1. Why did the gate promote a clearly bad batch?\n> 2. Which framework primitives can you make correct right now?\n> 3. Does the promotion gate now block on error-severity failures while letting warnings through?\n\n**Your mission:**\nImplement the contract validation, the quality checks, and the severity-aware promotion gate so the framework blocks unsafe promotions. You are assessed on data-reliability judgment, correctness of the primitives, and severity design.",
+  "scenario": "A bad orders batch was promoted to production last night.\nFinance escalated at 09:00; the executive dashboard was wrong; alerts didn't fire.\n\nThe post-mortem points at three places at once:\n\n* `dq/checks.py` — four quality primitives, all stubbed to pass\n* `dq/contract.py` — schema validator rubber-stamps every record\n* `dq/gate.py` — the gate hardcodes `passed=True` regardless of severity\n\nThe fix is half mechanical and half judgment, and the judgment is what your\nteam is hiring you for. The mechanical fix — implementing the four checks\ncorrectly — is what the model can do. The judgment is what only you can do:\n\n**The contract is yours to design.** Three downstream systems consume the\ngate's output today, with conflicting needs:\n\n  - **Airflow's promotion task** calls `gate(results)[\"passed\"]` (bool). It\n    wants one shape: a boolean. Anything else breaks the orchestrator.\n  - **The on-call Slack router** needs the *severity* of each failing check,\n    the *first failing row* if available, and human-readable grouping so the\n    page tells the on-call which check fired and what to look at.\n  - **The executive quality dashboard** needs a daily-aggregatable score\n    (e.g. fraction of batches that passed, weighted by severity) — not the\n    per-batch bool.\n\n`CONTRACT_SPEC.md` does NOT prescribe the gate's return shape. You decide\nit. Whichever shape you pick, ONE of those three consumers will be served\nsub-optimally. Document the trade-off you accepted in `LIBRARY_DESIGN.md`.\n\n**The freshness-severity argument is yours to resolve.** `dq/severity.py`\ndefines ERROR and WARN. The spec lists `freshness_check` as WARN. A finance\npartner has emailed: \"freshness is the most important check for us — please\ndefault it to ERROR.\" Both positions are defensible. Pick one, document\nwhich contradiction you noticed, document who you'd check with before\nshipping, and justify in `LIBRARY_DESIGN.md`.\n\n**What the rubric grades:**\n\n1. Did you make the four check primitives correct? (you're paid to ship\n   working code; the model can help)\n2. Did you design a coherent gate-return shape that names which consumer\n   you sub-optimised, and why? (you're paid for THIS)\n3. Did you spot and resolve the freshness severity contradiction? (you're\n   paid for THIS too)\n\n`LIBRARY_DESIGN.md` is required. A submission with all 9 tests passing but\nan empty or vague LIBRARY_DESIGN.md will score in the *good* band, not\n*excellent* — the design doc is 30% of your grade.\n\nTools: `Read`, `Write`, `Edit`, `Bash` against the live repo. You have 30\nminutes. Use them on the design decisions, not on letting the model decide\nfor you.",
   "repo_structure": {
     "name": "data-quality-contract-framework",
     "files": {
@@ -22,12 +22,13 @@
       "tests/test_contract.py": "from dq.contract import validate_schema\n\nSCHEMA = {\n    \"order_id\": {\"type\": \"int\", \"required\": True},\n    \"customer_id\": {\"type\": \"int\", \"required\": True},\n    \"status\": {\"type\": \"str\", \"required\": True},\n}\n\n\ndef test_fails_when_required_column_missing():\n    records = [{\"order_id\": 1, \"customer_id\": 10, \"status\": \"open\"}, {\"order_id\": 2, \"status\": \"open\"}]\n    result = validate_schema(records, SCHEMA)\n    assert result[\"passed\"] is False\n    assert any(\"customer_id\" in e for e in result[\"errors\"])\n\n\ndef test_fails_on_type_mismatch():\n    records = [{\"order_id\": \"oops\", \"customer_id\": 10, \"status\": \"open\"}]\n    result = validate_schema(records, SCHEMA)\n    assert result[\"passed\"] is False\n\n\ndef test_passes_when_contract_satisfied():\n    records = [{\"order_id\": 1, \"customer_id\": 10, \"status\": \"open\"}]\n    assert validate_schema(records, SCHEMA)[\"passed\"] is True\n",
       "tests/test_checks.py": "from datetime import datetime\n\nfrom dq.checks import accepted_values_check, freshness_check, not_null_check, unique_check\n\n\ndef test_not_null_check_flags_nulls():\n    res = not_null_check([{\"x\": 1}, {\"x\": None}, {}], \"x\")\n    assert res.passed is False\n\n\ndef test_unique_check_flags_duplicates():\n    res = unique_check([{\"id\": 1}, {\"id\": 2}, {\"id\": 1}], \"id\")\n    assert res.passed is False\n\n\ndef test_accepted_values_check_flags_unknown_value():\n    res = accepted_values_check([{\"s\": \"open\"}, {\"s\": \"WEIRD\"}], \"s\", [\"open\", \"closed\"])\n    assert res.passed is False\n\n\ndef test_freshness_check_flags_stale_partition():\n    res = freshness_check([{\"ts\": \"2026-05-15\"}], \"ts\", max_age_days=7, now=datetime(2026, 5, 24))\n    assert res.passed is False\n",
       "tests/test_gate.py": "from dq.gate import promotion_gate\nfrom dq.registry import CheckResult\nfrom dq.severity import ERROR, WARN\n\n\ndef test_gate_blocks_on_error_severity_failure():\n    results = [\n        CheckResult(check=\"not_null:customer_id\", passed=False, severity=ERROR, failing=[1]),\n        CheckResult(check=\"freshness:created_at\", passed=True, severity=WARN),\n    ]\n    gate = promotion_gate(results)\n    assert gate[\"passed\"] is False\n    assert \"not_null:customer_id\" in gate[\"blockers\"]\n\n\ndef test_gate_allows_warning_only_failures():\n    results = [CheckResult(check=\"freshness:created_at\", passed=False, severity=WARN, failing=[\"2026-05-15\"])]\n    gate = promotion_gate(results)\n    assert gate[\"passed\"] is True\n",
-      "requirements.txt": "pytest>=8.0.0\n"
+      "requirements.txt": "pytest>=8.0.0\n",
+      "LIBRARY_DESIGN.md": "# LIBRARY_DESIGN.md — Data Quality Contract Framework\n\n> Fill this in as you work. The rubric reads it. A submission where this\n> doc is empty or vague will not score \"excellent\" on\n> ``library_design_doc`` regardless of test pass-rate.\n\n## 1. ``promotion_gate()`` return shape\n\nWhat shape did you settle on? Show a representative example (Python dict,\ndataclass, or whatever you chose):\n\n```python\n# Your example here\n```\n\nWhich downstream consumer is **sub-optimally** served by your choice, and\nwhy did you accept that trade-off?\n\n## 2. Severity tiers\n\nIs ERROR / WARN enough, or did you introduce additional tiers (SOFT_BLOCK,\nINFO, etc.)? Justify in 1–3 sentences.\n\n## 3. Composability guarantee\n\nState what your library guarantees to callers (e.g. \"checks are pure,\nno I/O\"; \"results are JSON-serialisable\"; \"gate output is independent\nof CheckResult ordering\"). 3–5 bullets.\n\n## 4. Freshness severity — contradiction you resolved\n\nThe spec says freshness is WARN. The finance partner said ERROR. What did\nyou ship as the default? Who would you check with before merging this\nchange in a real team? Why?\n\n## 5. What I did NOT implement and why\n\nRow-level quarantine, anomaly detection, schema-drift alerts, etc.\nWhat did you intentionally defer, and why is deferring safe given the\n30-minute time-box?\n"
     }
   },
   "evaluation_rubric": {
     "framework_assessment": {
-      "weight": 0.22,
+      "weight": 0.18,
       "criteria": {
         "excellent": "Reads CONTRACT_SPEC.md and diagnostics/quality_report.md before coding. Correctly diagnoses that the contract validator, the checks, and the gate are all stubbed, and frames it as a data-reliability failure that promoted bad data to production.",
         "good": "Identifies that the framework over-passes but misses one stubbed layer.",
@@ -35,7 +36,7 @@
       }
     },
     "contract_validation": {
-      "weight": 0.2,
+      "weight": 0.17,
       "criteria": {
         "excellent": "Implements validate_schema to enforce required columns and value types per the spec, returning a meaningful errors list.",
         "good": "Checks required columns but not types, or vice versa.",
@@ -43,7 +44,7 @@
       }
     },
     "quality_checks": {
-      "weight": 0.2,
+      "weight": 0.17,
       "criteria": {
         "excellent": "Implements not_null, unique, accepted_values, and freshness checks correctly, each returning the failing rows/values.",
         "good": "Implements most checks but one is incorrect or ignores failing rows.",
@@ -51,19 +52,19 @@
       }
     },
     "severity_gating": {
-      "weight": 0.2,
+      "weight": 0.18,
       "criteria": {
         "excellent": "Implements promotion_gate to block only on ERROR-severity failures while letting WARN-severity failures through, and names the blockers.",
         "good": "Blocks on failures but ignores the severity distinction.",
         "poor": "Gate still passes everything."
       }
     },
-    "communication_clarity": {
-      "weight": 0.18,
+    "library_design_doc": {
+      "weight": 0.3,
       "criteria": {
-        "excellent": "Writes a Platform-Lead-facing summary: why the bad batch was promoted, what is now enforced, and what remains (e.g. row-level quarantine, alerting). Plain language plus specifics.",
-        "good": "Clear engineering summary but light on remaining gaps.",
-        "poor": "Cannot explain what was fixed or whether the gate would now block the bad batch."
+        "excellent": "LIBRARY_DESIGN.md is filled out in detail. The candidate names which of the three downstream consumers their promotion_gate return shape sub-optimises and accepts the trade-off explicitly. The freshness-severity contradiction between the spec and the finance partner is named, a resolution is chosen, and the candidate states who they would check with before merging. Composability guarantees are concrete (purity, JSON-serialisability, ordering independence) rather than hand-waved.",
+        "good": "LIBRARY_DESIGN.md is filled out but skims one of the named decisions (gate shape OR severity contradiction OR composability guarantee). Trade-offs are mentioned without being defended.",
+        "poor": "LIBRARY_DESIGN.md is empty, copy-pasted from the scaffold with no candidate-specific reasoning, or fails to mention either the gate-shape decision or the freshness contradiction. Indicates the candidate let the model drive without making the design decisions themselves."
       }
     }
   },
@@ -162,9 +163,9 @@
         "rubric_dimension": "severity_gating"
       },
       {
-        "job_requirement": "Communicate data-reliability status and residual risk to stakeholders.",
-        "task_artifact": "Required Platform-Lead-facing written summary",
-        "rubric_dimension": "communication_clarity"
+        "job_requirement": "Data Platform Engineering: own shared libraries used across pipelines. Make explicit API design decisions and communicate trade-offs to internal consumers (orchestrator, on-call, dashboard).",
+        "task_artifact": "LIBRARY_DESIGN.md — required design document covering gate-return-shape choice, severity-tier policy, composability guarantee, and the freshness-severity contradiction resolution.",
+        "rubric_dimension": "library_design_doc"
       }
     ]
   },

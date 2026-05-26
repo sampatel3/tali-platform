@@ -4,7 +4,7 @@
   "role": "ai_engineer",
   "duration_minutes": 30,
   "calibration_prompt": "You have 2 minutes. Ask Claude to help you define a precise, testable specification for a single RAG evaluation metric (for example recall@k or answer faithfulness). State the inputs, the exact formula or decision rule, and one worked example with the expected numeric output, so a reviewer could implement it without ambiguity.",
-  "scenario": "You joined Deeplight as a GenAI / AI Engineer and inherited the evaluation harness that gates our RAG support bot's releases.\n\n**Message from the ML Lead:**\n\n> Our RAG support bot shipped v1.4 last week with a green evaluation report — recall@k 1.00, faithfulness 1.00, gate PASSED. Then support started getting tickets: the bot cites the wrong knowledge-base articles and invented a \"2 business day refund\" SLA that exists nowhere in our KB.\n>\n> The harness is supposed to catch exactly this. Instead it greenlit a broken release. I think the metrics and the release gate are stubbed — they report success no matter what.\n>\n> The local reproduction strips the live retriever and LLM; retrieval results and answers are fixtures so the logic is deterministic. I don't want a new eval framework. I want THIS one to tell the truth.\n>\n> In 30 minutes, tell me:\n> 1. Why did the harness greenlight a broken release?\n> 2. Which metrics/gates can you make honest right now?\n> 3. Does the harness now correctly FAIL the bad fixture dataset?\n\n**Your mission:**\nMake the evaluation harness correctly measure retrieval quality and answer faithfulness, and make the release gate fail when the system is below threshold. You are assessed on evaluation judgment, correctness, and whether your fixes would actually have caught the v1.4 regression.",
+  "scenario": "v1.4 of the customer-support RAG passed every faithfulness check in the\nharness, shipped to prod, and the support team caught it within a day:\nthe assistant told three customers refunds take *2 business days*.\nDocumented policy is 30 days. There is no \"2 business day\" string\nanywhere in the retrieval corpus — the model made it up.\n\nThe harness *should* have caught this. It didn't, because the current\nfaithfulness metric is **substring match**: a claim is \"supported\" iff\nits text appears in the retrieved context. Substring match has two\nknown failure modes, and both bit you:\n\n1. **False negatives** — any clean paraphrase of policy (\"we refund\n   within 30 days\" against context \"policy: refund window = 30 days\")\n   is flagged as ungrounded. Every honest release fails the gate.\n2. **False positives** — a hallucinated \"2 business days\" never appears\n   in context, so substring match says \"ungrounded\" — which is correct\n   *for that one claim* — but the metric is so noisy that the gate is\n   tuned permissive, and the release ships.\n\nThe harness is useless either way. Too strict → every release fails.\nToo loose → the 2-business-day hallucination ships.\n\n**Design a faithfulness metric** that catches the v1.4 hallucination\nwithout rejecting clean paraphrases. There are at least three valid\napproaches; you pick one and defend it:\n\n* **Token-recall against the claim** — what fraction of claim tokens\n  appear (case/lemma-folded) in the context? Tunable threshold.\n* **Claim decomposition + per-claim grounding** — split the assistant\n  response into atomic claims, ground each independently. Aggregate.\n* **NLI-style entailment proxy** — under what conditions does the\n  context entail the claim? (You don't have an NLI model; simulate the\n  decision rule with a deterministic feature set.)\n\nImplement your chosen metric in `harness/faithfulness.py`. Document the\nchoice and its known failure modes in `EVAL_DESIGN.md`. Your\nimplementation will run against an adversarial fixture (5 cases) in\n`tests/test_faithfulness_adversarial.py` — your metric must classify\nthem correctly while substring match cannot.\n\n**Test fixture cases:**\n\n1. Clean paraphrase of policy — must NOT flag.\n2. Exact echo of policy — must NOT flag.\n3. Fabricated SLA (\"2 business days\") — MUST flag.\n4. Partial-match with one wrong number — MUST flag.\n5. Off-topic but context-mentioned entity — your call; defend.\n\n`harness/metrics.py` (recall@k, precision@k) is a side concern; those are\nclosed-ended formulas already specified in `EVAL_SPEC.md`. Implement them\ncorrectly but spend your time on the faithfulness redesign.\n\n**What the rubric grades:**\n\n1. Recall@k / precision@k / gate are graded against your code.\n2. ``metric_design_doc`` (30%) grades your EVAL_DESIGN.md against the\n   v1.4 case + adversarial fixture + named failure modes.\n\n30 minutes. Tools: `Read`, `Write`, `Edit`, `Bash`. EVAL_DESIGN.md is\nrequired.",
   "repo_structure": {
     "name": "rag-eval-harness",
     "files": {
@@ -23,12 +23,13 @@
       "tests/test_faithfulness.py": "from harness.faithfulness import faithfulness_score, unsupported_claims\n\n\ndef test_unsupported_claims_flags_ungrounded_claim():\n    context = \"Refunds are issued to the original payment method within 30 days.\"\n    claims = [\n        \"Refunds are issued to the original payment method within 30 days.\",\n        \"Refunds take 2 business days.\",\n    ]\n    assert unsupported_claims(claims, context) == [\"Refunds take 2 business days.\"]\n\n\ndef test_faithfulness_score_zero_when_any_claim_unsupported():\n    context = \"Standard shipping takes 5 to 7 business days.\"\n    assert faithfulness_score([\"Refunds take 2 business days.\"], context) == 0.0\n",
       "tests/test_gate.py": "from harness.gate import eval_gate\n\n\ndef test_gate_fails_when_metric_below_threshold():\n    result = eval_gate({\"recall_at_k\": 0.4, \"faithfulness\": 1.0}, {\"recall_at_k\": 0.7, \"faithfulness\": 0.9})\n    assert result[\"passed\"] is False\n    assert \"recall_at_k\" in result[\"failures\"]\n\n\ndef test_gate_passes_when_all_metrics_meet_threshold():\n    result = eval_gate({\"recall_at_k\": 0.8, \"faithfulness\": 0.95}, {\"recall_at_k\": 0.7, \"faithfulness\": 0.9})\n    assert result[\"passed\"] is True\n",
       "tests/test_runner.py": "from harness.dataset import DEFAULT_THRESHOLDS, SAMPLE_DATASET\nfrom harness.runner import run_eval\n\n\ndef test_runner_fails_release_on_bad_dataset():\n    \"\"\"A truthful harness must FAIL the gate on the fixture dataset, which\n    contains a wrong-retrieval, ungrounded example.\"\"\"\n    report = run_eval(SAMPLE_DATASET, DEFAULT_THRESHOLDS)\n    assert report[\"gate\"][\"passed\"] is False\n",
-      "requirements.txt": "pytest>=8.0.0\n"
+      "requirements.txt": "pytest>=8.0.0\n",
+      "EVAL_DESIGN.md": "# EVAL_DESIGN.md — RAG Faithfulness Metric\n\n> The ML lead and the on-call read this. Be specific; ground every\n> claim in the fixture cases.\n\n## 1. Operational faithfulness definition\n\nState the rule your `unsupported_claims()` enforces. Formula or\ndeterministic decision rule.\n\n## 2. Why this catches the v1.4 \"2 business days\" hallucination\n\nWalk through how your metric classifies the hallucinated claim, citing\nthe rule from §1.\n\n## 3. Worked example: classify each of the 5 fixture cases\n\n| # | Case | Your classification | Why |\n|---|------|---------------------|-----|\n| 1 | Clean paraphrase | not-flagged | (your reasoning) |\n| 2 | Exact echo | not-flagged | |\n| 3 | Fabricated SLA | flagged | |\n| 4 | Partial match wrong number | flagged | |\n| 5 | Off-topic entity | your call | (defend) |\n\n## 4. Known false positives\n\nWhat does your metric over-flag? Examples.\n\n## 5. Drift mode: under what context shift does this silently degrade?\n\n(e.g. \"if the retrieval corpus shifts to long paragraphs, token-recall\ngoes up artificially because more candidate tokens appear by chance.\")\n\n## 6. What about recall@k did you NOT change, and why?\n\nThe IR-metrics half of this task is closed-ended. Confirm what you\nimplemented and what you intentionally left in its textbook form.\n"
     }
   },
   "evaluation_rubric": {
     "system_risk_assessment": {
-      "weight": 0.22,
+      "weight": 0.18,
       "criteria": {
         "excellent": "Reads EVAL_SPEC.md and diagnostics/eval_report.md before coding. Correctly diagnoses that the harness greenlights unsafe releases because the metrics AND the gate are stubbed, and frames this as a release-safety risk, not a cosmetic bug.",
         "good": "Identifies that the harness over-reports but misses one root cause (e.g. fixes metrics but not the gate, or vice versa).",
@@ -36,7 +37,7 @@
       }
     },
     "retrieval_evaluation": {
-      "weight": 0.2,
+      "weight": 0.17,
       "criteria": {
         "excellent": "Implements recall@k and precision@k per the spec, respecting the k cutoff and relevant-set semantics. Matches the worked examples exactly.",
         "good": "Implements recall@k correctly but precision@k is off or ignores k.",
@@ -44,7 +45,7 @@
       }
     },
     "faithfulness_grounding": {
-      "weight": 0.2,
+      "weight": 0.18,
       "criteria": {
         "excellent": "Implements unsupported_claims so ungrounded answer claims are detected against the retrieved context, and faithfulness_score reflects them.",
         "good": "Detects ungrounded claims but with a brittle rule that misses the fixture case.",
@@ -52,19 +53,19 @@
       }
     },
     "eval_gate_design": {
-      "weight": 0.2,
+      "weight": 0.17,
       "criteria": {
         "excellent": "Implements eval_gate so it fails and names the failing metrics whenever an aggregate is below threshold, and confirms run_eval now FAILS the bad fixture dataset.",
         "good": "Gate fails on low metrics but does not surface which metric failed.",
         "poor": "Gate still passes everything; the runner still greenlights the bad dataset."
       }
     },
-    "communication_clarity": {
-      "weight": 0.18,
+    "metric_design_doc": {
+      "weight": 0.3,
       "criteria": {
-        "excellent": "Writes an ML-Lead-facing summary: why v1.4 passed a broken release, what is now measured honestly, and what remains unmeasured (e.g. answer relevance, latency). Plain language plus specifics.",
-        "good": "Clear engineering summary but light on what is still unmeasured.",
-        "poor": "Cannot explain what was fixed or whether the regression would now be caught."
+        "excellent": "EVAL_DESIGN.md states a clear operational faithfulness rule (a formula or deterministic decision rule, not a hand-wave). The 5-fixture worked-example table is filled with case-specific reasoning, including a defended position on the off-topic-entity case. Known false positives and a drift-mode degradation case are both named. The implementation in faithfulness.py matches the stated rule.",
+        "good": "EVAL_DESIGN.md states a metric and works through most fixture cases but skips either the drift-mode discussion or the false-positives section, OR the stated rule drifts from what faithfulness.py actually implements.",
+        "poor": "EVAL_DESIGN.md is empty, restates substring-match without the v1.4 failure addressed, or fails to defend the off-topic-entity classification. Indicates the candidate ran the obvious 'fix the stub' play without engaging the design problem."
       }
     }
   },
@@ -163,9 +164,9 @@
         "rubric_dimension": "eval_gate_design"
       },
       {
-        "job_requirement": "Communicate evaluation results and residual risk to ML stakeholders.",
-        "task_artifact": "Required ML-Lead-facing written summary",
-        "rubric_dimension": "communication_clarity"
+        "job_requirement": "RAG evaluation design: own the metric that decides whether a release ships. Defend a faithfulness operational definition against adversarial cases, name failure modes, anticipate drift.",
+        "task_artifact": "EVAL_DESIGN.md — required design document covering the faithfulness rule, classification of the 5-case adversarial fixture, false-positives, drift-mode degradation, and unchanged IR primitives.",
+        "rubric_dimension": "metric_design_doc"
       }
     ]
   },
