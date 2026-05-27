@@ -67,11 +67,7 @@
     },
     "design_decisions_articulated": {
       "weight": 0.3,
-      "criteria": {
-        "excellent": "The candidate engaged substantively with EVERY decision Claude opened with. For each: a specific choice was named (not a hedge like 'maybe' or 'depends'), the choice was justified in 1-3 sentences referencing the actual constraints in the scenario (the conflicting consumers, the residency rule, the lock window, etc.), and any stakeholder consultations were named. The chat transcript reads like the candidate is steering Claude, not the other way around.",
-        "good": "Most decisions answered substantively but at least one answer is thin (a choice without a justification, or a justification that doesn't reference the named constraints). The candidate is engaged but not driving every decision.",
-        "poor": "Decisions answered with one-word replies ('yes', 'sure', 'whatever you think'), unanswered, or visibly delegated back to Claude ('what would you suggest?'). The transcript shows the model driving the decisions, not the candidate. Pasting the brief back to Claude with no added context is the canonical poor signal."
-      }
+      "grader": "interrogation_outcome"
     }
   },
   "expected_candidate_journey": {
@@ -189,5 +185,66 @@
     "rubric_matches_role": true,
     "timebox_realistic": true
   },
-  "task_opener": "It's 22:30 and finance close is at 06:00. Before I touch the pipeline, two decisions only you can make:\n\n**1. Load method.** The CDC binlog tail between 19:00 and 22:00 was paused — no consistent stream to replay for that 3-hour window. Three options, none clean:\n\n- **Delta replay**: possible, but the gap window has 4 known duplicate `transaction_id` values from upstream retries; dedup must handle them.\n- **CDC**: what the job was originally configured to do, but with the gap, the replay produces an incomplete tail.\n- **Full load**: safe, but locks the orders table for ~40 minutes during Iceberg compaction, and finance pre-close starts at 05:30.\n\nWhich one are you picking, and what trade-off are you explicitly accepting? Don't say \"depends\" — pick.\n\n**2. Bookmark idempotency.** DynamoDB is eventually consistent. Today `should_advance_bookmark()` advances if records were loaded, ignoring `quality_passed`. If the bookmark write succeeds but the quality_gate write fails, what does the next scheduled run do? Spell out the failure mode you want to handle and the failure mode you're willing to accept.\n\nOnce I have your answers I'll implement. The on-call who picks this up at 06:01 needs to know *why* you chose what you chose, not just *what* you chose — your answers go into the handover. If you tell me \"whatever you think\" I'll push back."
+  "decision_points": [
+    {
+      "id": "load_method",
+      "headline": "Load method.",
+      "tension": "The CDC binlog tail between 19:00 and 22:00 was paused — no consistent stream to replay for that 3-hour window. None of the three options are clean.",
+      "options": [
+        {
+          "label": "Delta replay",
+          "summary": "possible, but the gap window has 4 known duplicate `transaction_id` values from upstream retries; dedup must handle them"
+        },
+        {
+          "label": "CDC",
+          "summary": "what the job was originally configured to do, but with the gap, the replay produces an incomplete tail"
+        },
+        {
+          "label": "Full load",
+          "summary": "safe, but locks the orders table for ~40 minutes during Iceberg compaction, and finance pre-close starts at 05:30"
+        }
+      ],
+      "ask": "Which one are you picking, and what trade-off are you explicitly accepting? Don't say \"depends\" — pick.",
+      "valid_commit": "names Delta replay, CDC, or Full load with an explicit statement of the trade-off being accepted (duplicate handling effort, incomplete-tail risk, pre-close lock window).",
+      "valid_reframes": [
+        "argues a hybrid (e.g. CDC up to the gap, Delta replay for the window only) and names the additional complexity it introduces",
+        "challenges the close-deadline assumption: explicitly proposes pushing finance close as the correct move and names the political/process cost"
+      ],
+      "anti_patterns": [
+        "names a method without stating the trade-off",
+        "answers 'depends on the data'",
+        "asks Claude to model the alternatives without committing"
+      ]
+    },
+    {
+      "id": "bookmark_idempotency",
+      "headline": "Bookmark idempotency.",
+      "tension": "DynamoDB is eventually consistent. Today `should_advance_bookmark()` advances if records were loaded, ignoring `quality_passed`. If the bookmark write succeeds but the quality_gate write fails, the next scheduled run is exposed to an inconsistent state.",
+      "options": [
+        {
+          "label": "Gate bookmark advance on quality_passed",
+          "summary": "fixes the silent-advance failure mode; introduces a stuck-bookmark possibility if quality writes never converge"
+        },
+        {
+          "label": "Idempotent re-run keyed on bookmark+quality",
+          "summary": "tolerates the inconsistency by re-reading both; pays a per-run consistency-check cost"
+        },
+        {
+          "label": "Accept current behaviour with alerting",
+          "summary": "no code change; alert on bookmark-advanced-without-quality and treat human triage as the safety net"
+        }
+      ],
+      "ask": "Spell out the failure mode you want to handle and the failure mode you're willing to accept.",
+      "valid_commit": "names a specific approach AND names both the failure mode that approach prevents AND the failure mode it accepts/tolerates.",
+      "valid_reframes": [
+        "argues the eventual-consistency model is the wrong substrate and proposes moving the bookmark to a strongly consistent store (e.g. RDS/postgres) with explicit two-phase semantics, naming the migration cost",
+        "argues the bookmark should be derived from quality_gate state rather than stored independently, eliminating the consistency window altogether"
+      ],
+      "anti_patterns": [
+        "names a fix without naming the failure mode it accepts",
+        "answers 'we'll handle it in code review'",
+        "treats the question as purely about retry counts"
+      ]
+    }
+  ]
 }

@@ -675,6 +675,16 @@ def submit_assessment_impl(
                         design_doc = snap["final"]
                         break
 
+            # Pull structured decision_points off the task spec so the
+            # ``interrogation_outcome`` grader can deterministically
+            # re-score the design_decisions dimension from the per-turn
+            # classifier state written by the chat route. No Anthropic
+            # call needed for this dim — it's pure replay.
+            task_extra = task.extra_data if isinstance(task.extra_data, dict) else {}
+            decision_points_for_grader = []
+            raw_dps_for_grader = task_extra.get("decision_points") if isinstance(task_extra, dict) else None
+            if isinstance(raw_dps_for_grader, list):
+                decision_points_for_grader = [dp for dp in raw_dps_for_grader if isinstance(dp, dict)]
             artifacts = ScoringArtifacts(
                 repo_files=repo_files_for_grader,
                 design_doc=design_doc,
@@ -682,6 +692,7 @@ def submit_assessment_impl(
                 test_results_summary=f"{passed} of {total} tests passed",
                 task_scenario=task.scenario or "",
                 candidate_role=str(task.role or ""),
+                decision_points=decision_points_for_grader,
             )
             scorer = RubricScorer(
                 api_key=settings_obj.ANTHROPIC_API_KEY,

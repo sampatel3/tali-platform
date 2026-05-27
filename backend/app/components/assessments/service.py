@@ -31,6 +31,7 @@ from ...domains.assessments_runtime.pipeline_service import (
 )
 from ...domains.assessments_runtime.role_support import refresh_application_score_cache
 from .claude_budget import build_claude_budget_snapshot, resolve_effective_budget_limit_usd
+from .interrogation import render_opener
 from .submission_runtime import submit_assessment_impl
 from .terminal_runtime import resolve_ai_mode, terminal_capabilities
 
@@ -794,26 +795,44 @@ def start_or_resume_assessment(
                 "assessment_started",
                 {"type": "started"},
             )
-            # Conversational interrogation (#37): if the task spec defines a
-            # ``task_opener``, persist it as ai_prompts[0] so the candidate
-            # sees Claude's decision questions BEFORE typing anything. The
-            # chat flattener treats an opener (empty ``message``) as an
-            # assistant-only turn — Claude sees that it asked something and
-            # is waiting for an answer. The system prompt teaches Claude to
-            # refuse to write substantive code until the candidate engages
-            # with every named decision. Without this opener, candidates
-            # delegate by pasting the brief ("can you help with this?" —
-            # assessment 80, 2026-05-26).
+            # Conversational interrogation: if the task spec defines a
+            # ``decision_points`` block, render the opener message and
+            # persist it as ai_prompts[0] so the candidate sees Claude's
+            # decision questions BEFORE typing anything. The chat
+            # flattener treats an opener (empty ``message``) as an
+            # assistant-only turn — Claude sees that it asked something
+            # and is waiting for an answer. The chat route runs a
+            # per-turn classifier against the same decision_points and
+            # builds an interrogation directive into the system prompt.
+            # See ``interrogation.py`` for the schema + renderer +
+            # classifier; this is the entry point.
             task_for_opener = (
                 db.query(Task).filter(Task.id == assessment.task_id).first()
                 if assessment.task_id
                 else None
             )
             opener_text = ""
+            decision_points: list[dict[str, Any]] = []
             if task_for_opener is not None:
                 extra = task_for_opener.extra_data if isinstance(task_for_opener.extra_data, dict) else {}
-                opener_text = str(extra.get("task_opener") or "").strip()
+                raw_dps = extra.get("decision_points") if isinstance(extra, dict) else None
+                if isinstance(raw_dps, list):
+                    decision_points = [dp for dp in raw_dps if isinstance(dp, dict)]
+                if decision_points:
+                    opener_text = render_opener(decision_points)
             if opener_text and not (assessment.ai_prompts or []):
+                # Seed every decision_point at status=unaddressed in the
+                # opener record. The chat route reads this back when
+                # classifying the candidate's first reply.
+                seeded_state: dict[str, dict[str, str]] = {
+                    str(dp.get("id")): {
+                        "status": "unaddressed",
+                        "raw_status": "unaddressed",
+                        "rationale": "",
+                    }
+                    for dp in decision_points
+                    if isinstance(dp.get("id"), str) and dp.get("id")
+                }
                 assessment.ai_prompts = [
                     {
                         "message": "",
@@ -824,6 +843,7 @@ def start_or_resume_assessment(
                         "input_tokens": 0,
                         "output_tokens": 0,
                         "tool_calls_made": [],
+                        "interrogation_state": seeded_state,
                     }
                 ]
         if started_now and assessment.application_id:

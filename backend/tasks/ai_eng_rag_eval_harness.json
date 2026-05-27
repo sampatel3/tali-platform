@@ -61,11 +61,7 @@
     },
     "design_decisions_articulated": {
       "weight": 0.3,
-      "criteria": {
-        "excellent": "The candidate engaged substantively with EVERY decision Claude opened with. For each: a specific choice was named (not a hedge like 'maybe' or 'depends'), the choice was justified in 1-3 sentences referencing the actual constraints in the scenario (the conflicting consumers, the residency rule, the lock window, etc.), and any stakeholder consultations were named. The chat transcript reads like the candidate is steering Claude, not the other way around.",
-        "good": "Most decisions answered substantively but at least one answer is thin (a choice without a justification, or a justification that doesn't reference the named constraints). The candidate is engaged but not driving every decision.",
-        "poor": "Decisions answered with one-word replies ('yes', 'sure', 'whatever you think'), unanswered, or visibly delegated back to Claude ('what would you suggest?'). The transcript shows the model driving the decisions, not the candidate. Pasting the brief back to Claude with no added context is the canonical poor signal."
-      }
+      "grader": "interrogation_outcome"
     }
   },
   "expected_candidate_journey": {
@@ -177,5 +173,62 @@
     "rubric_matches_role": true,
     "timebox_realistic": true
   },
-  "task_opener": "Substring-match faithfulness is what shipped the v1.4 hallucination. Before I write a replacement, two design decisions only you can make:\n\n**1. Operational faithfulness definition.** There are at least three viable approaches:\n\n- **Token-recall against the claim**: what fraction of claim tokens appear (case/lemma-folded) in the context? Tunable threshold.\n- **Claim decomposition + per-claim grounding**: split the assistant response into atomic claims, ground each independently, aggregate.\n- **Entailment proxy**: a deterministic decision rule that approximates \"does the context entail this claim\" (you don't have an NLI model — simulate the decision with a feature set).\n\nPick one. Tell me the rule in one or two sentences (formula, decision tree, whatever your representation is). I'll implement what you specify.\n\n**2. The off-topic-but-mentioned-entity case.** In the adversarial fixture, case 5 is an off-topic claim that mentions an entity from the retrieved context (e.g. claim references \"Stripe\" because Stripe appears in an unrelated context paragraph). Should your metric flag this as ungrounded or as supported? Both are defensible. Which one matches your operational definition, and why?\n\nOnce I have your answers I'll write `harness/faithfulness.py` to match. If you tell me \"whatever you think\" I'll push back — defining the metric IS the senior-engineer judgment call here; that's what we're hiring for."
+  "decision_points": [
+    {
+      "id": "faithfulness_definition",
+      "headline": "Operational faithfulness definition.",
+      "tension": "Substring-match faithfulness is what shipped the v1.4 hallucination. There are at least three viable replacements, each with different operational characteristics.",
+      "options": [
+        {
+          "label": "Token-recall against the claim",
+          "summary": "fraction of claim tokens that appear (case/lemma-folded) in the context, with a tunable threshold"
+        },
+        {
+          "label": "Claim decomposition + per-claim grounding",
+          "summary": "split the assistant response into atomic claims, ground each independently, aggregate"
+        },
+        {
+          "label": "Entailment proxy",
+          "summary": "a deterministic decision rule that approximates 'does the context entail this claim' using a feature set (no NLI model available)"
+        }
+      ],
+      "ask": "Pick one. Tell me the rule in one or two sentences (formula, decision tree, whatever your representation is). I'll implement what you specify.",
+      "valid_commit": "names ONE approach AND specifies the actual decision rule in one to two sentences (formula, threshold, or decision tree). Just naming the approach without the rule does NOT count.",
+      "valid_reframes": [
+        "argues that no single metric captures faithfulness operationally and proposes a tiered metric (e.g. fast token-recall as a gate, claim-decomp on cases that fail the gate), naming the latency/quality trade-off",
+        "challenges the premise of metric-only faithfulness and proposes a human-in-the-loop sample audit with a specific cadence, naming the cost"
+      ],
+      "anti_patterns": [
+        "names an approach without specifying the rule",
+        "answers 'whichever has the best F1'",
+        "asks Claude to pick after running both"
+      ]
+    },
+    {
+      "id": "off_topic_entity",
+      "headline": "The off-topic-but-mentioned-entity case.",
+      "tension": "In the adversarial fixture, case 5 is an off-topic claim that mentions an entity from the retrieved context (e.g. claim references \"Stripe\" because Stripe appears in an unrelated context paragraph). Both \"ungrounded\" and \"supported\" are defensible answers depending on the operational definition.",
+      "options": [
+        {
+          "label": "Ungrounded",
+          "summary": "mere entity overlap does not constitute grounding; the metric should flag this as a faithfulness failure"
+        },
+        {
+          "label": "Supported",
+          "summary": "any context overlap counts; the cost is that off-topic mentions can mask hallucinations"
+        }
+      ],
+      "ask": "Should your metric flag this as ungrounded or as supported? Both are defensible. Which one matches your operational definition, and why?",
+      "valid_commit": "names ungrounded or supported AND explicitly ties the answer back to the faithfulness_definition decision (consistency between the two decisions is the senior signal).",
+      "valid_reframes": [
+        "argues this single case is a calibration question, not a metric-design question, and proposes treating case 5 as a labelled hold-out to tune the threshold rather than encoding a fixed answer",
+        "argues there should be a third bucket ('weakly-supported' / 'flagged-for-review') and accepts the operational cost of a non-binary metric"
+      ],
+      "anti_patterns": [
+        "picks a label without tying it to the metric definition",
+        "answers 'it depends on the model'",
+        "ignores the consistency requirement with decision 1"
+      ]
+    }
+  ]
 }

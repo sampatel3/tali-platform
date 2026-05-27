@@ -60,11 +60,7 @@
     },
     "design_decisions_articulated": {
       "weight": 0.3,
-      "criteria": {
-        "excellent": "The candidate engaged substantively with EVERY decision Claude opened with. For each: a specific choice was named (not a hedge like 'maybe' or 'depends'), the choice was justified in 1-3 sentences referencing the actual constraints in the scenario (the conflicting consumers, the residency rule, the lock window, etc.), and any stakeholder consultations were named. The chat transcript reads like the candidate is steering Claude, not the other way around.",
-        "good": "Most decisions answered substantively but at least one answer is thin (a choice without a justification, or a justification that doesn't reference the named constraints). The candidate is engaged but not driving every decision.",
-        "poor": "Decisions answered with one-word replies ('yes', 'sure', 'whatever you think'), unanswered, or visibly delegated back to Claude ('what would you suggest?'). The transcript shows the model driving the decisions, not the candidate. Pasting the brief back to Claude with no added context is the canonical poor signal."
-      }
+      "grader": "interrogation_outcome"
     }
   },
   "expected_candidate_journey": {
@@ -176,5 +172,62 @@
     "rubric_matches_role": true,
     "timebox_realistic": true
   },
-  "task_opener": "Before I touch any code, two decisions that need to come from you — not from me. These shape everything else; I'm not going to write the gate or the checks until you've made a call on each.\n\n**1. The gate's return shape.** Three downstream systems consume the gate's output and they want different things:\n\n- **Airflow's promotion task** calls `gate(results)[\"passed\"]` and branches on the bool.\n- **The Slack router** (the on-call gets paged from here) wants the severity of each failing check, the first failing row when available, and grouping so the page is human-readable.\n- **The executive dashboard** wants a daily score it can aggregate over time — fraction of batches that passed, weighted by severity.\n\nWhatever single shape we return, one of them is going to be sub-optimally served. Which consumer are you optimising for, and which one are you accepting will get a less clean API? Don't say \"support all three\" — pick.\n\n**2. Freshness severity.** The spec lists `freshness_check` as WARN. A finance partner emailed last week asking us to default it to ERROR (\"freshness is the most important check for us\"). Both positions are defensible. Two things to decide:\n\n- WARN or ERROR as the default?\n- Would you check back with the finance partner before merging your change, or is the spec canonical enough that you'd just ship?\n\nOnce I have your answers I'll write the implementation that matches your choices. If you tell me \"whatever you think\" I'll push back — these need to come from you."
+  "decision_points": [
+    {
+      "id": "return_shape",
+      "headline": "The gate's return shape.",
+      "tension": "Three downstream systems consume the gate's output and they want different things.",
+      "options": [
+        {
+          "label": "Airflow's promotion task",
+          "summary": "calls `gate(results)[\"passed\"]` and branches on the bool"
+        },
+        {
+          "label": "The Slack router",
+          "summary": "(the on-call gets paged from here) wants the severity of each failing check, the first failing row when available, and grouping so the page is human-readable"
+        },
+        {
+          "label": "The executive dashboard",
+          "summary": "wants a daily score it can aggregate over time — fraction of batches that passed, weighted by severity"
+        }
+      ],
+      "ask": "Whatever single shape we return, one of them is going to be sub-optimally served. Which consumer are you optimising for, and which one are you accepting will get a less clean API? Don't say \"support all three\" — pick.",
+      "valid_commit": "names ONE specific consumer the return shape is optimised for AND names which other consumers pay the cost (verbosity, broken indexing, missing field, etc.).",
+      "valid_reframes": [
+        "challenges the premise that the consumers conflict by proposing a superset shape AND names which consumer pays the cost (e.g. 'Airflow gets a verbose payload it ignores most of')",
+        "argues all three should consume a versioned event stream instead, and accepts the operational cost of running the queue"
+      ],
+      "anti_patterns": [
+        "lists all options without picking one",
+        "answers 'support all three' or 'depends' without naming costs",
+        "asks Claude to decide"
+      ]
+    },
+    {
+      "id": "freshness_severity",
+      "headline": "Freshness severity.",
+      "tension": "The spec lists `freshness_check` as WARN. A finance partner emailed last week asking us to default it to ERROR (\"freshness is the most important check for us\"). Both positions are defensible.",
+      "options": [
+        {
+          "label": "WARN as default",
+          "summary": "spec-canonical; finance partner unhappy but pipelines keep flowing on stale data"
+        },
+        {
+          "label": "ERROR as default",
+          "summary": "blocks promotion on staleness; spec is contradicted; finance partner is happy"
+        }
+      ],
+      "ask": "WARN or ERROR as the default? Would you check back with the finance partner before merging your change, or is the spec canonical enough that you'd just ship?",
+      "valid_commit": "names WARN or ERROR with a one-sentence reason tied to the operational consequences, AND explicitly states whether they would consult finance before merging.",
+      "valid_reframes": [
+        "names this as a requirements-gathering failure: the spec/partner conflict is the real issue, so first ask finance whether they want the check to GATE or just ALERT, then the WARN/ERROR label falls out from the answer",
+        "argues the severity label is the wrong abstraction and proposes a per-consumer policy (different severity surfaced to different consumers)"
+      ],
+      "anti_patterns": [
+        "picks WARN or ERROR without stating why",
+        "answers 'whatever you think'",
+        "ignores the stakeholder loop (doesn't address the finance-partner consultation)"
+      ]
+    }
+  ]
 }
