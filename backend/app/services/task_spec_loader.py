@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
 
+from ..components.assessments.interrogation import validate_decision_points
 from .task_catalog import canonical_task_catalog_dir
 from .task_repo_service import normalize_repo_file_content
 
@@ -52,6 +53,52 @@ class TaskSpecValidationResult:
     task_id: str
     valid: bool
     errors: List[str]
+
+
+_SUPPORTED_GRADERS = frozenset({"interrogation_outcome"})
+
+
+def _validate_decisions_dim(
+    evaluation_rubric: Dict[str, Any] | None,
+    decision_points: Any,
+) -> List[str]:
+    """If a rubric dimension declares ``grader: "interrogation_outcome"`` it
+    MUST have a corresponding non-empty ``decision_points`` block at the
+    top level of the spec, and vice-versa.
+
+    Without this guard you can ship a task whose rubric scores
+    "design_decisions_articulated" via the interrogation grader while
+    the spec declares no decisions — the grader would silently 0-score
+    every candidate. Catch it at boot, not at submit.
+    """
+    errors: List[str] = []
+    if not isinstance(evaluation_rubric, dict):
+        return errors
+    dims_with_interrogation_grader: List[str] = []
+    for dim_id, details in evaluation_rubric.items():
+        if not isinstance(details, dict):
+            continue
+        grader = str(details.get("grader") or "").strip()
+        if grader and grader not in _SUPPORTED_GRADERS:
+            errors.append(
+                f"evaluation_rubric.{dim_id}.grader={grader!r} is not a supported grader; "
+                f"supported: {sorted(_SUPPORTED_GRADERS)}"
+            )
+        if grader == "interrogation_outcome":
+            dims_with_interrogation_grader.append(dim_id)
+    has_decisions = isinstance(decision_points, list) and len(decision_points) > 0
+    if dims_with_interrogation_grader and not has_decisions:
+        errors.append(
+            "rubric dim(s) "
+            + ", ".join(dims_with_interrogation_grader)
+            + " declare grader=interrogation_outcome but no decision_points block is defined"
+        )
+    if has_decisions and not dims_with_interrogation_grader:
+        errors.append(
+            "decision_points are defined but no rubric dimension declares "
+            "grader=interrogation_outcome; the candidate would never be scored on them"
+        )
+    return errors
 
 
 def validate_rubric_weights(evaluation_rubric: Dict[str, Any] | None) -> List[str]:
@@ -315,6 +362,8 @@ def validate_task_spec(spec: Dict[str, Any]) -> TaskSpecValidationResult:
             errors.append(f"evaluation_rubric must define exactly 5 dimensions; got {len(rubric_dimensions)}")
 
     errors.extend(validate_rubric_weights(evaluation_rubric))
+    errors.extend(_validate_decisions_dim(evaluation_rubric, spec.get("decision_points")))
+    errors.extend(validate_decision_points(spec.get("decision_points")))
     errors.extend(_validate_repo_structure(spec))
     errors.extend(_validate_expected_candidate_journey(spec))
     errors.extend(_validate_interviewer_signals(spec))

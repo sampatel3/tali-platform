@@ -49,6 +49,10 @@ from anthropic import Anthropic
 
 from ...platform.config import settings
 from ...services.metered_anthropic_client import MeteredAnthropicClient
+from .interrogation import (
+    RESOLVED_STATUSES,
+    derive_interrogation_state,
+)
 
 logger = logging.getLogger("taali.assessments.rubric_scoring")
 
@@ -96,6 +100,13 @@ class ScoringArtifacts:
     test_results_summary: str = ""
     task_scenario: str = ""
     candidate_role: str = ""
+    # Schema-driven interrogation dimension support. ``decision_points``
+    # is the task's structured decision list (extra_data.decision_points
+    # at the task spec layer); the ``interrogation_outcome`` grader reads
+    # it together with the per-turn ``interrogation_state`` snapshots
+    # written onto each ai_prompts record to score the dimension
+    # deterministically — no Anthropic call for this dim.
+    decision_points: List[Dict[str, Any]] = field(default_factory=list)
 
     def repo_files_excerpt(self) -> str:
         """Concatenated repo files for prompt embedding (bounded)."""
@@ -290,6 +301,124 @@ class RubricScorer:
 
     # ---- public ----------------------------------------------------------
 
+    def grade_dimension_via_interrogation_outcome(
+        self,
+        dimension_id: str,
+        artifacts: ScoringArtifacts,
+        *,
+        weight: float = 0.0,
+    ) -> DimensionGrade:
+        """Deterministic grader for the ``design_decisions_articulated``
+        dimension (or any dim with ``grader: "interrogation_outcome"``).
+
+        Reads the per-turn classifier state from each ai_prompts record
+        plus the task's ``decision_points`` list and derives the final
+        per-dp outcome via the same carry-forward semantics the chat
+        route used at runtime — so this re-scoring is byte-equivalent
+        to "what did the runtime see at the last turn".
+
+        Mapping is fixed and explicit:
+        - any decision ended at ``dodge``               → poor   (score=2.0)
+        - all decisions in {commit, reframe}            → excellent (score=9.5)
+        - ≥50% in {commit, reframe}, no dodges           → good   (score=6.5)
+        - otherwise (all vague/unaddressed, no dodges)   → poor   (score=3.0)
+
+        Why fixed scores: the rubric's job is signal differentiation,
+        not a continuous score. Two consultants both committing
+        substantively to every decision should both land at "excellent"
+        — variance there is noise. The thresholds live in one place;
+        change them centrally if calibration data demands it.
+
+        No Anthropic call → zero metering rows for this dim. The classifier
+        ran per-turn during the chat (already metered as
+        ``sub_feature=interrogation_classifier``); re-deriving at submit
+        time is pure-Python.
+        """
+        decision_points = list(artifacts.decision_points or [])
+        if not decision_points:
+            return DimensionGrade(
+                dimension_id=dimension_id, score=0.0, rating="poor",
+                reasoning=(
+                    "No decision_points defined for this task; the "
+                    "interrogation grader cannot evaluate."
+                ),
+                evidence_citations=[], weight=weight,
+                error="missing_decision_points",
+            )
+        state = derive_interrogation_state(
+            decision_points, artifacts.prompt_transcript or [],
+        )
+        per_dp_lines: List[str] = []
+        n_resolved = 0
+        n_dodge = 0
+        for dp in decision_points:
+            dp_id = dp.get("id")
+            if not isinstance(dp_id, str) or not dp_id:
+                continue
+            status = state.get(dp_id, "unaddressed")
+            headline = str(dp.get("headline") or dp_id).strip()
+            per_dp_lines.append(f"{dp_id} ({headline}): {status}")
+            if status in RESOLVED_STATUSES:
+                n_resolved += 1
+            if status == "dodge":
+                n_dodge += 1
+        n_total = len(per_dp_lines)
+        if n_total == 0:
+            return DimensionGrade(
+                dimension_id=dimension_id, score=0.0, rating="poor",
+                reasoning="decision_points present but none had a valid id.",
+                evidence_citations=[], weight=weight,
+                error="no_valid_decision_points",
+            )
+
+        if n_dodge > 0:
+            score = 2.0
+            rating = "poor"
+        elif n_resolved == n_total:
+            score = 9.5
+            rating = "excellent"
+        elif n_resolved * 2 >= n_total:
+            score = 6.5
+            rating = "good"
+        else:
+            score = 3.0
+            rating = "poor"
+
+        reasoning = (
+            f"Per-decision outcomes — {'; '.join(per_dp_lines)}. "
+            f"{n_resolved}/{n_total} resolved (commit/reframe); "
+            f"{n_dodge} dodge(s)."
+        )
+        # Cite which transcript turn first promoted each dp to its
+        # final status — cheap evidence trail for the recruiter UI.
+        evidence: List[str] = []
+        per_dp_turn_marks: Dict[str, int] = {}
+        for idx, record in enumerate(artifacts.prompt_transcript or []):
+            if not isinstance(record, dict):
+                continue
+            per_dp = record.get("interrogation_state") or {}
+            if not isinstance(per_dp, dict):
+                continue
+            for dp_id, payload in per_dp.items():
+                if dp_id in per_dp_turn_marks:
+                    continue
+                status_here = ""
+                if isinstance(payload, dict):
+                    status_here = str(payload.get("status") or "").strip().lower()
+                elif isinstance(payload, str):
+                    status_here = payload.strip().lower()
+                if status_here and status_here == state.get(dp_id):
+                    per_dp_turn_marks[dp_id] = idx
+        for dp_id, turn_idx in per_dp_turn_marks.items():
+            evidence.append(f"decision={dp_id} reached '{state[dp_id]}' at transcript turn {turn_idx + 1}")
+        evidence = evidence[:10]
+
+        return DimensionGrade(
+            dimension_id=dimension_id, score=score, rating=rating,
+            reasoning=reasoning[:1000], evidence_citations=evidence,
+            weight=weight,
+        )
+
     def grade_dimension(
         self,
         dimension_id: str,
@@ -359,12 +488,20 @@ class RubricScorer:
             if not isinstance(dim_spec, dict):
                 continue
             weight = float(dim_spec.get("weight") or 0.0)
-            criteria = dim_spec.get("criteria") or {}
-            if not isinstance(criteria, dict):
-                criteria = {}
-            grade = self.grade_dimension(
-                dim_id, criteria, artifacts, weight=weight,
-            )
+            grader_kind = str(dim_spec.get("grader") or "").strip()
+            if grader_kind == "interrogation_outcome":
+                # Deterministic, no Anthropic call. Reads decision_points
+                # + per-turn interrogation_state from artifacts.
+                grade = self.grade_dimension_via_interrogation_outcome(
+                    dim_id, artifacts, weight=weight,
+                )
+            else:
+                criteria = dim_spec.get("criteria") or {}
+                if not isinstance(criteria, dict):
+                    criteria = {}
+                grade = self.grade_dimension(
+                    dim_id, criteria, artifacts, weight=weight,
+                )
             graded.append(grade)
             total_weight += weight
             if grade.error is not None:

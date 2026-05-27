@@ -29,6 +29,13 @@ from ...components.assessments.claude_budget import (
     resolve_effective_budget_limit_usd,
 )
 from ...components.assessments.claude_tool_executor import AssessmentToolExecutor
+from ...components.assessments.interrogation import (
+    all_resolved,
+    build_interrogation_directive,
+    classify_response,
+    derive_interrogation_state,
+    merge_state,
+)
 from ...components.assessments.repository import (
     append_assessment_timeline_event,
     get_active_assessment,
@@ -54,15 +61,18 @@ _MAX_HISTORY_MESSAGES = 20
 _MAX_CONTEXT_CHARS = 12000
 
 
-def _build_agentic_system_prompt(task: Task, opener_in_history: bool) -> str:
+def _build_agentic_system_prompt(task: Task, interrogation_directive: str) -> str:
     """Lean system prompt — the SDK auto-documents the tool schemas, so we
     only need scenario + style guidance, not a tool catalogue.
 
-    When ``opener_in_history`` is True, the assistant's first turn in the
-    history block is the task opener (decision questions Claude asked
-    proactively at /start time). The prompt teaches the model to refuse
-    to write substantive code until those questions have been answered
-    substantively by the candidate.
+    ``interrogation_directive`` is the state-aware block produced by
+    ``interrogation.build_interrogation_directive`` for THIS turn. Empty
+    string means all decisions are resolved (or none were declared); the
+    prompt skips the interrogation rules entirely and Claude operates
+    in pair-programmer mode. When non-empty, the block names each
+    open decision + its current classifier status + the per-status
+    response rule. The block is fully task-AGNOSTIC — only the data
+    inside it varies per task.
     """
     scenario = (task.scenario or task.description or task.name or "(no scenario provided)").strip()
     base = [
@@ -79,16 +89,8 @@ def _build_agentic_system_prompt(task: Task, opener_in_history: bool) -> str:
         "- Answer the EXACT question asked. Don't pre-emptively explore the repo or suggest unrelated changes.",
         "- When proposing a fix, point to the file and line, don't paraphrase the whole module.",
     ]
-    if opener_in_history:
-        base.extend([
-            "",
-            "INTERROGATIVE MODE — your first message in the transcript above asked the candidate to make 2-3 named design decisions. They are the load-bearing decisions for this task and the rubric grades them. Until those decisions have been answered SUBSTANTIVELY by the candidate, you do NOT write substantive code. Specifically:",
-            "- You MAY use tool calls to read files for context if the candidate's question requires it.",
-            "- You DO NOT write or edit code (``Write`` / ``Edit``) for any of the decisions you opened with until the candidate has named a choice AND given a one-sentence justification for each.",
-            "- If the candidate replies with 'whatever you think', 'you decide', 'sure', 'yes', or pastes the brief back at you, that is NOT an answer. Push back: name the specific decision still open, ask them to commit to a choice. Be polite but firm. The decision is theirs.",
-            "- Once all decisions you opened with have substantive answers in the transcript, switch into collaborative pair-programmer mode: write the code that matches their choices, point out trade-offs they didn't name, surface contradictions if the candidate's answers conflict.",
-            "- DO NOT volunteer to make a decision for them just to keep moving. The friction IS the assessment.",
-        ])
+    if interrogation_directive:
+        base.extend(["", interrogation_directive])
     base.extend([
         "",
         "Task scenario:",
@@ -181,12 +183,22 @@ async def chat_with_claude_agentic(
     executor = AssessmentToolExecutor(e2b_service=e2b, sandbox=sandbox, repo_root=repo_root)
 
     prompts = list(getattr(assessment, "ai_prompts", None) or [])
-    # Did the assessment start with a task_opener? If yes, the system
-    # prompt enters interrogative mode (refuse to write code until the
-    # candidate engages with each named decision).
-    opener_in_history = any(
-        isinstance(p, dict) and p.get("opener") for p in prompts
+    # Schema-driven interrogation: pull decision_points from the task's
+    # extra_data (canonical source of truth), derive the latest per-dp
+    # status from the transcript, then classify the candidate's new
+    # message and merge with carry-forward semantics. The merged state
+    # becomes (a) input to the system prompt's interrogation directive
+    # for THIS turn and (b) persisted onto the new ai_prompts record
+    # so the grader at submit time can replay deterministically.
+    extra = task.extra_data if isinstance(task.extra_data, dict) else {}
+    raw_dps = extra.get("decision_points") if isinstance(extra, dict) else None
+    decision_points = (
+        [dp for dp in raw_dps if isinstance(dp, dict)]
+        if isinstance(raw_dps, list)
+        else []
     )
+    prior_state = derive_interrogation_state(decision_points, prompts)
+
     messages = _flatten_prompts_to_messages(prompts, _MAX_HISTORY_MESSAGES)
     new_message = data.message.strip()
     if not new_message:
@@ -206,7 +218,37 @@ async def chat_with_claude_agentic(
         )
     messages.append({"role": "user", "content": user_turn_content})
 
-    system_prompt = _build_agentic_system_prompt(task, opener_in_history=opener_in_history)
+    # Run the classifier BEFORE the main chat call so the system prompt
+    # sees the freshly-derived state for the candidate's current turn.
+    # Skip when there are no decisions or all are already resolved —
+    # avoids a Haiku call once the assessment is in pair-programmer mode.
+    persist_state: dict[str, dict[str, str]] = {}
+    merged_state = prior_state
+    if decision_points and not all_resolved(prior_state):
+        outcome = classify_response(
+            decision_points=decision_points,
+            candidate_message=new_message,
+            prior_state=prior_state,
+            api_key=api_key,
+            organization_id=int(assessment.organization_id),
+            assessment_id=int(assessment.id),
+        )
+        merged_state, persist_state = merge_state(prior_state, outcome.by_dp)
+        if outcome.error:
+            logger.info(
+                "interrogation classifier soft-failed assessment=%s err=%s",
+                assessment.id, outcome.error,
+            )
+    elif decision_points:
+        # All resolved — still persist the current state so a replay
+        # of the transcript sees the carry-forward without a gap.
+        persist_state = {
+            dp_id: {"status": status, "raw_status": status, "rationale": "carry_forward"}
+            for dp_id, status in prior_state.items()
+        }
+
+    interrogation_directive = build_interrogation_directive(decision_points, merged_state)
+    system_prompt = _build_agentic_system_prompt(task, interrogation_directive=interrogation_directive)
 
     current_budget = build_claude_budget_snapshot(
         budget_limit_usd=effective_budget_limit,
@@ -279,6 +321,11 @@ async def chat_with_claude_agentic(
         # So scoring/analytics can branch CLI-era vs tool-use-era vs SDK-era
         # assessments without sniffing structure.
         "transport": "claude_agent_sdk",
+        # Per-decision status snapshot for this turn. Read back by:
+        #   1. derive_interrogation_state on the next turn (carry-forward)
+        #   2. rubric_scoring.interrogation_outcome grader at submit time
+        # Empty dict if no decision_points were declared for this task.
+        "interrogation_state": persist_state,
     }
     prompts.append(record)
     assessment.ai_prompts = prompts
