@@ -95,9 +95,47 @@ def run_async(coro, *, timeout: float = 60.0):
 
     Used by the sync code paths (FastAPI handlers, SQLAlchemy listeners)
     that need to call Graphiti without becoming async themselves.
+
+    **ContextVar propagation.** ``asyncio.run_coroutine_threadsafe`` does
+    NOT copy the caller's contextvars to the target loop's thread —
+    contextvars are thread-local plus task-local, so a value set in the
+    caller's thread (e.g. ``graph_metering_ctx.set(...)`` in
+    ``episodes.dispatch``) is invisible to code running inside ``coro``
+    on the Graphiti loop thread.
+
+    Symptom this fix addresses (caught 2026-05-27 via worker logs):
+    ``metered_async_anthropic: graph_metering_ctx unset`` firing on
+    every Graphiti call → claude_call_log rows landed but with
+    ``organization_id=NULL`` → reconciliation's
+    ``organization_id IN (...)`` filter excluded them → those calls were
+    invisible to drift math even though the row existed in the table.
+
+    Fix: snapshot the caller's context with ``contextvars.copy_context()``
+    and re-apply each var inside a wrapper coroutine on the target loop.
     """
+    import contextvars
+
     loop = _start_background_loop()
-    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    caller_ctx = contextvars.copy_context()
+
+    async def _wrapped():
+        # Re-apply every contextvar that had a value in the caller's
+        # context. ``var.set(value)`` inside this coroutine scopes the
+        # value to this task's local context (and any further coroutines
+        # it awaits), so other coroutines on the same loop don't bleed
+        # into each other.
+        tokens = [(var, var.set(value)) for var, value in caller_ctx.items()]
+        try:
+            return await coro
+        finally:
+            for var, token in reversed(tokens):
+                try:
+                    var.reset(token)
+                except Exception:
+                    # Best-effort cleanup — never fail the call here.
+                    pass
+
+    future = asyncio.run_coroutine_threadsafe(_wrapped(), loop)
     return future.result(timeout=timeout)
 
 
