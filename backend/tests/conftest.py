@@ -132,6 +132,44 @@ try:
 except Exception:  # pragma: no cover — model import shouldn't fail
     pass
 
+
+# Same BigInteger-PK workaround for brain_feed_outbox — the durable outbound
+# mainspring brain feed. Rows are written by the brain-feed sweep; register
+# globally here so any test exercising the feed gets an autoincrementing PK.
+_BRAIN_FEED_OUTBOX_PK_COUNTER = {"n": 0}
+
+
+def _assign_brain_feed_outbox_pk(mapper, connection, target):  # pragma: no cover
+    if getattr(target, "id", None) is None:
+        _BRAIN_FEED_OUTBOX_PK_COUNTER["n"] += 1
+        target.id = _BRAIN_FEED_OUTBOX_PK_COUNTER["n"]
+
+
+try:
+    from app.models.brain_feed_outbox import BrainFeedOutbox as _BrainFeedOutbox
+
+    event.listen(_BrainFeedOutbox, "before_insert", _assign_brain_feed_outbox_pk)
+except Exception:  # pragma: no cover — model import shouldn't fail
+    pass
+
+
+# Same BigInteger-PK workaround for decision_feedback (teach-loop rows).
+_DECISION_FEEDBACK_PK_COUNTER = {"n": 0}
+
+
+def _assign_decision_feedback_pk(mapper, connection, target):  # pragma: no cover
+    if getattr(target, "id", None) is None:
+        _DECISION_FEEDBACK_PK_COUNTER["n"] += 1
+        target.id = _DECISION_FEEDBACK_PK_COUNTER["n"]
+
+
+try:
+    from app.models.decision_feedback import DecisionFeedback as _DecisionFeedback
+
+    event.listen(_DecisionFeedback, "before_insert", _assign_decision_feedback_pk)
+except Exception:  # pragma: no cover — model import shouldn't fail
+    pass
+
 def override_get_db():
     db = TestingSessionLocal()
     try:

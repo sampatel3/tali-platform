@@ -85,6 +85,12 @@ from .decision_tasks import apply_decision_side_effects
 # the import the worker NotRegistered's it and the irreplaceable realised-
 # outcome episodes never reach Graphiti. Same trap as the imports above.
 from .graph_outbox_tasks import drain_graph_episode_outbox
+# Eager-import brain_feed_tasks so the worker registers the outbound
+# mainspring brain-feed flush. The beat schedule references this task name;
+# without the import the worker NotRegistered's it and the (flag-gated) feed
+# never ships. Same trap as the imports above. The task itself is a no-op
+# unless MAINSPRING_BRAIN_FEED_ENABLED is set.
+from .brain_feed_tasks import flush_brain_feed
 
 __all__ = [
     "celery_app",
@@ -119,4 +125,5 @@ __all__ = [
     "recalibrate_cv_match",
     "apply_decision_side_effects",
     "drain_graph_episode_outbox",
+    "flush_brain_feed",
 ]
