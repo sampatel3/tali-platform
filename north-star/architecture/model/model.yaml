@@ -25,9 +25,12 @@ metadata:
 repos:
   - id: mainspring
     role: substrate
-    description: Shared, brand-agnostic substrate/framework. Canonical home of cross-cutting logic.
+    description: >
+      Operations runtime for autonomous operations over a stateful business pipeline —
+      the layer above LLM-chaining frameworks that every brand builds on. Canonical,
+      brand-agnostic home of all cross-cutting capability.
     localPathEnv: MAINSPRING_PATH
-  - id: taali
+  - id: taali-brand
     role: brand
     description: A brand on the substrate (AI-augmented technical assessment surface).
     localPathEnv: TAALI_PATH
@@ -47,7 +50,7 @@ context:
   system:
     id: platform
     name: Platform
-    description: One product, one substrate (mainspring), exposed through brands (taali, cadence).
+    description: One product, one substrate (mainspring, an operations runtime), exposed through brands (taali, cadence).
   people:
     - id: recruiter
       name: Recruiter
@@ -87,7 +90,7 @@ containers:
 
   - id: taali-surface
     name: Taali Surface
-    repo: taali
+    repo: taali-brand
     technology: TypeScript / React + Python brand services
     description: Taali brand surface and brand-owned data/migrations on top of the substrate.
 

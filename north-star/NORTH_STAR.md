@@ -12,9 +12,10 @@
 
 ## One product, one substrate, many brands
 
-There is **one product**, built on **one shared substrate** (`mainspring`), exposed
-through **brands** that sit on top of it. Brands differ in surface, positioning, and
-data; they do **not** fork the substrate.
+There is **one product**, built on **one shared substrate** (`mainspring` — an
+operations runtime over a stateful business pipeline, the layer above LLM-chaining
+frameworks), exposed through **brands** that sit on top of it. Brands differ in
+surface, positioning, and data; they do **not** fork the substrate.
 
 ```
         ┌─────────────┐     ┌─────────────┐

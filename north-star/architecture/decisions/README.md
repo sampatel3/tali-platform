@@ -18,6 +18,7 @@ Format: the lightweight one popularised by Michael Nygard. (Same convention as
 | 0005 | Per-brand Alembic migration chains                 | Accepted |
 | 0006 | North Star model format                            | Accepted |
 | 0007 | Agent injection via a synced CLAUDE.md block       | Accepted |
+| 0008 | Role-aware agent blocks (substrate/brand/legacy)   | Accepted |
 
 ## Conventions
 

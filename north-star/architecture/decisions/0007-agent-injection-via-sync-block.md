@@ -1,6 +1,6 @@
 # 7. Agent injection via a synced CLAUDE.md block
 
-- **Status:** Accepted
+- **Status:** Accepted (block content made role-aware by ADR-0008)
 - **Date:** 2026-05-29
 - **Deciders:** Sam
 
