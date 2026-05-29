@@ -1,5 +1,6 @@
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import worker_process_init
 
 from ..platform.config import settings
 
@@ -8,6 +9,28 @@ celery_app = Celery(
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
 )
+
+
+@worker_process_init.connect
+def _install_anthropic_wire_tap(**_kwargs):
+    """Install the transport-level Anthropic wire-tap in every worker
+    process. The bulk of Anthropic spend (scoring, agent, Graphiti) runs
+    on the workers, so the wire-tap MUST be installed here too — not just
+    in the API lifespan — or the ground-truth log misses worker traffic.
+
+    ``worker_process_init`` fires once per forked worker process (prefork
+    pool), which is where httpx clients are actually constructed and used.
+    """
+    try:
+        from ..services.anthropic_wire_tap import install
+
+        install()
+    except Exception:  # pragma: no cover — never block worker boot
+        import logging
+
+        logging.getLogger("taali.anthropic_wire_tap").exception(
+            "Failed to install Anthropic wire-tap in worker"
+        )
 
 # Task → queue routing. Scoring lives on its own queue so a long-running
 # integration task (e.g. Workable sync at 60+ min) can't starve scoring.

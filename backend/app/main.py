@@ -39,6 +39,17 @@ _openapi_url = None if _is_production else "/api/openapi.json"
 async def _lifespan(_app: FastAPI):
     # Startup
     logger.info("%s API started | env=%s", BRAND_NAME, "production" if settings.SENTRY_DSN else "development")
+    # Install the transport-level Anthropic wire-tap FIRST, before any
+    # client is constructed, so every /v1/messages request — wrapped,
+    # bare, Graphiti, gateway, or SDK retry — writes a ground-truth
+    # anthropic_wire_log row. This is what reconciliation diffs against
+    # claude_call_log to locate metering bypasses.
+    try:
+        from .services.anthropic_wire_tap import install as _install_wire_tap
+
+        _install_wire_tap()
+    except Exception:  # pragma: no cover — instrumentation must never block boot
+        logger.exception("Failed to install Anthropic wire-tap")
     # Wire candidate_graph SQLAlchemy listeners (no-op when Graphiti is unset).
     try:
         from .candidate_graph.listeners import register_listeners
