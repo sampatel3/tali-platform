@@ -90,6 +90,26 @@ except Exception:  # pragma: no cover — model import shouldn't fail
     pass
 
 
+# Same BigInteger-PK workaround for anthropic_wire_log (the transport-level
+# ground-truth log). Written by the wire-tap from any process; register
+# globally so wire-tap tests don't depend on import order.
+_ANTHROPIC_WIRE_LOG_PK_COUNTER = {"n": 0}
+
+
+def _assign_anthropic_wire_log_pk(mapper, connection, target):  # pragma: no cover
+    if getattr(target, "id", None) is None:
+        _ANTHROPIC_WIRE_LOG_PK_COUNTER["n"] += 1
+        target.id = _ANTHROPIC_WIRE_LOG_PK_COUNTER["n"]
+
+
+try:
+    from app.models.anthropic_wire_log import AnthropicWireLog as _AnthropicWireLog
+
+    event.listen(_AnthropicWireLog, "before_insert", _assign_anthropic_wire_log_pk)
+except Exception:  # pragma: no cover — model import shouldn't fail
+    pass
+
+
 # Same BigInteger-PK workaround for agent_decisions. Decisions are created
 # from many code paths (the pre-screen emitter, reconcile, the role PATCH
 # reconcile, approve/override), so register the listener globally here

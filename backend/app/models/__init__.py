@@ -54,6 +54,7 @@ from .session import AssessmentSession
 from .billing_credit_ledger import BillingCreditLedger
 from .usage_event import UsageEvent
 from .claude_call_log import ClaudeCallLog
+from .anthropic_wire_log import AnthropicWireLog
 from .usage_grant import (
     GRANT_FREE_TIER,
     GRANT_MANUAL,
@@ -188,6 +189,8 @@ __all__ = [
     "AssessmentSession",
     "BillingCreditLedger",
     "UsageEvent",
+    "ClaudeCallLog",
+    "AnthropicWireLog",
     "UsageGrant",
     "GRANT_FREE_TIER",
     "GRANT_PROMO",
