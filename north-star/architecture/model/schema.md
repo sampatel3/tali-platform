@@ -37,7 +37,7 @@ are reported **unverifiable** rather than failing. `tali-platform` defaults to `
 implementation:
   repo: tali-platform       # must match a repos[].id
   paths:                    # files OR directories, relative to that repo's root
-    - backend/app/services/ai_service.py
+    - backend/app/services/metered_anthropic_client.py
     - backend/alembic
 ```
 

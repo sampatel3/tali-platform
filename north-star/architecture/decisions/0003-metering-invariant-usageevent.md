@@ -18,8 +18,8 @@ through the metered client, which writes a `UsageEvent` for the call. The metere
 client is substrate-owned (`mainspring`). This is CI-gated: a check fails the build if
 the raw SDK is imported/called outside the metered client.
 
-Current (legacy) home: `backend/app/services/ai_service.py` and
-`backend/app/services/usage_service.py`. Target home: `mainspring`.
+Current (legacy) home: `backend/app/services/metered_anthropic_client.py` and
+`backend/app/services/metered_async_anthropic_client.py`. Target home: `mainspring`.
 
 ## Consequences
 

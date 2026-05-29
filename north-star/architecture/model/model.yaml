@@ -125,8 +125,8 @@ components:
     implementation:
       repo: tali-platform
       paths:
-        - backend/app/services/ai_service.py
-        - backend/app/services/usage_service.py
+        - backend/app/services/metered_anthropic_client.py
+        - backend/app/services/metered_async_anthropic_client.py
 
   - id: decision-engine
     name: Workable Decision Engine
@@ -139,7 +139,8 @@ components:
     implementation:
       repo: tali-platform
       paths:
-        - backend/app/services/workable_decision_service.py
+        - backend/app/components/integrations/workable/service.py
+        - backend/app/components/integrations/workable/sync_service.py
 
   - id: brand-migrations
     name: Per-Brand Migration Chains
@@ -157,13 +158,13 @@ components:
   - id: billing
     name: Billing
     container: mainspring-substrate
-    description: Stripe-backed billing and usage-based cost estimation.
+    description: Stripe-backed billing, pricing, and the credit ledger.
     migratesTo: mainspring
     implementation:
       repo: tali-platform
       paths:
-        - backend/app/services/billing_service.py
-        - backend/app/services/cost_estimation_service.py
+        - backend/app/services/pricing_service.py
+        - backend/app/services/credit_ledger_service.py
 
 # ---------------------------------------------------------------------------
 # Relationships (for views; source/destination are container or external ids)

@@ -18,8 +18,8 @@ org, at most one decision write proceeds at a time; others wait. The serializati
 keyed by org so different orgs are unaffected. This lives with the decision engine in
 the substrate.
 
-Current (legacy) home: `backend/app/services/workable_decision_service.py`. Target
-home: `mainspring`.
+Current (legacy) home: `backend/app/components/integrations/workable/service.py` and
+`.../workable/sync_service.py`. Target home: `mainspring`.
 
 ## Consequences
 

@@ -22,11 +22,11 @@ flowchart TB
     billing --> stripe
 ```
 
-| Component                | Invariant | Today (verifiable in tali-platform)                                   |
-| ------------------------ | --------- | --------------------------------------------------------------------- |
-| Metered Anthropic Client | ADR-0003  | `backend/app/services/ai_service.py`, `.../usage_service.py`          |
-| Workable Decision Engine | ADR-0004  | `backend/app/services/workable_decision_service.py`                   |
-| Per-Brand Migrations     | ADR-0005  | `backend/alembic`                                                     |
-| Billing                  | —         | `backend/app/services/billing_service.py`, `.../cost_estimation_service.py` |
+| Component                | Invariant | Today (verifiable in tali-platform)                                       |
+| ------------------------ | --------- | ------------------------------------------------------------------------- |
+| Metered Anthropic Client | ADR-0003  | `backend/app/services/metered_anthropic_client.py`, `.../metered_async_anthropic_client.py` |
+| Workable Decision Engine | ADR-0004  | `backend/app/components/integrations/workable/service.py`, `.../sync_service.py` |
+| Per-Brand Migrations     | ADR-0005  | `backend/alembic`                                                         |
+| Billing                  | —         | `backend/app/services/pricing_service.py`, `.../credit_ledger_service.py` |
 
 These migrate into `mainspring` (`migratesTo`) as legacy capabilities are drained.
