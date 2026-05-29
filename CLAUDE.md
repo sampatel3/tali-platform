@@ -1,0 +1,16 @@
+# CLAUDE.md
+
+## Project tracking — Linear
+
+We track work in **Linear**: one workspace, one team (prefix **`PLAT`**), one
+**Project per repo** (`mainspring`, `taali`, `cadence`, `tali-platform`).
+
+The **Linear MCP** is wired in `.mcp.json` (`linear-server`,
+`https://mcp.linear.app/mcp`). Run `/mcp` to authenticate, then you can
+find/create/update Linear issues from here.
+
+**Workflow:** issue → branch (`sam/plat-42-...`, copy with `Cmd/Ctrl+Shift+.`)
+→ PR with **`Fixes PLAT-#`** in the body → merge to `main` auto-closes the issue.
+Branch created → In Progress, PR opened → In Review, PR merged → Done.
+
+Full setup + day-to-day details: [`docs/LINEAR_RUNBOOK.md`](docs/LINEAR_RUNBOOK.md).
