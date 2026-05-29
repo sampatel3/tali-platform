@@ -215,6 +215,16 @@ celery_app.conf.update(
             "task": "app.tasks.graph_outbox_tasks.drain_graph_episode_outbox",
             "schedule": 300.0,
         },
+        # Outbound mainspring brain feed: sweep newly-resolved decisions /
+        # teach outcomes / daily usage rollups (anonymized) into the
+        # brain_feed_outbox and ship them to mainspring's ingest API. No-op
+        # unless MAINSPRING_BRAIN_FEED_ENABLED is on (default off), so this is
+        # inert on the live platform until deliberately enabled. Every 15 min
+        # keeps the feed near-continuous without adding load.
+        "flush-brain-feed-every-15-minutes": {
+            "task": "app.tasks.brain_feed_tasks.flush_brain_feed",
+            "schedule": 900.0,
+        },
     },
 )
 

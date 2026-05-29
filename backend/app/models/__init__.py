@@ -114,6 +114,17 @@ from .graph_episode_outbox import (
     OUTBOX_STATUS_SENT,
     GraphEpisodeOutbox,
 )
+from .brain_feed_outbox import (
+    BRAIN_FEED_KIND_DECISION,
+    BRAIN_FEED_KIND_OUTCOME,
+    BRAIN_FEED_KIND_USAGE,
+    BRAIN_FEED_KINDS,
+    BRAIN_FEED_STATUS_FAILED,
+    BRAIN_FEED_STATUS_PENDING,
+    BRAIN_FEED_STATUS_SENT,
+    BRAIN_FEED_STATUSES,
+    BrainFeedOutbox,
+)
 from .capability_flag import CapabilityFlag
 from .role_intent import RoleIntent
 from .role_feedback_note import RoleFeedbackNote
@@ -223,6 +234,15 @@ __all__ = [
     "OUTBOX_STATUS_SENT",
     "OUTBOX_STATUS_FAILED",
     "GRAPH_OUTBOX_STATUSES",
+    "BrainFeedOutbox",
+    "BRAIN_FEED_KIND_DECISION",
+    "BRAIN_FEED_KIND_OUTCOME",
+    "BRAIN_FEED_KIND_USAGE",
+    "BRAIN_FEED_KINDS",
+    "BRAIN_FEED_STATUS_PENDING",
+    "BRAIN_FEED_STATUS_SENT",
+    "BRAIN_FEED_STATUS_FAILED",
+    "BRAIN_FEED_STATUSES",
     "ShareLink",
     "SHARE_LINK_MODE_RECRUITER",
     "SHARE_LINK_MODE_CLIENT",

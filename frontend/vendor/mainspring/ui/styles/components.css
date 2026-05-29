@@ -1,0 +1,288 @@
+/* ============================================================
+   @mainspring/ui — component layer.
+
+   Tailwind @layer components classes shared across brands. Reads the
+   @mainspring/tokens CSS vars, so these re-skin per brand automatically.
+   A brand imports this after tailwind base/components/utilities:
+     @import "@mainspring/ui/styles/components.css";
+   ============================================================ */
+@layer components {
+  .eyebrow {
+    @apply font-mono text-xs uppercase tracking-widest text-accent;
+  }
+  .card {
+    @apply rounded-lg bg-panel border border-line-d p-5 shadow-card;
+  }
+  .card-light {
+    @apply rounded-lg bg-paper border border-line-l p-5 shadow-card text-ink;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center rounded font-semibold
+           px-3 py-1.5 text-sm transition-colors;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-paper hover:bg-accent-deep;
+  }
+  .btn-ghost {
+    @apply btn border border-line-d text-cloud hover:bg-panel-2;
+  }
+  .btn-warn {
+    @apply btn bg-warn text-ink hover:bg-[color-mix(in_oklab,var(--amber)_80%,transparent)];
+  }
+  .btn-danger {
+    @apply btn bg-danger text-paper hover:bg-[color-mix(in_oklab,var(--red)_80%,transparent)];
+  }
+  .pill {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-[11px]
+           font-semibold tracking-wider uppercase;
+  }
+}
+
+/* ============================================================
+   Auth (two-pane sign-in / register / reset) — ported verbatim from
+   Taali's production stylesheet. Reads only canonical @mainspring/tokens
+   vars (--ink/--mute/--line/--bg/--purple/--grad-dark-vert/--purple-glow),
+   so it re-skins per brand: deep-purple editorial pane for taali, coral
+   for cadence. Plain CSS (not @layer) so it always wins over utilities.
+   ============================================================ */
+.mc-kicker {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--purple);
+  margin-bottom: 10px;
+}
+.mc-kicker.is-mute { color: var(--mute); }
+
+.mc-auth {
+  display: grid;
+  grid-template-columns: 1fr;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+}
+@media (min-width: 1024px) {
+  .mc-auth { grid-template-columns: 1.05fr 1fr; }
+}
+
+.mc-auth-editorial {
+  position: relative;
+  overflow: hidden;
+  padding: 0 var(--pad-x) 48px;
+  display: flex;
+  flex-direction: column;
+  background: var(--grad-dark-vert);
+  color: #fff;
+}
+@media (max-width: 1023px) {
+  .mc-auth-editorial { display: none; }
+}
+
+.mc-auth-editorial-bg {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(900px 420px at 80% -10%, var(--purple-glow), transparent 50%),
+    radial-gradient(700px 320px at 0% 90%, color-mix(in oklab, var(--purple-lav) 18%, transparent), transparent 60%);
+  pointer-events: none;
+}
+
+.mc-auth-editorial-logo {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 64px;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+  width: fit-content;
+  text-decoration: none;
+}
+.mc-auth-editorial-logo:hover { opacity: 0.85; }
+.mc-auth-editorial-logo:focus-visible {
+  outline: 2px solid var(--purple-lav);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.mc-auth-quote {
+  position: relative;
+  margin: auto 0;
+  color: #fff;
+  font-style: normal;
+  max-width: 460px;
+}
+.mc-auth-quote-kicker {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  opacity: 0.7;
+  margin-bottom: 18px;
+}
+.mc-auth-quote p {
+  font-family: var(--font-display);
+  font-size: 30px;
+  line-height: 1.18;
+  letter-spacing: -0.02em;
+  font-weight: 500;
+  margin: 0;
+}
+
+.mc-auth-compliance {
+  position: relative;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  opacity: 0.55;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.mc-auth-form-pane {
+  display: flex;
+  flex-direction: column;
+  padding: 48px 24px;
+  background: var(--bg);
+  position: relative;
+}
+@media (min-width: 768px) {
+  .mc-auth-form-pane { padding: 48px 56px; }
+}
+
+.mc-auth-top-right {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--mute);
+  min-height: 20px;
+}
+.mc-auth-top-right a { color: var(--purple); font-weight: 500; }
+
+.mc-auth-form {
+  margin: auto;
+  max-width: 420px;
+  width: 100%;
+}
+.mc-auth-title {
+  font-family: var(--font-display);
+  font-size: 36px;
+  letter-spacing: -0.025em;
+  font-weight: 600;
+  line-height: 1.1;
+  margin: 0 0 10px;
+  color: var(--ink);
+}
+.mc-auth-sub {
+  color: var(--mute);
+  font-size: 14px;
+  line-height: 1.55;
+  margin: 0 0 28px;
+}
+.mc-auth-footer {
+  margin: 28px auto 0;
+  max-width: 420px;
+  width: 100%;
+  font-size: 12.5px;
+  color: var(--mute);
+  text-align: center;
+}
+
+.mc-auth-field { margin-bottom: 14px; }
+.mc-auth-field-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-2);
+  margin-bottom: 6px;
+}
+.mc-auth-input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+}
+.mc-auth-input:focus {
+  border-color: var(--purple);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple) 18%, transparent);
+}
+.mc-auth-input.is-error { border-color: var(--red); }
+.mc-auth-field-helper { font-size: 11.5px; color: var(--mute); margin-top: 4px; }
+.mc-auth-field-error { font-size: 11.5px; color: var(--red); margin-top: 4px; }
+
+.mc-auth-divider {
+  margin: 18px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--mute);
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.12em;
+}
+.mc-auth-divider::before,
+.mc-auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+.mc-auth-cta {
+  width: 100%;
+  height: 42px;
+  border-radius: 999px;
+  border: 0;
+  background: var(--ink);
+  color: var(--bg);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: background 0.15s;
+}
+.mc-auth-cta:hover { background: var(--purple); }
+.mc-auth-cta:disabled { opacity: 0.6; cursor: not-allowed; }
+.mc-auth-cta-outline {
+  background: var(--bg-2);
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+.mc-auth-cta-outline:hover { border-color: var(--ink); background: var(--bg-2); }
+
+.mc-auth-error-card {
+  background: color-mix(in oklab, var(--red) 8%, var(--bg-2));
+  border: 1px solid color-mix(in oklab, var(--red) 28%, var(--line));
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+.mc-auth-error-card .title { font-size: 13.5px; font-weight: 600; color: var(--red); margin-bottom: 4px; }
+.mc-auth-error-card .body { font-size: 13px; color: var(--ink-2); line-height: 1.5; }
+
+.mc-auth-success-card {
+  background: color-mix(in oklab, var(--green) 8%, var(--bg-2));
+  border: 1px solid color-mix(in oklab, var(--green) 28%, var(--line));
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+.mc-auth-success-card .title { font-size: 13.5px; font-weight: 600; color: var(--green); margin-bottom: 4px; }
+.mc-auth-success-card .body { font-size: 13px; color: var(--ink-2); line-height: 1.5; }

@@ -114,6 +114,26 @@ class Settings(BaseSettings):
     COST_ALERT_DAILY_SPEND_USD: float = 200.0
     COST_ALERT_PER_COMPLETED_ASSESSMENT_USD: float = 10.0
 
+    # Outbound mainspring brain feed (bidirectional tali<->mainspring link).
+    # When True, a periodic sweep enqueues ANONYMIZED, aggregable learning
+    # signal (resolved decisions + human disposition, teach outcomes, daily
+    # usage rollups — never PII/free-text/raw ids) into brain_feed_outbox, and
+    # a drain task POSTs it to mainspring's ingest API. Default OFF: nothing is
+    # enqueued and the live platform is completely unaffected. With the flag on
+    # but MAINSPRING_INGEST_URL empty, the drain runs in shadow (log-only) —
+    # the intended posture until the mainspring ingest endpoint is live.
+    MAINSPRING_BRAIN_FEED_ENABLED: bool = False
+    # Base URL of the mainspring deployment exposing /api/v1/ingest/*. Empty =
+    # shadow mode (drain logs what it would send, leaves rows pending).
+    MAINSPRING_INGEST_URL: str = ""
+    # Brand service token for the ingest API (sent as Bearer). Empty in shadow.
+    MAINSPRING_BRAND_TOKEN: str = ""
+    # How far back each sweep looks for newly-resolved decisions / teach
+    # outcomes to enqueue. The sweep runs continuously, so this only needs to
+    # comfortably exceed the inter-sweep interval; the daily usage rollup only
+    # aggregates whole past days regardless of this value.
+    MAINSPRING_BRAIN_FEED_LOOKBACK_HOURS: int = 72
+
     @property
     def resolved_claude_model(self) -> str:
         """Claude model for assessment terminal, chat, and general use. Defaults to claude-3-5-haiku-latest."""

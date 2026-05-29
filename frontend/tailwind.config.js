@@ -4,6 +4,10 @@ export default {
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
+    // Vendored @mainspring/ui primitives carry their class names as literals;
+    // scan them so the semantic-colour bridge below actually emits CSS when a
+    // primitive is imported into a Taali surface.
+    "./vendor/mainspring/**/*.{ts,tsx}",
   ],
   theme: {
     extend: {
@@ -39,6 +43,19 @@ export default {
         'taali-warning': 'var(--amber)',
         'taali-danger': 'var(--red)',
         'taali-info': 'var(--purple)',
+        // Bridge: @mainspring/ui primitives (CommandBar, Toast, …) are written
+        // against mainspring's semantic colour names. Map each by *role* onto
+        // Taali's tokens so a vendored primitive re-skins to the Taali palette
+        // with no edit to the vendored copy. Purely additive — no Taali surface
+        // references these names (they all use the `taali-*` namespace).
+        panel: 'var(--bg-2)',
+        'panel-2': 'var(--bg-3)',
+        cloud: 'var(--ink)',
+        mute: 'var(--mute)',
+        'line-d': 'var(--line)',
+        accent: 'var(--purple)',
+        warn: 'var(--amber)',
+        danger: 'var(--red)',
       },
       fontFamily: {
         display: ['var(--font-display)'],
