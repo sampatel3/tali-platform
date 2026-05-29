@@ -1,0 +1,9 @@
+{
+  "$comment": "Edit this in the real north-star repo. Paths are resolved relative to the north-star repo root (where this file lives), or may be absolute. 'northStarRef' is the human/agent-facing pointer embedded in each managed block.",
+  "northStarRef": "the `north-star` repo (see its NORTH_STAR.md)",
+  "targets": [
+    { "repo": "mainspring", "claudeMd": "../mainspring/CLAUDE.md" },
+    { "repo": "taali",      "claudeMd": "../taali/CLAUDE.md" },
+    { "repo": "cadence",    "claudeMd": "../cadence/CLAUDE.md" }
+  ]
+}

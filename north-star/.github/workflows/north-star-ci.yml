@@ -1,0 +1,33 @@
+name: north-star
+
+# Keeps the North Star honest: the model must be internally consistent, must match
+# reality (drift), and the agent block must render. Runs on every PR.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install pyyaml
+
+      - name: Validate model integrity + ADR linkage
+        run: python scripts/validate_model.py
+
+      - name: Drift check (model vs reality)
+        # Non-strict: sibling repos aren't checked out in this repo's CI, so their
+        # mappings are reported unverifiable, not failed. Verifiable repos must match.
+        # To check every repo, check them out and pass --strict.
+        run: python scripts/check_drift.py
+
+      - name: Agent block renders
+        run: python agent/sync_north_star.py --print
