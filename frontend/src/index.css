@@ -4,7 +4,12 @@
    under ./styles/. Import order == original source order, so the
    cascade is preserved exactly. @tailwind + @layer base live in
    01-base.css (must stay together for Tailwind layer resolution).
+
+   00-tokens.css (vendored @mainspring/tokens) is imported first so the
+   canonical design-token vocabulary is defined before anything that
+   consumes it; Taali's hiring-specific tokens live in 01-base.css.
    ============================================================ */
+@import "./styles/00-tokens.css";
 @import "./styles/01-base.css";
 @import "./styles/02-shell-nav.css";
 @import "./styles/03-settings-agent.css";
