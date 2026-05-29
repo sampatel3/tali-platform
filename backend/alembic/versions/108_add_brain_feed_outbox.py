@@ -7,8 +7,8 @@ drain task ships pending rows to the mainspring ingest API with retry,
 idempotent on ``event_id``. Sits behind MAINSPRING_BRAIN_FEED_ENABLED (default
 off) so the live platform is unaffected until deliberately enabled.
 
-Revision ID: 107_add_brain_feed_outbox
-Revises: 106_add_cache_creation_1h_tokens
+Revision ID: 108_add_brain_feed_outbox
+Revises: 107_add_anthropic_wire_log
 Create Date: 2026-05-29
 """
 
@@ -18,8 +18,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision = "107_add_brain_feed_outbox"
-down_revision = "106_add_cache_creation_1h_tokens"
+revision = "108_add_brain_feed_outbox"
+down_revision = "107_add_anthropic_wire_log"
 branch_labels = None
 depends_on = None
 
