@@ -1,0 +1,253 @@
+/* Landing pipeline diagram (HOW THE AGENT WORKS section). Horizontal
+   recruitment flow at top of each column, vertical stack of Taali
+   automation cards underneath. 6 columns on wide viewports, 3 on md,
+   2 on sm, 1 on mobile. */
+.taali-pipeline {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1280px) {
+  .taali-pipeline {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .taali-pipeline {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .taali-pipeline {
+    grid-template-columns: 1fr;
+  }
+}
+
+.taali-pipeline-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.taali-pipeline-step {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: #fff;
+}
+
+.taali-pipeline-step-n {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: color-mix(in oklab, var(--purple-lav) 80%, #fff);
+}
+
+.taali-pipeline-step-name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Arrow between stage pills — only visible on the wide grid where
+   stages sit on the same row. Hidden on responsive collapses. */
+.taali-pipeline-arrow {
+  position: absolute;
+  right: -14px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 14px;
+  color: var(--mute);
+  pointer-events: none;
+}
+
+@media (max-width: 1280px) {
+  .taali-pipeline-arrow {
+    display: none;
+  }
+}
+
+.taali-pipeline-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.taali-pipeline-card {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.taali-pipeline-card:hover {
+  border-color: color-mix(in oklab, var(--purple) 35%, var(--line));
+  box-shadow: 0 8px 18px -12px rgba(91, 44, 168, 0.25);
+}
+
+.taali-pipeline-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.taali-pipeline-card-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+/* Bespoke-task CTA: lives at the bottom of the catalogue rather than in
+   the page header so it doesn't crowd the title. Subtle dashed
+   container — discoverable but doesn't compete with the catalogue
+   cards above. */
+.tasks-bespoke-cta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 28px;
+  padding: 16px 20px;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  background: var(--bg-2);
+}
+
+.tasks-bespoke-cta-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.tasks-bespoke-cta-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--purple) 14%, transparent);
+  color: var(--purple);
+  flex-shrink: 0;
+}
+
+.tasks-bespoke-cta-body b {
+  display: block;
+  color: var(--ink);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.tasks-bespoke-cta-body p {
+  margin: 2px 0 0;
+  color: var(--mute);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.tasks-bespoke-cta-btn {
+  flex-shrink: 0;
+  padding: 9px 16px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--purple) 35%, var(--line));
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.tasks-bespoke-cta-btn:hover {
+  background: color-mix(in oklab, var(--purple) 8%, var(--bg));
+  border-color: var(--purple);
+}
+
+@media (max-width: 640px) {
+  .tasks-bespoke-cta {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .tasks-bespoke-cta-btn {
+    align-self: flex-start;
+  }
+}
+
+.tasks-loading-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.jobs-search {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.jobs-search input {
+  flex: 1;
+  width: 100%;
+  padding: 14px 18px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  font: inherit;
+  font-size: 14px;
+}
+
+.jobs-search input:focus {
+  outline: 0;
+  border-color: var(--purple);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--purple) 16%, transparent);
+}
+
+.jobs-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.job-card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, transform 0.12s ease;
+}
+
+.job-card:hover {
+  border-color: color-mix(in oklab, var(--purple) 25%, var(--line));
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.job-card .role-name {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.job-card.from-wk {
+  border-color: color-mix(in oklab, #2d8cff 25%, var(--line));
+}

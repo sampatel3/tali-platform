@@ -1,0 +1,703 @@
+/* ================== PAGE LAYOUT + HERO (Phase 2) ================== */
+
+.mc-page {
+  padding: 28px 32px 48px;
+  max-width: 1440px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.mc-page-narrow {
+  max-width: 1200px;
+}
+
+.mc-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 28px;
+  flex-wrap: wrap;
+}
+
+.mc-page-head > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.mc-page-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.mc-kicker {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--purple);
+  margin-bottom: 10px;
+}
+
+.mc-kicker.is-mute { color: var(--mute); }
+
+.mc-h-display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.02;
+  font-size: clamp(38px, 5.4vw, 60px);
+  color: var(--ink);
+  margin: 0 0 10px;
+}
+
+.mc-h-display em {
+  font-style: normal;
+  color: var(--purple);
+  font-weight: inherit;
+}
+
+.mc-h-display .mc-period {
+  color: var(--purple);
+}
+
+.mc-subtitle {
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--mute);
+  max-width: 720px;
+  margin: 0;
+}
+
+/* ================================================================
+   AGENT HEADER — unified V2 hero (HANDOFF unified-headers.md §2-§5)
+   The single dark-purple slab at the top of every recruiter page.
+   Fixed 320px tall so every header lines up perfectly across the
+   platform. The right-side agent panel (Jobs / Role detail) reserves
+   208px so OFF and ON states have the same vertical footprint.
+   ================================================================ */
+
+.agent-header {
+  color: #fff;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  position: relative;
+  overflow: hidden;
+  padding: 32px 32px 36px;
+  /* Floor sized to absorb the tallest normal layout (Role-detail
+     back-link + kicker + h1 + actions + 4-fact grid + 4-row agent
+     panel on the right) so every recruiter-page header lines up at
+     the same y-coordinate in the 99% case. Kept as `min-height` (not
+     fixed `height`) so an unusually long role name — backend allows
+     up to 200 chars and we render it in both kicker and title — can
+     wrap without getting clipped by overflow: hidden. */
+  min-height: 320px;
+  display: flex;
+  /* Anchor inner content to the top so the title sits at the same y position
+     on every page, with or without a right-side agent panel. (Centering left
+     short title blocks ~50px lower than pages with a tall panel.) */
+  align-items: flex-start;
+  /* Quiet base — the bright running gradient fades in on top via the
+     .ah-bright-overlay layer so OFF→ON cross-fades cleanly. */
+  background: var(--grad-dark-vert);
+}
+
+.agent-header-inner {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 32px;
+  align-items: flex-start;
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+/* Compact variant deprecated — normalized to default height. */
+.agent-header.compact { padding: 32px 32px 36px; }
+
+/* === Bright agent-running gradient lives on a separate overlay layer so
+   the OFF→ON state change cross-fades opacity instead of snapping between
+   two `background` values (which browsers can't interpolate). The dark
+   quiet base stays painted on `.agent-header`; the overlay simply fades
+   in on top of it when the agent is running. === */
+.ah-bright-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 700ms cubic-bezier(.4, 0, .2, 1);
+  background:
+    radial-gradient(ellipse 80% 60% at 75% 0%,  rgba(196,165,253,0.70) 0%, transparent 60%),
+    radial-gradient(ellipse 70% 80% at 10% 100%, rgba(180,80,255,0.55) 0%, transparent 65%),
+    linear-gradient(180deg, #3a1d6e 0%, #251248 100%);
+}
+
+.agent-header.agent-running .ah-bright-overlay {
+  opacity: 1;
+  animation: agentHeaderPulse 6s ease-in-out infinite;
+}
+
+/* Wrapper around the on/off/paused state body. Inherits the flex column
+   layout the parent `.agent-panel` used to host directly, so existing
+   spacing + `.agent-panel.agent-off .agent-actions { margin-top: auto }`
+   keep working. The React `key={status}` on this node re-mounts the body
+   on a real state flip, triggering the agentPanelEnter fade-in. */
+.agent-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  animation: agentPanelEnter 380ms cubic-bezier(.4, 0, .2, 1) both;
+}
+
+@keyframes agentPanelEnter {
+  0%   { opacity: 0; transform: translateY(4px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes agentHeaderPulse {
+  0%, 100% { filter: saturate(1)    brightness(1);    }
+  50%      { filter: saturate(1.15) brightness(1.08); }
+}
+
+/* Bright glow drift pseudos used to sit on .agent-header.agent-running, but
+   in the new cross-fade architecture the bright wash lives on the
+   .ah-bright-overlay child so the OFF→ON state can interpolate. The pseudos
+   conflicted with the overlay's stacking, so the agentHeaderPulse on the
+   overlay carries the breathing motion on its own now. */
+
+/* === OFF / no-agent: same purple base (now on .agent-header itself),
+   glows muted, no animation. === */
+.agent-header.agent-quiet {
+  /* base background + border now live on .agent-header */
+}
+
+.agent-header.agent-quiet::before {
+  content: "";
+  position: absolute;
+  top: -30%;
+  right: 25%;
+  width: 420px;
+  height: 420px;
+  background: radial-gradient(circle, rgba(167,139,250,0.05), transparent 65%);
+  pointer-events: none;
+}
+
+.agent-header.agent-quiet::after {
+  content: "";
+  position: absolute;
+  bottom: -50%;
+  left: -2%;
+  width: 420px;
+  height: 420px;
+  background: radial-gradient(circle, rgba(157,0,255,0.04), transparent 70%);
+  pointer-events: none;
+}
+
+.agent-header.agent-quiet::before,
+.agent-header.agent-quiet::after {
+  opacity: 0.18 !important;
+  filter: blur(40px) !important;
+}
+
+/* Dial back the lavender accent on quiet mode so the trailing "." reads quiet, not branded. */
+.agent-header.agent-quiet .agent-header-left h1 em,
+.agent-header.agent-quiet .agent-header-left h1 .ah-period {
+  color: rgba(196, 165, 253, .55);
+}
+
+.agent-header-left { min-width: 0; }
+
+.agent-header-left .back-link {
+  color: rgba(255, 255, 255, 0.65);
+  display: block;
+  /* `display: block` stretches the element to the column width, and
+     the onClick-variant renders as <button> which centers its text by
+     default — pin left so the breadcrumb stays aligned with the
+     kicker/title below. `width: fit-content` keeps the click target
+     tight to the label instead of spanning the whole hero. */
+  text-align: left;
+  width: fit-content;
+  margin-bottom: 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  text-decoration: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.agent-header-left .back-link:hover { color: #fff; }
+
+.agent-header-left .ah-kicker {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.65);
+  margin: 0 0 10px;
+}
+
+.agent-header-left .ah-title-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.agent-header-left h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 48px;
+  letter-spacing: -.03em;
+  font-weight: 600;
+  line-height: 1.02;
+  color: #fff;
+}
+
+.agent-header.compact .agent-header-left h1 { font-size: 48px; }
+
+.agent-header-left h1 em,
+.agent-header-left h1 .ah-period {
+  font-style: normal;
+  color: var(--purple-lav);
+}
+
+.agent-header-left .ah-title-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.agent-header-left .ah-title-actions .btn,
+.agent-header-left .ah-title-actions button.btn-outline,
+.agent-header-left .ah-title-actions .btn-outline {
+  background: rgba(255, 255, 255, 0.10);
+  border-color: rgba(255, 255, 255, 0.20);
+  color: #fff;
+}
+
+.agent-header-left .ah-title-actions .btn-outline:hover { background: rgba(255, 255, 255, 0.16); }
+
+.agent-header-left .ah-title-actions .btn-purple,
+.agent-header-left .ah-title-actions .btn.btn-purple {
+  background: var(--purple);
+  color: #fff;
+  border-color: transparent;
+}
+
+.agent-header-left p.ah-subtitle {
+  margin: 10px 0 0;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 14px;
+  line-height: 1.55;
+  max-width: 640px;
+}
+
+/* ============== Right-side agent panel (Jobs / Role detail) ============== */
+.agent-panel {
+  width: 300px;
+  flex-shrink: 0;
+  /* Locked height so the box doesn't pop between states. OFF (copy +
+     budget input + button) is the tallest natural layout; ON / PAUSED
+     have empty room below the action row. min-height (vs fixed) lets
+     edge cases like the inline budget error grow gracefully without
+     clipping, while every common state still settles at exactly 240px. */
+  min-height: 240px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(167, 139, 250, 0.32);
+  border-radius: 14px;
+  padding: 14px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  /* Smooth chrome change when on/off/paused flips, so the border + bg
+     fade in step with the hero's bright-overlay cross-fade. */
+  transition:
+    background-color 700ms cubic-bezier(.4, 0, .2, 1),
+    border-color 700ms cubic-bezier(.4, 0, .2, 1),
+    box-shadow 700ms cubic-bezier(.4, 0, .2, 1);
+}
+
+/* Pin the action row to the bottom of the panel in every state, so the
+   Pause / Resume / Turn-on button always sits in the same place when
+   the user toggles agent mode. (Pairs with the locked .agent-panel
+   height — together they keep the box visually static across flips.) */
+.agent-panel .agent-actions { margin-top: auto; }
+.agent-panel.agent-off {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+}
+.agent-panel.agent-paused { border-color: rgba(251, 191, 36, 0.32); }
+
+/* Subtle breathing border on the live panel — signals live activity. */
+.agent-header.agent-running .agent-panel:not(.agent-off):not(.agent-paused) {
+  animation: agentPanelBreathe 3s ease-in-out infinite;
+}
+
+@keyframes agentPanelBreathe {
+  0%, 100% {
+    border-color: rgba(196, 165, 253, 0.42);
+    box-shadow: 0 0 0 0 rgba(196, 165, 253, 0), 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  }
+  50% {
+    border-color: rgba(220, 200, 255, 0.72);
+    box-shadow: 0 0 0 4px rgba(196, 165, 253, 0.12), 0 1px 0 rgba(255, 255, 255, 0.10) inset;
+  }
+}
+
+.agent-panel-head { display: flex; align-items: center; gap: 11px; }
+
+.agent-pulse-wrap {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: rgba(167, 139, 250, 0.22);
+  border: 1px solid rgba(167, 139, 250, 0.40);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.agent-panel.agent-off .agent-pulse-wrap {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.agent-panel.agent-paused .agent-pulse-wrap {
+  background: rgba(251, 191, 36, 0.18);
+  border-color: rgba(251, 191, 36, 0.40);
+}
+
+.agent-pulse {
+  position: absolute;
+  inset: -3px;
+  border-radius: 13px;
+  border: 2px solid rgba(196, 165, 253, 0.65);
+  animation: agentPulse 1.6s ease-out infinite;
+  pointer-events: none;
+}
+
+@keyframes agentPulse {
+  0%   { transform: scale(1);    opacity: .85; }
+  100% { transform: scale(1.32); opacity: 0;   }
+}
+
+.agent-status { flex: 1; min-width: 0; }
+.agent-status-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agent-mode {
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.78);
+  font-weight: 500;
+}
+
+.agent-state-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+}
+
+.agent-state-pill.state-on     { background: #c4a5fd; color: #1a0f2e; }
+.agent-state-pill.state-off    { background: rgba(255, 255, 255, 0.14); color: rgba(255, 255, 255, 0.78); border: 1px solid rgba(255, 255, 255, 0.18); }
+.agent-state-pill.state-paused { background: rgba(251, 191, 36, 0.85); color: #3b2200; }
+
+.agent-pending {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: #fff;
+  font-weight: 600;
+  background: rgba(196, 165, 253, 0.22);
+  border: 1px solid rgba(196, 165, 253, 0.40);
+  border-radius: 6px;
+  padding: 3px 8px;
+  display: inline-block;
+}
+
+.agent-tick {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.78);
+  line-height: 1.45;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.20);
+  border-left: 2px solid var(--purple-lav);
+  /* Single line + ellipsis. Multi-line ticks would push the panel
+     past its min-height and visibly resize the hero box on toggle. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-budget { display: flex; flex-direction: column; gap: 5px; }
+.agent-budget-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.65);
+}
+.agent-budget-row .amt {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #fff;
+  font-weight: 600;
+}
+.agent-budget-row .amt .of {
+  color: rgba(255, 255, 255, 0.55);
+  font-weight: 400;
+}
+
+.agent-budget-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.agent-budget-bar .fill {
+  height: 100%;
+  background: var(--purple-lav);
+  border-radius: 3px;
+}
+
+.agent-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 2px;
+}
+
+/* OFF-state activator (HANDOFF unified-headers.md §4):
+   inline budget input + Activate button living inside the agent panel
+   when the role has agent mode disabled. One click + one number → live. */
+.agent-off-copy {
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.agent-off-budget {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.20);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.agent-off-budget-prefix,
+.agent-off-budget-suffix {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.agent-off-budget input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  padding: 0;
+}
+
+.agent-off-budget input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.agent-off-error {
+  font-size: 11.5px;
+  color: rgba(251, 191, 36, 0.95);
+  line-height: 1.35;
+}
+
+.agent-btn {
+  flex: 1;
+  height: 30px;
+  background: rgba(255, 255, 255, 0.10);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  border-radius: 7px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: transform 130ms cubic-bezier(.4, 0, .2, 1), filter 130ms ease;
+}
+
+.agent-btn:hover { background: rgba(255, 255, 255, 0.16); }
+.agent-btn:disabled { opacity: 0.55; cursor: default; }
+.agent-btn.icon { flex: 0 0 30px; padding: 0; color: rgba(255, 255, 255, 0.78); }
+.agent-btn.primary { background: var(--purple); border-color: transparent; }
+.agent-btn.primary:hover { background: color-mix(in oklab, var(--purple) 90%, white); }
+
+/* Simulated click — fired briefly when the landing-hero scroll trigger
+   "presses" the Turn on agent button before flipping the panel state, so
+   visitors visually see the button respond instead of state changing on
+   its own. */
+.agent-btn.is-pressing {
+  transform: scale(0.94);
+  filter: brightness(0.85);
+}
+
+/* ============== Pre/Post-title slots ============== */
+.agent-header-left .ah-pre { margin-bottom: 14px; }
+.agent-header-left .ah-post { margin-top: 14px; }
+
+/* Compact pending-by-type strip in the purple header (Home). Light text on
+   the slab; dot colours carry the decision-type vocabulary. */
+.ah-pending-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+}
+.ah-pending-strip-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+}
+.ah-pending-strip-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.78);
+  white-space: nowrap;
+}
+.ah-pending-strip-item b {
+  font-family: var(--font-display);
+  font-weight: 600;
+  color: #fff;
+}
+.ah-pending-strip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* Candidate detail avatar block lives in the preTitle slot. */
+.ah-cand-pre {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.ah-cand-pre .ah-cand-avatar {
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Role detail facts grid lives in the postTitle slot. */
+.ah-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+  max-width: 720px;
+  margin-top: 14px;
+}
+.ah-facts .f { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.ah-facts .f .k {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+}
+.ah-facts .f .v {
+  font-size: 13px;
+  color: #fff;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ah-facts .f .v.purple { color: var(--purple-lav); }
+
+@media (max-width: 880px) {
+  .agent-header-inner { grid-template-columns: 1fr; }
+  .agent-panel { width: 100%; }
+  .ah-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ============== Nav agent-running chip (Jobs / Role detail only) ============== */
+.mc-nav-agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(167, 139, 250, 0.14);
+  border: 1px solid rgba(167, 139, 250, 0.36);
+  color: var(--purple);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mc-nav-agent-chip:hover { background: rgba(167, 139, 250, 0.22); }
+.mc-nav-agent-chip .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--purple);
+  box-shadow: 0 0 0 4px rgba(127, 57, 251, 0.18);
+  animation: agentChipPulse 1.6s ease-in-out infinite;
+}
+@keyframes agentChipPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(127, 57, 251, 0.30); opacity: 1; }
+  50%      { box-shadow: 0 0 0 6px rgba(127, 57, 251, 0);    opacity: .85; }
+}

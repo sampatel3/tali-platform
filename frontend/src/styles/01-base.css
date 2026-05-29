@@ -1,0 +1,241 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --ink: #15121a;
+  --ink-2: #3a3343;
+  --ink-soft: #6b6478;
+  --mute: #8b8595;
+  --mute-2: #9e96ae;
+  --line: #e8e2ee;
+  --line-2: #f1edf5;
+  --bg: #f7f4fb;
+  --bg-2: #ffffff;
+  --bg-3: #efe8f7;
+  /* Brand purple — v8, lifted out of the agent-quiet anchor.
+     v7 sampled the literal `--grad-dark-vert` start (#2a1854) — at
+     21% lightness that crosses into "looks black", not purple.
+     v8 keeps the same hue axis as the gradient stops (H≈263°,
+     shared by #2a1854 / #3a1d6e / #b450ff) but lifts lightness to
+     ~44% so the brand actually reads as purple. Sits perceptually
+     midway between the agent-off anchor and the agent-on glow —
+     calm and deep, but unmistakably purple.
+
+     Drives every purple in the system that reads as the brand:
+     buttons (.btn-purple, .btn-primary:hover), kickers, accents
+     (text-[var(--purple)]), marketing CTA pill text, the Pending
+     count, focus rings. The agent-running hero keeps its hard-coded
+     vivid recipe — the brightness there is the signal that the
+     agent is live, not the brand identity. A few canvas / xterm
+     consumers hardcode the agent-on bright (#B450FF) for visibility
+     on dark surfaces; those are deliberate exceptions, not the
+     brand. */
+  --purple: #5e3aa8;
+  --purple-2: #4a2d80;
+  --purple-soft: #ede5f8;
+
+  /* v5 — deep-purple dark surfaces (HANDOFF unified-headers.md §1).
+     Bumped up from v4 (#100a18 / #0d0719 / #1a0f2e / #2a1f3d) so the
+     purple actually reads as purple, not black. Applies to the auth
+     editorial pane, demo dark panels, IDE chrome, reporting narrator,
+     and every platform AgentHeader. Re-anchored on --purple v6. */
+  --ink-deep: #1a1228;       /* deepest panel bg, IDE chrome */
+  --ink-deep-2: #1d1130;     /* card surface / gradient end */
+  --ink-deep-3: #2a1854;     /* mid panel / gradient start (matches agent-quiet anchor) */
+  --line-dark: #3a2a55;      /* border on dark panels */
+  --purple-glow: rgba(196, 165, 253, 0.45); /* atmospheric blob — hero top-right lavender */
+  --purple-lav: #c4a5fd;     /* lavender accent (hero top-right blob, sans alpha) */
+  /* Signature dark gradients — same family as the agent-running hero,
+     muted. Powers the agent-quiet (off) hero variant and the demo /
+     IDE chrome panels. The deeper #2a1854 anchor is the same hue as
+     --purple v6, just much darker — keep these in lockstep with
+     `.agent-header.agent-running` so on/off variants read as siblings. */
+  --grad-dark-vert: linear-gradient(180deg, #2a1854 0%, #1d1130 100%);
+  --grad-dark-diag: linear-gradient(135deg, #2a1854 0%, #1d1130 100%);
+  --grad-dark-card: linear-gradient(160deg, #2a1854 0%, #3a2a55 100%);
+
+  --lime: #c8f169;
+  --peach: #ffd1b8;
+  --green: #15a36a;
+  --red: #e64a4a;
+  /* Deeper red for higher-severity reject states (currently the
+     pre-screen reject, where the agent has flagged the candidate as
+     not worth assessing). Visibly darker than --red so the recruiter
+     reads it as a stronger no without losing the red-family signal. */
+  --red-deep: #a83232;
+  --amber: #d88a1c;
+  --workable: #2d8cff;
+  --workable-dark: #1a5fbf;
+  --shadow-sm: 0 1px 2px rgba(21, 18, 26, 0.06);
+  --shadow-md: 0 8px 28px -12px rgba(21, 18, 26, 0.18);
+  --shadow-lg: 0 28px 60px -28px rgba(21, 18, 26, 0.22);
+  --radius-sm: 10px;
+  --radius: 14px;
+  --radius-lg: 22px;
+  --radius-xl: 28px;
+  --pad-x: 48px;
+  --section-y: 96px;
+  --font-display: 'Geist', system-ui, sans-serif;
+  --font-sans: 'Geist', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+
+  /* Backwards-compatible variables for existing components. */
+  --taali-bg: var(--bg);
+  --taali-surface: color-mix(in oklab, var(--bg-2) 92%, transparent);
+  --taali-surface-elevated: var(--bg-2);
+  --taali-surface-subtle: var(--bg-3);
+  --taali-surface-muted: color-mix(in oklab, var(--purple) 4%, var(--bg-2));
+  --taali-surface-warm: color-mix(in oklab, var(--peach) 24%, var(--bg-2));
+  --taali-card-bg: var(--bg-2);
+  --taali-panel-bg: color-mix(in oklab, var(--bg-2) 96%, transparent);
+  --taali-table-header: color-mix(in oklab, var(--bg) 85%, var(--bg-2));
+  --taali-line: var(--line);
+  --taali-line-2: var(--line-2);
+  /* All `var(--taali-border)` consumers (Background jobs panel, Workable
+     toaster, settings buttons) want a subtle divider — not an ink-colored
+     hard border. Aliasing to var(--line) keeps the legacy callers working
+     without grep-and-replace. */
+  --taali-border: var(--line);
+  --taali-border-soft: color-mix(in oklab, var(--line) 78%, transparent);
+  --taali-border-subtle: color-mix(in oklab, var(--ink) 8%, transparent);
+  --taali-border-muted: var(--line);
+  --taali-text: var(--ink);
+  --taali-ink-2: var(--ink-2);
+  --taali-inverse-bg: var(--ink);
+  --taali-inverse-text: var(--bg);
+  --taali-muted: var(--mute);
+  --taali-nav-bg: color-mix(in oklab, var(--bg) 82%, transparent);
+  --taali-nav-pill-bg: color-mix(in oklab, var(--bg-2) 92%, transparent);
+  --taali-purple: var(--purple);
+  --taali-purple-hover: var(--purple-2);
+  --taali-purple-soft: var(--purple-soft);
+  --taali-workable: var(--workable);
+  --taali-workable-dark: var(--workable-dark);
+  --taali-surface-hover: color-mix(in oklab, var(--purple) 8%, transparent);
+  --taali-radius: var(--radius);
+  --taali-radius-card: var(--radius-lg);
+  --taali-radius-panel: var(--radius-xl);
+  --taali-font: var(--font-sans);
+  --taali-font-display: var(--font-display);
+  --taali-font-mono: var(--font-mono);
+  --taali-ring: color-mix(in oklab, var(--purple) 18%, transparent);
+  --taali-shadow-soft: var(--shadow-md);
+  --taali-shadow-strong: var(--shadow-lg);
+  --taali-spacing: 8px;
+  --taali-radius-control: var(--radius-sm);
+  --taali-success: var(--green);
+  --taali-success-soft: color-mix(in oklab, var(--green) 10%, var(--bg-2));
+  --taali-success-border: color-mix(in oklab, var(--green) 28%, var(--line));
+  --workspace-grid: minmax(220px, 0.8fr) minmax(0, 1.6fr) minmax(280px, 0.9fr);
+  --taali-warning: var(--amber);
+  --taali-warning-soft: color-mix(in oklab, var(--amber) 12%, var(--bg-2));
+  --taali-warning-border: color-mix(in oklab, var(--amber) 28%, var(--line));
+  --taali-danger: var(--red);
+  --taali-danger-soft: color-mix(in oklab, var(--red) 10%, var(--bg-2));
+  --taali-danger-border: color-mix(in oklab, var(--red) 28%, var(--line));
+  --taali-info: var(--purple);
+  --taali-info-soft: color-mix(in oklab, var(--purple) 10%, var(--bg-2));
+  --taali-info-border: color-mix(in oklab, var(--purple) 28%, var(--line));
+  --taali-level-junior: color-mix(in oklab, var(--green) 88%, black 12%);
+  --taali-level-mid: color-mix(in oklab, var(--workable) 86%, black 14%);
+  --taali-level-senior: color-mix(in oklab, var(--purple) 90%, black 10%);
+  --taali-level-staff: color-mix(in oklab, var(--ink) 72%, var(--purple) 28%);
+  --taali-runtime-bg: var(--bg);
+  --taali-runtime-text: var(--ink);
+  --taali-runtime-muted: var(--mute);
+  --taali-runtime-border: color-mix(in oklab, var(--line) 84%, transparent);
+  --taali-runtime-panel: color-mix(in oklab, var(--bg-2) 94%, transparent);
+  --taali-runtime-panel-alt: color-mix(in oklab, var(--bg) 72%, var(--bg-2));
+  --taali-runtime-panel-muted: color-mix(in oklab, var(--purple) 8%, var(--bg-2));
+  --taali-runtime-overlay: color-mix(in oklab, var(--ink) 26%, transparent);
+  --taali-runtime-terminal-bg: color-mix(in oklab, var(--ink) 94%, black 6%);
+  --taali-runtime-terminal-header: color-mix(in oklab, var(--ink) 88%, white 12%);
+  --taali-runtime-terminal-text: color-mix(in oklab, var(--bg) 90%, transparent);
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --ink: #f3effb;
+  --ink-2: #d9d2e8;
+  --ink-soft: #b9b1cc;
+  --mute: #a79cbe;
+  --mute-2: #776b8d;
+  --line: #2a2340;
+  --line-2: #201a34;
+  --bg: #0e0a18;
+  --bg-2: #16102a;
+  --bg-3: #1c1535;
+  /* Dark-mode --purple v8 — sibling of the light value (#5e3aa8),
+     lifted into a slightly higher luminance so it stays readable on
+     #0e0a18 without losing the deep-purple character. */
+  --purple: #8867c4;
+  --purple-2: #6e4ba8;
+  --purple-soft: #2e1a4e;
+  --workable: #53a3ff;
+  --workable-dark: #2d8cff;
+  --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.3), 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 1px 0 rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 2px 0 rgba(0, 0, 0, 0.3), 0 30px 60px -20px rgba(0, 0, 0, 0.7);
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv11";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  code {
+    font-family: var(--font-mono);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6,
+  p {
+    margin: 0;
+  }
+
+  h1 em,
+  h2 em,
+  h3 em {
+    font-style: normal !important;
+    color: var(--purple);
+    font-weight: inherit;
+  }
+}
