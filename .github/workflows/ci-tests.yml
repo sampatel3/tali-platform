@@ -1,0 +1,70 @@
+name: CI Tests (Tier 1 — pilot gate)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tier 1 test gate for tali-platform. PRE-PILOT it runs ONLY on manual dispatch
+# so it's real and reviewable without blocking while the suite's
+# environment-specific failures are burned down.
+#
+# >>> TURN ON AT PILOT START <<<
+# Uncomment the `pull_request:` trigger below. That one line makes the gate
+# required on every PR. (See docs/qa/TWO_TIER_QA_STRATEGY.md §5.)
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+  # pull_request:        # <-- uncomment at pilot start to make this a PR gate
+
+jobs:
+  # Fast feedback: the suite on isolated SQLite (the default datastore).
+  backend-tests-sqlite:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: pytest (SQLite, isolated)
+        # No TEST_DATABASE_URL → per-test isolated SQLite. The autouse
+        # isolation fixture guarantees order-independent results.
+        run: pytest -q -m "not production"
+
+  # Prod parity: the same suite against a REAL throwaway Postgres. The service
+  # is mapped to host port 55432 (NOT 5432) so it can never be confused with a
+  # dev/prod database, and matches the conftest safety guard.
+  backend-tests-postgres:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - "55432:5432"
+        options: >-
+          --health-cmd "pg_isready -U test"
+          --health-interval 2s --health-timeout 3s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgresql://test:test@localhost:55432/test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: pytest (Postgres, prod parity)
+        run: pytest -q -m "not production"

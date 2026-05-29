@@ -9,9 +9,30 @@ warnings.filterwarnings(
     module="starlette.formparsers",
 )
 
-# Override DATABASE_URL before any app imports. Shared in-memory avoids disk I/O
-# and locking when sync + async engines both access the DB.
-os.environ["DATABASE_URL"] = "sqlite:///file:taalitest?mode=memory&cache=shared"
+# --- Test datastore selection -------------------------------------------------
+# Override DATABASE_URL before any app imports.
+#
+# Default (no TEST_DATABASE_URL): a shared-cache in-memory SQLite. Fast, no
+# external services — used for local runs and the pre-pilot CI gate.
+#
+# TEST_DATABASE_URL set: run against a real datastore (Postgres) for prod
+# parity. This MUST point at a *throwaway* database — CI's ephemeral service
+# container, or a dedicated dev container on a NON-default port. The teardown
+# below drops every table between tests, so pointing this at a real database
+# (e.g. the host's 5432, which may be the prod pg / an ssh tunnel) would be
+# destructive. We refuse the obvious footgun explicitly.
+_TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "").strip()
+if _TEST_DATABASE_URL:
+    if ":5432/" in _TEST_DATABASE_URL or _TEST_DATABASE_URL.endswith(":5432"):
+        raise RuntimeError(
+            "TEST_DATABASE_URL points at port 5432 — refusing to run the "
+            "destructive test teardown (drop_all per test) against what is "
+            "likely the host/prod Postgres. Use a throwaway container on "
+            "another port (e.g. 55432) or an ephemeral CI service DB."
+        )
+    os.environ["DATABASE_URL"] = _TEST_DATABASE_URL
+else:
+    os.environ["DATABASE_URL"] = "sqlite:///file:taalitest?mode=memory&cache=shared"
 # Keep external integrations disabled by default for unit/API tests. Individual
 # tests can opt-in by monkeypatching settings.
 os.environ["MVP_DISABLE_WORKABLE"] = "true"
@@ -47,90 +68,82 @@ from app.models.candidate import Candidate
 from app.models.assessment import Assessment
 
 SQLALCHEMY_DATABASE_URL = os.environ["DATABASE_URL"]
-# Use same URL as app so sync + async share the in-memory DB
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False, "timeout": 30},
-    poolclass=NullPool,
-)
+IS_SQLITE = SQLALCHEMY_DATABASE_URL.startswith("sqlite")
+
+# Use same URL as app so sync + async share the DB.
+if IS_SQLITE:
+    engine = create_engine(
+        SQLALCHEMY_DATABASE_URL,
+        connect_args={"check_same_thread": False, "timeout": 30},
+        poolclass=NullPool,
+    )
+else:
+    # Real Postgres (CI service container / throwaway dev container). NullPool
+    # keeps connection state from bleeding across the per-test drop/create.
+    engine = create_engine(SQLALCHEMY_DATABASE_URL, poolclass=NullPool)
+
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
 # Keep one sync connection open so SQLite shared-memory state survives across
-# short-lived request/test sessions during the suite.
-_keepalive_connection = engine.connect()
+# short-lived request/test sessions during the suite. Not needed for Postgres
+# (the server owns the DB regardless of client connections).
+_keepalive_connection = engine.connect() if IS_SQLITE else None
 
 # Enable foreign key support and WAL mode for SQLite (reduces locking with async engine)
-@event.listens_for(engine, "connect")
-def set_sqlite_pragma(dbapi_connection, connection_record):
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.close()
+if IS_SQLITE:
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.close()
 
 
-# SQLite BigInteger-PK workaround for claude_call_log. SQLite only
-# auto-increments INTEGER PRIMARY KEY; a BIGINT PK stays NULL on insert.
-# claude_call_log rows are now written by MeteredAnthropicClient from many
-# code paths (any test that triggers a Claude call through the wrapper),
-# so the workaround lives here globally rather than per-test-file. Prod
-# uses Postgres where BigInteger PKs auto-increment via sequence.
+# SQLite BigInteger-PK workaround. SQLite only auto-increments INTEGER PRIMARY
+# KEY; a BIGINT PK stays NULL on insert. Several high-traffic tables use
+# BigInteger PKs and are written from many code paths, so we assign their PKs
+# from a counter via a before_insert listener.
+#
+# CRITICAL: these counters are reset to zero before *every* test by the
+# autouse `_isolate_test` fixture below. They used to be process-global and
+# monotonic for the whole session, which made any test asserting a specific
+# id (or a clean first row) pass alone but fail when another row-creating
+# test ran first — the "passes in isolation, fails in suite" coupling.
+#
+# The listeners are registered ONLY for SQLite. On Postgres (CI / prod
+# parity) the real BIGSERIAL sequence assigns ids; forcing them from a Python
+# counter there would fight the sequence and collide.
 _CLAUDE_CALL_LOG_PK_COUNTER = {"n": 0}
-
-
-def _assign_claude_call_log_pk(mapper, connection, target):  # pragma: no cover
-    if getattr(target, "id", None) is None:
-        _CLAUDE_CALL_LOG_PK_COUNTER["n"] += 1
-        target.id = _CLAUDE_CALL_LOG_PK_COUNTER["n"]
-
-
-try:
-    from app.models.claude_call_log import ClaudeCallLog as _ClaudeCallLog
-
-    event.listen(_ClaudeCallLog, "before_insert", _assign_claude_call_log_pk)
-except Exception:  # pragma: no cover — model import shouldn't fail
-    pass
-
-
-# Same BigInteger-PK workaround for agent_decisions. Decisions are created
-# from many code paths (the pre-screen emitter, reconcile, the role PATCH
-# reconcile, approve/override), so register the listener globally here
-# rather than in a single test module — otherwise tests that create
-# AgentDecisions only pass when that one module happens to be imported in
-# the same pytest session (an import-order coupling).
 _AGENT_DECISION_PK_COUNTER = {"n": 0}
-
-
-def _assign_agent_decision_pk(mapper, connection, target):  # pragma: no cover
-    if getattr(target, "id", None) is None:
-        _AGENT_DECISION_PK_COUNTER["n"] += 1
-        target.id = _AGENT_DECISION_PK_COUNTER["n"]
-
-
-try:
-    from app.models.agent_decision import AgentDecision as _AgentDecision
-
-    event.listen(_AgentDecision, "before_insert", _assign_agent_decision_pk)
-except Exception:  # pragma: no cover — model import shouldn't fail
-    pass
-
-
-# Same BigInteger-PK workaround for graph_episode_outbox — the durable
-# Graphiti episode outbox. Rows are written from the outcome-learning and
-# decision-queueing paths (many test modules), so register globally here.
 _GRAPH_EPISODE_OUTBOX_PK_COUNTER = {"n": 0}
 
 
-def _assign_graph_episode_outbox_pk(mapper, connection, target):  # pragma: no cover
-    if getattr(target, "id", None) is None:
-        _GRAPH_EPISODE_OUTBOX_PK_COUNTER["n"] += 1
-        target.id = _GRAPH_EPISODE_OUTBOX_PK_COUNTER["n"]
+def _reset_pk_counters() -> None:
+    _CLAUDE_CALL_LOG_PK_COUNTER["n"] = 0
+    _AGENT_DECISION_PK_COUNTER["n"] = 0
+    _GRAPH_EPISODE_OUTBOX_PK_COUNTER["n"] = 0
 
 
-try:
-    from app.models.graph_episode_outbox import GraphEpisodeOutbox as _GraphEpisodeOutbox
+def _make_pk_assigner(counter):
+    def _assign(mapper, connection, target):  # pragma: no cover
+        if getattr(target, "id", None) is None:
+            counter["n"] += 1
+            target.id = counter["n"]
+    return _assign
 
-    event.listen(_GraphEpisodeOutbox, "before_insert", _assign_graph_episode_outbox_pk)
-except Exception:  # pragma: no cover — model import shouldn't fail
-    pass
+
+if IS_SQLITE:
+    for _model_path, _attr, _counter in (
+        ("app.models.claude_call_log", "ClaudeCallLog", _CLAUDE_CALL_LOG_PK_COUNTER),
+        ("app.models.agent_decision", "AgentDecision", _AGENT_DECISION_PK_COUNTER),
+        ("app.models.graph_episode_outbox", "GraphEpisodeOutbox", _GRAPH_EPISODE_OUTBOX_PK_COUNTER),
+    ):
+        try:
+            _module = __import__(_model_path, fromlist=[_attr])
+            event.listen(getattr(_module, _attr), "before_insert", _make_pk_assigner(_counter))
+        except Exception:  # pragma: no cover — model import shouldn't fail
+            pass
+
 
 def override_get_db():
     db = TestingSessionLocal()
@@ -140,47 +153,74 @@ def override_get_db():
         db.close()
 
 def _dispose_async_engine_before_teardown():
-    """Dispose async engine so drop_all can run without 'database is locked'."""
+    """Dispose async engine so the drop can run without 'database is locked'."""
     from app.platform.database import async_engine
     asyncio.run(async_engine.dispose())
-    time.sleep(0.05)  # Let SQLite release locks
+    if IS_SQLITE:
+        time.sleep(0.05)  # Let SQLite release WAL locks
 
 
 def _safe_drop_all():
-    """Drop all tables in reverse dependency order; use IF EXISTS for robustness."""
+    """Drop every table so the next test starts from a pristine schema.
+
+    Dialect-aware: SQLite drops tables individually with FK enforcement off
+    (we have a cyclic FK pair, agent_decisions.feedback_id ↔
+    decision_feedback.decision_id, that can't be dropped in any order while
+    foreign_keys=ON); Postgres resets the public schema in one shot.
+    """
     from sqlalchemy import text
     _dispose_async_engine_before_teardown()
     with engine.connect() as conn:
-        # Disable FK enforcement for the duration of the drop. We have at
-        # least one cyclic FK pair (agent_decisions.feedback_id ↔
-        # decision_feedback.decision_id) which SQLite refuses to drop in
-        # any order while PRAGMA foreign_keys=ON.
-        conn.execute(text("PRAGMA foreign_keys=OFF"))
-        # Drop in reverse dependency order (referencing tables first)
-        for table in reversed(Base.metadata.sorted_tables):
-            conn.execute(text(f"DROP TABLE IF EXISTS {table.name}"))
-        conn.execute(text("PRAGMA foreign_keys=ON"))
+        if IS_SQLITE:
+            conn.execute(text("PRAGMA foreign_keys=OFF"))
+            for table in reversed(Base.metadata.sorted_tables):
+                conn.execute(text(f"DROP TABLE IF EXISTS {table.name}"))
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+        else:
+            # Throwaway Postgres only (guarded above): wipe and recreate the
+            # schema — fast, and immune to the cyclic-FK drop-order problem.
+            conn.execute(text("DROP SCHEMA public CASCADE"))
+            conn.execute(text("CREATE SCHEMA public"))
         conn.commit()
+
+
+@pytest.fixture(scope="function", autouse=True)
+def _isolate_test():
+    """Per-test isolation for EVERY test — not just those that request `db`.
+
+    Setup: reset the SQLite PK counters and create a pristine schema.
+    Teardown: clear in-process state and drop the schema again.
+
+    This is the fix for the cross-file state leak: previously only tests that
+    requested the `db` fixture got create_all/drop_all, and the PK counters
+    were never reset, so a test's result depended on which other tests ran
+    first in the same process. Now isolation is unconditional and the run
+    order can't change a single pass/fail.
+    """
+    _reset_pk_counters()
+    _rate_limit_store.clear()
+    Base.metadata.create_all(bind=engine)
+    yield
+    _rate_limit_store.clear()
+    _safe_drop_all()
+    _reset_pk_counters()
 
 
 @pytest.fixture(scope="function")
 def db():
-    Base.metadata.create_all(bind=engine)
+    # Schema lifecycle is owned by the autouse `_isolate_test` fixture, which
+    # runs first; here we only hand out a session bound to that fresh schema.
     db = TestingSessionLocal()
     yield db
     db.close()
-    _safe_drop_all()
 
 
 @pytest.fixture(scope="function")
 def client(db):
     app.dependency_overrides[get_db] = override_get_db
-    # Clear in-memory rate limit state between tests to prevent 429 bleed-through
-    _rate_limit_store.clear()
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
-    _rate_limit_store.clear()
 
 
 # ---------------------------------------------------------------------------
