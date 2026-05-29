@@ -1,0 +1,465 @@
+.cand-head {
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+.cand-row {
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.12s, box-shadow 0.12s;
+}
+
+.cand-row:last-child {
+  border-bottom: 0;
+}
+
+.cand-row:hover {
+  background: var(--bg);
+}
+
+.cand-row.below {
+  background: color-mix(in oklab, var(--red) 4%, var(--bg-2));
+}
+
+.cand-row.below:hover {
+  background: color-mix(in oklab, var(--red) 7%, var(--bg-2));
+}
+
+.cand-row.selected {
+  background: color-mix(in oklab, var(--purple) 6%, var(--bg-2));
+  box-shadow: inset 3px 0 0 var(--purple);
+}
+
+.cand-row:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: -2px;
+}
+
+.cand-row input[type=checkbox],
+.cand-head input[type=checkbox] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--purple);
+  cursor: pointer;
+}
+
+.candidate-submitted-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.c-name {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.c-name .n {
+  font-weight: 500;
+}
+
+.c-name .e {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--mute);
+  margin-top: 2px;
+}
+
+.c-role {
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.c-role .r-meta {
+  color: var(--mute);
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  margin-top: 2px;
+}
+
+/* HANDOFF v2 / canvas CandidatesDirectoryPage — CV match column. */
+.c-cvmatch {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+/* HANDOFF v2 / canvas CandidatesDirectoryPage — Score column.
+   Mono, weight 600, ink color; purple when score >= 80. */
+.c-score {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.c-score.hi { color: var(--purple); }
+
+.c-score .suffix {
+  font-weight: 400;
+  color: var(--mute);
+}
+
+.c-score-unified {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.c-score-unified .pct {
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.c-score-unified .pct.un {
+  color: var(--mute);
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.c-score-unified .pct.lo {
+  color: var(--red);
+}
+
+.c-score-unified .pct.md {
+  color: var(--amber);
+}
+
+.c-score-unified .pct.hi {
+  color: var(--green);
+}
+
+.c-score-unified .meter {
+  width: 100%;
+  max-width: 140px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--line-2);
+  overflow: hidden;
+  position: relative;
+}
+
+.c-score-unified .meter i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}
+
+.c-score-unified .meter i.lo {
+  background: var(--red);
+}
+
+.c-score-unified .meter i.md {
+  background: var(--amber);
+}
+
+.c-score-unified .meter i.hi {
+  background: var(--green);
+}
+
+.c-score-unified .meter .thr {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 1.5px;
+  background: var(--ink);
+  opacity: 0.55;
+}
+
+.c-score-unified .score-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.c-score-unified .wk-pip {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #2d8cff;
+  font-weight: 500;
+}
+
+.score-kind-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.score-kind-pill.cv {
+  background: var(--bg-3);
+  color: var(--mute);
+}
+
+.score-kind-pill.composite {
+  background: color-mix(in oklab, var(--purple) 14%, transparent);
+  color: var(--purple);
+}
+
+.below-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--red) 14%, transparent);
+  color: var(--red);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.candidate-status-chip {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.candidate-status-chip .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mute);
+  display: inline-block;
+}
+
+.candidate-status-chip.submitted .dot {
+  background: var(--green);
+}
+
+.candidate-status-chip.live .dot {
+  background: var(--green);
+}
+
+.candidate-status-chip.invited .dot {
+  background: var(--amber);
+}
+
+.candidate-status-chip.review .dot {
+  background: var(--purple);
+}
+
+.c-time {
+  color: var(--mute);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.candidate-table .pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 22px;
+  color: var(--mute);
+  font-size: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.candidate-decision-pane {
+  margin-top: 18px;
+}
+
+.candidate-triage {
+  background: color-mix(in oklab, var(--purple) 4%, var(--bg-2));
+  color: var(--ink);
+}
+
+.candidate-triage-inline {
+  /* Was `min-width: 1280px` — that was inherited from the directory
+     page where it sat inline within a wide table. On the role page
+     the drawer mounts below the candidates list and needs to fit
+     whatever container it lands in. */
+  width: 100%;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid var(--purple);
+  padding: 22px 28px 24px 25px;
+  margin-top: 16px;
+  animation: candidate-triage-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+@keyframes candidate-triage-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.candidate-triage-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.1fr) minmax(360px, 1.4fr);
+  gap: 28px;
+  align-items: start;
+  position: relative;
+}
+
+.candidate-triage-identity,
+.candidate-triage-actions {
+  min-width: 0;
+}
+
+.candidate-triage-person {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.candidate-triage-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.candidate-triage-role {
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.candidate-triage-email {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--mute);
+}
+
+.candidate-triage-scores {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.candidate-triage-score-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  padding: 10px 12px;
+}
+
+.candidate-triage-score-card .k,
+.candidate-triage-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+.candidate-triage-score-card .v {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.candidate-triage-actions {
+  display: grid;
+  gap: 14px;
+}
+
+.candidate-triage-section {
+  display: grid;
+  gap: 8px;
+}
+
+.candidate-triage-stage-seg {
+  display: inline-flex;
+  gap: 2px;
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  padding: 3px;
+  overflow-x: auto;
+}
+
+.candidate-triage-stage-seg button {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--mute);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 6px 12px;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+
+.candidate-triage-stage-seg button:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.candidate-triage-stage-seg button.on {
+  background: var(--purple);
+  color: #fff;
+}
+
+.candidate-triage-stage-seg button:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.candidate-triage-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.candidate-triage-task-select {
+  flex: 1;
+  min-width: 220px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 13px;
+  padding: 9px 32px 9px 12px;
+}
+
+.candidate-triage-send {
+  min-height: 38px;
+}
+
+.candidate-triage-report-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.candidate-triage-action-spacer {
+  flex: 1;
+}

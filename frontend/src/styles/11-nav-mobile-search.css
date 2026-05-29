@@ -1,0 +1,553 @@
+/* ============================================================================
+   Mission Control chrome (Phase 1)
+   Shared shell + agent bar primitives. Class names are mc-* prefixed to
+   avoid collision with the legacy `.app-nav` / `.kicker` / `.chip` styles
+   higher up in this file. Pages opt-in by rendering <Shell /> + <AgentBar />.
+   ========================================================================= */
+
+.mc-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.mc-nav {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0 var(--pad-x);
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+}
+
+@media (max-width: 720px) {
+  .mc-nav { padding: 0 16px; }
+  /* Collapse the desktop chrome into the hamburger drawer. Selectors are
+     scoped under .mc-nav to outrank the single-class base rules that are
+     defined later in this file (equal specificity would lose on order). */
+  .mc-nav .mc-nav-tabs,
+  .mc-nav .mc-nav-search-wrap,
+  .mc-nav .mc-icon-btn,
+  .mc-nav .mc-nav-agent-chip,
+  .mc-nav .mc-nav-avatar-wrap {
+    display: none;
+  }
+  .mc-nav .mc-mobile-trigger { display: inline-flex; }
+}
+
+.mc-nav-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 18px;
+  letter-spacing: -0.025em;
+  color: var(--ink);
+  margin-right: 28px;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-style: normal;
+}
+
+.mc-nav-logo em {
+  color: var(--purple);
+  font-style: normal;
+  font-weight: inherit;
+}
+
+.mc-nav-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 100%;
+}
+
+.mc-nav-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  height: 100%;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--mute);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  position: relative;
+}
+
+.mc-nav-tab:hover {
+  color: var(--ink-2);
+}
+
+.mc-nav-tab.on {
+  color: var(--ink);
+  border-bottom-color: var(--purple);
+}
+
+.mc-nav-tab .mc-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: var(--purple-soft);
+  color: var(--purple);
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.mc-nav-grow { flex: 1; }
+
+.mc-nav-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Hamburger trigger — hidden on desktop, shown at <=720px (see media query
+   in the nav section). */
+.mc-mobile-trigger {
+  display: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-2);
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.mc-mobile-trigger:hover { border-color: var(--line); color: var(--purple); }
+
+/* ---- Mobile nav drawer ---- */
+.mc-drawer-root {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+}
+.mc-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 6, 24, 0.5);
+  animation: mc-drawer-fade 0.16s ease;
+}
+.mc-drawer-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: min(320px, 85vw);
+  background: var(--bg-2);
+  border-left: 1px solid var(--line);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
+  overflow-y: auto;
+  outline: none;
+  animation: mc-drawer-slide 0.18s ease;
+}
+@keyframes mc-drawer-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes mc-drawer-slide { from { transform: translateX(100%); } to { transform: translateX(0); } }
+
+.mc-drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.mc-drawer-id {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.mc-drawer-avatar {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--purple-soft);
+  color: var(--purple);
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+.mc-drawer-id-text { min-width: 0; }
+.mc-drawer-id-text .name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mc-drawer-id-text .org {
+  font-size: 12px;
+  color: var(--mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mc-drawer-search { padding: 12px 0; }
+.mc-drawer-search .mc-nav-search-wrap { width: 100%; }
+.mc-drawer-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mc-drawer-tab {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 12px;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink-2);
+  text-decoration: none;
+}
+.mc-drawer-tab:hover { background: var(--bg-3); }
+.mc-drawer-tab.on {
+  background: var(--purple-soft);
+  color: var(--purple);
+}
+.mc-drawer-tab .mc-badge {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: var(--purple-soft);
+  color: var(--purple);
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+.mc-drawer-tab.on .mc-badge { background: var(--bg-2); }
+.mc-drawer-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 12px 0;
+}
+.mc-drawer-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mc-drawer-actions button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+.mc-drawer-actions button:hover { background: var(--bg-3); }
+
+/* Global search — pill input + dropdown popover. The placeholder pill
+   used to be a no-op; this is the working version with a typed-word
+   fallback over candidates/roles/tasks plus an "Ask Search AI" handoff
+   to the /chat tab. */
+.mc-nav-search-wrap {
+  position: relative;
+  /* Wrap establishes the canonical search width — both the input pill
+     and the dropdown popover anchor to it so they always line up. */
+  width: 380px;
+  max-width: 100%;
+}
+
+.mc-nav-search-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px 7px 11px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--mute);
+  width: 100%;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.mc-nav-search-wrap.open .mc-nav-search-form,
+.mc-nav-search-form:focus-within,
+.mc-nav-search-form:hover {
+  border-color: color-mix(in oklab, var(--purple) 45%, var(--line));
+  background: var(--bg-2);
+}
+
+.mc-nav-search-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  outline: none;
+  font: inherit;
+  color: var(--ink);
+}
+
+.mc-nav-search-input::placeholder {
+  color: var(--mute);
+}
+
+.mc-nav-search-form kbd {
+  margin-left: auto;
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg-2);
+  color: var(--ink-2);
+  font-family: inherit;
+  font-size: 10px;
+}
+
+.mc-nav-search-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  /* Anchor to the wrap — both edges align with the input above. */
+  left: 0;
+  right: 0;
+  width: 100%;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+  z-index: 200;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.mc-nav-search-empty {
+  padding: 18px 16px;
+  font-size: 13px;
+  color: var(--mute);
+  text-align: center;
+}
+
+.mc-nav-search-groups {
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 6px 6px 4px;
+}
+
+.mc-nav-search-group + .mc-nav-search-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line-2);
+}
+
+.mc-nav-search-grouphead {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+.mc-nav-search-grouphead .count {
+  margin-left: auto;
+  color: var(--mute-2);
+}
+
+.mc-nav-search-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.mc-nav-search-row:hover,
+.mc-nav-search-row:focus-visible {
+  background: color-mix(in oklab, var(--purple) 8%, var(--bg-2));
+  outline: none;
+}
+
+.mc-nav-search-row .title {
+  font-size: 13.5px;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.mc-nav-search-row .sub {
+  font-size: 11.5px;
+  color: var(--mute);
+}
+
+.mc-nav-search-ai {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: color-mix(in oklab, var(--purple) 6%, var(--bg-2));
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.mc-nav-search-ai:hover {
+  background: color-mix(in oklab, var(--purple) 12%, var(--bg-2));
+}
+
+.mc-nav-search-ai em {
+  font-style: normal;
+  color: var(--mute);
+  font-weight: 400;
+}
+
+.mc-nav-search-ai .arrow {
+  margin-left: auto;
+  color: var(--purple);
+  transition: transform 0.18s ease;
+}
+
+.mc-nav-search-ai:hover .arrow {
+  transform: translateX(3px);
+}
+
+.mc-icon-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  position: relative;
+}
+
+.mc-icon-btn:hover {
+  border-color: var(--line);
+  color: var(--purple);
+}
+
+.mc-icon-btn .mc-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--purple);
+  border: 2px solid var(--bg-2);
+}
+
+.mc-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--purple-soft);
+  color: var(--purple);
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  border: 0;
+  cursor: pointer;
+}
+
+.mc-avatar-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 220px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow-md);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  z-index: 60;
+}
+
+.mc-avatar-menu-header {
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--line-2);
+  margin-bottom: 4px;
+}
+
+.mc-avatar-menu-header .name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.mc-avatar-menu-header .org {
+  font-size: 11.5px;
+  color: var(--mute);
+  margin-top: 2px;
+}
+
+.mc-avatar-menu button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.mc-avatar-menu button:hover {
+  background: var(--bg);
+  color: var(--purple);
+}
+
+.mc-nav-avatar-wrap {
+  position: relative;
+  display: inline-flex;
+}

@@ -1,0 +1,881 @@
+/* Positive-exit accent for the Advanced KPI — candidates Tali has handed
+   back to the recruiter. Faint purple lift (same recipe as the agent-asks
+   card) so it reads as a win, distinct from the neutral Below threshold. */
+.stat.is-handoff {
+  border-color: color-mix(in oklab, var(--purple) 32%, var(--line));
+  background: color-mix(in oklab, var(--purple) 6%, var(--bg-2));
+}
+
+.stat.is-handoff .v {
+  color: var(--purple-2);
+}
+
+.stat .k {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  color: var(--mute);
+  text-transform: uppercase;
+}
+
+.stat.hi .k,
+.stat.hi .d {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.stat .v {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 6px 0 2px;
+}
+
+.stat .d {
+  font-size: 12.5px;
+  color: var(--mute);
+}
+
+/* Phase 7 cohort planner: agent-asks-recruiter card, mounted at the top
+   of the role page above the sub-tabs. Hides itself when there are no
+   open questions, so a healthy role doesn't render an empty frame. */
+.agent-needs-input {
+  margin: 0 0 18px;
+  padding: 14px 18px 16px;
+  border: 1px solid color-mix(in oklab, var(--purple) 35%, var(--line));
+  border-radius: 14px;
+  background: color-mix(in oklab, var(--purple) 8%, var(--bg-2));
+}
+
+.agent-needs-input-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.agent-needs-input-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--purple) 20%, var(--bg));
+  color: var(--purple);
+  flex-shrink: 0;
+}
+
+.agent-needs-input-head b {
+  display: block;
+  color: var(--ink);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.agent-needs-input-head p {
+  margin: 2px 0 0;
+  color: var(--mute);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.agent-needs-input-error {
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--danger, #c33) 12%, transparent);
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.agent-needs-input-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agent-needs-input-row {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+
+.agent-needs-input-prompt p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.agent-needs-input-role {
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mute);
+  margin-bottom: 6px;
+}
+
+.agent-needs-input-role a {
+  color: var(--purple);
+  text-decoration: none;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.agent-needs-input-role a:hover {
+  text-decoration: underline;
+}
+
+.agent-needs-input-rationale {
+  margin-top: 4px !important;
+  color: var(--mute) !important;
+  font-size: 11.5px !important;
+  font-style: italic;
+}
+
+.agent-needs-input-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  align-items: center;
+}
+
+.agent-needs-input-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--purple);
+  border: 1px solid var(--purple);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.agent-needs-input-option:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.agent-needs-input-option:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.agent-needs-input-dismiss {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--mute);
+  font-size: 12px;
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.agent-needs-input-dismiss:hover:not(:disabled) {
+  border-color: var(--mute);
+  color: var(--ink);
+}
+
+.agent-needs-input-freeform {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+}
+
+.agent-needs-input-freeform input,
+.agent-needs-input-freeform textarea {
+  flex: 1;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  font-size: 12.5px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: inherit;
+  resize: vertical;
+  min-height: 32px;
+}
+
+.agent-needs-input-freeform button {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--purple);
+  background: var(--purple);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  align-self: flex-end;
+}
+
+.agent-needs-input-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--purple) 40%, var(--line));
+  color: var(--purple);
+  background: color-mix(in oklab, var(--purple) 6%, transparent);
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.agent-needs-input-link:hover {
+  background: color-mix(in oklab, var(--purple) 12%, transparent);
+}
+
+.sub-tabs {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+/* Stack below the global AgentBar (Mission Control chrome) so tabs remain
+   reachable while the candidates table or kanban scrolls past. */
+.sub-tabs-sticky {
+  position: sticky;
+  top: 78px;
+  z-index: 30;
+  padding: 10px 14px;
+  margin: 4px 0 14px;
+  background: color-mix(in oklab, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(180%) blur(10px);
+  -webkit-backdrop-filter: saturate(180%) blur(10px);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 2px 6px -3px rgba(0, 0, 0, 0.08);
+}
+
+.sub-tabs .seg {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow-sm);
+}
+
+.sub-tabs .seg button,
+.sub-tabs .seg a {
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--mute);
+}
+
+.sub-tabs .seg button.active,
+.sub-tabs .seg a.active {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.pipeline-invite-hint {
+  max-width: 320px;
+  color: var(--mute);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
+.pipeline-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.kanban {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 14px;
+}
+
+@media (max-width: 1380px) {
+  .kanban { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+.kanban-col {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 100%;
+}
+
+.kanban-col-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line-2);
+}
+
+.kanban-col-head .title,
+.candidate-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.kanban-col-head .title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.kanban-col-head .count {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--mute);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.kanban-card {
+  display: block;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.kanban-card:hover {
+  border-color: color-mix(in oklab, var(--purple) 25%, var(--line));
+  background: color-mix(in oklab, var(--purple) 4%, var(--bg));
+}
+
+.kanban-card:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 2px;
+}
+
+.kanban-card.is-review {
+  border-color: color-mix(in oklab, var(--purple) 25%, var(--line));
+}
+
+.kanban-card .cc-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.kanban-card .cc-id {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.kanban-card .av {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  background: var(--ink-soft);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.kanban-card .n {
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kanban-card .pos {
+  font-size: 10.5px;
+  color: var(--mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Compact meta line: CV n% · score · ago [· LIVE] */
+.kanban-card .cc-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--mute);
+}
+
+.kanban-card .cc-line .dot-sep {
+  color: var(--mute);
+  opacity: 0.5;
+}
+
+.kanban-card .cc-line .score-pip {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.kanban-card .cc-line .live-pip {
+  color: var(--purple);
+  font-weight: 600;
+}
+
+.kanban-card .cc-line-grow {
+  flex: 1 1 auto;
+}
+
+.kanban-card .cc-agent {
+  margin-top: 6px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  background: var(--purple-soft);
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.kanban-card .cc-agent-glyph {
+  color: var(--purple);
+  margin-top: 1px;
+  flex-shrink: 0;
+}
+
+.kanban-card .cc-agent-body {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ink-2);
+  min-width: 0;
+}
+
+.kanban-card .cc-agent-action {
+  font-weight: 500;
+  color: var(--purple);
+}
+
+.kanban-card .cc-agent-why {
+  color: var(--mute);
+  font-size: 10.5px;
+}
+
+.kanban-card .cc-agent-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 5px;
+}
+
+.kanban-card .cc-agent-actions .btn-xs {
+  height: 24px;
+  padding: 0 9px;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.kanban-card .tag.g {
+  background: color-mix(in oklab, var(--green) 16%, transparent);
+  color: var(--green);
+}
+
+.kanban-card .tag.a {
+  background: color-mix(in oklab, var(--amber) 16%, transparent);
+  color: var(--amber);
+}
+
+.kanban-card.more {
+  border-style: dashed;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  color: var(--mute);
+}
+
+.focus-panel {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 20px 22px;
+  position: sticky;
+  top: 96px;
+}
+
+.focus-panel h4 {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  margin: 0 0 6px;
+}
+
+.focus-panel h4 em {
+  font-style: normal;
+  color: var(--purple);
+}
+
+.focus-panel .sub {
+  color: var(--mute);
+  font-size: 13px;
+  margin: 0 0 18px;
+}
+
+.focus-item {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line-2);
+}
+
+.role-fit-view,
+.activity-view {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.role-fit-view {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 0;
+  overflow: hidden;
+}
+
+.role-fit-list {
+  padding: 22px 26px;
+}
+
+.role-fit-side {
+  padding: 22px 24px;
+  border-left: 1px solid var(--line-2);
+  background: color-mix(in oklab, var(--purple) 2%, var(--bg-2));
+}
+
+.role-fit-head,
+.activity-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.role-fit-head h3,
+.activity-head h3,
+.role-fit-side h4 {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  margin: 0 0 4px;
+}
+
+.role-fit-head h3 em,
+.activity-head h3 em,
+.role-fit-side h4 em {
+  font-style: normal;
+  color: var(--purple);
+}
+
+.role-fit-head p,
+.activity-head p,
+.role-fit-side p {
+  color: var(--mute);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.role-fit-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 36px 1fr 180px 128px;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line-2);
+  text-align: left;
+}
+
+.role-fit-row:last-child {
+  border-bottom: 0;
+}
+
+.role-fit-row .av {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--purple-soft);
+  color: var(--purple);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.role-fit-row .n {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.role-fit-row .e {
+  margin-top: 2px;
+  color: var(--mute);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.rf-score {
+  display: grid;
+  grid-template-columns: 46px 1fr;
+  gap: 10px;
+  align-items: center;
+  font-family: var(--font-mono);
+  color: var(--green);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.mini-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+
+.mini-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--green);
+}
+
+.rf-status {
+  justify-self: end;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--green);
+  background: color-mix(in oklab, var(--green) 12%, transparent);
+}
+
+.rf-status.warn {
+  color: var(--red);
+  background: color-mix(in oklab, var(--red) 12%, transparent);
+}
+
+.activity-view {
+  padding: 22px 26px 26px;
+}
+
+.activity-timeline {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--line-2);
+}
+
+.activity-item {
+  display: grid;
+  grid-template-columns: 12px 92px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--line-2);
+  text-align: left;
+}
+
+.activity-item .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--purple);
+}
+
+.activity-item .when,
+.activity-item .score {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--mute);
+}
+
+.activity-item .what {
+  color: var(--ink-2);
+  font-size: 13.5px;
+}
+
+.activity-item .what b {
+  color: var(--ink);
+}
+
+.activity-empty {
+  padding: 18px 0 2px;
+  color: var(--mute);
+  font-size: 13px;
+}
+
+.focus-item:last-child {
+  border-bottom: 0;
+}
+
+.focus-item .q {
+  font-size: 13.5px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.focus-item .a {
+  font-size: 12.5px;
+  color: var(--mute);
+  line-height: 1.5;
+}
+
+.candidate-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.candidate-toolbar .segset {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.candidate-toolbar .segset button {
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--mute);
+}
+
+.candidate-toolbar .segset button.on {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.candidate-toolbar input.search {
+  flex: 1;
+  min-width: 280px;
+  padding: 11px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  font: inherit;
+  font-size: 14px;
+}
+
+.candidate-toolbar input.search:focus {
+  outline: 0;
+  border-color: var(--purple);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--purple) 16%, transparent);
+}
+
+.candidate-toolbar-note {
+  margin: -4px 0 16px;
+  color: var(--mute);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.candidate-toolbar-link {
+  color: var(--purple);
+  font: inherit;
+}
+
+.candidate-bulk-bar {
+  display: none;
+  position: sticky;
+  top: 12px;
+  z-index: 5;
+  margin: 0 0 14px;
+  padding: 12px 18px;
+  background: var(--ink);
+  color: var(--bg);
+  border-radius: 999px;
+  box-shadow: var(--shadow-md);
+  align-items: center;
+  gap: 14px;
+}
+
+.candidate-bulk-bar.on {
+  display: flex;
+}
+
+.candidate-bulk-bar .count {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--bg) 15%, transparent);
+}
+
+.candidate-bulk-bar .label {
+  font-size: 13.5px;
+  flex: 1;
+}
+
+.candidate-bulk-bar .label b {
+  font-weight: 600;
+}
+
+.candidate-bulk-bar button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.candidate-table {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+
+.candidate-table-wrap {
+  overflow-x: auto;
+}
+
+.cand-head,
+.cand-row {
+  display: grid;
+  /* HANDOFF v2 / canvas CandidatesDirectoryPage table:
+     checkbox + Candidate (2fr) + Role (1.6fr) + Stage (1fr) +
+     CV match (0.8fr) + Score (0.8fr) + Status (0.6fr) */
+  grid-template-columns: 28px minmax(220px, 2fr) minmax(180px, 1.6fr) minmax(110px, 1fr) minmax(96px, 0.8fr) minmax(96px, 0.8fr) minmax(88px, 0.6fr);
+  gap: 14px;
+  align-items: center;
+  padding: 14px 22px;
+}

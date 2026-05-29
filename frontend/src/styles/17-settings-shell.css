@@ -1,0 +1,122 @@
+/* ================== SETTINGS SHELL — Phase 5 / v4 ================== */
+
+/* HANDOFF chat.md §1 — v4 Settings switched from a sticky left rail
+   to a horizontal pill-tab strip. The grid is now single-column with
+   the pills above the active section card. */
+.mc-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  align-items: stretch;
+}
+
+.mc-settings-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  width: fit-content;
+  max-width: 100%;
+  -ms-overflow-style: none;
+}
+
+.mc-settings-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.mc-settings-tab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--mute);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+
+.mc-settings-tab:hover {
+  color: var(--ink-2);
+}
+
+.mc-settings-tab.on {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.mc-settings-rail {
+  position: sticky;
+  top: 88px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mc-settings-group {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mute);
+  padding: 18px 12px 8px;
+}
+
+.mc-settings-group:first-child { padding-top: 0; }
+
+.mc-settings-link {
+  display: block;
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.mc-settings-link:hover { background: var(--bg-3); color: var(--ink); }
+
+.mc-settings-link.on {
+  background: #1a1320;
+  color: #fff;
+}
+
+.mc-settings-main {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.mc-settings-section {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 24px;
+  scroll-margin-top: 96px;
+}
+
+.mc-settings-section h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 22px;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+  margin: 0 0 6px;
+}
+
+.mc-settings-section .section-sub {
+  font-size: 13px;
+  color: var(--mute);
+  margin-bottom: 20px;
+}
