@@ -7,7 +7,7 @@ name: CI Tests (Tier 1 — pilot gate)
 #
 # >>> TURN ON AT PILOT START <<<
 # Uncomment the `pull_request:` trigger below. That one line makes the gate
-# required on every PR. (See docs/qa/TWO_TIER_QA_STRATEGY.md §5.)
+# required on every PR. (Full QA strategy lives in the platform-qa repo.)
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
