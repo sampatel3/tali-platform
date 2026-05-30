@@ -1,9 +1,10 @@
-/* B2 funnel board — stage counts + an aligned decision row beneath. Shared
-   look with the home/jobs funnel (same tokens); the decision row is unique to
-   the role-detail surface where per-role pending decisions are available. */
+/* B2 funnel board — stage counts + an aligned "awaiting your decision" row.
+   The candidate-stages card is a distinct light-purple surface so it reads as
+   the pipeline overview, set apart from the plain white KPI metric cards.
+   Tinted from --purple so it tracks the active theme accent. */
 .funnel-board {
-  background: var(--bg-2);
-  border: 1px solid var(--line);
+  background: color-mix(in oklab, var(--purple) 7%, var(--bg-2));
+  border: 1px solid color-mix(in oklab, var(--purple) 22%, var(--line));
   border-radius: 14px;
   box-shadow: var(--shadow-sm);
   padding: 14px 18px;
@@ -24,7 +25,8 @@
 
 .fb-cap-aw {
   color: var(--purple);
-  background: var(--purple-soft, color-mix(in oklab, var(--purple) 12%, var(--bg-2)));
+  background: var(--bg-2);
+  border: 1px solid color-mix(in oklab, var(--purple) 30%, var(--line));
   border-radius: 6px;
   padding: 2px 8px;
 }
@@ -42,7 +44,7 @@
 
 /* The active pipeline | outcomes divider sits before Advanced. */
 .fb-st.is-out-start {
-  border-left: 1px solid var(--line);
+  border-left: 1px solid color-mix(in oklab, var(--purple) 18%, var(--line));
 }
 
 .fb-v {
@@ -73,7 +75,7 @@
   color: var(--mute);
   margin: 10px 0 6px;
   padding-top: 8px;
-  border-top: 1px dashed var(--line);
+  border-top: 1px dashed color-mix(in oklab, var(--purple) 20%, var(--line));
 }
 
 .fb-drow {
@@ -91,8 +93,9 @@
   font-family: var(--font-mono);
   font-size: 9.5px;
   letter-spacing: 0.01em;
-  background: var(--purple-soft, color-mix(in oklab, var(--purple) 12%, var(--bg-2)));
+  background: var(--bg-2);
   color: var(--purple-2, var(--purple));
+  border: 1px solid color-mix(in oklab, var(--purple) 26%, var(--line));
   border-radius: 6px;
   padding: 2px 7px;
   white-space: nowrap;
