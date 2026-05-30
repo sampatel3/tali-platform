@@ -37,7 +37,7 @@ from ..models.assessment import Assessment
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..services import cohort_signals_service
-from . import calibration, cohort_tools, policy_evaluator
+from . import calibration, cohort_tools, decision_translation, policy_evaluator
 
 
 # Cohort signals are recomputed when older than this. The full pool query
@@ -1325,8 +1325,11 @@ _AUTO_TOGGLE_FOR_DECISION_TYPE: dict[str, str] = {
 # server-side check that the queued type matches what the deterministic
 # engine would emit. This binds the IRREVERSIBLE step to the engine: a
 # hire-relevant decision_type is only auto-executed if it matches the
-# engine verdict captured this cycle by evaluate_policy. The vocab aligns
-# with decision_policy/engine.py DECISION_POINT_ORDER.
+# engine verdict captured this cycle by evaluate_policy. Both sides speak
+# the persisted-NOUN vocabulary (advance_to_interview, …): the queue tool
+# passes the noun, and evaluate_policy stores the noun by translating the
+# engine's verbs (queue_advance_decision, …) through
+# decision_translation.resolve_persisted_decision_type before capture.
 #
 # Scope: only the auto-executing HIRE-PROGRESSION verdict (advance) is bound
 # here. reject / skip_assessment_reject are already held for human confirmation
@@ -1666,7 +1669,19 @@ def _tool_evaluate_policy(
     if _verdicts is None:
         _verdicts = {}
         agent_run.__engine_verdicts__ = _verdicts  # type: ignore[attr-defined]
-    _verdicts[int(application_id)] = str(verdict.decision_type)
+    # ``verdict.decision_type`` is the engine VERB (e.g. ``queue_advance_decision``),
+    # but ``_is_on_policy`` is handed the persisted NOUN the queue_* tools carry
+    # (``advance_to_interview``). Translate through the same map the bulk path uses
+    # so the two vocabularies line up — without this, ``queue_advance_decision`` is
+    # compared to ``{"advance_to_interview"}`` and EVERY on-policy advance reads as
+    # off-policy and is wrongly withheld. The no-assessment-task switch (send →
+    # advance) is honoured via ``role.tasks``. Non-queueable / escalated verdicts
+    # (escalate_low_confidence / skip / no_action) translate to ``None`` -> stored as
+    # None -> ``_is_on_policy`` fails SAFE (off-policy -> human review).
+    _verdicts[int(application_id)] = decision_translation.resolve_persisted_decision_type(
+        str(verdict.decision_type),
+        has_assessment_task=bool(getattr(role, "tasks", None)),
+    )
     # Telemetry: structured log so the Hub's signals dashboard can
     # bucket evaluations per (org, role, decision_type, revision).
     logging.getLogger("taali.policy.evaluation").info(

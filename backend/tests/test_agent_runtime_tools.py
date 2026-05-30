@@ -1310,3 +1310,155 @@ def test_on_policy_advance_auto_executes(db):
 
     assert mock_advance.called, "on-policy advance with auto_promote should auto-execute"
     assert result["off_policy_withheld"] is False
+
+
+def test_evaluate_policy_then_advance_auto_executes_end_to_end(db):
+    """End-to-end regression for the TAA-22 vocabulary bug. Drives the REAL
+    capture path (evaluate_policy populating __engine_verdicts__) instead of
+    hand-seeding the dict, then queues the advance. The deterministic engine
+    emits the VERB 'queue_advance_decision'; capture MUST translate it to the
+    persisted NOUN 'advance_to_interview' (the value the queue tool carries) or
+    _is_on_policy never matches and every on-policy advance is wrongly withheld.
+    Before the fix the raw verb was stored and this test would fail at both the
+    capture assertion and the auto-execute assertion."""
+    from app.decision_policy.engine import PolicyDecision
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.auto_promote = True
+    db.flush()
+    app = _make_application(db, org=org, role=role, name="Strong", email="s2@x.test", taali=88.0)
+    run = _make_agent_run(db, role)
+
+    # The deterministic engine's advance verdict is the VERB (engine.py emits
+    # decision_type = rule.then = 'queue_advance_decision').
+    engine_verdict = PolicyDecision(
+        decision_type="queue_advance_decision",
+        confidence=0.95,
+        reasoning="clears advance threshold",
+        rule_path=["advance_rule"],
+        decision_point="advance_to_interview",
+    )
+    with patch.object(
+        tool_registry.policy_evaluator,
+        "evaluate_for_application",
+        return_value=(engine_verdict, {}),
+    ):
+        tool_registry.dispatch(
+            "evaluate_policy", {"application_id": app.id},
+            db=db, agent_run=run, role=role,
+        )
+
+    # Capture must hold the persisted NOUN, not the engine verb.
+    assert run.__engine_verdicts__[int(app.id)] == "advance_to_interview", (
+        "evaluate_policy must translate the engine verb 'queue_advance_decision' "
+        "to the persisted noun 'advance_to_interview' (TAA-22 vocab bug)"
+    )
+
+    with patch.object(tool_registry.advance_stage, "run") as mock_advance:
+        result = tool_registry.dispatch(
+            "queue_advance_decision",
+            {
+                "application_id": app.id,
+                "reasoning": "clear advance",
+                "evidence": {"taali_score": 88},
+                "confidence": 0.95,
+            },
+            db=db, agent_run=run, role=role,
+        )
+
+    assert mock_advance.called, (
+        "on-policy advance captured via the real evaluate_policy path must auto-execute"
+    )
+    assert result["off_policy_withheld"] is False
+
+
+def test_evaluate_policy_escalated_verdict_withholds_advance(db):
+    """When the engine escalates (low confidence), capture stores None (the
+    verdict is not a queueable noun), so a subsequent auto_promote advance is
+    withheld and routed to human review. Locks the fail-safe through the real
+    capture path — an escalated verdict must never auto-advance."""
+    from app.decision_policy.engine import PolicyDecision
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.auto_promote = True
+    db.flush()
+    app = _make_application(db, org=org, role=role, name="Borderline", email="b2@x.test", taali=60.0)
+    run = _make_agent_run(db, role)
+
+    escalated = PolicyDecision(
+        decision_type="escalate_low_confidence",
+        confidence=0.4,
+        reasoning="sub-agents disagree",
+        rule_path=["abstention_overlay:disagreement"],
+        decision_point="advance_to_interview",
+    )
+    with patch.object(
+        tool_registry.policy_evaluator,
+        "evaluate_for_application",
+        return_value=(escalated, {}),
+    ):
+        tool_registry.dispatch(
+            "evaluate_policy", {"application_id": app.id},
+            db=db, agent_run=run, role=role,
+        )
+
+    assert run.__engine_verdicts__[int(app.id)] is None, (
+        "a non-queueable/escalated verdict must capture as None (no advance blessing)"
+    )
+
+    with patch.object(tool_registry.advance_stage, "run") as mock_advance:
+        result = tool_registry.dispatch(
+            "queue_advance_decision",
+            {
+                "application_id": app.id,
+                "reasoning": "try advance",
+                "evidence": {"taali_score": 60},
+                "confidence": 0.6,
+            },
+            db=db, agent_run=run, role=role,
+        )
+
+    assert not mock_advance.called, "escalated verdict must not auto-execute an advance"
+    assert result["off_policy_withheld"] is True
+
+
+def test_evaluate_policy_no_task_send_verdict_captures_as_advance(db):
+    """The no-assessment-task switch must hold on the CAPTURE side too. When the
+    engine emits 'queue_send_assessment' for a role with NO task, the persisted
+    decision is 'advance_to_interview' (nothing to send -> straight to interview),
+    so the captured engine verdict must also be 'advance_to_interview' — otherwise
+    a legitimate no-task advance reads as off-policy. This is precisely the case a
+    static verb->noun map would mis-handle, which is why capture goes through
+    resolve_persisted_decision_type (context-aware on has_assessment_task)."""
+    from app.decision_policy.engine import PolicyDecision
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    db.flush()
+    assert not getattr(role, "tasks", None), "precondition: role has no assessment task"
+    app = _make_application(db, org=org, role=role, name="NoTask", email="nt@x.test", taali=85.0)
+    run = _make_agent_run(db, role)
+
+    send_verdict = PolicyDecision(
+        decision_type="queue_send_assessment",
+        confidence=0.9,
+        reasoning="strong candidate; role has no task to send",
+        rule_path=["send_rule"],
+        decision_point="send_assessment",
+    )
+    with patch.object(
+        tool_registry.policy_evaluator,
+        "evaluate_for_application",
+        return_value=(send_verdict, {}),
+    ):
+        tool_registry.dispatch(
+            "evaluate_policy", {"application_id": app.id},
+            db=db, agent_run=run, role=role,
+        )
+
+    assert run.__engine_verdicts__[int(app.id)] == "advance_to_interview", (
+        "no-task send_assessment verdict must capture as advance_to_interview"
+    )
+    assert tool_registry._is_on_policy(run, int(app.id), "advance_to_interview")[0] is True
