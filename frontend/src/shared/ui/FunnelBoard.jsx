@@ -1,24 +1,27 @@
 import React from 'react';
 
-import { PIPELINE_FUNNEL_STAGES, funnelStageTone, formatCount, decisionGatesByStage } from '../../shared/metrics';
-import './RoleFunnelSummary.css';
+import { PIPELINE_FUNNEL_STAGES, funnelStageTone, formatCount, decisionGatesByStage } from '../metrics';
+import './FunnelBoard.css';
 
 const OUTCOME_KEYS = new Set(['advanced', 'rejected']);
 
-// B2 funnel board for the role-detail header: stage counts on top
+// Shared B2 funnel board — stage counts on top
 // (Applied · Scored · Invited · Completed · Advanced │ Rejected), and — when
 // pending decisions are supplied — the agent's pending recommendation for each
 // stage aligned in the row directly beneath it (Pre-screen under Applied, Send
 // assessment / Reject under Scored, Advance under Completed). Advanced and
-// Rejected are terminal outcomes, divided off with no decision row. Stage
-// counts come from the role GET's stage_counts aggregate; `decisions` is the
-// list (or {type:count} map) of this role's pending agent decisions.
-export const RoleFunnelSummary = ({ stageCounts, decisions = null, awaitingTotal = null }) => {
+// Rejected are terminal outcomes, divided off with no decision row.
+//
+// Used on the role-detail page (scopeLabel "this role", with the role's pending
+// decisions) and the home hub (scopeLabel "all roles", stages-only — the org
+// decision breakdown lives in the hero). `decisions` is a list (or
+// {decision_type: count} map) of pending agent decisions.
+export const FunnelBoard = ({ stageCounts, decisions = null, awaitingTotal = null, scopeLabel = 'this role' }) => {
   const byStage = decisions ? decisionGatesByStage(decisions) : null;
   return (
     <div className="funnel-board">
       <div className="fb-cap">
-        <span>Pipeline · this role</span>
+        <span>Pipeline · {scopeLabel}</span>
         {byStage && awaitingTotal != null && Number(awaitingTotal) > 0 ? (
           <span className="fb-cap-aw">{formatCount(awaitingTotal)} awaiting you</span>
         ) : null}

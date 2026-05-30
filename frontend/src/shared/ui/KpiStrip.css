@@ -4,7 +4,7 @@
 .kpi-strip {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 10px;
+  gap: 12px;
 }
 
 @media (min-width: 900px) {
