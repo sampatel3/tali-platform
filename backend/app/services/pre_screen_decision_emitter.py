@@ -715,6 +715,85 @@ def reconcile_pre_screen_reject_decisions(
     }
 
 
+# Advance-family decision types a changed threshold can supersede — mirrors
+# the Decision Hub "advance" bucket (routes.DECISION_TYPE_CATEGORIES["advance"]).
+_ADVANCE_DECISION_TYPES = (
+    "advance_to_interview",
+    "send_assessment",
+    "resend_assessment_invite",
+)
+
+
+def retract_advances_below_threshold(
+    db: Session,
+    *,
+    role: Role,
+    organization_id: int,
+    threshold: float | None,
+) -> dict:
+    """Discard pending advance / send_assessment cards for candidates the
+    current pre-screen threshold now rejects.
+
+    ``reconcile_pre_screen_reject_decisions`` only manages
+    ``skip_assessment_reject`` cards, so changing the threshold otherwise
+    leaves a stale "advance" card standing for a candidate now below the cutoff
+    — and because the reject emit loop skips applications that already have a
+    pending decision, that stale advance even *blocks* the reject card from
+    being created. Run this BEFORE the reject reconcile so the freed slot gets
+    the correct ``skip_assessment_reject`` in its place.
+
+    Uses the same below-threshold test as the reject path
+    (``pre_screen_score_100`` vs the cutoff), so every advance discarded here is
+    one the reject reconcile re-emits as a reject — never left card-less.
+
+    No-op for agent-off roles, for ``auto_reject`` roles (same carve-out as the
+    reject reconcile), and when ``threshold`` is None (no cutoff to judge
+    against). Never retracts a candidate a recruiter advanced past handover in
+    Workable. Returns ``{"discarded": int}``.
+    """
+    if not bool(getattr(role, "agentic_mode_enabled", False)):
+        return {"discarded": 0}
+    if bool(getattr(role, "auto_reject", False)):
+        return {"discarded": 0}
+    if threshold is None:
+        return {"discarded": 0}
+
+    now = datetime.now(timezone.utc)
+    note = (
+        f"superseded: pre-screen threshold changed to {threshold:.1f}; "
+        "candidate now below cutoff"
+    )[:500]
+    pending = (
+        db.query(AgentDecision, CandidateApplication)
+        .join(
+            CandidateApplication,
+            CandidateApplication.id == AgentDecision.application_id,
+        )
+        .filter(
+            AgentDecision.role_id == int(role.id),
+            AgentDecision.status == "pending",
+            AgentDecision.decision_type.in_(_ADVANCE_DECISION_TYPES),
+            AgentDecision.resolved_by_user_id.is_(None),
+        )
+        .all()
+    )
+    discarded = 0
+    for decision, app in pending:
+        if is_post_handover_workable_stage(app.workable_stage):
+            continue
+        if not _below_threshold(
+            app.pre_screen_score_100, app.pre_screen_recommendation, threshold
+        ):
+            continue
+        decision.status = "discarded"
+        decision.resolved_at = now
+        decision.resolution_note = note
+        discarded += 1
+    if discarded:
+        db.commit()
+    return {"discarded": discarded}
+
+
 def rederive_pre_screen_recommendations(
     db: Session,
     *,

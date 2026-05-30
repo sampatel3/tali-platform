@@ -339,10 +339,19 @@ def agent_cohort_tick_role(self, role_id: int) -> dict:
         try:
             from ..services.pre_screen_decision_emitter import (
                 reconcile_pre_screen_reject_decisions,
+                retract_advances_below_threshold,
             )
             from ..services.pre_screening_service import resolved_auto_reject_config
 
             _thr = resolved_auto_reject_config(None, role, db=db)["threshold_100"]
+            # Retract stale advances below the cutoff first, then let the reject
+            # reconcile emit the matching skip_assessment_reject in their place.
+            retract_advances_below_threshold(
+                db,
+                role=role,
+                organization_id=int(role.organization_id),
+                threshold=_thr,
+            )
             reconcile_pre_screen_reject_decisions(
                 db,
                 role=role,

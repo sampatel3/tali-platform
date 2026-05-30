@@ -468,6 +468,17 @@ def update_role(
                 try:
                     from ...services.pre_screen_decision_emitter import (
                         reconcile_pre_screen_reject_decisions,
+                        retract_advances_below_threshold,
+                    )
+                    # Order matters: retract stale advances FIRST so the reject
+                    # reconcile's emit loop (which skips apps that already have a
+                    # pending decision) can replace each with the correct
+                    # skip_assessment_reject card.
+                    retract_advances_below_threshold(
+                        db,
+                        role=role,
+                        organization_id=int(current_user.organization_id),
+                        threshold=_threshold_after,
                     )
                     reconcile_pre_screen_reject_decisions(
                         db,
@@ -478,7 +489,7 @@ def update_role(
                     db.commit()
                 except Exception:
                     logger.exception(
-                        "Pre-screen reject reconcile failed for role_id=%s", role.id
+                        "Pre-screen threshold re-apply failed for role_id=%s", role.id
                     )
                     db.rollback()
     return role_to_response(role)
