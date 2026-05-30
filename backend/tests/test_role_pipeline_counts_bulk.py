@@ -11,7 +11,7 @@ and stay org-scoped.
 from __future__ import annotations
 
 from app.domains.assessments_runtime.pipeline_service import (
-    PIPELINE_STAGES,
+    FUNNEL_BUCKETS,
     role_pipeline_counts,
     role_pipeline_counts_bulk,
 )
@@ -78,14 +78,15 @@ def test_bulk_matches_per_role_and_counts_advanced_and_rejected(db):
         assert bulk[role_a] == per_role
         # The number the Hub cares about: already-advanced (open) candidates.
         assert bulk[role_a]["advanced"] == 10
-        assert bulk[role_a]["review"] == 3
+        # `review` stage surfaces as the "completed" funnel bucket.
+        assert bulk[role_a]["completed"] == 3
         assert bulk[role_a]["invited"] == 2
         # Rejected counted across all stages, not just the open funnel.
         assert bulk[role_a]["rejected"] == 5
 
         # A requested role with no applications gets a zero-filled dict
-        # (every pipeline stage + rejected), never a missing key.
-        assert bulk[role_b] == {s: 0 for s in PIPELINE_STAGES} | {"rejected": 0}
+        # (every funnel bucket), never a missing key.
+        assert bulk[role_b] == {b: 0 for b in FUNNEL_BUCKETS}
     finally:
         sess.close()
 

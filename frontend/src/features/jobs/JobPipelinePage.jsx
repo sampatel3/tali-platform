@@ -39,21 +39,20 @@ import { CandidateTriageDrawer, candidateReportHref } from '../candidates/Candid
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSheet } from '../candidates/RoleSheet';
 import { getErrorMessage, trimOrUndefined, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
-import { formatCount, budgetTile } from '../../shared/metrics';
+import { formatCount, budgetTile, applicationFunnelBucket } from '../../shared/metrics';
 import { RoleFunnelSummary } from './RoleFunnelSummary';
 
 const EMPTY_PROGRESS = { status: 'idle', total: 0, scored: 0, errors: 0, include_scored: false };
 const EMPTY_FETCH_PROGRESS = { status: 'idle', total: 0, fetched: 0, errors: 0 };
 const EMPTY_PRE_SCREEN_PROGRESS = { status: 'idle', total: 0, processed: 0, errors: 0, refresh: false };
 const EMPTY_CONFIRM = { open: false, action: null, bullets: [], loading: false, dryRunLoading: false };
-// Kanban columns + segmented stage filters. Labels track the shared canonical
-// funnel (Assessing, not "In assessment") so stage names read identically to
-// the role card and the funnel summary; countLabel is the per-column caption.
+// Kanban columns + segmented stage filters — keys are the shared funnel
+// buckets (applicationFunnelBucket) so they read identically to the funnel.
 const PIPELINE_STAGE_ORDER = [
   { key: 'applied', label: 'Applied', countLabel: 'new' },
+  { key: 'scored', label: 'Scored', countLabel: 'to send' },
   { key: 'invited', label: 'Invited', countLabel: 'awaiting' },
-  { key: 'in_assessment', label: 'Assessing', countLabel: 'live' },
-  { key: 'review', label: 'Review', countLabel: 'decision' },
+  { key: 'completed', label: 'Completed', countLabel: 'decision' },
   { key: 'advanced', label: 'Advanced', countLabel: 'with recruiter' },
 ];
 
@@ -1050,6 +1049,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // Pipeline-tab kanban cards can render the real Approve/Override flow
   // inline (HANDOFF v2 §4 / canvas jobs-detail-pipeline). Polls every 30s.
   const [pendingAgentDecisions, setPendingAgentDecisions] = useState({});
+  // Flat list of this role's pending decisions — feeds the funnel decision row.
+  const pendingDecisionList = useMemo(
+    () => Object.values(pendingAgentDecisions || {}).filter(Boolean),
+    [pendingAgentDecisions],
+  );
   const [resolvingDecisionId, setResolvingDecisionId] = useState(null);
   const fetchPendingDecisions = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
@@ -1387,7 +1391,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         key: 'active',
         label: 'In pipeline',
         value: formatCount(role?.active_candidates_count || activeApplications.length || 0),
-        description: `${formatCount(role?.stage_counts?.review || 0)} in review`,
+        description: `${formatCount(role?.stage_counts?.completed || 0)} completed`,
         highlight: true,
       },
       {
@@ -1424,7 +1428,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const groupedApplications = useMemo(() => [
     ...PIPELINE_STAGE_ORDER.map((stage) => ({
       ...stage,
-      items: activeApplications.filter((application) => String(application?.pipeline_stage || '').toLowerCase() === stage.key),
+      items: activeApplications.filter((application) => applicationFunnelBucket(application) === stage.key),
     })),
     { key: 'rejected', label: 'Rejected', countLabel: 'closed', items: rejectedApplications },
   ], [activeApplications, rejectedApplications]);
@@ -2041,8 +2045,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       />
       <div className="page">
         <div className="mc-cockpit-main">
-        {/* Canonical six-stage funnel summary (shared with the role card). */}
-        <RoleFunnelSummary stageCounts={role?.stage_counts} />
+        {/* B2 funnel board — stage counts + pending decision per stage. */}
+        <RoleFunnelSummary
+          stageCounts={role?.stage_counts}
+          decisions={pendingDecisionList}
+          awaitingTotal={roleAgent?.pending ?? pendingDecisionList.length}
+        />
 
         <RoleViewTabs activeView={activeView} />
 
@@ -2407,7 +2415,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   if (selCount > 0) return (<><Sparkles size={12} />Process {selCount} selected</>);
                   const tabCount = tableStageFilter === 'rejected' ? rejectedApplications.length
                     : tableStageFilter === 'all' ? activeApplications.length
-                    : activeApplications.filter((a) => String(a?.pipeline_stage || '').toLowerCase() === tableStageFilter).length;
+                    : activeApplications.filter((a) => applicationFunnelBucket(a) === tableStageFilter).length;
                   return (<><Sparkles size={12} />Process {tabCount} candidate{tabCount === 1 ? '' : 's'}</>);
                 })()}
               </button>
@@ -2426,7 +2434,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 ? rejectedApplications
                 : activeStage === 'all'
                   ? activeApplications
-                  : activeApplications.filter((a) => String(a?.pipeline_stage || '').toLowerCase() === activeStage);
+                  : activeApplications.filter((a) => applicationFunnelBucket(a) === activeStage);
               const cmpScore = (a) => {
                 const raw = a?.score_summary?.taali_score
                   ?? a?.taali_score
