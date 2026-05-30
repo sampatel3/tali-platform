@@ -101,6 +101,7 @@ def record_event(
     cache_creation_tokens: int = 0,
     cache_creation_1h_tokens: Optional[int] = None,
     cache_hit: bool = False,
+    service_tier: str = "standard",
     user_id: Optional[int] = None,
     role_id: Optional[int] = None,
     entity_id: Optional[str] = None,
@@ -130,6 +131,7 @@ def record_event(
         cache_creation_tokens=cache_creation_tokens,
         cache_creation_1h_tokens=cache_creation_1h_tokens,
         model=model,
+        service_tier=service_tier,
     )
     charged = credits_charged(
         feature=feature_enum, cost_usd_micro=cost_usd_micro, cache_hit=cache_hit
@@ -138,6 +140,12 @@ def record_event(
     multiplier = (
         pricing.cache_hit_multiplier if cache_hit else pricing.markup_multiplier
     )
+
+    # Persist the tier in metadata (there is no dedicated column yet) so batch
+    # spend stays queryable and reconciliation can tell standard vs batch apart.
+    meta = dict(metadata or {})
+    if service_tier and service_tier != "standard":
+        meta.setdefault("service_tier", service_tier)
 
     event = UsageEvent(
         organization_id=organization_id,
@@ -155,7 +163,7 @@ def record_event(
         markup_multiplier=multiplier,
         credits_charged=charged,
         cache_hit=1 if cache_hit else 0,
-        event_metadata=metadata or None,
+        event_metadata=meta or None,
     )
     db.add(event)
     db.flush()  # populate event.id

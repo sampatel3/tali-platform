@@ -252,4 +252,16 @@ def _percent_drift(*, internal: int, external: int) -> Optional[Decimal]:
             return Decimal("0.000")
         return None
     diff = Decimal(internal - external) / Decimal(external) * Decimal(100)
-    return diff.quantize(Decimal("0.001"))
+    diff = diff.quantize(Decimal("0.001"))
+    # The drift columns are Numeric(7,3) -> max ±9999.999. When internal is
+    # >100x external (e.g. a near-zero-Anthropic day with real internal spend,
+    # or a wide-window re-reconcile of an old day), the raw percentage overflows
+    # the column and the whole commit fails. Clamp to the column range — a
+    # clamped value still reads as "wildly off" and trips the drift alert, which
+    # is all the magnitude needs to convey past this point.
+    _CLAMP = Decimal("9999.999")
+    if diff > _CLAMP:
+        return _CLAMP
+    if diff < -_CLAMP:
+        return -_CLAMP
+    return diff
