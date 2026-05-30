@@ -893,6 +893,13 @@ const RoleAgentSettingsTab = ({
             EOM PROJECTION ≈ {fmtUsd(projectedCents)} ·{' '}
             {projectedCents > monthlyBudgetCents ? 'over budget' : 'paced under budget'}
           </div>
+          {usageBreakdown?.monthly_raw_anthropic_cost_cents != null ? (
+            <div className="mc-agent-settings-budget-foot">
+              ANTHROPIC COST ≈ {fmtUsd(usageBreakdown.monthly_raw_anthropic_cost_cents)} ·{' '}
+              MARGIN {fmtUsd(usageBreakdown.monthly_margin_cents)}
+              {usageBreakdown.margin_pct ? ` (${Math.round(usageBreakdown.margin_pct)}%)` : ''}
+            </div>
+          ) : null}
           {Array.isArray(usageBreakdown?.by_feature) && usageBreakdown.by_feature.length > 0 ? (
             <ul className="mc-agent-settings-budget-breakdown">
               {(() => {
