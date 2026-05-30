@@ -1,0 +1,200 @@
+# North Star — canonical architecture model (single source of truth).
+#
+# This file is DATA, not prose. It uses C4 vocabulary (Context -> Container ->
+# Component). Views (architecture/model/views/*) and docs are DERIVED from it.
+# Each implemented element carries an `implementation` block mapping it to the
+# repo + path(s) that realise it; `scripts/check_drift.py` verifies those exist.
+#
+# Edit order for any architectural change:
+#   1. edit this file        2. refresh affected views        3. record WHY in an ADR
+#
+# Schema is documented in architecture/model/schema.md.
+
+metadata:
+  name: Platform North Star
+  schemaVersion: 1
+  modelVersion: 1
+  updated: "2026-05-29"
+  vocabulary: C4
+
+# ---------------------------------------------------------------------------
+# Repos (ownership domains). `localPathEnv` lets the drift checker locate a
+# checkout; if unset/missing the repo's mappings are reported "unverifiable"
+# rather than failing — so the model can describe repos this checkout can't see.
+# ---------------------------------------------------------------------------
+repos:
+  - id: mainspring
+    role: substrate
+    description: >
+      Operations runtime for autonomous operations over a stateful business pipeline —
+      the layer above LLM-chaining frameworks that every brand builds on. Canonical,
+      brand-agnostic home of all cross-cutting capability.
+    localPathEnv: MAINSPRING_PATH
+  - id: taali-brand
+    role: brand
+    description: A brand on the substrate (AI-augmented technical assessment surface).
+    localPathEnv: TAALI_PATH
+  - id: cadence
+    role: brand
+    description: A brand on the substrate.
+    localPathEnv: CADENCE_PATH
+  - id: tali-platform
+    role: legacy
+    description: Legacy monolith. Do not extend; migrate capabilities into substrate/brand when touched.
+    localPathEnv: TALI_PLATFORM_PATH   # defaults to "." so this checkout is verifiable
+
+# ---------------------------------------------------------------------------
+# C4 Level 1 — System Context
+# ---------------------------------------------------------------------------
+context:
+  system:
+    id: platform
+    name: Platform
+    description: One product, one substrate (mainspring, an operations runtime), exposed through brands (taali, cadence).
+  people:
+    - id: recruiter
+      name: Recruiter
+      description: Creates assessments, reviews results, manages their org.
+      uses: [platform]
+    - id: candidate
+      name: Candidate
+      description: Takes assessments in the browser.
+      uses: [platform]
+    - id: admin
+      name: Admin
+      description: Manages platform-wide settings and templates.
+      uses: [platform]
+  externalSystems:
+    - id: anthropic
+      name: Anthropic (Claude)
+      description: LLM provider. Reached ONLY through the metered client (ADR-0003).
+    - id: stripe
+      name: Stripe
+      description: Billing / payments.
+    - id: workable
+      name: Workable
+      description: ATS integration; decision writes serialized per org (ADR-0004).
+    - id: e2b
+      name: E2B
+      description: Ephemeral sandboxes for candidate code execution.
+
+# ---------------------------------------------------------------------------
+# C4 Level 2 — Containers (runtime/deployable units), grouped by owning repo
+# ---------------------------------------------------------------------------
+containers:
+  - id: mainspring-substrate
+    name: Mainspring Substrate
+    repo: mainspring
+    technology: Python / FastAPI
+    description: Cross-cutting services consumed by every brand. Owns invariant-bearing components.
+
+  - id: taali-surface
+    name: Taali Surface
+    repo: taali-brand
+    technology: TypeScript / React + Python brand services
+    description: Taali brand surface and brand-owned data/migrations on top of the substrate.
+
+  - id: cadence-surface
+    name: Cadence Surface
+    repo: cadence
+    technology: TypeScript / React + Python brand services
+    description: Cadence brand surface and brand-owned data/migrations on top of the substrate.
+
+  - id: legacy-backend
+    name: Legacy Backend
+    repo: tali-platform
+    technology: Python / FastAPI
+    description: Legacy monolith. Source of capabilities being migrated to substrate/brand.
+    implementation:
+      repo: tali-platform
+      paths:
+        - backend/app/main.py
+
+# ---------------------------------------------------------------------------
+# C4 Level 3 — Components. The ones that CARRY INVARIANTS are first-class here
+# because they are what agents most often get wrong. Each links to its ADR.
+# Implementations point at the LEGACY home today (verifiable) and name the
+# substrate target they migrate to.
+# ---------------------------------------------------------------------------
+components:
+  - id: metered-anthropic-client
+    name: Metered Anthropic Client
+    container: mainspring-substrate
+    invariant: ADR-0003
+    description: >
+      The ONLY path to Anthropic. Wraps the SDK and writes a UsageEvent for every
+      call. No raw SDK call path is permitted.
+    migratesTo: mainspring
+    implementation:
+      repo: tali-platform
+      paths:
+        - backend/app/services/metered_anthropic_client.py
+        - backend/app/services/metered_async_anthropic_client.py
+
+  - id: decision-engine
+    name: Workable Decision Engine
+    container: mainspring-substrate
+    invariant: ADR-0004
+    description: >
+      Writes hiring decisions to Workable. Writes are serialized per org via a mutex;
+      never concurrent for the same org.
+    migratesTo: mainspring
+    implementation:
+      repo: tali-platform
+      paths:
+        - backend/app/components/integrations/workable/service.py
+        - backend/app/components/integrations/workable/sync_service.py
+
+  - id: brand-migrations
+    name: Per-Brand Migration Chains
+    container: mainspring-substrate
+    invariant: ADR-0005
+    description: >
+      Each brand owns its Alembic chain. No cross-importing or sharing revisions
+      between brands.
+    migratesTo: mainspring
+    implementation:
+      repo: tali-platform
+      paths:
+        - backend/alembic
+
+  - id: billing
+    name: Billing
+    container: mainspring-substrate
+    description: Stripe-backed billing, pricing, and the credit ledger.
+    migratesTo: mainspring
+    implementation:
+      repo: tali-platform
+      paths:
+        - backend/app/services/pricing_service.py
+        - backend/app/services/credit_ledger_service.py
+
+# ---------------------------------------------------------------------------
+# Relationships (for views; source/destination are container or external ids)
+# ---------------------------------------------------------------------------
+relationships:
+  - { source: taali-surface,   destination: mainspring-substrate, description: "builds on" }
+  - { source: cadence-surface, destination: mainspring-substrate, description: "builds on" }
+  - { source: mainspring-substrate, destination: anthropic, description: "calls (metered only)" }
+  - { source: mainspring-substrate, destination: stripe,    description: "bills via" }
+  - { source: mainspring-substrate, destination: workable,  description: "writes decisions to (serialized)" }
+  - { source: mainspring-substrate, destination: e2b,       description: "runs candidate code in" }
+
+# ---------------------------------------------------------------------------
+# Boundaries & invariants as DATA — so agents and CI can reason over them.
+# ---------------------------------------------------------------------------
+boundaries:
+  - id: substrate-vs-brand
+    adr: ADR-0002
+    rule: Shared/cross-cutting logic lives in mainspring; brand-specific code stays in its brand. No substrate assumptions about a specific brand; no logic duplicated across brands.
+
+invariants:
+  - id: metering-mandatory
+    adr: ADR-0003
+    rule: Every Anthropic call goes through the metered client and writes a UsageEvent. No raw SDK path.
+  - id: decision-writes-serialized
+    adr: ADR-0004
+    rule: Workable decision writes are serialized per org via a mutex.
+  - id: migrations-per-brand
+    adr: ADR-0005
+    rule: Each brand owns its Alembic chain; never cross-import migration revisions.
