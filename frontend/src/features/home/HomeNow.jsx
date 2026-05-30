@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 
 import { agent as agentApi, organizations as orgsApi } from '../../shared/api';
+import { PIPELINE_FUNNEL_STAGES, funnelStageTone, formatCount } from '../../shared/metrics';
 import { useToast } from '../../context/ToastContext';
 import { pathForPage } from '../../app/routing';
 import { ScoreRing } from '../../shared/ui/ScoreRing';
@@ -293,16 +294,10 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction }) => (
 // pending queue so a recruiter knows the denominator before advancing more
 // — "I've got 17 pending, but I've already advanced 10" is the question this
 // answers. Counts come from the same source the Jobs page uses
-// (role.stage_counts on /agent/roles/breakdown). `advanced` is emphasised
-// because it's the one that bounds how many more should go through.
-const PIPELINE_STANDING_STAGES = [
-  { key: 'advanced', label: 'Advanced', emphasis: true },
-  { key: 'review', label: 'In review' },
-  { key: 'in_assessment', label: 'Assessing' },
-  { key: 'invited', label: 'Invited' },
-  { key: 'rejected', label: 'Rejected' },
-];
-
+// (role.stage_counts on /agent/roles/breakdown). Uses the shared canonical
+// funnel (PIPELINE_FUNNEL_STAGES) so labels/order/colour match the role card
+// and job-detail funnel exactly: forward order, Review goes purple when it
+// needs you, Rejected is the muted terminal bucket.
 const PipelineStandingStrip = ({ rolesBreakdown, filters }) => {
   const { counts, scopeLabel } = useMemo(() => {
     const roles = Array.isArray(rolesBreakdown) ? rolesBreakdown : [];
@@ -326,7 +321,10 @@ const PipelineStandingStrip = ({ rolesBreakdown, filters }) => {
   }, [rolesBreakdown, filters.role_id]);
 
   if (!counts) return null;
-  const items = PIPELINE_STANDING_STAGES.map((s) => ({ ...s, n: Number(counts[s.key]) || 0 }));
+  const items = PIPELINE_FUNNEL_STAGES.map((s) => {
+    const n = Number(counts[s.key]) || 0;
+    return { ...s, n, tone: funnelStageTone(s.key, n) };
+  });
   // Nothing in the pipeline at all → no point showing an all-zero strip.
   if (items.every((i) => i.n === 0)) return null;
 
@@ -335,8 +333,11 @@ const PipelineStandingStrip = ({ rolesBreakdown, filters }) => {
       <span className="rq-standing-kicker">PIPELINE · {scopeLabel}</span>
       <div className="rq-standing-items">
         {items.map((i) => (
-          <span key={i.key} className={`rq-standing-item${i.emphasis ? ' is-emph' : ''}`}>
-            <b>{i.n}</b> {i.label}
+          <span
+            key={i.key}
+            className={`rq-standing-item${i.tone === 'attn' ? ' is-emph' : ''}${i.tone === 'term' ? ' is-term' : ''}`}
+          >
+            <b>{formatCount(i.n)}</b> {i.label}
           </span>
         ))}
       </div>

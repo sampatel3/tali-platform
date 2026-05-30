@@ -88,12 +88,35 @@ const SHOWCASE_AGENT = {
   inFlight: false,
 };
 
+// Shared org KPI strip (primary) + Decision-Hub health row (secondary) —
+// mirrors the real HomePage layout so the demo matches the live surface.
 const SHOWCASE_KPIS = [
-  { l: 'Awaiting your review', v: '3', d: 'oldest 1h', emph: true },
-  { l: 'Decisions today', v: '14', d: '11 auto-applied · 3 pending' },
-  { l: 'Org budget · MTD', v: '$18.20', d: 'of $50.00 cap', bar: 36 },
-  { l: 'Override rate · 7d', v: '8%', d: '12% taught · last decision 2m ago' },
+  { l: 'In pipeline', v: '312', d: 'across 5 active roles' },
+  { l: 'Active roles', v: '5', d: '2 with candidates' },
+  { l: 'Awaiting you', v: '3', d: 'oldest 1h', emph: true },
+  { l: 'Org budget · MTD', v: '$18', unit: '/ $50', d: '36% · proj $44 EOM', bar: 36 },
 ];
+
+const SHOWCASE_KPIS_HEALTH = [
+  { l: 'Decisions today', v: '14', d: '11 auto · 3 pending' },
+  { l: 'Override rate · 7d', v: '8%', d: '12% taught · last 2m ago' },
+];
+
+const ShowcaseKpiTile = ({ k }) => (
+  <div className={`rq-kpi ${k.emph ? 'rq-kpi-emph' : ''}`.trim()}>
+    <div className="l">{k.l}</div>
+    <div className="v">
+      {k.emph ? <em>{k.v}</em> : k.v}
+      {k.unit ? <span style={{ color: 'var(--mute)', fontSize: 15, fontWeight: 400 }}> {k.unit}</span> : null}
+    </div>
+    {k.bar != null ? (
+      <div className="rq-bar">
+        <i style={{ width: `${k.bar}%`, background: 'var(--purple)' }} />
+      </div>
+    ) : null}
+    <div className="d">{k.d}</div>
+  </div>
+);
 
 export const HomeShowcaseView = () => (
   <div>
@@ -105,20 +128,11 @@ export const HomeShowcaseView = () => (
     />
 
     <div className="home-body">
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-        {SHOWCASE_KPIS.map((k) => (
-          <div key={k.l} className={`rq-kpi ${k.emph ? 'rq-kpi-emph' : ''}`.trim()}>
-            <div className="l">{k.l}</div>
-            <div className="v">{k.emph ? <em>{k.v}</em> : k.v}</div>
-            {k.bar != null ? (
-              <div className="rq-bar">
-                <i style={{ width: `${k.bar}%`, background: 'var(--purple)' }} />
-              </div>
-            ) : (
-              <div className="d">{k.d}</div>
-            )}
-          </div>
-        ))}
+      <div className="rq-kpis">
+        {SHOWCASE_KPIS.map((k) => <ShowcaseKpiTile key={k.l} k={k} />)}
+      </div>
+      <div className="rq-kpis rq-kpis-secondary">
+        {SHOWCASE_KPIS_HEALTH.map((k) => <ShowcaseKpiTile key={k.l} k={k} />)}
       </div>
 
       <ActivityFeed

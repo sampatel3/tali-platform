@@ -231,7 +231,21 @@ def get_role_endpoint(
         .scalar()
         or 0
     )
-    return role_to_response(role, tasks_count=len(role.tasks or []), applications_count=int(app_count))
+    # Per-stage funnel counts (applied → invited → in_assessment → review →
+    # advanced + rejected) — the same aggregate the /roles list attaches, so
+    # the role detail page can render the home-card funnel summary from the
+    # single GET rather than deriving it from the (row-capped) applications list.
+    stage_counts = role_pipeline_counts(
+        db,
+        organization_id=current_user.organization_id,
+        role_id=role.id,
+    )
+    return role_to_response(
+        role,
+        tasks_count=len(role.tasks or []),
+        applications_count=int(app_count),
+        stage_counts=stage_counts,
+    )
 
 
 def _effective_pre_screen_threshold(db: Session, role: Role) -> float | None:

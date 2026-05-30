@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Tali · Metric surfaces — consistency proposal</title>
+<style>
+  :root{
+    --ink:#1a1424; --ink-soft:#4a4358; --mute:#8b8595;
+    --line:#e8e2ee; --line-2:#f1edf5;
+    --bg:#f7f4fb; --bg-2:#ffffff; --bg-3:#efe8f7;
+    --purple:#7c5cff; --purple-2:#6342d6; --purple-soft:#efeaff;
+    --good:#15c07a; --warn:#e0a106;
+    --radius:14px; --shadow:0 1px 2px rgba(21,18,26,.06);
+    --mono:ui-monospace,"Geist Mono",SFMono-Regular,Menlo,monospace;
+    --disp:"Geist",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--disp);
+       -webkit-font-smoothing:antialiased;line-height:1.45;padding:40px 28px 80px}
+  .wrap{max-width:1120px;margin:0 auto}
+  h1{font-size:30px;letter-spacing:-.02em;margin:0 0 4px}
+  h2{font-size:18px;letter-spacing:-.01em;margin:44px 0 4px}
+  .sub{color:var(--ink-soft);font-size:14px;margin:0 0 8px;max-width:760px}
+  .kick{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--purple);font-weight:600}
+  .note{font-size:12.5px;color:var(--mute);margin:6px 0 18px}
+  .panel{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:22px;margin-top:14px}
+  .panel.dark{background:linear-gradient(160deg,#211a33 0%,#15101f 100%);border:none;color:#f3effb}
+  .panel.dark .kick{color:#c4b6ff}
+
+  /* ---- shared KPI tile ---- */
+  .kpis{display:grid;gap:14px}
+  .kpis.c4{grid-template-columns:repeat(4,1fr)}
+  .kpis.c5{grid-template-columns:repeat(5,1fr)}
+  .kpi{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow)}
+  .kpi.hi{background:var(--ink);color:#fff;border-color:transparent}
+  .kpi.attn{border-color:var(--purple);background:var(--purple-soft)}
+  .kpi .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--mute)}
+  .kpi.hi .k{color:#b9b1cc}
+  .kpi .v{font-size:26px;font-weight:600;letter-spacing:-.02em;margin:7px 0 2px;font-family:var(--disp)}
+  .kpi .v .unit{font-size:15px;color:var(--mute);margin-left:4px;font-weight:500}
+  .kpi.hi .v .unit{color:#b9b1cc}
+  .kpi .v .accent{color:var(--purple)}
+  .kpi .d{font-size:12.5px;color:var(--mute)}
+  .kpi.hi .d{color:#cdbfff}
+  .bar{height:6px;background:var(--bg-3);border-radius:999px;overflow:hidden;margin:6px 0 7px}
+  .bar>i{display:block;height:100%;background:var(--purple);border-radius:999px}
+
+  /* ---- canonical funnel (card + strip) ---- */
+  .fcard{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px 20px;max-width:430px}
+  .fhead{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:14px}
+  .fhead h3{margin:0 0 4px;font-size:18px;font-weight:600;letter-spacing:-.01em}
+  .fhead .meta{font-family:var(--mono);font-size:11px;color:var(--mute)}
+  .fhead .agent{font-family:var(--mono);font-size:10.5px;color:var(--purple);white-space:nowrap}
+  .star{color:var(--purple)}
+  .fstats{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;padding-top:12px;border-top:1px solid var(--line-2)}
+  .fcell{text-align:center;position:relative}
+  .fcell.term::before{content:"";position:absolute;left:-3px;top:2px;bottom:2px;width:1px;background:var(--line)}
+  .fcell .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--mute)}
+  .fcell .v{font-family:var(--disp);font-size:22px;line-height:1.1;margin-top:2px;letter-spacing:-.02em;color:var(--ink)}
+  .fcell .v.attn{color:var(--purple)}
+  .fcell .v.term{color:var(--mute)}
+
+  /* horizontal strip variant */
+  .fstrip{display:flex;align-items:center;gap:18px;flex-wrap:wrap;background:var(--purple-soft);border:1px solid var(--line);border-radius:12px;padding:12px 16px}
+  .fstrip .kick{margin-right:4px}
+  .fstrip .it{font-size:14px;color:var(--ink-soft)}
+  .fstrip .it b{font-family:var(--disp);font-weight:600;color:var(--ink);margin-right:5px;font-size:15px}
+  .fstrip .it.attn b{color:var(--purple)}
+  .fstrip .it.term{color:var(--mute)}
+  .fstrip .sep{width:1px;height:18px;background:var(--line)}
+
+  /* ---- compare table ---- */
+  table{border-collapse:collapse;width:100%;font-size:13px;margin-top:10px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line-2);vertical-align:top}
+  th{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);font-weight:600}
+  td code{font-family:var(--mono);font-size:12px;background:var(--bg-3);padding:1px 5px;border-radius:4px}
+  .bad{color:#c0392b}
+  .fix{color:var(--purple-2);font-weight:500}
+  .tag{display:inline-block;font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:5px;background:var(--bg-3);color:var(--mute)}
+  .tag.org{background:#eef;color:#5347c4}
+  .tag.role{background:var(--purple-soft);color:var(--purple-2)}
+  .legend{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:10px}
+  .legend .lc{font-size:13px;color:var(--ink-soft)}
+  .legend .lc b{display:block;font-size:13px;color:var(--ink);margin-bottom:3px}
+  .sw{display:inline-block;width:11px;height:11px;border-radius:3px;vertical-align:middle;margin-right:6px}
+  .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kick">Tali · design proposal</div>
+  <h1>Metric surfaces — one consistent system</h1>
+  <p class="sub">Today there are <b>six</b> metric surfaces across Home and Job pages, each inventing its own labels, ordering, number formatting and colour rules for what are often the <i>same</i> underlying numbers. This proposes one shared vocabulary, one tile component, and one formatting standard.</p>
+
+  <!-- ============ PROBLEM ============ -->
+  <h2>1 · What's inconsistent today</h2>
+  <p class="note">Same concept, surfaced three different ways:</p>
+  <div class="panel">
+    <table>
+      <tr><th>Concept</th><th>Where</th><th>Current label</th><th>Current value format</th><th>Issue</th></tr>
+      <tr><td rowspan="3"><b>Pipeline funnel</b></td>
+          <td>Home role card</td><td><code>APPLIED INVITED ASSESSING REVIEW ADVANCED REJECTED</code></td><td>6 stages, forward</td><td class="fix">✓ the good one</td></tr>
+      <tr><td>Home "Pipeline" strip</td><td><code>Advanced · In review · Assessing · Invited · Rejected</code></td><td>5 stages, reversed</td><td class="bad">drops Applied · reversed · "In review"</td></tr>
+      <tr><td>Job kanban / filters</td><td><code>In assessment · Review</code></td><td>stage nav</td><td class="bad">"In assessment" ≠ "Assessing"</td></tr>
+      <tr><td rowspan="2"><b>Candidates in pipeline</b></td>
+          <td>Jobs header</td><td><code>CANDIDATES IN PIPELINE</code></td><td><code>52594</code></td><td class="bad">no separators; long label</td></tr>
+      <tr><td>Job detail tile</td><td><code>IN PIPELINE</code></td><td><code>62</code></td><td class="bad">different label, same metric</td></tr>
+      <tr><td rowspan="2"><b>Review / decision queue</b></td>
+          <td>Jobs header</td><td><code>YOUR REVIEW QUEUE</code></td><td>= sum of <code>stage.review</code></td><td class="bad">"review queue" but it's the funnel stage</td></tr>
+      <tr><td>Home Decision Hub</td><td><code>AWAITING YOUR REVIEW</code></td><td>= pending agent decisions</td><td class="bad">same name, <i>different</i> number</td></tr>
+      <tr><td rowspan="3"><b>Budget / spend</b></td>
+          <td>Jobs header</td><td><code>BUDGET USED</code></td><td><code>68%</code> → "$609 of $900"</td><td class="bad">% primary</td></tr>
+      <tr><td>Home Decision Hub</td><td><code>ORG BUDGET · MTD</code></td><td><code>$609 / $900</code></td><td class="bad">$ primary, "/" form</td></tr>
+      <tr><td>Job detail tile</td><td><code>AGENT SPEND</code></td><td><code>$0 /$50</code> + "0%"</td><td class="bad">3rd label, 3rd format</td></tr>
+      <tr><td><b>Colour meaning</b></td><td>everywhere</td><td>purple = review · purple = advanced · red/green dots</td><td>—</td><td class="bad">purple means 3 things; RAG is off-brand</td></tr>
+    </table>
+  </div>
+
+  <!-- ============ FUNNEL ============ -->
+  <h2>2 · One canonical funnel</h2>
+  <p class="sub">The same six stages, same order, same labels, same colour rules — wherever a funnel appears (role card, job-detail summary, the Home "Pipeline" strip, kanban &amp; filter labels). Forward order always. <b>Review</b> turns purple when it needs you; <b>Rejected</b> is muted &amp; divided off as the terminal bucket.</p>
+
+  <div class="panel" style="display:flex;gap:30px;flex-wrap:wrap;align-items:flex-start">
+    <div>
+      <div class="lbl" style="margin-bottom:8px">Card form — home roles list &amp; job detail</div>
+      <div class="fcard">
+        <div class="fhead">
+          <div style="display:flex;gap:9px">
+            <span class="star">★</span>
+            <div>
+              <h3>AI Cybersecurity Governance Specialist</h3>
+              <div class="meta">#117 → WORKABLE · updated 21m ago</div>
+            </div>
+          </div>
+          <div class="agent">AGENT ON · $29/$50</div>
+        </div>
+        <div class="fstats">
+          <div class="fcell"><div class="k">Applied</div><div class="v">57</div></div>
+          <div class="fcell"><div class="k">Invited</div><div class="v">0</div></div>
+          <div class="fcell"><div class="k">Assessing</div><div class="v">0</div></div>
+          <div class="fcell"><div class="k">Review</div><div class="v attn">0</div></div>
+          <div class="fcell"><div class="k">Advanced</div><div class="v">5</div></div>
+          <div class="fcell term"><div class="k">Rejected</div><div class="v term">81</div></div>
+        </div>
+      </div>
+    </div>
+    <div style="flex:1;min-width:320px">
+      <div class="lbl" style="margin-bottom:8px">Strip form — home "Pipeline" standing (now same 6, forward)</div>
+      <div class="fstrip">
+        <span class="kick">Pipeline · all roles</span>
+        <span class="it"><b>2,058</b>Applied</span>
+        <span class="it"><b>1</b>Invited</span>
+        <span class="it"><b>0</b>Assessing</span>
+        <span class="it attn"><b>1</b>Review</span>
+        <span class="it"><b>60</b>Advanced</span>
+        <span class="sep"></span>
+        <span class="it term"><b>1,905</b>Rejected</span>
+      </div>
+      <p class="note" style="margin-top:14px">• <b>Applied</b> restored &nbsp;• forward order matches the card &nbsp;• <code>Assessing</code> not "In assessment" &nbsp;• <code>Review</code> not "In review" &nbsp;• Rejected divided off as terminal</p>
+    </div>
+  </div>
+
+  <!-- ============ ORG STRIP ============ -->
+  <h2>3 · One org KPI strip — shared by Home hub &amp; Jobs list</h2>
+  <p class="sub">Both org-level dashboards show the <b>same four tiles</b>. "Candidates in pipeline" → <b>In pipeline</b>. "Your review queue" / "Awaiting your review" → one metric, <b>Awaiting you</b> = pending decisions. Budget is always <code>$spent / $cap</code> with a bar.</p>
+  <div class="panel">
+    <div class="kpis c4">
+      <div class="kpi hi"><div class="k">In pipeline</div><div class="v">52,594</div><div class="d">across 18 active roles</div></div>
+      <div class="kpi"><div class="k">Active roles</div><div class="v">18</div><div class="d">21 starred</div></div>
+      <div class="kpi attn"><div class="k">Awaiting you</div><div class="v"><span class="accent">1</span></div><div class="d">oldest 21m</div></div>
+      <div class="kpi"><div class="k">Org budget · MTD</div><div class="v">$609 <span class="unit">/ $900</span></div><div class="bar"><i style="width:68%"></i></div><div class="d">68% · proj $812 EOM</div></div>
+    </div>
+  </div>
+
+  <h2 style="margin-top:26px">3b · Decision-Hub adds two health tiles (org only)</h2>
+  <p class="sub">The Hub keeps its agent-quality metrics — but as a second row beneath the shared strip, same tile component &amp; formatting.</p>
+  <div class="panel">
+    <div class="kpis c4" style="grid-template-columns:repeat(4,1fr)">
+      <div class="kpi"><div class="k">Decisions today</div><div class="v">0</div><div class="d">0 auto · 0 pending</div></div>
+      <div class="kpi"><div class="k">Override rate · 7d</div><div class="v">0<span class="unit">%</span></div><div class="d">no teach signal yet</div></div>
+      <div class="kpi" style="opacity:.4;border-style:dashed"><div class="k">— optional —</div><div class="v">·</div><div class="d">room to grow</div></div>
+      <div class="kpi" style="opacity:.4;border-style:dashed"><div class="k">— optional —</div><div class="v">·</div><div class="d">room to grow</div></div>
+    </div>
+  </div>
+
+  <!-- ============ ROLE STRIP ============ -->
+  <h2>4 · One role KPI strip — job detail</h2>
+  <p class="sub">Mirrors the org strip's shape and naming. <b>In pipeline</b> &amp; <b>Awaiting you</b> match the org tiles exactly. The old "Advanced" tile is dropped — Advanced now lives in the funnel right above it — and replaced with role-scoped <b>Awaiting you</b>. Budget uses the identical <code>$spent / $cap</code> + bar.</p>
+  <div class="panel">
+    <div class="kpis c5">
+      <div class="kpi hi"><div class="k">In pipeline</div><div class="v">62</div><div class="d">0 in review</div></div>
+      <div class="kpi"><div class="k">New CVs</div><div class="v">3</div><div class="d">ready to score</div></div>
+      <div class="kpi"><div class="k">Below threshold</div><div class="v">53</div><div class="d">flagged at &lt; 70</div></div>
+      <div class="kpi attn"><div class="k">Awaiting you</div><div class="v"><span class="accent">0</span></div><div class="d">queue clear</div></div>
+      <div class="kpi"><div class="k">Role budget · MTD</div><div class="v">$0 <span class="unit">/ $50</span></div><div class="bar"><i style="width:0%"></i></div><div class="d">0% · proj $0 EOM</div></div>
+    </div>
+  </div>
+
+  <!-- ============ RULES ============ -->
+  <h2>5 · Formatting standard</h2>
+  <div class="panel">
+    <div class="legend">
+      <div class="lc"><b>Labels</b>UPPERCASE mono, <code>--mute</code>, .1em tracking. Title-case in source, CSS uppercases. One label per concept.</div>
+      <div class="lc"><b>Counts</b>Thousands separators ≥ 1,000 → <code>52,594</code>. Geist display, 26px (tile) / 22px (funnel).</div>
+      <div class="lc"><b>Money</b>Whole dollars, always <code>$spent / $cap</code> + bar. No cap → <code>— · no cap</code>. Never cents.</div>
+      <div class="lc"><b>Percent</b>Integer + <code>%</code>. Used in sub-line, never as the primary budget value.</div>
+      <div class="lc"><b>Sub-line</b>Always present, one line, lowercase, ≤ ~22 chars. Context or the single most useful secondary number.</div>
+      <div class="lc"><b>Colour — 3 meanings only</b>
+        <div style="margin-top:6px"><span class="sw" style="background:var(--purple)"></span><span class="lbl">needs you</span> — Review, Awaiting you, over-budget</div>
+        <div><span class="sw" style="background:var(--ink)"></span><span class="lbl">volume</span> — neutral counts</div>
+        <div><span class="sw" style="background:var(--mute)"></span><span class="lbl">terminal / context</span> — Rejected, sub-lines</div>
+        <div style="margin-top:5px;color:var(--mute)">Retire ad-hoc red/green dot grid → purple / mute.</div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note" style="margin-top:30px">One decision needs your call: <b>"Awaiting you" = pending agent decisions</b> (the thing you action), while the <b>Review</b> funnel stage stays in the funnel only. Today the Jobs header's "review queue" actually shows the Review <i>stage count</i> — this proposal repoints it to pending decisions so the label means the same thing on every surface. Shout if you'd rather keep it as the stage count.</p>
+
+</div>
+</body>
+</html>

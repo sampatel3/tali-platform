@@ -11,7 +11,8 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 
 import './home.css';
-import { formatRelativeAge, formatUsd } from './atoms';
+import { formatCount, budgetTile, inPipelineFromStageCounts } from '../../shared/metrics';
+import { formatRelativeAge } from './atoms';
 import { HomeNow } from './HomeNow';
 import { HomeMonitoring } from './HomeMonitoring';
 import { HomePlatformUpdates } from './HomePlatformUpdates';
@@ -288,11 +289,21 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     return `${Math.round(h / 24)}d`;
   }, [kpis.oldest_pending_age_seconds]);
 
-  const budgetPct = useMemo(() => {
-    const cap = Number(kpis.org_budget_cap_cents || 0);
-    const spent = Number(kpis.org_budget_spent_cents || 0);
-    return cap > 0 ? Math.min(100, (spent / cap) * 100) : 0;
-  }, [kpis.org_budget_cap_cents, kpis.org_budget_spent_cents]);
+  // Org budget tile (spent / cap + bar + projection) — same helper the Jobs
+  // and role strips use so the format is identical everywhere.
+  const orgBudget = useMemo(
+    () => budgetTile(kpis.org_budget_spent_cents, kpis.org_budget_cap_cents),
+    [kpis.org_budget_cap_cents, kpis.org_budget_spent_cents],
+  );
+
+  // "In pipeline" — open candidates summed across every role, from the same
+  // /agent/roles/breakdown stage_counts the Jobs strip uses.
+  const orgPipeline = useMemo(() => {
+    const list = Array.isArray(rolesBreakdown) ? rolesBreakdown : [];
+    const total = list.reduce((acc, r) => acc + inPipelineFromStageCounts(r?.stage_counts), 0);
+    const withCandidates = list.filter((r) => inPipelineFromStageCounts(r?.stage_counts) > 0).length;
+    return { total, withCandidates };
+  }, [rolesBreakdown]);
 
   const headerPendingBuckets = useMemo(() => {
     const counts = kpis.pending_by_type || {};
@@ -324,47 +335,66 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       />
 
       <div className="home-body">
-        {/* KPI strip */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-          <div className="rq-kpi rq-kpi-emph">
-            <div className="l">Awaiting your review</div>
-            <div className="v"><em>{kpis.pending}</em></div>
+        {/* Shared org KPI strip — the same four tiles the Jobs list shows:
+            In pipeline · Active roles · Awaiting you · Org budget · MTD.
+            "Awaiting you" is the pending-decision queue (kpis.pending), the
+            same metric the Jobs strip sums per role. Formatting (separators,
+            $spent / $cap + bar) comes from src/shared/metrics. */}
+        <div className="rq-kpis">
+          <div className="rq-kpi">
+            <div className="l">In pipeline</div>
+            <div className="v">{formatCount(orgPipeline.total)}</div>
             <div className="d">
-              {kpis.pending > 0 ? `oldest ${oldestAgeLabel}` : 'Queue is clear'}
+              across {formatCount(kpis.active_role_count)} active role{kpis.active_role_count === 1 ? '' : 's'}
             </div>
           </div>
           <div className="rq-kpi">
-            <div className="l">Decisions today</div>
-            <div className="v">{kpis.today}</div>
+            <div className="l">Active roles</div>
+            <div className="v">{formatCount(kpis.active_role_count)}</div>
             <div className="d">
-              {kpis.auto_applied_today} auto-applied · {kpis.pending_decisions ?? kpis.pending} pending
+              {orgPipeline.withCandidates > 0 ? `${formatCount(orgPipeline.withCandidates)} with candidates` : 'no candidates yet'}
+            </div>
+          </div>
+          <div className="rq-kpi rq-kpi-emph">
+            <div className="l">Awaiting you</div>
+            <div className="v"><em>{formatCount(kpis.pending)}</em></div>
+            <div className="d">
+              {kpis.pending > 0 ? `oldest ${oldestAgeLabel}` : 'queue clear'}
             </div>
           </div>
           <div className="rq-kpi">
             <div className="l">Org budget · MTD</div>
             <div className="v">
-              {formatUsd(kpis.org_budget_spent_cents)}
-              {kpis.org_budget_cap_cents > 0
-                ? <span style={{ color: 'var(--mute)', fontSize: 14, fontWeight: 400 }}> / {formatUsd(kpis.org_budget_cap_cents)}</span>
+              {orgBudget.value}
+              {orgBudget.unit
+                ? <span style={{ color: 'var(--mute)', fontSize: 15, fontWeight: 400 }}> {orgBudget.unit}</span>
                 : null}
             </div>
             {kpis.org_budget_cap_cents > 0 ? (
               <div className="rq-bar">
-                <i style={{
-                  width: `${budgetPct}%`,
-                  background: budgetPct > 100 ? 'var(--red)' : budgetPct > 80 ? 'var(--amber)' : 'var(--purple)',
-                }} />
+                <i style={{ width: `${orgBudget.pct}%`, background: orgBudget.over ? 'var(--red)' : 'var(--purple)' }} />
               </div>
-            ) : (
-              <div className="d">No cap configured</div>
-            )}
+            ) : null}
+            <div className="d">{orgBudget.sub}</div>
+          </div>
+        </div>
+
+        {/* Decision-Hub health row — agent-quality metrics, org-only. Same
+            tile component as the strip above, secondary by position. */}
+        <div className="rq-kpis rq-kpis-secondary">
+          <div className="rq-kpi">
+            <div className="l">Decisions today</div>
+            <div className="v">{formatCount(kpis.today)}</div>
+            <div className="d">
+              {formatCount(kpis.auto_applied_today)} auto · {formatCount(kpis.pending_decisions ?? kpis.pending)} pending
+            </div>
           </div>
           <div className="rq-kpi">
             <div className="l">Override rate · 7d</div>
             <div className="v">{kpis.override_rate_pct.toFixed(0)}%</div>
             <div className="d">
-              {kpis.teach_rate_pct > 0 ? `${kpis.teach_rate_pct.toFixed(0)}% taught` : 'No teach signal yet'}
-              {orgStatus?.last_decision_at ? ` · last decision ${formatRelativeAge(orgStatus.last_decision_at)} ago` : ''}
+              {kpis.teach_rate_pct > 0 ? `${kpis.teach_rate_pct.toFixed(0)}% taught` : 'no teach signal yet'}
+              {orgStatus?.last_decision_at ? ` · last ${formatRelativeAge(orgStatus.last_decision_at)} ago` : ''}
             </div>
           </div>
         </div>
