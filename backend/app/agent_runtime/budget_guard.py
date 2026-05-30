@@ -79,6 +79,29 @@ def month_to_date_spend_cents(db: Session, *, role: Role) -> int:
     return int(int(spent_micro) / 10_000)  # micro-USD → cents
 
 
+def month_to_date_raw_cost_cents(db: Session, *, role: Role) -> int:
+    """Month-to-date RAW Anthropic cost on this role, in cents.
+
+    Aggregates ``UsageEvent.cost_usd_micro`` (the pre-markup Anthropic cost)
+    over the SAME window/filter as ``month_to_date_spend_cents``. The
+    difference between the two is Taali's margin on this role for the month —
+    surfaced so the budget panel can show Anthropic cost vs charged credits
+    rather than only the marked-up number the cap is denominated in.
+    """
+    month_start = _month_start_utc(datetime.now(timezone.utc))
+    raw_micro = (
+        db.query(func.coalesce(func.sum(UsageEvent.cost_usd_micro), 0))
+        .filter(
+            UsageEvent.organization_id == role.organization_id,
+            UsageEvent.role_id == role.id,
+            UsageEvent.created_at >= month_start,
+        )
+        .scalar()
+        or 0
+    )
+    return int(int(raw_micro) / 10_000)  # micro-USD → cents
+
+
 def check_monthly_usd(db: Session, *, role: Role) -> BudgetCheck:
     """Refuse when month-to-date spend on the role hits its cap.
 

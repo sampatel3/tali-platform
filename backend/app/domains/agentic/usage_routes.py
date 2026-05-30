@@ -28,7 +28,8 @@ router = APIRouter(tags=["agentic"])
 class RoleUsageBreakdownLine(BaseModel):
     feature: str
     label: str
-    cost_cents: int
+    cost_cents: int  # charged (marked-up) credits — what the budget cap counts
+    raw_anthropic_cost_cents: int  # raw Anthropic cost for this feature (pre-markup)
     event_count: int
 
 
@@ -36,7 +37,10 @@ class RoleUsageBreakdown(BaseModel):
     role_id: int
     role_name: str
     monthly_budget_cents: int
-    monthly_spent_cents: int
+    monthly_spent_cents: int  # charged credits MTD (the cap basis)
+    monthly_raw_anthropic_cost_cents: int  # raw Anthropic cost MTD (pre-markup)
+    monthly_margin_cents: int  # spent - raw = Taali margin this month
+    margin_pct: float  # margin / raw * 100 = effective blended markup
     month_start: datetime
     by_feature: list[RoleUsageBreakdownLine]
 
@@ -89,6 +93,7 @@ def role_usage_breakdown(
         db.query(
             UsageEvent.feature,
             func.coalesce(func.sum(UsageEvent.credits_charged), 0).label("cost_micro"),
+            func.coalesce(func.sum(UsageEvent.cost_usd_micro), 0).label("raw_micro"),
             func.count(UsageEvent.id).label("event_count"),
         )
         .filter(
@@ -108,17 +113,26 @@ def role_usage_breakdown(
                 str(r.feature).replace("_", " ").title(),
             ),
             cost_cents=int(int(r.cost_micro or 0) / 10_000),
+            raw_anthropic_cost_cents=int(int(r.raw_micro or 0) / 10_000),
             event_count=int(r.event_count or 0),
         )
         for r in rows
     ]
     lines.sort(key=lambda l: l.cost_cents, reverse=True)
 
+    spent_cents = budget_guard.month_to_date_spend_cents(db, role=role)
+    raw_cents = budget_guard.month_to_date_raw_cost_cents(db, role=role)
+    margin_cents = spent_cents - raw_cents
+    margin_pct = round((margin_cents / raw_cents) * 100, 1) if raw_cents > 0 else 0.0
+
     return RoleUsageBreakdown(
         role_id=role_id,
         role_name=str(role.name or ""),
         monthly_budget_cents=budget_guard.role_monthly_usd_cents(role),
-        monthly_spent_cents=budget_guard.month_to_date_spend_cents(db, role=role),
+        monthly_spent_cents=spent_cents,
+        monthly_raw_anthropic_cost_cents=raw_cents,
+        monthly_margin_cents=margin_cents,
+        margin_pct=margin_pct,
         month_start=month_start,
         by_feature=lines,
     )
