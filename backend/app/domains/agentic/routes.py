@@ -75,15 +75,17 @@ def _enqueue_decision_side_effects(
         )
 
 
-# Filter shorthand: a single ``?type=advance`` lets the recruiter scope the
-# Hub to every forward-progress decision the agent emits (interview, send
-# assessment, resend assessment invite). Without this, the dropdown would
-# need three separate options for what reads as one concept. ``reject`` and
-# ``skip_assessment_reject`` stay 1:1 with their underlying decision_type —
-# the Hub draws a hard visual line between post- and pre-screen rejections,
-# and recruiters want to filter on that distinction.
+# Filter shorthands map a single ``?type=`` value onto the set of underlying
+# decision_types it should match, so the Hub's filter tabs line up 1:1 with
+# the header pending buckets. ``advance`` scopes to interview hand-offs;
+# ``assessment`` scopes to the send/resend-assessment pair (one concept to a
+# recruiter, two decision_types under the hood). ``reject`` and
+# ``skip_assessment_reject`` stay 1:1 with their decision_type — the Hub draws
+# a hard visual line between post- and pre-screen rejections, and recruiters
+# want to filter on that distinction.
 DECISION_TYPE_CATEGORIES: dict[str, list[str]] = {
-    "advance": ["advance_to_interview", "send_assessment", "resend_assessment_invite"],
+    "advance": ["advance_to_interview"],
+    "assessment": ["send_assessment", "resend_assessment_invite"],
 }
 
 
