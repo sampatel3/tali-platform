@@ -204,6 +204,10 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   // at AGENT_SPEND_FANOUT_LIMIT to keep the request count bounded; orgs with
   // more agentic roles fall back to the cap-only display.
   const [agentSpendByRole, setAgentSpendByRole] = useState({});
+  // Org-level KPIs from /agent/org-status — the SAME source the Home hub reads,
+  // so "Org budget · MTD" is the canonical org figure (total credits this month
+  // vs sum of ALL role caps), not a truncated per-role sum.
+  const [orgKpis, setOrgKpis] = useState(null);
   const [sourceFilter, setSourceFilter] = useState('all');
   const [roleSheetOpen, setRoleSheetOpen] = useState(false);
   const [savingRole, setSavingRole] = useState(false);
@@ -213,6 +217,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     if (isShowcase) {
       setRoles(JOBS_SHOWCASE);
       setOrgData(JOBS_SHOWCASE_ORG);
+      // Mirror the Home showcase org budget ($18 / $50) so the demo surfaces match.
+      setOrgKpis({ org_budget_spent_cents: 1800, org_budget_cap_cents: 5000 });
       // Show a brief "Syncing now" pulse on first load, then settle into the
       // static "Synced X min ago" state. Pure visual — no API calls fire.
       setSyncing(true);
@@ -225,10 +231,12 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     setLoading(true);
     setError('');
     try {
-      const [rolesRes, orgRes] = await Promise.all([
+      const [rolesRes, orgRes, orgStatusRes] = await Promise.all([
         rolesApi.list({ include_pipeline_stats: true }),
         orgApi.get(),
+        apiClient.agent.orgStatus().catch(() => null),
       ]);
+      setOrgKpis(orgStatusRes?.data || null);
       const nextRoles = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
       let nextOrgData = orgRes?.data || null;
       let nextSyncing = false;
@@ -252,6 +260,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     } catch {
       setRoles([]);
       setOrgData(null);
+      setOrgKpis(null);
       setSyncing(false);
       setSyncRunId(null);
       setError('Failed to load jobs.');
@@ -649,23 +658,14 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           const awaitingRoleCount = roles.filter(
             (r) => Number(agentSpendByRole?.[r.id]?.pending_decisions || 0) > 0,
           ).length;
-          // Org budget · MTD — sum live spend + cap across agent-enabled
-          // roles. Spend comes from the fan-out kept in `agentSpendByRole`;
-          // cap falls back to role.monthly_usd_budget_cents until it loads.
-          const agentEnabledCount = roles.filter((r) => r?.agentic_mode_enabled).length;
-          let totalSpentCents = 0;
-          let totalBudgetCents = 0;
-          roles.forEach((r) => {
-            if (!r?.agentic_mode_enabled) return;
-            const live = agentSpendByRole?.[r.id];
-            totalSpentCents += Number(live?.monthly_spent_cents || 0);
-            totalBudgetCents += Number(
-              live?.monthly_budget_cents
-              ?? r?.monthly_usd_budget_cents
-              ?? 0,
-            );
-          });
-          const budget = budgetTile(totalSpentCents, totalBudgetCents);
+          // Org budget · MTD — the canonical org figure from /agent/org-status
+          // (total credits charged this month vs sum of ALL role caps), the
+          // SAME source the Home hub reads so the two pages always match. The
+          // old per-role sum over agent-enabled roles (capped at the fan-out
+          // limit) under-counted spend and used sum-of-role-caps, not the org
+          // cap — which is why Jobs and Home disagreed.
+          const orgBudgetCapCents = Number(orgKpis?.org_budget_cap_cents || 0);
+          const budget = budgetTile(Number(orgKpis?.org_budget_spent_cents || 0), orgBudgetCapCents);
           return (
             <div style={{ marginBottom: 18 }}>
             <KpiStrip
@@ -697,12 +697,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                   label: 'Org budget · MTD',
                   value: budget.value,
                   unit: budget.unit,
-                  bar: totalBudgetCents > 0 ? budget : null,
-                  sub: totalBudgetCents > 0
-                    ? budget.sub
-                    : agentEnabledCount > 0
-                      ? `${formatCount(agentEnabledCount)} role${agentEnabledCount === 1 ? '' : 's'} with the agent on`
-                      : 'no roles using the agent yet',
+                  bar: orgBudgetCapCents > 0 ? budget : null,
+                  sub: budget.sub,
                 },
               ]}
             />
