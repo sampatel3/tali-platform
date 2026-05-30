@@ -27,10 +27,12 @@ export const PIPELINE_FUNNEL_STAGES = [
 // usually a fast-track hand-off of a strong *scored* candidate to the recruiter
 // (skipping the assessment). Completed = candidates who actually finished an
 // assessment; they surface as "decision pending" until acted on.
+// `tone` colour-codes the chip, matching the decision-feed badge vocabulary:
+// advance=green, send=purple, reject=red, pre-screen reject=deep-red.
 export const FUNNEL_DECISION_GATES = [
-  { stage: 'applied', key: 'pre_screen', label: 'pre-screen reject', tone: 'reject', types: ['skip_assessment_reject'] },
-  { stage: 'scored', key: 'send', label: 'send assessment', tone: 'go', types: ['send_assessment', 'resend_assessment_invite'] },
-  { stage: 'scored', key: 'advance', label: 'advance', tone: 'go', types: ['advance_to_interview'] },
+  { stage: 'applied', key: 'pre_screen', label: 'pre-screen reject', tone: 'prescreen', types: ['skip_assessment_reject'] },
+  { stage: 'scored', key: 'send', label: 'send assessment', tone: 'send', types: ['send_assessment', 'resend_assessment_invite'] },
+  { stage: 'scored', key: 'advance', label: 'advance', tone: 'advance', types: ['advance_to_interview'] },
   { stage: 'scored', key: 'reject', label: 'reject', tone: 'reject', types: ['reject'] },
 ];
 

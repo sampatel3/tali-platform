@@ -56,10 +56,7 @@ export const FunnelBoard = ({ stageCounts, decisionsByType = null, awaitingTotal
                 <span className="fb-dnone">outcome</span>
               ) : chips.length ? (
                 chips.map((chip) => (
-                  <span
-                    key={chip.key}
-                    className={`fb-dchip${chip.tone === 'reject' ? ' is-reject' : ''}${chip.tone === 'pending' ? ' is-pending' : ''}`}
-                  >
+                  <span key={chip.key} className={`fb-dchip is-${chip.tone}`}>
                     {formatCount(chip.count)} {chip.label}
                   </span>
                 ))

@@ -102,16 +102,32 @@
   white-space: nowrap;
 }
 
+/* Colour-coded decision chips, matching the decision-feed badge vocabulary.
+   White fill + a coloured border/text so they stay legible on the light-purple
+   funnel card. */
+.fb-dchip.is-send {
+  color: var(--purple-2, var(--purple));
+  border-color: color-mix(in oklab, var(--purple) 38%, var(--line));
+}
+
+.fb-dchip.is-advance {
+  color: color-mix(in oklab, var(--green, #15a36a) 78%, var(--ink));
+  border-color: color-mix(in oklab, var(--green, #15a36a) 42%, var(--line));
+}
+
 .fb-dchip.is-reject {
-  background: color-mix(in oklab, var(--red, #ec5a6f) 14%, var(--bg-2));
-  color: color-mix(in oklab, var(--red, #ec5a6f) 80%, var(--ink));
-  border-color: color-mix(in oklab, var(--red, #ec5a6f) 30%, var(--line));
+  color: color-mix(in oklab, var(--red, #ef4444) 80%, var(--ink));
+  border-color: color-mix(in oklab, var(--red, #ef4444) 40%, var(--line));
+}
+
+.fb-dchip.is-prescreen {
+  color: color-mix(in oklab, var(--red-deep, #b91c1c) 82%, var(--ink));
+  border-color: color-mix(in oklab, var(--red-deep, #b91c1c) 44%, var(--line));
 }
 
 /* "decision pending" — candidates the agent hasn't ruled on yet: muted, to sit
    quietly behind the actionable recommendation chips. */
 .fb-dchip.is-pending {
-  background: var(--bg-2);
   color: var(--mute);
   border-color: var(--line);
 }
