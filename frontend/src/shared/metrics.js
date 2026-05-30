@@ -26,7 +26,7 @@ export const PIPELINE_FUNNEL_STAGES = [
 // scoring and Invited awaits the candidate, so neither is a recruiter decision.
 export const FUNNEL_DECISION_STAGES = [
   { stage: 'scored', action: 'send / reject' },
-  { stage: 'completed', action: 'advance / decide' },
+  { stage: 'completed', action: 'advance / reject' },
 ];
 
 // "Awaiting you" = candidates sitting at a decision stage (Scored + Completed).
