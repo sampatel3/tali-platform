@@ -50,9 +50,16 @@ from .anthropic_reconciliation_aggregates import (  # noqa: F401
 logger = logging.getLogger("taali.anthropic_reconciliation")
 
 
-# Window we re-pull on every run. 48h gives Anthropic late data time to
-# settle without making the daily query expensive.
-_RECONCILE_LOOKBACK_DAYS = 2
+# Window we re-pull on every run. The binding lateness is NOT Anthropic's
+# (its usage/cost data settles in ~5 min) — it's OUR OWN internal rows: the
+# Message Batches retrieve path (cv_matching/runner_batch) lands claude_call_log
+# / usage_events rows hours-to-days after the batch was billed, so a day
+# reconciled at 03:00 can still be missing batch spend that arrives later.
+# Measured 2026-05-30: recomputing 05-26/05-27 against current data raised the
+# internal total well above what the 03:00 run stored (drift -21% -> single
+# digits). A 4-day daily window re-reconciles each day until its late batch
+# rows have settled; the weekly settle sweep (days=14) catches stragglers.
+_RECONCILE_LOOKBACK_DAYS = 4
 
 
 def reconcile_recent(

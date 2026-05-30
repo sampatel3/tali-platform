@@ -128,6 +128,15 @@ celery_app.conf.update(
             "task": "app.tasks.reconciliation_tasks.reconcile_anthropic_usage",
             "schedule": crontab(hour=3, minute=0),
         },
+        # Weekly settle sweep: re-reconcile the last 14 days so very-late
+        # batch-retrieval rows (which can land days after Anthropic bills the
+        # batch) converge the stored drift toward 0 instead of leaving a stale
+        # negative number from the day's first 03:00 run. Idempotent upsert.
+        "anthropic-usage-reconciliation-weekly-settle": {
+            "task": "app.tasks.reconciliation_tasks.reconcile_anthropic_usage",
+            "schedule": crontab(hour=4, minute=0, day_of_week=0),
+            "kwargs": {"days": 14},
+        },
         # Phase 7 cohort planner tick: every 30 min, fan a tick to each
         # agent-enabled, non-paused role. The orchestrator surveys
         # cohort state and acts on what it finds. Replaces the old

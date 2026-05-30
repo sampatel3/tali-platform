@@ -14,18 +14,23 @@ import logging
 
 from .celery_app import celery_app
 from ..platform.database import SessionLocal
-from ..services.anthropic_reconciliation_service import reconcile_recent
+from ..services.anthropic_reconciliation_service import (
+    _RECONCILE_LOOKBACK_DAYS,
+    reconcile_recent,
+)
 
 logger = logging.getLogger("taali.tasks.reconciliation")
 
 
 @celery_app.task(name="app.tasks.reconciliation_tasks.reconcile_anthropic_usage")
-def reconcile_anthropic_usage(days: int = 2) -> dict:
+def reconcile_anthropic_usage(days: int = _RECONCILE_LOOKBACK_DAYS) -> dict:
     """Reconcile the last ``days`` days of Anthropic billing.
 
-    The default 2-day window catches late-arriving Anthropic data on
-    day-1 while still reconciling day-2's data with the freshest
-    available numbers. Idempotent: the service upserts rows.
+    The default window re-reconciles each recent day until OUR late-arriving
+    internal rows (batch retrievals land hours-to-days after billing) have
+    settled — not because Anthropic's data is late (it settles in ~5 min).
+    The weekly settle sweep passes a wider ``days`` for stragglers.
+    Idempotent: the service upserts rows by (date, workspace, model).
     """
     db = SessionLocal()
     try:
