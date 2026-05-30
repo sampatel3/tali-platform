@@ -1,0 +1,3 @@
+mainspring master @ 715c189
+Files: metering/seam.py, metering/pricing.py (ORM-free seam only).
+Re-vendor: scripts/vendor_mainspring_metering.sh
