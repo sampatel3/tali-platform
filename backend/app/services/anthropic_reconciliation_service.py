@@ -61,6 +61,28 @@ logger = logging.getLogger("taali.anthropic_reconciliation")
 # rows have settled; the weekly settle sweep (days=14) catches stragglers.
 _RECONCILE_LOOKBACK_DAYS = 4
 
+# Drift alerting. A reconciliation that silently records -77% drift for days
+# (as happened with the pre-2026-05-26 Graphiti leak) is worse than useless —
+# the whole point is to catch un-metered spend loudly. After each run we alert
+# on any (day, model) row whose |cost drift| crosses the threshold on a
+# MATERIAL day. Tiny days are excluded because a couple of dollars of rounding
+# reads as a huge percentage (e.g. a $0.08 day showed -25%). NEGATIVE drift
+# (internal < Anthropic billed) is the dangerous direction — we were billed for
+# spend we never metered — but we alert on large drift either way.
+_ALERT_DRIFT_PCT = 10  # percent
+_ALERT_MIN_COST_USD_MICRO = 1_000_000  # $1 — ignore sub-dollar noise rows
+
+
+def _is_alertable_drift(cost_drift, anthropic_cost_micro: int) -> bool:
+    """True when a (day, model) row's cost drift warrants an alert: a real
+    drift magnitude on a material-spend day. ``cost_drift`` is the Decimal
+    percent from ``_percent_drift`` (None when external spend is 0)."""
+    return (
+        cost_drift is not None
+        and abs(cost_drift) >= _ALERT_DRIFT_PCT
+        and anthropic_cost_micro >= _ALERT_MIN_COST_USD_MICRO
+    )
+
 
 def reconcile_recent(
     db: Session,
@@ -203,6 +225,7 @@ def reconcile_recent(
 
     rows_written = 0
     rows_skipped = 0
+    drift_alerts: list[dict[str, Any]] = []
     for (usage_day, workspace_id, model), tokens in by_key.items():
         org_id = workspace_to_org.get(workspace_id) if workspace_id else None
         anthropic_cost = cost_by_key.get((usage_day, workspace_id, model), 0)
@@ -253,6 +276,18 @@ def reconcile_recent(
             internal=internal["cost_usd_micro"],
             external=anthropic_cost,
         )
+
+        # Collect a drift alert for material rows that breach the threshold.
+        if _is_alertable_drift(cost_drift, anthropic_cost):
+            drift_alerts.append({
+                "usage_date": usage_day.isoformat(),
+                "model": model or "",
+                "workspace_id": workspace_id,
+                "cost_drift_pct": float(cost_drift),
+                "anthropic_cost_usd": round(anthropic_cost / 1e6, 2),
+                "internal_cost_usd": round(internal["cost_usd_micro"] / 1e6, 2),
+                "direction": "under_count" if cost_drift < 0 else "over_count",
+            })
 
         details: dict[str, Any] = {
             "anthropic_workspace_known": workspace_id in workspace_to_org,
@@ -318,9 +353,34 @@ def reconcile_recent(
         logger.exception("Failed to commit reconciliation rows")
         return {"error": "commit_failed", "rows_attempted": rows_written}
 
+    if drift_alerts:
+        # Most-negative (worst under-count) first.
+        drift_alerts.sort(key=lambda a: a["cost_drift_pct"])
+        worst = drift_alerts[:5]
+        logger.error(
+            "anthropic_reconciliation_drift_alert: %d (day,model) row(s) exceed "
+            "%d%% cost drift on material spend. Worst: %s",
+            len(drift_alerts), _ALERT_DRIFT_PCT, worst,
+            extra={"event": "anthropic_reconciliation_drift_alert", "alerts": worst},
+        )
+        try:  # surface to Sentry if configured (main.py inits it)
+            import sentry_sdk
+
+            w = worst[0]
+            sentry_sdk.capture_message(
+                f"Anthropic reconciliation drift: {len(drift_alerts)} row(s) over "
+                f"{_ALERT_DRIFT_PCT}% (worst {w['cost_drift_pct']:.1f}% {w['direction']} "
+                f"on {w['model']} {w['usage_date']})",
+                level="error",
+            )
+        except Exception:  # pragma: no cover — never let alerting break the run
+            pass
+
     return {
         "rows_written": rows_written,
         "rows_skipped": rows_skipped,
         "window_start": starting_at.isoformat(),
         "window_end": ending_at.isoformat(),
+        "drift_alerts": len(drift_alerts),
+        "drift_alert_details": drift_alerts[:10],
     }

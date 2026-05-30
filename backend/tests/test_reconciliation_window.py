@@ -10,6 +10,7 @@ never revisited it, leaving a stale negative drift. The window is now 4 days
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -20,6 +21,26 @@ from app.services import anthropic_reconciliation_service as svc
 
 def test_lookback_is_widened():
     assert svc._RECONCILE_LOOKBACK_DAYS >= 4
+
+
+def test_drift_alert_threshold():
+    """Alert on material-spend rows with large drift (either direction); stay
+    quiet on small drift and on sub-dollar noise days."""
+    big = 5_000_000  # $5 — material
+    # Large negative drift on a material day -> alert (the dangerous direction).
+    assert svc._is_alertable_drift(Decimal("-21.7"), big) is True
+    # Large positive drift on a material day -> alert too (over-count is a bug).
+    assert svc._is_alertable_drift(Decimal("15.0"), big) is True
+    # Small drift -> no alert.
+    assert svc._is_alertable_drift(Decimal("-3.0"), big) is False
+    # Sub-dollar noise day (the real $0.08 / -25% row) -> no alert.
+    assert svc._is_alertable_drift(Decimal("-25.4"), 80_000) is False
+    # Undefined drift (zero external spend) -> no alert.
+    assert svc._is_alertable_drift(None, big) is False
+    # Exactly at the threshold on the minimum material spend -> alert.
+    assert svc._is_alertable_drift(
+        Decimal(str(svc._ALERT_DRIFT_PCT)), svc._ALERT_MIN_COST_USD_MICRO
+    ) is True
 
 
 def test_reconcile_recent_pulls_the_widened_window(monkeypatch):
