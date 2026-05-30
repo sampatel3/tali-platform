@@ -41,6 +41,7 @@ import { RoleSheet } from '../candidates/RoleSheet';
 import { getErrorMessage, trimOrUndefined, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
 import { formatCount, budgetTile, applicationFunnelBucket } from '../../shared/metrics';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
+import { KpiStrip } from '../../shared/ui/KpiStrip';
 
 const EMPTY_PROGRESS = { status: 'idle', total: 0, scored: 0, errors: 0, include_scored: false };
 const EMPTY_FETCH_PROGRESS = { status: 'idle', total: 0, fetched: 0, errors: 0 };
@@ -1386,41 +1387,42 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     );
     const budget = budgetTile(monthlySpentCents, monthlyBudgetCents);
     const awaitingCount = Number(agentStatus?.pending_decisions || 0);
+    // Shaped as <KpiStrip> tiles so the role KPI row is the SAME card as the
+    // home / jobs-list strips (no bespoke .stat cards, no black tile).
+    // "Awaiting you" carries the purple-tint emphasis, matching home.
     return [
       {
         key: 'active',
         label: 'In pipeline',
         value: formatCount(role?.active_candidates_count || activeApplications.length || 0),
-        description: `${formatCount(role?.stage_counts?.completed || 0)} completed`,
-        highlight: true,
+        sub: `${formatCount(role?.stage_counts?.completed || 0)} completed`,
       },
       {
         key: 'unscored',
         label: 'New CVs',
         value: formatCount(unscoredApplications.length),
-        description: unscoredApplications.length > 0 ? 'ready to score' : 'all visible CVs scored',
+        sub: unscoredApplications.length > 0 ? 'ready to score' : 'all visible CVs scored',
       },
       {
         key: 'below-threshold',
         label: 'Below threshold',
         value: formatCount(belowThresholdCount),
-        description: thresholdValue != null ? `flagged at < ${thresholdValue}` : 'set a reject threshold',
+        sub: thresholdValue != null ? `flagged at < ${thresholdValue}` : 'set a reject threshold',
       },
       {
         key: 'awaiting',
         label: 'Awaiting you',
         value: formatCount(awaitingCount),
-        attn: awaitingCount > 0,
-        description: awaitingCount > 0 ? 'pending your call' : 'queue clear',
+        emph: awaitingCount > 0,
+        sub: awaitingCount > 0 ? 'pending your call' : 'queue clear',
       },
       {
         key: 'spend',
         label: 'Role budget · MTD',
         value: budget.value,
-        valueSuffix: monthlyBudgetCents > 0 ? budget.unit : null,
-        budgetPct: monthlyBudgetCents > 0 ? budget.pct : null,
-        budgetOver: budget.over,
-        description: budget.sub,
+        unit: monthlyBudgetCents > 0 ? budget.unit : null,
+        bar: monthlyBudgetCents > 0 ? budget : null,
+        sub: budget.sub,
       },
     ];
   }, [activeApplications.length, agentStatus, belowThresholdCount, role, thresholdValue, unscoredApplications.length]);
@@ -2336,27 +2338,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 the first thing inside the Candidates tab, mirroring the
                 CandidatesTab artboard in tali-pages.jsx. Other tabs do not
                 show these KPIs. */}
-            <div className="stat-row">
-              {pipelineStats.map((item) => (
-                <div
-                  key={item.key}
-                  className={`stat ${item.highlight ? 'hi' : ''} ${item.budgetPct != null ? 'has-bar' : ''}`.trim()}
-                >
-                  <div className="k">{item.label}</div>
-                  <div className="v">
-                    <span style={item.attn ? { color: 'var(--purple)' } : undefined}>{item.value}</span>
-                    {item.valueSuffix ? (
-                      <span style={{ color: 'var(--mute)', fontSize: 14, marginLeft: 4 }}>{item.valueSuffix}</span>
-                    ) : null}
-                  </div>
-                  {item.budgetPct != null ? (
-                    <div className="stat-bar" aria-hidden="true">
-                      <i style={{ width: `${item.budgetPct}%`, ...(item.budgetOver ? { background: 'var(--red)' } : null) }} />
-                    </div>
-                  ) : null}
-                  <div className="d">{item.description}</div>
-                </div>
-              ))}
+            <div style={{ marginBottom: 20 }}>
+              <KpiStrip columns={5} tiles={pipelineStats} />
             </div>
 
             {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — segmented
