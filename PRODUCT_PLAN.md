@@ -685,6 +685,19 @@ Week 4:
 
 ## GUARDRAILS
 
+> **⚠️ SUPERSEDED (2026-05-30, platform audit — `TAA-12`).** The scoring
+> guardrails below ("Scoring is heuristic-first" and "Single Claude call per
+> assessment") describe the original MVP design and **no longer match the code**.
+> Scoring now runs an LLM grader path: a **per-dimension rubric grader**
+> (`backend/app/.../rubric_scoring.py`) plus a **per-turn interrogation
+> classifier**, for **56 LLM call sites** across the scoring path (audit-verified
+> against `origin/main`). Heuristics remain as a composite/fallback, but the
+> authoritative score for most live tasks is LLM-graded — not a single CV-match
+> call. Do **not** treat these two guardrails as the spec. The authority for the
+> intended scoring posture is `NORTH_STAR.md` (Principle 4, determinism) and the
+> rubric-scoring design; the determinism qualifier and the `temperature=0` fix
+> are tracked in `TAA-8`.
+
 ### Scoring is heuristic-first
 - **Trigger**: Importing ML/HuggingFace libraries for scoring
 - **Rule**: STOP. Use regex and pattern matching. The only Claude call is for CV-job matching (one call per assessment at submission). All other scoring is pure heuristic. HuggingFace/ML is V2.
