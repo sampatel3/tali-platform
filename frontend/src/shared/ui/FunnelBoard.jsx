@@ -13,13 +13,15 @@ const OUTCOME_KEYS = new Set(['advanced', 'rejected']);
 
 // Shared B2 funnel board — stage counts on top
 // (Applied · Scored · Invited · Completed · Advanced │ Rejected), with an
-// "awaiting your decision" row beneath that surfaces the candidates needing
-// YOUR call at each decision stage (Scored → send/reject, Completed →
-// advance/decide). Derived purely from the stage counts, so it works on both
-// the role page and the home hub, agent on or off. Advanced and Rejected are
-// terminal outcomes, divided off with no decision row.
-export const FunnelBoard = ({ stageCounts, awaitingTotal = null, scopeLabel = 'this role' }) => {
-  const decisionRow = funnelDecisionRow(stageCounts);
+// "awaiting your decision" row beneath. Under each stage that row stacks the
+// agent's pending decisions by type ("25 send assessment", "8 advance",
+// "3 pre-screen reject"…) plus a "N decision pending" chip for candidates the
+// agent hasn't ruled on yet. `decisionsByType` is the role's pending decisions
+// (a list of {decision_type} or a {type: count} map); when omitted every
+// scored/completed candidate shows as "decision pending". Advanced and Rejected
+// are terminal outcomes, divided off with no decision row.
+export const FunnelBoard = ({ stageCounts, decisionsByType = null, awaitingTotal = null, scopeLabel = 'this role' }) => {
+  const decisionRow = funnelDecisionRow(stageCounts, decisionsByType);
   const awaiting = awaitingTotal != null ? Number(awaitingTotal) : awaitingFromStageCounts(stageCounts);
   return (
     <div className="funnel-board">
@@ -47,13 +49,20 @@ export const FunnelBoard = ({ stageCounts, awaitingTotal = null, scopeLabel = 't
       <div className="fb-drow-hdr">Awaiting your decision</div>
       <div className="fb-grid fb-drow">
         {PIPELINE_FUNNEL_STAGES.map((stage) => {
-          const gate = decisionRow[stage.key];
+          const chips = decisionRow[stage.key] || [];
           return (
             <div key={stage.key} className="fb-dcell">
               {OUTCOME_KEYS.has(stage.key) ? (
                 <span className="fb-dnone">outcome</span>
-              ) : gate && gate.count > 0 ? (
-                <span className="fb-dchip">{gate.action}</span>
+              ) : chips.length ? (
+                chips.map((chip) => (
+                  <span
+                    key={chip.key}
+                    className={`fb-dchip${chip.tone === 'reject' ? ' is-reject' : ''}${chip.tone === 'pending' ? ' is-pending' : ''}`}
+                  >
+                    {formatCount(chip.count)} {chip.label}
+                  </span>
+                ))
               ) : (
                 <span className="fb-dnone">—</span>
               )}
