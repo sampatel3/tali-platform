@@ -306,8 +306,16 @@ def raw_cost_usd_micro(
     cache_creation_tokens: int = 0,
     cache_creation_1h_tokens: Optional[int] = None,
     model: Optional[str] = None,
+    service_tier: str = "standard",
 ) -> int:
     """Compute Claude cost in micro-USD (millionths of a dollar).
+
+    ``service_tier`` follows Anthropic's billing tiers. ``"batch"`` (the
+    Message Batches API) is billed at 50% of standard across EVERY token
+    category (input, output, cache read, cache write), so the whole cost is
+    halved. ``"standard"`` (the default) applies no multiplier. Pricing the
+    batch path at the full standard rate over-counts batch spend ~2× against
+    Anthropic's billed cost — see ``cv_matching/runner_batch.py``.
 
     Anthropic prompt-cache pricing:
     - cache_read_tokens: 0.10× input rate (cache hit)
@@ -354,6 +362,11 @@ def raw_cost_usd_micro(
 
     total_usd = (standard_input + standard_output + cache_read + cache_creation) / Decimal(1_000_000)
     micro = total_usd * Decimal(1_000_000)
+    # Batch tier bills at 50% of standard across all token categories. Apply
+    # after the per-category math so the discount is uniform and stacks
+    # correctly with the cache multipliers.
+    if service_tier == "batch":
+        micro = micro * Decimal("0.5")
     return int(micro.quantize(Decimal("1"), rounding=ROUND_UP))
 
 

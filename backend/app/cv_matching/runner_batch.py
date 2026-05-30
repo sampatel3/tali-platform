@@ -290,6 +290,121 @@ def submit_cv_match_batch(
     )
 
 
+def _batch_cache_creation_1h(usage: object) -> int | None:
+    """Pull the 1-hour cache-creation slice from a batch message's usage, if
+    the SDK exposes it (``usage.cache_creation.ephemeral_1h_input_tokens``).
+
+    Returns None when unavailable — pricing then treats the whole
+    cache-creation total as 5-minute TTL (the conservative default).
+    """
+    cc = getattr(usage, "cache_creation", None)
+    if cc is None:
+        return None
+    val = getattr(cc, "ephemeral_1h_input_tokens", None)
+    if val is None and isinstance(cc, dict):
+        val = cc.get("ephemeral_1h_input_tokens")
+    return int(val) if val is not None else None
+
+
+def _record_batch_spend(
+    submission: BatchSubmission,
+    custom_id: str,
+    *,
+    message: object,
+    ctx: _RunContext,
+) -> None:
+    """Record one batch result's Anthropic spend.
+
+    The Batches API bypasses the metered wrapper, so we mirror its contract:
+      1. ALWAYS a ``claude_call_log`` row (the ground-truth table the Anthropic
+         reconciliation prefers). ``organization_id`` is nullable there, so the
+         spend is captured even when attribution is missing — an absent org_id
+         previously dropped batch spend entirely.
+      2. a ``usage_events`` row for billing attribution WHEN org context is
+         present (it requires an org), linked via ``usage_event_id`` so
+         reconciliation counts the spend exactly once.
+    Batch bills at 50% of standard, so both rows price at ``service_tier=batch``.
+    Never raises — a metering failure must not break result delivery.
+    """
+    usage = getattr(message, "usage", None)
+    if usage is None:
+        return
+    resolved_model = str(getattr(message, "model", MODEL_VERSION))
+    cc_1h = _batch_cache_creation_1h(usage)
+    try:
+        from ..models.claude_call_log import ClaudeCallLog
+        from ..platform.database import SessionLocal
+        from ..services.pricing_service import Feature, raw_cost_usd_micro
+        from ..services.usage_metering_service import record_event
+
+        meter_ctx = (
+            submission.metering_by_custom_id.get(custom_id)
+            if hasattr(submission, "metering_by_custom_id")
+            else None
+        ) or {}
+        org_id = meter_ctx.get("organization_id")
+        if org_id is None:
+            logger.warning(
+                "runner_batch: no organization_id for custom_id=%s — usage_event "
+                "skipped (it needs an org); recording a claude_call_log row so the "
+                "batch spend still reconciles.",
+                custom_id,
+            )
+
+        cost_micro = raw_cost_usd_micro(
+            input_tokens=ctx.input_tokens,
+            output_tokens=ctx.output_tokens,
+            cache_read_tokens=ctx.cache_read_tokens,
+            cache_creation_tokens=ctx.cache_creation_tokens,
+            cache_creation_1h_tokens=cc_1h,
+            model=resolved_model,
+            service_tier="batch",
+        )
+        with SessionLocal() as fresh:
+            usage_event = None
+            if org_id is not None:
+                usage_event = record_event(
+                    fresh,
+                    organization_id=int(org_id),
+                    feature=Feature.SCORE,
+                    model=resolved_model,
+                    input_tokens=ctx.input_tokens,
+                    output_tokens=ctx.output_tokens,
+                    cache_read_tokens=ctx.cache_read_tokens,
+                    cache_creation_tokens=ctx.cache_creation_tokens,
+                    cache_creation_1h_tokens=cc_1h,
+                    service_tier="batch",
+                    user_id=meter_ctx.get("user_id"),
+                    role_id=meter_ctx.get("role_id"),
+                    entity_id=meter_ctx.get("entity_id") or custom_id,
+                    metadata={"batch_id": submission.batch_id},
+                )  # record_event flushes, so usage_event.id is set
+            fresh.add(
+                ClaudeCallLog(
+                    organization_id=int(org_id) if org_id is not None else None,
+                    model=resolved_model,
+                    input_tokens=ctx.input_tokens,
+                    output_tokens=ctx.output_tokens,
+                    cache_read_tokens=ctx.cache_read_tokens,
+                    cache_creation_tokens=ctx.cache_creation_tokens,
+                    cache_creation_1h_tokens=cc_1h,
+                    cost_usd_micro=int(cost_micro),
+                    feature_hint="score",
+                    status="ok",
+                    anthropic_request_id=getattr(message, "id", None),
+                    usage_event_id=(
+                        int(usage_event.id) if usage_event is not None else None
+                    ),
+                    trace_id=ctx.trace_id,
+                )
+            )
+            fresh.commit()
+    except Exception:
+        logger.exception(
+            "runner_batch: failed to record batch spend for custom_id=%s", custom_id
+        )
+
+
 def retrieve_cv_match_batch(
     submission: BatchSubmission,
     *,
@@ -357,55 +472,12 @@ def retrieve_cv_match_batch(
                 getattr(usage, "cache_creation_input_tokens", 0) or 0
             )
 
-        # Per-job usage_event recording. The batches API doesn't go
-        # through the metered wrapper (it bypasses messages.create), so
-        # we explicitly record here. Submission tracks the org_id /
-        # role_id per custom_id via ``submission.metering_by_custom_id``
-        # — when callers don't populate it, the row is still recorded
-        # under Feature.SCORE with no org attribution and a logged
-        # warning, surfacing the gap in the usage tab rather than
-        # silently dropping spend.
+        # Per-job spend recording (see ``_record_batch_spend``). The Batches
+        # API bypasses the metered wrapper, so batch spend was previously
+        # invisible to claude_call_log — a root cause of the -20%..-77% Haiku
+        # reconciliation under-count.
         if usage is not None:
-            try:
-                from ..services.usage_metering_service import record_event
-                from ..services.pricing_service import Feature
-                from ..platform.database import SessionLocal
-
-                meter_ctx = (
-                    submission.metering_by_custom_id.get(custom_id)
-                    if hasattr(submission, "metering_by_custom_id")
-                    else None
-                ) or {}
-                org_id = meter_ctx.get("organization_id")
-                if org_id is None:
-                    logger.warning(
-                        "runner_batch: no organization_id for custom_id=%s — "
-                        "usage_event will be skipped. Populate submission.metering_by_custom_id "
-                        "to attribute batch spend correctly.",
-                        custom_id,
-                    )
-                else:
-                    with SessionLocal() as fresh:
-                        record_event(
-                            fresh,
-                            organization_id=int(org_id),
-                            feature=Feature.SCORE,
-                            model=str(getattr(message, "model", MODEL_VERSION)),
-                            input_tokens=ctx.input_tokens,
-                            output_tokens=ctx.output_tokens,
-                            cache_read_tokens=ctx.cache_read_tokens,
-                            cache_creation_tokens=ctx.cache_creation_tokens,
-                            user_id=meter_ctx.get("user_id"),
-                            role_id=meter_ctx.get("role_id"),
-                            entity_id=meter_ctx.get("entity_id") or custom_id,
-                            metadata={"batch_id": submission.batch_id},
-                        )
-                        fresh.commit()
-            except Exception:
-                logger.exception(
-                    "runner_batch: failed to record usage_event for custom_id=%s",
-                    custom_id,
-                )
+            _record_batch_spend(submission, custom_id, message=message, ctx=ctx)
 
         raw_text = ""
         try:
