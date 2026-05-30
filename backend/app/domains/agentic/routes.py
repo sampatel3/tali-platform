@@ -1092,3 +1092,88 @@ def run_now(
 
     async_result = agent_manual_run.delay(role_id=role_id, application_id=body.application_id)
     return RunNowResult(role_id=role_id, queued=True, task_id=str(async_result.id))
+
+
+# Reason stamped on a recruiter-initiated org-wide pause. Distinct from the
+# orchestrator's budget reasons so the activity tick / panel copy reads as a
+# deliberate pause rather than "monthly budget reached".
+MANUAL_PAUSE_REASON = "paused by recruiter"
+
+
+class BulkAgentPauseResult(BaseModel):
+    """Outcome of an org-wide pause-all / resume-all sweep."""
+
+    affected: int  # roles whose pause flag actually flipped this call
+    enabled_count: int  # agent-enabled roles considered
+    skipped: int = 0  # resume-all roles left paused (still over budget)
+
+
+@router.post("/agent/pause-all", response_model=BulkAgentPauseResult)
+def pause_all_agents(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Soft-pause every agent-enabled role in the org in one shot.
+
+    Sets the pause flag (``agent_paused_at``) the cohort sweeps already
+    honour — so agents stop scoring/spending on the next beat — *without*
+    disabling the agent. Crucially this preserves each role's pending
+    decisions (unlike the per-role toggle-off, which discards them), so the
+    recruiter's review queue survives the pause and ``resume-all`` brings
+    everything back. Already-paused roles (e.g. budget-paused) are left
+    untouched so resume-all can tell them apart by cap, not by who paused.
+    """
+    roles = (
+        db.query(Role)
+        .filter(
+            Role.organization_id == current_user.organization_id,
+            Role.deleted_at.is_(None),
+            Role.agentic_mode_enabled.is_(True),
+        )
+        .all()
+    )
+    affected = 0
+    for role in roles:
+        if role.agent_paused_at is None:
+            budget_guard.pause_role(db, role=role, reason=MANUAL_PAUSE_REASON)
+            affected += 1
+    if affected:
+        db.commit()
+    return BulkAgentPauseResult(affected=affected, enabled_count=len(roles))
+
+
+@router.post("/agent/resume-all", response_model=BulkAgentPauseResult)
+def resume_all_agents(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Resume every paused agent-enabled role that's back under its cap.
+
+    The inverse of ``pause-all``. Reuses ``budget_guard.resume_if_under_budget``
+    so a role that's genuinely over its monthly cap stays paused rather than
+    resuming only to re-pause on the next cycle — the same guard the
+    cap-raise auto-resume uses. Roles held back for that reason are reported
+    in ``skipped``. Resumed roles pick up on the next scheduled sweep (no
+    immediate thundering-herd of manual cycles).
+    """
+    roles = (
+        db.query(Role)
+        .filter(
+            Role.organization_id == current_user.organization_id,
+            Role.deleted_at.is_(None),
+            Role.agentic_mode_enabled.is_(True),
+            Role.agent_paused_at.isnot(None),
+        )
+        .all()
+    )
+    affected = 0
+    for role in roles:
+        if budget_guard.resume_if_under_budget(db, role=role):
+            affected += 1
+    if affected:
+        db.commit()
+    return BulkAgentPauseResult(
+        affected=affected,
+        enabled_count=len(roles),
+        skipped=len(roles) - affected,
+    )

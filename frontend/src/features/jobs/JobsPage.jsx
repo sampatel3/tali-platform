@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   ArrowRight,
@@ -153,8 +153,8 @@ const getRoleBadgeLabel = (role) => {
 // OFF state on this page guides the user to open a role rather than firing
 // a single org-wide activate.
 const useJobsHeaderAgent = (roles, isShowcase) => {
-  const { status } = useAgentStatusOrg();
-  return useMemo(() => {
+  const { status, refetch } = useAgentStatusOrg();
+  const agent = useMemo(() => {
     if (isShowcase) {
       return {
         on: true,
@@ -181,6 +181,7 @@ const useJobsHeaderAgent = (roles, isShowcase) => {
     }
     return buildAgentPropFromStatus(status, { isEnabled: status.active_role_count > 0 });
   }, [status, roles, isShowcase]);
+  return { agent, refetch };
 };
 
 export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => {
@@ -502,7 +503,36 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     }
   };
 
-  const headerAgent = useJobsHeaderAgent(roles, isShowcase);
+  const { agent: headerAgent, refetch: refetchAgentStatus } = useJobsHeaderAgent(roles, isShowcase);
+
+  // Org-wide soft pause / resume driven from the header's Agent panel.
+  // Pause flips every agent-enabled role's pause flag (keeping its pending
+  // review items); resume clears it for roles back under their cap. A ref
+  // guard blocks double-fire while the request is in flight; on success we
+  // reload roles + re-poll the org-aggregate so the panel flips Pause⇄Resume
+  // immediately instead of waiting for the 30s poll.
+  const agentBulkBusyRef = useRef(false);
+  const runAgentBulk = useCallback(async (action, failMsg) => {
+    if (isShowcase || agentBulkBusyRef.current) return;
+    agentBulkBusyRef.current = true;
+    setError('');
+    try {
+      await action();
+      await Promise.all([loadJobsHub(), refetchAgentStatus()]);
+    } catch {
+      setError(failMsg);
+    } finally {
+      agentBulkBusyRef.current = false;
+    }
+  }, [isShowcase, loadJobsHub, refetchAgentStatus]);
+  const handlePauseAllAgents = useCallback(
+    () => runAgentBulk(() => apiClient.agent.pauseAll(), 'Could not pause agents.'),
+    [runAgentBulk],
+  );
+  const handleResumeAllAgents = useCallback(
+    () => runAgentBulk(() => apiClient.agent.resumeAll(), 'Could not resume agents.'),
+    [runAgentBulk],
+  );
 
   return (
     <div>
@@ -544,6 +574,10 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           </>
         )}
         agent={headerAgent}
+        onPauseAgent={isShowcase ? undefined : handlePauseAllAgents}
+        onResumeAgent={isShowcase ? undefined : handleResumeAllAgents}
+        pauseLabel="Pause all"
+        resumeLabel="Resume all"
         offStateMessage="Open a role and turn on agent mode there — each role has its own monthly cap."
       />
       <div className="mc-page">

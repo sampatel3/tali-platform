@@ -30,6 +30,13 @@ export const agent = {
   // Manual trigger
   runNow: (roleId, body = {}) => api.post(`/roles/${roleId}/agent/run-now`, body),
 
+  // Org-wide soft pause / resume. pauseAll sets the pause flag on every
+  // agent-enabled role WITHOUT disabling it, so pending review items are
+  // kept (unlike the per-role toggle-off). resumeAll clears the pause for
+  // roles back under their monthly cap. Both are one round-trip.
+  pauseAll: () => api.post('/agent/pause-all', {}),
+  resumeAll: () => api.post('/agent/resume-all', {}),
+
   // Per-role agent status
   status: (roleId) => api.get(`/roles/${roleId}/agent/status`),
 

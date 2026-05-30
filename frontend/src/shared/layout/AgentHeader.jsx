@@ -116,6 +116,10 @@ const AgentPanel = ({
   onResume,
   onSettings,
   offStateMessage,
+  // Pause/Resume button copy. Defaults to the per-role wording; the Jobs
+  // list passes "Pause all" / "Resume all" because its panel acts org-wide.
+  pauseLabel = 'Pause',
+  resumeLabel = 'Resume',
 }) => {
   const {
     on = true,
@@ -128,6 +132,10 @@ const AgentPanel = ({
     pausedReason = null,
   } = agent || {};
   const status = !on ? (paused ? 'paused' : 'off') : 'on';
+  // A deliberate org-wide "Pause all" stamps a recruiter reason; an auto
+  // budget-pause does not. Distinguish them so the pill/tick don't claim
+  // "AUTO-PAUSED" right after the user clicked Pause.
+  const isManualPause = /recruiter|paused by/i.test(String(pausedReason || ''));
   const pct = budgetCents > 0
     ? Math.min(100, Math.round((Number(spentCents) / Number(budgetCents)) * 100))
     : 0;
@@ -145,7 +153,7 @@ const AgentPanel = ({
           <div className="agent-status-line">
             <span className="agent-mode">Agent mode</span>
             <span className={`agent-state-pill state-${status}`}>
-              {status === 'paused' ? 'AUTO-PAUSED' : status.toUpperCase()}
+              {status === 'paused' ? (isManualPause ? 'PAUSED' : 'AUTO-PAUSED') : status.toUpperCase()}
             </span>
           </div>
           {pending > 0 ? (
@@ -165,6 +173,7 @@ const AgentPanel = ({
               // Mirror HomeRoles' humanization so the role detail page
               // matches the home page label. Backend writes
               // implementation-detail strings; recruiters see a clean phrase.
+              if (isManualPause) return 'Paused by you. Resume to continue.';
               const r = String(pausedReason || '').toLowerCase();
               let pretty = null;
               if (r.startsWith('monthly usd cap')) pretty = 'monthly budget reached';
@@ -205,7 +214,7 @@ const AgentPanel = ({
                 disabled={!onPause}
               >
                 <Pause size={11} strokeWidth={2} />
-                Pause
+                {pauseLabel}
               </button>
             ) : paused ? (
               <button
@@ -215,7 +224,7 @@ const AgentPanel = ({
                 disabled={!onResume}
               >
                 <Play size={11} strokeWidth={2} fill="currentColor" />
-                Resume
+                {resumeLabel}
               </button>
             ) : null}
             <button
@@ -266,6 +275,10 @@ export const AgentHeader = ({
   // Optional copy shown in the OFF panel when activation isn't available
   // (e.g. Jobs list, where activation is per-role).
   offStateMessage,
+  // Optional Pause/Resume button copy. The Jobs list passes "Pause all" /
+  // "Resume all" since its panel pauses/resumes every agent role at once.
+  pauseLabel,
+  resumeLabel,
   className = '',
   variant = 'hero',
 }) => {
@@ -310,6 +323,8 @@ export const AgentHeader = ({
               onResume={onResumeAgent}
               onSettings={onAgentSettings}
               offStateMessage={offStateMessage}
+              pauseLabel={pauseLabel}
+              resumeLabel={resumeLabel}
             />
           ) : null}
         </div>

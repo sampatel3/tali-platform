@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pause, Play, Sparkles } from 'lucide-react';
 
 import { agent as agentApi, roles as rolesApi } from '../api';
@@ -96,11 +96,8 @@ export const useAgentStatusOrg = () => {
   const [error, setError] = useState(null);
   const cancelledRef = useRef(false);
 
-  useEffect(() => {
-    cancelledRef.current = false;
-
-    const fetchOnce = async () => {
-      try {
+  const fetchOnce = useCallback(async () => {
+    try {
         const rolesRes = await rolesApi.list();
         const allRoles = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
         // Only roles where the agent is currently enabled count toward the
@@ -137,6 +134,7 @@ export const useAgentStatusOrg = () => {
         let pending = 0;
         let allPaused = true;
         let anyPaused = false;
+        let pausedReason = null;
         let currentRun = null;
         let latestActivity = null;
         let latestActivityRole = null;
@@ -165,8 +163,14 @@ export const useAgentStatusOrg = () => {
           // Backend returns `paused_at: datetime|null`; tests/legacy callers
           // may set `paused: bool`. Accept either.
           const isPaused = data.paused != null ? Boolean(data.paused) : Boolean(data.paused_at);
-          if (isPaused) anyPaused = true;
-          else allPaused = false;
+          if (isPaused) {
+            anyPaused = true;
+            // Carry one representative reason so the panel can tell a
+            // deliberate "Pause all" from an auto budget-pause.
+            if (!pausedReason && data.paused_reason) pausedReason = data.paused_reason;
+          } else {
+            allPaused = false;
+          }
           if (!currentRun && data.current_run) currentRun = data.current_run;
           const ts = tsOf(data.last_activity);
           if (ts > latestActivityTs) {
@@ -207,6 +211,7 @@ export const useAgentStatusOrg = () => {
           setStatus({
             paused: activeRoles.length > 0 && allPaused,
             any_paused: anyPaused,
+            paused_reason: allPaused ? pausedReason : null,
             pending_decisions: pending,
             monthly_spent_cents: monthlySpent,
             monthly_budget_cents: monthlyBudget,
@@ -219,8 +224,10 @@ export const useAgentStatusOrg = () => {
       } catch (err) {
         if (!cancelledRef.current) setError(err);
       }
-    };
+    }, []);
 
+  useEffect(() => {
+    cancelledRef.current = false;
     fetchOnce();
     let timer = setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return;
@@ -242,9 +249,9 @@ export const useAgentStatusOrg = () => {
         document.removeEventListener('visibilitychange', onVisibility);
       }
     };
-  }, []);
+  }, [fetchOnce]);
 
-  return { status, error };
+  return { status, error, refetch: fetchOnce };
 };
 
 // AgentBar — purple aurora strip rendered globally inside Shell on
