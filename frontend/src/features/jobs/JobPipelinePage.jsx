@@ -1050,11 +1050,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // Pipeline-tab kanban cards can render the real Approve/Override flow
   // inline (HANDOFF v2 §4 / canvas jobs-detail-pipeline). Polls every 30s.
   const [pendingAgentDecisions, setPendingAgentDecisions] = useState({});
-  // Flat list of this role's pending decisions — feeds the funnel decision row.
-  const pendingDecisionList = useMemo(
-    () => Object.values(pendingAgentDecisions || {}).filter(Boolean),
-    [pendingAgentDecisions],
-  );
   const [resolvingDecisionId, setResolvingDecisionId] = useState(null);
   const fetchPendingDecisions = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
@@ -1386,7 +1381,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       ?? 0
     );
     const budget = budgetTile(monthlySpentCents, monthlyBudgetCents);
-    const awaitingCount = Number(agentStatus?.pending_decisions || 0);
+    // Awaiting you = candidates sitting at a decision stage (Scored + Completed)
+    // — the recruiter's to-do, surfaced whether the agent is on or off.
+    const scoredCount = Number(role?.stage_counts?.scored || 0);
+    const completedCount = Number(role?.stage_counts?.completed || 0);
+    const awaitingCount = scoredCount + completedCount;
     // Shaped as <KpiStrip> tiles so the role KPI row is the SAME card as the
     // home / jobs-list strips (no bespoke .stat cards, no black tile).
     // "Awaiting you" carries the purple-tint emphasis, matching home.
@@ -2047,12 +2046,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       />
       <div className="page">
         <div className="mc-cockpit-main">
-        <FunnelBoard
-          stageCounts={role?.stage_counts}
-          decisions={pendingDecisionList}
-          awaitingTotal={roleAgent?.pending ?? pendingDecisionList.length}
-          scopeLabel="this role"
-        />
+        <FunnelBoard stageCounts={role?.stage_counts} scopeLabel="this role" />
 
         <RoleViewTabs activeView={activeView} />
 

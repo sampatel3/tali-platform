@@ -11,7 +11,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 
 import './home.css';
-import { formatCount, budgetTile } from '../../shared/metrics';
+import { formatCount, budgetTile, awaitingFromStageCounts } from '../../shared/metrics';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { HomeNow } from './HomeNow';
 import { HomeMonitoring } from './HomeMonitoring';
@@ -278,17 +278,6 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     oldest_pending_age_seconds: null,
   };
 
-  const oldestAgeLabel = useMemo(() => {
-    if (!kpis.oldest_pending_age_seconds) return '—';
-    const s = Number(kpis.oldest_pending_age_seconds);
-    if (s < 60) return 'just now';
-    const m = Math.round(s / 60);
-    if (m < 60) return `${m}m`;
-    const h = Math.round(m / 60);
-    if (h < 24) return `${h}h`;
-    return `${Math.round(h / 24)}d`;
-  }, [kpis.oldest_pending_age_seconds]);
-
   // Org budget tile (spent / cap + bar + projection) — same helper the Jobs
   // and role strips use so the format is identical everywhere.
   const orgBudget = useMemo(
@@ -296,14 +285,17 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     [kpis.org_budget_cap_cents, kpis.org_budget_spent_cents],
   );
 
-  // One pending number for the whole hub — decisions awaiting your call. The
-  // header chips break this exact total down by action, so kicker + chips +
-  // the "Awaiting you" tile all read the same figure (was 480 vs 472: the old
-  // kicker/tile used kpis.pending, which also counts open questions, while the
-  // chips sum kpis.pending_decisions). pending_questions, when present, rides
-  // along in the tile sub-line rather than inflating the headline.
+  // The agent's Decision-Hub queue (recommendations to approve/override) — the
+  // hero "PENDING" kicker + chips. A subset of "Awaiting you" (the full to-do).
   const pendingDecisions = Number(kpis.pending_decisions ?? kpis.pending ?? 0);
-  const pendingQuestions = Number(kpis.pending_questions ?? 0);
+  // "Awaiting you" = candidates at a decision stage (Scored + Completed) summed
+  // across roles — the recruiter's real to-do, matching the funnel below. The
+  // hero "PENDING" kicker / chips stay the agent's Decision-Hub queue (a subset
+  // the agent has a recommendation for).
+  const orgAwaiting = useMemo(() => {
+    const list = Array.isArray(rolesBreakdown) ? rolesBreakdown : [];
+    return list.reduce((acc, r) => acc + awaitingFromStageCounts(r?.stage_counts), 0);
+  }, [rolesBreakdown]);
 
   const headerPendingBuckets = useMemo(() => {
     const counts = kpis.pending_by_type || {};
@@ -348,9 +340,9 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
             {
               key: 'awaiting',
               label: 'Awaiting you',
-              value: formatCount(pendingDecisions),
-              emph: pendingDecisions > 0,
-              sub: `${pendingDecisions > 0 ? `oldest ${oldestAgeLabel}` : 'queue clear'}${pendingQuestions > 0 ? ` · ${formatCount(pendingQuestions)} question${pendingQuestions === 1 ? '' : 's'}` : ''}`,
+              value: formatCount(orgAwaiting),
+              emph: orgAwaiting > 0,
+              sub: orgAwaiting > 0 ? `${formatCount(pendingDecisions)} agent-flagged` : 'queue clear',
             },
             {
               key: 'today',
