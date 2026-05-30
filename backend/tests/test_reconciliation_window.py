@@ -43,6 +43,20 @@ def test_drift_alert_threshold():
     ) is True
 
 
+def test_percent_drift_clamps_to_column_range():
+    """drift_pct columns are Numeric(7,3) -> max ±9999.999. A >100x ratio
+    (near-zero Anthropic day with real internal spend) must clamp, not overflow
+    the column and abort the whole reconciliation commit."""
+    # 49,900% raw -> clamped to the column max.
+    assert svc._percent_drift(internal=5_000_000, external=10_000) == Decimal("9999.999")
+    # Full under-count is naturally bounded at -100%.
+    assert svc._percent_drift(internal=0, external=10_000_000) == Decimal("-100.000")
+    # Normal values pass through unclamped.
+    assert svc._percent_drift(internal=90, external=100) == Decimal("-10.000")
+    # Undefined (zero external) stays None.
+    assert svc._percent_drift(internal=5, external=0) is None
+
+
 def test_reconcile_recent_pulls_the_widened_window(monkeypatch):
     """reconcile_recent must request the full widened day-range from Anthropic
     so late-settling internal rows get re-reconciled."""
