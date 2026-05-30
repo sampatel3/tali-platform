@@ -101,3 +101,31 @@ def pause_role(db: Session, *, role: Role, reason: str) -> None:
     role.agent_paused_at = datetime.now(timezone.utc)
     role.agent_paused_reason = reason
     db.add(role)
+
+
+def resume_if_under_budget(db: Session, *, role: Role) -> bool:
+    """Clear a budget-triggered pause once the role is back under its cap.
+
+    The inverse of :func:`pause_role`. The monthly USD cap is the *only*
+    thing that auto-pauses a role (see module docstring), so a paused but
+    still agent-enabled role is by definition budget-paused. When the
+    recruiter raises ``monthly_usd_budget_cents`` above month-to-date
+    spend, the role should resume on its own — the cohort sweep skips
+    paused roles (``agent_paused_at IS NULL``), so without this the raised
+    cap has no effect until the recruiter manually toggles the agent
+    off/on.
+
+    Acts only when the role is still agent-enabled (a manually disabled
+    agent stays off), currently paused, and *now genuinely under the cap*
+    — so the next cycle won't immediately re-pause and emit a confusing
+    pause event. Returns ``True`` when a pause was actually cleared, so the
+    caller can kick an immediate cycle instead of waiting for the beat.
+    """
+    if role.agent_paused_at is None or not bool(role.agentic_mode_enabled):
+        return False
+    if not check_monthly_usd(db, role=role).ok:
+        return False
+    role.agent_paused_at = None
+    role.agent_paused_reason = None
+    db.add(role)
+    return True

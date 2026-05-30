@@ -179,6 +179,178 @@ def test_budget_guard_check_monthly_usd_sums_credits_charged(db):
 
 
 # ---------------------------------------------------------------------------
+# resume_if_under_budget: raising the cap above spend auto-clears the pause
+# (regression — previously only an off/on agent toggle cleared it, so a
+# raised cap had no effect until a manual resume).
+# ---------------------------------------------------------------------------
+
+def _paused_role_at_cap(db, *, cap_cents: int = 5000, spend_cents: int = 5000):
+    """Org + agent-enabled role paused on the cap, with ``spend_cents`` of
+    month-to-date usage. Returns the ``Role``."""
+    from app.agent_runtime.budget_guard import pause_role
+    from app.models.organization import Organization
+    from app.models.role import Role
+    from app.models.usage_event import UsageEvent
+
+    org = Organization(name="t", slug=f"t-{cap_cents}-{spend_cents}")
+    db.add(org)
+    db.commit()
+    role = Role(
+        organization_id=org.id,
+        name="r",
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=cap_cents,
+    )
+    db.add(role)
+    db.commit()
+    db.add(
+        UsageEvent(
+            organization_id=org.id,
+            role_id=role.id,
+            feature="agent_autonomous",
+            model="claude-haiku-4-5-20251001",
+            input_tokens=0,
+            output_tokens=0,
+            cost_usd_micro=spend_cents * 10_000,
+            markup_multiplier=1,
+            credits_charged=spend_cents * 10_000,  # micro-USD → cents on read
+            cache_hit=0,
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+    pause_role(db, role=role, reason=f"monthly USD cap reached: {spend_cents}c >= {cap_cents}c")
+    db.commit()
+    db.refresh(role)
+    assert role.agent_paused_at is not None
+    return role
+
+
+def test_resume_clears_pause_when_cap_raised_above_spend(db):
+    from app.agent_runtime.budget_guard import resume_if_under_budget
+
+    role = _paused_role_at_cap(db, cap_cents=5000, spend_cents=5000)
+    role.monthly_usd_budget_cents = 10_000  # recruiter raises $50 → $100
+    db.commit()
+
+    assert resume_if_under_budget(db, role=role) is True
+    assert role.agent_paused_at is None
+    assert role.agent_paused_reason is None
+
+
+def test_resume_is_noop_while_still_over_cap(db):
+    # Raising the cap but not above spend must NOT resume — otherwise the
+    # next cycle re-pauses immediately and emits a confusing pause event.
+    from app.agent_runtime.budget_guard import resume_if_under_budget
+
+    role = _paused_role_at_cap(db, cap_cents=5000, spend_cents=5000)
+    role.monthly_usd_budget_cents = 4000  # still below the 5000c spend
+    db.commit()
+
+    assert resume_if_under_budget(db, role=role) is False
+    assert role.agent_paused_at is not None
+
+
+def test_resume_is_noop_when_agent_disabled(db):
+    # A manually disabled agent stays off even if nominally under cap.
+    from app.agent_runtime.budget_guard import resume_if_under_budget
+
+    role = _paused_role_at_cap(db, cap_cents=5000, spend_cents=5000)
+    role.agentic_mode_enabled = False
+    role.monthly_usd_budget_cents = 100_000
+    db.commit()
+
+    assert resume_if_under_budget(db, role=role) is False
+    assert role.agent_paused_at is not None
+
+
+def test_resume_is_noop_when_not_paused(db):
+    # A running (non-paused) role is left untouched.
+    from app.agent_runtime.budget_guard import resume_if_under_budget
+    from app.models.organization import Organization
+    from app.models.role import Role
+
+    org = Organization(name="t", slug="t-running")
+    db.add(org)
+    db.commit()
+    role = Role(
+        organization_id=org.id,
+        name="r",
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=100_000,
+    )
+    db.add(role)
+    db.commit()
+
+    assert resume_if_under_budget(db, role=role) is False
+    assert role.agent_paused_at is None
+
+
+def test_patch_raising_budget_resumes_paused_role_via_route(client):
+    """End-to-end of the actual bug: a budget-paused, agent-enabled role
+    comes back ON when the recruiter raises the cap above spend through
+    PATCH /roles/{id} alone — no agent off/on toggle — and an immediate
+    review cycle is kicked instead of waiting for the 30-min beat."""
+    from unittest.mock import patch as _patch
+    from app.models.role import Role
+    from app.models.usage_event import UsageEvent
+    from app.models.user import User
+
+    headers, email = auth_headers(client)
+
+    # Seed a paused, over-cap, agent-enabled role directly in the DB — the
+    # state the role lands in after the orchestrator hits the cap.
+    db = TestingSessionLocal()
+    try:
+        user = db.query(User).filter(User.email == email).first()
+        org_id = int(user.organization_id)
+        role = Role(
+            organization_id=org_id,
+            name="Paused Agent Role",
+            agentic_mode_enabled=True,
+            monthly_usd_budget_cents=5000,
+            agent_paused_at=datetime.now(timezone.utc),
+            agent_paused_reason="monthly USD cap reached: 5000c >= 5000c",
+        )
+        db.add(role)
+        db.commit()
+        db.refresh(role)
+        role_id = int(role.id)
+        db.add(
+            UsageEvent(
+                organization_id=org_id,
+                role_id=role_id,
+                feature="agent_autonomous",
+                model="claude-haiku-4-5-20251001",
+                input_tokens=0,
+                output_tokens=0,
+                cost_usd_micro=50_000_000,   # 5000c
+                markup_multiplier=1,
+                credits_charged=50_000_000,  # 5000c → at cap
+                cache_hit=0,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    # Raise the cap above spend via the API. Mock the kicked task so we
+    # assert dispatch without running a real cycle.
+    with _patch("app.tasks.agent_tasks.agent_daily_review_role.delay") as mock_delay:
+        resp = client.patch(
+            f"/api/v1/roles/{role_id}",
+            json={"monthly_usd_budget_cents": 10000},
+            headers=headers,
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["agent_paused_at"] is None
+    assert body.get("agent_paused_reason") in (None, "")
+    mock_delay.assert_called_once_with(role_id)
+
+
+# ---------------------------------------------------------------------------
 # Phase 4: admin reconcile endpoint
 # ---------------------------------------------------------------------------
 

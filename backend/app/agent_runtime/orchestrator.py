@@ -339,7 +339,7 @@ def run_cycle(
             db, run=run, application_id=application_id,
             reason=(
                 f"Agent paused — monthly budget cap reached for this role. "
-                f"Will resume next month or after recruiter raises the cap."
+                f"Raise the monthly cap above current spend to resume."
             ),
         )
         return run
