@@ -19,30 +19,57 @@ export const PIPELINE_FUNNEL_STAGES = [
   { key: 'rejected', label: 'Rejected' },
 ];
 
-// Decision stages — where a candidate needs YOUR call. A candidate at Scored
-// is awaiting a send-assessment / reject decision; at Completed, advance /
-// reject. This is the recruiter's to-do and is independent of whether the
-// agent is on (when on, the agent drains these by acting). Applied awaits
-// scoring and Invited awaits the candidate, so neither is a recruiter decision.
-export const FUNNEL_DECISION_STAGES = [
-  { stage: 'scored', action: 'send / reject' },
-  { stage: 'completed', action: 'advance / reject' },
+// Agent pending-decision types, mapped to the stage they act on. The funnel's
+// "awaiting your decision" row shows these as chips under each stage —
+// candidates the agent has a recommendation for, awaiting your approval.
+// (decision_type values come from AgentDecision.)
+export const FUNNEL_DECISION_GATES = [
+  { stage: 'applied', key: 'pre_screen', label: 'pre-screen reject', tone: 'reject', types: ['skip_assessment_reject'] },
+  { stage: 'scored', key: 'send', label: 'send assessment', tone: 'go', types: ['send_assessment', 'resend_assessment_invite'] },
+  { stage: 'scored', key: 'reject', label: 'reject', tone: 'reject', types: ['reject'] },
+  { stage: 'completed', key: 'advance', label: 'advance', tone: 'go', types: ['advance_to_interview'] },
 ];
 
-// "Awaiting you" = candidates sitting at a decision stage (Scored + Completed).
+// The stages where a candidate without an agent recommendation still counts as
+// "decision pending" — i.e. scored/completed but the agent hasn't ruled yet.
+const DECISION_PENDING_STAGES = ['scored', 'completed'];
+
+// "Awaiting you" = candidates at a decision stage (Scored + Completed) — the
+// recruiter's total to-do (recommendations + not-yet-decided).
 export const awaitingFromStageCounts = (stageCounts) => {
   const sc = stageCounts || {};
-  return FUNNEL_DECISION_STAGES.reduce((acc, d) => acc + (Number(sc[d.stage]) || 0), 0);
+  return DECISION_PENDING_STAGES.reduce((acc, k) => acc + (Number(sc[k]) || 0), 0);
 };
 
-// The funnel's "awaiting your decision" row, derived from stage counts: under
-// each decision stage, the count of candidates there awaiting your call (+ the
-// action). Keyed by stage so the row aligns under the stage cell.
-export const funnelDecisionRow = (stageCounts) => {
+// Normalize a decisions arg (a list of {decision_type} objects OR a
+// {decision_type: count} map) into a counts-by-type map.
+const decisionCountsByType = (decisions) => {
+  if (Array.isArray(decisions)) {
+    const c = {};
+    for (const d of decisions) { const t = d?.decision_type; if (t) c[t] = (c[t] || 0) + 1; }
+    return c;
+  }
+  return decisions || {};
+};
+
+// The funnel's "awaiting your decision" row. Under each stage: the agent's
+// pending decisions by type (chips like "25 send assessment", "8 advance"),
+// PLUS a "decision pending" chip for candidates at a decision stage the agent
+// hasn't ruled on yet (e.g. "144 decision pending"). Keyed by stage so each
+// chip stacks under the stage cell it acts on.
+export const funnelDecisionRow = (stageCounts, decisions) => {
+  const counts = decisionCountsByType(decisions);
   const sc = stageCounts || {};
   const byStage = {};
-  for (const d of FUNNEL_DECISION_STAGES) {
-    byStage[d.stage] = { count: Number(sc[d.stage]) || 0, action: d.action };
+  const push = (stage, chip) => { (byStage[stage] = byStage[stage] || []).push(chip); };
+  for (const gate of FUNNEL_DECISION_GATES) {
+    const count = gate.types.reduce((acc, t) => acc + (Number(counts[t]) || 0), 0);
+    if (count > 0) push(gate.stage, { key: gate.key, label: gate.label, count, tone: gate.tone });
+  }
+  for (const stage of DECISION_PENDING_STAGES) {
+    const decided = (byStage[stage] || []).reduce((acc, c) => acc + c.count, 0);
+    const pending = Math.max(0, (Number(sc[stage]) || 0) - decided);
+    if (pending > 0) push(stage, { key: 'pending', label: 'decision pending', count: pending, tone: 'pending' });
   }
   return byStage;
 };

@@ -297,7 +297,7 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction }) => (
 // answers. Renders the shared B2 <FunnelBoard> (stages only — the org decision
 // breakdown lives in the hero) so it matches the role-detail funnel exactly.
 // Counts come from role.stage_counts on /agent/roles/breakdown.
-const PipelineStandingStrip = ({ rolesBreakdown, filters }) => {
+const PipelineStandingStrip = ({ rolesBreakdown, filters, pendingByType }) => {
   const { counts, scopeLabel } = useMemo(() => {
     const roles = Array.isArray(rolesBreakdown) ? rolesBreakdown : [];
     if (filters.role_id) {
@@ -323,7 +323,11 @@ const PipelineStandingStrip = ({ rolesBreakdown, filters }) => {
   // Nothing in the pipeline at all → no point showing an all-zero board.
   if (PIPELINE_FUNNEL_STAGES.every((s) => (Number(counts[s.key]) || 0) === 0)) return null;
 
-  return <FunnelBoard stageCounts={counts} scopeLabel={scopeLabel} />;
+  // The org-wide pending-decision breakdown is only meaningful for the unscoped
+  // funnel (pendingByType is org-wide); a role-scoped funnel falls back to the
+  // stage-derived "decision pending".
+  const decisionsByType = filters.role_id ? null : pendingByType;
+  return <FunnelBoard stageCounts={counts} decisionsByType={decisionsByType} scopeLabel={scopeLabel} />;
 };
 
 const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) => {
@@ -635,6 +639,7 @@ export const HomeNow = ({
   filters,
   setFilters,
   rolesBreakdown,
+  pendingByType,
   reload,
   onNavigate,
 }) => {
@@ -934,7 +939,7 @@ export const HomeNow = ({
 
       {/* Funnel standing for the scoped role — how many are already advanced /
           in review / rejected — so the pending count has a denominator. */}
-      <PipelineStandingStrip rolesBreakdown={rolesBreakdown} filters={filters} />
+      <PipelineStandingStrip rolesBreakdown={rolesBreakdown} filters={filters} pendingByType={pendingByType} />
 
       {/* Open orchestrator questions across the org (or scoped to the
           toolbar's role filter when set). Hides itself when the queue

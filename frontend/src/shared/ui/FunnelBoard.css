@@ -105,6 +105,15 @@
 .fb-dchip.is-reject {
   background: color-mix(in oklab, var(--red, #ec5a6f) 14%, var(--bg-2));
   color: color-mix(in oklab, var(--red, #ec5a6f) 80%, var(--ink));
+  border-color: color-mix(in oklab, var(--red, #ec5a6f) 30%, var(--line));
+}
+
+/* "decision pending" — candidates the agent hasn't ruled on yet: muted, to sit
+   quietly behind the actionable recommendation chips. */
+.fb-dchip.is-pending {
+  background: var(--bg-2);
+  color: var(--mute);
+  border-color: var(--line);
 }
 
 .fb-dnone {

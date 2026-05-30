@@ -116,6 +116,7 @@ export const HomeShowcaseView = () => (
       <FunnelBoard
         scopeLabel="all roles"
         stageCounts={{ applied: 312, scored: 184, invited: 9, completed: 4, advanced: 61, rejected: 1905 }}
+        decisionsByType={{ send_assessment: 20, reject: 80, advance_to_interview: 3, skip_assessment_reject: 0 }}
       />
 
       <ActivityFeed

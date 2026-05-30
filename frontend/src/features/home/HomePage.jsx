@@ -346,6 +346,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           filters={filters}
           setFilters={setFilters}
           rolesBreakdown={rolesBreakdown}
+          pendingByType={kpis.pending_by_type}
           reload={reloadAll}
           onNavigate={onNavigate}
         />
