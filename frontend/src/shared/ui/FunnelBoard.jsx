@@ -53,7 +53,7 @@ export const FunnelBoard = ({ stageCounts, awaitingTotal = null, scopeLabel = 't
               {OUTCOME_KEYS.has(stage.key) ? (
                 <span className="fb-dnone">outcome</span>
               ) : gate && gate.count > 0 ? (
-                <span className="fb-dchip">{formatCount(gate.count)} {gate.action}</span>
+                <span className="fb-dchip">{gate.action}</span>
               ) : (
                 <span className="fb-dnone">—</span>
               )}
