@@ -184,6 +184,9 @@ class RoleResponse(BaseModel):
     tasks_count: int = 0
     applications_count: int = 0
     stage_counts: dict[str, int] = Field(default_factory=dict)
+    # Pending agent decisions grouped by decision_type — feeds the role-page
+    # funnel's "awaiting your decision" chips (uncapped, unlike the fetched list).
+    pending_decisions_by_type: dict[str, int] = Field(default_factory=dict)
     active_candidates_count: int = 0
     last_candidate_activity_at: Optional[datetime] = None
     created_at: datetime

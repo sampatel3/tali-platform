@@ -184,6 +184,7 @@ def role_to_response(
     tasks_count: int | None = None,
     applications_count: int | None = None,
     stage_counts: dict[str, int] | None = None,
+    pending_decisions_by_type: dict[str, int] | None = None,
     active_candidates_count: int | None = None,
     last_candidate_activity_at: datetime | None = None,
 ) -> RoleResponse:
@@ -257,6 +258,7 @@ def role_to_response(
         tasks_count=tasks_count,
         applications_count=applications_count,
         stage_counts=stage_counts or {},
+        pending_decisions_by_type=pending_decisions_by_type or {},
         active_candidates_count=int(active_candidates_count or 0),
         last_candidate_activity_at=last_candidate_activity_at,
         created_at=role.created_at,

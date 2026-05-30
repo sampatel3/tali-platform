@@ -1057,13 +1057,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // Pipeline-tab kanban cards can render the real Approve/Override flow
   // inline (HANDOFF v2 §4 / canvas jobs-detail-pipeline). Polls every 30s.
   const [pendingAgentDecisions, setPendingAgentDecisions] = useState({});
-  // Flat list of this role's pending agent decisions — feeds the funnel's
-  // decision row (grouped by decision_type, with the un-decided remainder shown
-  // as "decision pending").
-  const pendingDecisionList = useMemo(
-    () => Object.values(pendingAgentDecisions || {}).filter(Boolean),
-    [pendingAgentDecisions],
-  );
   const [resolvingDecisionId, setResolvingDecisionId] = useState(null);
   const fetchPendingDecisions = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
@@ -2060,7 +2053,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       />
       <div className="page">
         <div className="mc-cockpit-main">
-        <FunnelBoard stageCounts={role?.stage_counts} decisionsByType={pendingDecisionList} scopeLabel="this role" />
+        <FunnelBoard stageCounts={role?.stage_counts} decisionsByType={role?.pending_decisions_by_type} scopeLabel="this role" />
 
         <RoleViewTabs activeView={activeView} />
 
