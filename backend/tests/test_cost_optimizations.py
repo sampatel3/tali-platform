@@ -187,6 +187,87 @@ def test_auto_enqueue_scoring_skips_backoff_blocked_apps(db):
     assert m.call_count == 2
 
 
+def test_auto_enqueue_scoring_skips_scoring_error_backoff(db):
+    """Apps still inside the scoring-error backoff (``score_retry_after`` in
+    the future) are excluded at the SQL level. This covers the full v3
+    failure path — a candidate that passed pre-screen but whose full score
+    keeps erroring (e.g. the 2026-05-24 credit outage) would otherwise earn
+    a fresh job every tick despite having no ``pre_screen_error_reason``."""
+    from app.tasks.agent_tasks import _auto_enqueue_scoring
+
+    org = Organization(name="O", slug=f"o-{id(db)}")
+    db.add(org); db.flush()
+    role = Role(organization_id=org.id, name="R", source="manual", agentic_mode_enabled=True, monthly_usd_budget_cents=5000, job_spec_text="hire")
+    db.add(role); db.flush()
+
+    future = datetime.now(timezone.utc) + timedelta(hours=2)
+    past = datetime.now(timezone.utc) - timedelta(minutes=1)
+    for i, retry_after in enumerate([
+        None,    # eligible: no backoff
+        future,  # blocked: backoff window still open
+        past,    # eligible: backoff window elapsed
+    ]):
+        cand = Candidate(organization_id=org.id, email=f"c{i}@x.test", full_name=f"C{i}")
+        db.add(cand); db.flush()
+        db.add(CandidateApplication(
+            organization_id=org.id, candidate_id=cand.id, role_id=role.id,
+            status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
+            application_outcome="open", source="manual",
+            cv_text="content", score_retry_after=retry_after,
+        ))
+    db.commit()
+
+    with patch("app.services.cv_score_orchestrator.enqueue_score", return_value=object()) as m:
+        touched = _auto_enqueue_scoring(db, role=role)
+
+    assert touched == 2  # the no-backoff one + the elapsed one; future one skipped
+    assert m.call_count == 2
+
+
+def test_auto_enqueue_backoff_does_not_starve_healthy_apps(db):
+    """The per-tick cap selects candidates BEFORE enqueue runs, so backed-off
+    apps must be excluded in SQL — otherwise low-id backed-off apps fill the
+    cap's slots and healthy apps further down never get scored."""
+    from app.tasks.agent_tasks import _auto_enqueue_scoring
+
+    org = Organization(name="O", slug=f"o-{id(db)}")
+    db.add(org); db.flush()
+    role = Role(organization_id=org.id, name="R", source="manual", agentic_mode_enabled=True, monthly_usd_budget_cents=5000, job_spec_text="hire")
+    db.add(role); db.flush()
+
+    future = datetime.now(timezone.utc) + timedelta(hours=6)
+    # 60 backed-off apps first (lowest ids), then 5 healthy ones. With a
+    # cap of 50, the backed-off apps would consume every slot if they
+    # weren't excluded by the SQL filter.
+    healthy_ids: list[int] = []
+    for i in range(65):
+        cand = Candidate(organization_id=org.id, email=f"c{i}@x.test", full_name=f"C{i}")
+        db.add(cand); db.flush()
+        a = CandidateApplication(
+            organization_id=org.id, candidate_id=cand.id, role_id=role.id,
+            status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
+            application_outcome="open", source="manual",
+            cv_text="content",
+            score_retry_after=future if i < 60 else None,
+        )
+        db.add(a); db.flush()
+        if i >= 60:
+            healthy_ids.append(int(a.id))
+    db.commit()
+
+    seen: list[int] = []
+
+    def fake_enqueue(db_arg, app, *, force=False):
+        seen.append(int(app.id))
+        return object()
+
+    with patch("app.services.cv_score_orchestrator.enqueue_score", side_effect=fake_enqueue):
+        touched = _auto_enqueue_scoring(db, role=role)
+
+    assert touched == 5  # only the healthy apps
+    assert sorted(seen) == sorted(healthy_ids)
+
+
 # ---------------------------------------------------------------------------
 # P2b — cohort tick early-exit
 # ---------------------------------------------------------------------------

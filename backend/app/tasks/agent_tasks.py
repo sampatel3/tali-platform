@@ -469,6 +469,16 @@ def _auto_enqueue_scoring(db, *, role, limit: int = AUTO_SCORE_PER_TICK_CAP) -> 
     CV upload — they'd just error again immediately. The backoff lives
     in ``application_needs_pre_screen``; we mirror it here at the SQL
     level so we don't even enqueue.
+
+    Separately we filter out apps still inside the *scoring-error* backoff
+    (``score_retry_after``). That window covers the full v3 ``cv_match``
+    failure path too — not just pre-screen errors — so a candidate who
+    passed pre-screen but whose full score keeps failing (e.g. the
+    2026-05-24 Anthropic credit outage) stops earning a fresh job every
+    tick. Mirroring it in SQL (not just in ``enqueue_score``) matters
+    because the per-tick cap selects candidates *before* enqueue runs: if
+    backed-off apps weren't excluded here they'd fill the cap's slots and
+    starve healthy candidates further down the backlog.
     """
     try:
         from datetime import datetime, timedelta, timezone
@@ -479,7 +489,8 @@ def _auto_enqueue_scoring(db, *, role, limit: int = AUTO_SCORE_PER_TICK_CAP) -> 
         from ..services.cv_score_orchestrator import enqueue_score
         from ..services.pre_screening_service import PRE_SCREEN_ERROR_BACKOFF
 
-        backoff_cutoff = datetime.now(timezone.utc) - PRE_SCREEN_ERROR_BACKOFF
+        now = datetime.now(timezone.utc)
+        backoff_cutoff = now - PRE_SCREEN_ERROR_BACKOFF
         # Re-screen is only worthwhile when the candidate uploaded a newer
         # CV after the last pre-screen run.
         fresh_cv = and_(
@@ -516,6 +527,16 @@ def _auto_enqueue_scoring(db, *, role, limit: int = AUTO_SCORE_PER_TICK_CAP) -> 
                     CandidateApplication.pre_screen_score_100.is_(None),
                     CandidateApplication.pre_screen_score_100 >= settings.PRE_SCREEN_THRESHOLD,
                     CandidateApplication.pre_screen_error_reason.isnot(None),
+                    fresh_cv,
+                ),
+                # Scoring-error backoff: skip apps still inside their
+                # exponential retry window (set in cv_score_orchestrator on
+                # each errored job). Covers full v3 failures, not just
+                # pre-screen errors. A fresh CV clears the window upstream;
+                # the explicit override keeps the two consistent.
+                or_(
+                    CandidateApplication.score_retry_after.is_(None),
+                    CandidateApplication.score_retry_after <= now,
                     fresh_cv,
                 ),
             )

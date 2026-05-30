@@ -99,6 +99,20 @@ class CandidateApplication(Base):
     # threshold"). Used by batch actions to skip already-pre-screened apps
     # whose CV hasn't changed since.
     pre_screen_run_at = Column(DateTime(timezone=True), nullable=True)
+    # Consecutive failed scoring attempts (pre-screen error OR full v3
+    # failure) since the last success or CV change. Drives the exponential
+    # scoring-error backoff: without it a candidate whose scoring
+    # persistently errors (e.g. an Anthropic credit-balance outage) earns a
+    # fresh CvScoreJob every 30-min cohort tick — 50-69 burned attempts per
+    # candidate during the 2026-05-24 outage. Reset to 0 on any successful
+    # score and on CV change.
+    score_error_count = Column(Integer, nullable=False, server_default="0", default=0)
+    # Earliest time the next auto-scoring attempt may run. Written on every
+    # scoring error to ``now + backoff(score_error_count)``; NULL when there
+    # is no active backoff. ``enqueue_score`` (auto path) and
+    # ``_auto_enqueue_scoring`` both skip apps still inside this window.
+    # A manual rescore (force=True) or a CV change bypasses it.
+    score_retry_after = Column(DateTime(timezone=True), nullable=True)
     auto_reject_state = Column(String, nullable=True)
     auto_reject_reason = Column(Text, nullable=True)
     auto_reject_triggered_at = Column(DateTime(timezone=True), nullable=True)
