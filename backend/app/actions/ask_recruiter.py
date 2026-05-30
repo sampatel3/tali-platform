@@ -277,7 +277,23 @@ def _canonical_for_kind(
         return {
             "rationale": (
                 "Without a CV there's nothing to evaluate against the role's "
-                "criteria — the candidate is skipped rather than guessed at."
+                "criteria — the candidate is skipped rather than guessed at. "
+                "There's no file to fetch, so the choices are upload one or "
+                "reject."
+            ),
+            "link_url": f"/jobs/{int(role.id)}",
+            "link_label": "Review candidates",
+        }
+    if kind == "cv_unreadable":
+        # No prompt override: data_readiness authors a prompt with the live
+        # count. We only inject the link + rationale. Deliberately no reject
+        # action — these candidates DID submit a CV; it just couldn't be read.
+        return {
+            "rationale": (
+                "A scanned or image-only CV has no text layer to evaluate. "
+                "Re-fetching from Workable won't help — the file is already on "
+                "record — and re-uploading the same scan won't either. It needs "
+                "OCR or a text-based CV (PDF/DOCX)."
             ),
             "link_url": f"/jobs/{int(role.id)}",
             "link_label": "Review candidates",

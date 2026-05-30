@@ -59,7 +59,8 @@ NEEDS_INPUT_KINDS = (
     "candidate_tie_break",                  # two near-identical candidates, recruiter picks
     # --- Data-readiness guardrails (agent refuses to spend on incomplete data) ---
     "missing_job_spec",                     # agent-on role has no job description; cycles abort until one exists
-    "missing_cv",                           # candidate(s) the agent would act on have no CV on file
+    "missing_cv",                           # candidate(s) the agent would act on have no CV file at all (rejectable)
+    "cv_unreadable",                        # candidate(s) have a CV file but no extractable text (scanned/image); needs OCR, not a reject
     "confirm_material_change",              # Workable job spec changed; recruiter confirms whether to re-derive + re-evaluate
     "other",
 )

@@ -240,6 +240,57 @@
   background: color-mix(in oklab, var(--purple) 12%, transparent);
 }
 
+/* "Reject — no CV" — a destructive bulk action, so it starts as a quiet
+   outline button and only fills in (purple, on-brand) once armed for the
+   Confirm step. Mirrors the candidate-triage reject pattern. */
+.agent-needs-input-reject {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.agent-needs-input-reject:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--purple) 6%, transparent);
+  border-color: color-mix(in oklab, var(--purple) 35%, var(--line));
+  color: var(--ink);
+}
+
+.agent-needs-input-reject.confirm {
+  background: var(--purple);
+  border-color: var(--purple);
+  color: #fff;
+}
+
+.agent-needs-input-reject:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.agent-needs-input-reject-cancel {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--mute);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.agent-needs-input-reject-cancel:hover:not(:disabled) {
+  border-color: var(--mute);
+  color: var(--ink);
+}
+
 .sub-tabs {
   display: flex;
   justify-content: space-between;

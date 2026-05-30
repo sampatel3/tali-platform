@@ -375,7 +375,7 @@ def run_cycle(
     # Job spec present: clear any stale missing-spec item and surface (or
     # clear) the count of candidates the agent can't act on for lack of a CV.
     data_readiness.resolve_open(db, role=role, kind="missing_job_spec")
-    data_readiness.sync_missing_cv(db, role=role)
+    data_readiness.sync_cv_readiness(db, role=role)
 
     snapshot = calibration.load(role)
     run = AgentRun(

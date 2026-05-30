@@ -96,7 +96,7 @@ def test_missing_cv_count_and_sync(db):
     assert data_readiness.missing_cv_count(db, role=role) == 1
 
     # sync raises a single role-level missing_cv item with the live count.
-    data_readiness.sync_missing_cv(db, role=role)
+    data_readiness.sync_cv_readiness(db, role=role)
     db.flush()
     rows = _open_kind(db, role, "missing_cv")
     assert len(rows) == 1
@@ -106,9 +106,59 @@ def test_missing_cv_count_and_sync(db):
     app.cv_text = "now has cv"
     db.add(app)
     db.flush()
-    data_readiness.sync_missing_cv(db, role=role)
+    data_readiness.sync_cv_readiness(db, role=role)
     db.flush()
     assert _open_kind(db, role, "missing_cv") == []
+
+
+def test_cv_readiness_split_missing_vs_unreadable(db):
+    """A CV *file* present but no extracted text is 'unreadable', not
+    'missing' — surfaced on its own card, never as missing_cv."""
+    org, role, app = _seed(db, cv="has cv")
+
+    # File on record but no text => unreadable, not missing.
+    app.cv_text = None
+    app.cv_file_url = "s3://bucket/scan.png"
+    db.add(app)
+    db.flush()
+    assert data_readiness.missing_cv_count(db, role=role) == 0
+    assert data_readiness.unreadable_cv_count(db, role=role) == 1
+
+    data_readiness.sync_cv_readiness(db, role=role)
+    db.flush()
+    assert _open_kind(db, role, "missing_cv") == []
+    unreadable = _open_kind(db, role, "cv_unreadable")
+    assert len(unreadable) == 1
+    assert "couldn't read" in unreadable[0].prompt
+
+    # Drop the file too => now it's genuinely missing; the cards swap over.
+    app.cv_file_url = None
+    db.add(app)
+    db.flush()
+    assert data_readiness.missing_cv_count(db, role=role) == 1
+    assert data_readiness.unreadable_cv_count(db, role=role) == 0
+    data_readiness.sync_cv_readiness(db, role=role)
+    db.flush()
+    assert len(_open_kind(db, role, "missing_cv")) == 1
+    assert _open_kind(db, role, "cv_unreadable") == []
+
+
+def test_file_less_open_applications_excludes_file_present(db):
+    org, role, app = _seed(db, cv="has cv")
+    # File-less app => included.
+    app.cv_text = None
+    app.cv_file_url = None
+    db.add(app)
+    db.flush()
+    file_less = data_readiness.file_less_open_applications(db, role=role)
+    assert [a.id for a in file_less] == [app.id]
+
+    # Same app but with a file on record => excluded (it's unreadable, not
+    # rejectable).
+    app.cv_file_url = "s3://bucket/scan.png"
+    db.add(app)
+    db.flush()
+    assert data_readiness.file_less_open_applications(db, role=role) == []
 
 
 # ---------------------------------------------------------------------------

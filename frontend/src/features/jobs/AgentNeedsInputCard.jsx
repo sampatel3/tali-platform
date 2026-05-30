@@ -11,7 +11,7 @@
 // across the org (the default on Home).
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { ArrowUpRight, CheckCircle2, MessageSquareWarning, X } from 'lucide-react';
+import { ArrowUpRight, CheckCircle2, MessageSquareWarning, UserX, X } from 'lucide-react';
 
 import api from '../../shared/api/httpClient';
 
@@ -28,6 +28,9 @@ export default function AgentNeedsInputCard({ roleId }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  // Two-step arm for the destructive "Reject — no CV" action: first click
+  // arms (id stored here), second click on Confirm fires the bulk reject.
+  const [confirmingRejectId, setConfirmingRejectId] = useState(null);
 
   const reload = useCallback(() => {
     setLoading(true);
@@ -65,6 +68,32 @@ export default function AgentNeedsInputCard({ roleId }) {
     setBusyId(id);
     try {
       await api.post(`/agent-needs-input/${id}/dismiss`);
+      reload();
+    } catch (e) {
+      setError(e.response?.data?.detail || e.message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // Bulk-reject every candidate on the role that has no CV file at all.
+  // Only offered on `missing_cv` cards — never on `cv_unreadable`, where a
+  // CV was submitted and the text just couldn't be read.
+  const handleRejectMissingCv = async (id) => {
+    setBusyId(id);
+    try {
+      const { data } = await api.post(`/agent-needs-input/${id}/reject-missing-cv`);
+      const failed = Array.isArray(data?.failed) ? data.failed : [];
+      if (failed.length) {
+        setError(
+          `Rejected ${data.rejected}. ${failed.length} couldn't be rejected ` +
+            `(Workable write-back failed) — they're left open; try again or ` +
+            `reject them from the role page.`,
+        );
+      } else {
+        setError(null);
+      }
+      setConfirmingRejectId(null);
       reload();
     } catch (e) {
       setError(e.response?.data?.detail || e.message);
@@ -155,6 +184,43 @@ export default function AgentNeedsInputCard({ roleId }) {
                   {row.link_label || 'Open settings'}
                 </a>
               ) : null}
+              {/* Reject shortcut — only for missing_cv (no file at all). The
+                  cv_unreadable card deliberately has no reject: those
+                  candidates did submit a CV we just couldn't read. */}
+              {row.kind === 'missing_cv' ? (
+                confirmingRejectId === row.id ? (
+                  <>
+                    <button
+                      type="button"
+                      className="agent-needs-input-reject confirm"
+                      disabled={busyId === row.id}
+                      onClick={() => handleRejectMissingCv(row.id)}
+                    >
+                      <UserX size={12} />
+                      Confirm reject
+                    </button>
+                    <button
+                      type="button"
+                      className="agent-needs-input-reject-cancel"
+                      disabled={busyId === row.id}
+                      onClick={() => setConfirmingRejectId(null)}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="agent-needs-input-reject"
+                    disabled={busyId === row.id}
+                    onClick={() => setConfirmingRejectId(row.id)}
+                    title="Reject every candidate on this role that has no CV"
+                  >
+                    <UserX size={12} />
+                    Reject — no CV
+                  </button>
+                )
+              ) : null}
               <button
                 type="button"
                 className="agent-needs-input-dismiss"
@@ -181,7 +247,7 @@ const LONG_FORM_KINDS = new Set(['intent_slot_missing', 'intent_clarification'])
 // Data-readiness gaps: the recruiter resolves them by adding the missing
 // data (job spec / CV) via the link, not by typing an answer — so we render
 // just the link + Skip, no free-text box.
-const LINK_ONLY_KINDS = new Set(['missing_job_spec', 'missing_cv']);
+const LINK_ONLY_KINDS = new Set(['missing_job_spec', 'missing_cv', 'cv_unreadable']);
 
 function FreeTextAnswer({ busy, onSubmit, multiline = false, placeholder = 'Your answer…' }) {
   const [text, setText] = useState('');
