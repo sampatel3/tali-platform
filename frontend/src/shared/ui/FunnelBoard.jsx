@@ -5,7 +5,7 @@ import {
   funnelStageTone,
   formatCount,
   funnelDecisionRow,
-  awaitingFromStageCounts,
+  awaitingHitlFromDecisions,
 } from '../metrics';
 import './FunnelBoard.css';
 
@@ -20,9 +20,12 @@ const OUTCOME_KEYS = new Set(['advanced', 'rejected']);
 // (a list of {decision_type} or a {type: count} map); when omitted every
 // scored/completed candidate shows as "decision pending". Advanced and Rejected
 // are terminal outcomes, divided off with no decision row.
+// The "N awaiting you" pill = the agent's pending recommendations (HITL — what
+// needs *your* call), NOT every scored candidate; pass `awaitingTotal` to
+// override (e.g. an org-wide count from a different source).
 export const FunnelBoard = ({ stageCounts, decisionsByType = null, awaitingTotal = null, scopeLabel = 'this role' }) => {
   const decisionRow = funnelDecisionRow(stageCounts, decisionsByType);
-  const awaiting = awaitingTotal != null ? Number(awaitingTotal) : awaitingFromStageCounts(stageCounts);
+  const awaiting = awaitingTotal != null ? Number(awaitingTotal) : awaitingHitlFromDecisions(decisionsByType);
   return (
     <div className="funnel-board">
       <div className="fb-cap">

@@ -40,13 +40,6 @@ export const FUNNEL_DECISION_GATES = [
 // "decision pending" — i.e. scored/completed but the agent hasn't ruled yet.
 const DECISION_PENDING_STAGES = ['scored', 'completed'];
 
-// "Awaiting you" = candidates at a decision stage (Scored + Completed) — the
-// recruiter's total to-do (recommendations + not-yet-decided).
-export const awaitingFromStageCounts = (stageCounts) => {
-  const sc = stageCounts || {};
-  return DECISION_PENDING_STAGES.reduce((acc, k) => acc + (Number(sc[k]) || 0), 0);
-};
-
 // Normalize a decisions arg (a list of {decision_type} objects OR a
 // {decision_type: count} map) into a counts-by-type map.
 const decisionCountsByType = (decisions) => {
@@ -78,6 +71,32 @@ export const funnelDecisionRow = (stageCounts, decisions) => {
     if (pending > 0) push(stage, { key: 'pending', label: 'decision pending', count: pending, tone: 'pending' });
   }
   return byStage;
+};
+
+// "Awaiting you" = the agent's pending recommendations (HITL) — the sum of the
+// typed pending-decision counts (send / advance / reject / pre-screen reject).
+// This is the actionable queue the recruiter must approve, override or teach,
+// and what the nav badge + home hero count. Candidates the agent hasn't ruled
+// on yet are NOT here — they're "decision pending" (see decisionPendingFromCounts).
+export const awaitingHitlFromDecisions = (decisions) => {
+  const counts = decisionCountsByType(decisions);
+  return Object.values(counts).reduce((acc, n) => acc + (Number(n) || 0), 0);
+};
+
+// Total "decision pending" — candidates at a decision stage the agent hasn't
+// ruled on yet (the funnel's grey "N decision pending" chips, summed). The
+// remainder of Scored + Completed after the agent's typed recommendations;
+// still the agent's to-do, not yet awaiting you. Derived from funnelDecisionRow
+// so it always reconciles with the chips the funnel renders.
+export const decisionPendingFromCounts = (stageCounts, decisions) => {
+  const row = funnelDecisionRow(stageCounts, decisions);
+  let total = 0;
+  for (const stage of DECISION_PENDING_STAGES) {
+    for (const chip of row[stage] || []) {
+      if (chip.key === 'pending') total += chip.count;
+    }
+  }
+  return total;
 };
 
 // Bucket a single application row into a funnel stage — mirrors the backend's

@@ -11,7 +11,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 
 import './home.css';
-import { formatCount, budgetTile, awaitingFromStageCounts } from '../../shared/metrics';
+import { formatCount, budgetTile, decisionPendingFromCounts } from '../../shared/metrics';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { HomeNow } from './HomeNow';
 import { HomeMonitoring } from './HomeMonitoring';
@@ -274,16 +274,20 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     [kpis.org_budget_cap_cents, kpis.org_budget_spent_cents],
   );
 
-  // The agent's Decision-Hub queue (recommendations to approve/override) — the
-  // hero "PENDING" kicker + chips. A subset of "Awaiting you" (the full to-do).
+  // "Awaiting you" = the agent's pending recommendations (HITL) — the queue the
+  // recruiter must approve, override or teach. Drives the hero kicker + the
+  // "Awaiting you" card, and matches the nav badge. A scored candidate the agent
+  // hasn't ruled on yet is NOT here — it's "decision pending" (below).
   const pendingDecisions = Number(kpis.pending_decisions ?? kpis.pending ?? 0);
-  // "Awaiting you" = candidates at a decision stage (Scored + Completed) summed
-  // across roles — the recruiter's real to-do, matching the funnel below. The
-  // hero "PENDING" kicker / chips stay the agent's Decision-Hub queue (a subset
-  // the agent has a recommendation for).
-  const orgAwaiting = useMemo(() => {
+  // Not-yet-decided — candidates at a decision stage the agent hasn't ruled on
+  // yet (the funnel's grey "decision pending" chips, summed across roles).
+  // Shown as context under the "Awaiting you" card; the agent's to-do, not yours.
+  const orgNotYetDecided = useMemo(() => {
     const list = Array.isArray(rolesBreakdown) ? rolesBreakdown : [];
-    return list.reduce((acc, r) => acc + awaitingFromStageCounts(r?.stage_counts), 0);
+    return list.reduce(
+      (acc, r) => acc + decisionPendingFromCounts(r?.stage_counts, r?.pending_decisions_by_type),
+      0,
+    );
   }, [rolesBreakdown]);
 
   return (
@@ -291,7 +295,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       {NavComponent ? <NavComponent currentPage="home" onNavigate={onNavigate} /> : null}
       <AgentHeader
         breadcrumbs={[{ label: 'Home' }]}
-        kicker={`HUB · ${formatCount(orgAwaiting)} AWAITING YOU · ${formatCount(kpis.active_role_count)} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
+        kicker={`HUB · ${formatCount(pendingDecisions)} AWAITING YOU · ${formatCount(kpis.active_role_count)} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
         title={greetingFor(user)}
         subtitle="Every decision the agent makes that needs you. Approve, override, or teach it — your calls become its training signal. The long-term goal is full automation; this is where you keep the loop honest."
       />
@@ -310,9 +314,11 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
             {
               key: 'awaiting',
               label: 'Awaiting you',
-              value: formatCount(orgAwaiting),
-              emph: orgAwaiting > 0,
-              sub: orgAwaiting > 0 ? `${formatCount(pendingDecisions)} agent-flagged` : 'queue clear',
+              value: formatCount(pendingDecisions),
+              emph: pendingDecisions > 0,
+              sub: orgNotYetDecided > 0
+                ? `${formatCount(orgNotYetDecided)} decision pending`
+                : (pendingDecisions > 0 ? 'all flagged' : 'queue clear'),
             },
             {
               key: 'today',
