@@ -297,24 +297,31 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction }) => (
 // answers. Renders the shared B2 <FunnelBoard> (stages only — the org decision
 // breakdown lives in the hero) so it matches the role-detail funnel exactly.
 // Counts come from role.stage_counts on /agent/roles/breakdown.
-const PipelineStandingStrip = ({ rolesBreakdown, filters, pendingByType }) => {
-  const { counts, scopeLabel } = useMemo(() => {
+const PipelineStandingStrip = ({ rolesBreakdown, filters }) => {
+  // Both the stage counts AND the pending-decision breakdown come from
+  // rolesBreakdown (each role carries stage_counts + pending_decisions_by_type),
+  // so the role-scoped funnel shows that role's real decisions instead of
+  // lumping everyone into "decision pending".
+  const { counts, decisionsByType, scopeLabel } = useMemo(() => {
     const roles = Array.isArray(rolesBreakdown) ? rolesBreakdown : [];
     if (filters.role_id) {
       const role = roles.find((r) => String(r.role_id) === String(filters.role_id));
       return {
         counts: role?.stage_counts || null,
+        decisionsByType: role?.pending_decisions_by_type || {},
         scopeLabel: role?.short_name || role?.name || `Role #${filters.role_id}`,
       };
     }
-    // No role filter → sum each stage across every role for an org-wide funnel.
-    const summed = roles.reduce((acc, r) => {
-      const sc = r?.stage_counts || {};
-      for (const k of Object.keys(sc)) acc[k] = (acc[k] || 0) + (Number(sc[k]) || 0);
+    // No role filter → sum each stage + decision type across every role.
+    const sum = (key) => roles.reduce((acc, r) => {
+      const obj = r?.[key] || {};
+      for (const k of Object.keys(obj)) acc[k] = (acc[k] || 0) + (Number(obj[k]) || 0);
       return acc;
     }, {});
+    const summed = sum('stage_counts');
     return {
       counts: Object.keys(summed).length ? summed : null,
+      decisionsByType: sum('pending_decisions_by_type'),
       scopeLabel: 'all roles',
     };
   }, [rolesBreakdown, filters.role_id]);
@@ -323,10 +330,6 @@ const PipelineStandingStrip = ({ rolesBreakdown, filters, pendingByType }) => {
   // Nothing in the pipeline at all → no point showing an all-zero board.
   if (PIPELINE_FUNNEL_STAGES.every((s) => (Number(counts[s.key]) || 0) === 0)) return null;
 
-  // The org-wide pending-decision breakdown is only meaningful for the unscoped
-  // funnel (pendingByType is org-wide); a role-scoped funnel falls back to the
-  // stage-derived "decision pending".
-  const decisionsByType = filters.role_id ? null : pendingByType;
   return <FunnelBoard stageCounts={counts} decisionsByType={decisionsByType} scopeLabel={scopeLabel} />;
 };
 
@@ -639,7 +642,6 @@ export const HomeNow = ({
   filters,
   setFilters,
   rolesBreakdown,
-  pendingByType,
   reload,
   onNavigate,
 }) => {
@@ -939,7 +941,7 @@ export const HomeNow = ({
 
       {/* Funnel standing for the scoped role — how many are already advanced /
           in review / rejected — so the pending count has a denominator. */}
-      <PipelineStandingStrip rolesBreakdown={rolesBreakdown} filters={filters} pendingByType={pendingByType} />
+      <PipelineStandingStrip rolesBreakdown={rolesBreakdown} filters={filters} />
 
       {/* Open orchestrator questions across the org (or scoped to the
           toolbar's role filter when set). Hides itself when the queue

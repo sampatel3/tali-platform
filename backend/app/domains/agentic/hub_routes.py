@@ -31,6 +31,7 @@ from ._hub_shared import (
     month_start_utc,
     now_utc,
     pending_filter,
+    role_pending_decisions_by_type_bulk,
     short_role_name,
     start_of_day_utc,
 )
@@ -293,6 +294,14 @@ def roles_breakdown(
         organization_id=current_user.organization_id,
         role_ids=[int(r.id) for r in roles],
     )
+    # Per-role pending decisions grouped by type — feeds the funnel's
+    # "awaiting your decision" chips when the home funnel is scoped to a role.
+    pending_by_type_by_role = role_pending_decisions_by_type_bulk(
+        db,
+        organization_id=current_user.organization_id,
+        role_ids=[int(r.id) for r in roles],
+        now=now,
+    )
 
     # Pre-compute per-role aggregates in three single queries to avoid
     # N+1 across the role list.
@@ -385,6 +394,7 @@ def roles_breakdown(
                 paused_reason=role.agent_paused_reason,
                 agentic_mode_enabled=bool(role.agentic_mode_enabled),
                 stage_counts=stage_counts_by_role.get(rid, {}),
+                pending_decisions_by_type=pending_by_type_by_role.get(rid, {}),
             )
         )
     # Sort: pending desc, then name asc (so the most-needs-attention rows lead).

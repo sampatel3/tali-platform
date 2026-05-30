@@ -47,6 +47,7 @@ from ...services.role_criteria_service import (
 )
 from .role_support import get_role, role_to_response
 from .pipeline_service import role_pipeline_counts
+from ..agentic._hub_shared import role_pending_decisions_by_type
 
 router = APIRouter(tags=["Roles"])
 logger = logging.getLogger("taali.roles")
@@ -240,11 +241,19 @@ def get_role_endpoint(
         organization_id=current_user.organization_id,
         role_id=role.id,
     )
+    # Pending agent decisions by type — feeds the role funnel's "awaiting your
+    # decision" chips (uncapped, unlike the row-limited applications fetch).
+    pending_decisions_by_type = role_pending_decisions_by_type(
+        db,
+        organization_id=current_user.organization_id,
+        role_id=role.id,
+    )
     return role_to_response(
         role,
         tasks_count=len(role.tasks or []),
         applications_count=int(app_count),
         stage_counts=stage_counts,
+        pending_decisions_by_type=pending_decisions_by_type,
     )
 
 

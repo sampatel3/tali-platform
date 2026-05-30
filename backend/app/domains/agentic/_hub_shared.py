@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from ...models.agent_decision import AgentDecision
@@ -78,6 +78,47 @@ def pending_filter(now: datetime):
             AgentDecision.snoozed_until <= now,
         ),
     )
+
+
+def role_pending_decisions_by_type(db, *, organization_id: int, role_id: int, now: datetime | None = None) -> dict[str, int]:
+    """Pending agent decisions for one role, grouped by decision_type — the
+    uncapped source for the funnel's "awaiting your decision" chips. (The
+    fetched-decisions list is row-capped, so high-volume roles under-count.)"""
+    now = now or datetime.now(timezone.utc)
+    rows = (
+        db.query(AgentDecision.decision_type, func.count(AgentDecision.id))
+        .filter(
+            AgentDecision.organization_id == organization_id,
+            AgentDecision.role_id == role_id,
+            pending_filter(now),
+        )
+        .group_by(AgentDecision.decision_type)
+        .all()
+    )
+    return {str(dt): int(c) for dt, c in rows}
+
+
+def role_pending_decisions_by_type_bulk(db, *, organization_id: int, role_ids: list[int], now: datetime | None = None) -> dict[int, dict[str, int]]:
+    """Batched ``role_pending_decisions_by_type`` for many roles in one query."""
+    counts: dict[int, dict[str, int]] = {int(rid): {} for rid in role_ids}
+    if not role_ids:
+        return counts
+    now = now or datetime.now(timezone.utc)
+    rows = (
+        db.query(AgentDecision.role_id, AgentDecision.decision_type, func.count(AgentDecision.id))
+        .filter(
+            AgentDecision.organization_id == organization_id,
+            AgentDecision.role_id.in_(role_ids),
+            pending_filter(now),
+        )
+        .group_by(AgentDecision.role_id, AgentDecision.decision_type)
+        .all()
+    )
+    for rid, dt, c in rows:
+        bucket = counts.get(int(rid))
+        if bucket is not None:
+            bucket[str(dt)] = int(c)
+    return counts
 
 
 def open_needs_input_filter():
@@ -149,6 +190,11 @@ class RoleBreakdownRow(BaseModel):
     # Lets the Hub show "already advanced N" context next to the pending queue
     # so a recruiter knows the denominator before advancing more.
     stage_counts: dict[str, int] = {}
+    # Pending agent decisions for the role, grouped by decision_type
+    # ({advance_to_interview, reject, send_assessment, skip_assessment_reject…}).
+    # Drives the funnel's "awaiting your decision" chips when the home funnel is
+    # scoped to this role. Uncapped (unlike the fetched-decisions list).
+    pending_decisions_by_type: dict[str, int] = {}
 
 
 # ---------------------------------------------------------------------------
