@@ -190,6 +190,55 @@
   flex-wrap: wrap;
 }
 
+/* Pipeline-standing strip — the funnel for the scoped role, shown under the
+   toolbar so the pending count has a denominator. Purple-soft slab to read as
+   context, not an action. */
+.rq-standing {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding: 8px 14px;
+  background: var(--purple-soft);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.rq-standing-kicker {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  color: var(--purple);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.rq-standing-items {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.rq-standing-item {
+  font-size: 12.5px;
+  color: var(--mute);
+  white-space: nowrap;
+}
+
+.rq-standing-item b {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--ink-2);
+  margin-right: 2px;
+}
+
+.rq-standing-item.is-emph b {
+  color: var(--purple);
+  font-size: 14px;
+}
+
 .rq-select {
   appearance: none;
   background: var(--bg);

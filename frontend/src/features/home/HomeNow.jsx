@@ -287,6 +287,61 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction }) => (
   </div>
 );
 
+// The candidate-pipeline funnel for the scoped role, surfaced next to the
+// pending queue so a recruiter knows the denominator before advancing more
+// — "I've got 17 pending, but I've already advanced 10" is the question this
+// answers. Counts come from the same source the Jobs page uses
+// (role.stage_counts on /agent/roles/breakdown). `advanced` is emphasised
+// because it's the one that bounds how many more should go through.
+const PIPELINE_STANDING_STAGES = [
+  { key: 'advanced', label: 'Advanced', emphasis: true },
+  { key: 'review', label: 'In review' },
+  { key: 'in_assessment', label: 'Assessing' },
+  { key: 'invited', label: 'Invited' },
+  { key: 'rejected', label: 'Rejected' },
+];
+
+const PipelineStandingStrip = ({ rolesBreakdown, filters }) => {
+  const { counts, scopeLabel } = useMemo(() => {
+    const roles = Array.isArray(rolesBreakdown) ? rolesBreakdown : [];
+    if (filters.role_id) {
+      const role = roles.find((r) => String(r.role_id) === String(filters.role_id));
+      return {
+        counts: role?.stage_counts || null,
+        scopeLabel: role?.short_name || role?.name || `Role #${filters.role_id}`,
+      };
+    }
+    // No role filter → sum each stage across every role for an org-wide funnel.
+    const summed = roles.reduce((acc, r) => {
+      const sc = r?.stage_counts || {};
+      for (const k of Object.keys(sc)) acc[k] = (acc[k] || 0) + (Number(sc[k]) || 0);
+      return acc;
+    }, {});
+    return {
+      counts: Object.keys(summed).length ? summed : null,
+      scopeLabel: 'All roles',
+    };
+  }, [rolesBreakdown, filters.role_id]);
+
+  if (!counts) return null;
+  const items = PIPELINE_STANDING_STAGES.map((s) => ({ ...s, n: Number(counts[s.key]) || 0 }));
+  // Nothing in the pipeline at all → no point showing an all-zero strip.
+  if (items.every((i) => i.n === 0)) return null;
+
+  return (
+    <div className="rq-standing" role="group" aria-label={`Pipeline standing for ${scopeLabel}`}>
+      <span className="rq-standing-kicker">PIPELINE · {scopeLabel}</span>
+      <div className="rq-standing-items">
+        {items.map((i) => (
+          <span key={i.key} className={`rq-standing-item${i.emphasis ? ' is-emph' : ''}`}>
+            <b>{i.n}</b> {i.label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) => {
   // The list is sorted by score, so the oldest item is no longer at a fixed
   // position — derive its age explicitly for the header label.
@@ -892,6 +947,10 @@ export const HomeNow = ({
       </div>
 
       <Toolbar filters={filters} setFilters={setFilters} roles={rolesBreakdown} bulkAction={bulkActionEl} />
+
+      {/* Funnel standing for the scoped role — how many are already advanced /
+          in review / rejected — so the pending count has a denominator. */}
+      <PipelineStandingStrip rolesBreakdown={rolesBreakdown} filters={filters} />
 
       {/* Open orchestrator questions across the org (or scoped to the
           toolbar's role filter when set). Hides itself when the queue

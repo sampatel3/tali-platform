@@ -41,6 +41,7 @@ from ...models.role import Role
 from ...models.usage_event import UsageEvent
 from ...models.user import User
 from ...platform.database import get_db
+from ..assessments_runtime.pipeline_service import role_pipeline_counts_bulk
 
 
 router = APIRouter(tags=["agentic-hub"])
@@ -284,6 +285,15 @@ def roles_breakdown(
         .all()
     )
 
+    # Live candidate-pipeline standing per role (advanced / review / rejected
+    # …) — the same source the Jobs page uses — so the Hub can show "already
+    # advanced N" context alongside the pending queue. Batched to two queries.
+    stage_counts_by_role = role_pipeline_counts_bulk(
+        db,
+        organization_id=current_user.organization_id,
+        role_ids=[int(r.id) for r in roles],
+    )
+
     # Pre-compute per-role aggregates in three single queries to avoid
     # N+1 across the role list.
     pending_by_role = dict(
@@ -374,6 +384,7 @@ def roles_breakdown(
                 paused=role.agent_paused_at is not None,
                 paused_reason=role.agent_paused_reason,
                 agentic_mode_enabled=bool(role.agentic_mode_enabled),
+                stage_counts=stage_counts_by_role.get(rid, {}),
             )
         )
     # Sort: pending desc, then name asc (so the most-needs-attention rows lead).

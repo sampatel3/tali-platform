@@ -697,3 +697,70 @@ def role_pipeline_counts(
     )
     counts["rejected"] = int(rejected_total or 0)
     return counts
+
+
+def role_pipeline_counts_bulk(
+    db: Session,
+    *,
+    organization_id: int,
+    role_ids: list[int],
+) -> dict[int, dict[str, int]]:
+    """Batched ``role_pipeline_counts`` for many roles in two queries.
+
+    Returns ``{role_id: {stage: count, ..., "rejected": count}}`` for every
+    requested role (roles with no applications still get a zero-filled dict).
+    The per-role helper does 2 queries each; callers iterating a role list —
+    e.g. the Hub's /agent/roles/breakdown — would N+1 without this.
+    """
+    counts: dict[int, dict[str, int]] = {
+        int(rid): {stage: 0 for stage in PIPELINE_STAGES} | {"rejected": 0}
+        for rid in role_ids
+    }
+    if not role_ids:
+        return counts
+
+    open_rows = (
+        db.query(
+            CandidateApplication.role_id,
+            CandidateApplication.pipeline_stage,
+            func.count(CandidateApplication.id),
+        )
+        .filter(
+            CandidateApplication.organization_id == organization_id,
+            CandidateApplication.role_id.in_(role_ids),
+            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.application_outcome == "open",
+        )
+        .group_by(CandidateApplication.role_id, CandidateApplication.pipeline_stage)
+        .all()
+    )
+    for role_id, stage, total in open_rows:
+        bucket = counts.get(int(role_id))
+        if bucket is None:
+            continue
+        normalized = normalize_pipeline_key(stage)
+        if normalized in bucket:
+            bucket[normalized] = int(total or 0)
+
+    # `rejected` is an application_outcome, orthogonal to pipeline_stage —
+    # counted across all stages, mirroring role_pipeline_counts().
+    rejected_rows = (
+        db.query(
+            CandidateApplication.role_id,
+            func.count(CandidateApplication.id),
+        )
+        .filter(
+            CandidateApplication.organization_id == organization_id,
+            CandidateApplication.role_id.in_(role_ids),
+            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.application_outcome == "rejected",
+        )
+        .group_by(CandidateApplication.role_id)
+        .all()
+    )
+    for role_id, total in rejected_rows:
+        bucket = counts.get(int(role_id))
+        if bucket is not None:
+            bucket["rejected"] = int(total or 0)
+
+    return counts
