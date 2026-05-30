@@ -83,20 +83,16 @@ def extract_usage(response: Any) -> TokenUsage:
 
 
 def price_usage(model: str, usage: TokenUsage) -> int:
-    """Cost of one call in micro-USD via the canonical ``cost_for``.
-
-    NOTE: ``cost_for`` currently prices the whole ``cache_creation`` stream
-    uniformly (1.25x input); it does not yet split the 1-hour TTL slice (2x).
-    A brand that records ``cache_creation_1h_tokens`` will see a small
-    under-price here vs a TTL-aware meter — surfaced by the shadow comparator
-    and closed by up-streaming the split into ``cost_for`` (a follow-up cut).
-    """
+    """Cost of one call in micro-USD via the canonical ``cost_for`` — including
+    the cache 1-hour-TTL split (2x input vs the 5m default at 1.25x) when the
+    brand reported ``cache_creation_1h_tokens``."""
     return cost_for(
         model=model,
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
         cache_read_tokens=usage.cache_read_tokens,
         cache_creation_tokens=usage.cache_creation_tokens,
+        cache_creation_1h_tokens=usage.cache_creation_1h_tokens,
     )
 
 

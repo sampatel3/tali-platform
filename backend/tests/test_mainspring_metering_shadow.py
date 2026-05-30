@@ -46,13 +46,14 @@ def test_shadow_logs_compared_with_drift(caplog, monkeypatch):
 
 
 def test_shadow_flags_unpriced_when_mainspring_lacks_the_model(caplog, monkeypatch):
-    """tali bills the bare alias 'claude-haiku-4-5'; mainspring prices only dated
-    names + its alias map. The shadow must flag this as 'unpriced' (a mainspring
-    pricing-table gap) rather than a misleading -100% drift."""
+    """A model mainspring can't price (its PRICING/ALIASES table lacks it) logs
+    as 'unpriced' — a mainspring pricing gap, not a misleading -100% drift.
+    (tali's current aliases all price now after the pricing-parity cut, so this
+    uses a deliberately-unknown model.)"""
     monkeypatch.setattr(settings, "MAINSPRING_METERING_SHADOW", True, raising=False)
     with caplog.at_level(logging.INFO, logger="taali.metering.shadow"):
         shadow_compare(
-            model="claude-haiku-4-5", tali_cost_usd_micro=1000,
+            model="claude-unknown-future-99", tali_cost_usd_micro=1000,
             input_tokens=1000, output_tokens=500,
         )
     evs = _SHADOW_EVENTS(caplog)
