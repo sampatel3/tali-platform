@@ -366,6 +366,18 @@ def update_role(
         role.agent_decision_budget_per_cycle = updates["agent_decision_budget_per_cycle"]
     if "monthly_usd_budget_cents" in updates:
         role.monthly_usd_budget_cents = updates["monthly_usd_budget_cents"]
+        # Raising the cap above month-to-date spend should bring a
+        # budget-paused role back on its own — the recruiter shouldn't have
+        # to toggle the agent off/on. The cohort sweep skips paused roles,
+        # so without this the raised cap has no effect until a manual
+        # resume. Guarded inside the helper so a still-over-budget raise
+        # won't resume only to re-pause next cycle. Mirrors the explicit
+        # Resume path in the agentic_mode_enabled block above; the
+        # `agent_resumed_now` flag kicks an immediate cycle below.
+        from ...agent_runtime import budget_guard
+
+        if budget_guard.resume_if_under_budget(db, role=role):
+            agent_resumed_now = True
     if "score_threshold" in updates:
         # ``score_threshold`` is the per-role override of the org default
         # used by both the agent's send-assessment decision rule and the
