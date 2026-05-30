@@ -8,6 +8,13 @@ import {
 } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
+import {
+  PIPELINE_FUNNEL_STAGES,
+  funnelStageTone,
+  formatCount,
+  budgetTile,
+  inPipelineFromStageCounts,
+} from '../../shared/metrics';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 import { useAgentStatusOrg } from '../../shared/layout/AgentBar';
 import { RoleSheet } from '../candidates/RoleSheet';
@@ -28,16 +35,9 @@ import {
   JOBS_SHOWCASE_ORG,
 } from '../demo/productWalkthroughModels';
 
-const STAGES = [
-  { key: 'applied', label: 'Applied' },
-  { key: 'invited', label: 'Invited' },
-  { key: 'in_assessment', label: 'Assessing' },
-  { key: 'review', label: 'Review' },
-  { key: 'advanced', label: 'Advanced' },
-  // `rejected` is an application_outcome (not a pipeline_stage), counted
-  // separately by the backend across every stage.
-  { key: 'rejected', label: 'Rejected' },
-];
+// Canonical funnel for the role-card stat row — shared with the home
+// "Pipeline" strip and the job-detail funnel via src/shared/metrics.
+const STAGES = PIPELINE_FUNNEL_STAGES;
 
 const SOURCE_FILTERS = [
   { key: 'all', label: 'All roles' },
@@ -291,6 +291,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           next[targets[idx].id] = {
             monthly_spent_cents: Number(data.monthly_spent_cents || 0),
             monthly_budget_cents: Number(data.monthly_budget_cents || 0),
+            pending_decisions: Number(data.pending_decisions || 0),
           };
         });
         setAgentSpendByRole(next);
@@ -591,31 +592,32 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           </div>
         ) : null}
 
-        {/* HANDOFF v2 §4 / canvas jobs-list — exactly 4 KPI tiles:
-            ACTIVE ROLES · CANDIDATES IN PIPELINE · YOUR REVIEW QUEUE · BUDGET USED
-            (Last tile rolls up monthly_spent + monthly_budget across the
-            roles the agent is enabled on; mirrors the AgentBar org rollup.) */}
+        {/* Shared org KPI strip — the same four tiles the Home hub shows:
+            IN PIPELINE · ACTIVE ROLES · AWAITING YOU · ORG BUDGET · MTD.
+            "Awaiting you" is the pending-decision queue (summed from the
+            /roles/{id}/agent/status fan-out), the same number the Home hub
+            surfaces — not the Review funnel stage. Formatting (separators,
+            $spent / $cap + bar) comes from src/shared/metrics. */}
         <div className="mc-jobs-kpis">
           {(() => {
             const activeRoles = sourceCounts.live;
             const starredCount = roles.filter((r) => r.starred_for_auto_sync).length;
             const pipelineCount = roles.reduce(
-              (acc, r) => acc + Number(r.active_candidates_count || r.applications_count || 0),
+              (acc, r) => acc + inPipelineFromStageCounts(r?.stage_counts),
               0,
             );
-            const reviewCount = roles.reduce(
-              (acc, r) => acc + Number(r?.stage_counts?.review || 0),
+            // Awaiting you — pending agent decisions across roles, from the
+            // agent-status fan-out (only agent-enabled roles can have any).
+            const awaitingCount = roles.reduce(
+              (acc, r) => acc + Number(agentSpendByRole?.[r.id]?.pending_decisions || 0),
               0,
             );
-            const reviewRoleCount = roles.filter((r) => Number(r?.stage_counts?.review || 0) > 0).length;
-            const newThisWeek = roles.reduce(
-              (acc, r) => acc + Number(r?.new_candidates_this_week || 0),
-              0,
-            );
-            // BUDGET USED — sum live spend + budget across agent-enabled roles.
-            // Spend comes from the /roles/{id}/agent/status fan-out kept in
-            // `agentSpendByRole`; budget cap falls back to
-            // role.monthly_usd_budget_cents when the status hasn't loaded yet.
+            const awaitingRoleCount = roles.filter(
+              (r) => Number(agentSpendByRole?.[r.id]?.pending_decisions || 0) > 0,
+            ).length;
+            // Org budget · MTD — sum live spend + cap across agent-enabled
+            // roles. Spend comes from the fan-out kept in `agentSpendByRole`;
+            // cap falls back to role.monthly_usd_budget_cents until it loads.
             const agentEnabledCount = roles.filter((r) => r?.agentic_mode_enabled).length;
             let totalSpentCents = 0;
             let totalBudgetCents = 0;
@@ -629,31 +631,52 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                 ?? 0,
               );
             });
-            const budgetPct = totalBudgetCents > 0
-              ? Math.min(100, Math.round((totalSpentCents / totalBudgetCents) * 100))
-              : null;
-            const dollars = (cents) => {
-              const n = Number(cents) / 100;
-              return n >= 100 ? `$${Math.round(n)}` : `$${n.toFixed(0)}`;
-            };
+            const budget = budgetTile(totalSpentCents, totalBudgetCents);
             const tiles = [
-              { k: 'ACTIVE ROLES', v: activeRoles, d: starredCount > 0 ? `${starredCount} starred` : 'None starred' },
-              { k: 'CANDIDATES IN PIPELINE', v: pipelineCount, d: newThisWeek > 0 ? `+${newThisWeek} this week` : 'Across active roles' },
-              { k: 'YOUR REVIEW QUEUE', v: reviewCount, d: reviewCount === 0 ? 'All clear' : `Across ${reviewRoleCount} role${reviewRoleCount === 1 ? '' : 's'}` },
               {
-                k: 'BUDGET USED',
-                v: budgetPct != null ? `${budgetPct}%` : '—',
+                k: 'IN PIPELINE',
+                v: formatCount(pipelineCount),
+                d: `across ${formatCount(activeRoles)} active role${activeRoles === 1 ? '' : 's'}`,
+              },
+              {
+                k: 'ACTIVE ROLES',
+                v: formatCount(activeRoles),
+                d: starredCount > 0 ? `${formatCount(starredCount)} starred` : 'none starred',
+              },
+              {
+                k: 'AWAITING YOU',
+                v: formatCount(awaitingCount),
+                attn: awaitingCount > 0,
+                d: awaitingCount === 0
+                  ? 'queue clear'
+                  : `across ${formatCount(awaitingRoleCount)} role${awaitingRoleCount === 1 ? '' : 's'}`,
+              },
+              {
+                k: 'ORG BUDGET · MTD',
+                v: budget.value,
+                unit: budget.unit,
+                bar: totalBudgetCents > 0 ? budget : null,
                 d: totalBudgetCents > 0
-                  ? `${dollars(totalSpentCents)} of ${dollars(totalBudgetCents)}`
+                  ? budget.sub
                   : agentEnabledCount > 0
-                    ? `${agentEnabledCount} role${agentEnabledCount === 1 ? '' : 's'} with the agent on`
-                    : 'No roles using the agent yet',
+                    ? `${formatCount(agentEnabledCount)} role${agentEnabledCount === 1 ? '' : 's'} with the agent on`
+                    : 'no roles using the agent yet',
               },
             ];
             return tiles.map((tile) => (
               <div key={tile.k} className="mc-jobs-kpi">
                 <div className="k">{tile.k}</div>
-                <div className="v">{tile.v}</div>
+                <div className="v">
+                  <span style={tile.attn ? { color: 'var(--purple)' } : undefined}>{tile.v}</span>
+                  {tile.unit ? (
+                    <span style={{ color: 'var(--mute)', fontSize: 15, fontWeight: 400, marginLeft: 4 }}>{tile.unit}</span>
+                  ) : null}
+                </div>
+                {tile.bar ? (
+                  <div className="mc-jobs-kpi-bar" aria-hidden="true">
+                    <i style={{ width: `${tile.bar.pct}%`, background: tile.bar.over ? 'var(--red)' : 'var(--purple)' }} />
+                  </div>
+                ) : null}
                 <div className="d">{tile.d}</div>
               </div>
             ));
@@ -828,12 +851,15 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                   <div className="job-stats">
                     {STAGES.map((stage) => {
                       const value = Number(stageCounts?.[stage.key] || 0);
-                      const isReviewActive = stage.key === 'review' && value > 0;
+                      const tone = funnelStageTone(stage.key, value);
                       return (
-                        <div key={stage.key} className="js-cell">
+                        <div key={stage.key} className={`js-cell${tone === 'term' ? ' is-term' : ''}`}>
                           <div className="k">{stage.label}</div>
-                          <div className="v" style={isReviewActive ? { color: 'var(--purple)' } : undefined}>
-                            {value}
+                          <div
+                            className="v"
+                            style={tone === 'attn' ? { color: 'var(--purple)' } : tone === 'term' ? { color: 'var(--mute)' } : undefined}
+                          >
+                            {formatCount(value)}
                           </div>
                         </div>
                       );

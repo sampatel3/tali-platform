@@ -108,6 +108,23 @@
 }
 
 /* ---------------- KPI strip ---------------- */
+.rq-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+/* Decision-Hub health row — secondary by position; sits just under the
+   primary org strip and is held to two columns on wide screens so it reads
+   as a sub-row, not a continuation of the four-tile strip. */
+.rq-kpis-secondary {
+  margin-top: 12px;
+}
+
+@media (min-width: 900px) {
+  .rq-kpis-secondary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 .rq-kpi {
   background: var(--bg-2);
   border: 1px solid var(--line);
@@ -237,6 +254,18 @@
 .rq-standing-item.is-emph b {
   color: var(--purple);
   font-size: 14px;
+}
+
+/* Terminal bucket (Rejected) — muted and divided off from the active stages
+   with a leading separator, mirroring the role-card funnel's divider. */
+.rq-standing-item.is-term {
+  padding-left: 16px;
+  border-left: 1px solid var(--line);
+  color: var(--mute);
+}
+
+.rq-standing-item.is-term b {
+  color: var(--mute);
 }
 
 .rq-select {

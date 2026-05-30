@@ -56,6 +56,12 @@
   text-align: center;
 }
 
+/* Terminal bucket (Rejected) — divided off from the active funnel stages
+   with a leading rule so it reads as an outcome, not an in-flight stage. */
+.js-cell.is-term {
+  border-left: 1px solid var(--line);
+}
+
 .js-cell .k {
   font-family: var(--font-mono);
   font-size: 10px;

@@ -39,15 +39,20 @@ import { CandidateTriageDrawer, candidateReportHref } from '../candidates/Candid
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSheet } from '../candidates/RoleSheet';
 import { getErrorMessage, trimOrUndefined, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
+import { formatCount, budgetTile } from '../../shared/metrics';
+import { RoleFunnelSummary } from './RoleFunnelSummary';
 
 const EMPTY_PROGRESS = { status: 'idle', total: 0, scored: 0, errors: 0, include_scored: false };
 const EMPTY_FETCH_PROGRESS = { status: 'idle', total: 0, fetched: 0, errors: 0 };
 const EMPTY_PRE_SCREEN_PROGRESS = { status: 'idle', total: 0, processed: 0, errors: 0, refresh: false };
 const EMPTY_CONFIRM = { open: false, action: null, bullets: [], loading: false, dryRunLoading: false };
+// Kanban columns + segmented stage filters. Labels track the shared canonical
+// funnel (Assessing, not "In assessment") so stage names read identically to
+// the role card and the funnel summary; countLabel is the per-column caption.
 const PIPELINE_STAGE_ORDER = [
   { key: 'applied', label: 'Applied', countLabel: 'new' },
   { key: 'invited', label: 'Invited', countLabel: 'awaiting' },
-  { key: 'in_assessment', label: 'In assessment', countLabel: 'live' },
+  { key: 'in_assessment', label: 'Assessing', countLabel: 'live' },
   { key: 'review', label: 'Review', countLabel: 'decision' },
   { key: 'advanced', label: 'Advanced', countLabel: 'with recruiter' },
 ];
@@ -1361,16 +1366,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       return Number.isFinite(score) && score < thresholdValue;
     }).length;
   }, [activeApplications, thresholdValue]);
-  // Handed-back count; matches the Advanced filter tab (off activeApplications).
-  const advancedCount = useMemo(() => activeApplications.filter(
-    (a) => String(a?.pipeline_stage || '').toLowerCase() === 'advanced').length, [activeApplications]);
 
-  // HANDOFF v2 §4 — Candidates tab KPI row matches canvas exactly:
-  // In pipeline · New CVs · Below threshold · Agent spend (with bar).
-  // The legacy "Assessment tasks" + "Interview focus" tiles are gone —
-  // task linkage shows in the role hero, interview focus is per-candidate.
-  // Spend pulls from /roles/{id}/agent/status (live), budget cap is the
-  // role.monthly_usd_budget_cents column.
+  // Role KPI row — role-scoped mirror of the org strip on Home / Jobs:
+  // In pipeline · New CVs · Below threshold · Awaiting you · Role budget · MTD.
+  // "Awaiting you" is this role's pending-decision queue; "Advanced" lives in
+  // the funnel summary above. Formatting comes from src/shared/metrics.
   const pipelineStats = useMemo(() => {
     const monthlySpentCents = Number(agentStatus?.monthly_spent_cents || 0);
     // Cap from the role record (refreshed on save); agent/status only echoes
@@ -1380,55 +1380,46 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       ?? agentStatus?.monthly_budget_cents
       ?? 0
     );
-    const spentDollars = Math.round(monthlySpentCents / 100);
-    const budgetDollars = Math.round(monthlyBudgetCents / 100);
-    const spendPct = monthlyBudgetCents > 0
-      ? Math.min(100, Math.round((monthlySpentCents / monthlyBudgetCents) * 100))
-      : null;
-    const eomProjection = spendPct != null && spendPct > 0
-      ? Math.round((spentDollars * 30) / Math.max(1, new Date().getDate()))
-      : null;
+    const budget = budgetTile(monthlySpentCents, monthlyBudgetCents);
+    const awaitingCount = Number(agentStatus?.pending_decisions || 0);
     return [
       {
         key: 'active',
         label: 'In pipeline',
-        value: String(role?.active_candidates_count || activeApplications.length || 0),
-        description: `${role?.stage_counts?.review || 0} in review`,
+        value: formatCount(role?.active_candidates_count || activeApplications.length || 0),
+        description: `${formatCount(role?.stage_counts?.review || 0)} in review`,
         highlight: true,
       },
       {
         key: 'unscored',
         label: 'New CVs',
-        value: String(unscoredApplications.length),
-        description: unscoredApplications.length > 0 ? 'Ready to score' : 'All visible CVs scored',
+        value: formatCount(unscoredApplications.length),
+        description: unscoredApplications.length > 0 ? 'ready to score' : 'all visible CVs scored',
       },
       {
         key: 'below-threshold',
         label: 'Below threshold',
-        value: String(belowThresholdCount),
-        description: thresholdValue != null ? `Auto-flagged at <${thresholdValue}` : 'Set a reject threshold',
+        value: formatCount(belowThresholdCount),
+        description: thresholdValue != null ? `flagged at < ${thresholdValue}` : 'set a reject threshold',
       },
       {
-        key: 'advanced',
-        label: 'Advanced',
-        value: String(advancedCount),
-        description: advancedCount > 0 ? 'Handed to recruiter' : 'None handed off yet',
-        accent: 'handoff',
+        key: 'awaiting',
+        label: 'Awaiting you',
+        value: formatCount(awaitingCount),
+        attn: awaitingCount > 0,
+        description: awaitingCount > 0 ? 'pending your call' : 'queue clear',
       },
       {
         key: 'spend',
-        label: 'Agent spend',
-        // value rendered specially below — we still emit a string fallback
-        // so the .v cell isn't empty when budget is 0.
-        value: budgetDollars > 0 ? `$${spentDollars}` : '—',
-        valueSuffix: budgetDollars > 0 ? `/ $${budgetDollars}` : null,
-        budgetPct: spendPct,
-        description: spendPct != null
-          ? `${spendPct}%${eomProjection != null && budgetDollars > 0 ? ` · projected $${eomProjection} EOM` : ''}`
-          : 'Cap not set',
+        label: 'Role budget · MTD',
+        value: budget.value,
+        valueSuffix: monthlyBudgetCents > 0 ? budget.unit : null,
+        budgetPct: monthlyBudgetCents > 0 ? budget.pct : null,
+        budgetOver: budget.over,
+        description: budget.sub,
       },
     ];
-  }, [activeApplications.length, advancedCount, agentStatus, belowThresholdCount, role, thresholdValue, unscoredApplications.length]);
+  }, [activeApplications.length, agentStatus, belowThresholdCount, role, thresholdValue, unscoredApplications.length]);
 
   const groupedApplications = useMemo(() => [
     ...PIPELINE_STAGE_ORDER.map((stage) => ({
@@ -2050,6 +2041,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       />
       <div className="page">
         <div className="mc-cockpit-main">
+        {/* Canonical six-stage funnel summary (shared with the role card). */}
+        <RoleFunnelSummary stageCounts={role?.stage_counts} />
+
         <RoleViewTabs activeView={activeView} />
 
         {activeView === 'pipeline' ? (
@@ -2338,18 +2332,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               {pipelineStats.map((item) => (
                 <div
                   key={item.key}
-                  className={`stat ${item.highlight ? 'hi' : ''} ${item.accent === 'handoff' ? 'is-handoff' : ''} ${item.budgetPct != null ? 'has-bar' : ''}`.trim()}
+                  className={`stat ${item.highlight ? 'hi' : ''} ${item.budgetPct != null ? 'has-bar' : ''}`.trim()}
                 >
                   <div className="k">{item.label}</div>
                   <div className="v">
-                    {item.value}
+                    <span style={item.attn ? { color: 'var(--purple)' } : undefined}>{item.value}</span>
                     {item.valueSuffix ? (
                       <span style={{ color: 'var(--mute)', fontSize: 14, marginLeft: 4 }}>{item.valueSuffix}</span>
                     ) : null}
                   </div>
                   {item.budgetPct != null ? (
                     <div className="stat-bar" aria-hidden="true">
-                      <i style={{ width: `${item.budgetPct}%` }} />
+                      <i style={{ width: `${item.budgetPct}%`, ...(item.budgetOver ? { background: 'var(--red)' } : null) }} />
                     </div>
                   ) : null}
                   <div className="d">{item.description}</div>

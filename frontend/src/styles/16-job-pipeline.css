@@ -1,5 +1,24 @@
 /* ================== JOB PIPELINE COCKPIT — Phase 4 ================== */
 
+/* Funnel summary strip on the role detail page — frames the shared
+   `.job-stats` six-stage stat row (reused from the home/jobs-list role card)
+   as a standalone card. The base `.job-stats` carries a top border meant to
+   divide it from a card header; inside this standalone card it sits alone, so
+   we drop that divider and the row's top padding. */
+.job-summary-card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 18px;
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 18px;
+}
+
+.job-summary-card .job-stats {
+  padding-top: 0;
+  border-top: none;
+}
+
 .mc-cockpit {
   display: grid;
   grid-template-columns: 1fr;
