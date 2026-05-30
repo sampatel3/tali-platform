@@ -1,0 +1,112 @@
+/* B2 funnel board — stage counts + an aligned decision row beneath. Shared
+   look with the home/jobs funnel (same tokens); the decision row is unique to
+   the role-detail surface where per-role pending decisions are available. */
+.funnel-board {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
+  padding: 14px 18px;
+  margin-bottom: 18px;
+}
+
+.fb-cap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--mute);
+  margin-bottom: 10px;
+}
+
+.fb-cap-aw {
+  color: var(--purple);
+  background: var(--purple-soft, color-mix(in oklab, var(--purple) 12%, var(--bg-2)));
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+
+.fb-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+}
+
+.fb-st {
+  text-align: center;
+  padding: 2px 4px;
+}
+
+/* The active pipeline | outcomes divider sits before Advanced. */
+.fb-st.is-out-start {
+  border-left: 1px solid var(--line);
+}
+
+.fb-v {
+  font-family: var(--font-display);
+  font-size: 22px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.fb-v.attn { color: var(--purple); }
+.fb-v.term { color: var(--mute); }
+
+.fb-l {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mute);
+  margin-top: 2px;
+}
+
+.fb-drow-hdr {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+  margin: 10px 0 6px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+
+.fb-drow {
+  align-items: start;
+}
+
+.fb-dcell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: center;
+}
+
+.fb-dchip {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.01em;
+  background: var(--purple-soft, color-mix(in oklab, var(--purple) 12%, var(--bg-2)));
+  color: var(--purple-2, var(--purple));
+  border-radius: 6px;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+
+.fb-dchip.is-reject {
+  background: color-mix(in oklab, var(--red, #ec5a6f) 14%, var(--bg-2));
+  color: color-mix(in oklab, var(--red, #ec5a6f) 80%, var(--ink));
+}
+
+.fb-dnone {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mute-2, var(--mute));
+}

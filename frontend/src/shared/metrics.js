@@ -4,23 +4,75 @@
 // strips — imports from here so labels, ordering, number/money formatting and
 // colour semantics stay identical wherever a number is surfaced.
 
-// Canonical funnel — forward order, always all six stages. `in_assessment`
-// is labelled "Assessing" and `review` is "Review" (never "In assessment" /
-// "In review"). `rejected` is the terminal bucket, rendered divided-off from
-// the active stages.
+// Canonical funnel — forward order. Stages are where a candidate IS;
+// `advanced` and `rejected` are terminal OUTCOMES, divided off from the
+// active flow. Keys are the display buckets the backend's role_pipeline_counts
+// emits (applied/scored split by whether the CV is scored; `invited` folds in
+// the old `in_assessment`; `completed` = the old `review`). "Assessing" is
+// gone — a candidate is Invited (assessment out) or Completed.
 export const PIPELINE_FUNNEL_STAGES = [
   { key: 'applied', label: 'Applied' },
+  { key: 'scored', label: 'Scored' },
   { key: 'invited', label: 'Invited' },
-  { key: 'in_assessment', label: 'Assessing' },
-  { key: 'review', label: 'Review' },
+  { key: 'completed', label: 'Completed' },
   { key: 'advanced', label: 'Advanced' },
   { key: 'rejected', label: 'Rejected' },
 ];
 
+// The four decision gates between stages — the agent's pending recommendations,
+// i.e. the "Awaiting you" breakdown. Each gate is bound to the stage it acts
+// on, so the funnel can render the pending count directly under that stage.
+// `types` are the AgentDecision.decision_type values that roll into the gate.
+export const FUNNEL_DECISION_GATES = [
+  { stage: 'applied', key: 'pre_screen', label: 'Pre-screen', short: 'pre-screen', tone: 'reject', types: ['skip_assessment_reject'] },
+  { stage: 'scored', key: 'send', label: 'Send assessment', short: 'send', tone: 'go', types: ['send_assessment', 'resend_assessment_invite'] },
+  { stage: 'scored', key: 'reject', label: 'Reject', short: 'reject', tone: 'reject', types: ['reject'] },
+  { stage: 'completed', key: 'advance', label: 'Advance', short: 'advance', tone: 'go', types: ['advance_to_interview'] },
+];
+
+// Roll a {decision_type: count} map into gate counts keyed by stage →
+// [{key,label,short,tone,count}], for the funnel's decision row. Accepts a
+// counts-by-type map or a list of decision objects ({decision_type}).
+export const decisionGatesByStage = (decisions) => {
+  let counts = {};
+  if (Array.isArray(decisions)) {
+    for (const d of decisions) {
+      const t = d?.decision_type;
+      if (t) counts[t] = (counts[t] || 0) + 1;
+    }
+  } else {
+    counts = decisions || {};
+  }
+  const byStage = {};
+  for (const gate of FUNNEL_DECISION_GATES) {
+    const count = gate.types.reduce((acc, t) => acc + (Number(counts[t]) || 0), 0);
+    if (!byStage[gate.stage]) byStage[gate.stage] = [];
+    byStage[gate.stage].push({ key: gate.key, label: gate.label, short: gate.short, tone: gate.tone, count });
+  }
+  return byStage;
+};
+
+// Bucket a single application row into a funnel stage — mirrors the backend's
+// funnel_bucket_for so the kanban / stage filters group candidates the same
+// way the funnel counts them. "Scored" = stage `applied` with a CV score.
+export const applicationFunnelBucket = (application) => {
+  const outcome = String(application?.application_outcome || '').toLowerCase();
+  if (outcome === 'rejected') return 'rejected';
+  const stage = String(application?.pipeline_stage || '').toLowerCase();
+  if (stage === 'applied') {
+    const scored = application?.cv_match_score != null || application?.pre_screen_score_100 != null;
+    return scored ? 'scored' : 'applied';
+  }
+  if (stage === 'invited' || stage === 'in_assessment') return 'invited';
+  if (stage === 'review') return 'completed';
+  if (stage === 'advanced') return 'advanced';
+  return 'applied';
+};
+
 // The open (in-flight) stages — everything except the terminal `rejected`
 // bucket. Summing these gives the "In pipeline" count, the same denominator
 // the role list's active_candidates_count represents.
-export const OPEN_FUNNEL_STAGE_KEYS = ['applied', 'invited', 'in_assessment', 'review', 'advanced'];
+export const OPEN_FUNNEL_STAGE_KEYS = ['applied', 'scored', 'invited', 'completed', 'advanced'];
 
 // "In pipeline" total from a stage_counts map — sum of the open stages.
 // Used by both the org strip (summed across roles) and the role strip so the
@@ -31,11 +83,11 @@ export const inPipelineFromStageCounts = (stageCounts) => {
 };
 
 // Tone for a funnel cell — drives the single purple / ink / mute rule:
-//   'attn' → needs you (Review with anyone waiting) → purple
-//   'term' → terminal bucket (Rejected) → muted
+//   'attn' → needs you (Completed with anyone awaiting a decision) → purple
+//   'term' → terminal outcome (Rejected) → muted
 //   null   → neutral volume → ink
 export const funnelStageTone = (key, value) => {
-  if (key === 'review' && Number(value) > 0) return 'attn';
+  if (key === 'completed' && Number(value) > 0) return 'attn';
   if (key === 'rejected') return 'term';
   return null;
 };

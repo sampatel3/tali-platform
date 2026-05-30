@@ -658,15 +658,46 @@ def apply_legacy_status_update(
     return app
 
 
+# Recruiter-facing funnel buckets (DISPLAY), derived from the stored
+# pipeline_stage + whether the CV has been scored. This is the single funnel
+# vocabulary surfaced on the home hub, jobs list and role page:
+#   Applied   — stage `applied`, CV not yet scored (= "new CVs / ready to score")
+#   Scored    — stage `applied`, CV scored, awaiting the send-assessment call
+#   Invited   — stage `invited` + `in_assessment` (assessment out / in progress)
+#   Completed — stage `review` (assessment done, awaiting advance/reject)
+#   Advanced  — stage `advanced` (handed to recruiter)            } outcomes,
+#   Rejected  — application_outcome `rejected` (across all stages) } outside the flow
+# No DB enum change — the stored pipeline_stage is unchanged; this only buckets
+# it for display.
+FUNNEL_BUCKETS = ("applied", "scored", "invited", "completed", "advanced", "rejected")
+
+
+def funnel_bucket_for(stage_key: str, is_scored: bool) -> str | None:
+    """Map a stored ``pipeline_stage`` (+ scored flag) to a display bucket.
+    Returns None for stages with no open-bucket (none today). ``rejected`` is an
+    outcome, counted separately by the callers below."""
+    if stage_key == "applied":
+        return "scored" if is_scored else "applied"
+    if stage_key in ("invited", "in_assessment"):
+        return "invited"
+    if stage_key == "review":
+        return "completed"
+    if stage_key == "advanced":
+        return "advanced"
+    return None
+
+
 def role_pipeline_counts(
     db: Session,
     *,
     organization_id: int,
     role_id: int,
 ) -> dict[str, int]:
+    scored_expr = CandidateApplication.cv_match_scored_at.isnot(None)
     rows = (
         db.query(
             CandidateApplication.pipeline_stage,
+            scored_expr,
             func.count(CandidateApplication.id),
         )
         .filter(
@@ -675,14 +706,14 @@ def role_pipeline_counts(
             CandidateApplication.deleted_at.is_(None),
             CandidateApplication.application_outcome == "open",
         )
-        .group_by(CandidateApplication.pipeline_stage)
+        .group_by(CandidateApplication.pipeline_stage, scored_expr)
         .all()
     )
-    counts = {stage: 0 for stage in PIPELINE_STAGES}
-    for stage, total in rows:
-        normalized = normalize_pipeline_key(stage)
-        if normalized in counts:
-            counts[normalized] = int(total or 0)
+    counts = {bucket: 0 for bucket in FUNNEL_BUCKETS}
+    for stage, is_scored, total in rows:
+        bucket = funnel_bucket_for(normalize_pipeline_key(stage), bool(is_scored))
+        if bucket:
+            counts[bucket] += int(total or 0)
     # `rejected` is an application_outcome, orthogonal to pipeline_stage, so it is
     # counted across all stages rather than via the open-stage query above.
     rejected_total = (
@@ -713,16 +744,18 @@ def role_pipeline_counts_bulk(
     e.g. the Hub's /agent/roles/breakdown — would N+1 without this.
     """
     counts: dict[int, dict[str, int]] = {
-        int(rid): {stage: 0 for stage in PIPELINE_STAGES} | {"rejected": 0}
+        int(rid): {bucket: 0 for bucket in FUNNEL_BUCKETS}
         for rid in role_ids
     }
     if not role_ids:
         return counts
 
+    scored_expr = CandidateApplication.cv_match_scored_at.isnot(None)
     open_rows = (
         db.query(
             CandidateApplication.role_id,
             CandidateApplication.pipeline_stage,
+            scored_expr,
             func.count(CandidateApplication.id),
         )
         .filter(
@@ -731,16 +764,16 @@ def role_pipeline_counts_bulk(
             CandidateApplication.deleted_at.is_(None),
             CandidateApplication.application_outcome == "open",
         )
-        .group_by(CandidateApplication.role_id, CandidateApplication.pipeline_stage)
+        .group_by(CandidateApplication.role_id, CandidateApplication.pipeline_stage, scored_expr)
         .all()
     )
-    for role_id, stage, total in open_rows:
+    for role_id, stage, is_scored, total in open_rows:
         bucket = counts.get(int(role_id))
         if bucket is None:
             continue
-        normalized = normalize_pipeline_key(stage)
-        if normalized in bucket:
-            bucket[normalized] = int(total or 0)
+        key = funnel_bucket_for(normalize_pipeline_key(stage), bool(is_scored))
+        if key:
+            bucket[key] += int(total or 0)
 
     # `rejected` is an application_outcome, orthogonal to pipeline_stage —
     # counted across all stages, mirroring role_pipeline_counts().

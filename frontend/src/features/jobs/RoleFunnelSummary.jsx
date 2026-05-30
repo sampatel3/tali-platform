@@ -1,31 +1,70 @@
 import React from 'react';
 
-import { PIPELINE_FUNNEL_STAGES, funnelStageTone, formatCount } from '../../shared/metrics';
+import { PIPELINE_FUNNEL_STAGES, funnelStageTone, formatCount, decisionGatesByStage } from '../../shared/metrics';
+import './RoleFunnelSummary.css';
 
-// Compact six-stage funnel summary (Applied → Invited → Assessing → Review →
-// Advanced → Rejected) for the role-detail header — the same canonical funnel
-// the home/jobs-list role card renders, so a role's standing reads identically
-// wherever it's surfaced. Counts come from the role GET's stage_counts
-// aggregate (whole pipeline, not the row-capped applications fetch). Review
-// goes purple when it needs you; Rejected is the muted, divided-off terminal.
-export const RoleFunnelSummary = ({ stageCounts }) => (
-  <div className="job-summary-card">
-    <div className="job-stats">
-      {PIPELINE_FUNNEL_STAGES.map((stage) => {
-        const value = Number(stageCounts?.[stage.key] || 0);
-        const tone = funnelStageTone(stage.key, value);
-        return (
-          <div key={stage.key} className={`js-cell${tone === 'term' ? ' is-term' : ''}`}>
-            <div className="k">{stage.label}</div>
+const OUTCOME_KEYS = new Set(['advanced', 'rejected']);
+
+// B2 funnel board for the role-detail header: stage counts on top
+// (Applied · Scored · Invited · Completed · Advanced │ Rejected), and — when
+// pending decisions are supplied — the agent's pending recommendation for each
+// stage aligned in the row directly beneath it (Pre-screen under Applied, Send
+// assessment / Reject under Scored, Advance under Completed). Advanced and
+// Rejected are terminal outcomes, divided off with no decision row. Stage
+// counts come from the role GET's stage_counts aggregate; `decisions` is the
+// list (or {type:count} map) of this role's pending agent decisions.
+export const RoleFunnelSummary = ({ stageCounts, decisions = null, awaitingTotal = null }) => {
+  const byStage = decisions ? decisionGatesByStage(decisions) : null;
+  return (
+    <div className="funnel-board">
+      <div className="fb-cap">
+        <span>Pipeline · this role</span>
+        {byStage && awaitingTotal != null && Number(awaitingTotal) > 0 ? (
+          <span className="fb-cap-aw">{formatCount(awaitingTotal)} awaiting you</span>
+        ) : null}
+      </div>
+
+      <div className="fb-grid fb-stages">
+        {PIPELINE_FUNNEL_STAGES.map((stage) => {
+          const value = Number(stageCounts?.[stage.key] || 0);
+          const tone = funnelStageTone(stage.key, value);
+          return (
             <div
-              className="v"
-              style={tone === 'attn' ? { color: 'var(--purple)' } : tone === 'term' ? { color: 'var(--mute)' } : undefined}
+              key={stage.key}
+              className={`fb-st${stage.key === 'advanced' ? ' is-out-start' : ''}${OUTCOME_KEYS.has(stage.key) ? ' is-out' : ''}`}
             >
-              {formatCount(value)}
+              <div className={`fb-v${tone === 'attn' ? ' attn' : ''}${tone === 'term' ? ' term' : ''}`}>{formatCount(value)}</div>
+              <div className="fb-l">{stage.label}</div>
             </div>
+          );
+        })}
+      </div>
+
+      {byStage ? (
+        <>
+          <div className="fb-drow-hdr">Awaiting your decision</div>
+          <div className="fb-grid fb-drow">
+            {PIPELINE_FUNNEL_STAGES.map((stage) => {
+              const gates = (byStage[stage.key] || []).filter((gate) => gate.count > 0);
+              return (
+                <div key={stage.key} className="fb-dcell">
+                  {OUTCOME_KEYS.has(stage.key) ? (
+                    <span className="fb-dnone">outcome</span>
+                  ) : gates.length ? (
+                    gates.map((gate) => (
+                      <span key={gate.key} className={`fb-dchip${gate.tone === 'reject' ? ' is-reject' : ''}`}>
+                        {formatCount(gate.count)} {gate.short}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="fb-dnone">—</span>
+                  )}
+                </div>
+              );
+            })}
           </div>
-        );
-      })}
+        </>
+      ) : null}
     </div>
-  </div>
-);
+  );
+};
