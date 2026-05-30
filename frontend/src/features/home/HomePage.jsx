@@ -50,17 +50,6 @@ const greetingFor = (user) => {
   return `${greetingForHour(new Date())}, ${name}`;
 };
 
-// Compact pending-by-type breakdown shown inside the purple header — the
-// glanceable version of what used to be a full body section. Dot colours
-// mirror the TypeBadge vocabulary; send_assessment uses lavender so it reads
-// on the purple slab. Escalate only shows when there's something to escalate.
-const HEADER_PENDING_BUCKETS = [
-  { key: 'advance', label: 'Advance', color: 'var(--green)', types: ['advance_to_interview'] },
-  { key: 'send_assessment', label: 'Send assessment', color: 'var(--purple-lav)', types: ['send_assessment', 'resend_assessment_invite'] },
-  { key: 'reject', label: 'Reject', color: 'var(--red)', types: ['reject'] },
-  { key: 'skip_assessment_reject', label: 'Pre-screen', color: 'var(--red-deep)', types: ['skip_assessment_reject'] },
-  { key: 'escalate', label: 'Escalate', color: 'var(--amber)', types: ['escalate_low_confidence'], hideWhenZero: true },
-];
 
 export const HomePage = ({ onNavigate, NavComponent }) => {
   const { user } = useAuth() || {};
@@ -297,33 +286,14 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     return list.reduce((acc, r) => acc + awaitingFromStageCounts(r?.stage_counts), 0);
   }, [rolesBreakdown]);
 
-  const headerPendingBuckets = useMemo(() => {
-    const counts = kpis.pending_by_type || {};
-    const sumFor = (types) => types.reduce((n, t) => n + (Number(counts[t]) || 0), 0);
-    return HEADER_PENDING_BUCKETS
-      .map((b) => ({ ...b, count: sumFor(b.types) }))
-      .filter((b) => !(b.hideWhenZero && b.count === 0));
-  }, [kpis.pending_by_type]);
-
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="home" onNavigate={onNavigate} /> : null}
       <AgentHeader
         breadcrumbs={[{ label: 'Home' }]}
-        kicker={`HUB · ${formatCount(pendingDecisions)} PENDING · ${formatCount(kpis.active_role_count)} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
+        kicker={`HUB · ${formatCount(orgAwaiting)} AWAITING YOU · ${formatCount(kpis.active_role_count)} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
         title={greetingFor(user)}
         subtitle="Every decision the agent makes that needs you. Approve, override, or teach it — your calls become its training signal. The long-term goal is full automation; this is where you keep the loop honest."
-        postTitle={headerPendingBuckets.length ? (
-          <div className="ah-pending-strip">
-            <span className="ah-pending-strip-label">Pending</span>
-            {headerPendingBuckets.map((b) => (
-              <span key={b.key} className="ah-pending-strip-item">
-                <span className="ah-pending-strip-dot" style={{ background: b.color }} aria-hidden="true" />
-                <b>{b.count}</b> {b.label}
-              </span>
-            ))}
-          </div>
-        ) : null}
       />
 
       <div className="home-body">

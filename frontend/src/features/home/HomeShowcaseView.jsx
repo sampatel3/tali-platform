@@ -104,7 +104,7 @@ const SHOWCASE_KPIS = [
 export const HomeShowcaseView = () => (
   <div>
     <AgentHeader
-      kicker="HUB · 3 PENDING · 5 ACTIVE ROLES"
+      kicker="HUB · 188 AWAITING YOU · 5 ACTIVE ROLES"
       title="Good morning"
       subtitle="Every decision the agent makes that needs you. Approve, override, or teach it — your calls become its training signal. The long-term goal is full automation; this is where you keep the loop honest."
       agent={SHOWCASE_AGENT}
