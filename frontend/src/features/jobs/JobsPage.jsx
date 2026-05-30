@@ -633,6 +633,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           });
           const budget = budgetTile(totalSpentCents, totalBudgetCents);
           return (
+            <div style={{ marginBottom: 18 }}>
             <KpiStrip
               columns={4}
               tiles={[
@@ -671,6 +672,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                 },
               ]}
             />
+            </div>
           );
         })()}
 

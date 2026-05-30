@@ -22,7 +22,8 @@ import {
 } from 'lucide-react';
 
 import { agent as agentApi, organizations as orgsApi } from '../../shared/api';
-import { PIPELINE_FUNNEL_STAGES, funnelStageTone, formatCount } from '../../shared/metrics';
+import { PIPELINE_FUNNEL_STAGES } from '../../shared/metrics';
+import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { useToast } from '../../context/ToastContext';
 import { pathForPage } from '../../app/routing';
 import { ScoreRing } from '../../shared/ui/ScoreRing';
@@ -293,11 +294,9 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction }) => (
 // The candidate-pipeline funnel for the scoped role, surfaced next to the
 // pending queue so a recruiter knows the denominator before advancing more
 // — "I've got 17 pending, but I've already advanced 10" is the question this
-// answers. Counts come from the same source the Jobs page uses
-// (role.stage_counts on /agent/roles/breakdown). Uses the shared canonical
-// funnel (PIPELINE_FUNNEL_STAGES) so labels/order/colour match the role card
-// and job-detail funnel exactly: forward order, Review goes purple when it
-// needs you, Rejected is the muted terminal bucket.
+// answers. Renders the shared B2 <FunnelBoard> (stages only — the org decision
+// breakdown lives in the hero) so it matches the role-detail funnel exactly.
+// Counts come from role.stage_counts on /agent/roles/breakdown.
 const PipelineStandingStrip = ({ rolesBreakdown, filters }) => {
   const { counts, scopeLabel } = useMemo(() => {
     const roles = Array.isArray(rolesBreakdown) ? rolesBreakdown : [];
@@ -316,33 +315,15 @@ const PipelineStandingStrip = ({ rolesBreakdown, filters }) => {
     }, {});
     return {
       counts: Object.keys(summed).length ? summed : null,
-      scopeLabel: 'All roles',
+      scopeLabel: 'all roles',
     };
   }, [rolesBreakdown, filters.role_id]);
 
   if (!counts) return null;
-  const items = PIPELINE_FUNNEL_STAGES.map((s) => {
-    const n = Number(counts[s.key]) || 0;
-    return { ...s, n, tone: funnelStageTone(s.key, n) };
-  });
-  // Nothing in the pipeline at all → no point showing an all-zero strip.
-  if (items.every((i) => i.n === 0)) return null;
+  // Nothing in the pipeline at all → no point showing an all-zero board.
+  if (PIPELINE_FUNNEL_STAGES.every((s) => (Number(counts[s.key]) || 0) === 0)) return null;
 
-  return (
-    <div className="rq-standing" role="group" aria-label={`Pipeline standing for ${scopeLabel}`}>
-      <span className="rq-standing-kicker">PIPELINE · {scopeLabel}</span>
-      <div className="rq-standing-items">
-        {items.map((i) => (
-          <span
-            key={i.key}
-            className={`rq-standing-item${i.tone === 'attn' ? ' is-emph' : ''}${i.tone === 'term' ? ' is-term' : ''}`}
-          >
-            <b>{formatCount(i.n)}</b> {i.label}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
+  return <FunnelBoard stageCounts={counts} scopeLabel={scopeLabel} />;
 };
 
 const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) => {

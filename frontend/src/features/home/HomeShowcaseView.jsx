@@ -9,6 +9,7 @@ import React from 'react';
 
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
+import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { ActivityFeed } from './ActivityFeed';
 import './home.css';
 
@@ -111,6 +112,11 @@ export const HomeShowcaseView = () => (
 
     <div className="home-body">
       <KpiStrip columns={4} tiles={SHOWCASE_KPIS} />
+
+      <FunnelBoard
+        scopeLabel="all roles"
+        stageCounts={{ applied: 312, scored: 184, invited: 9, completed: 4, advanced: 61, rejected: 1905 }}
+      />
 
       <ActivityFeed
         rows={SHOWCASE_FEED_ROWS}

@@ -40,7 +40,7 @@ import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSheet } from '../candidates/RoleSheet';
 import { getErrorMessage, trimOrUndefined, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
 import { formatCount, budgetTile, applicationFunnelBucket } from '../../shared/metrics';
-import { RoleFunnelSummary } from './RoleFunnelSummary';
+import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 
 const EMPTY_PROGRESS = { status: 'idle', total: 0, scored: 0, errors: 0, include_scored: false };
 const EMPTY_FETCH_PROGRESS = { status: 'idle', total: 0, fetched: 0, errors: 0 };
@@ -2045,11 +2045,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       />
       <div className="page">
         <div className="mc-cockpit-main">
-        {/* B2 funnel board — stage counts + pending decision per stage. */}
-        <RoleFunnelSummary
+        <FunnelBoard
           stageCounts={role?.stage_counts}
           decisions={pendingDecisionList}
           awaitingTotal={roleAgent?.pending ?? pendingDecisionList.length}
+          scopeLabel="this role"
         />
 
         <RoleViewTabs activeView={activeView} />
