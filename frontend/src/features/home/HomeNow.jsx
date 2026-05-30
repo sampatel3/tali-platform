@@ -325,7 +325,10 @@ const PipelineStandingStrip = ({ rolesBreakdown, filters }) => {
       const role = roles.find((r) => String(r.role_id) === String(filters.role_id));
       return {
         counts: role?.stage_counts || null,
-        scopeLabel: role?.short_name || role?.name || `Role #${filters.role_id}`,
+        // Show the full role name (not the abbreviated short_name) so the
+        // strip reads "PIPELINE · Specialist - Vulnerability Management"
+        // rather than "PIPELINE · Spe. -".
+        scopeLabel: role?.name || role?.short_name || `Role #${filters.role_id}`,
       };
     }
     // No role filter → sum each stage across every role for an org-wide funnel.
