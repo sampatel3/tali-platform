@@ -32,6 +32,7 @@ from .pricing_service import (
     raw_cost_usd_micro,
     feature_pricing,
 )
+from .mainspring_metering_shadow import shadow_compare
 
 logger = logging.getLogger("taali.usage_metering")
 
@@ -132,6 +133,18 @@ def record_event(
         cache_creation_1h_tokens=cache_creation_1h_tokens,
         model=model,
         service_tier=service_tier,
+    )
+    # ADR-0010 cut #1b: shadow-price the same tokens through mainspring's
+    # vendored seam and log a parity diff. No-op unless MAINSPRING_METERING_SHADOW
+    # is set; never raises — must not affect the live call.
+    shadow_compare(
+        model=model,
+        tali_cost_usd_micro=cost_usd_micro,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_creation_tokens=cache_creation_tokens,
+        cache_creation_1h_tokens=cache_creation_1h_tokens,
     )
     charged = credits_charged(
         feature=feature_enum, cost_usd_micro=cost_usd_micro, cache_hit=cache_hit

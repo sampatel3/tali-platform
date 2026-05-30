@@ -126,6 +126,10 @@ class Settings(BaseSettings):
     # Base URL of the mainspring deployment exposing /api/v1/ingest/*. Empty =
     # shadow mode (drain logs what it would send, leaves rows pending).
     MAINSPRING_INGEST_URL: str = ""
+    # ADR-0010 metering convergence (cut #1b): when True, every metered call is
+    # ALSO priced through mainspring's vendored seam and a parity diff is logged
+    # (log-only, no behaviour change) — the at-parity evidence before any cutover.
+    MAINSPRING_METERING_SHADOW: bool = False
     # Brand service token for the ingest API (sent as Bearer). Empty in shadow.
     MAINSPRING_BRAND_TOKEN: str = ""
     # How far back each sweep looks for newly-resolved decisions / teach
