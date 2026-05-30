@@ -438,6 +438,11 @@ class RubricScorer:
             response = self._client.messages.create(
                 model=self._model,
                 max_tokens=_MAX_TOKENS_PER_DIMENSION,
+                # temperature=0 makes the authoritative assessment score
+                # reproducible: two candidates with the same evidence get the
+                # same grade (NORTH_STAR principle 4). Without it the Anthropic
+                # default (1.0) makes identical submissions score differently.
+                temperature=0,
                 system=_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_prompt}],
                 metering=self._metering(dimension_id),
