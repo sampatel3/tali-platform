@@ -107,70 +107,10 @@
   color: var(--mute-2);
 }
 
-/* ---------------- KPI strip ---------------- */
-.rq-kpis {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 12px;
-}
-
-/* Decision-Hub health row — secondary by position; sits just under the
-   primary org strip and is held to two columns on wide screens so it reads
-   as a sub-row, not a continuation of the four-tile strip. */
-.rq-kpis-secondary {
-  margin-top: 12px;
-}
-
-@media (min-width: 900px) {
-  .rq-kpis-secondary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-
-.rq-kpi {
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 16px 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.rq-kpi .l {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  color: var(--mute);
-  text-transform: uppercase;
-}
-
-.rq-kpi .v {
-  font-family: var(--font-display);
-  font-size: 30px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  color: var(--ink);
-  line-height: 1;
-}
-
-.rq-kpi .v em {
-  color: var(--purple);
-  font-style: normal;
-}
-
-.rq-kpi .d {
-  font-size: 12px;
-  color: var(--mute);
-}
-
-.rq-kpi-emph {
-  background: linear-gradient(
-    180deg,
-    color-mix(in oklab, var(--purple) 7%, var(--bg-2)),
-    var(--bg-2)
-  );
-  border-color: color-mix(in oklab, var(--purple) 28%, var(--line));
-}
-
+/* ---------------- KPI strip ----------------
+   The hub's KPI tiles moved to the shared <KpiStrip> (src/shared/ui/KpiStrip)
+   so the home + jobs strips stay identical. `.rq-bar` stays — HomeRoles still
+   uses it for its inline budget bars. */
 .rq-bar {
   height: 4px;
   border-radius: 3px;

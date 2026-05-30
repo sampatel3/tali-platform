@@ -43,21 +43,6 @@
   margin-top: 5px;
 }
 
-.mc-jobs-kpi-bar {
-  height: 4px;
-  border-radius: 3px;
-  background: var(--bg-3);
-  overflow: hidden;
-  margin-top: 7px;
-}
-
-.mc-jobs-kpi-bar > i {
-  display: block;
-  height: 100%;
-  border-radius: 3px;
-  background: var(--purple);
-}
-
 /* ================== CANDIDATE REPORT SNAPSHOT — Phase 6.3 ================== */
 
 .mc-report-snapshot {
