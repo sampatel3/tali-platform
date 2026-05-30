@@ -763,6 +763,10 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               const lastRoleActivity = role?.last_candidate_activity_at || role?.updated_at || orgData?.workable_last_sync_at || null;
               const roleBadgeLabel = getRoleBadgeLabel(role);
               const agentEnabled = Boolean(role?.agentic_mode_enabled);
+              // Soft pause keeps agentic_mode_enabled=true but stamps
+              // agent_paused_at, so an enabled-but-paused role must read
+              // "AGENT PAUSED", not "AGENT ON".
+              const agentPaused = agentEnabled && Boolean(role?.agent_paused_at);
               // Live agent status from the /roles/{id}/agent/status fan-out.
               // When loaded, the indicator shows the canvas-spec
               // "AGENT ON · $X/$Y"; otherwise falls back to cap-only.
@@ -860,7 +864,13 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                         ].filter(Boolean).join(' · ') || 'No metadata yet'}
                       </div>
                     </div>
-                    {agentEnabled ? (
+                    {agentPaused ? (
+                      <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>
+                        {agentBudget > 0
+                          ? `AGENT PAUSED · cap $${Math.round(agentBudget)}`
+                          : 'AGENT PAUSED'}
+                      </div>
+                    ) : agentEnabled ? (
                       <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--purple)', whiteSpace: 'nowrap' }}>
                         {agentSpent != null && agentBudget > 0
                           ? `AGENT ON · $${Math.round(agentSpent)}/$${Math.round(agentBudget)}`

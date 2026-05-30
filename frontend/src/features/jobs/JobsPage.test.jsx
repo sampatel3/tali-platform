@@ -18,6 +18,11 @@ vi.mock('../../shared/api', () => ({
   tasks: {
     list: vi.fn(),
   },
+  agent: {
+    status: vi.fn(),
+    pauseAll: vi.fn(),
+    resumeAll: vi.fn(),
+  },
 }));
 
 import * as apiClient from '../../shared/api';
@@ -52,6 +57,7 @@ describe('JobsPage Workable sync states', () => {
     apiClient.roles.list.mockResolvedValue({ data: baseRoles });
     apiClient.organizations.get.mockResolvedValue({ data: baseOrg });
     apiClient.tasks.list.mockResolvedValue({ data: [] });
+    apiClient.agent.status.mockResolvedValue({ data: { paused_at: null, pending_decisions: 0 } });
   });
 
   it('reattaches to an active sync on first load', async () => {
@@ -145,5 +151,25 @@ describe('JobsPage Workable sync states', () => {
     fireEvent.click(await screen.findByRole('button', { name: '+ New role' }));
 
     expect(await screen.findByText('Set up a role in three quick steps.')).toBeInTheDocument();
+  });
+
+  it('shows AGENT PAUSED (not AGENT ON) for an enabled-but-paused role', async () => {
+    // Soft pause keeps agentic_mode_enabled=true and stamps agent_paused_at.
+    apiClient.roles.list.mockResolvedValue({
+      data: [{
+        ...baseRoles[0],
+        agentic_mode_enabled: true,
+        agent_paused_at: '2026-05-30T18:53:00Z',
+        monthly_usd_budget_cents: 5000,
+      }],
+    });
+    apiClient.organizations.getWorkableSyncStatus.mockResolvedValue({
+      data: { run_id: null, sync_in_progress: false, workable_last_sync_at: '2026-04-25T13:00:00Z', workable_last_sync_status: 'success', workable_last_sync_summary: {} },
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    expect(await screen.findByText(/AGENT PAUSED/)).toBeInTheDocument();
+    expect(screen.queryByText(/AGENT ON/)).not.toBeInTheDocument();
   });
 });
