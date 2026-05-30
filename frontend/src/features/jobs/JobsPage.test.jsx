@@ -18,6 +18,10 @@ vi.mock('../../shared/api', () => ({
   tasks: {
     list: vi.fn(),
   },
+  agent: {
+    status: vi.fn(),
+    orgStatus: vi.fn(),
+  },
 }));
 
 import * as apiClient from '../../shared/api';
@@ -52,6 +56,10 @@ describe('JobsPage Workable sync states', () => {
     apiClient.roles.list.mockResolvedValue({ data: baseRoles });
     apiClient.organizations.get.mockResolvedValue({ data: baseOrg });
     apiClient.tasks.list.mockResolvedValue({ data: [] });
+    apiClient.agent.status.mockResolvedValue({ data: {} });
+    apiClient.agent.orgStatus.mockResolvedValue({
+      data: { org_budget_spent_cents: 4200, org_budget_cap_cents: 9000 },
+    });
   });
 
   it('reattaches to an active sync on first load', async () => {
