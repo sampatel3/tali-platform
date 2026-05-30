@@ -12,7 +12,7 @@ directly with a synthetic AgentRun. They cover:
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import event
@@ -1178,6 +1178,9 @@ def test_auto_promote_role_still_auto_executes_advance(db):
     db.flush()
     app = _make_application(db, org=org, role=role, name="Strong", email="s@x.test", taali=85.0)
     run = _make_agent_run(db, role)
+    # The agent evaluated policy first (the normal flow), so the engine verdict
+    # is captured and the advance is on-policy — TAA-22's guard lets it auto-execute.
+    run.__engine_verdicts__ = {int(app.id): "advance_to_interview"}
 
     with patch.object(tool_registry, "advance_stage") as mock_advance:
         result = tool_registry.dispatch(
@@ -1227,3 +1230,83 @@ def test_auto_execute_decision_refuses_irreversible_reject(db):
                 db, role=role, decision=queued, decision_type="reject"
             )
     assert not mock_reject.called
+
+
+# ---------------------------------------------------------------------------
+# Off-policy auto-execution guard (TAA-22 / AUDIT_02 P2-TALI-01)
+# ---------------------------------------------------------------------------
+
+
+def test_is_on_policy_helper():
+    """The pure guard: hire-relevant types must match the captured engine
+    verdict; operational types are exempt; missing/mismatched fails safe."""
+    run = MagicMock()
+    run.__engine_verdicts__ = {7: "advance_to_interview"}
+    # advance matches the captured engine verdict -> on-policy
+    assert tool_registry._is_on_policy(run, 7, "advance_to_interview") == (True, "advance_to_interview")
+    # advance with NO captured verdict -> fail safe (off-policy)
+    assert tool_registry._is_on_policy(run, 99, "advance_to_interview") == (False, None)
+    # advance vs a captured reject verdict -> off-policy
+    run.__engine_verdicts__ = {8: "reject"}
+    assert tool_registry._is_on_policy(run, 8, "advance_to_interview")[0] is False
+    # reject / send / resend are exempt (human-confirm or operational) -> on-policy
+    assert tool_registry._is_on_policy(run, 8, "reject") == (True, None)
+    assert tool_registry._is_on_policy(run, 99, "resend_assessment_invite") == (True, None)
+
+
+def test_off_policy_advance_is_withheld_from_auto_execute(db):
+    """With ``auto_promote=True`` but the deterministic engine verdict for the
+    application being ``reject``, an agent that queues ``advance_to_interview``
+    must NOT auto-execute the stage move — it is off-policy and routes to human
+    review. (TAA-22 / AUDIT_02 P2-TALI-01.)"""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.auto_promote = True
+    db.flush()
+    app = _make_application(db, org=org, role=role, name="Mid", email="m@x.test", taali=55.0)
+    run = _make_agent_run(db, role)
+    # The engine said reject this cycle; the LLM is trying to advance.
+    run.__engine_verdicts__ = {int(app.id): "reject"}
+
+    with patch.object(tool_registry.advance_stage, "run") as mock_advance:
+        result = tool_registry.dispatch(
+            "queue_advance_decision",
+            {
+                "application_id": app.id,
+                "reasoning": "looks strong",
+                "evidence": {"taali_score": 55},
+                "confidence": 0.8,
+            },
+            db=db, agent_run=run, role=role,
+        )
+
+    assert not mock_advance.called, "off-policy advance must not auto-execute"
+    assert result["off_policy_withheld"] is True
+    assert result["status"] == "pending"
+
+
+def test_on_policy_advance_auto_executes(db):
+    """When the queued type matches the engine verdict, auto_promote still
+    auto-executes (the guard only blocks off-policy)."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.auto_promote = True
+    db.flush()
+    app = _make_application(db, org=org, role=role, name="Strong", email="s@x.test", taali=88.0)
+    run = _make_agent_run(db, role)
+    run.__engine_verdicts__ = {int(app.id): "advance_to_interview"}
+
+    with patch.object(tool_registry.advance_stage, "run") as mock_advance:
+        result = tool_registry.dispatch(
+            "queue_advance_decision",
+            {
+                "application_id": app.id,
+                "reasoning": "clear advance",
+                "evidence": {"taali_score": 88},
+                "confidence": 0.95,
+            },
+            db=db, agent_run=run, role=role,
+        )
+
+    assert mock_advance.called, "on-policy advance with auto_promote should auto-execute"
+    assert result["off_policy_withheld"] is False

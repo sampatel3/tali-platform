@@ -9,6 +9,7 @@ actions (which want an ``Actor``).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
@@ -1315,6 +1316,52 @@ _AUTO_TOGGLE_FOR_DECISION_TYPE: dict[str, str] = {
 }
 
 
+# Off-policy auto-execution guard (TAA-22 / AUDIT_02 P2-TALI-01).
+#
+# "Deterministic verdict, never LLM" is structural in the mainspring
+# substrate (the reasoner's return type can't carry a verdict). On this
+# agent surface it was convention-only: the LLM's queue_* tools hardcode a
+# decision_type and (with the auto toggle on) auto-execute, without any
+# server-side check that the queued type matches what the deterministic
+# engine would emit. This binds the IRREVERSIBLE step to the engine: a
+# hire-relevant decision_type is only auto-executed if it matches the
+# engine verdict captured this cycle by evaluate_policy. The vocab aligns
+# with decision_policy/engine.py DECISION_POINT_ORDER.
+#
+# Scope: only the auto-executing HIRE-PROGRESSION verdict (advance) is bound
+# here. reject / skip_assessment_reject are already held for human confirmation
+# (TAA-11), and send_assessment / resend are operational (re-sendable, not a
+# hire/no-hire verdict) — so they stay exempt to avoid withholding legitimate
+# invite sends. advance is the one irreversible-ish auto-executed verdict left
+# that an off-policy LLM could push, so it must match the engine.
+_ENGINE_VERDICT_EQUIV: dict[str, frozenset[str]] = {
+    "advance_to_interview": frozenset({"advance_to_interview"}),
+}
+
+
+def _engine_verdict_for(agent_run: AgentRun, application_id: int) -> Optional[str]:
+    """The deterministic engine verdict captured for this application this
+    cycle by ``evaluate_policy`` (``__engine_verdicts__`` is attached to the
+    AgentRun instance; it does not persist)."""
+    verdicts = getattr(agent_run, "__engine_verdicts__", None) or {}
+    return verdicts.get(int(application_id))
+
+
+def _is_on_policy(
+    agent_run: AgentRun, application_id: int, decision_type: str
+) -> tuple[bool, Optional[str]]:
+    """Returns (on_policy, engine_decision_type). Decision types that aren't a
+    hire/no-hire verdict (e.g. resend_assessment_invite) are exempt. For
+    hire-relevant types the queued type must match the captured engine
+    verdict; a missing or mismatched verdict fails SAFE -> not on-policy, so
+    auto-execution is withheld and the decision routes to human review."""
+    expected = _ENGINE_VERDICT_EQUIV.get(decision_type)
+    if expected is None:
+        return True, None
+    engine_dt = _engine_verdict_for(agent_run, application_id)
+    return (engine_dt in expected), engine_dt
+
+
 # Human-confirm rail (TAA-11 / AUDIT_01 P1-TALI-03).
 #
 # A reject is IRREVERSIBLE: the candidate's side effect is a Workable
@@ -1469,6 +1516,26 @@ def _queue(
     # recommendation is queued; the recruiter confirms the Workable
     # disqualify with one click. See ``_HUMAN_CONFIRM_REQUIRED_DECISION_TYPES``.
     human_confirm_required = decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
+    # TAA-22 (P2-TALI-01): bind the irreversible auto-execution to the
+    # deterministic engine. A hire-relevant decision_type is only
+    # auto-executed if it matches the engine verdict captured this cycle by
+    # evaluate_policy; a missing/mismatched verdict fails SAFE -> the decision
+    # routes to human review instead of auto-executing off-policy.
+    on_policy, engine_verdict = _is_on_policy(
+        agent_run, int(args["application_id"]), decision_type
+    )
+    toggle_on = bool(auto_attr and bool(getattr(role, auto_attr, False)))
+    off_policy_withheld = bool(
+        toggle_on and not human_confirm_required and just_created
+        and str(decision.status) == "pending" and not on_policy
+    )
+    if off_policy_withheld:
+        logging.getLogger("taali.agent.policy").warning(
+            "off_policy_auto_execute_withheld role_id=%s app_id=%s "
+            "queued=%s engine=%s run_id=%s",
+            role.id, args["application_id"], decision_type,
+            engine_verdict, agent_run.id,
+        )
     # Only auto-execute a freshly-created, still-pending decision. A dedup
     # return (existing pending, recently-discarded, or a prior_approved C4
     # match) carries _just_created=False and may already be resolved —
@@ -1477,6 +1544,7 @@ def _queue(
     if (
         auto_attr
         and not human_confirm_required
+        and on_policy
         and bool(getattr(role, auto_attr, False))
         and just_created
         and str(decision.status) == "pending"
@@ -1497,6 +1565,10 @@ def _queue(
             and auto_attr
             and bool(getattr(role, auto_attr, False))
         ),
+        # Surface the off-policy guard (TAA-22): True when the toggle would
+        # have auto-executed but the queued decision_type did not match the
+        # deterministic engine verdict, so it was held pending for review.
+        "off_policy_withheld": off_policy_withheld,
     }
 
 
@@ -1586,6 +1658,15 @@ def _tool_evaluate_policy(
         metering_context=metering_context,
         skip_cache=skip_cache,
     )
+    # TAA-22: record the deterministic engine verdict for this application so
+    # the queue_* tools can bind an auto-executed decision to it (see
+    # _is_on_policy). Attached to the AgentRun instance for this cycle; not
+    # persisted.
+    _verdicts = getattr(agent_run, "__engine_verdicts__", None)
+    if _verdicts is None:
+        _verdicts = {}
+        agent_run.__engine_verdicts__ = _verdicts  # type: ignore[attr-defined]
+    _verdicts[int(application_id)] = str(verdict.decision_type)
     # Telemetry: structured log so the Hub's signals dashboard can
     # bucket evaluations per (org, role, decision_type, revision).
     logging.getLogger("taali.policy.evaluation").info(
