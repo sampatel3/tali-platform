@@ -144,6 +144,11 @@ class RoleBreakdownRow(BaseModel):
     paused: bool
     paused_reason: Optional[str]
     agentic_mode_enabled: bool
+    # Live candidate-pipeline standing for the role (same source the Jobs page
+    # uses): {applied, invited, in_assessment, review, advanced, rejected}.
+    # Lets the Hub show "already advanced N" context next to the pending queue
+    # so a recruiter knows the denominator before advancing more.
+    stage_counts: dict[str, int] = {}
 
 
 # ---------------------------------------------------------------------------
