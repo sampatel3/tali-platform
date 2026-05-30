@@ -20,6 +20,7 @@ from ..models.organization import Organization
 from ..models.policy_version import PolicyVersion
 from ..models.rubric_revision import RubricRevision
 from ..models.role import Role
+from .audit_examples import load_audit_examples
 from .bias_audit import AuditExample
 from .engine import load_active_policy
 from .feedback_aggregator import aggregate_signals
@@ -116,13 +117,22 @@ def run_for_org(
 ) -> NightlyResult:
     """Run the nightly retune for one org.
 
+    Auto-apply (flipping a learned proposal live without a human approval
+    click) is **operator-opt-in** via
+    ``Organization.workspace_settings.decision_policy_auto_apply`` and is
+    OFF by default. When it is off, the proposal is always written inactive
+    for human review and ``audit_examples`` is irrelevant.
+
     ``audit_examples`` is the protected-attribute holdout the bias audit
-    runs against when auto-apply is enabled. Protected attributes are
+    runs against when auto-apply IS enabled. Protected attributes are
     deliberately kept out of production data (see
     ``graph_writeback.sensitivity``), so this is a *curated compliance
     set* supplied by the caller rather than something we can derive from
-    the warehouse. When it's absent the auto-apply gate fails closed
-    (cold start) and the proposal is written inactive for human review.
+    the warehouse. ``run_for_all_orgs`` now resolves it per-org via
+    ``audit_examples.load_audit_examples`` (TAA-28) so the EEOC bias audit
+    runs on real data when a holdout is configured. When it's absent the
+    auto-apply gate fails closed (cold start) and the proposal is written
+    inactive for human review — the same safe behaviour as before.
     """
     org = (
         db.query(Organization)
@@ -269,7 +279,26 @@ def run_for_all_orgs(db: Session) -> list[NightlyResult]:
     results: list[NightlyResult] = []
     for oid in org_ids:
         try:
-            results.append(run_for_org(db, organization_id=oid))
+            # TAA-28: resolve the org's compliance-curated bias-audit
+            # holdout and thread it through so ``evaluate_auto_apply``'s
+            # EEOC bias audit runs on REAL data when auto-apply is enabled.
+            # Unconfigured orgs resolve to ``[]`` → the gate fails closed
+            # (cold start), which is the safe default. Auto-apply itself
+            # stays opt-in per ``decision_policy_auto_apply`` (off by
+            # default), so this never activates a policy on its own.
+            org = (
+                db.query(Organization)
+                .filter(Organization.id == oid)
+                .one_or_none()
+            )
+            audit_examples = (
+                load_audit_examples(org) if org is not None else []
+            )
+            results.append(
+                run_for_org(
+                    db, organization_id=oid, audit_examples=audit_examples
+                )
+            )
         except Exception as exc:
             logger.exception("nightly retune crashed for org_id=%s", oid)
             # run_for_org adds/flushes rows; a mid-flight failure leaves

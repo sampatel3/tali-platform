@@ -19,7 +19,7 @@ from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 from . import calibration as calibration_mod
 
 
-PROMPT_VERSION = "agent.v9.effective-reject-threshold.2026-05-24"
+PROMPT_VERSION = "agent.v10.reject-human-confirm.2026-05-30"
 
 
 def _render_bucketed_criteria(role: Role) -> str:
@@ -142,6 +142,10 @@ ALLOWLIST — you may ONLY call tools in this list:
   QUEUE FOR RECRUITER APPROVAL:
   - queue_advance_decision, queue_reject_decision,
     queue_skip_assessment_reject_decision
+  - A reject (queue_reject_decision / queue_skip_assessment_reject_decision)
+    is IRREVERSIBLE and ALWAYS waits for a recruiter's one-click confirm —
+    it is never auto-executed, even on roles configured to auto-act. Queue
+    the recommendation with cited evidence; the recruiter confirms.
 
   TERMINAL:
   - agent_run_complete: signal end of cycle (always call this last)

@@ -1080,3 +1080,150 @@ def test_approve_skip_assessment_reject_sets_outcome_rejected(db):
 
     db.refresh(app)
     assert app.application_outcome == "rejected"
+
+
+# ---------------------------------------------------------------------------
+# Human-confirm rail for irreversible auto-reject (TAA-11 / P1-TALI-03)
+# ---------------------------------------------------------------------------
+
+
+def test_auto_reject_role_does_not_disqualify_without_human_confirm(db):
+    """With ``role.auto_reject=True`` the agent's queued reject must NOT
+    fire the irreversible Workable disqualify. The recommendation is
+    recorded and left ``pending`` for a recruiter's one-click confirmation;
+    no ``reject_application.run`` (→ disqualify_candidate_in_workable) is
+    invoked. (TAA-11 / AUDIT_01 P1-TALI-03.)"""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.auto_reject = True  # opt-in still cannot auto-fire an irreversible reject
+    db.flush()
+    app = _make_application(db, org=org, role=role, name="Low", email="l@x.test", taali=40.0)
+    run = _make_agent_run(db, role)
+
+    # Patch at the tool_registry binding so any auto-execute attempt is caught.
+    with patch.object(tool_registry.reject_application, "run") as mock_reject:
+        result = tool_registry.dispatch(
+            "queue_reject_decision",
+            {
+                "application_id": app.id,
+                "reasoning": "TAALI 40 < threshold; missing Kubernetes.",
+                "evidence": {"taali_score": 40},
+                "confidence": 0.9,
+            },
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    # No Workable disqualify side effect.
+    assert not mock_reject.called, (
+        "auto_reject=True must NOT auto-execute the irreversible Workable "
+        "disqualify; it requires explicit human confirmation"
+    )
+    # The decision is queued, pending, and flagged for human confirmation.
+    assert result["status"] == "pending"
+    assert result["decision_type"] == "reject"
+    assert result["human_confirm_required"] is True
+
+    decision = db.query(AgentDecision).filter(AgentDecision.id == result["decision_id"]).one()
+    assert decision.status == "pending"
+    assert decision.resolved_at is None
+
+    # The application is untouched — still open, not disqualified.
+    db.refresh(app)
+    assert app.application_outcome == "open"
+
+
+def test_auto_reject_role_does_not_disqualify_skip_assessment_reject(db):
+    """Same rail for the more impactful skip-assessment reject: a candidate
+    cut at the CV/pre-screen stage is just as irreversible, so an
+    ``auto_reject`` role must still leave it pending for human confirm."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.auto_reject = True
+    db.flush()
+    app = _make_application(
+        db, org=org, role=role, name="VeryLow", email="vl@x.test", taali=20.0,
+        pipeline_stage="applied",
+    )
+    run = _make_agent_run(db, role)
+
+    with patch.object(tool_registry.reject_application, "run") as mock_reject:
+        result = tool_registry.dispatch(
+            "queue_skip_assessment_reject_decision",
+            {
+                "application_id": app.id,
+                "reasoning": "CV-match 20; not worth the assessment cost.",
+                "evidence": {"cv_match_score": 20},
+                "confidence": 0.92,
+            },
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert not mock_reject.called
+    assert result["status"] == "pending"
+    assert result["human_confirm_required"] is True
+    db.refresh(app)
+    assert app.application_outcome == "open"
+
+
+def test_auto_promote_role_still_auto_executes_advance(db):
+    """Control: the rail is reject-specific. A reversible advance under
+    ``auto_promote=True`` must still auto-execute (stage move), proving the
+    human-confirm rail didn't break the reversible auto path."""
+    org = _make_org(db)
+    role = _make_role(db, org)  # auto_promote=True via _make_role default
+    db.flush()
+    app = _make_application(db, org=org, role=role, name="Strong", email="s@x.test", taali=85.0)
+    run = _make_agent_run(db, role)
+
+    with patch.object(tool_registry, "advance_stage") as mock_advance:
+        result = tool_registry.dispatch(
+            "queue_advance_decision",
+            {
+                "application_id": app.id,
+                "reasoning": "TAALI 85; strong on all must-haves.",
+                "evidence": {"taali_score": 85},
+                "confidence": 0.9,
+            },
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert mock_advance.run.called, "reversible advance must still auto-execute under auto_promote"
+    # advance is not on the human-confirm rail.
+    assert result.get("human_confirm_required") is False
+
+
+def test_auto_execute_decision_refuses_irreversible_reject(db):
+    """Defense-in-depth: even if a future caller routes a reject into
+    ``_auto_execute_decision`` directly, it refuses rather than firing the
+    disqualify, so the rail holds at the side-effect boundary."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(db, org=org, role=role, name="Low", email="l2@x.test", taali=40.0)
+    run = _make_agent_run(db, role)
+
+    queued = queue_decision.run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="reject",
+        reasoning="Below threshold.",
+        confidence=0.8,
+        model_version="m",
+        prompt_version="p",
+    )
+    db.flush()
+
+    with patch.object(tool_registry.reject_application, "run") as mock_reject:
+        with pytest.raises(ValueError):
+            tool_registry._auto_execute_decision(
+                db, role=role, decision=queued, decision_type="reject"
+            )
+    assert not mock_reject.called

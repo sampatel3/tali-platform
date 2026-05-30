@@ -7,6 +7,14 @@ cv_score_orchestrator recorded a single post-call usage_event. That
 missed errored/retried calls and left usage_event ~73% short of actual
 Anthropic spend (claude_call_log proved it on 2026-05-22). Now the
 wrapper records every call; the orchestrator records only cache hits.
+
+The cv_match score call now goes through the forced-tool-use gateway
+(``generate_structured(..., use_tool_use=True)``): the model emits
+``CVMatchResult`` as the ``emit_cv_match_result`` tool's ``.input`` dict,
+not as a ``content[0].text`` JSON blob. The stub Anthropic responses below
+therefore return a ``tool_use`` block whose ``.input`` is the parsed dict —
+the shape the gateway's ``_extract_tool_input`` reads — rather than a text
+block (which the gateway would reject as "did not emit the expected tool").
 """
 from __future__ import annotations
 
@@ -16,17 +24,23 @@ from typing import Any
 from app.cv_matching import archetype_synthesizer
 from app.cv_matching.runner import run_cv_match
 from app.cv_matching.schemas import Priority, RequirementInput
+from app.llm.structured import _default_tool_name
 from app.models.claude_call_log import ClaudeCallLog
 from app.models.organization import Organization
 from app.models.usage_event import UsageEvent
 from app.services.metered_anthropic_client import MeteredAnthropicClient
 
+# The tool name the gateway forces for CVMatchResult — derived once so the
+# stub block names match what _extract_tool_input looks for.
+from app.cv_matching.schemas import CVMatchResult as _CVMatchResult
 
-def _valid_cv_match_json() -> str:
-    import json
+_CV_MATCH_TOOL = _default_tool_name(_CVMatchResult)
+
+
+def _valid_cv_match_payload() -> dict:
     from app.cv_matching import PROMPT_VERSION
 
-    return json.dumps({
+    return {
         "prompt_version": PROMPT_VERSION,
         "dimension_scores": {
             "skills_coverage": 80.0, "skills_depth": 75.0, "title_trajectory": 70.0,
@@ -41,7 +55,7 @@ def _valid_cv_match_json() -> str:
         }],
         "matching_skills": ["Python"], "missing_skills": [],
         "experience_highlights": [], "concerns": [], "summary": "Strong fit.",
-    })
+    }
 
 
 @dataclass
@@ -53,27 +67,35 @@ class _Usage:
 
 
 @dataclass
+class _ToolUseBlock:
+    """A forced-tool-use content block: the gateway reads ``.input``."""
+    input: dict
+    name: str
+    type: str = "tool_use"
+
+
+@dataclass
 class _Resp:
-    text: str
+    payload: dict
     @property
     def content(self):
-        @dataclass
-        class _B:
-            text: str
-        return [_B(text=self.text)]
+        # Forced-tool-use shape: one tool_use block whose .input IS the
+        # structured result the gateway validates against CVMatchResult.
+        return [_ToolUseBlock(input=self.payload, name=_CV_MATCH_TOOL)]
     @property
     def usage(self):
         return _Usage()
     id = "req_stub_1"
+    stop_reason = "tool_use"
 
 
 @dataclass
 class _Msgs:
-    body: str
+    payload: dict
     calls: list = field(default_factory=list)
     def create(self, **kwargs):
         self.calls.append(kwargs)
-        return _Resp(text=self.body)
+        return _Resp(payload=self.payload)
 
 
 @dataclass
@@ -94,7 +116,7 @@ def test_score_cache_miss_writes_one_linked_usage_event(db, monkeypatch):
     org = Organization(name="O", slug=f"o-{id(db)}")
     db.add(org); db.commit()
 
-    inner = _Inner(messages=_Msgs(body=_valid_cv_match_json()))
+    inner = _Inner(messages=_Msgs(payload=_valid_cv_match_payload()))
     wrapped = MeteredAnthropicClient(inner=inner, organization_id=int(org.id))
 
     out = run_cv_match(
@@ -154,7 +176,7 @@ def test_score_with_caller_db_in_context_still_links_call_log(db, monkeypatch):
     org = Organization(name="O2", slug=f"o2-{id(db)}")
     db.add(org); db.commit()
 
-    inner = _Inner(messages=_Msgs(body=_valid_cv_match_json()))
+    inner = _Inner(messages=_Msgs(payload=_valid_cv_match_payload()))
     wrapped = MeteredAnthropicClient(inner=inner, organization_id=int(org.id))
 
     out = run_cv_match(
@@ -193,7 +215,7 @@ def test_score_call_does_not_use_skip_when_context_present(monkeypatch):
     and we can inspect exactly what the runner built."""
     monkeypatch.setattr(archetype_synthesizer, "synthesize_archetype", lambda *a, **kw: None)
 
-    inner = _Inner(messages=_Msgs(body=_valid_cv_match_json()))
+    inner = _Inner(messages=_Msgs(payload=_valid_cv_match_payload()))
     run_cv_match(
         cv_text="cv", jd_text="jd",
         requirements=[RequirementInput(id="jd_req_1", requirement="x", priority=Priority.MUST_HAVE)],
@@ -213,7 +235,7 @@ def test_score_call_skips_without_context(monkeypatch):
     org-less events."""
     monkeypatch.setattr(archetype_synthesizer, "synthesize_archetype", lambda *a, **kw: None)
 
-    inner = _Inner(messages=_Msgs(body=_valid_cv_match_json()))
+    inner = _Inner(messages=_Msgs(payload=_valid_cv_match_payload()))
     run_cv_match(
         cv_text="cv", jd_text="jd",
         requirements=[RequirementInput(id="jd_req_1", requirement="x", priority=Priority.MUST_HAVE)],

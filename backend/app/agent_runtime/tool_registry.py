@@ -1315,6 +1315,33 @@ _AUTO_TOGGLE_FOR_DECISION_TYPE: dict[str, str] = {
 }
 
 
+# Human-confirm rail (TAA-11 / AUDIT_01 P1-TALI-03).
+#
+# A reject is IRREVERSIBLE: the candidate's side effect is a Workable
+# *disqualify* (``reject_application.run`` →
+# ``disqualify_candidate_in_workable``), which fires the org's
+# disqualify-stage rejection email. Unlike an advance (an internal
+# hand-back / stage move the recruiter can undo) or an assessment send
+# (re-sendable), a disqualify can't be cleanly walked back once the
+# candidate has been emailed.
+#
+# The product non-goal is "no verdicts that bypass a human recruiter."
+# ``role.auto_reject`` is opt-in, but even opted-in we do NOT let the
+# agent push the irreversible Workable disqualify with zero human in the
+# loop. These decision types are therefore EXCLUDED from auto-execution:
+# the queue tool still records the agent's reject *recommendation* (so the
+# toggle, the reasoning, and the audit row are all preserved), but the
+# decision stays ``pending`` in the Decision Hub awaiting an explicit
+# one-click recruiter confirmation. The recruiter's approve path runs the
+# exact same ``reject_application.run`` action — the only thing the rail
+# costs is one human confirmation before an irreversible candidate-facing
+# action. Reversible decisions (advance / send / resend) are unaffected
+# and still auto-execute under their ``auto_promote`` toggle.
+_HUMAN_CONFIRM_REQUIRED_DECISION_TYPES: frozenset[str] = frozenset(
+    {"reject", "skip_assessment_reject"}
+)
+
+
 def _auto_execute_decision(
     db: Session,
     *,
@@ -1328,7 +1355,20 @@ def _auto_execute_decision(
     underlying action call, same idempotency key shape — but with
     ``actor=system`` and a ``human_disposition`` that records the
     auto-toggle that drove the call.
+
+    Defense-in-depth for the human-confirm rail (TAA-11 / P1-TALI-03):
+    an irreversible reject must never reach this auto-execute path. The
+    sole caller (``_queue``) already excludes those types, but a future
+    caller could regress that; refuse here so the invariant holds at the
+    side-effect boundary, not just the gate above it.
     """
+    if decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES:
+        raise ValueError(
+            f"refusing to auto-execute irreversible decision_type "
+            f"'{decision_type}' — it requires explicit human confirmation "
+            f"(TAA-11 / P1-TALI-03). Leave the decision pending for the "
+            f"recruiter to approve."
+        )
     actor = Actor.system()
     metadata = {
         "agent_decision_id": int(decision.id),
@@ -1424,6 +1464,11 @@ def _queue(
     if just_created:
         agent_run.decisions_emitted = int(agent_run.decisions_emitted or 0) + 1
     auto_attr = _AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type)
+    # Human-confirm rail (TAA-11 / P1-TALI-03): an irreversible reject is
+    # never auto-executed, even with ``role.auto_reject`` on. The
+    # recommendation is queued; the recruiter confirms the Workable
+    # disqualify with one click. See ``_HUMAN_CONFIRM_REQUIRED_DECISION_TYPES``.
+    human_confirm_required = decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
     # Only auto-execute a freshly-created, still-pending decision. A dedup
     # return (existing pending, recently-discarded, or a prior_approved C4
     # match) carries _just_created=False and may already be resolved —
@@ -1431,6 +1476,7 @@ def _queue(
     # change, reject) for an already-handled decision. (Codex #241)
     if (
         auto_attr
+        and not human_confirm_required
         and bool(getattr(role, auto_attr, False))
         and just_created
         and str(decision.status) == "pending"
@@ -1438,7 +1484,20 @@ def _queue(
         _auto_execute_decision(
             db, role=role, decision=decision, decision_type=decision_type
         )
-    return {"decision_id": int(decision.id), "status": str(decision.status), "decision_type": decision_type}
+    return {
+        "decision_id": int(decision.id),
+        "status": str(decision.status),
+        "decision_type": decision_type,
+        # Surface the rail to the agent so it knows the reject is awaiting a
+        # human confirmation rather than silently executed. ``True`` only when
+        # the role would otherwise have auto-executed (toggle on) but the
+        # human-confirm rail held it pending.
+        "human_confirm_required": bool(
+            human_confirm_required
+            and auto_attr
+            and bool(getattr(role, auto_attr, False))
+        ),
+    }
 
 
 def _tool_queue_advance_decision(

@@ -30,6 +30,7 @@ from unittest.mock import MagicMock, patch
 
 from sqlalchemy import event
 
+from app.llm import MeteringContext
 from app.models.agent_decision import AgentDecision
 from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
@@ -56,22 +57,46 @@ event.listen(AgentRun, "before_insert", _assign_big_pk)
 # ---------------------------------------------------------------------------
 
 def test_orchestrator_passes_metering_skip_to_messages_create():
-    """Read the orchestrator source and verify the ``client.messages.create``
-    call carries ``metering={"skip": True}``. This is the only way to keep
-    the wrapper from auto-recording an event alongside the explicit
-    ``record_event`` below."""
+    """The orchestrator must keep the MeteredAnthropicClient wrapper from
+    auto-recording a per-round UsageEvent, because it writes its own richer
+    ``record_event(Feature.AGENT_AUTONOMOUS, ...)`` below. Without the skip
+    we'd get TWO rows per Anthropic call (one Feature.OTHER from the wrapper
+    fallback, one AGENT_AUTONOMOUS here) — the 2× Sonnet over-count of
+    2026-05-21.
+
+    The call now goes through the shared ``one_call`` gateway, which builds
+    the ``metering`` kwarg from a ``MeteringContext`` rather than the
+    orchestrator hand-rolling ``client.messages.create(metering={...})``.
+    Pin the invariant at the behavioural layer: the context the orchestrator
+    hands ``one_call`` must serialise to ``{"skip": True}`` so the wrapper
+    stays out of the way."""
+    from app.llm import MeteringContext
+
+    round_metering = MeteringContext.skipped(
+        metered_by="agent_runtime.orchestrator.run_cycle"
+    )
+    serialised = round_metering.as_dict()
+    assert serialised.get("skip") is True, (
+        "orchestrator round metering must serialise to {'skip': True} or the "
+        "wrapper auto-records a duplicate UsageEvent as Feature.OTHER. "
+        f"Got: {serialised}"
+    )
+
+    # And the orchestrator must actually use a skipped context for the
+    # per-round call (not a feature-bearing one that the wrapper would meter).
     from pathlib import Path
     src = Path(__file__).parents[1] / "app" / "agent_runtime" / "orchestrator.py"
     content = src.read_text()
-    # The whole client.messages.create call site
-    create_idx = content.find("response = client.messages.create(")
-    assert create_idx > -1, "could not find messages.create call site"
-    # Look at the next ~600 chars (the call args)
-    call_block = content[create_idx:create_idx + 600]
-    assert '"skip": True' in call_block, (
-        "orchestrator client.messages.create must pass metering={'skip': True}"
-        " or the wrapper auto-records a duplicate UsageEvent as Feature.OTHER. "
-        f"Got:\n{call_block}"
+    assert "MeteringContext.skipped(" in content, (
+        "orchestrator must build a skipped MeteringContext for the per-round "
+        "agent call so the wrapper does not double-record"
+    )
+    create_idx = content.find("response = one_call(")
+    assert create_idx > -1, "could not find one_call call site in orchestrator"
+    call_block = content[create_idx:create_idx + 400]
+    assert "metering=round_metering" in call_block, (
+        "the per-round one_call must be passed the skipped round_metering "
+        f"context. Got:\n{call_block}"
     )
 
 
@@ -80,12 +105,16 @@ def test_orchestrator_passes_metering_skip_to_messages_create():
 # ---------------------------------------------------------------------------
 
 def test_call_claude_accumulates_tokens_across_retries():
-    """If the runner retries (validation failure), tokens from each
-    attempt must add — not overwrite. Anthropic charges for every call;
-    the platform must record all of them."""
-    from app.cv_matching.runner import _RunContext, _call_claude
+    """If a logical operation makes more than one Anthropic call (e.g. a
+    validation-failure retry), tokens from each attempt must ADD — not
+    overwrite. Anthropic charges for every call; the platform must record
+    all of them.
 
-    ctx = _RunContext(trace_id="t", cv_hash="c", jd_hash="j", started_at=0.0)
+    The per-attempt token accumulation that ``cv_matching.runner`` used to
+    do inline on ``_RunContext`` now lives in the shared
+    ``app.llm.core.CallUsage`` sink, which ``one_call`` folds each response
+    into. Pin the accumulation invariant at that layer."""
+    from app.llm.core import CallUsage, one_call
 
     def make_response(in_tok, out_tok):
         return SimpleNamespace(
@@ -104,12 +133,16 @@ def test_call_claude_accumulates_tokens_across_retries():
         make_response(in_tok=800, out_tok=180),   # retry
     ]
 
-    _call_claude(client, messages=[{"role": "user", "content": "x"}], ctx=ctx)
-    _call_claude(client, messages=[{"role": "user", "content": "x"}], ctx=ctx)
+    sink = CallUsage()
+    metering = MeteringContext.skipped(metered_by="test")
+    one_call(client, model="m", messages=[{"role": "user", "content": "x"}],
+             max_tokens=16, metering=metering, usage_sink=sink)
+    one_call(client, model="m", messages=[{"role": "user", "content": "x"}],
+             max_tokens=16, metering=metering, usage_sink=sink)
 
     # Sum across both calls — not just the last one.
-    assert ctx.input_tokens == 1800, f"expected 1800, got {ctx.input_tokens}"
-    assert ctx.output_tokens == 380, f"expected 380, got {ctx.output_tokens}"
+    assert sink.input_tokens == 1800, f"expected 1800, got {sink.input_tokens}"
+    assert sink.output_tokens == 380, f"expected 380, got {sink.output_tokens}"
 
 
 # ---------------------------------------------------------------------------
