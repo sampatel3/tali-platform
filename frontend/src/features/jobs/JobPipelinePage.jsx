@@ -39,7 +39,13 @@ import { CandidateTriageDrawer, candidateReportHref } from '../candidates/Candid
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSheet } from '../candidates/RoleSheet';
 import { getErrorMessage, trimOrUndefined, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
-import { formatCount, budgetTile, applicationFunnelBucket } from '../../shared/metrics';
+import {
+  formatCount,
+  budgetTile,
+  applicationFunnelBucket,
+  awaitingHitlFromDecisions,
+  decisionPendingFromCounts,
+} from '../../shared/metrics';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 
@@ -1388,11 +1394,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       ?? 0
     );
     const budget = budgetTile(monthlySpentCents, monthlyBudgetCents);
-    // Awaiting you = candidates sitting at a decision stage (Scored + Completed)
-    // — the recruiter's to-do, surfaced whether the agent is on or off.
-    const scoredCount = Number(role?.stage_counts?.scored || 0);
-    const completedCount = Number(role?.stage_counts?.completed || 0);
-    const awaitingCount = scoredCount + completedCount;
+    // Awaiting you = this role's pending agent recommendations (HITL — what
+    // needs your call), NOT every scored candidate. Scored/Completed candidates
+    // the agent hasn't ruled on yet are "decision pending" (shown as context).
+    const awaitingCount = awaitingHitlFromDecisions(role?.pending_decisions_by_type);
+    const notYetDecided = decisionPendingFromCounts(role?.stage_counts, role?.pending_decisions_by_type);
     // Shaped as <KpiStrip> tiles so the role KPI row is the SAME card as the
     // home / jobs-list strips (no bespoke .stat cards, no black tile).
     // "Awaiting you" carries the purple-tint emphasis, matching home.
@@ -1420,7 +1426,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         label: 'Awaiting you',
         value: formatCount(awaitingCount),
         emph: awaitingCount > 0,
-        sub: awaitingCount > 0 ? 'pending your call' : 'queue clear',
+        sub: notYetDecided > 0
+          ? `${formatCount(notYetDecided)} decision pending`
+          : (awaitingCount > 0 ? 'all flagged' : 'queue clear'),
       },
       {
         key: 'spend',

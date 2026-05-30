@@ -95,7 +95,7 @@ const SHOWCASE_AGENT = {
 // today · Org budget · Override; pipeline + active-role volume live in the
 // kicker / pipeline strip.
 const SHOWCASE_KPIS = [
-  { key: 'awaiting', label: 'Awaiting you', value: '3', emph: true, sub: 'oldest 1h' },
+  { key: 'awaiting', label: 'Awaiting you', value: '103', emph: true, sub: '85 decision pending' },
   { key: 'today', label: 'Decisions today', value: '14', sub: '11 auto-applied' },
   { key: 'budget', label: 'Org budget · MTD', value: '$18', unit: '/ $50', bar: { pct: 36, over: false }, sub: '36% · proj $44 EOM' },
   { key: 'override', label: 'Override rate · 7d', value: '8%', sub: '12% taught' },
@@ -104,7 +104,7 @@ const SHOWCASE_KPIS = [
 export const HomeShowcaseView = () => (
   <div>
     <AgentHeader
-      kicker="HUB · 188 AWAITING YOU · 5 ACTIVE ROLES"
+      kicker="HUB · 103 AWAITING YOU · 5 ACTIVE ROLES"
       title="Good morning"
       subtitle="Every decision the agent makes that needs you. Approve, override, or teach it — your calls become its training signal. The long-term goal is full automation; this is where you keep the loop honest."
       agent={SHOWCASE_AGENT}
