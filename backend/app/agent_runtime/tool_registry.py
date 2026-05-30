@@ -9,6 +9,7 @@ actions (which want an ``Actor``).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
@@ -36,7 +37,7 @@ from ..models.assessment import Assessment
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..services import cohort_signals_service
-from . import calibration, cohort_tools, policy_evaluator
+from . import calibration, cohort_tools, decision_translation, policy_evaluator
 
 
 # Cohort signals are recomputed when older than this. The full pool query
@@ -1315,6 +1316,82 @@ _AUTO_TOGGLE_FOR_DECISION_TYPE: dict[str, str] = {
 }
 
 
+# Off-policy auto-execution guard (TAA-22 / AUDIT_02 P2-TALI-01).
+#
+# "Deterministic verdict, never LLM" is structural in the mainspring
+# substrate (the reasoner's return type can't carry a verdict). On this
+# agent surface it was convention-only: the LLM's queue_* tools hardcode a
+# decision_type and (with the auto toggle on) auto-execute, without any
+# server-side check that the queued type matches what the deterministic
+# engine would emit. This binds the IRREVERSIBLE step to the engine: a
+# hire-relevant decision_type is only auto-executed if it matches the
+# engine verdict captured this cycle by evaluate_policy. Both sides speak
+# the persisted-NOUN vocabulary (advance_to_interview, …): the queue tool
+# passes the noun, and evaluate_policy stores the noun by translating the
+# engine's verbs (queue_advance_decision, …) through
+# decision_translation.resolve_persisted_decision_type before capture.
+#
+# Scope: only the auto-executing HIRE-PROGRESSION verdict (advance) is bound
+# here. reject / skip_assessment_reject are already held for human confirmation
+# (TAA-11), and send_assessment / resend are operational (re-sendable, not a
+# hire/no-hire verdict) — so they stay exempt to avoid withholding legitimate
+# invite sends. advance is the one irreversible-ish auto-executed verdict left
+# that an off-policy LLM could push, so it must match the engine.
+_ENGINE_VERDICT_EQUIV: dict[str, frozenset[str]] = {
+    "advance_to_interview": frozenset({"advance_to_interview"}),
+}
+
+
+def _engine_verdict_for(agent_run: AgentRun, application_id: int) -> Optional[str]:
+    """The deterministic engine verdict captured for this application this
+    cycle by ``evaluate_policy`` (``__engine_verdicts__`` is attached to the
+    AgentRun instance; it does not persist)."""
+    verdicts = getattr(agent_run, "__engine_verdicts__", None) or {}
+    return verdicts.get(int(application_id))
+
+
+def _is_on_policy(
+    agent_run: AgentRun, application_id: int, decision_type: str
+) -> tuple[bool, Optional[str]]:
+    """Returns (on_policy, engine_decision_type). Decision types that aren't a
+    hire/no-hire verdict (e.g. resend_assessment_invite) are exempt. For
+    hire-relevant types the queued type must match the captured engine
+    verdict; a missing or mismatched verdict fails SAFE -> not on-policy, so
+    auto-execution is withheld and the decision routes to human review."""
+    expected = _ENGINE_VERDICT_EQUIV.get(decision_type)
+    if expected is None:
+        return True, None
+    engine_dt = _engine_verdict_for(agent_run, application_id)
+    return (engine_dt in expected), engine_dt
+
+
+# Human-confirm rail (TAA-11 / AUDIT_01 P1-TALI-03).
+#
+# A reject is IRREVERSIBLE: the candidate's side effect is a Workable
+# *disqualify* (``reject_application.run`` →
+# ``disqualify_candidate_in_workable``), which fires the org's
+# disqualify-stage rejection email. Unlike an advance (an internal
+# hand-back / stage move the recruiter can undo) or an assessment send
+# (re-sendable), a disqualify can't be cleanly walked back once the
+# candidate has been emailed.
+#
+# The product non-goal is "no verdicts that bypass a human recruiter."
+# ``role.auto_reject`` is opt-in, but even opted-in we do NOT let the
+# agent push the irreversible Workable disqualify with zero human in the
+# loop. These decision types are therefore EXCLUDED from auto-execution:
+# the queue tool still records the agent's reject *recommendation* (so the
+# toggle, the reasoning, and the audit row are all preserved), but the
+# decision stays ``pending`` in the Decision Hub awaiting an explicit
+# one-click recruiter confirmation. The recruiter's approve path runs the
+# exact same ``reject_application.run`` action — the only thing the rail
+# costs is one human confirmation before an irreversible candidate-facing
+# action. Reversible decisions (advance / send / resend) are unaffected
+# and still auto-execute under their ``auto_promote`` toggle.
+_HUMAN_CONFIRM_REQUIRED_DECISION_TYPES: frozenset[str] = frozenset(
+    {"reject", "skip_assessment_reject"}
+)
+
+
 def _auto_execute_decision(
     db: Session,
     *,
@@ -1328,7 +1405,20 @@ def _auto_execute_decision(
     underlying action call, same idempotency key shape — but with
     ``actor=system`` and a ``human_disposition`` that records the
     auto-toggle that drove the call.
+
+    Defense-in-depth for the human-confirm rail (TAA-11 / P1-TALI-03):
+    an irreversible reject must never reach this auto-execute path. The
+    sole caller (``_queue``) already excludes those types, but a future
+    caller could regress that; refuse here so the invariant holds at the
+    side-effect boundary, not just the gate above it.
     """
+    if decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES:
+        raise ValueError(
+            f"refusing to auto-execute irreversible decision_type "
+            f"'{decision_type}' — it requires explicit human confirmation "
+            f"(TAA-11 / P1-TALI-03). Leave the decision pending for the "
+            f"recruiter to approve."
+        )
     actor = Actor.system()
     metadata = {
         "agent_decision_id": int(decision.id),
@@ -1424,6 +1514,31 @@ def _queue(
     if just_created:
         agent_run.decisions_emitted = int(agent_run.decisions_emitted or 0) + 1
     auto_attr = _AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type)
+    # Human-confirm rail (TAA-11 / P1-TALI-03): an irreversible reject is
+    # never auto-executed, even with ``role.auto_reject`` on. The
+    # recommendation is queued; the recruiter confirms the Workable
+    # disqualify with one click. See ``_HUMAN_CONFIRM_REQUIRED_DECISION_TYPES``.
+    human_confirm_required = decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
+    # TAA-22 (P2-TALI-01): bind the irreversible auto-execution to the
+    # deterministic engine. A hire-relevant decision_type is only
+    # auto-executed if it matches the engine verdict captured this cycle by
+    # evaluate_policy; a missing/mismatched verdict fails SAFE -> the decision
+    # routes to human review instead of auto-executing off-policy.
+    on_policy, engine_verdict = _is_on_policy(
+        agent_run, int(args["application_id"]), decision_type
+    )
+    toggle_on = bool(auto_attr and bool(getattr(role, auto_attr, False)))
+    off_policy_withheld = bool(
+        toggle_on and not human_confirm_required and just_created
+        and str(decision.status) == "pending" and not on_policy
+    )
+    if off_policy_withheld:
+        logging.getLogger("taali.agent.policy").warning(
+            "off_policy_auto_execute_withheld role_id=%s app_id=%s "
+            "queued=%s engine=%s run_id=%s",
+            role.id, args["application_id"], decision_type,
+            engine_verdict, agent_run.id,
+        )
     # Only auto-execute a freshly-created, still-pending decision. A dedup
     # return (existing pending, recently-discarded, or a prior_approved C4
     # match) carries _just_created=False and may already be resolved —
@@ -1431,6 +1546,8 @@ def _queue(
     # change, reject) for an already-handled decision. (Codex #241)
     if (
         auto_attr
+        and not human_confirm_required
+        and on_policy
         and bool(getattr(role, auto_attr, False))
         and just_created
         and str(decision.status) == "pending"
@@ -1438,7 +1555,24 @@ def _queue(
         _auto_execute_decision(
             db, role=role, decision=decision, decision_type=decision_type
         )
-    return {"decision_id": int(decision.id), "status": str(decision.status), "decision_type": decision_type}
+    return {
+        "decision_id": int(decision.id),
+        "status": str(decision.status),
+        "decision_type": decision_type,
+        # Surface the rail to the agent so it knows the reject is awaiting a
+        # human confirmation rather than silently executed. ``True`` only when
+        # the role would otherwise have auto-executed (toggle on) but the
+        # human-confirm rail held it pending.
+        "human_confirm_required": bool(
+            human_confirm_required
+            and auto_attr
+            and bool(getattr(role, auto_attr, False))
+        ),
+        # Surface the off-policy guard (TAA-22): True when the toggle would
+        # have auto-executed but the queued decision_type did not match the
+        # deterministic engine verdict, so it was held pending for review.
+        "off_policy_withheld": off_policy_withheld,
+    }
 
 
 def _tool_queue_advance_decision(
@@ -1526,6 +1660,27 @@ def _tool_evaluate_policy(
         application_id=application_id,
         metering_context=metering_context,
         skip_cache=skip_cache,
+    )
+    # TAA-22: record the deterministic engine verdict for this application so
+    # the queue_* tools can bind an auto-executed decision to it (see
+    # _is_on_policy). Attached to the AgentRun instance for this cycle; not
+    # persisted.
+    _verdicts = getattr(agent_run, "__engine_verdicts__", None)
+    if _verdicts is None:
+        _verdicts = {}
+        agent_run.__engine_verdicts__ = _verdicts  # type: ignore[attr-defined]
+    # ``verdict.decision_type`` is the engine VERB (e.g. ``queue_advance_decision``),
+    # but ``_is_on_policy`` is handed the persisted NOUN the queue_* tools carry
+    # (``advance_to_interview``). Translate through the same map the bulk path uses
+    # so the two vocabularies line up — without this, ``queue_advance_decision`` is
+    # compared to ``{"advance_to_interview"}`` and EVERY on-policy advance reads as
+    # off-policy and is wrongly withheld. The no-assessment-task switch (send →
+    # advance) is honoured via ``role.tasks``. Non-queueable / escalated verdicts
+    # (escalate_low_confidence / skip / no_action) translate to ``None`` -> stored as
+    # None -> ``_is_on_policy`` fails SAFE (off-policy -> human review).
+    _verdicts[int(application_id)] = decision_translation.resolve_persisted_decision_type(
+        str(verdict.decision_type),
+        has_assessment_task=bool(getattr(role, "tasks", None)),
     )
     # Telemetry: structured log so the Hub's signals dashboard can
     # bucket evaluations per (org, role, decision_type, revision).
