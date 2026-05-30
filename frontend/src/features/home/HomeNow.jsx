@@ -251,6 +251,13 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction }) => (
         value={filters.role_id || ''}
         onChange={(e) => setFilters((f) => ({ ...f, role_id: e.target.value || null }))}
         aria-label="Select a role to scope the view"
+        // Surface the full role name on hover for the case where a long name
+        // still ellipsises on a narrow viewport.
+        title={
+          filters.role_id
+            ? (roles.find((r) => String(r.role_id) === String(filters.role_id))?.name || undefined)
+            : undefined
+        }
       >
         <option value="">All roles</option>
         {roles.map((r) => (
