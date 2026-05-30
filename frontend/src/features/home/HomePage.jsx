@@ -12,6 +12,7 @@ import { useToast } from '../../context/ToastContext';
 
 import './home.css';
 import { formatCount, budgetTile } from '../../shared/metrics';
+import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { HomeNow } from './HomeNow';
 import { HomeMonitoring } from './HomeMonitoring';
 import { HomePlatformUpdates } from './HomePlatformUpdates';
@@ -339,47 +340,40 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
               Awaiting you · Decisions today · Org budget·MTD · Override 7d.
             "In pipeline" / "Active roles" were dropped — the funnel strip and
             the kicker already carry them. "Awaiting you" reads the same
-            pendingDecisions the hero chips sum to. Formatting (separators,
-            $spent / $cap + bar) comes from src/shared/metrics. */}
-        <div className="rq-kpis rq-kpis-compact">
-          <div className="rq-kpi rq-kpi-emph">
-            <div className="l">Awaiting you</div>
-            <div className="v"><em>{formatCount(pendingDecisions)}</em></div>
-            <div className="d">
-              {pendingDecisions > 0 ? `oldest ${oldestAgeLabel}` : 'queue clear'}
-              {pendingQuestions > 0 ? ` · ${formatCount(pendingQuestions)} question${pendingQuestions === 1 ? '' : 's'}` : ''}
-            </div>
-          </div>
-          <div className="rq-kpi">
-            <div className="l">Decisions today</div>
-            <div className="v">{formatCount(kpis.today)}</div>
-            <div className="d">
-              {kpis.auto_applied_today > 0 ? `${formatCount(kpis.auto_applied_today)} auto-applied` : 'none auto-applied'}
-            </div>
-          </div>
-          <div className="rq-kpi">
-            <div className="l">Org budget · MTD</div>
-            <div className="v">
-              {orgBudget.value}
-              {orgBudget.unit
-                ? <span style={{ color: 'var(--mute)', fontSize: 15, fontWeight: 400 }}> {orgBudget.unit}</span>
-                : null}
-            </div>
-            {kpis.org_budget_cap_cents > 0 ? (
-              <div className="rq-bar">
-                <i style={{ width: `${orgBudget.pct}%`, background: orgBudget.over ? 'var(--red)' : 'var(--purple)' }} />
-              </div>
-            ) : null}
-            <div className="d">{orgBudget.sub}</div>
-          </div>
-          <div className="rq-kpi">
-            <div className="l">Override rate · 7d</div>
-            <div className="v">{kpis.override_rate_pct.toFixed(0)}%</div>
-            <div className="d">
-              {kpis.teach_rate_pct > 0 ? `${kpis.teach_rate_pct.toFixed(0)}% taught` : 'no teach signal yet'}
-            </div>
-          </div>
-        </div>
+            pendingDecisions the hero chips sum to. Shared <KpiStrip> tile so
+            this matches the jobs-list strip exactly. */}
+        <KpiStrip
+          columns={4}
+          tiles={[
+            {
+              key: 'awaiting',
+              label: 'Awaiting you',
+              value: formatCount(pendingDecisions),
+              emph: pendingDecisions > 0,
+              sub: `${pendingDecisions > 0 ? `oldest ${oldestAgeLabel}` : 'queue clear'}${pendingQuestions > 0 ? ` · ${formatCount(pendingQuestions)} question${pendingQuestions === 1 ? '' : 's'}` : ''}`,
+            },
+            {
+              key: 'today',
+              label: 'Decisions today',
+              value: formatCount(kpis.today),
+              sub: kpis.auto_applied_today > 0 ? `${formatCount(kpis.auto_applied_today)} auto-applied` : 'none auto-applied',
+            },
+            {
+              key: 'budget',
+              label: 'Org budget · MTD',
+              value: orgBudget.value,
+              unit: orgBudget.unit,
+              bar: kpis.org_budget_cap_cents > 0 ? orgBudget : null,
+              sub: orgBudget.sub,
+            },
+            {
+              key: 'override',
+              label: 'Override rate · 7d',
+              value: `${kpis.override_rate_pct.toFixed(0)}%`,
+              sub: kpis.teach_rate_pct > 0 ? `${kpis.teach_rate_pct.toFixed(0)}% taught` : 'no teach signal yet',
+            },
+          ]}
+        />
 
         <HomeNow
           decisions={decisions}

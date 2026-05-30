@@ -1,0 +1,80 @@
+/* Shared KPI strip — home hub + jobs list. Single source of truth for the
+   tile look so the two surfaces stay identical. (The marketing landing keeps
+   its own .mc-jobs-kpi; this is the in-app strip.) */
+.kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+@media (min-width: 900px) {
+  .kpi-strip {
+    grid-template-columns: repeat(var(--kpi-cols, 4), minmax(0, 1fr));
+  }
+}
+
+.kpi-tile {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-shadow: var(--shadow-sm);
+}
+
+/* "Awaiting you" glows purple when there's something waiting — the one tile
+   that maps to an action. */
+.kpi-tile.is-emph {
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--purple) 7%, var(--bg-2)),
+    var(--bg-2)
+  );
+  border-color: color-mix(in oklab, var(--purple) 28%, var(--line));
+}
+
+.kpi-l {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+.kpi-v {
+  font-family: var(--font-display);
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  color: var(--ink);
+}
+
+.kpi-v .kpi-accent { color: var(--purple); }
+
+.kpi-v .kpi-unit {
+  color: var(--mute);
+  font-size: 15px;
+  font-weight: 400;
+}
+
+.kpi-bar {
+  height: 4px;
+  border-radius: 3px;
+  background: var(--bg-3);
+  overflow: hidden;
+  margin-top: 6px;
+}
+
+.kpi-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}
+
+.kpi-d {
+  font-size: 12px;
+  color: var(--mute);
+}

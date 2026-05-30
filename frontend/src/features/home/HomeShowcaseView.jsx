@@ -8,6 +8,7 @@
 import React from 'react';
 
 import { AgentHeader } from '../../shared/layout/AgentHeader';
+import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { ActivityFeed } from './ActivityFeed';
 import './home.css';
 
@@ -88,31 +89,16 @@ const SHOWCASE_AGENT = {
   inFlight: false,
 };
 
-// One compact Decision-Hub KPI row — mirrors the real HomePage layout so the
-// demo matches the live surface. Awaiting you · Decisions today · Org budget ·
-// Override; pipeline + active-role volume live in the kicker / pipeline strip.
+// One compact Decision-Hub KPI row — mirrors the real HomePage layout (shared
+// <KpiStrip>) so the demo matches the live surface. Awaiting you · Decisions
+// today · Org budget · Override; pipeline + active-role volume live in the
+// kicker / pipeline strip.
 const SHOWCASE_KPIS = [
-  { l: 'Awaiting you', v: '3', d: 'oldest 1h', emph: true },
-  { l: 'Decisions today', v: '14', d: '11 auto-applied' },
-  { l: 'Org budget · MTD', v: '$18', unit: '/ $50', d: '36% · proj $44 EOM', bar: 36 },
-  { l: 'Override rate · 7d', v: '8%', d: '12% taught' },
+  { key: 'awaiting', label: 'Awaiting you', value: '3', emph: true, sub: 'oldest 1h' },
+  { key: 'today', label: 'Decisions today', value: '14', sub: '11 auto-applied' },
+  { key: 'budget', label: 'Org budget · MTD', value: '$18', unit: '/ $50', bar: { pct: 36, over: false }, sub: '36% · proj $44 EOM' },
+  { key: 'override', label: 'Override rate · 7d', value: '8%', sub: '12% taught' },
 ];
-
-const ShowcaseKpiTile = ({ k }) => (
-  <div className={`rq-kpi ${k.emph ? 'rq-kpi-emph' : ''}`.trim()}>
-    <div className="l">{k.l}</div>
-    <div className="v">
-      {k.emph ? <em>{k.v}</em> : k.v}
-      {k.unit ? <span style={{ color: 'var(--mute)', fontSize: 15, fontWeight: 400 }}> {k.unit}</span> : null}
-    </div>
-    {k.bar != null ? (
-      <div className="rq-bar">
-        <i style={{ width: `${k.bar}%`, background: 'var(--purple)' }} />
-      </div>
-    ) : null}
-    <div className="d">{k.d}</div>
-  </div>
-);
 
 export const HomeShowcaseView = () => (
   <div>
@@ -124,9 +110,7 @@ export const HomeShowcaseView = () => (
     />
 
     <div className="home-body">
-      <div className="rq-kpis rq-kpis-compact">
-        {SHOWCASE_KPIS.map((k) => <ShowcaseKpiTile key={k.l} k={k} />)}
-      </div>
+      <KpiStrip columns={4} tiles={SHOWCASE_KPIS} />
 
       <ActivityFeed
         rows={SHOWCASE_FEED_ROWS}
