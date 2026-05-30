@@ -19,35 +19,30 @@ export const PIPELINE_FUNNEL_STAGES = [
   { key: 'rejected', label: 'Rejected' },
 ];
 
-// The four decision gates between stages — the agent's pending recommendations,
-// i.e. the "Awaiting you" breakdown. Each gate is bound to the stage it acts
-// on, so the funnel can render the pending count directly under that stage.
-// `types` are the AgentDecision.decision_type values that roll into the gate.
-export const FUNNEL_DECISION_GATES = [
-  { stage: 'applied', key: 'pre_screen', label: 'Pre-screen', short: 'pre-screen', tone: 'reject', types: ['skip_assessment_reject'] },
-  { stage: 'scored', key: 'send', label: 'Send assessment', short: 'send', tone: 'go', types: ['send_assessment', 'resend_assessment_invite'] },
-  { stage: 'scored', key: 'reject', label: 'Reject', short: 'reject', tone: 'reject', types: ['reject'] },
-  { stage: 'completed', key: 'advance', label: 'Advance', short: 'advance', tone: 'go', types: ['advance_to_interview'] },
+// Decision stages — where a candidate needs YOUR call. A candidate at Scored
+// is awaiting a send-assessment / reject decision; at Completed, advance /
+// reject. This is the recruiter's to-do and is independent of whether the
+// agent is on (when on, the agent drains these by acting). Applied awaits
+// scoring and Invited awaits the candidate, so neither is a recruiter decision.
+export const FUNNEL_DECISION_STAGES = [
+  { stage: 'scored', action: 'send / reject' },
+  { stage: 'completed', action: 'advance / decide' },
 ];
 
-// Roll a {decision_type: count} map into gate counts keyed by stage →
-// [{key,label,short,tone,count}], for the funnel's decision row. Accepts a
-// counts-by-type map or a list of decision objects ({decision_type}).
-export const decisionGatesByStage = (decisions) => {
-  let counts = {};
-  if (Array.isArray(decisions)) {
-    for (const d of decisions) {
-      const t = d?.decision_type;
-      if (t) counts[t] = (counts[t] || 0) + 1;
-    }
-  } else {
-    counts = decisions || {};
-  }
+// "Awaiting you" = candidates sitting at a decision stage (Scored + Completed).
+export const awaitingFromStageCounts = (stageCounts) => {
+  const sc = stageCounts || {};
+  return FUNNEL_DECISION_STAGES.reduce((acc, d) => acc + (Number(sc[d.stage]) || 0), 0);
+};
+
+// The funnel's "awaiting your decision" row, derived from stage counts: under
+// each decision stage, the count of candidates there awaiting your call (+ the
+// action). Keyed by stage so the row aligns under the stage cell.
+export const funnelDecisionRow = (stageCounts) => {
+  const sc = stageCounts || {};
   const byStage = {};
-  for (const gate of FUNNEL_DECISION_GATES) {
-    const count = gate.types.reduce((acc, t) => acc + (Number(counts[t]) || 0), 0);
-    if (!byStage[gate.stage]) byStage[gate.stage] = [];
-    byStage[gate.stage].push({ key: gate.key, label: gate.label, short: gate.short, tone: gate.tone, count });
+  for (const d of FUNNEL_DECISION_STAGES) {
+    byStage[d.stage] = { count: Number(sc[d.stage]) || 0, action: d.action };
   }
   return byStage;
 };
@@ -83,11 +78,12 @@ export const inPipelineFromStageCounts = (stageCounts) => {
 };
 
 // Tone for a funnel cell — drives the single purple / ink / mute rule:
-//   'attn' → needs you (Completed with anyone awaiting a decision) → purple
+//   'attn' → needs you (a decision stage — Scored or Completed — with anyone
+//            waiting) → purple
 //   'term' → terminal outcome (Rejected) → muted
 //   null   → neutral volume → ink
 export const funnelStageTone = (key, value) => {
-  if (key === 'completed' && Number(value) > 0) return 'attn';
+  if ((key === 'scored' || key === 'completed') && Number(value) > 0) return 'attn';
   if (key === 'rejected') return 'term';
   return null;
 };
