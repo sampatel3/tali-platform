@@ -88,18 +88,14 @@ const SHOWCASE_AGENT = {
   inFlight: false,
 };
 
-// Shared org KPI strip (primary) + Decision-Hub health row (secondary) —
-// mirrors the real HomePage layout so the demo matches the live surface.
+// One compact Decision-Hub KPI row — mirrors the real HomePage layout so the
+// demo matches the live surface. Awaiting you · Decisions today · Org budget ·
+// Override; pipeline + active-role volume live in the kicker / pipeline strip.
 const SHOWCASE_KPIS = [
-  { l: 'In pipeline', v: '312', d: 'across 5 active roles' },
-  { l: 'Active roles', v: '5', d: '2 with candidates' },
   { l: 'Awaiting you', v: '3', d: 'oldest 1h', emph: true },
+  { l: 'Decisions today', v: '14', d: '11 auto-applied' },
   { l: 'Org budget · MTD', v: '$18', unit: '/ $50', d: '36% · proj $44 EOM', bar: 36 },
-];
-
-const SHOWCASE_KPIS_HEALTH = [
-  { l: 'Decisions today', v: '14', d: '11 auto · 3 pending' },
-  { l: 'Override rate · 7d', v: '8%', d: '12% taught · last 2m ago' },
+  { l: 'Override rate · 7d', v: '8%', d: '12% taught' },
 ];
 
 const ShowcaseKpiTile = ({ k }) => (
@@ -128,11 +124,8 @@ export const HomeShowcaseView = () => (
     />
 
     <div className="home-body">
-      <div className="rq-kpis">
+      <div className="rq-kpis rq-kpis-compact">
         {SHOWCASE_KPIS.map((k) => <ShowcaseKpiTile key={k.l} k={k} />)}
-      </div>
-      <div className="rq-kpis rq-kpis-secondary">
-        {SHOWCASE_KPIS_HEALTH.map((k) => <ShowcaseKpiTile key={k.l} k={k} />)}
       </div>
 
       <ActivityFeed

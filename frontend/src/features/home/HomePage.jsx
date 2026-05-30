@@ -11,8 +11,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 
 import './home.css';
-import { formatCount, budgetTile, inPipelineFromStageCounts } from '../../shared/metrics';
-import { formatRelativeAge } from './atoms';
+import { formatCount, budgetTile } from '../../shared/metrics';
 import { HomeNow } from './HomeNow';
 import { HomeMonitoring } from './HomeMonitoring';
 import { HomePlatformUpdates } from './HomePlatformUpdates';
@@ -296,14 +295,14 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     [kpis.org_budget_cap_cents, kpis.org_budget_spent_cents],
   );
 
-  // "In pipeline" — open candidates summed across every role, from the same
-  // /agent/roles/breakdown stage_counts the Jobs strip uses.
-  const orgPipeline = useMemo(() => {
-    const list = Array.isArray(rolesBreakdown) ? rolesBreakdown : [];
-    const total = list.reduce((acc, r) => acc + inPipelineFromStageCounts(r?.stage_counts), 0);
-    const withCandidates = list.filter((r) => inPipelineFromStageCounts(r?.stage_counts) > 0).length;
-    return { total, withCandidates };
-  }, [rolesBreakdown]);
+  // One pending number for the whole hub — decisions awaiting your call. The
+  // header chips break this exact total down by action, so kicker + chips +
+  // the "Awaiting you" tile all read the same figure (was 480 vs 472: the old
+  // kicker/tile used kpis.pending, which also counts open questions, while the
+  // chips sum kpis.pending_decisions). pending_questions, when present, rides
+  // along in the tile sub-line rather than inflating the headline.
+  const pendingDecisions = Number(kpis.pending_decisions ?? kpis.pending ?? 0);
+  const pendingQuestions = Number(kpis.pending_questions ?? 0);
 
   const headerPendingBuckets = useMemo(() => {
     const counts = kpis.pending_by_type || {};
@@ -318,7 +317,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       {NavComponent ? <NavComponent currentPage="home" onNavigate={onNavigate} /> : null}
       <AgentHeader
         breadcrumbs={[{ label: 'Home' }]}
-        kicker={`HUB · ${kpis.pending} PENDING · ${kpis.active_role_count} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
+        kicker={`HUB · ${formatCount(pendingDecisions)} PENDING · ${formatCount(kpis.active_role_count)} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
         title={greetingFor(user)}
         subtitle="Every decision the agent makes that needs you. Approve, override, or teach it — your calls become its training signal. The long-term goal is full automation; this is where you keep the loop honest."
         postTitle={headerPendingBuckets.length ? (
@@ -335,31 +334,27 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       />
 
       <div className="home-body">
-        {/* Shared org KPI strip — the same four tiles the Jobs list shows:
-            In pipeline · Active roles · Awaiting you · Org budget · MTD.
-            "Awaiting you" is the pending-decision queue (kpis.pending), the
-            same metric the Jobs strip sums per role. Formatting (separators,
+        {/* One compact KPI row for the Decision Hub — decision-focused, no
+            duplication of the hero chips or the pipeline strip below:
+              Awaiting you · Decisions today · Org budget·MTD · Override 7d.
+            "In pipeline" / "Active roles" were dropped — the funnel strip and
+            the kicker already carry them. "Awaiting you" reads the same
+            pendingDecisions the hero chips sum to. Formatting (separators,
             $spent / $cap + bar) comes from src/shared/metrics. */}
-        <div className="rq-kpis">
-          <div className="rq-kpi">
-            <div className="l">In pipeline</div>
-            <div className="v">{formatCount(orgPipeline.total)}</div>
-            <div className="d">
-              across {formatCount(kpis.active_role_count)} active role{kpis.active_role_count === 1 ? '' : 's'}
-            </div>
-          </div>
-          <div className="rq-kpi">
-            <div className="l">Active roles</div>
-            <div className="v">{formatCount(kpis.active_role_count)}</div>
-            <div className="d">
-              {orgPipeline.withCandidates > 0 ? `${formatCount(orgPipeline.withCandidates)} with candidates` : 'no candidates yet'}
-            </div>
-          </div>
+        <div className="rq-kpis rq-kpis-compact">
           <div className="rq-kpi rq-kpi-emph">
             <div className="l">Awaiting you</div>
-            <div className="v"><em>{formatCount(kpis.pending)}</em></div>
+            <div className="v"><em>{formatCount(pendingDecisions)}</em></div>
             <div className="d">
-              {kpis.pending > 0 ? `oldest ${oldestAgeLabel}` : 'queue clear'}
+              {pendingDecisions > 0 ? `oldest ${oldestAgeLabel}` : 'queue clear'}
+              {pendingQuestions > 0 ? ` · ${formatCount(pendingQuestions)} question${pendingQuestions === 1 ? '' : 's'}` : ''}
+            </div>
+          </div>
+          <div className="rq-kpi">
+            <div className="l">Decisions today</div>
+            <div className="v">{formatCount(kpis.today)}</div>
+            <div className="d">
+              {kpis.auto_applied_today > 0 ? `${formatCount(kpis.auto_applied_today)} auto-applied` : 'none auto-applied'}
             </div>
           </div>
           <div className="rq-kpi">
@@ -377,24 +372,11 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
             ) : null}
             <div className="d">{orgBudget.sub}</div>
           </div>
-        </div>
-
-        {/* Decision-Hub health row — agent-quality metrics, org-only. Same
-            tile component as the strip above, secondary by position. */}
-        <div className="rq-kpis rq-kpis-secondary">
-          <div className="rq-kpi">
-            <div className="l">Decisions today</div>
-            <div className="v">{formatCount(kpis.today)}</div>
-            <div className="d">
-              {formatCount(kpis.auto_applied_today)} auto · {formatCount(kpis.pending_decisions ?? kpis.pending)} pending
-            </div>
-          </div>
           <div className="rq-kpi">
             <div className="l">Override rate · 7d</div>
             <div className="v">{kpis.override_rate_pct.toFixed(0)}%</div>
             <div className="d">
               {kpis.teach_rate_pct > 0 ? `${kpis.teach_rate_pct.toFixed(0)}% taught` : 'no teach signal yet'}
-              {orgStatus?.last_decision_at ? ` · last ${formatRelativeAge(orgStatus.last_decision_at)} ago` : ''}
             </div>
           </div>
         </div>

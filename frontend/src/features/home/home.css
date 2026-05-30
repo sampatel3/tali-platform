@@ -114,15 +114,16 @@
   gap: 12px;
 }
 
-/* Decision-Hub health row — secondary by position; sits just under the
-   primary org strip and is held to two columns on wide screens so it reads
-   as a sub-row, not a continuation of the four-tile strip. */
-.rq-kpis-secondary {
-  margin-top: 12px;
+/* Compact Decision-Hub row — a single tight row of four tiles. Held to four
+   columns on wide screens (not auto-fit) so it never wraps to a second band,
+   with reduced padding + value size so the metric row stays low-profile above
+   the decision feed. */
+.rq-kpis-compact {
+  gap: 10px;
 }
 
 @media (min-width: 900px) {
-  .rq-kpis-secondary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rq-kpis-compact { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
 .rq-kpi {
@@ -133,6 +134,11 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.rq-kpis-compact .rq-kpi {
+  padding: 12px 14px;
+  gap: 4px;
 }
 
 .rq-kpi .l {
@@ -150,6 +156,10 @@
   letter-spacing: -0.02em;
   color: var(--ink);
   line-height: 1;
+}
+
+.rq-kpis-compact .rq-kpi .v {
+  font-size: 25px;
 }
 
 .rq-kpi .v em {
