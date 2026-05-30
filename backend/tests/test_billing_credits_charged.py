@@ -141,6 +141,59 @@ def test_role_usage_breakdown_feature_costs_use_credits_charged(client):
     assert payload["monthly_spent_cents"] == 300
 
 
+def _seed_application(*, org_id: int, role_id: int, stage: str, outcome: str = "open") -> None:
+    """Insert one open/rejected CandidateApplication at ``stage`` for the role."""
+    from app.models.candidate import Candidate
+    from app.models.candidate_application import CandidateApplication
+
+    db = TestingSessionLocal()
+    try:
+        cand = Candidate(
+            organization_id=org_id,
+            email=f"c-{stage}-{outcome}-{id(object())}@x.test",
+            full_name="Stage Candidate",
+        )
+        db.add(cand)
+        db.flush()
+        db.add(
+            CandidateApplication(
+                organization_id=org_id,
+                candidate_id=cand.id,
+                role_id=role_id,
+                status="applied",
+                pipeline_stage=stage,
+                pipeline_stage_source="recruiter",
+                application_outcome=outcome,
+                source="manual",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_role_breakdown_exposes_stage_counts(client):
+    """The bulk-approve soft guard reads role.stage_counts.advanced from the
+    breakdown endpoint, so the per-role open-pipeline standing must be present
+    and only count open applications (rejected ones don't inflate 'advanced')."""
+    headers, email = auth_headers(client)
+    org_id, role_id = _resolve_ids(email)
+    _seed_application(org_id=org_id, role_id=role_id, stage="advanced")
+    _seed_application(org_id=org_id, role_id=role_id, stage="advanced")
+    _seed_application(org_id=org_id, role_id=role_id, stage="review")
+    # A rejected application sitting at 'advanced' must NOT count toward the
+    # open advanced total the guard warns on.
+    _seed_application(org_id=org_id, role_id=role_id, stage="advanced", outcome="rejected")
+
+    resp = client.get("/api/v1/agent/roles/breakdown", headers=headers)
+    assert resp.status_code == 200, resp.text
+    matched = [r for r in resp.json() if r["role_id"] == role_id]
+    assert len(matched) == 1
+    stage_counts = matched[0]["stage_counts"]
+    assert stage_counts["advanced"] == 2
+    assert stage_counts["review"] == 1
+
+
 def test_budget_guard_check_monthly_usd_sums_credits_charged(db):
     """Per-cycle enforcement: a 3× markup feature should hit a $1.50 cap
     after $0.50 of raw Anthropic spend, not after $1.50."""

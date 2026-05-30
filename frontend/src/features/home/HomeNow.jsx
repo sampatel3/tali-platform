@@ -213,6 +213,14 @@ const DEFAULT_ACTIONS = {
   alternatives: [],
 };
 
+// Soft guard for the bulk-approve flow. Advancing candidates is irreversible
+// from this screen, so once a role's *advanced* pipeline count (already
+// advanced + the batch about to be approved) crosses this threshold we surface
+// a warning in the confirmation modal. It's a nudge, not a hard block — the
+// recruiter can still confirm. Kept as a module constant for now; it could
+// become role-configurable later (e.g. role.advanced_soft_cap).
+const ADVANCED_SOFT_CAP = 25;
+
 const STATUS_TABS = [
   { id: 'pending', label: 'Pending' },
   { id: 'reverted_for_feedback', label: 'Returned' },
@@ -827,9 +835,33 @@ export const HomeNow = ({
       }
       advanceRolesMap.get(key).count += 1;
     }
-    const advanceRoles = [...advanceRolesMap.values()];
+    // Soft guard: annotate each advancing role with its current pipeline
+    // standing (advanced count from /agent/roles/breakdown) so the modal can
+    // show "X already advanced · approving Y more → Z total" and warn when the
+    // resulting total would cross ADVANCED_SOFT_CAP for the role.
+    const advanceRoles = [...advanceRolesMap.values()].map((r) => {
+      const rb = rolesBreakdown.find((b) => Number(b.role_id) === r.role_id);
+      const alreadyAdvanced = Number(rb?.stage_counts?.advanced || 0);
+      const projectedAdvanced = alreadyAdvanced + r.count;
+      return {
+        ...r,
+        alreadyAdvanced,
+        projectedAdvanced,
+        overCap: projectedAdvanced > ADVANCED_SOFT_CAP,
+      };
+    });
+    const overCapRoles = advanceRoles.filter((r) => r.overCap);
     setBulkStages({});
-    setBulkConfirm({ count, typeLabel, roleScope, sample, more, ids, advanceRoles });
+    setBulkConfirm({
+      count,
+      typeLabel,
+      roleScope,
+      sample,
+      more,
+      ids,
+      advanceRoles,
+      overCapRoles,
+    });
   };
 
   const runBulkApprove = async () => {
@@ -1055,6 +1087,31 @@ export const HomeNow = ({
             </div>
 
             <div className="rq-modal-body">
+              {bulkConfirm.overCapRoles?.length > 0 ? (
+                <div
+                  className="rq-modal-section"
+                  role="status"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 8,
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    background: 'color-mix(in srgb, var(--amber) 12%, var(--bg))',
+                    color: 'var(--amber)',
+                    fontSize: 12.5,
+                    lineHeight: 1.45,
+                    marginBottom: 4,
+                  }}
+                >
+                  <Eye size={14} strokeWidth={2} aria-hidden="true" style={{ marginTop: 1, flexShrink: 0 }} />
+                  <span>
+                    {bulkConfirm.overCapRoles.length === 1
+                      ? `Heads up — this pushes ${bulkConfirm.overCapRoles[0].role_name} past ${ADVANCED_SOFT_CAP} advanced (${bulkConfirm.overCapRoles[0].projectedAdvanced} total). Double-check before confirming.`
+                      : `Heads up — this pushes ${bulkConfirm.overCapRoles.length} roles past ${ADVANCED_SOFT_CAP} advanced. Double-check before confirming.`}
+                  </span>
+                </div>
+              ) : null}
               {bulkConfirm.advanceRoles.length > 0 ? (
                 <div className="rq-modal-section">
                   <span className="rq-modal-label">
@@ -1066,8 +1123,29 @@ export const HomeNow = ({
                     const picked = bulkStages[r.role_id];
                     return (
                       <div key={r.role_id} style={{ marginTop: 10 }}>
-                        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginBottom: 6 }}>
+                        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginBottom: 4 }}>
                           {r.role_name} · {r.count} advancing
+                        </div>
+                        {/* Pipeline standing at decision time — gives the
+                            recruiter the advanced total before they approve. */}
+                        <div
+                          style={{
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: 11,
+                            letterSpacing: '.02em',
+                            marginBottom: 6,
+                            color: r.overCap ? 'var(--amber)' : 'var(--mute)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                          }}
+                        >
+                          <span>
+                            {r.alreadyAdvanced} already advanced · approving {r.count} more → {r.projectedAdvanced} total
+                          </span>
+                          {r.overCap ? (
+                            <span style={{ fontWeight: 600 }}>· over {ADVANCED_SOFT_CAP}</span>
+                          ) : null}
                         </div>
                         {raw === undefined || raw === 'loading' ? (
                           <span style={{ fontSize: 12, color: 'var(--mute)' }}>Loading stages…</span>
