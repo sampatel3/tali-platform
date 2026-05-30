@@ -221,13 +221,15 @@ const STATUS_TABS = [
   { id: 'all', label: 'All' },
 ];
 
-// 'advance' is a category — the backend expands it to advance_to_interview
-// + send_assessment + resend_assessment_invite. 'reject' and
+// 'advance' and 'assessment' are categories — the backend expands them to
+// their underlying decision_types (advance → advance_to_interview;
+// assessment → send_assessment + resend_assessment_invite). 'reject' and
 // 'skip_assessment_reject' map 1:1 to their decision_type so the Hub
 // distinguishes the pre-screen reject from a post-assessment reject.
 const TYPE_OPTIONS = [
   { id: '', label: 'All types' },
   { id: 'advance', label: 'Advance' },
+  { id: 'assessment', label: 'Send assessment' },
   { id: 'reject', label: 'Reject' },
   { id: 'skip_assessment_reject', label: 'Reject (pre-screen)' },
 ];
