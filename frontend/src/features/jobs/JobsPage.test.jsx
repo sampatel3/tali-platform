@@ -21,6 +21,8 @@ vi.mock('../../shared/api', () => ({
   agent: {
     status: vi.fn(),
     orgStatus: vi.fn(),
+    pauseAll: vi.fn(),
+    resumeAll: vi.fn(),
   },
 }));
 
@@ -153,5 +155,25 @@ describe('JobsPage Workable sync states', () => {
     fireEvent.click(await screen.findByRole('button', { name: '+ New role' }));
 
     expect(await screen.findByText('Set up a role in three quick steps.')).toBeInTheDocument();
+  });
+
+  it('shows AGENT PAUSED (not AGENT ON) for an enabled-but-paused role', async () => {
+    // Soft pause keeps agentic_mode_enabled=true and stamps agent_paused_at.
+    apiClient.roles.list.mockResolvedValue({
+      data: [{
+        ...baseRoles[0],
+        agentic_mode_enabled: true,
+        agent_paused_at: '2026-05-30T18:53:00Z',
+        monthly_usd_budget_cents: 5000,
+      }],
+    });
+    apiClient.organizations.getWorkableSyncStatus.mockResolvedValue({
+      data: { run_id: null, sync_in_progress: false, workable_last_sync_at: '2026-04-25T13:00:00Z', workable_last_sync_status: 'success', workable_last_sync_summary: {} },
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    expect(await screen.findByText(/AGENT PAUSED/)).toBeInTheDocument();
+    expect(screen.queryByText(/AGENT ON/)).not.toBeInTheDocument();
   });
 });
