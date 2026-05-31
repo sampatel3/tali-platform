@@ -89,11 +89,19 @@ def shadow_compare(
                 # can't render a verdict on this attribute either.
                 continue
             scored_attrs.append(attr)
-            total_n = sum(n for _, n, _ in scorable)
-            # Global positive rate = n-weighted mean of the segment rates (the
-            # population selection rate mainspring's audit() compares against).
+            # Global positive rate = n-weighted mean over the WHOLE population,
+            # i.e. ALL segments incl. the undersized ones. In mainspring's
+            # audit() (seam.py PARITY NOTE) undersized groups are skipped only as
+            # violation *candidates* (gr.n < MIN_GROUP_N is dropped from the
+            # scored set), but every case still counts toward the GLOBAL rate the
+            # scored groups are measured against. Computing the baseline from the
+            # scorable segments alone shifts it toward those two groups, so many
+            # small high-rate segments + two scorable low-rate ones would log a
+            # false pass where the real mainspring verdict FAILS — exactly the
+            # sparse-attribute (nationality) case. Include all rows in the rate.
+            pop_n = sum(n for _, n, _ in rows)
             global_rate = (
-                sum(n * r for _, n, r in scorable) / total_n if total_n else 0.0
+                sum(n * r for _, n, r in rows) / pop_n if pop_n else 0.0
             )
             result = evaluate_demographic_parity(
                 candidate_id=int(candidate_id),

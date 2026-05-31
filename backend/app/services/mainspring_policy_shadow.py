@@ -52,8 +52,12 @@ _POINT_ORDER = ("send_assessment", "advance_to_interview", "reject")
 # rules strictly above a later point's, mirroring tali's point cascade.
 _POINT_PRIORITY_BASE = {"send_assessment": 30_000, "advance_to_interview": 20_000, "reject": 10_000}
 
-# tali rule verbs that short-circuit a point without queueing; mainspring
-# treats ``skip``/``no_action`` the same way, so they map straight through.
+# tali rule verbs that make a point return WITHOUT queueing. In tali these do
+# NOT end evaluation — the engine keeps walking later points (cascade), so a
+# passive higher-priority rule must NOT short-circuit the vendored engine (which
+# returns immediately on SKIP/NO_ACTION). We therefore drop passive rules from
+# the flattened rule list (see _translate_to_engine) and treat both engines'
+# passive/no-rule-matched outcomes as equivalent when judging agreement.
 _PASSIVE_VERBS = {"skip", "no_action"}
 
 
@@ -86,12 +90,20 @@ def _build_signal_bundle(inputs: "DecisionInputs", SignalBundle: Any, Signal: An
 
 
 def _translate_to_engine(
-    policy: "PolicyJson", inputs: "DecisionInputs", PolicyEngine: Any, Rule: Any
+    policy: "PolicyJson",
+    inputs: "DecisionInputs",
+    PolicyEngine: Any,
+    Rule: Any,
+    EscalationConfig: Any,
 ) -> tuple[Any, list[str]]:
     """Best-effort DomainSpec translation: tali ``PolicyJson`` → mainspring
     ``PolicyEngine``. Returns ``(engine, untranslatable)`` where the second
     list names structures we could not faithfully map (logged as a gap)."""
-    from ..decision_policy.engine import _build_rule_context, _eval_condition
+    from ..decision_policy.engine import (
+        _build_rule_context,
+        _eval_condition,
+        _weighted_score,
+    )
 
     rules: list[Any] = []
     thresholds: dict[str, float] = {}
@@ -102,10 +114,13 @@ def _translate_to_engine(
         if point is None:
             continue
         # The rule context tali evaluates against is per-point (it folds in the
-        # point's thresholds). Capture it once and reuse it as the predicate's
-        # closure so mainspring's ``when`` sees exactly tali's view.
+        # point's thresholds + the weighted_score). Capture it once and reuse it
+        # as the predicate's closure so mainspring's ``when`` sees exactly tali's
+        # view — and so we can replay tali's "first match wins" walk below.
         try:
             point_ctx = _build_rule_context(inputs, point_name, point)
+            weighted_total, _contrib = _weighted_score(inputs, point)
+            point_ctx["weighted_score"] = weighted_total
         except Exception:
             untranslatable.append(f"{point_name}:context")
             continue
@@ -118,7 +133,36 @@ def _translate_to_engine(
             untranslatable.append(f"{point_name}:weighted_fallthrough")
 
         base = _POINT_PRIORITY_BASE.get(point_name, 0)
-        for rule in point.rules:
+
+        # Emulate tali's PER-POINT cascade. Inside a point tali walks rules in
+        # priority-descending order and the FIRST firing rule wins
+        # (_evaluate_decision_point). If that first firing rule is PASSIVE
+        # (skip/no_action) tali returns a passive verdict and KEEPS LOOKING at
+        # later points (engine.evaluate `continue`s the DECISION_POINT_ORDER loop;
+        # only `last_no_action` survives if nothing queues). The vendored
+        # PolicyEngine instead returns IMMEDIATELY on the first firing
+        # SKIP/NO_ACTION rule (policy.py ~124-131), so emitting a passive rule
+        # with `then=rule.then` would short-circuit the whole engine where tali
+        # falls through — a false mismatch (e.g. send's `assessment_completed ->
+        # skip` firing before advance's queue rule could). We faithfully emulate
+        # the fall-through by, for each point, dropping the passive rule AND every
+        # rule it shadows (anything at or below it in priority that tali would
+        # never reach), so the only rules we emit for this point are the
+        # higher-priority QUEUEING rules that could actually win in tali. If
+        # nothing queues, tali returns the passive verdict and mainspring returns
+        # NO_ACTION — both in _PASSIVE_VERBS, so the agreement check still matches.
+        for rule in sorted(point.rules, key=lambda r: -r.priority):
+            if rule.then in _PASSIVE_VERBS:
+                try:
+                    if _eval_condition(rule.if_, point_ctx):
+                        # This passive rule wins the point in tali → it shadows
+                        # every lower-priority rule. Stop emitting for this point.
+                        break
+                except Exception:
+                    pass
+                # A non-firing passive rule simply doesn't emit (no short-circuit).
+                continue
+
             expr = rule.if_
 
             def _when(_ctx: dict, _expr: str = expr, _pctx: dict = point_ctx) -> bool:
@@ -144,7 +188,17 @@ def _translate_to_engine(
                 )
             )
 
-    engine = PolicyEngine(rules=rules, thresholds=thresholds)
+    # The shadow compares engine CONTROL-FLOW/priority semantics, not the
+    # abstention overlay: tali has no such overlay (a matching non-terminal rule
+    # queues directly; uncertainty is handled by tali's own confidence_floor,
+    # already folded into the verdict it emits). Mainspring's default
+    # EscalationConfig is ENABLED and would rewrite an otherwise-matching rule to
+    # `escalate` on low-confidence/spread>35 signals, logging a false disagree
+    # (e.g. a high-taali_score/low-role_fit candidate tali correctly queues).
+    # Disable abstention so the shadow measures only what tali also models.
+    engine = PolicyEngine(
+        rules=rules, thresholds=thresholds, escalation=EscalationConfig(enabled=False)
+    )
     return engine, untranslatable
 
 
@@ -168,10 +222,12 @@ def shadow_compare_verdict(
     if not getattr(settings, "MAINSPRING_POLICY_SHADOW", False):
         return
     try:
-        from vendor.mainspring_policy.policy import PolicyEngine, Rule
+        from vendor.mainspring_policy.policy import EscalationConfig, PolicyEngine, Rule
         from vendor.mainspring_policy.signals import Signal, SignalBundle
 
-        engine, untranslatable = _translate_to_engine(policy, inputs, PolicyEngine, Rule)
+        engine, untranslatable = _translate_to_engine(
+            policy, inputs, PolicyEngine, Rule, EscalationConfig
+        )
         bundle = _build_signal_bundle(inputs, SignalBundle, Signal)
         flags = _flags_for_engine(inputs)
 
