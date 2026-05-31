@@ -62,4 +62,61 @@ describe('AgentHeader — Pause/Resume panel', () => {
     expect(screen.getByText('AUTO-PAUSED')).toBeInTheDocument();
     expect(screen.getByText(/monthly budget reached/i)).toBeInTheDocument();
   });
+
+  describe('org bulk mode (Pause all / Resume all with counts)', () => {
+    it('shows BOTH "Pause all (N)" and "Resume all (M)" in a mixed org', () => {
+      const onPause = vi.fn();
+      const onResume = vi.fn();
+      render(
+        <AgentHeader
+          title="Jobs"
+          agent={runningAgent}
+          onPauseAgent={onPause}
+          onResumeAgent={onResume}
+          pauseLabel="Pause all"
+          resumeLabel="Resume all"
+          pauseAllCount={1}
+          resumeAllCount={10}
+        />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: /pause all \(1\)/i }));
+      fireEvent.click(screen.getByRole('button', { name: /resume all \(10\)/i }));
+      expect(onPause).toHaveBeenCalledTimes(1);
+      expect(onResume).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows only "Pause all (N)" when nothing is paused', () => {
+      render(
+        <AgentHeader
+          title="Jobs"
+          agent={runningAgent}
+          onPauseAgent={() => {}}
+          onResumeAgent={() => {}}
+          pauseLabel="Pause all"
+          resumeLabel="Resume all"
+          pauseAllCount={3}
+          resumeAllCount={0}
+        />,
+      );
+      expect(screen.getByRole('button', { name: /pause all \(3\)/i })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /resume all/i })).not.toBeInTheDocument();
+    });
+
+    it('shows only "Resume all (M)" when every agent is paused', () => {
+      render(
+        <AgentHeader
+          title="Jobs"
+          agent={{ ...runningAgent, on: false, paused: true, pausedReason: 'paused by recruiter' }}
+          onPauseAgent={() => {}}
+          onResumeAgent={() => {}}
+          pauseLabel="Pause all"
+          resumeLabel="Resume all"
+          pauseAllCount={0}
+          resumeAllCount={5}
+        />,
+      );
+      expect(screen.getByRole('button', { name: /resume all \(5\)/i })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /pause all/i })).not.toBeInTheDocument();
+    });
+  });
 });

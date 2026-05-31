@@ -542,6 +542,19 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     () => runAgentBulk(() => apiClient.agent.resumeAll(), 'Could not resume agents.'),
     [runAgentBulk],
   );
+  // Running vs paused split across agent-enabled roles — drives the panel's
+  // "Pause all (N)" / "Resume all (M)" so a mixed org can do either. Derived
+  // from the same role list the cards use, so the badges and buttons agree.
+  const { agentRunningCount, agentPausedCount } = useMemo(() => {
+    let running = 0;
+    let pausedCount = 0;
+    roles.forEach((role) => {
+      if (!role?.agentic_mode_enabled) return;
+      if (role?.agent_paused_at) pausedCount += 1;
+      else running += 1;
+    });
+    return { agentRunningCount: running, agentPausedCount: pausedCount };
+  }, [roles]);
 
   return (
     <div>
@@ -587,6 +600,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
         onResumeAgent={isShowcase ? undefined : handleResumeAllAgents}
         pauseLabel="Pause all"
         resumeLabel="Resume all"
+        pauseAllCount={isShowcase ? null : agentRunningCount}
+        resumeAllCount={isShowcase ? null : agentPausedCount}
         offStateMessage="Open a role and turn on agent mode there — each role has its own monthly cap."
       />
       <div className="mc-page">
