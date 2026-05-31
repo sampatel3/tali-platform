@@ -1,0 +1,7 @@
+mainspring master @ fa03ca7
+Files: knowledge_graph/base.py (ORM-free Protocol + dataclasses only).
+Vendored INTERFACE ONLY (ADR-0010 cut #5, decision: converge the interface, not the store).
+The production GraphitiBackend (knowledge_graph/graphiti.py) is a known
+NotImplementedError stub and is deliberately NOT vendored or called — the
+shadow logs status=mainspring_stub instead. Tali keeps Graphiti as its store.
+Re-vendor: bash backend/scripts/vendor_mainspring_kg.sh

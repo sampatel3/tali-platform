@@ -49,6 +49,7 @@ from ..decision_policy.schema import GraphPriorConfig, PolicyJson
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
+from ..services.mainspring_kg_shadow import shadow_compare_priors
 from ..platform.database import SessionLocal
 from .base import SubAgent, SubAgentRequest, SubAgentResult
 from .registry import register_sub_agent
@@ -240,6 +241,18 @@ class GraphPriorsSubAgent:
             overlap_rows=overlap_rows,
             similar_rows=similar_rows,
             skill_outcome_rows=skill_rows,
+        )
+        # ADR-0010 cut #5: shadow-check tali's GraphRAG prior against mainspring's
+        # vendored KnowledgeGraphBackend interface and log a conformance diff.
+        # No-op unless MAINSPRING_KG_SHADOW is set; never raises — must not affect
+        # the live prior. Interface-only: mainspring's store stub is never called.
+        shadow_compare_priors(
+            case_id=candidate_taali_id,
+            brand_id=int(req.organization_id),
+            tali_prior={
+                **synthesis,
+                "neighbour_count": len(similar_rows) + len(overlap_rows),
+            },
         )
         confidence = float(synthesis.get("confidence") or 0.0)
         p_advance = synthesis.get("p_advance")
