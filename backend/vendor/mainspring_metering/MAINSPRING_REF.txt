@@ -1,3 +1,3 @@
-mainspring master @ fa03ca7
-Files: metering/seam.py, metering/pricing.py (ORM-free seam only).
+mainspring @ e7ffa22
+Files: accelerator/metering/seam.py, governance/metering/pricing.py (ORM-free seam only).
 Re-vendor: bash backend/scripts/vendor_mainspring_metering.sh

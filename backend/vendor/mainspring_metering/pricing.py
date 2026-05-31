@@ -16,6 +16,7 @@ matching local records.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import ROUND_UP, Decimal
 from typing import Optional
 
 
@@ -152,6 +153,7 @@ def cost_for(
     *, model: str, input_tokens: int, output_tokens: int,
     cache_read_tokens: int = 0, cache_creation_tokens: int = 0,
     cache_creation_1h_tokens: Optional[int] = None,
+    service_tier: str = "standard",
 ) -> int:
     """Compute the cost of one call in micro-USD. Returns 0 for unknown
     models (and the reconciler flags the call) — we never silently
@@ -160,29 +162,57 @@ def cost_for(
     ``cache_creation_1h_tokens`` is the slice of ``cache_creation_tokens``
     written with a 1-hour TTL, which Anthropic prices at 2x input (vs the 5m
     default at 1.25x). ``None`` prices the whole cache-creation stream at the
-    5m rate — the conservative, backward-compatible default."""
+    5m rate — the conservative, backward-compatible default.
+
+    ``service_tier`` follows Anthropic's billing tiers. ``"standard"`` (the
+    default) applies no multiplier. ``"batch"`` (the Message Batches API) is
+    billed at 50% of standard across EVERY token category (input, output, cache
+    read, cache write), so the whole cost is halved. Pricing the batch path at
+    the full standard rate over-counts batch spend ~2x against Anthropic's
+    billed cost (see the brand's CV-matching batch runner).
+
+    Rounding: the cost is computed in ``Decimal`` and the final micro-USD is
+    rounded UP (``ROUND_UP``). This mirrors the brand meter (tali-platform
+    ``raw_cost_usd_micro``) token-for-token — including fractional micro values
+    from cache tokens (a single cache-read token at 0.1x input bills 1 micro,
+    not 0) and the float-free arithmetic that matters for the one fractional
+    per-MTok rate (claude-3-5-haiku at $0.80) over large token counts."""
     dated = resolve_model(model)
     price = PRICING.get(dated)
     if price is None:
         return 0
+    # Recover the exact per-MTok rate as a Decimal. ``input_per_token`` /
+    # ``output_per_token`` equal the published $/MTok numerically (the
+    # ``from_per_million`` round-trip is identity), so ``Decimal(str(...))``
+    # gives the exact rate (e.g. 0.8) without float drift. The cache
+    # multipliers (0.10 read, 1.25 5m-creation, 2.00 1h-creation) are applied
+    # off the input rate in Decimal, exactly as the brand meter does — so the
+    # two meters agree bit-for-bit, not just to ~1%.
+    in_rate = Decimal(str(price.input_per_token))
+    out_rate = Decimal(str(price.output_per_token))
+
+    standard_input = Decimal(input_tokens) * in_rate
+    standard_output = Decimal(output_tokens) * out_rate
+    cache_read = Decimal(cache_read_tokens) * in_rate * Decimal("0.10")
     if cache_creation_1h_tokens is None:
-        cache_creation_cost = cache_creation_tokens * price.cache_creation_per_token
+        cache_creation = Decimal(cache_creation_tokens) * in_rate * Decimal("1.25")
     else:
-        cc_1h = int(cache_creation_1h_tokens or 0)
-        cc_5m = cache_creation_tokens - cc_1h
+        cc_1h = Decimal(int(cache_creation_1h_tokens or 0))
+        cc_5m = Decimal(int(cache_creation_tokens or 0)) - cc_1h
         # 1h-TTL writes price at 2x input; the 5m remainder at the 1.25x
         # cache_creation rate. Matches the brand meter token-for-token.
-        cache_creation_cost = (
-            cc_5m * price.cache_creation_per_token
-            + cc_1h * price.input_per_token * 2.0
+        cache_creation = (
+            cc_5m * in_rate * Decimal("1.25")
+            + cc_1h * in_rate * Decimal("2.00")
         )
-    total = (
-        input_tokens * price.input_per_token
-        + output_tokens * price.output_per_token
-        + cache_read_tokens * price.cache_read_per_token
-        + cache_creation_cost
-    )
-    return int(round(total))
+
+    micro = standard_input + standard_output + cache_read + cache_creation
+    if service_tier == "batch":
+        # Batch tier bills at 50% across all token categories. Halve after the
+        # per-category math so the discount is uniform; ROUND_UP on the exact
+        # half (an odd total whose half ends in .5 rounds up identically).
+        micro = micro * Decimal("0.5")
+    return int(micro.quantize(Decimal("1"), rounding=ROUND_UP))
 
 
 def register_price(model: str, price: ModelPrice) -> None:
