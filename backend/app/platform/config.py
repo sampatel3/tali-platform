@@ -130,6 +130,13 @@ class Settings(BaseSettings):
     # ALSO priced through mainspring's vendored seam and a parity diff is logged
     # (log-only, no behaviour change) — the at-parity evidence before any cutover.
     MAINSPRING_METERING_SHADOW: bool = False
+    # ADR-0010 KG convergence (cut #5): when True, every GraphRAG prior synthesis
+    # is ALSO checked against mainspring's vendored KnowledgeGraphBackend Protocol
+    # — a structural interface-conformance + shape diff is logged (log-only, no
+    # behaviour change). INTERFACE-ONLY: the mainspring GraphitiBackend store is a
+    # known NotImplementedError stub, so the shadow logs mainspring_stub rather
+    # than calling it. Tali keeps Graphiti as its store.
+    MAINSPRING_KG_SHADOW: bool = False
     # Brand service token for the ingest API (sent as Bearer). Empty in shadow.
     MAINSPRING_BRAND_TOKEN: str = ""
     # How far back each sweep looks for newly-resolved decisions / teach
