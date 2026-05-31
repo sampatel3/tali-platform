@@ -32,6 +32,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from ..models.decision_policy import DecisionPolicy as DecisionPolicyRow
+from ..services.mainspring_policy_shadow import shadow_compare_verdict
 from .intent import apply_intent_overrides
 from .schema import DECISION_POINT_NAMES, DecisionPoint, PolicyJson
 
@@ -711,6 +712,7 @@ def evaluate(inputs: DecisionInputs, *, db: Session) -> PolicyDecision:
 
     last_no_action: PolicyDecision | None = None
     any_manual_skip = False
+    final: PolicyDecision | None = None
     for point_name in DECISION_POINT_ORDER:
         point = overlaid.decision_points.get(point_name)
         if point is None:
@@ -732,23 +734,33 @@ def evaluate(inputs: DecisionInputs, *, db: Session) -> PolicyDecision:
         if verdict.decision_type == "no_action":
             last_no_action = verdict
             continue
-        return verdict
+        final = verdict
+        break
 
-    # No decision point produced a queueable verdict. Propagate the
-    # skipped-due-to-manual flag if we saw it on any point — the
-    # cascade walked past it but the audit trail should still record
-    # that the recruiter handled the candidate manually.
-    if last_no_action is not None:
-        if any_manual_skip:
-            last_no_action.skipped_due_to_manual = True
-        return last_no_action
-    return PolicyDecision(
-        decision_type="no_action",
-        reasoning="No decision points configured for this policy.",
-        rule_path=["empty_policy"],
-        policy_revision_id=int(row.revision_id),
-        intent_overrode=intent_overrode,
-    )
+    if final is None:
+        # No decision point produced a queueable verdict. Propagate the
+        # skipped-due-to-manual flag if we saw it on any point — the
+        # cascade walked past it but the audit trail should still record
+        # that the recruiter handled the candidate manually.
+        if last_no_action is not None:
+            if any_manual_skip:
+                last_no_action.skipped_due_to_manual = True
+            final = last_no_action
+        else:
+            final = PolicyDecision(
+                decision_type="no_action",
+                reasoning="No decision points configured for this policy.",
+                rule_path=["empty_policy"],
+                policy_revision_id=int(row.revision_id),
+                intent_overrode=intent_overrode,
+            )
+
+    # ADR-0010 cut #2: shadow-derive the same verdict through mainspring's
+    # vendored PolicyEngine (a DomainSpec translated from this same overlaid
+    # policy + inputs) and log an agreement/disagreement diff. No-op unless
+    # MAINSPRING_POLICY_SHADOW is set; never raises — must not affect the verdict.
+    shadow_compare_verdict(inputs=inputs, policy=overlaid, tali_verdict=final)
+    return final
 
 
 __all__ = [
