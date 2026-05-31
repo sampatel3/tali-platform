@@ -139,3 +139,54 @@ def test_shadow_never_raises_on_bad_input(monkeypatch):
         tali_metrics={"gender": "not-a-dict", "race": None, "x": 123},
         tali_violations=None,
     )
+
+
+# --- P2 FIX 3: undersized segments must count toward the GLOBAL parity baseline
+
+
+def test_shadow_global_baseline_includes_undersized_segments(caplog, monkeypatch):
+    """REGRESSION (P2 #3): mainspring skips undersized groups as violation
+    CANDIDATES but still measures the scored groups against the GLOBAL
+    population rate (which includes everyone). With many small high-rate
+    segments + two scorable low-rate segments (the sparse `nationality` case),
+    the real mainspring verdict FAILS. The old shadow computed the baseline from
+    the scorable segments only → it logged a false pass/agreement. The fix folds
+    the undersized segments into the global rate, so mainspring now correctly
+    FAILS and the shadow logs a `disagreement` against tali's `passed=True`."""
+    monkeypatch.setattr(settings, "MAINSPRING_BIAS_SHADOW", True, raising=False)
+    # 6 small high-rate segments (n=3 < MIN_GROUP_N, rate 0.90) lift the global
+    # population rate to ~0.59; the two scorable low-rate segments (n=10, ~0.30)
+    # then sit 0.29/0.27 below it — both > MAX_PARITY_GAP (0.15) → violations.
+    segs = {f"small{i}": (3, 0.90) for i in range(6)}
+    segs["bigA"] = (10, 0.30)
+    segs["bigB"] = (10, 0.32)
+    metrics = _metrics("nationality", segs)
+    with caplog.at_level(logging.INFO, logger="taali.bias.shadow"):
+        shadow_compare(
+            candidate_id=11, tali_passed=True, tali_metrics=metrics, tali_violations=[]
+        )
+    evs = _SHADOW_EVENTS(caplog)
+    statuses = {e.status for e in evs}
+    assert "compared" in statuses and "disagreement" in statuses
+    compared = next(e for e in evs if e.status == "compared")
+    assert compared.mainspring_passed is False
+    assert compared.agreement is False
+    # Only the two scorable segments are EVALUATED as candidates; the small ones
+    # are excluded from the violation set but counted in the baseline.
+    assert compared.mainspring_violations == 2
+
+
+def test_shadow_no_undersized_segments_unchanged(caplog, monkeypatch):
+    """When every segment is scorable, the population baseline == the
+    scorable-only baseline, so the verdict is unchanged: two balanced groups
+    over MIN_GROUP_N still pass/agree (guards against an over-broad fix)."""
+    monkeypatch.setattr(settings, "MAINSPRING_BIAS_SHADOW", True, raising=False)
+    metrics = _metrics("gender", {"F": (20, 0.50), "M": (20, 0.51)})
+    with caplog.at_level(logging.INFO, logger="taali.bias.shadow"):
+        shadow_compare(
+            candidate_id=12, tali_passed=True, tali_metrics=metrics, tali_violations=[]
+        )
+    evs = _SHADOW_EVENTS(caplog)
+    assert evs and evs[0].status == "compared"
+    assert evs[0].mainspring_passed is True
+    assert evs[0].agreement is True
