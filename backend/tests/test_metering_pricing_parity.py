@@ -123,3 +123,51 @@ def test_service_tier_defaults_to_standard_on_seam():
         assert seam_cost_for(model=model, **u) == seam_cost_for(
             model=model, service_tier="standard", **u
         )
+
+
+# ---------------------------------------------------------------------------
+# Cutover assertion: record_event's BILLED cost is the seam's cost.
+# ---------------------------------------------------------------------------
+# After the cutover, ``record_event`` prices the raw Anthropic cost through the
+# vendored seam (``cost_for``) — not tali's ``raw_cost_usd_micro``. These pin
+# that the persisted ``UsageEvent.cost_usd_micro`` IS the seam's number (for
+# both standard and batch tiers), and that the per-feature markup is layered on
+# top of it unchanged. If a future change repoints record_event off the seam,
+# or breaks the markup threading, this fails.
+
+_CUTOVER_USAGES = [
+    dict(input_tokens=1000, output_tokens=500),
+    dict(input_tokens=1001, output_tokens=499, cache_read_tokens=89,
+         cache_creation_tokens=43, cache_creation_1h_tokens=17),
+    dict(input_tokens=12345, output_tokens=6789, cache_read_tokens=777),
+]
+
+
+@pytest.mark.parametrize("tier", _TIERS)
+@pytest.mark.parametrize("usage", _CUTOVER_USAGES)
+def test_record_event_bills_the_seam_cost(db, tier, usage):
+    from app.models.organization import Organization
+    from app.services.pricing_service import Feature, credits_charged
+    from app.services.usage_metering_service import record_event
+
+    model = "claude-sonnet-4-5-20250929"
+    org = Organization(name="O", slug=f"o-{tier}-{id(usage)}")
+    db.add(org)
+    db.commit()
+
+    event = record_event(
+        db,
+        organization_id=int(org.id),
+        feature=Feature.SCORE,
+        model=model,
+        service_tier=tier,
+        **usage,
+    )
+
+    expected_raw = seam_cost_for(model=model, service_tier=tier, **usage)
+    # The billed raw cost IS the seam's number — the cutover.
+    assert event.cost_usd_micro == expected_raw
+    # The per-feature markup (tali business logic) is layered on top, unchanged.
+    assert event.credits_charged == credits_charged(
+        feature=Feature.SCORE, cost_usd_micro=expected_raw, cache_hit=False
+    )

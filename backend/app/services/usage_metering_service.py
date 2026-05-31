@@ -29,10 +29,9 @@ from .pricing_service import (
     Feature,
     credits_charged,
     estimate_reservation,
-    raw_cost_usd_micro,
     feature_pricing,
 )
-from .mainspring_metering_shadow import shadow_compare
+from vendor.mainspring_metering.pricing import cost_for as seam_cost_for
 
 logger = logging.getLogger("taali.usage_metering")
 
@@ -125,26 +124,20 @@ def record_event(
     else:
         feature_enum = feature
 
-    cost_usd_micro = raw_cost_usd_micro(
+    # ADR-0010 metering CUTOVER: the vendored mainspring seam is now the single
+    # source of truth for the raw Anthropic call cost. It prices bit-for-bit
+    # identically to tali's former ``raw_cost_usd_micro`` (proven exact over the
+    # full model x usage x {standard,batch} corpus — see
+    # tests/test_metering_pricing_parity.py), so this is a zero-behaviour-change
+    # swap. The per-feature markup below stays tali business logic.
+    cost_usd_micro = seam_cost_for(
+        model=model,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cache_read_tokens=cache_read_tokens,
         cache_creation_tokens=cache_creation_tokens,
         cache_creation_1h_tokens=cache_creation_1h_tokens,
-        model=model,
         service_tier=service_tier,
-    )
-    # ADR-0010 cut #1b: shadow-price the same tokens through mainspring's
-    # vendored seam and log a parity diff. No-op unless MAINSPRING_METERING_SHADOW
-    # is set; never raises — must not affect the live call.
-    shadow_compare(
-        model=model,
-        tali_cost_usd_micro=cost_usd_micro,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        cache_read_tokens=cache_read_tokens,
-        cache_creation_tokens=cache_creation_tokens,
-        cache_creation_1h_tokens=cache_creation_1h_tokens,
     )
     charged = credits_charged(
         feature=feature_enum, cost_usd_micro=cost_usd_micro, cache_hit=cache_hit

@@ -126,10 +126,10 @@ class Settings(BaseSettings):
     # Base URL of the mainspring deployment exposing /api/v1/ingest/*. Empty =
     # shadow mode (drain logs what it would send, leaves rows pending).
     MAINSPRING_INGEST_URL: str = ""
-    # ADR-0010 metering convergence (cut #1b): when True, every metered call is
-    # ALSO priced through mainspring's vendored seam and a parity diff is logged
-    # (log-only, no behaviour change) — the at-parity evidence before any cutover.
-    MAINSPRING_METERING_SHADOW: bool = False
+    # ADR-0010 metering convergence: CUT OVER. record_event() now prices the
+    # billed cost directly through mainspring's vendored seam (the single source
+    # of truth). The pre-cutover shadow comparator + its MAINSPRING_METERING_SHADOW
+    # flag have been retired now that the seam is the live pricer.
     # ADR-0010 decision-policy convergence (cut #2): when True, every policy
     # verdict is ALSO re-derived through mainspring's vendored deterministic
     # PolicyEngine (a DomainSpec translated from the tali DecisionPolicyRow) and
