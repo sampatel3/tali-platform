@@ -33,6 +33,7 @@ from .bias_audit import (
 )
 from .fitted_policy import FittedModel, predict_proba_with_model
 from .shadow_mode import conclude_shadow_run, is_eligible_for_conclusion
+from ..services.mainspring_gate_shadow import shadow_compare_gate
 
 
 logger = logging.getLogger("taali.decision_policy.promotion_gate")
@@ -227,6 +228,20 @@ def run_gate(
         gold_passed=gold_passed,
         bias_passed=bias_passed,
         shadow_passed=shadow_passed,
+    )
+
+    # ADR-0010 cut #3: shadow-evaluate the same sub-check metrics through
+    # mainspring's vendored gate-decision seam and log a gate-decision agreement
+    # diff. No-op unless MAINSPRING_GATE_SHADOW is set; never raises — must not
+    # affect the gate run.
+    shadow_compare_gate(
+        policy_version_id=candidate.id,
+        tali_passed=all_pass,
+        gold_passed=gold_passed,
+        bias_passed=bias_passed,
+        shadow_passed=shadow_passed,
+        auto_apply=auto_promote,
+        tali_reasons=reasons,
     )
 
     if all_pass and auto_promote:

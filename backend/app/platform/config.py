@@ -130,6 +130,17 @@ class Settings(BaseSettings):
     # ALSO priced through mainspring's vendored seam and a parity diff is logged
     # (log-only, no behaviour change) — the at-parity evidence before any cutover.
     MAINSPRING_METERING_SHADOW: bool = False
+    # ADR-0010 decision-policy convergence (cut #2): when True, every policy
+    # verdict is ALSO re-derived through mainspring's vendored deterministic
+    # PolicyEngine (a DomainSpec translated from the tali DecisionPolicyRow) and
+    # a verdict agreement/disagreement diff is logged (log-only, no behaviour
+    # change) — the at-parity evidence before any cutover. Default OFF.
+    MAINSPRING_POLICY_SHADOW: bool = False
+    # ADR-0010 convergence (cut #3, promotion gate): when True, every promotion-
+    # gate run is ALSO evaluated through mainspring's vendored gate-decision seam
+    # and a gate-decision agreement diff is logged (log-only, no behaviour
+    # change) — the at-parity evidence before any gate cutover. Default OFF.
+    MAINSPRING_GATE_SHADOW: bool = False
     # ADR-0010 convergence (cut #4): when True, every bias/EEOC audit ALSO scores
     # the same per-group selection rates through mainspring's vendored bias seam
     # and logs whether the two fairness verdicts (passed) agree (log-only, no

@@ -1,0 +1,8 @@
+mainspring master @ fa03ca7
+Source: platform/services/promotion_gate.py (run_gate) + platform/models/policy_version.py (PolicyStatus).
+Vendored: the ORM-free gate-DECISION rule only (seam.py) — mainspring's run_gate
+is Session/ORM-coupled (queries rows, mutates PolicyVersion.status, writes an
+AuditEvent), so it can't be vendored whole. seam.py extracts the pure
+composition (passed = shadow & holdout & bias; status ACTIVE/GATED/FAILED_GATE)
+verbatim, plus the PolicyStatus string values, with no Session/ORM imports.
+Re-vendor: bash backend/scripts/vendor_mainspring_gate.sh
