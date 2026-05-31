@@ -120,6 +120,12 @@ const AgentPanel = ({
   // list passes "Pause all" / "Resume all" because its panel acts org-wide.
   pauseLabel = 'Pause',
   resumeLabel = 'Resume',
+  // Org-wide bulk mode (Jobs list). When either is a number, the actions
+  // row is driven by counts instead of the single on/paused toggle: show
+  // "Pause all (N)" while N roles run AND "Resume all (M)" while M are
+  // paused — both at once in a mixed state. null → per-role toggle behaviour.
+  pauseAllCount = null,
+  resumeAllCount = null,
 }) => {
   const {
     on = true,
@@ -136,6 +142,9 @@ const AgentPanel = ({
   // budget-pause does not. Distinguish them so the pill/tick don't claim
   // "AUTO-PAUSED" right after the user clicked Pause.
   const isManualPause = /recruiter|paused by/i.test(String(pausedReason || ''));
+  // Org bulk mode: drive the actions row off running/paused counts so a
+  // mixed org can both Pause all and Resume all in one panel.
+  const hasBulkCounts = pauseAllCount != null || resumeAllCount != null;
   const pct = budgetCents > 0
     ? Math.min(100, Math.round((Number(spentCents) / Number(budgetCents)) * 100))
     : 0;
@@ -206,7 +215,32 @@ const AgentPanel = ({
           />
         ) : (
           <div className="agent-actions">
-            {on && !paused ? (
+            {hasBulkCounts ? (
+              <>
+                {Number(pauseAllCount) > 0 ? (
+                  <button
+                    type="button"
+                    className="agent-btn"
+                    onClick={onPause}
+                    disabled={!onPause}
+                  >
+                    <Pause size={11} strokeWidth={2} />
+                    {pauseLabel} ({pauseAllCount})
+                  </button>
+                ) : null}
+                {Number(resumeAllCount) > 0 ? (
+                  <button
+                    type="button"
+                    className="agent-btn primary"
+                    onClick={onResume}
+                    disabled={!onResume}
+                  >
+                    <Play size={11} strokeWidth={2} fill="currentColor" />
+                    {resumeLabel} ({resumeAllCount})
+                  </button>
+                ) : null}
+              </>
+            ) : on && !paused ? (
               <button
                 type="button"
                 className="agent-btn"
@@ -279,6 +313,10 @@ export const AgentHeader = ({
   // "Resume all" since its panel pauses/resumes every agent role at once.
   pauseLabel,
   resumeLabel,
+  // Org bulk mode: running / paused role counts. When set, the panel shows
+  // "Pause all (N)" and/or "Resume all (M)" so a mixed org can do either.
+  pauseAllCount = null,
+  resumeAllCount = null,
   className = '',
   variant = 'hero',
 }) => {
@@ -325,6 +363,8 @@ export const AgentHeader = ({
               offStateMessage={offStateMessage}
               pauseLabel={pauseLabel}
               resumeLabel={resumeLabel}
+              pauseAllCount={pauseAllCount}
+              resumeAllCount={resumeAllCount}
             />
           ) : null}
         </div>
