@@ -22,12 +22,30 @@ from ..models.organization import Organization
 from ..models.user import User
 from ..platform.database import get_db
 
-# Defensive ceiling on a single bulk reject. Real no-CV cohorts after a
+# Defensive ceiling on a single bulk reject. Real CV-gap cohorts after a
 # Workable sync are tiny (a handful), but a large back-fill could in theory
-# leave hundreds file-less; cap synchronous rejects so one request can't make
-# hundreds of Workable round-trips. Above this the recruiter reviews + rejects
-# in smaller batches from the role page.
-MAX_BULK_REJECT_MISSING_CV = 200
+# leave hundreds; cap synchronous rejects so one request can't make hundreds
+# of Workable round-trips. Above this the recruiter reviews + rejects in
+# smaller batches from the role page.
+MAX_BULK_REJECT_CV_GAP = 200
+
+# The two CV-gap card kinds the bulk reject serves, each with the cohort
+# accessor it targets and the Workable/event reason that keeps the audit
+# trail honest about *why* the candidate couldn't be evaluated.
+_CV_GAP_REJECT = {
+    "missing_cv": {
+        "cohort": "file_less_open_applications",
+        "count": "missing_cv_count",
+        "reason": "No CV on file",
+        "too_many": "have no CV",
+    },
+    "cv_unreadable": {
+        "cohort": "unreadable_cv_open_applications",
+        "count": "unreadable_cv_count",
+        "reason": "CV could not be read",
+        "too_many": "have an unreadable CV",
+    },
+}
 
 
 router = APIRouter(prefix="/agent-needs-input", tags=["agent-needs-input"])
@@ -183,33 +201,35 @@ def dismiss_needs_input(
     return NeedsInputView.from_row(row)
 
 
-class RejectMissingCvResult(BaseModel):
+class RejectCvGapResult(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     rejected: int
     # Candidates whose Workable disqualification failed — left open, not
     # rejected. Shape: {application_id, reason}.
     failed: list[dict[str, Any]]
-    # Live count of file-less candidates still open after the action (0 when
+    # Live count of this card's cohort still open after the action (0 when
     # everything was rejected; the card resolves itself in that case).
     remaining: int
 
 
 @router.post(
-    "/{needs_input_id}/reject-missing-cv",
-    response_model=RejectMissingCvResult,
+    "/{needs_input_id}/reject-cv-gap",
+    response_model=RejectCvGapResult,
 )
-def reject_missing_cv(
+def reject_cv_gap(
     needs_input_id: int,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> RejectMissingCvResult:
-    """Bulk-reject every candidate on the role that has no CV file at all.
+) -> RejectCvGapResult:
+    """Bulk-reject the cohort behind a CV-gap card the agent can't evaluate.
 
-    Scoped strictly to the ``missing_cv`` cohort (no CV text *and* no CV
-    file). ``cv_unreadable`` candidates — who submitted a CV we simply
-    couldn't parse — are never touched here; rejecting them for "no CV" would
-    be wrong, so they stay on their own card.
+    Works for both ``missing_cv`` (no CV file at all → reason "No CV on
+    file") and ``cv_unreadable`` (a CV file we couldn't parse → reason "CV
+    could not be read"). Each card rejects only its own cohort and stamps the
+    matching reason, so a candidate who *did* submit a CV is never recorded as
+    "no CV". The recruiter is the decision-maker — whether to chase an OCR
+    re-upload or just reject is their call.
 
     Each reject writes the Workable disqualification first and flips the local
     outcome only on success, committing per-candidate so a mid-batch failure
@@ -227,10 +247,11 @@ def reject_missing_cv(
     )
     if row is None:
         raise HTTPException(status_code=404, detail="needs_input row not found")
-    if row.kind != "missing_cv":
+    spec = _CV_GAP_REJECT.get(row.kind)
+    if spec is None:
         raise HTTPException(
             status_code=422,
-            detail="reject-missing-cv only applies to missing_cv items",
+            detail="reject-cv-gap only applies to missing_cv / cv_unreadable items",
         )
     if not row.is_open:
         raise HTTPException(
@@ -240,21 +261,22 @@ def reject_missing_cv(
     if role is None:
         raise HTTPException(status_code=404, detail="role not found")
 
+    cohort_fn = getattr(data_readiness, spec["cohort"])
+    count_fn = getattr(data_readiness, spec["count"])
+
     # Pull one over the cap so we can tell "exactly at cap" from "too many".
-    apps = data_readiness.file_less_open_applications(
-        db, role=role, limit=MAX_BULK_REJECT_MISSING_CV + 1
-    )
-    if len(apps) > MAX_BULK_REJECT_MISSING_CV:
+    apps = cohort_fn(db, role=role, limit=MAX_BULK_REJECT_CV_GAP + 1)
+    if len(apps) > MAX_BULK_REJECT_CV_GAP:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"{MAX_BULK_REJECT_MISSING_CV}+ candidates have no CV — too many to "
-                f"reject in one action. Review them on the role page and reject "
+                f"{MAX_BULK_REJECT_CV_GAP}+ candidates {spec['too_many']} — too many "
+                f"to reject in one action. Review them on the role page and reject "
                 f"in smaller batches."
             ),
         )
 
-    from ..services.application_automation_service import reject_for_missing_cv
+    from ..services.application_automation_service import reject_for_cv_gap
 
     org = (
         db.query(Organization)
@@ -266,13 +288,15 @@ def reject_missing_cv(
     failed: list[dict[str, Any]] = []
     for app in apps:
         try:
-            result = reject_for_missing_cv(
+            result = reject_for_cv_gap(
                 db=db,
                 org=org,
                 app=app,
                 role=role,
                 actor_type="recruiter",
                 actor_id=user.id,
+                reason=spec["reason"],
+                trigger=f"reject_{row.kind}",
             )
             # Commit per-candidate: a successful reject (or a persisted
             # write-back-failure event) stands on its own, so one later
@@ -294,11 +318,11 @@ def reject_missing_cv(
                 }
             )
 
-    # Refresh/resolve the card (and the cv_unreadable card) against the new
-    # live counts: when nothing file-less remains, missing_cv auto-resolves
-    # and the card disappears on the next reload.
+    # Refresh/resolve both CV-gap cards against the new live counts: when this
+    # card's cohort is empty it auto-resolves and disappears on the next
+    # reload.
     data_readiness.sync_cv_readiness(db, role=role)
     db.commit()
 
-    remaining = data_readiness.missing_cv_count(db, role=role)
-    return RejectMissingCvResult(rejected=rejected, failed=failed, remaining=remaining)
+    remaining = count_fn(db, role=role)
+    return RejectCvGapResult(rejected=rejected, failed=failed, remaining=remaining)

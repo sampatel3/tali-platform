@@ -286,8 +286,9 @@ def _canonical_for_kind(
         }
     if kind == "cv_unreadable":
         # No prompt override: data_readiness authors a prompt with the live
-        # count. We only inject the link + rationale. Deliberately no reject
-        # action — these candidates DID submit a CV; it just couldn't be read.
+        # count. We only inject the link + rationale. The card also carries a
+        # reject action (reason "CV could not be read") — chasing an OCR
+        # re-upload vs. rejecting is the recruiter's call.
         return {
             "rationale": (
                 "A scanned or image-only CV has no text layer to evaluate. "

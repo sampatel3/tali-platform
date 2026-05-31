@@ -1,8 +1,9 @@
-"""Reject — no CV.
+"""Reject — CV gap.
 
 Covers the single-candidate reject helper (Workable-gated, mirrors
-auto-reject) and the bulk route that rejects a role's file-less cohort while
-never touching candidates whose CV merely couldn't be parsed.
+auto-reject) and the bulk route that rejects a role's CV-gap cohort. Both
+the ``missing_cv`` (no file) and ``cv_unreadable`` (file present, no text)
+cards can reject — each its own cohort, with a cause-specific reason.
 """
 from __future__ import annotations
 
@@ -18,6 +19,8 @@ from app.models.role import Role
 from app.models.user import User
 from app.services import application_automation_service as svc
 from tests.conftest import auth_headers
+
+REJECT_URL = "/api/v1/agent-needs-input/{id}/reject-cv-gap"
 
 
 def _seed_org(db, *, workable=False) -> Organization:
@@ -86,10 +89,10 @@ def _reget(db, app_id) -> CandidateApplication:
 
 
 # ---------------------------------------------------------------------------
-# reject_for_missing_cv helper
+# reject_for_cv_gap helper
 # ---------------------------------------------------------------------------
 
-def test_reject_for_missing_cv_writes_to_workable_then_rejects(db):
+def test_reject_for_cv_gap_writes_to_workable_then_rejects(db):
     org = _seed_org(db, workable=True)
     role = _seed_role(db, org)
     app = _seed_app(db, org, role, workable_id="wk-1")
@@ -99,7 +102,7 @@ def test_reject_for_missing_cv_writes_to_workable_then_rejects(db):
         "disqualify_candidate_in_workable",
         return_value={"success": True, "action": "disqualify"},
     ) as mock_dq:
-        result = svc.reject_for_missing_cv(
+        result = svc.reject_for_cv_gap(
             db=db, org=org, app=app, role=role, actor_type="recruiter", actor_id=1
         )
 
@@ -109,7 +112,28 @@ def test_reject_for_missing_cv_writes_to_workable_then_rejects(db):
     assert app.application_outcome == "rejected"
 
 
-def test_reject_for_missing_cv_workable_failure_leaves_candidate_open(db):
+def test_reject_for_cv_gap_passes_reason_to_workable(db):
+    """The caller's reason flows into the Workable disqualify call + result,
+    so the unreadable card records 'CV could not be read', not 'no CV'."""
+    org = _seed_org(db, workable=True)
+    role = _seed_role(db, org)
+    app = _seed_app(db, org, role, workable_id="wk-r")
+
+    with patch.object(
+        svc,
+        "disqualify_candidate_in_workable",
+        return_value={"success": True, "action": "disqualify"},
+    ) as mock_dq:
+        result = svc.reject_for_cv_gap(
+            db=db, org=org, app=app, role=role, actor_type="recruiter",
+            actor_id=1, reason="CV could not be read",
+        )
+
+    assert result["reason"] == "CV could not be read"
+    assert mock_dq.call_args.kwargs["reason"] == "CV could not be read"
+
+
+def test_reject_for_cv_gap_workable_failure_leaves_candidate_open(db):
     org = _seed_org(db, workable=True)
     role = _seed_role(db, org)
     app = _seed_app(db, org, role, workable_id="wk-2")
@@ -119,7 +143,7 @@ def test_reject_for_missing_cv_workable_failure_leaves_candidate_open(db):
         "disqualify_candidate_in_workable",
         return_value={"success": False, "message": "boom", "code": "api_error"},
     ):
-        result = svc.reject_for_missing_cv(
+        result = svc.reject_for_cv_gap(
             db=db, org=org, app=app, role=role, actor_type="recruiter", actor_id=1
         )
 
@@ -129,13 +153,13 @@ def test_reject_for_missing_cv_workable_failure_leaves_candidate_open(db):
     assert app.application_outcome == "open"
 
 
-def test_reject_for_missing_cv_unlinked_rejects_locally_only(db):
+def test_reject_for_cv_gap_unlinked_rejects_locally_only(db):
     org = _seed_org(db, workable=False)
     role = _seed_role(db, org)
     app = _seed_app(db, org, role, workable_id=None)
 
     with patch.object(svc, "disqualify_candidate_in_workable") as mock_dq:
-        result = svc.reject_for_missing_cv(
+        result = svc.reject_for_cv_gap(
             db=db, org=org, app=app, role=role, actor_type="recruiter", actor_id=1
         )
 
@@ -146,7 +170,7 @@ def test_reject_for_missing_cv_unlinked_rejects_locally_only(db):
 
 
 # ---------------------------------------------------------------------------
-# POST /agent-needs-input/{id}/reject-missing-cv
+# POST /agent-needs-input/{id}/reject-cv-gap
 # ---------------------------------------------------------------------------
 
 def _org_for_user(db, email) -> Organization:
@@ -154,7 +178,19 @@ def _org_for_user(db, email) -> Organization:
     return db.query(Organization).filter(Organization.id == user.organization_id).first()
 
 
-def test_reject_missing_cv_route_rejects_file_less_only(client, db):
+def _open_card(db, role, kind) -> AgentNeedsInput:
+    return (
+        db.query(AgentNeedsInput)
+        .filter(
+            AgentNeedsInput.role_id == role.id,
+            AgentNeedsInput.kind == kind,
+            AgentNeedsInput.resolved_at.is_(None),
+        )
+        .one()
+    )
+
+
+def test_reject_missing_cv_card_rejects_file_less_only(client, db):
     headers, email = auth_headers(client)
     org = _org_for_user(db, email)
     role = _seed_role(db, org)
@@ -166,19 +202,9 @@ def test_reject_missing_cv_route_rejects_file_less_only(client, db):
 
     data_readiness.sync_cv_readiness(db, role=role)
     db.commit()
-    row = (
-        db.query(AgentNeedsInput)
-        .filter(
-            AgentNeedsInput.role_id == role.id,
-            AgentNeedsInput.kind == "missing_cv",
-            AgentNeedsInput.resolved_at.is_(None),
-        )
-        .one()
-    )
+    row = _open_card(db, role, "missing_cv")
 
-    resp = client.post(
-        f"/api/v1/agent-needs-input/{row.id}/reject-missing-cv", headers=headers
-    )
+    resp = client.post(REJECT_URL.format(id=row.id), headers=headers)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["rejected"] == 2
@@ -188,40 +214,66 @@ def test_reject_missing_cv_route_rejects_file_less_only(client, db):
     db.expire_all()
     assert _reget(db, a1.id).application_outcome == "rejected"
     assert _reget(db, a2.id).application_outcome == "rejected"
-    # The unreadable + has-CV candidates are untouched.
+    # The unreadable + has-CV candidates are untouched by the missing_cv card.
     assert _reget(db, unreadable.id).application_outcome == "open"
     assert _reget(db, has_cv.id).application_outcome == "open"
     # Nothing file-less left → the card auto-resolves.
     assert db.query(AgentNeedsInput).filter(AgentNeedsInput.id == row.id).first().resolved_at is not None
 
 
-def test_reject_missing_cv_route_rejects_only_missing_cv_kind(client, db):
+def test_reject_unreadable_card_rejects_unreadable_cohort_only(client, db):
     headers, email = auth_headers(client)
     org = _org_for_user(db, email)
     role = _seed_role(db, org)
-    # A file-present-but-unreadable candidate raises a cv_unreadable card.
-    _seed_app(db, org, role, cv_file_url="s3://b/scan.png")
+    u1 = _seed_app(db, org, role, cv_file_url="s3://b/scan1.png")  # unreadable → rejected
+    u2 = _seed_app(db, org, role, cv_file_url="s3://b/scan2.png")  # unreadable → rejected
+    file_less = _seed_app(db, org, role)                          # missing_cv cohort
+    has_cv = _seed_app(db, org, role, cv_text="real cv")          # control
     db.commit()
+
     data_readiness.sync_cv_readiness(db, role=role)
     db.commit()
-    row = (
-        db.query(AgentNeedsInput)
-        .filter(
-            AgentNeedsInput.role_id == role.id,
-            AgentNeedsInput.kind == "cv_unreadable",
-            AgentNeedsInput.resolved_at.is_(None),
-        )
-        .one()
-    )
+    row = _open_card(db, role, "cv_unreadable")
 
-    resp = client.post(
-        f"/api/v1/agent-needs-input/{row.id}/reject-missing-cv", headers=headers
-    )
-    # Reject is scoped to missing_cv only — never the unreadable card.
+    resp = client.post(REJECT_URL.format(id=row.id), headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["rejected"] == 2
+    assert body["remaining"] == 0
+
+    db.expire_all()
+    assert _reget(db, u1.id).application_outcome == "rejected"
+    assert _reget(db, u2.id).application_outcome == "rejected"
+    # The file-less + has-CV candidates are untouched by the unreadable card.
+    assert _reget(db, file_less.id).application_outcome == "open"
+    assert _reget(db, has_cv.id).application_outcome == "open"
+    # The unreadable card auto-resolves, but the missing_cv card stays open
+    # because the file-less candidate is still there.
+    assert db.query(AgentNeedsInput).filter(
+        AgentNeedsInput.id == row.id
+    ).first().resolved_at is not None
+    assert data_readiness.missing_cv_count(db, role=role) == 1
+
+
+def test_reject_cv_gap_rejects_only_cv_gap_kinds(client, db):
+    """A non-CV-gap card (e.g. missing_job_spec) can't be rejected here."""
+    headers, email = auth_headers(client)
+    org = _org_for_user(db, email)
+    role = _seed_role(db, org, name="No Spec Role")
+    db.commit()
+    # Raise a missing_job_spec card by clearing the spec.
+    role.job_spec_text = ""
+    db.add(role)
+    db.commit()
+    data_readiness.raise_missing_job_spec(db, role=role)
+    db.commit()
+    row = _open_card(db, role, "missing_job_spec")
+
+    resp = client.post(REJECT_URL.format(id=row.id), headers=headers)
     assert resp.status_code == 422, resp.text
 
 
-def test_reject_missing_cv_route_404_for_other_org(client, db):
+def test_reject_cv_gap_404_for_other_org(client, db):
     headers_a, email_a = auth_headers(client, organization_name="OrgA")
     headers_b, email_b = auth_headers(client, organization_name="OrgB")
     org_a = _org_for_user(db, email_a)
@@ -230,14 +282,8 @@ def test_reject_missing_cv_route_404_for_other_org(client, db):
     db.commit()
     data_readiness.sync_cv_readiness(db, role=role)
     db.commit()
-    row = (
-        db.query(AgentNeedsInput)
-        .filter(AgentNeedsInput.role_id == role.id, AgentNeedsInput.kind == "missing_cv")
-        .one()
-    )
+    row = _open_card(db, role, "missing_cv")
 
     # Org B can't see or act on Org A's card.
-    resp = client.post(
-        f"/api/v1/agent-needs-input/{row.id}/reject-missing-cv", headers=headers_b
-    )
+    resp = client.post(REJECT_URL.format(id=row.id), headers=headers_b)
     assert resp.status_code == 404

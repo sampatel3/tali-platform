@@ -76,13 +76,12 @@ export default function AgentNeedsInputCard({ roleId }) {
     }
   };
 
-  // Bulk-reject every candidate on the role that has no CV file at all.
-  // Only offered on `missing_cv` cards — never on `cv_unreadable`, where a
-  // CV was submitted and the text just couldn't be read.
-  const handleRejectMissingCv = async (id) => {
+  // Bulk-reject the cohort behind a CV-gap card (missing_cv or
+  // cv_unreadable). The backend stamps the matching reason per kind.
+  const handleRejectCvGap = async (id) => {
     setBusyId(id);
     try {
-      const { data } = await api.post(`/agent-needs-input/${id}/reject-missing-cv`);
+      const { data } = await api.post(`/agent-needs-input/${id}/reject-cv-gap`);
       const failed = Array.isArray(data?.failed) ? data.failed : [];
       if (failed.length) {
         setError(
@@ -184,17 +183,17 @@ export default function AgentNeedsInputCard({ roleId }) {
                   {row.link_label || 'Open settings'}
                 </a>
               ) : null}
-              {/* Reject shortcut — only for missing_cv (no file at all). The
-                  cv_unreadable card deliberately has no reject: those
-                  candidates did submit a CV we just couldn't read. */}
-              {row.kind === 'missing_cv' ? (
+              {/* Reject shortcut for CV-gap cards. Both kinds can reject; the
+                  label + backend reason differ by cause. Re-upload/OCR vs.
+                  reject is the recruiter's call. */}
+              {CV_GAP_REJECT_KINDS.has(row.kind) ? (
                 confirmingRejectId === row.id ? (
                   <>
                     <button
                       type="button"
                       className="agent-needs-input-reject confirm"
                       disabled={busyId === row.id}
-                      onClick={() => handleRejectMissingCv(row.id)}
+                      onClick={() => handleRejectCvGap(row.id)}
                     >
                       <UserX size={12} />
                       Confirm reject
@@ -214,10 +213,14 @@ export default function AgentNeedsInputCard({ roleId }) {
                     className="agent-needs-input-reject"
                     disabled={busyId === row.id}
                     onClick={() => setConfirmingRejectId(row.id)}
-                    title="Reject every candidate on this role that has no CV"
+                    title={
+                      row.kind === 'missing_cv'
+                        ? 'Reject every candidate on this role that has no CV'
+                        : 'Reject every candidate on this role whose CV could not be read'
+                    }
                   >
                     <UserX size={12} />
-                    Reject — no CV
+                    {row.kind === 'missing_cv' ? 'Reject — no CV' : 'Reject — unreadable CV'}
                   </button>
                 )
               ) : null}
@@ -248,6 +251,10 @@ const LONG_FORM_KINDS = new Set(['intent_slot_missing', 'intent_clarification'])
 // data (job spec / CV) via the link, not by typing an answer — so we render
 // just the link + Skip, no free-text box.
 const LINK_ONLY_KINDS = new Set(['missing_job_spec', 'missing_cv', 'cv_unreadable']);
+
+// CV-gap cards that carry a bulk reject action. Both reject their own
+// cohort (the backend stamps a cause-specific reason); the label differs.
+const CV_GAP_REJECT_KINDS = new Set(['missing_cv', 'cv_unreadable']);
 
 function FreeTextAnswer({ busy, onSubmit, multiline = false, placeholder = 'Your answer…' }) {
   const [text, setText] = useState('');

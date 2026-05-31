@@ -153,12 +153,14 @@ def test_file_less_open_applications_excludes_file_present(db):
     file_less = data_readiness.file_less_open_applications(db, role=role)
     assert [a.id for a in file_less] == [app.id]
 
-    # Same app but with a file on record => excluded (it's unreadable, not
-    # rejectable).
+    # Same app but with a file on record => moves to the unreadable cohort,
+    # out of the file-less one (each reject targets only its own cohort).
     app.cv_file_url = "s3://bucket/scan.png"
     db.add(app)
     db.flush()
     assert data_readiness.file_less_open_applications(db, role=role) == []
+    unreadable = data_readiness.unreadable_cv_open_applications(db, role=role)
+    assert [a.id for a in unreadable] == [app.id]
 
 
 # ---------------------------------------------------------------------------
