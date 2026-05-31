@@ -141,6 +141,11 @@ class Settings(BaseSettings):
     # and a gate-decision agreement diff is logged (log-only, no behaviour
     # change) — the at-parity evidence before any gate cutover. Default OFF.
     MAINSPRING_GATE_SHADOW: bool = False
+    # ADR-0010 convergence (cut #4): when True, every bias/EEOC audit ALSO scores
+    # the same per-group selection rates through mainspring's vendored bias seam
+    # and logs whether the two fairness verdicts (passed) agree (log-only, no
+    # behaviour change) — the at-parity evidence before any cutover.
+    MAINSPRING_BIAS_SHADOW: bool = False
     # Brand service token for the ingest API (sent as Bearer). Empty in shadow.
     MAINSPRING_BRAND_TOKEN: str = ""
     # How far back each sweep looks for newly-resolved decisions / teach
