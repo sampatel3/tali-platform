@@ -31,7 +31,7 @@ def _candidate_label(app: CandidateApplication) -> str:
     return "Candidate"
 
 
-def reject_for_missing_cv(
+def reject_for_cv_gap(
     *,
     db,
     org: Organization | None,
@@ -39,23 +39,26 @@ def reject_for_missing_cv(
     role: Role | None,
     actor_type: str,
     actor_id: int | None = None,
+    reason: str = "No CV on file",
+    trigger: str = "reject_cv_gap",
 ) -> dict[str, Any]:
-    """Reject a single candidate that has no CV file on record.
+    """Reject a single candidate the agent can't evaluate for lack of usable
+    CV text — either no CV file at all (``reason="No CV on file"``) or a file
+    that couldn't be read (``reason="CV could not be read"``). The caller
+    picks the reason so the Workable note + event trail stay honest about the
+    cause.
 
     Mirrors the success path of ``run_auto_reject_if_needed`` (Workable
     disqualify first, then flip the local outcome only on success, so the two
-    never diverge), but with a recruiter-initiated "no CV" reason and none of
-    the pre-screen threshold logic — the trigger here is purely "there is no
-    CV to evaluate". When the candidate isn't linked to Workable (or the org
-    can't write), we still apply the local reject; there's simply nothing to
-    disqualify upstream.
+    never diverge), minus the pre-screen threshold logic. When the candidate
+    isn't linked to Workable (or the org can't write), we still apply the
+    local reject; there's simply nothing to disqualify upstream.
 
     Returns ``{"performed": True, ...}`` on success or
     ``{"performed": False, "reason": <message>}`` when the Workable write-back
     failed (the caller leaves the candidate open and reports the failure). Any
     DB writes made here (events) are left for the caller to commit/rollback.
     """
-    reason = "No CV on file"
     workable_linked = bool(getattr(app, "workable_candidate_id", None))
     org_writeable = bool(
         org
@@ -87,7 +90,7 @@ def reject_for_missing_cv(
                 metadata={
                     "action": result.get("action"),
                     "code": result.get("code"),
-                    "trigger": "reject_missing_cv",
+                    "trigger": trigger,
                     "workable_candidate_id": app.workable_candidate_id,
                 },
             )
@@ -111,7 +114,7 @@ def reject_for_missing_cv(
             actor_id=actor_id,
             reason=reason,
             metadata={
-                "trigger": "reject_missing_cv",
+                "trigger": trigger,
                 "workable_candidate_id": app.workable_candidate_id,
             },
         )

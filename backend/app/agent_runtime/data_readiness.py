@@ -15,17 +15,18 @@ basis to judge. Two preconditions, checked at the top of every cycle:
    honest remedy:
 
    - ``missing_cv`` — no CV file at all on record (Workable had nothing to
-     pull, or the candidate never attached one). Surfaced with the live
-     count and a one-click "Reject — no CV" action: there's nothing to
-     fetch, so the recruiter's only real choices are upload one or reject.
+     pull, or the candidate never attached one). There's nothing to fetch,
+     so the remedy is upload one or reject.
    - ``cv_unreadable`` — a CV *file* is on record but no text could be
      extracted (a scanned image / photo with no text layer). Re-fetching
      won't help (the sync already holds the file) and re-uploading the same
-     scan won't either — it needs OCR or a text-based file. Distinct item,
-     and deliberately NOT eligible for the no-CV reject (the candidate did
-     submit a CV; rejecting them for "no CV" would be wrong).
+     scan won't either — it needs OCR or a text-based file.
 
-   Both clear automatically once the gap is filled.
+   The split exists so the recruiter sees the right *remedy* per cause, not
+   to gate the reject: both cards carry a reject action (the recruiter is
+   the decision-maker — they may choose not to chase an OCR re-upload). The
+   reject reason differs by cause for an honest audit trail. Both clear
+   automatically once the gap is filled.
 
 All helpers are best-effort and idempotent (the underlying ask_recruiter
 upsert keys on ``(role_id, kind, subject_id)``).
@@ -75,6 +76,13 @@ def _no_cv_file_clause():
     )
 
 
+def _has_cv_file_clause():
+    """SQL predicate: the application has a CV file on record."""
+    return CandidateApplication.cv_file_url.isnot(None) & (
+        func.trim(CandidateApplication.cv_file_url) != ""
+    )
+
+
 def missing_cv_count(db: Session, *, role: Role) -> int:
     """Count of open applications with neither CV text nor a CV file on
     record — nothing was ever fetched or uploaded. These are the candidates
@@ -92,14 +100,10 @@ def unreadable_cv_count(db: Session, *, role: Role) -> int:
     """Count of open applications that have a CV *file* on record but no
     extracted text — a scanned image / photo CV the parser couldn't read.
     Re-fetching won't help (the sync already holds the file), so these are
-    surfaced separately from ``missing_cv`` and are NOT eligible for the
-    no-CV reject shortcut."""
+    surfaced separately from ``missing_cv`` with their own remedy."""
     return int(
         _open_no_cv_text_query(db, role=role)
-        .filter(
-            CandidateApplication.cv_file_url.isnot(None),
-            func.trim(CandidateApplication.cv_file_url) != "",
-        )
+        .filter(_has_cv_file_clause())
         .with_entities(func.count(CandidateApplication.id))
         .scalar()
         or 0
@@ -109,11 +113,23 @@ def unreadable_cv_count(db: Session, *, role: Role) -> int:
 def file_less_open_applications(
     db: Session, *, role: Role, limit: int | None = None
 ) -> list[CandidateApplication]:
-    """The rejectable cohort: open applications with neither CV text nor a
-    CV file. Returns the rows themselves so the recruiter's "Reject — no CV"
-    action can act on each. Mirrors ``missing_cv_count``'s predicate exactly
-    so the count shown and the rows rejected never disagree."""
+    """The ``missing_cv`` cohort: open applications with neither CV text nor
+    a CV file. Returns the rows themselves so the recruiter's reject action
+    can act on each. Mirrors ``missing_cv_count``'s predicate exactly so the
+    count shown and the rows rejected never disagree."""
     q = _open_no_cv_text_query(db, role=role).filter(_no_cv_file_clause())
+    if limit is not None:
+        q = q.limit(limit)
+    return q.all()
+
+
+def unreadable_cv_open_applications(
+    db: Session, *, role: Role, limit: int | None = None
+) -> list[CandidateApplication]:
+    """The ``cv_unreadable`` cohort: open applications that have a CV file
+    but no extracted text. Returns the rows so the recruiter's reject action
+    can act on each. Mirrors ``unreadable_cv_count``'s predicate exactly."""
+    q = _open_no_cv_text_query(db, role=role).filter(_has_cv_file_clause())
     if limit is not None:
         q = q.limit(limit)
     return q.all()
