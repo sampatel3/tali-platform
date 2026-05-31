@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from ..models.policy_version import PolicyVersion
 from ..models.promotion_gate import BiasAuditResult
+from ..services.mainspring_bias_shadow import shadow_compare as bias_shadow_compare
 from .fitted_policy import FittedModel, apply_calibration, predict_proba_with_model
 
 
@@ -234,6 +235,16 @@ def write_audit_result(
 ) -> BiasAuditResult:
     thr = thresholds or load_thresholds()
     metrics, violations = audit(model=model, examples=examples, thresholds=thr)
+    # ADR-0010 cut #4: shadow-score the same per-group selection rates through
+    # mainspring's vendored bias seam and log whether the fairness verdicts agree.
+    # No-op unless MAINSPRING_BIAS_SHADOW is set; never raises — must not affect
+    # the live audit / promotion gate.
+    bias_shadow_compare(
+        candidate_id=int(policy_version.id),
+        tali_passed=len(violations) == 0,
+        tali_metrics=metrics,
+        tali_violations=violations,
+    )
     row = BiasAuditResult(
         policy_version_id=int(policy_version.id),
         metrics_json=metrics,
