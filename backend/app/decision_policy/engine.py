@@ -32,7 +32,6 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from ..models.decision_policy import DecisionPolicy as DecisionPolicyRow
-from ..services.mainspring_policy_shadow import shadow_compare_verdict
 from .intent import apply_intent_overrides
 from .schema import DECISION_POINT_NAMES, DecisionPoint, PolicyJson
 
@@ -710,56 +709,106 @@ def evaluate(inputs: DecisionInputs, *, db: Session) -> PolicyDecision:
 
     skipped = _decision_points_to_skip(inputs.manual_actions)
 
-    last_no_action: PolicyDecision | None = None
-    any_manual_skip = False
-    final: PolicyDecision | None = None
-    for point_name in DECISION_POINT_ORDER:
-        point = overlaid.decision_points.get(point_name)
-        if point is None:
-            continue
-        verdict = _evaluate_decision_point(
-            inputs,
-            point_name=point_name,
-            point=point,
-            skipped=skipped,
+    # ADR-0010 cutover: the verdict cascade is now PRODUCED by mainspring's
+    # vendored deterministic engine (``PolicyEngine.evaluate_decision_points``),
+    # not hand-rolled here. The translation closes each mainspring rule over
+    # tali's own per-point context + ``_eval_condition`` (so the rule language
+    # stays tali's), and mainspring's weighted-score/confidence math is
+    # arithmetically identical to ``_weighted_score`` / ``_confidence_from_inputs``
+    # — net-zero behaviour change on ``decision_type`` (proved by the parity
+    # corpus in tests/decision_policy/test_engine_mainspring_parity.py). tali's
+    # pure evaluator above stays as the audit oracle the parity test asserts
+    # against. The abstention overlay is NOT applied (``evaluate_decision_points``
+    # has no escalation path); tali's abstention lives downstream in
+    # ``policy_evaluator`` and runs after this verdict.
+    final = _verdict_via_mainspring(
+        inputs=inputs,
+        overlaid=overlaid,
+        skipped=skipped,
+        revision_id=int(row.revision_id),
+        intent_overrode=intent_overrode,
+    )
+    return final
+
+
+def _verdict_via_mainspring(
+    *,
+    inputs: DecisionInputs,
+    overlaid: PolicyJson,
+    skipped: set[str],
+    revision_id: int,
+    intent_overrode: bool,
+) -> PolicyDecision:
+    """Produce the verdict through mainspring's vendored cascade, returning the
+    canonical tali ``PolicyDecision`` for the point mainspring selected.
+
+    Division of labour (this is why every ``PolicyDecision`` field is identical
+    to the old hand-rolled cascade, not just ``decision_type``):
+
+    * mainspring's ``evaluate_decision_points`` is the CASCADE DRIVER — it walks
+      the points in order, applies the confidence floor + manual-skip + passive
+      fall-through, and selects the *winning* point + verdict. Its math/control
+      flow is proved equal to the legacy walk by the parity corpus.
+    * tali's KEPT pure ``_evaluate_decision_point`` then RENDERS the canonical
+      verdict object for that selected point — reproducing the exact legacy
+      ``reasoning`` + ``rule_path`` (the ``rule:fired:…`` / ``no_rule_matched``
+      audit trace) byte-for-byte. We never re-derive the verdict, only re-render
+      the trace for the point mainspring already chose, so the two can't diverge.
+
+    Fall-through (no point queues) is reconstructed exactly like the legacy
+    ``last_no_action`` / ``any_manual_skip`` propagation.
+    """
+    # Lazily imported to avoid an import cycle (the bridge imports engine helpers).
+    from .mainspring_engine import derive_verdict
+
+    present_points = [
+        p for p in DECISION_POINT_ORDER if overlaid.decision_points.get(p) is not None
+    ]
+    if not present_points:
+        return PolicyDecision(
+            decision_type="no_action",
+            reasoning="No decision points configured for this policy.",
+            rule_path=["empty_policy"],
+            policy_revision_id=revision_id,
+            intent_overrode=intent_overrode,
         )
-        verdict.policy_revision_id = int(row.revision_id)
-        verdict.intent_overrode = intent_overrode
-        if verdict.skipped_due_to_manual:
-            any_manual_skip = True
-        if verdict.decision_type == "skip":
-            # Continue looking — the next point may still fire.
-            last_no_action = verdict
-            continue
-        if verdict.decision_type == "no_action":
-            last_no_action = verdict
-            continue
-        final = verdict
-        break
 
-    if final is None:
-        # No decision point produced a queueable verdict. Propagate the
-        # skipped-due-to-manual flag if we saw it on any point — the
-        # cascade walked past it but the audit trail should still record
-        # that the recruiter handled the candidate manually.
-        if last_no_action is not None:
-            if any_manual_skip:
-                last_no_action.skipped_due_to_manual = True
-            final = last_no_action
-        else:
-            final = PolicyDecision(
-                decision_type="no_action",
-                reasoning="No decision points configured for this policy.",
-                rule_path=["empty_policy"],
-                policy_revision_id=int(row.revision_id),
-                intent_overrode=intent_overrode,
-            )
+    ms_verdict = derive_verdict(inputs, overlaid, skip_points=skipped)
 
-    # ADR-0010 cut #2: shadow-derive the same verdict through mainspring's
-    # vendored PolicyEngine (a DomainSpec translated from this same overlaid
-    # policy + inputs) and log an agreement/disagreement diff. No-op unless
-    # MAINSPRING_POLICY_SHADOW is set; never raises — must not affect the verdict.
-    shadow_compare_verdict(inputs=inputs, policy=overlaid, tali_verdict=final)
+    # The point mainspring's cascade settled on (its rule_path leads with
+    # ``point:<name>``). For a queueing verdict this is the winning point; for a
+    # fall-through it's the LAST passive point — which matches the legacy
+    # ``last_no_action`` (the last point the walk recorded before giving up).
+    selected_point: str | None = None
+    ms_path = list(ms_verdict.rule_path or [])
+    if ms_path and isinstance(ms_path[0], str) and ms_path[0].startswith("point:"):
+        selected_point = ms_path[0].split(":", 1)[1]
+
+    is_queueing = ms_verdict.decision_type not in ("skip", "no_action")
+
+    # Re-render the canonical tali verdict for the selected point via the kept
+    # pure evaluator — this yields the legacy reasoning + rule_path verbatim.
+    point_obj = overlaid.decision_points.get(selected_point) if selected_point else None
+    if point_obj is not None:
+        final = _evaluate_decision_point(
+            inputs, point_name=selected_point, point=point_obj, skipped=skipped
+        )
+    else:  # pragma: no cover — defensive; cascade always names a present point
+        final = PolicyDecision(
+            decision_type=ms_verdict.decision_type,
+            confidence=float(ms_verdict.confidence),
+            reasoning=ms_verdict.reasoning,
+            rule_path=ms_path,
+            decision_point=selected_point,
+        )
+
+    # Legacy ``any_manual_skip`` propagation: on a NON-queueing final, surface
+    # that a recruiter manually handled the candidate even if the walk moved on.
+    if not is_queueing and any(p in skipped for p in present_points):
+        final.skipped_due_to_manual = True
+
+    final.policy_revision_id = revision_id
+    final.intent_overrode = intent_overrode
     return final
 
 
