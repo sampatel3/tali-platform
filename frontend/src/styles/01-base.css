@@ -110,6 +110,19 @@ html[data-theme="dark"] {
     scroll-behavior: smooth;
   }
 
+  /* Sam (2026-06-01) flagged that the whole site reads too large at
+     default zoom — he runs Taali at ~80% manually. The first attempt
+     was ``body { zoom: 0.85 }`` but that broke viewport-based height
+     math (``calc(100dvh - ...)`` doesn't compose with zoom, leaving
+     persistent whitespace below the assessment workspace). Replaced
+     with a root font-size reduction: rem-based sizes scale uniformly,
+     viewport units stay correct, and modal/fixed positioning isn't
+     perturbed. The px-explicit sizes in component classes don't
+     scale — those get a targeted typography pass per surface where
+     it matters (assessment runtime brief + header + repo tree). */
+  html {
+    font-size: 14px; /* was 16px default; ~87.5% scale on rem-based things */
+  }
   body {
     margin: 0;
     background: var(--bg);
@@ -118,16 +131,6 @@ html[data-theme="dark"] {
     font-feature-settings: "ss01", "cv11";
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    /* Sam (2026-06-01) flagged that everything across the site reads
-       too large at 100% browser zoom — he routinely runs Taali at
-       ~80% manually. Bake that preference in via ``zoom: 0.85`` so a
-       default-zoom visit lands at the size we actually design for.
-       ``zoom`` is supported across Chrome/Safari/Edge and (since
-       Firefox 126) Firefox too. Affects all geometry uniformly, so
-       grid + flex layouts compose correctly; viewport units (vh/vw)
-       still resolve against the unscaled viewport in current browsers
-       so full-height shells stay full-height. */
-    zoom: 0.85;
   }
 
   a {
