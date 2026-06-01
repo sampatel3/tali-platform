@@ -118,20 +118,28 @@ html[data-theme="dark"] {
     font-feature-settings: "ss01", "cv11";
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    /* No global zoom or root font-size scale. Several attempts to
-       bake Sam's 80% browser-zoom preference into the page broke
-       different things each time:
-       - ``zoom: 0.85`` and ``zoom: 0.8``: broke any page sized to
-         100vh/100dvh — login, demo-lead, etc. rendered at 80vh and
-         left empty viewport below.
-       - ``html { font-size: 14px }``: only scaled rem-based sizes;
-         px-explicit Tailwind classes (which most of the assessment
-         runtime uses) stayed full size, leading to uneven density.
-       The honest answer: there isn't a global scale mechanism that
-       composes cleanly with viewport-unit layouts. Sam's manual
-       browser-zoom to 80% is the right user-side choice; the site
-       renders at native scale and ships per-surface density passes
-       where the chrome reads too heavy (the chat already got one). */
+    /* Sam's stated preference: site at 80% browser-zoom density by
+       default. ``zoom: 0.8`` scales rem + px uniformly (the only
+       mechanism that does so), at the cost of viewport-unit math —
+       elements sized 100vh render at 80vh on screen. Compensation
+       below overrides the Tailwind ``.min-h-screen`` / ``.h-screen``
+       utilities to use 125vh so they render as 100vh after the
+       zoom. Any calc-based viewport heights elsewhere are inflated
+       proportionally — search ``125vh`` / ``125dvh`` for the pattern. */
+    zoom: 0.8;
+  }
+
+  /* Viewport-height compensation for ``body { zoom: 0.8 }``. Without
+     these overrides, pages using ``min-h-screen`` (login shell,
+     demo-lead, marketing, error pages, etc.) would render at 80% of
+     viewport height and leave empty space below their content. */
+  .min-h-screen {
+    min-height: 125vh;
+    min-height: 125dvh;
+  }
+  .h-screen {
+    height: 125vh;
+    height: 125dvh;
   }
 
   a {

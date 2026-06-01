@@ -549,11 +549,11 @@ export const AssessmentWorkspace = ({
           ``min-h-[620px]`` keeps the previous floor for short windows
           (laptops at 800px tall stay usable). ``100dvh`` over ``vh``
           so mobile address-bar collapse doesn't leave a gap. */}
-      {/* Workspace fills the viewport minus the chrome above (top nav,
-          assessment header, brief panel). 180px reserve was tuned at
-          native scale (no global zoom). ``dvh`` keeps mobile
-          address-bar collapse correct. */}
-      <div className="flex min-h-[620px] max-h-[calc(100dvh-180px)] flex-col">
+      {/* Workspace fills the viewport after compensating for the
+          ``body { zoom: 0.8 }`` global scale. 125dvh × 0.8 = 100dvh
+          rendered; 225px × 0.8 = 180px header reserve rendered.
+          See ``01-base.css`` for the zoom rationale. */}
+      <div className="flex min-h-[620px] max-h-[calc(125dvh-225px)] flex-col">
         <div
           className="grid min-h-0 flex-1 xl:[grid-template-columns:var(--workspace-grid)]"
           style={workspaceGridStyle}
