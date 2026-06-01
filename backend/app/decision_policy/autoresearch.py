@@ -1,35 +1,37 @@
-"""Autoresearch — a bias-gated search loop over the fitted-policy hyperparameters.
+"""Autoresearch — tali's brand adapter over the mainspring search loop.
 
-Inspired by Karpathy's ``autoresearch`` (constraint + one mechanical metric +
-autonomous keep/discard loop). The mapping onto tali's decision policy:
+The loop mechanics — propose → fit → score → audit → keep/discard, with the
+trial log as memory — live in the substrate (``mainspring.core.autoresearch``,
+vendored at ``vendor/mainspring_autoresearch``). This module supplies the
+tali-specific pieces and re-exports a brand-typed surface:
 
   - **Editable surface** (Karpathy's ``train.py``): the fit hyperparameters in
     :class:`HyperConfig` — L2, learning rate, iterations, pooling saturation,
     and whether isotonic calibration is applied. The production fit
     (:func:`fitted_policy.fit_model`) hard-codes these; here we search them.
   - **Metric** (Karpathy's ``val_bpb``): gold-set holdout log-loss — *lower is
-    better*. This is exactly the number the Phase-5 promotion gate already
-    judges (:func:`promotion_gate.evaluate_gold_set`).
+    better*. This is exactly the number the Phase-5 promotion gate already judges.
   - **Constraint** (the fairness-specific part): the bias audit must *pass* on
     the protected-attribute holdout. The EEOC 4/5ths verdict and its thresholds
-    are compliance-signed constants — they are a hard guardrail we never tune,
-    not an objective we optimise. A candidate that lowers log-loss but trips the
-    bias audit is *discarded*, never kept.
-  - **Keep / discard + memory** (Karpathy's git): greedy coordinate descent —
-    accept a one-knob change iff it strictly improves the metric *and* clears the
-    bias gate; otherwise revert. Every trial is logged in :attr:`SearchResult.trials`.
+    are compliance-signed constants — a hard guardrail we never tune, not an
+    objective. A candidate that lowers log-loss but trips the bias audit is
+    *discarded*, never kept (the substrate loop enforces this).
 
-This module is deliberately offline and side-effect-free: it fits in-memory
-candidate models and returns the winner. It does not write ``PolicyVersion``
-rows or flip anything live — that remains the job of the existing promotion
-gate, which this loop feeds.
+tali injects ``fit_fn`` / ``score_fn`` / ``audit_fn`` closures and a proposer;
+the substrate owns the algorithm so cadence (or any brand) inherits the same
+loop. This module is offline and side-effect-free — it fits in-memory candidate
+models and returns the winner; persisting/promoting stays with the promotion gate.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol, Sequence
+
+from vendor.mainspring_autoresearch.seam import GridProposer as _CoreGridProposer
+from vendor.mainspring_autoresearch.seam import Proposal as _CoreProposal
+from vendor.mainspring_autoresearch.seam import search as _core_search
 
 from .bias_audit import AuditExample, BiasThresholds, audit, load_thresholds
 from .fitted_policy import FittedModel, TrainingExample, fit_model
@@ -116,35 +118,69 @@ def summarize(result: "SearchResult", *, mode: str) -> dict:
     }
 
 
-def _evaluate(
-    config: HyperConfig,
+def _make_callables(
     *,
     train_examples: Sequence[TrainingExample],
     gold_set: Sequence[TrainingExample],
     audit_examples: Sequence[AuditExample],
     thresholds: BiasThresholds,
     role_id: int | None,
-) -> tuple[float | None, bool, int]:
-    """Fit one config and return ``(holdout_log_loss, bias_passed, n_violations)``.
+):
+    """Build the brand-specific (fit, score, audit) callables the loop injects.
 
-    The metric and the constraint are evaluated on the same fitted model:
-    log-loss on the gold set, the bias verdict on the protected-attribute
-    holdout. A fit that yields no holdout score returns ``(None, ...)`` and is
-    treated as un-scorable (never kept).
+    The artifact is the ``(model, metrics)`` pair, so the kept winner carries its
+    metrics dict back with no redundant refit. ``score_fn`` returns the gold-set
+    holdout log-loss (lower better); ``audit_fn`` returns ``(passed, n_violations)``
+    from the EEOC bias verdict on the protected-attribute holdout.
     """
-    model, metrics = fit_model(
-        train_examples,
-        role_id=role_id,
-        gold_set=gold_set,
-        l2=config.l2,
-        learning_rate=config.learning_rate,
-        max_iter=config.max_iter,
-        pooling_saturation=config.pooling_saturation,
-        calibrate=config.calibrate,
+
+    def fit_fn(cfg: dict):
+        hp = HyperConfig(**cfg)
+        return fit_model(
+            train_examples,
+            role_id=role_id,
+            gold_set=gold_set,
+            l2=hp.l2,
+            learning_rate=hp.learning_rate,
+            max_iter=hp.max_iter,
+            pooling_saturation=hp.pooling_saturation,
+            calibrate=hp.calibrate,
+        )
+
+    def score_fn(artifact) -> float | None:
+        _model, metrics = artifact
+        return (metrics or {}).get("holdout_log_loss")
+
+    def audit_fn(artifact) -> tuple[bool, int]:
+        model, _metrics = artifact
+        _, violations = audit(model=model, examples=audit_examples, thresholds=thresholds)
+        return (len(violations) == 0, len(violations))
+
+    return fit_fn, score_fn, audit_fn
+
+
+def _to_trial(ct) -> Trial:
+    """Map a substrate ``Trial`` (opaque dict config) to tali's HyperConfig Trial."""
+    return Trial(
+        config=HyperConfig(**ct.config),
+        log_loss=ct.score,
+        bias_passed=ct.constraint_passed,
+        violations=ct.violations,
+        kept=ct.kept,
+        note=ct.note,
     )
-    log_loss = metrics.get("holdout_log_loss")
-    _, violations = audit(model=model, examples=audit_examples, thresholds=thresholds)
-    return log_loss, (len(violations) == 0), len(violations)
+
+
+def _to_result(cr) -> SearchResult:
+    model, metrics = cr.best_artifact if cr.best_artifact is not None else (None, None)
+    return SearchResult(
+        accepted=cr.accepted,
+        best_config=HyperConfig(**cr.best_config),
+        best_model=model,
+        best_log_loss=cr.best_score,
+        trials=[_to_trial(t) for t in cr.trials],
+        best_metrics=metrics,
+    )
 
 
 def search(
@@ -157,129 +193,46 @@ def search(
     max_iters: int = 50,
     proposer: "Proposer | None" = None,
 ) -> SearchResult:
-    """Run the bias-gated hyperparameter search.
+    """Run the bias-gated hyperparameter search via the mainspring loop.
 
-    Default (``proposer=None``): greedy coordinate descent from :data:`BASELINE`
-    — walk the search grid one knob at a time, fit a candidate, and *keep* it iff
-    it (a) clears the bias audit and (b) strictly beats the current best holdout
-    log-loss by at least :data:`MIN_IMPROVEMENT`. Otherwise discard and move on.
-
-    Agentic (``proposer`` supplied): the same verify / keep-discard / log harness,
-    but the *propose the next experiment* step is delegated to a :class:`Proposer`
-    — e.g. :class:`LLMProposer`, which reads the full trial history and reasons
-    about what to try next (and when to stop), rather than walking a fixed grid.
-    The metric, the bias constraint, and the rollback semantics are identical, so
-    the safety guarantees do not change: the returned winner is always bias-clean,
-    and ``accepted`` is False with ``best_model=None`` if nothing clears the gate.
+    Default (``proposer=None``): the substrate's :class:`GridProposer` walks
+    :data:`SEARCH_GRID` by coordinate descent. Agentic (``proposer`` supplied,
+    e.g. :class:`LLMProposer`): the brand proposer reads the trial history and
+    reasons about the next config. Either way the substrate loop fits, scores,
+    and bias-gates every proposal identically, anchored on :data:`BASELINE`: the
+    winner is always bias-clean, and ``accepted`` is False with ``best_model=None``
+    if nothing clears the gate.
     """
-    if proposer is not None:
-        return _agentic_search(
-            train_examples=train_examples,
-            gold_set=gold_set,
-            audit_examples=audit_examples,
-            role_id=role_id,
-            thresholds=thresholds,
-            max_iters=max_iters,
-            proposer=proposer,
-        )
-
     thr = thresholds or load_thresholds()
-    trials: list[Trial] = []
-
-    def run(cfg: HyperConfig, note: str) -> Trial:
-        log_loss, bias_ok, n_viol = _evaluate(
-            cfg,
-            train_examples=train_examples,
-            gold_set=gold_set,
-            audit_examples=audit_examples,
-            thresholds=thr,
-            role_id=role_id,
-        )
-        t = Trial(
-            config=cfg,
-            log_loss=log_loss,
-            bias_passed=bias_ok,
-            violations=n_viol,
-            kept=False,
-            note=note,
-        )
-        trials.append(t)
-        return t
-
-    # 1. Anchor on the baseline. It only becomes the incumbent if it is itself
-    #    bias-clean and scorable; otherwise we have no valid incumbent yet and
-    #    the first passing candidate takes the lead.
-    base = run(BASELINE, "baseline")
-    best_cfg = BASELINE
-    best_model: FittedModel | None = None
-    best_loss: float | None = None
-    if base.bias_passed and base.log_loss is not None:
-        base.kept = True
-        best_loss = base.log_loss
-        best_model = None  # refit lazily on return; cheap and keeps trials light
-
-    # 2. Coordinate descent over the grid.
-    iters = 0
-    for knob, candidates in SEARCH_GRID.items():
-        for value in candidates:
-            if iters >= max_iters:
-                break
-            if getattr(best_cfg, knob) == value:
-                continue  # already the incumbent value for this knob
-            iters += 1
-            cand = replace(best_cfg, **{knob: value})
-            if any(t.config == cand for t in trials):
-                continue  # already evaluated this exact point
-            t = run(cand, f"{knob}={value}")
-            if not t.bias_passed:
-                t.note += " [discarded: bias]"
-                continue
-            if t.log_loss is None:
-                t.note += " [discarded: unscorable]"
-                continue
-            improved = best_loss is None or t.log_loss < best_loss - MIN_IMPROVEMENT
-            if improved:
-                t.kept = True
-                best_cfg = cand
-                best_loss = t.log_loss
-            else:
-                t.note += " [discarded: no improvement]"
-
-    accepted = best_loss is not None
-    best_metrics: dict | None = None
-    if accepted:
-        # Refit the winner once so the caller gets the model object + metrics.
-        best_model, best_metrics = fit_model(
-            train_examples,
-            role_id=role_id,
-            gold_set=gold_set,
-            l2=best_cfg.l2,
-            learning_rate=best_cfg.learning_rate,
-            max_iter=best_cfg.max_iter,
-            pooling_saturation=best_cfg.pooling_saturation,
-            calibrate=best_cfg.calibrate,
-        )
-        logger.info(
-            "autoresearch: %d trials, best log_loss=%.5f at %s",
-            len(trials),
-            best_loss,
-            best_cfg,
-        )
-    else:
+    fit_fn, score_fn, audit_fn = _make_callables(
+        train_examples=train_examples,
+        gold_set=gold_set,
+        audit_examples=audit_examples,
+        thresholds=thr,
+        role_id=role_id,
+    )
+    core_proposer = (
+        _CoreGridProposer(grid=SEARCH_GRID)
+        if proposer is None
+        else _BrandProposerAdapter(proposer)
+    )
+    cr = _core_search(
+        baseline_config=asdict(BASELINE),
+        fit_fn=fit_fn,
+        score_fn=score_fn,
+        audit_fn=audit_fn,
+        proposer=core_proposer,
+        max_iters=max_iters,
+        min_improvement=MIN_IMPROVEMENT,
+        minimize=True,
+    )
+    if not cr.accepted:
         logger.warning(
             "autoresearch: no bias-clean config found over %d trials; "
             "returning baseline unaccepted",
-            len(trials),
+            len(cr.trials),
         )
-
-    return SearchResult(
-        accepted=accepted,
-        best_config=best_cfg,
-        best_model=best_model,
-        best_log_loss=best_loss,
-        trials=trials,
-        best_metrics=best_metrics,
-    )
+    return _to_result(cr)
 
 
 # ---------------------------------------------------------------------------
@@ -453,93 +406,31 @@ class LLMProposer:
         )
 
 
-def _agentic_search(
-    *,
-    train_examples: Sequence[TrainingExample],
-    gold_set: Sequence[TrainingExample],
-    audit_examples: Sequence[AuditExample],
-    role_id: int | None,
-    thresholds: BiasThresholds | None,
-    max_iters: int,
-    proposer: Proposer,
-) -> SearchResult:
-    """Proposer-driven variant of :func:`search`. Same verify/keep/gate/log harness."""
-    thr = thresholds or load_thresholds()
-    trials: list[Trial] = []
+class _BrandProposerAdapter:
+    """Bridges a tali :class:`Proposer` to the substrate's proposer protocol.
 
-    def run(cfg: HyperConfig, note: str) -> Trial:
-        log_loss, bias_ok, n_viol = _evaluate(
-            cfg,
-            train_examples=train_examples,
-            gold_set=gold_set,
-            audit_examples=audit_examples,
-            thresholds=thr,
-            role_id=role_id,
-        )
-        t = Trial(
-            config=cfg, log_loss=log_loss, bias_passed=bias_ok,
-            violations=n_viol, kept=False, note=note,
-        )
-        trials.append(t)
-        return t
+    The substrate loop speaks opaque ``dict`` configs and ``best_score``; tali's
+    proposers (the :class:`LLMProposer`, test scripts) speak :class:`HyperConfig`
+    and ``best_log_loss``. This converts at the boundary and clamps every proposal
+    into safe bounds before it reaches a fit — so a hallucinated LLM value can
+    never blow up training time or destabilise the model.
+    """
 
-    base = run(BASELINE, "baseline")
-    best_cfg = BASELINE
-    best_loss: float | None = None
-    if base.bias_passed and base.log_loss is not None:
-        base.kept = True
-        best_loss = base.log_loss
+    def __init__(self, inner: "Proposer") -> None:
+        self._inner = inner
 
-    for _ in range(max_iters):
-        proposal = proposer.propose(
-            history=trials, best_config=best_cfg, best_log_loss=best_loss
+    def propose(self, *, history, best_config, best_score):
+        proposal = self._inner.propose(
+            history=[_to_trial(t) for t in history],
+            best_config=HyperConfig(**best_config),
+            best_log_loss=best_score,
         )
-        if proposal is None or proposal.stop:
-            break
+        if proposal is None:
+            return None
+        if proposal.stop:
+            return _CoreProposal(config=best_config, stop=True, rationale=proposal.rationale)
         cand = _clamp_config(proposal.config)
-        if any(t.config == cand for t in trials):
-            # Proposer repeated a tried config — treat as a convergence signal.
-            break
-        t = run(cand, (proposal.rationale or "agentic")[:160])
-        if not t.bias_passed:
-            t.note += " [discarded: bias]"
-            continue
-        if t.log_loss is None:
-            t.note += " [discarded: unscorable]"
-            continue
-        if best_loss is None or t.log_loss < best_loss - MIN_IMPROVEMENT:
-            t.kept = True
-            best_cfg = cand
-            best_loss = t.log_loss
-        else:
-            t.note += " [discarded: no improvement]"
-
-    accepted = best_loss is not None
-    best_model: FittedModel | None = None
-    best_metrics: dict | None = None
-    if accepted:
-        best_model, best_metrics = fit_model(
-            train_examples,
-            role_id=role_id,
-            gold_set=gold_set,
-            l2=best_cfg.l2,
-            learning_rate=best_cfg.learning_rate,
-            max_iter=best_cfg.max_iter,
-            pooling_saturation=best_cfg.pooling_saturation,
-            calibrate=best_cfg.calibrate,
-        )
-        logger.info(
-            "agentic autoresearch: %d trials, best log_loss=%.5f at %s",
-            len(trials), best_loss, best_cfg,
-        )
-    return SearchResult(
-        accepted=accepted,
-        best_config=best_cfg,
-        best_model=best_model,
-        best_log_loss=best_loss,
-        trials=trials,
-        best_metrics=best_metrics,
-    )
+        return _CoreProposal(config=asdict(cand), rationale=proposal.rationale)
 
 
 def make_llm_proposer(org: Any, *, role_id: int | None = None, **kwargs: Any) -> LLMProposer:
