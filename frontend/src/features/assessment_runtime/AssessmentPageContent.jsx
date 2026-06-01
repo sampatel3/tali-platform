@@ -424,14 +424,14 @@ export default function AssessmentPage({
     () => extractRepoFiles(assessment?.repo_structure),
     [assessment?.repo_structure],
   );
-  // Multi-role deliverable framing: when the task spec declares a
-  // ``deliverable.primary_artifact`` (e.g. doc-kind tasks like Scrum
-  // Master or PM scenarios), default the editor to that file instead
-  // of the alphabetical first. The candidate's work IS that file;
-  // landing them on `.gitignore` first wastes a click and signals
-  // "browse the repo" when the right mental model is "draft the
-  // deliverable." For code-kind tasks (no deliverable declared), the
-  // existing behavior (first file alphabetically) is unchanged.
+  // Chat-centred default: nothing is selected at mount, so the editor
+  // pane stays hidden and the candidate lands on a chat-dominant
+  // workspace. The editor reveals only when (a) the candidate clicks
+  // a file in the repo tree, or (b) a doc-kind task declares a
+  // ``deliverable.primary_artifact`` — in which case we auto-select
+  // it so the deliverable opens immediately (Scrum Master HANDBACK.md,
+  // PM DECISION_MEMO.md). Code-kind engineering tasks land on
+  // chat-only; the candidate browses to a file when they need to.
   const deliverable = assessment?.deliverable || null;
   const deliverablePrimary = deliverable?.primary_artifact || null;
   const repoHasPrimary = Boolean(
@@ -442,7 +442,7 @@ export default function AssessmentPage({
       ? selectedRepoFile
       : repoHasPrimary
         ? deliverablePrimary
-        : repoFiles[0]?.path || null;
+        : null;
   const repoFileTree = buildRepoFileTree(repoFiles);
   const modifiedRepoPaths = useMemo(() => {
     const initialFileMap = new Map(
