@@ -1568,9 +1568,7 @@ body.interview-view .page {
 }
 
 .demo-split {
-  /* 125vh × 0.8 = 100vh on screen; 230px × 0.8 = 184px header reserve.
-     Compensates for body { zoom: 0.8 } global scale. */
-  min-height: calc(125vh - 230px);
+  min-height: calc(100vh - 184px);
   display: grid;
   grid-template-columns: 1fr 1fr;
   overflow: hidden;

@@ -1,7 +1,7 @@
 import React from 'react';
 
 const screenClassName = 'overflow-hidden rounded-[28px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[var(--shadow-lg)]';
-const monoClassName = 'font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.12em]';
+const monoClassName = 'font-[var(--font-mono)] text-[0.65625rem] uppercase tracking-[0.12em]';
 
 export const SHOWCASE_MOMENTS = [
   {
@@ -28,7 +28,7 @@ const WindowChrome = ({ label = 'taali.com/workspace' }) => (
       <span className="h-2.5 w-2.5 rounded-full bg-[var(--amber)]" />
       <span className="h-2.5 w-2.5 rounded-full bg-[var(--green)]" />
     </div>
-    <div className="font-[var(--font-mono)] text-[12px] text-[var(--mute)]">{label}</div>
+    <div className="font-[var(--font-mono)] text-[0.75rem] text-[var(--mute)]">{label}</div>
     <div className="w-12" />
   </div>
 );
@@ -39,11 +39,11 @@ export const TaskBriefCard = ({ className = '' }) => (
     <h3 className="mt-4 font-[var(--font-display)] text-[clamp(30px,3.2vw,44px)] font-semibold tracking-[-0.03em]">
       GenAI Production Readiness Review
     </h3>
-    <p className="mt-3 max-w-[980px] text-[15px] leading-8 text-[var(--ink-2)]">
+    <p className="mt-3 max-w-[61.25rem] text-[0.9375rem] leading-8 text-[var(--ink-2)]">
       A candidate senior engineer is asked to stabilize a risky GenAI launch: strengthen safety guardrails,
       improve degraded-mode behavior, and decide whether to ship. They get 30 minutes, a real repo, and Claude as a pair.
     </p>
-    <div className="mt-4 flex flex-wrap gap-5 font-[var(--font-mono)] text-[12px] text-[var(--mute)]">
+    <div className="mt-4 flex flex-wrap gap-5 font-[var(--font-mono)] text-[0.75rem] text-[var(--mute)]">
       <span>Duration: 30 min</span>
       <span>Difficulty: Medium</span>
       <span>Stack: Python</span>
@@ -57,9 +57,9 @@ export const WorkspaceReplayFrame = ({ className = '' }) => (
     <div className="border-b border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[var(--ink)] px-5 py-4 text-[var(--bg)]">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3 rounded-full border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--taali-inverse-text)_5%,transparent)] px-3 py-2">
-          <span className="grid h-9 w-9 place-items-center rounded-full bg-[var(--purple)] font-[var(--font-mono)] text-[13px] font-semibold text-[var(--taali-inverse-text)]">T</span>
+          <span className="grid h-9 w-9 place-items-center rounded-full bg-[var(--purple)] font-[var(--font-mono)] text-[0.8125rem] font-semibold text-[var(--taali-inverse-text)]">T</span>
           <div>
-            <div className="font-[var(--font-display)] text-[18px] tracking-[-0.02em]">
+            <div className="font-[var(--font-display)] text-[1.125rem] tracking-[-0.02em]">
               GenAI <em className="text-[var(--purple-2)]">Production Readiness</em> Review
             </div>
             <div
@@ -71,7 +71,7 @@ export const WorkspaceReplayFrame = ({ className = '' }) => (
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 font-[var(--font-mono)] text-[11px] uppercase tracking-[0.06em] text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)]">
+        <div className="flex flex-wrap items-center gap-2 font-[var(--font-mono)] text-[0.6875rem] uppercase tracking-[0.06em] text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)]">
           <span className="rounded-full border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--taali-inverse-text)_5%,transparent)] px-3 py-1.5">AI: Claude CLI + Chat</span>
           <span className="rounded-full border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--taali-inverse-text)_5%,transparent)] px-3 py-1.5">Permission: Default</span>
           <span className="rounded-full border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--taali-inverse-text)_5%,transparent)] px-3 py-1.5">$ Claude credit: $6.20 left of $12.00</span>
@@ -82,7 +82,7 @@ export const WorkspaceReplayFrame = ({ className = '' }) => (
     </div>
 
     <div className="border-b border-[var(--line)] bg-[var(--bg)] px-5 py-3">
-      <div className="flex flex-wrap gap-2 font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">
+      <div className="flex flex-wrap gap-2 font-[var(--font-mono)] text-[0.6875rem] uppercase tracking-[0.08em] text-[var(--mute)]">
         <span className="rounded-full border border-[var(--line)] px-3 py-1.5">Candidate workspace</span>
         <span className="rounded-full bg-[var(--ink)] px-3 py-1.5 text-[var(--bg)]">Repo + editor + AI</span>
         <span className="rounded-full border border-[var(--line)] px-3 py-1.5">Prompt + diff telemetry</span>
@@ -94,11 +94,11 @@ export const WorkspaceReplayFrame = ({ className = '' }) => (
     <div className="grid gap-0 lg:grid-cols-[220px_minmax(0,1fr)_320px]">
       <aside className="border-r border-[var(--line)] bg-[var(--bg)] px-4 py-4">
         <div className={`${monoClassName} text-[var(--mute)]`}>Context window</div>
-        <button type="button" className="mt-4 rounded-[10px] border border-[var(--line)] bg-[var(--bg-2)] px-3 py-2 text-[12px] text-[var(--ink-2)]">
+        <button type="button" className="mt-4 rounded-[10px] border border-[var(--line)] bg-[var(--bg-2)] px-3 py-2 text-[0.75rem] text-[var(--ink-2)]">
           + New file
         </button>
-        <div className="mt-3 text-[12px] leading-6 text-[var(--mute)]">Save syncs edits back into the live terminal workspace.</div>
-        <div className="mt-4 space-y-2 font-[var(--font-mono)] text-[12px] leading-6 text-[var(--ink-2)]">
+        <div className="mt-3 text-[0.75rem] leading-6 text-[var(--mute)]">Save syncs edits back into the live terminal workspace.</div>
+        <div className="mt-4 space-y-2 font-[var(--font-mono)] text-[0.75rem] leading-6 text-[var(--ink-2)]">
           <div>README.md</div>
           <div>▾ app/</div>
           <div className="pl-4">evals.py</div>
@@ -115,13 +115,13 @@ export const WorkspaceReplayFrame = ({ className = '' }) => (
 
       <div className="border-r border-[var(--line)] bg-[var(--bg)] px-4 py-4">
         <div className="mb-3 flex items-center justify-between">
-          <div className="font-[var(--font-mono)] text-[12px] text-[var(--ink-2)]">app/release_guardrails.py <span className="text-[var(--mute)]">PYTHON</span></div>
+          <div className="font-[var(--font-mono)] text-[0.75rem] text-[var(--ink-2)]">app/release_guardrails.py <span className="text-[var(--mute)]">PYTHON</span></div>
           <div className="flex gap-2">
             <span className="chip purple">Run</span>
             <span className="chip">Save</span>
           </div>
         </div>
-        <div className="rounded-[18px] bg-[var(--bg-2)] p-4 font-[var(--font-mono)] text-[12px] leading-6 text-[var(--ink-2)]">
+        <div className="rounded-[18px] bg-[var(--bg-2)] p-4 font-[var(--font-mono)] text-[0.75rem] leading-6 text-[var(--ink-2)]">
           <div><span className="text-[var(--mute)]">1</span> <span className="text-[var(--purple)]">from</span> app.policy <span className="text-[var(--purple)]">import</span> SAFETY_POLICY</div>
           <div><span className="text-[var(--mute)]">2</span></div>
           <div><span className="text-[var(--mute)]">3</span> <span className="text-[var(--purple)]">def</span> should_allow_response(*, moderation_result, user_intent, confidence):</div>
@@ -142,17 +142,17 @@ export const WorkspaceReplayFrame = ({ className = '' }) => (
         <div className="flex items-center justify-between">
           <div>
             <div className={`${monoClassName} text-[var(--mute)]`}>Claude</div>
-            <div className="mt-1 text-[13px] font-medium text-[var(--ink-2)]">Show terminal</div>
+            <div className="mt-1 text-[0.8125rem] font-medium text-[var(--ink-2)]">Show terminal</div>
           </div>
           <div className="chip purple">Chat</div>
         </div>
 
-        <div className="mt-4 space-y-3 text-[12.5px] leading-6">
+        <div className="mt-4 space-y-3 text-[0.78125rem] leading-6">
           <div className="rounded-[14px] bg-[var(--purple)] p-3 text-[var(--taali-inverse-text)]">
             Prioritize the highest-risk launch blockers first, then propose the smallest safe patch sequence for the GenAI release review.
           </div>
           <div className="rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] p-3 text-[var(--ink-2)]">
-            <div className="mb-2 font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">Claude</div>
+            <div className="mb-2 font-[var(--font-mono)] text-[0.6875rem] uppercase tracking-[0.08em] text-[var(--mute)]">Claude</div>
             <div className="font-medium text-[var(--ink)]">Highest-risk blockers:</div>
             <ul className="mt-2 space-y-1 text-[var(--ink-2)]">
               <li>• Moderation outages currently default to <code>allow=True</code>, which is unsafe for a public launch.</li>
@@ -160,7 +160,7 @@ export const WorkspaceReplayFrame = ({ className = '' }) => (
               <li>• The eval gate logs critical failures but still marks the release as approved.</li>
             </ul>
           </div>
-          <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">
+          <div className="font-[var(--font-mono)] text-[0.6875rem] uppercase tracking-[0.08em] text-[var(--mute)]">
             TURN 04 · CLAUDE-SONNET · SCROLL TO EXPLORE
           </div>
         </div>
@@ -175,7 +175,7 @@ export const WorkspaceReplayFrame = ({ className = '' }) => (
       ].map(([title, body]) => (
         <div key={title} className="rounded-[16px] border border-[var(--line)] bg-[var(--bg-2)] p-4">
           <div className={`${monoClassName} text-[var(--purple)]`}>{title}</div>
-          <p className="mt-3 text-[13px] leading-6 text-[var(--ink-2)]">{body}</p>
+          <p className="mt-3 text-[0.8125rem] leading-6 text-[var(--ink-2)]">{body}</p>
         </div>
       ))}
     </div>
@@ -187,8 +187,8 @@ export const MomentCards = ({ className = '' }) => (
     {SHOWCASE_MOMENTS.map((item) => (
       <div key={item.kicker} className="rounded-[24px] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
         <div className={`${monoClassName} text-[var(--purple)]`}>{item.kicker}</div>
-        <h4 className="mt-4 font-[var(--font-display)] text-[34px] leading-[1.02] tracking-[-0.03em]">{item.title}</h4>
-        <p className="mt-4 text-[14px] leading-7 text-[var(--ink-2)]">{item.body}</p>
+        <h4 className="mt-4 font-[var(--font-display)] text-[2.125rem] leading-[1.02] tracking-[-0.03em]">{item.title}</h4>
+        <p className="mt-4 text-[0.875rem] leading-7 text-[var(--ink-2)]">{item.body}</p>
       </div>
     ))}
   </div>
@@ -209,7 +209,7 @@ export const ShowcaseCtaBand = ({
           with your <span className="text-[var(--purple-2)]">team&apos;s task</span>?
         </h3>
         <p
-          className="mt-4 max-w-[640px] text-[15px] leading-7 text-[var(--taali-inverse-text)]"
+          className="mt-4 max-w-[40rem] text-[0.9375rem] leading-7 text-[var(--taali-inverse-text)]"
           style={{ color: 'color-mix(in oklab, var(--taali-inverse-text) 72%, transparent)' }}
         >
           A Taali specialist will bring a live runtime, walk you through the scoring model, and calibrate it
@@ -236,7 +236,7 @@ export const ShowcaseCtaBand = ({
 export const WelcomePreviewCard = ({ className = '' }) => (
   <div className={`${screenClassName} ${className}`.trim()}>
     <div className="flex items-center justify-between border-b border-[var(--line)] bg-[var(--bg)] px-5 py-4">
-      <div className="logo-word text-[24px]">taali<em>.</em></div>
+      <div className="logo-word text-[1.5rem]">taali<em>.</em></div>
       <div className={`${monoClassName} text-[var(--mute)]`}>Candidate assessment · secure session</div>
     </div>
     <div className="grid gap-5 px-5 py-5 lg:grid-cols-[1.15fr_.85fr]">
@@ -245,7 +245,7 @@ export const WelcomePreviewCard = ({ className = '' }) => (
         <h3 className="mt-4 font-[var(--font-display)] text-[clamp(34px,3.8vw,52px)] font-semibold leading-[0.96] tracking-[-0.04em]">
           Hi Priya - ready to <span className="text-[var(--purple)]">show your work</span>?
         </h3>
-        <p className="mt-4 text-[14px] leading-7 text-[var(--ink-2)]">
+        <p className="mt-4 text-[0.875rem] leading-7 text-[var(--ink-2)]">
           This is a real engineering task, not a puzzle. You&apos;ll work with Claude for up to 60 minutes to diagnose and ship a safety-gate fix. We care how you work with the AI, not just what you ship.
         </p>
         <div className="mt-5 grid gap-4 border-y border-[var(--line)] py-4 md:grid-cols-3">
@@ -256,7 +256,7 @@ export const WelcomePreviewCard = ({ className = '' }) => (
           ].map(([label, value]) => (
             <div key={label}>
               <div className={`${monoClassName} text-[var(--mute)]`}>{label}</div>
-              <div className="mt-1 text-[14px] font-medium text-[var(--ink-2)]">{value}</div>
+              <div className="mt-1 text-[0.875rem] font-medium text-[var(--ink-2)]">{value}</div>
             </div>
           ))}
         </div>
@@ -269,7 +269,7 @@ export const WelcomePreviewCard = ({ className = '' }) => (
           ].map((item) => (
             <div key={item} className="flex items-start gap-3 border-b border-[var(--line-2)] pb-3 last:border-b-0 last:pb-0">
               <span className="mt-1 h-5 w-5 rounded-full bg-[var(--purple-soft)]" />
-              <div className="text-[13px] leading-6 text-[var(--ink-2)]">{item}</div>
+              <div className="text-[0.8125rem] leading-6 text-[var(--ink-2)]">{item}</div>
             </div>
           ))}
         </div>
@@ -282,23 +282,23 @@ export const WelcomePreviewCard = ({ className = '' }) => (
       <div className="space-y-4">
         <div className="rounded-[22px] bg-[var(--ink)] p-5 text-[var(--bg)]">
           <div className={`${monoClassName} text-[var(--purple-2)]`}>Applying for</div>
-          <div className="mt-3 text-[30px] font-semibold tracking-[-0.03em]">AI Full Stack Engineer</div>
+          <div className="mt-3 text-[1.875rem] font-semibold tracking-[-0.03em]">AI Full Stack Engineer</div>
           <p
-            className="mt-3 text-[13px] leading-6 text-[var(--taali-inverse-text)]"
+            className="mt-3 text-[0.8125rem] leading-6 text-[var(--taali-inverse-text)]"
             style={{ color: 'color-mix(in oklab, var(--taali-inverse-text) 70%, transparent)' }}
           >
             Deeplight AI · San Francisco / Remote-OK · Senior (L5)
           </p>
           <span
-            className="mt-4 inline-flex rounded-full px-3 py-1 font-[var(--font-mono)] text-[11px]"
+            className="mt-4 inline-flex rounded-full px-3 py-1 font-[var(--font-mono)] text-[0.6875rem]"
             style={{ backgroundColor: 'color-mix(in oklab, var(--taali-inverse-text) 10%, transparent)' }}
           >
             Assessment 1 of 1
           </span>
         </div>
         <div className="rounded-[22px] border border-[var(--line)] bg-[var(--bg)] p-5">
-          <div className="text-[22px] font-semibold tracking-[-0.02em]">System <span className="text-[var(--purple)]">check</span></div>
-          <div className="mt-4 space-y-3 text-[13px]">
+          <div className="text-[1.375rem] font-semibold tracking-[-0.02em]">System <span className="text-[var(--purple)]">check</span></div>
+          <div className="mt-4 space-y-3 text-[0.8125rem]">
             {[
               ['Browser', 'Chrome 126'],
               ['Connection', 'Stable · 84 Mbps'],
@@ -313,8 +313,8 @@ export const WelcomePreviewCard = ({ className = '' }) => (
           </div>
         </div>
         <div className="rounded-[22px] border border-[var(--line)] bg-[var(--bg)] p-5">
-          <div className="text-[22px] font-semibold tracking-[-0.02em]">Your <span className="text-[var(--purple)]">rights</span></div>
-          <div className="mt-4 rounded-[18px] bg-[var(--purple-soft)] p-4 text-[12.5px] leading-6 text-[var(--ink-2)]">
+          <div className="text-[1.375rem] font-semibold tracking-[-0.02em]">Your <span className="text-[var(--purple)]">rights</span></div>
+          <div className="mt-4 rounded-[18px] bg-[var(--purple-soft)] p-4 text-[0.78125rem] leading-6 text-[var(--ink-2)]">
             We record what you prompted, what Claude said, and what you accepted or edited. We do not record your camera.
           </div>
         </div>
@@ -326,7 +326,7 @@ export const WelcomePreviewCard = ({ className = '' }) => (
 export const StandingReportPreviewCard = ({ className = '' }) => (
   <div className={`${screenClassName} ${className}`.trim()}>
     <div className="flex items-center justify-between border-b border-[var(--line)] bg-[var(--bg)] px-5 py-4">
-      <div className="logo-word text-[24px]">taali<em>.</em></div>
+      <div className="logo-word text-[1.5rem]">taali<em>.</em></div>
       <div className="app-tabs !gap-2">
         {['Jobs', 'Candidates', 'Tasks', 'Reporting', 'Settings'].map((item) => (
           <span key={item} className={`app-tab ${item === 'Candidates' ? 'active' : ''}`.trim()}>{item}</span>
@@ -344,7 +344,7 @@ export const StandingReportPreviewCard = ({ className = '' }) => (
           Priya Anand - where she <span className="text-[var(--purple-2)]">stands</span> in the pipeline.
         </h3>
         <p
-          className="mt-4 max-w-[760px] text-[15px] leading-7 text-[var(--taali-inverse-text)]"
+          className="mt-4 max-w-[47.5rem] text-[0.9375rem] leading-7 text-[var(--taali-inverse-text)]"
           style={{ color: 'color-mix(in oklab, var(--taali-inverse-text) 72%, transparent)' }}
         >
           A role-anchored, shareable summary. Evidence-first: every claim links back to a timestamped moment in her assessment session.
@@ -361,9 +361,9 @@ export const StandingReportPreviewCard = ({ className = '' }) => (
           ].map(([label, value, detail]) => (
             <div key={label}>
               <div className={`${monoClassName} text-[var(--taali-inverse-text)] opacity-50`}>{label}</div>
-              <div className="mt-2 text-[30px] font-semibold tracking-[-0.03em] text-[var(--lime)]">{value}</div>
+              <div className="mt-2 text-[1.875rem] font-semibold tracking-[-0.03em] text-[var(--lime)]">{value}</div>
               <div
-                className="mt-1 text-[12px] text-[var(--taali-inverse-text)]"
+                className="mt-1 text-[0.75rem] text-[var(--taali-inverse-text)]"
                 style={{ color: 'color-mix(in oklab, var(--taali-inverse-text) 55%, transparent)' }}
               >
                 {detail}
@@ -377,15 +377,15 @@ export const StandingReportPreviewCard = ({ className = '' }) => (
         <div className="space-y-4">
           <div className="rounded-[22px] border border-[var(--line)] bg-[var(--bg)] p-5">
             <div className={`${monoClassName} text-[var(--purple)]`}>Verdict</div>
-            <div className="mt-3 text-[32px] font-semibold tracking-[-0.03em]">Advance to panel. <span className="text-[var(--purple)]">With conviction.</span></div>
-            <p className="mt-3 text-[13.5px] leading-6 text-[var(--ink-2)]">
+            <div className="mt-3 text-[2rem] font-semibold tracking-[-0.03em]">Advance to panel. <span className="text-[var(--purple)]">With conviction.</span></div>
+            <p className="mt-3 text-[0.84375rem] leading-6 text-[var(--ink-2)]">
               Priya works with Claude the way a senior engineer works with a sharp junior - specific, skeptical, and in charge of the decisions that matter.
             </p>
           </div>
 
           <div className="rounded-[22px] border border-[var(--line)] bg-[var(--bg)] p-5">
-            <div className="text-[28px] font-semibold tracking-[-0.03em]">Top <span className="text-[var(--purple)]">strengths</span></div>
-            <div className="mt-4 space-y-4 text-[13px] leading-6 text-[var(--ink-2)]">
+            <div className="text-[1.75rem] font-semibold tracking-[-0.03em]">Top <span className="text-[var(--purple)]">strengths</span></div>
+            <div className="mt-4 space-y-4 text-[0.8125rem] leading-6 text-[var(--ink-2)]">
               {[
                 ['01', 'Connects LLM failure to customer-facing blast radius', '9.4 / 10'],
                 ['02', 'Rejects premature suggestions', '9.1 / 10'],
@@ -393,9 +393,9 @@ export const StandingReportPreviewCard = ({ className = '' }) => (
                 ['04', 'Hand-writes the code that matters', '8.8 / 10'],
               ].map(([index, text, score]) => (
                 <div key={index} className="grid grid-cols-[40px_minmax(0,1fr)_auto] gap-4 border-b border-[var(--line-2)] pb-4 last:border-b-0 last:pb-0">
-                  <div className="font-[var(--font-display)] text-[28px] text-[var(--purple)]">{index}</div>
+                  <div className="font-[var(--font-display)] text-[1.75rem] text-[var(--purple)]">{index}</div>
                   <div>{text}</div>
-                  <div className="font-[var(--font-mono)] text-[12px] text-[var(--green)]">{score}</div>
+                  <div className="font-[var(--font-mono)] text-[0.75rem] text-[var(--green)]">{score}</div>
                 </div>
               ))}
             </div>
@@ -404,8 +404,8 @@ export const StandingReportPreviewCard = ({ className = '' }) => (
 
         <div className="space-y-4">
           <div className="rounded-[22px] border border-[var(--line)] bg-[var(--bg)] p-5">
-            <div className="text-[26px] font-semibold tracking-[-0.03em]">Vs. <span className="text-[var(--purple)]">peers</span></div>
-            <div className="mt-4 space-y-3 text-[13px] text-[var(--ink-2)]">
+            <div className="text-[1.625rem] font-semibold tracking-[-0.03em]">Vs. <span className="text-[var(--purple)]">peers</span></div>
+            <div className="mt-4 space-y-3 text-[0.8125rem] text-[var(--ink-2)]">
               {[
                 ['1 · Priya Anand (you)', '87', '98th'],
                 ['2 · Nia Kovac', '81', '94th'],
@@ -421,7 +421,7 @@ export const StandingReportPreviewCard = ({ className = '' }) => (
           </div>
 
           <div className="rounded-[22px] border border-[var(--line)] bg-[var(--bg)] p-5">
-            <div className="text-[26px] font-semibold tracking-[-0.03em]">Scored <span className="text-[var(--purple)]">dimensions</span></div>
+            <div className="text-[1.625rem] font-semibold tracking-[-0.03em]">Scored <span className="text-[var(--purple)]">dimensions</span></div>
             <div className="mt-4 space-y-3">
               {[
                 ['Prompt quality', '91', 'var(--green)'],
@@ -432,7 +432,7 @@ export const StandingReportPreviewCard = ({ className = '' }) => (
                 ['Time to first prompt', '3:42', 'var(--green)'],
               ].map(([label, value, color]) => (
                 <div key={label}>
-                  <div className="mb-1 flex items-center justify-between text-[13px]">
+                  <div className="mb-1 flex items-center justify-between text-[0.8125rem]">
                     <span>{label}</span>
                     <span className="font-[var(--font-mono)]">{value}</span>
                   </div>
@@ -452,7 +452,7 @@ export const StandingReportPreviewCard = ({ className = '' }) => (
 export const SettingsPreviewCard = ({ className = '' }) => (
   <div className={`${screenClassName} ${className}`.trim()}>
     <div className="flex items-center justify-between border-b border-[var(--line)] bg-[var(--bg)] px-5 py-4">
-      <div className="logo-word text-[24px]">taali<em>.</em></div>
+      <div className="logo-word text-[1.5rem]">taali<em>.</em></div>
       <div className="app-tabs !gap-2">
         {['Jobs', 'Candidates', 'Tasks', 'Reporting', 'Settings'].map((item) => (
           <span key={item} className={`app-tab ${item === 'Settings' ? 'active' : ''}`.trim()}>{item}</span>
@@ -462,7 +462,7 @@ export const SettingsPreviewCard = ({ className = '' }) => (
     <div className="grid gap-4 px-5 py-5 lg:grid-cols-[210px_1fr]">
       <aside className="rounded-[22px] border border-[var(--line)] bg-[var(--bg)] p-4">
         <div className={`${monoClassName} text-[var(--mute)]`}>Workspace</div>
-        <div className="mt-3 space-y-2 text-[13px] text-[var(--ink-2)]">
+        <div className="mt-3 space-y-2 text-[0.8125rem] text-[var(--ink-2)]">
           {[
             'Organization',
             'Scoring policy',
@@ -483,7 +483,7 @@ export const SettingsPreviewCard = ({ className = '' }) => (
 
       <div className="space-y-4">
         <div className="rounded-[22px] border border-[var(--line)] bg-[var(--bg)] p-5">
-          <div className="text-[30px] font-semibold tracking-[-0.03em]">Organization<span className="text-[var(--purple)]">.</span></div>
+          <div className="text-[1.875rem] font-semibold tracking-[-0.03em]">Organization<span className="text-[var(--purple)]">.</span></div>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             {[
               ['Workspace name', 'DEEPLIGHT_AI'],
@@ -493,15 +493,15 @@ export const SettingsPreviewCard = ({ className = '' }) => (
             ].map(([label, value]) => (
               <div key={label}>
                 <div className={`${monoClassName} text-[var(--mute)]`}>{label}</div>
-                <div className="mt-2 rounded-[12px] border border-[var(--line)] bg-[var(--bg-2)] px-4 py-3 text-[14px] text-[var(--ink-2)]">{value}</div>
+                <div className="mt-2 rounded-[12px] border border-[var(--line)] bg-[var(--bg-2)] px-4 py-3 text-[0.875rem] text-[var(--ink-2)]">{value}</div>
               </div>
             ))}
           </div>
         </div>
 
         <div className="rounded-[22px] border border-[var(--line)] bg-[var(--bg)] p-5">
-          <div className="text-[30px] font-semibold tracking-[-0.03em]">Scoring <span className="text-[var(--purple)]">policy</span></div>
-          <p className="mt-2 text-[13px] text-[var(--mute)]">Turn dimensions on or off for this workspace.</p>
+          <div className="text-[1.875rem] font-semibold tracking-[-0.03em]">Scoring <span className="text-[var(--purple)]">policy</span></div>
+          <p className="mt-2 text-[0.8125rem] text-[var(--mute)]">Turn dimensions on or off for this workspace.</p>
           <div className="mt-4 space-y-3">
             {[
               ['Prompt quality', true],
@@ -512,7 +512,7 @@ export const SettingsPreviewCard = ({ className = '' }) => (
               ['Time-to-first-signal', false],
             ].map(([label, enabled]) => (
               <div key={label} className="flex items-center justify-between rounded-[14px] border border-[var(--line)] px-4 py-3">
-                <span className="text-[13px] text-[var(--ink-2)]">{label}</span>
+                <span className="text-[0.8125rem] text-[var(--ink-2)]">{label}</span>
                 <span className={`h-6 w-10 rounded-full ${enabled ? 'bg-[var(--purple)]' : 'bg-[var(--bg-3)]'}`.trim()}>
                   <span className={`mt-1 block h-4 w-4 rounded-full bg-[var(--taali-inverse-text)] transition ${enabled ? 'ml-5' : 'ml-1'}`.trim()} />
                 </span>
@@ -522,8 +522,8 @@ export const SettingsPreviewCard = ({ className = '' }) => (
         </div>
 
         <div className="rounded-[22px] border border-[var(--line)] bg-[var(--bg)] p-5">
-          <div className="text-[30px] font-semibold tracking-[-0.03em]">AI <span className="text-[var(--purple)]">tooling</span></div>
-          <div className="mt-4 space-y-3 text-[13px] text-[var(--ink-2)]">
+          <div className="text-[1.875rem] font-semibold tracking-[-0.03em]">AI <span className="text-[var(--purple)]">tooling</span></div>
+          <div className="mt-4 space-y-3 text-[0.8125rem] text-[var(--ink-2)]">
             {[
               ['Claude CLI + Chat', 'Enabled'],
               ['Cursor / Copilot inline', 'Off'],

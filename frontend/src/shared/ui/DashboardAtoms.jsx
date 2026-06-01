@@ -22,7 +22,7 @@ export const StatsCard = ({ icon: Icon, label, value, subValue, change, onClick,
       {subValue ? (
         <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">{subValue}</div>
       ) : null}
-      <div className="font-mono text-[11px] leading-4 text-[var(--taali-muted)]">{change}</div>
+      <div className="font-mono text-[0.6875rem] leading-4 text-[var(--taali-muted)]">{change}</div>
     </>
   );
 

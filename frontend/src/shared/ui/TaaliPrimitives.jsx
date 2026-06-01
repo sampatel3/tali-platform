@@ -777,8 +777,7 @@ export const Sheet = ({
         aria-label={title}
         tabIndex={-1}
         className={cx(
-          /* 115vh × 0.8 = 92vh rendered; compensates for body { zoom: 0.8 }. */
-          'absolute inset-x-0 bottom-0 flex max-h-[115vh] flex-col overflow-hidden border border-[var(--taali-border-soft)] bg-[var(--taali-surface-elevated)] shadow-[var(--taali-shadow-strong)] focus:outline-none motion-safe:animate-[taali-sheet-in_180ms_ease-out] md:inset-y-3 md:h-[calc(100%-1.5rem)] md:max-h-none md:w-[680px] md:rounded-[var(--taali-radius-panel)]',
+          'absolute inset-x-0 bottom-0 flex max-h-[92vh] flex-col overflow-hidden border border-[var(--taali-border-soft)] bg-[var(--taali-surface-elevated)] shadow-[var(--taali-shadow-strong)] focus:outline-none motion-safe:animate-[taali-sheet-in_180ms_ease-out] md:inset-y-3 md:h-[calc(100%-1.5rem)] md:max-h-none md:w-[42.5rem] md:rounded-[var(--taali-radius-panel)]',
           side === 'left'
             ? 'md:left-3 md:right-auto'
             : 'md:right-3 md:left-auto',

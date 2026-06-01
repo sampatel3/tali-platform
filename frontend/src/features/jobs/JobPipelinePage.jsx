@@ -1934,7 +1934,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       <div>
         {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
         <div className="page">
-          <div className="flex min-h-[280px] items-center justify-center">
+          <div className="flex min-h-[17.5rem] items-center justify-center">
             <Spinner size={22} />
           </div>
         </div>

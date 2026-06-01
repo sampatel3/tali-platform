@@ -59,7 +59,7 @@ const coverageFilledCount = (coverage) => (
 
 const ScoreCard = ({ label, value }) => (
   <Card className="bg-[var(--taali-surface-subtle)] p-4">
-    <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{label}</div>
+    <div className="text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{label}</div>
     <div className="mt-2 taali-display text-3xl font-semibold" style={{ color: scoreTone100(value) }}>
       {formatScale100Score(value, '0-100')}
     </div>
@@ -82,7 +82,7 @@ export const RequirementCoverageStrip = ({ coverage }) => {
 
   return (
     <div>
-      <div className="flex h-2.5 gap-[2px] overflow-hidden rounded-full" style={{ background: 'var(--taali-border-soft)' }}>
+      <div className="flex h-2.5 gap-[0.125rem] overflow-hidden rounded-full" style={{ background: 'var(--taali-border-soft)' }}>
         {met ? <span style={{ flex: met, background: 'var(--taali-purple)' }} /> : null}
         {partial ? <span style={{ flex: partial, background: statusDot('partially_met') }} /> : null}
         {missing ? <span style={{ flex: missing, background: 'var(--taali-warning)' }} /> : null}
@@ -104,7 +104,7 @@ const RequirementRow = ({ item }) => (
       : undefined}
   >
     <span
-      className="flex h-fit w-full items-center justify-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-semibold"
+      className="flex h-fit w-full items-center justify-center gap-1.5 rounded-lg px-2 py-1 text-[0.6875rem] font-semibold"
       style={statusStyle(item.status)}
     >
       <span className="h-1.5 w-1.5 rounded-full" style={{ background: statusDot(item.status) }} />
@@ -113,15 +113,15 @@ const RequirementRow = ({ item }) => (
     <div>
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-semibold text-[var(--taali-text)]">{item.requirement}</span>
-        <Badge variant={isMustHave(item.priority) ? 'purple' : 'muted'} className="text-[10px]">
+        <Badge variant={isMustHave(item.priority) ? 'purple' : 'muted'} className="text-[0.625rem]">
           {isMustHave(item.priority) ? 'Must-have' : 'Nice-to-have'}
         </Badge>
       </div>
       {item.evidence ? (
-        <p className="mt-1 text-[13px] leading-relaxed text-[var(--taali-muted)]">{item.evidence}</p>
+        <p className="mt-1 text-[0.8125rem] leading-relaxed text-[var(--taali-muted)]">{item.evidence}</p>
       ) : null}
       {item.impact && item.status !== 'met' ? (
-        <p className="mt-1 text-[13px] leading-relaxed text-[var(--taali-muted)]">
+        <p className="mt-1 text-[0.8125rem] leading-relaxed text-[var(--taali-muted)]">
           <span className="font-medium text-[var(--taali-text)]">Impact:</span> {item.impact}
         </p>
       ) : null}
@@ -147,7 +147,7 @@ export const RequirementList = ({ requirements = [], limit = Infinity }) => {
         <button
           type="button"
           onClick={() => setExpanded(true)}
-          className="w-full py-3 text-left text-[13px] font-semibold text-[var(--taali-purple-hover)] hover:underline"
+          className="w-full py-3 text-left text-[0.8125rem] font-semibold text-[var(--taali-purple-hover)] hover:underline"
         >
           Show {hidden} more {hidden === 1 ? 'requirement' : 'requirements'}
         </button>
@@ -262,7 +262,7 @@ export function RoleFitEvidenceSections({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className={cx(config.titleSize, 'text-[var(--taali-text)]')}>Requirements fit</div>
             {model?.requirementsFitScore != null ? (
-              <Badge variant="purple" className="text-[11px]">
+              <Badge variant="purple" className="text-[0.6875rem]">
                 {formatScale100Score(model.requirementsFitScore, '0-100')}
               </Badge>
             ) : null}
@@ -300,7 +300,7 @@ export function RoleFitEvidenceSections({
         <Panel className="border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4">
           <div className="flex flex-wrap items-center gap-2">
             <div className={cx(config.titleSize, 'text-[var(--taali-text)]')}>Verify before interview</div>
-            <Badge variant="warning" className="text-[11px]">unverified</Badge>
+            <Badge variant="warning" className="text-[0.6875rem]">unverified</Badge>
           </div>
           <p className="mt-1 text-xs text-[var(--taali-muted)]">
             Claims the agent could not confirm from the CV. Not held against the score beyond a small flag — confirm in screening.

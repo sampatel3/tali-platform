@@ -27,7 +27,7 @@ const renderMetadata = (metadata) => {
   const entries = Object.entries(metadata);
   if (!entries.length) return null;
   return (
-    <pre className="mt-1 max-h-40 overflow-auto rounded bg-taali-bg-muted/40 p-2 text-[11px] leading-snug text-taali-fg">
+    <pre className="mt-1 max-h-40 overflow-auto rounded bg-taali-bg-muted/40 p-2 text-[0.6875rem] leading-snug text-taali-fg">
       {JSON.stringify(metadata, null, 2)}
     </pre>
   );
@@ -101,7 +101,7 @@ export const CandidateAuditTimeline = ({ applicationId }) => {
                     {event.reason ? <div className="mt-0.5 text-taali-fg">{event.reason}</div> : null}
                   </div>
                 </div>
-                <div className="shrink-0 text-right text-[11px] text-taali-fg-muted">
+                <div className="shrink-0 text-right text-[0.6875rem] text-taali-fg-muted">
                   <div>{actor.label}{event.actor_id ? ` #${event.actor_id}` : ''}</div>
                   <div>{new Date(event.created_at).toLocaleString()}</div>
                 </div>

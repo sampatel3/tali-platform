@@ -34,17 +34,17 @@ const CLAUDE_INTERNAL_TOOL_TAGS = new Set([
 
 const CLAUDE_MARKDOWN_COMPONENTS = {
   p: ({ children }) => (
-    <p className="whitespace-pre-line text-[13.5px] leading-6 text-[var(--ink-2)] [&:not(:first-child)]:mt-3">
+    <p className="whitespace-pre-line text-[0.84375rem] leading-6 text-[var(--ink-2)] [&:not(:first-child)]:mt-3">
       {children}
     </p>
   ),
   ul: ({ children }) => (
-    <ul className="mt-3 list-disc space-y-2 pl-5 text-[13.5px] leading-6 text-[var(--ink-2)]">
+    <ul className="mt-3 list-disc space-y-2 pl-5 text-[0.84375rem] leading-6 text-[var(--ink-2)]">
       {children}
     </ul>
   ),
   ol: ({ children }) => (
-    <ol className="mt-3 list-decimal space-y-2 pl-5 text-[13.5px] leading-6 text-[var(--ink-2)]">
+    <ol className="mt-3 list-decimal space-y-2 pl-5 text-[0.84375rem] leading-6 text-[var(--ink-2)]">
       {children}
     </ol>
   ),
@@ -67,7 +67,7 @@ const CLAUDE_MARKDOWN_COMPONENTS = {
     );
   },
   pre: ({ children }) => (
-    <pre className="mt-3 overflow-x-auto rounded-[12px] border border-[var(--line)] bg-[var(--bg)] p-3 font-mono text-[12px] leading-6 text-[var(--ink-2)]">
+    <pre className="mt-3 overflow-x-auto rounded-[12px] border border-[var(--line)] bg-[var(--bg)] p-3 font-mono text-[0.75rem] leading-6 text-[var(--ink-2)]">
       {children}
     </pre>
   ),
@@ -153,10 +153,10 @@ const EditorFallback = ({
 }) => (
   <div className="flex h-full flex-col bg-[var(--bg-2)]">
     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-3">
-      <div className="min-w-0 flex items-center gap-2 text-[13px] text-[var(--ink-2)]">
+      <div className="min-w-0 flex items-center gap-2 text-[0.8125rem] text-[var(--ink-2)]">
         <FileText size={13} />
         <span className="truncate font-mono">{editorFilename}</span>
-        <span className="rounded bg-[var(--bg-3)] px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-[var(--mute)]">
+        <span className="rounded bg-[var(--bg-3)] px-2 py-0.5 font-mono text-[0.625rem] uppercase tracking-[0.08em] text-[var(--mute)]">
           {editorLanguage}
         </span>
       </div>
@@ -165,7 +165,7 @@ const EditorFallback = ({
           type="button"
           onClick={() => onSave?.(editorContent ?? assessmentStarterCode ?? '')}
           disabled={isTimerPaused || saving}
-          className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3 py-1.5 text-[12px] font-medium text-[var(--mute)] transition-colors hover:border-[var(--ink)] hover:text-[var(--ink)] disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--mute)] transition-colors hover:border-[var(--ink)] hover:text-[var(--ink)] disabled:opacity-50"
         >
           {saving ? 'Saving...' : 'Save'}
         </button>
@@ -174,7 +174,7 @@ const EditorFallback = ({
             type="button"
             onClick={onOpenTerminal}
             disabled={isTimerPaused}
-            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3 py-1.5 text-[12px] font-medium text-[var(--ink-2)] transition-colors hover:border-[var(--purple)] hover:text-[var(--purple)] disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--ink-2)] transition-colors hover:border-[var(--purple)] hover:text-[var(--purple)] disabled:opacity-50"
           >
             <TerminalSquare size={12} />
             Run tests
@@ -184,20 +184,20 @@ const EditorFallback = ({
           type="button"
           onClick={() => onExecute?.(editorContent ?? assessmentStarterCode ?? '')}
           disabled={isTimerPaused}
-          className="inline-flex items-center gap-1.5 rounded-full bg-[var(--purple)] px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-[var(--purple-2)] disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-full bg-[var(--purple)] px-3 py-1.5 text-[0.75rem] font-medium text-white transition-colors hover:bg-[var(--purple-2)] disabled:opacity-50"
         >
           Run
         </button>
       </div>
     </div>
     <div className="flex-1 overflow-hidden p-4">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-[12px] border border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] px-3 py-2 font-mono text-[11px] text-[var(--taali-warning)]">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-[12px] border border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] px-3 py-2 font-mono text-[0.6875rem] text-[var(--taali-warning)]">
         <span>Advanced editor unavailable in this browser. Using a plain text fallback.</span>
         {onRetry ? (
           <button
             type="button"
             onClick={onRetry}
-            className="rounded-full border border-[var(--taali-warning-border)] bg-[var(--bg-2)] px-2.5 py-1 text-[11px] font-medium text-[var(--taali-warning)] transition-colors hover:border-[var(--purple)] hover:text-[var(--purple)]"
+            className="rounded-full border border-[var(--taali-warning-border)] bg-[var(--bg-2)] px-2.5 py-1 text-[0.6875rem] font-medium text-[var(--taali-warning)] transition-colors hover:border-[var(--purple)] hover:text-[var(--purple)]"
           >
             Try again
           </button>
@@ -208,7 +208,7 @@ const EditorFallback = ({
         onChange={(event) => onEditorChange?.(event.target.value)}
         disabled={isTimerPaused}
         spellCheck={false}
-        className="h-full min-h-[18rem] w-full resize-none rounded-[14px] border border-[var(--line)] bg-[var(--bg)] p-4 font-mono text-[12px] text-[var(--ink)] outline-none focus:border-[var(--purple)] disabled:opacity-60"
+        className="h-full min-h-[18rem] w-full resize-none rounded-[14px] border border-[var(--line)] bg-[var(--bg)] p-4 font-mono text-[0.75rem] text-[var(--ink)] outline-none focus:border-[var(--purple)] disabled:opacity-60"
       />
     </div>
   </div>
@@ -216,7 +216,7 @@ const EditorFallback = ({
 
 const EditorLoadingFallback = () => (
   <div className="flex h-full items-center justify-center bg-[var(--bg-2)] p-6">
-    <div className="rounded-[12px] border border-[var(--line)] bg-[var(--bg)] px-4 py-3 font-mono text-[12px] text-[var(--mute)]">
+    <div className="rounded-[12px] border border-[var(--line)] bg-[var(--bg)] px-4 py-3 font-mono text-[0.75rem] text-[var(--mute)]">
       Loading editor...
     </div>
   </div>
@@ -226,20 +226,20 @@ const TerminalFallback = ({ onRetry = null } = {}) => (
   <div className="flex h-full flex-col bg-[var(--ink)] text-[var(--taali-inverse-text)]">
     <div className="border-b border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] px-4 py-3">
       <div className="flex items-center justify-between gap-3">
-        <div className="font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--purple-soft)]">Claude Code CLI</div>
+        <div className="font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--purple-soft)]">Claude Code CLI</div>
         {onRetry ? (
           <button
             type="button"
             onClick={onRetry}
-            className="rounded-full border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--taali-inverse-text)_5%,transparent)] px-3 py-1 font-mono text-[10.5px] uppercase tracking-[0.08em] text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)] transition-colors hover:border-[var(--purple)] hover:text-[var(--purple)]"
+            className="rounded-full border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--taali-inverse-text)_5%,transparent)] px-3 py-1 font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)] transition-colors hover:border-[var(--purple)] hover:text-[var(--purple)]"
           >
             Retry
           </button>
         ) : null}
       </div>
-      <div className="mt-1 text-[12px] text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)]">Terminal preview is unavailable in this browser.</div>
+      <div className="mt-1 text-[0.75rem] text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)]">Terminal preview is unavailable in this browser.</div>
     </div>
-    <div className="p-4 font-mono text-[12px] leading-6 text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)]">
+    <div className="p-4 font-mono text-[0.75rem] leading-6 text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)]">
       Continue with the editor and Claude chat, or switch browsers to open the live terminal.
     </div>
   </div>
@@ -247,7 +247,7 @@ const TerminalFallback = ({ onRetry = null } = {}) => (
 
 const TerminalLoadingFallback = () => (
   <div className="flex h-full items-center justify-center bg-[var(--ink)] p-4">
-    <div className="rounded-[12px] border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--ink)_82%,var(--purple))] px-4 py-3 font-mono text-[12px] text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)]">
+    <div className="rounded-[12px] border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--ink)_82%,var(--purple))] px-4 py-3 font-mono text-[0.75rem] text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)]">
       Loading terminal...
     </div>
   </div>
@@ -257,7 +257,7 @@ const DockToggleButton = ({ active = false, icon = null, onClick, children }) =>
   <button
     type="button"
     onClick={onClick}
-    className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-medium transition-colors ${
+    className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[0.75rem] font-medium transition-colors ${
       active
         ? 'border-[var(--purple)] bg-[var(--purple-soft)] text-[var(--purple)]'
         : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:border-[var(--ink)] hover:text-[var(--ink)]'
@@ -269,24 +269,24 @@ const DockToggleButton = ({ active = false, icon = null, onClick, children }) =>
 );
 
 const RuntimeOutputPanel = ({ output, executing, onClose }) => (
-  <div className="flex min-h-[220px] flex-col overflow-hidden rounded-[16px] border border-[var(--line)] bg-[var(--ink)] text-[var(--taali-inverse-text)]">
+  <div className="flex min-h-[13.75rem] flex-col overflow-hidden rounded-[16px] border border-[var(--line)] bg-[var(--ink)] text-[var(--taali-inverse-text)]">
     <div className="flex items-center justify-between gap-3 border-b border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] px-4 py-3">
       <div>
-        <div className="font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--purple-soft)]">Run output</div>
-        <div className="mt-1 text-[12px] text-[color-mix(in_oklab,var(--taali-inverse-text)_60%,transparent)]">
+        <div className="font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--purple-soft)]">Run output</div>
+        <div className="mt-1 text-[0.75rem] text-[color-mix(in_oklab,var(--taali-inverse-text)_60%,transparent)]">
           {executing ? 'Executing...' : 'Latest result'}
         </div>
       </div>
       <button
         type="button"
         onClick={onClose}
-        className="inline-flex items-center gap-1 rounded-full border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--taali-inverse-text)_5%,transparent)] px-3 py-1.5 text-[11px] font-medium text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)] transition-colors hover:border-[color-mix(in_oklab,var(--taali-inverse-text)_20%,transparent)] hover:text-[var(--taali-inverse-text)]"
+        className="inline-flex items-center gap-1 rounded-full border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--taali-inverse-text)_5%,transparent)] px-3 py-1.5 text-[0.6875rem] font-medium text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)] transition-colors hover:border-[color-mix(in_oklab,var(--taali-inverse-text)_20%,transparent)] hover:text-[var(--taali-inverse-text)]"
       >
         Collapse
         <ChevronDown size={12} />
       </button>
     </div>
-    <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 font-mono text-[12px] leading-7">
+    <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 font-mono text-[0.75rem] leading-7">
       {output ? (
         <pre className="whitespace-pre-wrap">{output}</pre>
       ) : (
@@ -303,11 +303,11 @@ const TerminalDockPanel = ({
   onClose,
   children,
 }) => (
-  <div className="flex min-h-[220px] flex-col overflow-hidden rounded-[16px] border border-[var(--line)] bg-[var(--ink)] text-[var(--taali-inverse-text)]">
+  <div className="flex min-h-[13.75rem] flex-col overflow-hidden rounded-[16px] border border-[var(--line)] bg-[var(--ink)] text-[var(--taali-inverse-text)]">
     <div className="flex items-center justify-between gap-3 border-b border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] px-4 py-3">
       <div>
-        <div className="font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--purple-soft)]">Terminal</div>
-        <div className="mt-1 text-[12px] text-[color-mix(in_oklab,var(--taali-inverse-text)_60%,transparent)]">
+        <div className="font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--purple-soft)]">Terminal</div>
+        <div className="mt-1 text-[0.75rem] text-[color-mix(in_oklab,var(--taali-inverse-text)_60%,transparent)]">
           {terminalConnected ? 'Connected to the live workspace' : 'Connecting to the live workspace'}
         </div>
       </div>
@@ -317,7 +317,7 @@ const TerminalDockPanel = ({
             type="button"
             onClick={onRestartTerminal}
             disabled={terminalRestarting}
-            className="rounded-full border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--taali-inverse-text)_5%,transparent)] px-3 py-1.5 text-[11px] font-medium text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)] transition-colors hover:border-[color-mix(in_oklab,var(--taali-inverse-text)_20%,transparent)] hover:text-[var(--taali-inverse-text)] disabled:opacity-50"
+            className="rounded-full border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--taali-inverse-text)_5%,transparent)] px-3 py-1.5 text-[0.6875rem] font-medium text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)] transition-colors hover:border-[color-mix(in_oklab,var(--taali-inverse-text)_20%,transparent)] hover:text-[var(--taali-inverse-text)] disabled:opacity-50"
           >
             {terminalRestarting ? 'Restarting...' : 'Restart terminal'}
           </button>
@@ -325,7 +325,7 @@ const TerminalDockPanel = ({
         <button
           type="button"
           onClick={onClose}
-          className="inline-flex items-center gap-1 rounded-full border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--taali-inverse-text)_5%,transparent)] px-3 py-1.5 text-[11px] font-medium text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)] transition-colors hover:border-[color-mix(in_oklab,var(--taali-inverse-text)_20%,transparent)] hover:text-[var(--taali-inverse-text)]"
+          className="inline-flex items-center gap-1 rounded-full border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--taali-inverse-text)_5%,transparent)] px-3 py-1.5 text-[0.6875rem] font-medium text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)] transition-colors hover:border-[color-mix(in_oklab,var(--taali-inverse-text)_20%,transparent)] hover:text-[var(--taali-inverse-text)]"
         >
           Collapse
           <ChevronDown size={12} />
@@ -546,14 +546,13 @@ export const AssessmentWorkspace = ({
           the whole page instead of the chat scrolling internally
           (Sam, 2026-05-26). 220px reserves room for the top nav, the
           assessment header, and the task-context window above. The
-          ``min-h-[620px]`` keeps the previous floor for short windows
+          ``min-h-[38.75rem]`` keeps the previous floor for short windows
           (laptops at 800px tall stay usable). ``100dvh`` over ``vh``
           so mobile address-bar collapse doesn't leave a gap. */}
-      {/* Workspace fills the viewport after compensating for the
-          ``body { zoom: 0.8 }`` global scale. 125dvh × 0.8 = 100dvh
-          rendered; 225px × 0.8 = 180px header reserve rendered.
-          See ``01-base.css`` for the zoom rationale. */}
-      <div className="flex min-h-[620px] max-h-[calc(125dvh-225px)] flex-col">
+      {/* Workspace fills the viewport minus the chrome above (top nav,
+          assessment header, brief panel). ``dvh`` keeps mobile
+          address-bar collapse correct. */}
+      <div className="flex min-h-[38.75rem] max-h-[calc(100dvh-180px)] flex-col">
         <div
           className="grid min-h-0 flex-1 xl:[grid-template-columns:var(--workspace-grid)]"
           style={workspaceGridStyle}
@@ -567,7 +566,7 @@ export const AssessmentWorkspace = ({
             >
               <div className={`flex items-center gap-2 pb-3 ${repoPanelCollapsed ? 'justify-center' : 'justify-between'}`}>
                 {repoPanelCollapsed ? null : (
-                  <span className="font-mono text-[10.5px] uppercase tracking-[0.12em] text-[var(--mute)]">Repository</span>
+                  <span className="font-mono text-[0.65625rem] uppercase tracking-[0.12em] text-[var(--mute)]">Repository</span>
                 )}
                 <div className="flex items-center gap-1">
                   <button
@@ -600,8 +599,8 @@ export const AssessmentWorkspace = ({
                     <Folder size={16} />
                   </div>
                   <div className="text-center">
-                    <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--mute)]">Repo</div>
-                    <div className="mt-1 text-[12px] font-medium text-[var(--ink-2)]">{repoFileCount}</div>
+                    <div className="font-mono text-[0.625rem] uppercase tracking-[0.12em] text-[var(--mute)]">Repo</div>
+                    <div className="mt-1 text-[0.75rem] font-medium text-[var(--ink-2)]">{repoFileCount}</div>
                   </div>
                 </div>
               ) : (
@@ -613,20 +612,20 @@ export const AssessmentWorkspace = ({
                         value={newRepoFilePath}
                         onChange={(event) => onNewRepoFilePathChange?.(event.target.value)}
                         placeholder="src/new_file.py"
-                        className="w-full rounded-[10px] border border-[var(--line)] bg-[var(--bg)] px-3 py-2 font-mono text-[12px] text-[var(--ink)] placeholder:text-[var(--mute)] focus:border-[var(--purple)] focus:outline-none"
+                        className="w-full rounded-[10px] border border-[var(--line)] bg-[var(--bg)] px-3 py-2 font-mono text-[0.75rem] text-[var(--ink)] placeholder:text-[var(--mute)] focus:border-[var(--purple)] focus:outline-none"
                       />
                       <div className="mt-2 flex gap-2">
                         <button
                           type="button"
                           onClick={() => onCreateRepoFile?.(newRepoFilePath)}
-                          className="flex-1 rounded-full bg-[var(--purple)] px-3 py-2 text-[12px] font-medium text-white transition-colors hover:bg-[var(--purple-2)]"
+                          className="flex-1 rounded-full bg-[var(--purple)] px-3 py-2 text-[0.75rem] font-medium text-white transition-colors hover:bg-[var(--purple-2)]"
                         >
                           Create
                         </button>
                         <button
                           type="button"
                           onClick={onCancelRepoFileCreate}
-                          className="flex-1 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3 py-2 text-[12px] font-medium text-[var(--ink-2)] transition-colors hover:border-[var(--ink)] hover:text-[var(--ink)]"
+                          className="flex-1 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3 py-2 text-[0.75rem] font-medium text-[var(--ink-2)] transition-colors hover:border-[var(--ink)] hover:text-[var(--ink)]"
                         >
                           Cancel
                         </button>
@@ -634,7 +633,7 @@ export const AssessmentWorkspace = ({
                     </div>
                   ) : null}
 
-                  <div className="min-h-0 flex-1 overflow-y-auto font-mono text-[12.5px] leading-7">
+                  <div className="min-h-0 flex-1 overflow-y-auto font-mono text-[0.78125rem] leading-7">
                     {repoEntries.map(([dir, paths]) => (
                       <div key={dir || '(root)'} className="mb-1">
                         {dir ? (
@@ -664,10 +663,10 @@ export const AssessmentWorkspace = ({
                                 }`}
                                 onClick={() => onSelectRepoFile(path)}
                               >
-                                <span className={`h-[5px] w-[5px] rounded-full ${isSelected ? 'bg-[var(--purple)]' : 'bg-[var(--mute-2)]/60'}`} />
+                                <span className={`h-[0.3125rem] w-[0.3125rem] rounded-full ${isSelected ? 'bg-[var(--purple)]' : 'bg-[var(--mute-2)]/60'}`} />
                                 <span className="truncate">{name}</span>
                                 {isModified ? (
-                                  <span className="ml-auto font-mono text-[10.5px] uppercase tracking-[0.08em] text-[var(--amber)]">M</span>
+                                  <span className="ml-auto font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[var(--amber)]">M</span>
                                 ) : null}
                               </button>
                             );
@@ -677,7 +676,7 @@ export const AssessmentWorkspace = ({
                     ))}
                   </div>
 
-                  <div className="mt-4 border-t border-[var(--line-2)] pt-3 font-mono text-[10.5px] leading-5 text-[var(--mute)]">
+                  <div className="mt-4 border-t border-[var(--line-2)] pt-3 font-mono text-[0.65625rem] leading-5 text-[var(--mute)]">
                     <div>Save syncs the selected file.</div>
                     <div>Branch · <span className="text-[var(--purple-2)]">{branchName || 'live workspace'}</span></div>
                   </div>
@@ -709,22 +708,22 @@ export const AssessmentWorkspace = ({
                 tabIndex={0}
                 onMouseDown={handleResizeStart}
                 onDoubleClick={() => setAssistantPanelWidth(ASSISTANT_PANEL_DEFAULT)}
-                className="group absolute inset-y-0 right-0 z-10 hidden w-[7px] translate-x-[3px] cursor-col-resize xl:block"
+                className="group absolute inset-y-0 right-0 z-10 hidden w-[0.4375rem] translate-x-[3px] cursor-col-resize xl:block"
                 title="Drag to resize · double-click to reset"
               >
-                <div className="pointer-events-none absolute left-1/2 top-1/2 h-12 w-[2px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--line-2)] transition-colors group-hover:bg-[var(--purple)]" />
+                <div className="pointer-events-none absolute left-1/2 top-1/2 h-12 w-[0.125rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--line-2)] transition-colors group-hover:bg-[var(--purple)]" />
               </div>
             ) : null}
-            <div className="flex h-full min-h-[420px] flex-col">
+            <div className="flex h-full min-h-[26.25rem] flex-col">
               <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <div className="grid h-6 w-6 place-items-center rounded-[7px] bg-[linear-gradient(135deg,var(--purple)_0%,var(--purple-soft)_100%)] font-mono text-[10px] font-semibold text-[var(--taali-inverse-text)]">
+                    <div className="grid h-6 w-6 place-items-center rounded-[7px] bg-[linear-gradient(135deg,var(--purple)_0%,var(--purple-soft)_100%)] font-mono text-[0.625rem] font-semibold text-[var(--taali-inverse-text)]">
                       C
                     </div>
                     <div className="min-w-0">
-                      <div className="truncate text-[12px] font-semibold text-[var(--ink)]">Claude</div>
-                      <div className="truncate font-mono text-[9px] uppercase tracking-[0.08em] text-[var(--mute)]">
+                      <div className="truncate text-[0.75rem] font-semibold text-[var(--ink)]">Claude</div>
+                      <div className="truncate font-mono text-[0.5625rem] uppercase tracking-[0.08em] text-[var(--mute)]">
                         {showTerminal ? 'Live repo assistant' : 'Chat guidance'}
                       </div>
                     </div>
@@ -732,12 +731,12 @@ export const AssessmentWorkspace = ({
                 </div>
 
                 {showTerminal ? (
-                  <div className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-[9.5px] uppercase tracking-[0.06em] ${
+                  <div className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-[0.59375rem] uppercase tracking-[0.06em] ${
                     terminalConnected
                       ? 'border-[var(--line)] bg-[var(--bg)] text-[var(--green)]'
                       : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)]'
                   }`}>
-                    <span className={`h-[5px] w-[5px] rounded-full ${terminalConnected ? 'bg-[var(--green)]' : 'bg-[var(--mute-2)]'}`} />
+                    <span className={`h-[0.3125rem] w-[0.3125rem] rounded-full ${terminalConnected ? 'bg-[var(--green)]' : 'bg-[var(--mute-2)]'}`} />
                     {terminalConnected ? 'Terminal ready' : 'Terminal idle'}
                   </div>
                 ) : null}
@@ -766,8 +765,8 @@ export const AssessmentWorkspace = ({
                         const turnLabel = `turn ${index + 1}`;
 
                         return (
-                          <div key={`${entry?.role || 'message'}-${index}`} className={`text-[13.5px] ${isUser ? 'text-right' : ''}`}>
-                            <div className={`mb-2 flex gap-2 font-mono text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)] ${isUser ? 'justify-end' : 'justify-start'}`}>
+                          <div key={`${entry?.role || 'message'}-${index}`} className={`text-[0.84375rem] ${isUser ? 'text-right' : ''}`}>
+                            <div className={`mb-2 flex gap-2 font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[var(--mute)] ${isUser ? 'justify-end' : 'justify-start'}`}>
                               <span>{isUser ? 'You' : 'Claude'}</span>
                               <span>{turnLabel}</span>
                             </div>
@@ -789,8 +788,8 @@ export const AssessmentWorkspace = ({
                       })}
 
                       {claudePromptSending ? (
-                        <div className="text-[13.5px]">
-                          <div className="mb-2 flex gap-2 font-mono text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">
+                        <div className="text-[0.84375rem]">
+                          <div className="mb-2 flex gap-2 font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[var(--mute)]">
                             <span>Claude</span>
                             <span>drafting</span>
                           </div>
@@ -798,7 +797,7 @@ export const AssessmentWorkspace = ({
                             {claudePromptSlow ? (
                               <div className="space-y-2">
                                 <div className="font-medium text-[var(--ink)]">Still working in the live repo session...</div>
-                                <div className="text-[13px] leading-6 text-[var(--mute)]">
+                                <div className="text-[0.8125rem] leading-6 text-[var(--mute)]">
                                   Open the terminal dock to inspect progress, or restart the terminal if it looks stuck.
                                 </div>
                               </div>
@@ -810,10 +809,10 @@ export const AssessmentWorkspace = ({
                       ) : null}
 
                       {!(claudeConversation || []).length ? (
-                        <div className="rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] px-4 py-4 text-[13px] leading-6 text-[var(--mute)]">
+                        <div className="rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] px-4 py-4 text-[0.8125rem] leading-6 text-[var(--mute)]">
                           Ask Claude to inspect the live repo, explain a failure, or suggest the smallest safe patch path before you edit.
                           {showTerminal ? (
-                            <div className="mt-2 inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.08em] text-[var(--purple)]">
+                            <div className="mt-2 inline-flex items-center gap-2 font-mono text-[0.6875rem] uppercase tracking-[0.08em] text-[var(--purple)]">
                               <TerminalSquare size={12} />
                               Terminal lives in the bottom dock.
                             </div>
@@ -839,17 +838,17 @@ export const AssessmentWorkspace = ({
                         }}
                         placeholder="Ask Claude, attach files with @, run a tool with /…"
                         disabled={claudePromptDisabled || claudePromptSending}
-                        className="min-h-[64px] w-full resize-none border-0 bg-transparent text-[13.5px] leading-6 text-[var(--ink)] outline-none placeholder:text-[var(--mute)] disabled:opacity-60"
+                        className="min-h-[4rem] w-full resize-none border-0 bg-transparent text-[0.84375rem] leading-6 text-[var(--ink)] outline-none placeholder:text-[var(--mute)] disabled:opacity-60"
                       />
                       <div className="mt-2 flex items-center justify-between gap-3">
-                        <div className="font-mono text-[10.5px] uppercase tracking-[0.06em] text-[var(--mute)]">
+                        <div className="font-mono text-[0.65625rem] uppercase tracking-[0.06em] text-[var(--mute)]">
                           Cmd/Ctrl + Enter to send
                         </div>
                         <button
                           type="button"
                           onClick={onClaudePromptSubmit}
                           disabled={claudePromptDisabled || claudePromptSending || !String(claudePrompt || '').trim()}
-                          className="inline-flex items-center gap-2 rounded-full bg-[var(--ink)] px-3 py-1.5 text-[12.5px] font-medium text-[var(--bg)] transition-colors hover:bg-[var(--purple)] disabled:opacity-50"
+                          className="inline-flex items-center gap-2 rounded-full bg-[var(--ink)] px-3 py-1.5 text-[0.78125rem] font-medium text-[var(--bg)] transition-colors hover:bg-[var(--purple)] disabled:opacity-50"
                         >
                           <MessageSquare size={13} />
                           Send
@@ -872,7 +871,7 @@ export const AssessmentWorkspace = ({
               editor. */}
           {editorVisible ? (
             <main className="min-w-0 border-l border-[var(--line)] bg-[var(--bg-2)]">
-              <div className="flex h-full min-h-[420px] flex-col">
+              <div className="flex h-full min-h-[26.25rem] flex-col">
                 {/* Editor header strip with close (×) — clears the file
                     selection so the editor column drops out of the
                     grid entirely and chat expands back to fill the
@@ -880,7 +879,7 @@ export const AssessmentWorkspace = ({
                     be collapsable not the chat window — it should
                     completely collapse so not visible." */}
                 <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-2">
-                  <div className="min-w-0 truncate font-mono text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">
+                  <div className="min-w-0 truncate font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[var(--mute)]">
                     {editorFilename || selectedFilePath || 'Editor'}
                   </div>
                   <button
@@ -941,8 +940,8 @@ export const AssessmentWorkspace = ({
         >
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="font-mono text-[10.5px] uppercase tracking-[0.12em] text-[var(--mute)]">Workspace dock</div>
-              <div className="mt-1 text-[12px] text-[var(--mute)]">
+              <div className="font-mono text-[0.65625rem] uppercase tracking-[0.12em] text-[var(--mute)]">Workspace dock</div>
+              <div className="mt-1 text-[0.75rem] text-[var(--mute)]">
                 {terminalSurfaceEnabled
                   ? 'Open the output pane after each run, or use the terminal for repo commands and tests.'
                   : 'Open the output pane to see results from Run and Run tests.'}

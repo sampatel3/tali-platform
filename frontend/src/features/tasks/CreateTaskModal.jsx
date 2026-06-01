@@ -290,7 +290,7 @@ export const CreateTaskModal = ({
           <label className="block">
             <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Description</span>
             <Textarea
-              className="min-h-[90px]"
+              className="min-h-[5.625rem]"
               value={form.description || ''}
               onChange={(event) => handleChange('description', event.target.value)}
               disabled={isViewOnly}
@@ -300,7 +300,7 @@ export const CreateTaskModal = ({
           <label className="block">
             <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Scenario</span>
             <Textarea
-              className="min-h-[80px]"
+              className="min-h-[5rem]"
               value={form.scenario || ''}
               onChange={(event) => handleChange('scenario', event.target.value)}
               disabled={isViewOnly}
@@ -311,7 +311,7 @@ export const CreateTaskModal = ({
             <label className="block">
               <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Starter code</span>
               <Textarea
-                className="min-h-[220px] font-mono text-xs"
+                className="min-h-[13.75rem] font-mono text-xs"
                 value={form.starter_code || ''}
                 onChange={(event) => handleChange('starter_code', event.target.value)}
                 disabled={isViewOnly}
@@ -320,7 +320,7 @@ export const CreateTaskModal = ({
             <label className="block">
               <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Test suite</span>
               <Textarea
-                className="min-h-[220px] font-mono text-xs"
+                className="min-h-[13.75rem] font-mono text-xs"
                 value={form.test_code || ''}
                 onChange={(event) => handleChange('test_code', event.target.value)}
                 disabled={isViewOnly}

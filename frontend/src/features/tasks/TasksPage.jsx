@@ -204,7 +204,7 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
         </div>
 
         {loading ? (
-          <div className="flex min-h-[260px] items-center justify-center">
+          <div className="flex min-h-[16.25rem] items-center justify-center">
             <Spinner size={32} />
           </div>
         ) : filteredTasks.length === 0 ? (
@@ -334,9 +334,9 @@ export const TaskPreviewPage = () => {
   if (!task) {
     return (
       <div className="min-h-screen bg-[var(--bg)] p-10 text-[var(--ink)]">
-        <div className="mx-auto max-w-[760px] rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-8 shadow-[var(--shadow-sm)]">
+        <div className="mx-auto max-w-[47.5rem] rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-8 shadow-[var(--shadow-sm)]">
           <div className="kicker">Task preview</div>
-          <h1 className="mt-3 font-[var(--font-display)] text-[34px] font-semibold tracking-[-0.03em]">Task not found.</h1>
+          <h1 className="mt-3 font-[var(--font-display)] text-[2.125rem] font-semibold tracking-[-0.03em]">Task not found.</h1>
           <p className="mt-3 text-[var(--mute)]">Return to the task library and open a current task preview.</p>
         </div>
       </div>

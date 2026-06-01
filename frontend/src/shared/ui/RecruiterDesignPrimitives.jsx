@@ -144,7 +144,7 @@ export const WorkableTag = ({
   <span
     className={cx(
       'inline-flex items-center gap-1 rounded-full border px-3 py-1 font-medium tracking-[0.01em]',
-      size === 'sm' ? 'text-[11px]' : 'text-[12px]',
+      size === 'sm' ? 'text-[0.6875rem]' : 'text-[0.75rem]',
       className
     )}
     style={{
@@ -168,7 +168,7 @@ export const WorkableScorePip = ({ value, className = '' }) => {
   return (
     <span
       className={cx(
-        'inline-flex items-center gap-1 rounded-full px-2 py-1 font-mono text-[11px] font-semibold',
+        'inline-flex items-center gap-1 rounded-full px-2 py-1 font-mono text-[0.6875rem] font-semibold',
         className
       )}
       style={{
@@ -191,7 +191,7 @@ export const WorkableSyncIndicator = ({
   const health = resolveSyncHealth({ status, lastSyncedAt });
   const relativeLabel = lastSyncedAt ? formatRelativeDateTime(lastSyncedAt) : 'Not synced';
   return (
-    <span className={cx('inline-flex items-center gap-2 text-[11px] font-medium text-[var(--taali-muted)]', className)}>
+    <span className={cx('inline-flex items-center gap-2 text-[0.6875rem] font-medium text-[var(--taali-muted)]', className)}>
       <SyncPulse status={health} />
       <span>{lastSyncedAt ? `${label} ${relativeLabel}` : relativeLabel}</span>
     </span>
@@ -225,7 +225,7 @@ export const FilterChip = ({
     <span>{children}</span>
     {count != null ? (
       <span
-        className="inline-flex min-w-[1.45rem] items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-semibold"
+        className="inline-flex min-w-[1.45rem] items-center justify-center rounded-full px-1.5 py-0.5 text-[0.6875rem] font-semibold"
         style={{
           backgroundColor: active ? 'rgba(255,255,255,0.78)' : 'var(--taali-line-2)',
           color: active ? 'var(--taali-purple-hover)' : 'var(--taali-ink-2)',
@@ -254,7 +254,7 @@ export const RecruiterStatStrip = ({ items = [], className = '' }) => {
             color: item.highlight ? 'white' : 'var(--taali-text)',
           }}
         >
-          <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[inherit] opacity-70">
+          <div className="text-[0.6875rem] font-semibold uppercase tracking-[0.12em] text-[inherit] opacity-70">
             {item.label}
           </div>
           <div className="mt-2 text-[1.75rem] font-semibold tracking-[-0.03em]">{item.value}</div>
@@ -287,7 +287,7 @@ export const RecruiterPageHero = ({
     <div className="grid gap-5 px-5 py-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:px-6">
       <div>
         {eyebrow ? (
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--taali-purple-hover)]">
+          <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.16em] text-[var(--taali-purple-hover)]">
             {eyebrow}
           </p>
         ) : null}
@@ -304,7 +304,7 @@ export const RecruiterPageHero = ({
             {pills.map((pill) => (
               <span
                 key={pill.key || pill.label}
-                className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[12px] font-medium"
+                className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[0.75rem] font-medium"
                 style={{
                   borderColor: pill.borderColor || 'var(--taali-line)',
                   background: pill.background || 'rgba(255,255,255,0.8)',
@@ -432,7 +432,7 @@ export const WorkableSyncStrip = ({
           <WorkableLogo size={40} />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[13.5px] font-semibold text-[var(--taali-ink-2)]">
+              <span className="text-[0.84375rem] font-semibold text-[var(--taali-ink-2)]">
                 Synced from Workable
               </span>
               <SyncPulse status={health} />
@@ -441,7 +441,7 @@ export const WorkableSyncStrip = ({
               {syncedRolesCount} of {totalRolesCount} roles synced
               {org?.workable_subdomain ? ` · ${org.workable_subdomain}.workable.com` : ''}
             </div>
-            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] text-[var(--taali-muted)]">
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[0.6875rem] text-[var(--taali-muted)]">
               <span><b className="text-[var(--taali-ink-2)]">{newCandidates}</b> new candidates</span>
               <span><b className="text-[var(--taali-ink-2)]">{openJobsSeen}</b> open jobs</span>
               <span><b className="text-[var(--taali-ink-2)]">{activeCandidatesSeen}</b> active candidates</span>
@@ -594,13 +594,13 @@ export const WorkableComparisonCard = ({
 
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         <div className="rounded-[16px] border border-[var(--taali-line)] bg-[rgba(45,140,255,0.08)] p-4">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">Workable raw</div>
+          <div className="text-[0.6875rem] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">Workable raw</div>
           <div className="mt-2 text-[2rem] font-semibold tracking-[-0.04em] text-[var(--taali-workable-dark)]">
             {workableRawScore != null ? formatPercentScore(workableRawScore) : '—'}
           </div>
         </div>
         <div className="rounded-[16px] border border-[var(--taali-line)] bg-[var(--taali-surface-subtle)] p-4">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">Taali score</div>
+          <div className="text-[0.6875rem] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">Taali score</div>
           <div className="mt-2 text-[2rem] font-semibold tracking-[-0.04em] text-[var(--taali-text)]">
             {taaliScore != null ? formatPercentScore(taaliScore) : '—'}
           </div>
@@ -608,9 +608,9 @@ export const WorkableComparisonCard = ({
       </div>
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-        <span className="font-mono text-[11px] text-[var(--taali-muted)]">{caption}</span>
+        <span className="font-mono text-[0.6875rem] text-[var(--taali-muted)]">{caption}</span>
         {posted ? (
-          <span className="inline-flex items-center gap-2 rounded-full bg-[var(--taali-success-soft)] px-3 py-1 text-[11px] font-semibold text-[var(--taali-success)]">
+          <span className="inline-flex items-center gap-2 rounded-full bg-[var(--taali-success-soft)] px-3 py-1 text-[0.6875rem] font-semibold text-[var(--taali-success)]">
             Posted {postedAt ? formatShortDate(postedAt) : ''}
           </span>
         ) : onPost ? (

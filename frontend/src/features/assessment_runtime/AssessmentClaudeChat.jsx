@@ -30,32 +30,32 @@ const formatCostUsd = (usd) => {
 // COLOR CONTRAST, and SPACING — never type size.
 const MARKDOWN_COMPONENTS = {
   p: ({ children }) => (
-    <p className="whitespace-pre-line text-[14px] leading-[1.6] text-[var(--ink)] [&:not(:first-child)]:mt-3">
+    <p className="whitespace-pre-line text-[0.875rem] leading-[1.6] text-[var(--ink)] [&:not(:first-child)]:mt-3">
       {children}
     </p>
   ),
   h1: ({ children }) => (
-    <h1 className="mt-4 text-[16px] font-semibold leading-tight text-[var(--ink)] [&:first-child]:mt-0">
+    <h1 className="mt-4 text-[1rem] font-semibold leading-tight text-[var(--ink)] [&:first-child]:mt-0">
       {children}
     </h1>
   ),
   h2: ({ children }) => (
-    <h2 className="mt-3.5 text-[14.5px] font-semibold leading-tight text-[var(--ink)] [&:first-child]:mt-0">
+    <h2 className="mt-3.5 text-[0.90625rem] font-semibold leading-tight text-[var(--ink)] [&:first-child]:mt-0">
       {children}
     </h2>
   ),
   h3: ({ children }) => (
-    <h3 className="mt-3 text-[13.5px] font-semibold leading-tight text-[var(--ink)] [&:first-child]:mt-0">
+    <h3 className="mt-3 text-[0.84375rem] font-semibold leading-tight text-[var(--ink)] [&:first-child]:mt-0">
       {children}
     </h3>
   ),
   ul: ({ children }) => (
-    <ul className="mt-2.5 list-disc space-y-1 pl-5 text-[14px] leading-[1.6] text-[var(--ink)] marker:text-[var(--purple)]">
+    <ul className="mt-2.5 list-disc space-y-1 pl-5 text-[0.875rem] leading-[1.6] text-[var(--ink)] marker:text-[var(--purple)]">
       {children}
     </ul>
   ),
   ol: ({ children }) => (
-    <ol className="mt-2.5 list-decimal space-y-1 pl-5 text-[14px] leading-[1.6] text-[var(--ink)] marker:text-[var(--purple)]">
+    <ol className="mt-2.5 list-decimal space-y-1 pl-5 text-[0.875rem] leading-[1.6] text-[var(--ink)] marker:text-[var(--purple)]">
       {children}
     </ol>
   ),
@@ -65,7 +65,7 @@ const MARKDOWN_COMPONENTS = {
   ),
   em: ({ children }) => <em className="italic text-[var(--ink)]">{children}</em>,
   blockquote: ({ children }) => (
-    <blockquote className="mt-3 border-l-[3px] border-[var(--purple)] bg-[var(--purple-soft)] px-3 py-2 text-[13.5px] leading-[1.55] text-[var(--ink-2)]">
+    <blockquote className="mt-3 border-l-[3px] border-[var(--purple)] bg-[var(--purple-soft)] px-3 py-2 text-[0.84375rem] leading-[1.55] text-[var(--ink-2)]">
       {children}
     </blockquote>
   ),
@@ -89,7 +89,7 @@ const MARKDOWN_COMPONENTS = {
     );
   },
   pre: ({ children }) => (
-    <pre className="mt-3 overflow-x-auto rounded-[10px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-bg)] p-3 font-mono text-[12.5px] leading-[1.55] text-[var(--ink-2)]">
+    <pre className="mt-3 overflow-x-auto rounded-[10px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-bg)] p-3 font-mono text-[0.78125rem] leading-[1.55] text-[var(--ink-2)]">
       {children}
     </pre>
   ),
@@ -132,9 +132,9 @@ const MessageRow = ({ entry }) => {
   const content = String(entry?.content || '');
 
   return (
-    <div className={`text-[14px] ${isUser ? 'text-right' : ''}`}>
+    <div className={`text-[0.875rem] ${isUser ? 'text-right' : ''}`}>
       <div
-        className={`mb-1.5 flex gap-2 font-mono text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)] ${
+        className={`mb-1.5 flex gap-2 font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[var(--mute)] ${
           isUser ? 'justify-end' : 'justify-start'
         }`}
       >
@@ -148,7 +148,7 @@ const MessageRow = ({ entry }) => {
         }`}
       >
         {isUser ? (
-          <p className="whitespace-pre-wrap text-[14px] leading-[1.55] text-inherit">{content}</p>
+          <p className="whitespace-pre-wrap text-[0.875rem] leading-[1.55] text-inherit">{content}</p>
         ) : (
           <ReactMarkdown components={MARKDOWN_COMPONENTS}>{content}</ReactMarkdown>
         )}
@@ -358,7 +358,7 @@ export const AssessmentClaudeChat = ({
           response so they SEE the system ticking. Data comes from the
           same claude_budget snapshot the workspace top-bar uses. */}
       <div
-        className={`flex items-center justify-between gap-3 border-b border-[var(--taali-runtime-border)] px-5 py-2.5 font-mono text-[11px] transition-colors duration-700 ${
+        className={`flex items-center justify-between gap-3 border-b border-[var(--taali-runtime-border)] px-5 py-2.5 font-mono text-[0.6875rem] transition-colors duration-700 ${
           trackerHighlight
             ? 'bg-[var(--purple-soft)] text-[var(--purple)]'
             : 'text-[var(--mute)]'
@@ -389,8 +389,8 @@ export const AssessmentClaudeChat = ({
       >
         <div className="space-y-3">
           {messages.length === 0 && !pending ? (
-            <div className="rounded-[12px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-4 py-3.5 text-[13.5px] leading-[1.55] text-[var(--ink-2)]">
-              <div className="mb-2 inline-flex items-center gap-2 font-mono text-[10.5px] uppercase tracking-[0.1em] text-[var(--purple)]">
+            <div className="rounded-[12px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-4 py-3.5 text-[0.84375rem] leading-[1.55] text-[var(--ink-2)]">
+              <div className="mb-2 inline-flex items-center gap-2 font-mono text-[0.65625rem] uppercase tracking-[0.1em] text-[var(--purple)]">
                 <FileSearch size={12} />
                 Claude is ready
               </div>
@@ -403,8 +403,8 @@ export const AssessmentClaudeChat = ({
           ))}
 
           {pending ? (
-            <div className="text-[14px]" data-testid="assessment-claude-chat-pending">
-              <div className="mb-1.5 flex gap-2 font-mono text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">
+            <div className="text-[0.875rem]" data-testid="assessment-claude-chat-pending">
+              <div className="mb-1.5 flex gap-2 font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[var(--mute)]">
                 <span>Claude</span>
                 <span>working</span>
               </div>
@@ -432,17 +432,17 @@ export const AssessmentClaudeChat = ({
             placeholder={placeholder}
             disabled={disabled || pending || isBudgetExhausted}
             aria-label="Message Claude"
-            className="min-h-[72px] w-full resize-none border-0 bg-transparent text-[14px] leading-[1.55] text-[var(--ink)] outline-none placeholder:text-[var(--mute)] disabled:opacity-60"
+            className="min-h-[4.5rem] w-full resize-none border-0 bg-transparent text-[0.875rem] leading-[1.55] text-[var(--ink)] outline-none placeholder:text-[var(--mute)] disabled:opacity-60"
           />
           <div className="mt-2 flex items-center justify-between gap-3">
-            <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-[var(--mute)]">
+            <div className="font-mono text-[0.625rem] uppercase tracking-[0.06em] text-[var(--mute)]">
               Cmd/Ctrl + Enter to send
             </div>
             <button
               type="button"
               onClick={handleSubmit}
               disabled={!canSend}
-              className="inline-flex items-center gap-1.5 rounded-full bg-[var(--ink)] px-3 py-1.5 text-[12px] font-medium text-[var(--bg)] transition-colors hover:bg-[var(--purple)] disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-full bg-[var(--ink)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--bg)] transition-colors hover:bg-[var(--purple)] disabled:opacity-50"
               aria-label="Send message to Claude"
             >
               <MessageSquare size={12} />

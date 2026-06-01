@@ -1966,7 +1966,7 @@ export const CandidatesDirectoryPage = ({
             ))}
           </div>
 
-          <div className="relative grow min-w-[280px]">
+          <div className="relative grow min-w-[17.5rem]">
             <Search size={14} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[var(--mute)]" />
             <input
               className="search pl-10"
@@ -2236,7 +2236,7 @@ export const CandidatesDirectoryPage = ({
         ) : null}
 
         {showInitialLoadingState ? (
-          <div className="flex min-h-[260px] items-center justify-center">
+          <div className="flex min-h-[16.25rem] items-center justify-center">
             <Spinner size={22} />
           </div>
         ) : applicationsError ? (

@@ -18,9 +18,9 @@ function CandidateInterviewKitSection({ kit }) {
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-sm font-semibold text-[var(--taali-text)]">Candidate-specific interview guidance</p>
-          <p className="text-[11px] text-[var(--taali-muted)]">Derived from CV scoring evidence — no extra Claude call.</p>
+          <p className="text-[0.6875rem] text-[var(--taali-muted)]">Derived from CV scoring evidence — no extra Claude call.</p>
         </div>
-        <Badge variant="muted" className="font-mono text-[11px]">
+        <Badge variant="muted" className="font-mono text-[0.6875rem]">
           {kit.summary?.total_criteria ?? 0} criteria
         </Badge>
       </div>
@@ -58,7 +58,7 @@ function KitItemCard({ item, tone }) {
     <div className={`rounded border ${borderClass} px-3 py-2`}>
       <div className="flex items-start justify-between gap-2">
         <p className="text-sm font-semibold text-[var(--taali-text)]">{item.criterion_text}</p>
-        <Badge variant="muted" className="font-mono text-[10px]">
+        <Badge variant="muted" className="font-mono text-[0.625rem]">
           {item.status}
           {typeof item.confidence === 'number' ? ` · ${Math.round(item.confidence * 100)}%` : ''}
         </Badge>
@@ -69,7 +69,7 @@ function KitItemCard({ item, tone }) {
         </p>
       ) : null}
       {item.cv_quote ? (
-        <p className="mt-1 text-[11px] italic text-[var(--taali-muted)]">
+        <p className="mt-1 text-[0.6875rem] italic text-[var(--taali-muted)]">
           “{item.cv_quote}”
         </p>
       ) : null}
@@ -135,7 +135,7 @@ export function CandidateScoreSummarySheet({
             <Select
               value={selectedTask}
               onChange={(event) => setSelectedTask(event.target.value)}
-              className="min-w-[240px]"
+              className="min-w-[15rem]"
             >
               <option value="">Select task...</option>
               {roleTasks.map((task) => (
@@ -203,7 +203,7 @@ export function CandidateScoreSummarySheet({
       footer={footer}
     >
       {loading ? (
-        <div className="flex min-h-[240px] items-center justify-center">
+        <div className="flex min-h-[15rem] items-center justify-center">
           <Spinner size={22} />
         </div>
       ) : !application ? (

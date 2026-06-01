@@ -21,7 +21,7 @@ const variantConfig = {
 };
 
 const SectionLabel = ({ children }) => (
-  <div className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[var(--taali-muted)]">
+  <div className="text-[0.625rem] font-semibold uppercase tracking-[0.1em] text-[var(--taali-muted)]">
     {children}
   </div>
 );
@@ -37,7 +37,7 @@ const TimelineRow = ({ entry }) => (
       </div>
     ) : null}
     {entry.range ? (
-      <div className="mt-1 font-mono text-[11px] text-[var(--taali-muted)]">{entry.range}</div>
+      <div className="mt-1 font-mono text-[0.6875rem] text-[var(--taali-muted)]">{entry.range}</div>
     ) : null}
   </div>
 );
@@ -53,7 +53,7 @@ export function CandidateSnapshotCard({ snapshot, variant = 'page', className = 
     <Card className={cx(config.padding, className)}>
       <div className={cx('grid gap-4', config.columns)}>
         {yearsLabel ? (
-          <div className="flex min-w-[140px] flex-col gap-1">
+          <div className="flex min-w-[8.75rem] flex-col gap-1">
             <SectionLabel>Experience</SectionLabel>
             <div className="taali-display text-2xl font-semibold text-[var(--taali-text)]">
               {yearsLabel}
@@ -66,7 +66,7 @@ export function CandidateSnapshotCard({ snapshot, variant = 'page', className = 
             <SectionLabel>Tech stack</SectionLabel>
             <div className="flex flex-wrap gap-1.5">
               {topSkills.map((skill) => (
-                <Badge key={skill} variant="purple" className="text-[11px]">{skill}</Badge>
+                <Badge key={skill} variant="purple" className="text-[0.6875rem]">{skill}</Badge>
               ))}
             </div>
           </div>

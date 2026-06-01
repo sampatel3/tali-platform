@@ -22,7 +22,7 @@ export const ScoreHeroCard = ({
   <Card className={cx('bg-[var(--taali-surface)] p-4', className)}>
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0 flex-1">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">{label}</div>
+        <div className="text-[0.625rem] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">{label}</div>
         <div className={cx('mt-2 taali-display text-5xl font-semibold leading-none text-[var(--taali-text)]', valueClassName)}>
           {renderScoreValue(value, scale)}
         </div>
@@ -44,12 +44,12 @@ export const ScoreMetricCard = ({
   valueClassName = '',
 }) => (
   <Card className={cx('bg-[var(--taali-surface)] px-3 py-3', className)}>
-    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">{label}</div>
+    <div className="text-[0.625rem] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">{label}</div>
     <div className={cx('mt-1.5 taali-display text-[1.55rem] font-semibold leading-none text-[var(--taali-text)]', valueClassName)}>
       {renderScoreValue(value, scale)}
     </div>
     {sublabel ? (
-      <div className="mt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">{sublabel}</div>
+      <div className="mt-1 text-[0.625rem] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">{sublabel}</div>
     ) : null}
   </Card>
 );
@@ -61,7 +61,7 @@ export const InsightCard = ({
   className = '',
 }) => (
   <Card className={cx('bg-[var(--taali-surface)] p-3', className)}>
-    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">{label}</div>
+    <div className="text-[0.625rem] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">{label}</div>
     <div className="mt-2 text-[1.05rem] font-semibold leading-7 text-[var(--taali-text)]">{title}</div>
     {description ? <p className="mt-1.5 text-sm leading-6 text-[var(--taali-muted)]">{description}</p> : null}
   </Card>

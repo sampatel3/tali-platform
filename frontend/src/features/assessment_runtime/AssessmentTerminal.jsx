@@ -167,11 +167,11 @@ export const AssessmentTerminal = ({
             <span className="font-mono text-xs font-bold uppercase tracking-wide">
               Claude Code CLI
             </span>
-            <span className="text-[11px] text-[var(--taali-runtime-muted)]">
+            <span className="text-[0.6875rem] text-[var(--taali-runtime-muted)]">
               Repo shell for tests, commands, and the Claude session behind Ask Claude.
             </span>
           </div>
-          <span className={`rounded-full border px-2 py-0.5 font-mono text-[11px] ${
+          <span className={`rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] ${
             connected
               ? 'border-[var(--taali-success-border)] bg-[var(--taali-success-soft)] text-[var(--taali-success)]'
               : 'border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] text-[var(--taali-warning)]'
