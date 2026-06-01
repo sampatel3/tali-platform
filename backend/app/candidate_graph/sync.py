@@ -153,23 +153,39 @@ def sync_interview(
     )
 
 
-def sync_event(event: CandidateApplicationEvent) -> int:
-    """Ingest a pipeline event (best-effort; some are no-op)."""
+def sync_event(
+    event: CandidateApplicationEvent,
+    *,
+    db: Session | None = None,
+    bill_organization_id: int | None = None,
+) -> int:
+    """Ingest a pipeline event (best-effort; some are no-op).
+
+    ``db`` + ``bill_organization_id`` let the spend be attributed to the org
+    (a graph_sync usage_event per call). When ``bill_organization_id`` is
+    omitted we fall back to the event's own organization_id, then its
+    application chain. Without ``db`` no usage_event can be written — the prior
+    version never passed it, so every event-sync call landed org=NULL.
+    """
     if not graph_client.is_configured():
         return 0
     episode = episode_module.build_event_episode(event)
     if episode is None:
         return 0
-    # Resolve org via the event's application; same best-effort pattern
-    # as ``sync_interview``.
-    bill_org_id: int | None = None
-    try:
-        application = getattr(event, "application", None)
-        if application is not None and application.organization_id is not None:
-            bill_org_id = int(application.organization_id)
-    except Exception:
-        bill_org_id = None
-    return episode_module.dispatch([episode], bill_organization_id=bill_org_id)
+    bill_org_id: int | None = bill_organization_id
+    if bill_org_id is None:
+        try:
+            if getattr(event, "organization_id", None) is not None:
+                bill_org_id = int(event.organization_id)
+            else:
+                application = getattr(event, "application", None)
+                if application is not None and application.organization_id is not None:
+                    bill_org_id = int(application.organization_id)
+        except Exception:
+            bill_org_id = None
+    return episode_module.dispatch(
+        [episode], db=db, bill_organization_id=bill_org_id
+    )
 
 
 def sync_organization(
