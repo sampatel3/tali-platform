@@ -1,4 +1,4 @@
-mainspring master @ e7ffa22
+mainspring master @ 9ef6f8b
 Source: mainspring/governance/bias_audit.py (post-carve canonical; ORM-free governance)
 Vendored (ORM-free verdict): the EEOC 4/5ths PAIRWISE disparate-impact test +
 selection / outcome / calibration parity gaps — pairwise_fairness_verdict, plus
