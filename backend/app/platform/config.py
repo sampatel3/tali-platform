@@ -140,11 +140,11 @@ class Settings(BaseSettings):
     # composes its AND-decision via mainspring's vendored gate seam unconditionally
     # (decision_policy/promotion_gate.py); the log-only MAINSPRING_GATE_SHADOW flag
     # and its shadow comparator were removed once parity was proven. (historical)
-    # ADR-0010 convergence (cut #4): when True, every bias/EEOC audit ALSO scores
-    # the same per-group selection rates through mainspring's vendored bias seam
-    # and logs whether the two fairness verdicts (passed) agree (log-only, no
-    # behaviour change) — the at-parity evidence before any cutover.
-    MAINSPRING_BIAS_SHADOW: bool = False
+    # ADR-0010 convergence (cut #4) CUTOVER COMPLETE: the bias/EEOC audit verdict
+    # is now mainspring's vendored bias seam (decision_policy/bias_audit.py
+    # delegates to pairwise_fairness_verdict). The log-only MAINSPRING_BIAS_SHADOW
+    # flag + its shadow comparator were removed once parity was proven
+    # (test_bias_seam_parity.py). (historical)
     # ADR-0010 KG convergence (cut #5): when True, every GraphRAG prior synthesis
     # is ALSO checked against mainspring's vendored KnowledgeGraphBackend Protocol
     # — a structural interface-conformance + shape diff is logged (log-only, no

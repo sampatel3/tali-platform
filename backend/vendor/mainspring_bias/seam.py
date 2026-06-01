@@ -1,40 +1,33 @@
-"""Bias-audit seam — the brand-agnostic, ORM-free fairness surface.
+"""Bias-audit seam — the brand-agnostic, ORM-free fairness verdict surface.
 
 This is the convergence seam (ADR-0010, cut #4): the minimal, dependency-light
 contract a brand (e.g. tali-platform) imports to evaluate the *fairness verdict*
-(``passed`` + ``violations``) a candidate model produces on group metrics —
+(``metrics`` + ``violations``) a candidate model produces on per-group metrics —
 WITHOUT pulling in mainspring's ``Case``/``PolicyVersion``/``Session``/ORM
-machinery. Cut #4 uses it for **shadow comparison**: the brand keeps its own
-``decision_policy/bias_audit.py`` but ALSO scores the same per-group selection
-rates through mainspring's verdict logic and logs whether the two fairness
-verdicts agree, before any cutover.
+machinery. Cut #4's cutover: the brand keeps computing the per-group metrics
+(case loading, prediction, selection/outcome/calibration rates) but DELEGATES the
+verdict to :func:`pairwise_fairness_verdict` here, so substrate and brand compute
+the IDENTICAL fairness verdict.
 
-Why a thin seam rather than a verbatim copy: mainspring's
-``services/bias_audit.py`` ``audit()`` is **not** ORM-free — it runs
-``db.execute(select(Case)...)`` to load + predict cases inline, so its verdict
-logic is entangled with a DB session. The dataclasses (``GroupMetrics``,
-``BiasAuditResult``) and the constants below ARE ORM-free and are copied
-verbatim. The pure verdict function :func:`evaluate_demographic_parity` lifts
-mainspring's *exact* demographic-parity rule out of ``audit()`` (group rate vs
-GLOBAL rate, ``abs(group_rate - global_rate) > MAX_PARITY_GAP``, groups under
-``MIN_GROUP_N`` skipped) so the shadow can run it on metrics tali already
-computed, with no mainspring DB session.
+The verdict is the EEOC 80%-rule (4/5ths) PAIRWISE disparate-impact test plus the
+selection-rate / outcome / calibration (ECE) parity gaps — the compliance-signed-
+off rule. It was contributed UP into the substrate (per ADR-0002) and now lives
+in ``mainspring/governance/bias_audit.py:pairwise_fairness_verdict``; this seam is
+the ORM-free lift of exactly that pure function (the governance module is itself
+ORM-free, so the seam mirrors it byte-for-byte).
+
+Per protected attribute, group the audit examples by segment, then for every
+unordered pair of segments flag:
+  * ``disparate_impact``  — ``min(rA,rB)/max(rA,rB) < disparate_impact_ratio_min``
+    (4/5ths; default 0.80)
+  * ``selection_rate_gap`` — ``|rA - rB| > selection_rate_parity_max_gap`` (0.05)
+  * ``outcome_gap``       — ``|hireA - hireB| > outcome_parity_max_gap`` (0.07)
+  * ``calibration_gap``   — ``|eceA - eceB| > calibration_parity_max_gap`` (0.05)
+An attribute with < 2 segments is recorded ``insufficient_segments`` (no
+violation). The candidate passes iff the violation list is empty.
 
 Importable standalone: depends only on the stdlib, so a consumer can vendor
 ``seam.py`` and nothing else.
-
-PARITY NOTE (surfaced by the shadow, tracked under ADR-0010 / ADR-0002): the two
-engines do NOT share a fairness definition yet.
-  * tali  — PAIRWISE across protected attributes: 4/5ths disparate-impact ratio
-    + selection-rate gap + outcome gap + calibration (ECE) gap, default gaps
-    ~0.05, ratio_min 0.80.
-  * mainspring (here) — group-vs-GLOBAL demographic-parity, default gap 0.15
-    (plus an equalized-odds mode needing labels).
-The shadow compares the boolean ``passed`` verdict on the SAME per-group
-selection rates; a schema-translation TODO (mapping tali's pairwise/attr-keyed
-metrics onto mainspring's group-vs-global shape, and reconciling thresholds)
-must be closed before any cutover. Tali must contribute the richer pairwise
-audit UP into the substrate first per ADR-0002.
 """
 from __future__ import annotations
 
@@ -42,140 +35,198 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Protocol, Sequence, runtime_checkable
 
 
-# --- copied verbatim from mainspring services/bias_audit.py (ORM-free) -------
 AUDIT_GROUP_FIELD = "_audit_group"
-MAX_PARITY_GAP = 0.15           # max abs difference in positive rate vs global
-MAX_ODDS_GAP = 0.20             # max abs difference in TPR/FPR vs global
-MIN_GROUP_N = 5                 # minimum cases per group to score
+
+# --- Fairness thresholds (EEOC 4/5ths + parity gaps). COMPLIANCE-SIGNED-OFF. --
+# Mirror mainspring/governance/bias_audit.py and the brand's
+# config/bias_audit_thresholds.yaml exactly — changing any is a compliance event.
+DISPARATE_IMPACT_RATIO_MIN = 0.80    # 4/5ths rule: DIR below this is a violation
+SELECTION_RATE_PARITY_MAX_GAP = 0.05  # |selection_rate_A - selection_rate_B|
+OUTCOME_PARITY_MAX_GAP = 0.07         # |hire_rate_A - hire_rate_B|
+CALIBRATION_PARITY_MAX_GAP = 0.05     # |ECE_A - ECE_B|
+
+PROTECTED_ATTRIBUTES: tuple[str, ...] = (
+    "gender",
+    "race",
+    "age_band",
+    "nationality",
+    "disability_status",
+    "religion",
+)
+
+# Legacy demographic-parity constants — retained for back-compat imports; they no
+# longer drive the verdict (the 4/5ths pairwise rule does).
+MAX_PARITY_GAP = 0.15
+MAX_ODDS_GAP = 0.20
+MIN_GROUP_N = 5
 
 
 @dataclass(frozen=True)
-class GroupMetrics:
-    group: str
+class BiasThresholds:
+    """The pairwise-4/5ths fairness thresholds (mirrors mainspring governance +
+    the brand's ``config/bias_audit_thresholds.yaml``)."""
+
+    disparate_impact_ratio_min: float = DISPARATE_IMPACT_RATIO_MIN
+    selection_rate_parity_max_gap: float = SELECTION_RATE_PARITY_MAX_GAP
+    outcome_parity_max_gap: float = OUTCOME_PARITY_MAX_GAP
+    calibration_parity_max_gap: float = CALIBRATION_PARITY_MAX_GAP
+    protected_attributes: tuple[str, ...] = PROTECTED_ATTRIBUTES
+
+
+@dataclass(frozen=True)
+class SegmentMetrics:
+    """One segment's already-computed metrics for one protected attribute — the
+    ORM-free input the brand feeds in (it computed these in its own audit)."""
+
+    segment: str
     n: int
-    positive_rate: float
-    tpr: Optional[float]          # true positive rate (None if no labels)
-    fpr: Optional[float]          # false positive rate
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "group": self.group, "n": self.n,
-            "positive_rate": round(self.positive_rate, 3),
-            "tpr": round(self.tpr, 3) if self.tpr is not None else None,
-            "fpr": round(self.fpr, 3) if self.fpr is not None else None,
-        }
+    selection_rate: float
+    hire_rate: float = 0.0
+    ece: float = 0.0
 
 
-@dataclass(frozen=True)
-class BiasAuditResult:
-    candidate_id: int
-    scoring: str                              # "demographic_parity" | "equalized_odds"
-    n_groups: int
-    global_positive_rate: float
-    group_metrics: list[GroupMetrics]
-    violations: list[str] = field(default_factory=list)
-    passed: bool = True
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "candidate_id": self.candidate_id,
-            "scoring": self.scoring,
-            "n_groups": self.n_groups,
-            "global_positive_rate": round(self.global_positive_rate, 3),
-            "group_metrics": [g.as_dict() for g in self.group_metrics],
-            "violations": list(self.violations),
-            "passed": self.passed,
-        }
-
-
-# --- thin ORM-free seam: mainspring's demographic-parity verdict, lifted -----
-# out of ``audit()`` so it runs on per-group selection rates the brand already
-# has, with no Session / Case / PolicyVersion. The rule is mainspring's exact
-# one: each group whose n >= MIN_GROUP_N must sit within ``max_parity_gap`` of
-# the GLOBAL positive (selection) rate.
-@dataclass(frozen=True)
-class GroupRate:
-    """One group's selection/positive rate + sample size — the ORM-free input
-    the brand feeds in (it already computed these in its own audit)."""
-
-    group: str
-    n: int
-    positive_rate: float
-
-
-def evaluate_demographic_parity(
+def pairwise_fairness_verdict(
     *,
-    candidate_id: int,
-    group_rates: Sequence[GroupRate],
-    global_positive_rate: float,
-    max_parity_gap: float = MAX_PARITY_GAP,
-    min_group_n: int = MIN_GROUP_N,
-) -> BiasAuditResult:
-    """Mainspring's demographic-parity verdict on pre-computed group rates.
+    metrics_by_attr: Mapping[str, Sequence[SegmentMetrics]],
+    thresholds: BiasThresholds | None = None,
+    protected_attributes: Sequence[str] | None = None,
+) -> tuple[dict, list[dict]]:
+    """The EEOC 4/5ths PAIRWISE verdict over pre-computed per-group metrics.
 
-    Mirrors ``services/bias_audit.py:audit()`` (the ``scoring ==
-    "demographic_parity"`` branch) WITHOUT a DB: groups under ``min_group_n``
-    are skipped; every scored group must be within ``max_parity_gap`` of the
-    global rate or it is a violation; ``passed`` iff no violations.
+    ``metrics_by_attr`` maps each protected attribute to its segments'
+    :class:`SegmentMetrics`. Returns ``(metrics_json, violations)`` in the
+    brand's exact shape:
+
+    * ``metrics_json[attr]`` is ``{seg: {n, selection_rate, hire_rate, ece}}``
+      for a measurable attribute, or
+      ``{"status": "insufficient_segments", "segments": [...]}`` when < 2 segments.
+    * each violation dict is ``{attr, kind, segments: [a, b], observed, threshold}``
+      with ``kind`` in {``disparate_impact``, ``selection_rate_gap``,
+      ``outcome_gap``, ``calibration_gap``}.
+
+    Deterministic iteration: attributes in ``protected_attributes`` order, then
+    segments in metric-list order, then ordered pairs ``(i, j>i)``, then the four
+    checks in DI / selection / outcome / calibration order.
     """
-    group_metrics: list[GroupMetrics] = []
-    violations: list[str] = []
-    for gr in group_rates:
-        if gr.n < min_group_n:
+    thr = thresholds or BiasThresholds()
+    attrs = list(protected_attributes if protected_attributes is not None else thr.protected_attributes)
+
+    metrics: dict = {}
+    violations: list[dict] = []
+
+    for attr in attrs:
+        segs = list(metrics_by_attr.get(attr, ()))
+        if len(segs) < 2:
+            metrics[attr] = {
+                "status": "insufficient_segments",
+                "segments": [s.segment for s in segs],
+            }
             continue
-        group_metrics.append(GroupMetrics(
-            group=gr.group, n=gr.n, positive_rate=gr.positive_rate,
-            tpr=None, fpr=None,
-        ))
-        gap = abs(gr.positive_rate - global_positive_rate)
-        if gap > max_parity_gap:
-            violations.append(
-                f"group {gr.group!r}: positive_rate {gr.positive_rate:.2f} vs "
-                f"global {global_positive_rate:.2f} — gap {gap:.2f} > {max_parity_gap:.2f}"
-            )
-    return BiasAuditResult(
-        candidate_id=candidate_id,
-        scoring="demographic_parity",
-        n_groups=len(group_metrics),
-        global_positive_rate=global_positive_rate,
-        group_metrics=group_metrics,
-        violations=violations,
-        passed=not violations,
-    )
+
+        seg_summary: dict[str, dict] = {}
+        for s in segs:
+            seg_summary[s.segment] = {
+                "n": s.n,
+                "selection_rate": s.selection_rate,
+                "hire_rate": s.hire_rate,
+                "ece": s.ece,
+            }
+        metrics[attr] = seg_summary
+
+        seg_names = [s.segment for s in segs]
+        for i, a in enumerate(seg_names):
+            for b in seg_names[i + 1:]:
+                ra = seg_summary[a]["selection_rate"] or 1e-9
+                rb = seg_summary[b]["selection_rate"] or 1e-9
+                dir_ratio = min(ra, rb) / max(ra, rb)
+                if dir_ratio < thr.disparate_impact_ratio_min:
+                    violations.append({
+                        "attr": attr,
+                        "kind": "disparate_impact",
+                        "segments": [a, b],
+                        "observed": dir_ratio,
+                        "threshold": thr.disparate_impact_ratio_min,
+                    })
+                sel_gap = abs(ra - rb)
+                if sel_gap > thr.selection_rate_parity_max_gap:
+                    violations.append({
+                        "attr": attr,
+                        "kind": "selection_rate_gap",
+                        "segments": [a, b],
+                        "observed": sel_gap,
+                        "threshold": thr.selection_rate_parity_max_gap,
+                    })
+                hire_gap = abs(seg_summary[a]["hire_rate"] - seg_summary[b]["hire_rate"])
+                if hire_gap > thr.outcome_parity_max_gap:
+                    violations.append({
+                        "attr": attr,
+                        "kind": "outcome_gap",
+                        "segments": [a, b],
+                        "observed": hire_gap,
+                        "threshold": thr.outcome_parity_max_gap,
+                    })
+                ece_gap = abs(seg_summary[a]["ece"] - seg_summary[b]["ece"])
+                if ece_gap > thr.calibration_parity_max_gap:
+                    violations.append({
+                        "attr": attr,
+                        "kind": "calibration_gap",
+                        "segments": [a, b],
+                        "observed": ece_gap,
+                        "threshold": thr.calibration_parity_max_gap,
+                    })
+
+    return metrics, violations
 
 
 @runtime_checkable
 class BiasAuditor(Protocol):
-    """The convergence contract: a fairness verdict over pre-computed group
-    rates, independent of how the brand loaded/predicted the cases (mainspring
-    keys on ``Case``/``PolicyVersion``/``Session``; tali on ``AuditExample``s +
-    its own thresholds). Both can satisfy this shape once the schema is mapped.
-    """
+    """The convergence contract: a pairwise-4/5ths fairness verdict over
+    pre-computed per-group metrics, independent of how the brand loaded /
+    predicted the cases."""
 
-    def evaluate_demographic_parity(
+    def pairwise_fairness_verdict(
         self,
         *,
-        candidate_id: int,
-        group_rates: Sequence[GroupRate],
-        global_positive_rate: float,
-    ) -> BiasAuditResult:
+        metrics_by_attr: Mapping[str, Sequence[SegmentMetrics]],
+        thresholds: Optional[BiasThresholds] = None,
+        protected_attributes: Optional[Sequence[str]] = None,
+    ) -> tuple[dict, list[dict]]:
         ...
 
 
-def group_rates_from_mapping(rates: Mapping[str, tuple[int, float]]) -> list[GroupRate]:
-    """Convenience: build :class:`GroupRate` list from ``{group: (n, rate)}``."""
-    return [GroupRate(group=g, n=int(n), positive_rate=float(r)) for g, (n, r) in rates.items()]
+def segment_metrics_from_summary(
+    seg_summary: Mapping[str, Mapping[str, Any]],
+) -> list[SegmentMetrics]:
+    """Convenience: build a :class:`SegmentMetrics` list from one attribute's
+    ``{seg: {n, selection_rate, hire_rate, ece}}`` block (the brand's metric
+    shape), skipping non-segment markers (``status`` / ``segments``)."""
+    out: list[SegmentMetrics] = []
+    for seg, summ in seg_summary.items():
+        if not isinstance(summ, Mapping) or "selection_rate" not in summ:
+            continue
+        out.append(SegmentMetrics(
+            segment=str(seg),
+            n=int(summ.get("n", 0)),
+            selection_rate=float(summ.get("selection_rate", 0.0)),
+            hire_rate=float(summ.get("hire_rate", 0.0)),
+            ece=float(summ.get("ece", 0.0)),
+        ))
+    return out
 
 
 __all__ = [
     "AUDIT_GROUP_FIELD",
+    "DISPARATE_IMPACT_RATIO_MIN",
+    "SELECTION_RATE_PARITY_MAX_GAP",
+    "OUTCOME_PARITY_MAX_GAP",
+    "CALIBRATION_PARITY_MAX_GAP",
+    "PROTECTED_ATTRIBUTES",
     "MAX_PARITY_GAP",
     "MAX_ODDS_GAP",
     "MIN_GROUP_N",
-    "GroupMetrics",
-    "BiasAuditResult",
-    "GroupRate",
-    "evaluate_demographic_parity",
+    "BiasThresholds",
+    "SegmentMetrics",
+    "pairwise_fairness_verdict",
     "BiasAuditor",
-    "group_rates_from_mapping",
+    "segment_metrics_from_summary",
 ]

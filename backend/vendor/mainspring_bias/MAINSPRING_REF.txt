@@ -1,11 +1,11 @@
-mainspring master @ fa03ca7
-Source: mainspring/platform/services/bias_audit.py
-Vendored (ORM-free only): GroupMetrics, BiasAuditResult, the constants
-(AUDIT_GROUP_FIELD, MAX_PARITY_GAP, MAX_ODDS_GAP, MIN_GROUP_N) — copied verbatim —
-plus a thin seam (evaluate_demographic_parity / GroupRate / BiasAuditor) lifting
-mainspring's audit() demographic-parity verdict out of its DB session so the
-shadow needs no mainspring Case/PolicyVersion/Session.
-NOT vendored: audit() / _load_fitted() / _audit_group() / _expected_label() —
-they import sqlalchemy Session + Case + PolicyVersion and run select(Case) (NOT
-ORM-free); the equalized_odds branch (needs labelled cases loaded from the DB).
-Re-vendor: bash backend/scripts/vendor_mainspring_bias.sh
+mainspring master @ e7ffa22
+Source: mainspring/governance/bias_audit.py (post-carve canonical; ORM-free governance)
+Vendored (ORM-free verdict): the EEOC 4/5ths PAIRWISE disparate-impact test +
+selection / outcome / calibration parity gaps — pairwise_fairness_verdict, plus
+BiasThresholds, SegmentMetrics, and the threshold constants — mirrored from
+governance.bias_audit (itself ORM-free) into seam.py.
+NOT vendored: the BiasAuditResult/GroupMetrics single-group demographic-parity
+adapter (demographic_parity_verdict) — that is the accelerator DB-adapter shape,
+not the brand's pairwise input; and accelerator/services/bias_audit.py audit()
+which runs select(Case) on a Session (NOT ORM-free).
+Re-vendor: MAINSPRING_DIR=<ms> bash backend/scripts/vendor_mainspring_bias.sh
