@@ -129,18 +129,9 @@ html[data-theme="dark"] {
     zoom: 0.8;
   }
 
-  /* Viewport-height compensation for ``body { zoom: 0.8 }``. Without
-     these overrides, pages using ``min-h-screen`` (login shell,
-     demo-lead, marketing, error pages, etc.) would render at 80% of
-     viewport height and leave empty space below their content. */
-  .min-h-screen {
-    min-height: 125vh;
-    min-height: 125dvh;
-  }
-  .h-screen {
-    height: 125vh;
-    height: 125dvh;
-  }
+  /* Override Tailwind's ``.min-h-screen`` / ``.h-screen`` lives in
+     ``@layer utilities`` (below) — declaring it here in ``@layer base``
+     loses to Tailwind's own utility in the cascade. */
 
   a {
     color: inherit;
@@ -174,5 +165,23 @@ html[data-theme="dark"] {
     font-style: normal !important;
     color: var(--purple);
     font-weight: inherit;
+  }
+}
+
+/* Viewport-height compensation for ``body { zoom: 0.8 }``. Without
+   these overrides, Tailwind's ``.min-h-screen`` (= ``min-height: 100vh``)
+   renders at 80vh after the zoom, leaving empty viewport below the
+   login shell, demo-lead, marketing pages, etc. Declared in
+   ``@layer utilities`` so the cascade beats Tailwind's own utility
+   class (declared in ``@layer base`` doesn't — that was the bug in
+   the previous push). 125 × 0.8 = 100 ✓ */
+@layer utilities {
+  .min-h-screen {
+    min-height: 125vh;
+    min-height: 125dvh;
+  }
+  .h-screen {
+    height: 125vh;
+    height: 125dvh;
   }
 }
