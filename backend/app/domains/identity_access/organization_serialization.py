@@ -46,7 +46,16 @@ def resolved_fireflies_config(org: Organization) -> FirefliesConfig:
 
 def resolved_workspace_settings(org: Organization) -> dict:
     raw = org.workspace_settings if isinstance(org.workspace_settings, dict) else {}
-    return WorkspaceSettings(**{**WorkspaceSettings().model_dump(), **raw}).model_dump()
+    known = WorkspaceSettings(**{**WorkspaceSettings().model_dump(), **raw}).model_dump()
+    # Preserve operator-only keys (e.g. decision_policy_auto_apply,
+    # decision_policy_autoresearch) that aren't part of the user-facing settings
+    # schema. The GET/PATCH handlers persist this dict back onto the org, so
+    # round-tripping it through the strict schema alone would silently drop these
+    # flags on the next settings read or save. The API response builder
+    # (``org_response_payload``) re-applies the strict schema, so extras never
+    # leak into the response.
+    extras = {k: v for k, v in raw.items() if k not in known}
+    return {**known, **extras}
 
 
 def resolved_scoring_policy(org: Organization) -> dict:
@@ -73,11 +82,14 @@ def merge_workable_config(org: Organization, incoming: OrgUpdate) -> dict:
 
 
 def merge_workspace_settings(org: Organization, incoming: OrgUpdate) -> dict:
-    base = resolved_workspace_settings(org)
+    base = resolved_workspace_settings(org)  # includes preserved operator-only keys
     if incoming.workspace_settings is None:
         return base
     updates = incoming.workspace_settings.model_dump(exclude_none=True)
-    return WorkspaceSettings(**{**base, **updates}).model_dump()
+    merged = {**base, **updates}
+    known = WorkspaceSettings(**{**WorkspaceSettings().model_dump(), **merged}).model_dump()
+    extras = {k: v for k, v in merged.items() if k not in known}
+    return {**known, **extras}
 
 
 def merge_scoring_policy(org: Organization, incoming: OrgUpdate) -> dict:
