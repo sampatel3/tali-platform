@@ -22,7 +22,6 @@ from typing import Optional
 from anthropic import Anthropic
 
 from ..components.integrations.anthropic_admin.service import (
-    AnthropicAdminError,
     is_configured as admin_is_configured,
     provision_workspace_for_org,
 )
@@ -118,79 +117,66 @@ def _decrypted_workspace_key(org: Organization) -> Optional[str]:
     return plaintext or None
 
 
-def _record_provisioning_failure(org_id: int) -> None:
-    """Stamp the org so we don't hammer Admin API on every call. Uses a
-    fresh session so the caller's transaction isn't tied to telemetry."""
+def _provision_for_org_safe(org: Organization) -> Optional[str]:
+    """Provision a workspace + key for an org, SERIALIZED per-org so concurrent
+    first-calls can't each create a workspace (the source of duplicate
+    ``taali-org-*`` workspaces). Returns the plaintext key on success, ``None``
+    on failure (caller falls back to shared key).
+
+    The org row is locked (``with_for_update``) for the whole check → provision
+    → persist sequence, so a second concurrent call blocks until the first
+    commits, then sees the freshly-stored key and returns it WITHOUT creating a
+    duplicate. The lock is held across the Admin API call (~1-2s) — acceptable
+    because provisioning happens exactly once per org, at low volume.
+    """
+    if not admin_is_configured():
+        return None
+    org_id = int(org.id)
     try:
         with SessionLocal() as session:
-            org = (
-                session.query(Organization)
-                .filter(Organization.id == org_id)
-                .first()
-            )
-            if org is not None:
-                org.anthropic_workspace_provisioning_failed_at = datetime.now(timezone.utc)
-                session.commit()
-    except Exception:
-        logger.exception(
-            "Failed to record workspace-provisioning failure for org=%s", org_id
-        )
-
-
-def _persist_workspace(
-    *,
-    org_id: int,
-    workspace_id: str,
-    api_key_plaintext: str,
-) -> None:
-    encrypted = encrypt_text(api_key_plaintext, settings.SECRET_KEY)
-    try:
-        with SessionLocal() as session:
-            org = (
+            locked = (
                 session.query(Organization)
                 .filter(Organization.id == org_id)
                 .with_for_update()
                 .first()
             )
-            if org is None:
-                return
-            org.anthropic_workspace_id = workspace_id
-            org.anthropic_workspace_key_encrypted = encrypted
-            org.anthropic_workspace_provisioning_failed_at = None
+            if locked is None:
+                return None
+            # Re-check UNDER THE LOCK: a concurrent call may have already
+            # provisioned (key persisted) or recorded a failure while we waited
+            # for the lock. Either way, never create a second workspace.
+            existing = _decrypted_workspace_key(locked)
+            if existing:
+                return existing
+            if locked.anthropic_workspace_provisioning_failed_at is not None:
+                return None
+            # We hold the lock and the org still has no key → sole provisioner.
+            try:
+                provisioned = provision_workspace_for_org(
+                    org_id=org_id,
+                    org_slug=getattr(locked, "slug", None),
+                )
+            except Exception as exc:  # AnthropicAdminError or anything else
+                logger.warning(
+                    "Admin API provisioning failed for org=%s: %s", org_id, exc
+                )
+                locked.anthropic_workspace_provisioning_failed_at = datetime.now(
+                    timezone.utc
+                )
+                session.commit()
+                return None
+            locked.anthropic_workspace_id = provisioned.workspace_id
+            locked.anthropic_workspace_key_encrypted = encrypt_text(
+                provisioned.api_key_plaintext, settings.SECRET_KEY
+            )
+            locked.anthropic_workspace_provisioning_failed_at = None
             session.commit()
-    except Exception:
-        logger.exception("Failed to persist workspace key for org=%s", org_id)
-
-
-def _provision_for_org_safe(org: Organization) -> Optional[str]:
-    """Try to provision a workspace + key for an org. Returns plaintext key
-    on success, ``None`` on failure (caller falls back to shared key)."""
-    if not admin_is_configured():
-        return None
-    try:
-        provisioned = provision_workspace_for_org(
-            org_id=int(org.id),
-            org_slug=getattr(org, "slug", None),
-        )
-    except AnthropicAdminError as exc:
-        logger.warning(
-            "Admin API provisioning failed for org=%s: %s", org.id, exc
-        )
-        _record_provisioning_failure(int(org.id))
-        return None
+            return provisioned.api_key_plaintext
     except Exception:
         logger.exception(
-            "Unexpected error during workspace provisioning for org=%s", org.id
+            "Unexpected error provisioning workspace for org=%s", org_id
         )
-        _record_provisioning_failure(int(org.id))
         return None
-
-    _persist_workspace(
-        org_id=int(org.id),
-        workspace_id=provisioned.workspace_id,
-        api_key_plaintext=provisioned.api_key_plaintext,
-    )
-    return provisioned.api_key_plaintext
 
 
 def get_metered_client(
