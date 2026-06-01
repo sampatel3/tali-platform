@@ -177,6 +177,9 @@ def fit_pooled(
     feature_names: Sequence[str] | None = None,
     pooling_floor: int = 10,
     pooling_saturation: int = 100,
+    l2: float = 0.01,
+    learning_rate: float = 0.05,
+    max_iter: int = 200,
 ) -> FittedModel:
     """Fit org-level baseline + role-level residual with sqrt(n) shrinkage.
 
@@ -188,6 +191,11 @@ def fit_pooled(
       4. Otherwise fit a role-level model on the role examples and
          blend with the org-level via ``alpha = min(1, sqrt(n/sat))``.
          alpha=1 means full role-level use; alpha<1 shrinks toward org.
+
+    The ``l2`` / ``learning_rate`` / ``max_iter`` defaults reproduce the
+    historical hand-tuned fit exactly; they are exposed so the
+    autoresearch loop can search over them without changing the
+    production default.
     """
     if feature_names is None:
         feature_names = sorted(
@@ -195,7 +203,8 @@ def fit_pooled(
         )
     feature_names = list(feature_names)
 
-    org_coefs, org_intercept = _fit_logistic(examples, feature_names)
+    fit_kwargs = {"l2": l2, "learning_rate": learning_rate, "max_iter": max_iter}
+    org_coefs, org_intercept = _fit_logistic(examples, feature_names, **fit_kwargs)
     if role_id is None or not examples:
         return FittedModel(
             coefs=org_coefs,
@@ -216,7 +225,7 @@ def fit_pooled(
             role_sample_count=n,
         )
 
-    role_coefs, role_intercept = _fit_logistic(role_examples, feature_names)
+    role_coefs, role_intercept = _fit_logistic(role_examples, feature_names, **fit_kwargs)
     alpha = min(1.0, math.sqrt(n / float(pooling_saturation)))
     blended = {
         name: alpha * role_coefs[name] + (1.0 - alpha) * org_coefs[name]
@@ -301,14 +310,30 @@ def fit_model(
     *,
     role_id: int | None,
     gold_set: Sequence[TrainingExample] | None = None,
+    l2: float = 0.01,
+    learning_rate: float = 0.05,
+    max_iter: int = 200,
+    pooling_saturation: int = 100,
+    calibrate: bool = True,
 ) -> tuple[FittedModel, dict]:
     """Fit + calibrate. Returns ``(model, metrics_dict)``.
 
     Metrics include training log-loss, hold-out log-loss (when gold_set
     given), and calibration ECE (expected calibration error) so the
     Phase 5 promotion gate can read them off the row.
+
+    The hyperparameter arguments default to the historical production
+    values (zero behaviour change); the autoresearch loop overrides them
+    to search for a better-calibrated fit under the bias constraint.
     """
-    model = fit_pooled(examples, role_id=role_id)
+    model = fit_pooled(
+        examples,
+        role_id=role_id,
+        pooling_saturation=pooling_saturation,
+        l2=l2,
+        learning_rate=learning_rate,
+        max_iter=max_iter,
+    )
 
     metrics: dict = {
         "training_examples": len(examples),
@@ -322,13 +347,12 @@ def fit_model(
             for ex in gold_set
         ]
         labels = [ex.label for ex in gold_set]
-        model.calibration = isotonic_calibration(raw_preds, labels)
-        # Post-calibration metrics.
-        calibrated_preds = [
-            apply_calibration(p, model.calibration) for p in raw_preds
-        ]
-        metrics["holdout_log_loss"] = _log_loss(calibrated_preds, labels)
-        metrics["holdout_ece"] = _ece(calibrated_preds, labels, bins=10)
+        if calibrate:
+            model.calibration = isotonic_calibration(raw_preds, labels)
+        # Holdout metrics on whatever map (calibrated or identity) is active.
+        scored = [apply_calibration(p, model.calibration) for p in raw_preds]
+        metrics["holdout_log_loss"] = _log_loss(scored, labels)
+        metrics["holdout_ece"] = _ece(scored, labels, bins=10)
 
     return model, metrics
 
