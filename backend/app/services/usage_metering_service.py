@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from ..models.billing_credit_ledger import BillingCreditLedger
@@ -341,7 +341,11 @@ def usage_summary(
         func.count(UsageEvent.id).label("event_count"),
         func.sum(UsageEvent.input_tokens).label("input_tokens"),
         func.sum(UsageEvent.output_tokens).label("output_tokens"),
-        func.sum(UsageEvent.cost_usd_micro).label("cost_usd_micro"),
+        # cost_usd_micro = real Anthropic cost → exclude cache hits (no call);
+        # credits_charged keeps the cache fee (what the customer pays).
+        func.sum(
+            case((UsageEvent.cache_hit == 0, UsageEvent.cost_usd_micro), else_=0)
+        ).label("cost_usd_micro"),
         func.sum(UsageEvent.credits_charged).label("credits_charged"),
     ).filter(UsageEvent.organization_id == organization_id)
     if since is not None:

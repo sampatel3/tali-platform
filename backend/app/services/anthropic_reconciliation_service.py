@@ -57,9 +57,18 @@ logger = logging.getLogger("taali.anthropic_reconciliation")
 # reconciled at 03:00 can still be missing batch spend that arrives later.
 # Measured 2026-05-30: recomputing 05-26/05-27 against current data raised the
 # internal total well above what the 03:00 run stored (drift -21% -> single
-# digits). A 4-day daily window re-reconciles each day until its late batch
-# rows have settled; the weekly settle sweep (days=14) catches stragglers.
-_RECONCILE_LOOKBACK_DAYS = 4
+# digits). The daily window re-reconciles each day until its late batch rows
+# have settled; the weekly settle sweep (days=14) catches stragglers.
+#
+# Widened 4 -> 8 on 2026-06-01: the settings → usage tab surfaces the last 14
+# days, but the daily run only refreshed the trailing 4, so days 5-14 carried
+# STALE pre-fix snapshots (the source of the "−46% over 30d" confusion during
+# the reconciliation audit — those rows predated the 05-26..05-31 capture
+# fixes and were only re-reconciled by the weekly sweep). 8 days keeps almost
+# the whole dashboard window fresh daily; re-reconciliation is an idempotent
+# upsert against Anthropic's (already-settled) actuals, so the only cost is a
+# few extra Admin-API day-pulls per run.
+_RECONCILE_LOOKBACK_DAYS = 8
 
 # Drift alerting. A reconciliation that silently records -77% drift for days
 # (as happened with the pre-2026-05-26 Graphiti leak) is worse than useless —

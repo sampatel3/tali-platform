@@ -87,6 +87,14 @@ def month_to_date_raw_cost_cents(db: Session, *, role: Role) -> int:
     difference between the two is Taali's margin on this role for the month —
     surfaced so the budget panel can show Anthropic cost vs charged credits
     rather than only the marked-up number the cap is denominated in.
+
+    Excludes ``cache_hit`` rows: a cache hit is served from cv_score_cache and
+    makes NO Anthropic call, so its real Anthropic cost is $0 regardless of
+    cost_usd_micro. Post-#476 those rows already carry cost_usd_micro=0, but
+    pre-#476 rows still in the MTD window populated the full cached cost — which
+    inflated the raw-cost total (and understated margin) by up to ~60%. The
+    cache FEE stays in ``month_to_date_spend_cents`` (credits), so the margin
+    correctly counts it as margin.
     """
     month_start = _month_start_utc(datetime.now(timezone.utc))
     raw_micro = (
@@ -95,6 +103,7 @@ def month_to_date_raw_cost_cents(db: Session, *, role: Role) -> int:
             UsageEvent.organization_id == role.organization_id,
             UsageEvent.role_id == role.id,
             UsageEvent.created_at >= month_start,
+            UsageEvent.cache_hit == 0,
         )
         .scalar()
         or 0
