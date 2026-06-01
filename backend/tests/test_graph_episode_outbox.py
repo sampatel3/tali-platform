@@ -162,7 +162,7 @@ def test_enqueue_is_idempotent_on_dedup_key(db):
 
 
 def test_drain_sends_pending_and_is_idempotent(db):
-    _enqueue_pending(db)
+    org, role, app, decision = _enqueue_pending(db)
     assert (
         db.query(GraphEpisodeOutbox)
         .filter(GraphEpisodeOutbox.status == OUTBOX_STATUS_PENDING)
@@ -171,10 +171,12 @@ def test_drain_sends_pending_and_is_idempotent(db):
     )
 
     dispatched = []
+    dispatch_kwargs = []
 
-    def fake_dispatch(eps):
+    def fake_dispatch(eps, **kwargs):
         eps = list(eps)
         dispatched.append(eps)
+        dispatch_kwargs.append(kwargs)
         return len(eps)
 
     with patch.object(graph_client, "is_configured", return_value=True), patch.object(
@@ -189,6 +191,12 @@ def test_drain_sends_pending_and_is_idempotent(db):
     assert "HiringOutcome".lower() in dispatched[0][0].body.lower() or (
         f"D-" in dispatched[0][0].body
     )
+    # Regression: the drain must attribute the spend to the row's org (+ pass
+    # db) so the metered async wrapper writes a per-org graph_sync usage_event
+    # instead of an unattributed (org=NULL) call_log row. Was dropped pre-fix.
+    kw = dispatch_kwargs[0]
+    assert kw.get("bill_organization_id") == int(org.id)
+    assert kw.get("db") is db
 
     row = db.query(GraphEpisodeOutbox).one()
     assert row.status == OUTBOX_STATUS_SENT

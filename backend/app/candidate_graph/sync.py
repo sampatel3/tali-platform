@@ -119,8 +119,18 @@ def sync_candidate(
     return sent
 
 
-def sync_interview(interview: ApplicationInterview, *, db: Session | None = None) -> int:
-    """Ingest one interview transcript + structured summary."""
+def sync_interview(
+    interview: ApplicationInterview,
+    *,
+    db: Session | None = None,
+    bill_organization_id: int | None = None,
+) -> int:
+    """Ingest one interview transcript + structured summary.
+
+    ``bill_organization_id`` lets a caller that already knows the org (e.g.
+    the per-org backfill) attribute the spend directly; when omitted we fall
+    back to resolving it via the interview's application → candidate chain.
+    """
     if not graph_client.is_configured():
         return 0
     episodes = episode_module.build_interview_episodes(interview)
@@ -128,13 +138,14 @@ def sync_interview(interview: ApplicationInterview, *, db: Session | None = None
     # the metered async wrapper can tag the claude_call_log rows with
     # the right org. Best-effort; fall through unattributed when the
     # relationships aren't loaded.
-    bill_org_id: int | None = None
-    try:
-        application = getattr(interview, "application", None)
-        if application is not None and application.organization_id is not None:
-            bill_org_id = int(application.organization_id)
-    except Exception:
-        bill_org_id = None
+    bill_org_id: int | None = bill_organization_id
+    if bill_org_id is None:
+        try:
+            application = getattr(interview, "application", None)
+            if application is not None and application.organization_id is not None:
+                bill_org_id = int(application.organization_id)
+        except Exception:
+            bill_org_id = None
     return episode_module.dispatch(
         episodes,
         db=db,
@@ -214,7 +225,16 @@ def sync_organization(
     candidates = cand_q.all()
     out["candidates"]["total"] = len(candidates)
     for candidate in candidates:
-        sent = sync_candidate(candidate, db=db, include_cv_text=True)
+        # Backfill is per-org — attribute the indexing spend to this org so
+        # the metered async wrapper writes a graph_sync usage_event per call
+        # (otherwise re-index Anthropic spend lands as org=NULL call_log rows
+        # that reconcile against Anthropic but never reach the org's budget).
+        sent = sync_candidate(
+            candidate,
+            db=db,
+            include_cv_text=True,
+            bill_organization_id=organization_id,
+        )
         if sent > 0:
             out["candidates"]["succeeded"] += 1
             out["candidates"]["episodes"] += sent
@@ -231,7 +251,9 @@ def sync_organization(
     )
     out["interviews"]["total"] = len(interviews)
     for interview in interviews:
-        out["interviews"]["episodes"] += sync_interview(interview, db=db)
+        out["interviews"]["episodes"] += sync_interview(
+            interview, db=db, bill_organization_id=organization_id
+        )
 
     events = (
         db.query(CandidateApplicationEvent)
