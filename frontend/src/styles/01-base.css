@@ -118,6 +118,16 @@ html[data-theme="dark"] {
     font-feature-settings: "ss01", "cv11";
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    /* Sam (2026-06-01) flagged that everything across the site reads
+       too large at 100% browser zoom — he routinely runs Taali at
+       ~80% manually. Bake that preference in via ``zoom: 0.85`` so a
+       default-zoom visit lands at the size we actually design for.
+       ``zoom`` is supported across Chrome/Safari/Edge and (since
+       Firefox 126) Firefox too. Affects all geometry uniformly, so
+       grid + flex layouts compose correctly; viewport units (vh/vw)
+       still resolve against the unscaled viewport in current browsers
+       so full-height shells stay full-height. */
+    zoom: 0.85;
   }
 
   a {
