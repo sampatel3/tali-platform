@@ -426,16 +426,21 @@ export const AssessmentWorkspace = ({
   const showTerminalPanel = Boolean(terminalSurfaceEnabled && terminalPanelOpen);
   const showDock = showOutputPanel || showTerminalPanel;
 
-  // Resizable assistant panel — Sam called out (2026-05-26) that the
-  // fixed 380px chat column was too narrow to read longer Claude
-  // replies. Drag the bar between editor and chat to widen up to
-  // 720px or shrink back to 320px. Persist per browser via
-  // localStorage so the choice survives reloads. When the panel is
-  // collapsed by the chevron button, we still expose the small 76px
-  // rail, ignoring the saved width until uncollapsed.
-  const ASSISTANT_PANEL_MIN = 320;
-  const ASSISTANT_PANEL_MAX = 720;
-  const ASSISTANT_PANEL_DEFAULT = 380;
+  // Resizable assistant panel. Default widened from 380→600 (2026-06-01)
+  // to reflect the chat-first work model: candidates increasingly drive
+  // assessments through the agent, so chat is the dominant surface and
+  // the IDE pane is the context drawer. Doc-kind tasks (PM, Scrum
+  // Master, etc.) push this further — chat IS the work; the editor is
+  // for the deliverable. Drag-resize range correspondingly bumped:
+  // 280 (light glance) → 900 (chat-as-half-the-viewport) covers both
+  // candidates who want the editor bigger and those who want chat
+  // bigger. Persist per browser via localStorage so the choice survives
+  // reloads. When the panel is collapsed by the chevron button, we
+  // still expose the small 76px rail, ignoring the saved width until
+  // uncollapsed.
+  const ASSISTANT_PANEL_MIN = 280;
+  const ASSISTANT_PANEL_MAX = 900;
+  const ASSISTANT_PANEL_DEFAULT = 600;
   const ASSISTANT_PANEL_STORAGE_KEY = 'taali.assessmentRuntime.assistantPanelWidth';
   const [assistantPanelWidth, setAssistantPanelWidth] = useState(() => {
     if (typeof window === 'undefined') return ASSISTANT_PANEL_DEFAULT;

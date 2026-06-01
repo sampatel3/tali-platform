@@ -1001,6 +1001,16 @@ def start_or_resume_assessment(
         # time) — frontend hydrates the chat panel from this so the
         # decision questions appear immediately on first open (#37).
         "ai_prompts": list(assessment.ai_prompts or []),
+        # Multi-role deliverable framing. Absent for legacy engineering
+        # tasks (FE defaults to kind="code"); set when the task spec
+        # declares ``deliverable`` (see task_spec_loader). The chat-first
+        # FE keys off ``kind`` to (a) auto-open primary_artifact in the
+        # editor and (b) reweight panes so chat is dominant.
+        "deliverable": (
+            (task.extra_data or {}).get("deliverable")
+            if isinstance(task.extra_data, dict)
+            else None
+        ),
     }
 
 

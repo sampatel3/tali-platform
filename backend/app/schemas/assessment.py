@@ -163,6 +163,12 @@ class AssessmentStart(BaseModel):
     # hydrates the chat panel from this so the candidate sees Claude's
     # decision questions immediately on first open.
     ai_prompts: Optional[List[Dict[str, Any]]] = None
+    # Multi-role deliverable framing. ``kind`` ∈ {"code", "doc"} —
+    # absent or "code" → engineering IDE flow (existing behavior); "doc"
+    # → chat-first surface with the primary_artifact auto-opened in the
+    # editor as a markdown document. Adding a new family later is a
+    # schema-only change (see services.task_spec_loader.validate_deliverable).
+    deliverable: Optional[Dict[str, Any]] = None
 
 
 class AssessmentStartRequest(BaseModel):
