@@ -549,7 +549,13 @@ export const AssessmentWorkspace = ({
           ``min-h-[620px]`` keeps the previous floor for short windows
           (laptops at 800px tall stay usable). ``100dvh`` over ``vh``
           so mobile address-bar collapse doesn't leave a gap. */}
-      <div className="flex min-h-[620px] max-h-[calc(100dvh-220px)] flex-col">
+      {/* Heights tightened 2026-06-01 alongside the global zoom: 0.85
+          so the workspace actually fills the viewport at default
+          browser zoom. Was 220px reserve / 620px floor; after the
+          zoom the header chrome above is also 85%-sized so we can
+          take more vertical real estate. dvh keeps mobile address-bar
+          collapse correct. */}
+      <div className="flex min-h-[640px] max-h-[calc(100dvh-180px)] flex-col">
         <div
           className="grid min-h-0 flex-1 xl:[grid-template-columns:var(--workspace-grid)]"
           style={workspaceGridStyle}
