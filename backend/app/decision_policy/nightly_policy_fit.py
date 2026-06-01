@@ -29,12 +29,96 @@ from sqlalchemy.orm import Session
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.decision_policy import DecisionPolicy
+from ..models.organization import Organization
 from ..models.policy_version import PolicyVersion
 from ..models.role import Role
+from . import autoresearch
+from .audit_examples import load_audit_examples
 from .fitted_policy import TrainingExample, fit_model
 
 
 logger = logging.getLogger("taali.decision_policy.nightly_policy_fit")
+
+
+# Operator opt-in (per-org ``workspace_settings.decision_policy_autoresearch``):
+#   absent / false  -> one-shot fit with the historical defaults (unchanged).
+#   "grid"          -> deterministic hyperparameter search (no LLM cost).
+#   "agentic" / true-> LLM-driven search (Claude proposes; metered tokens).
+# Either search mode only ever *replaces* the fit when it finds a bias-clean
+# config that beats the baseline; otherwise the one-shot fit is used. The
+# Phase-5 promotion gate remains the authoritative bias/gold/shadow check.
+_AUTORESEARCH_MODES = {"grid", "agentic"}
+
+
+def _autoresearch_mode(org: Organization | None) -> str | None:
+    if org is None:
+        return None
+    settings = org.workspace_settings if isinstance(org.workspace_settings, dict) else None
+    raw = (settings or {}).get("decision_policy_autoresearch", False)
+    if raw is True:
+        return "agentic"
+    if isinstance(raw, str) and raw.lower() in _AUTORESEARCH_MODES:
+        return raw.lower()
+    return None
+
+
+def _fit_candidate_model(
+    db: Session,
+    *,
+    organization_id: int,
+    role_id: int | None,
+    train: list[TrainingExample],
+    gold: list[TrainingExample],
+) -> tuple[object, dict]:
+    """Produce the candidate model + metrics, optionally via the autoresearch loop.
+
+    Falls back to the one-shot ``fit_model`` whenever autoresearch is disabled,
+    can't build its proposer, or finds no bias-clean improvement — so this is
+    strictly non-regressive versus the historical fitter.
+    """
+    org = db.query(Organization).filter(Organization.id == organization_id).one_or_none()
+    mode = _autoresearch_mode(org)
+    if mode is None:
+        return fit_model(train, role_id=role_id, gold_set=gold)
+
+    audit_examples = load_audit_examples(org) if org is not None else []
+    proposer = None
+    if mode == "agentic":
+        try:
+            proposer = autoresearch.make_llm_proposer(org, role_id=role_id)
+        except Exception:
+            logger.exception(
+                "autoresearch: LLM proposer build failed org=%s; falling back to grid",
+                organization_id,
+            )
+            mode = "grid"
+
+    try:
+        result = autoresearch.search(
+            train_examples=train,
+            gold_set=gold,
+            audit_examples=audit_examples,
+            role_id=role_id,
+            proposer=proposer,
+        )
+    except Exception:
+        logger.exception(
+            "autoresearch: search crashed org=%s role=%s; using one-shot fit",
+            organization_id, role_id,
+        )
+        model, metrics = fit_model(train, role_id=role_id, gold_set=gold)
+        metrics["autoresearch"] = {"mode": mode, "accepted": False, "error": True}
+        return model, metrics
+
+    if result.accepted and result.best_model is not None:
+        metrics = dict(result.best_metrics or {})
+        metrics["autoresearch"] = autoresearch.summarize(result, mode=mode)
+        return result.best_model, metrics
+
+    # No bias-clean improvement — keep the baseline candidate the gate expects.
+    model, metrics = fit_model(train, role_id=role_id, gold_set=gold)
+    metrics["autoresearch"] = autoresearch.summarize(result, mode=mode)
+    return model, metrics
 
 
 # Minimum training volume per (org, role) before we attempt a role-level
@@ -289,7 +373,13 @@ def fit_for_org(
     # gold set separately.
     cut = max(1, int(len(examples) * 0.8))
     train, gold = examples[:cut], examples[cut:]
-    model, metrics = fit_model(train, role_id=role_id, gold_set=gold)
+    model, metrics = _fit_candidate_model(
+        db,
+        organization_id=organization_id,
+        role_id=role_id,
+        train=train,
+        gold=gold,
+    )
 
     row = PolicyVersion(
         organization_id=organization_id,

@@ -10,6 +10,7 @@ marked-up number.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from app.agent_runtime import budget_guard
 from app.models.organization import Organization
@@ -17,7 +18,7 @@ from app.models.role import Role
 from app.models.usage_event import UsageEvent
 
 
-def _seed(db, org_id, role_id, *, feature, raw_micro, charged_micro, markup):
+def _seed(db, org_id, role_id, *, feature, raw_micro, charged_micro, markup, cache_hit=0):
     db.add(
         UsageEvent(
             organization_id=org_id,
@@ -31,7 +32,7 @@ def _seed(db, org_id, role_id, *, feature, raw_micro, charged_micro, markup):
             cost_usd_micro=raw_micro,
             markup_multiplier=markup,
             credits_charged=charged_micro,
-            cache_hit=0,
+            cache_hit=cache_hit,
             created_at=datetime.now(timezone.utc),
         )
     )
@@ -80,3 +81,31 @@ def test_raw_cost_isolated_per_role(db):
 
     assert budget_guard.month_to_date_raw_cost_cents(db, role=role_a) == 50
     assert budget_guard.month_to_date_raw_cost_cents(db, role=role_b) == 20
+
+
+def test_cache_hit_excluded_from_raw_cost_but_kept_in_credits(db):
+    """A cache hit makes NO Anthropic call ⇒ $0 raw cost, even if a pre-#476
+    row still carries the cached cost. The cache FEE stays in credits, so it is
+    correctly counted as margin (not as Anthropic cost)."""
+    org = Organization(name="CacheCo", slug=f"cache-{id(db)}")
+    db.add(org)
+    db.flush()
+    role = Role(organization_id=org.id, name="C", source="manual", job_spec_text="x")
+    db.add(role)
+    db.flush()
+
+    # Real call: raw $0.10 → charged $0.30.
+    _seed(db, org.id, role.id, feature="score", raw_micro=100_000, charged_micro=300_000, markup=3)
+    # Pre-#476 cache-hit row: phantom raw $0.50 but only a $0.05 cache fee.
+    _seed(
+        db, org.id, role.id, feature="score",
+        raw_micro=500_000, charged_micro=50_000, markup=Decimal("0.10"), cache_hit=1,
+    )
+    db.flush()
+
+    raw_cents = budget_guard.month_to_date_raw_cost_cents(db, role=role)
+    spent_cents = budget_guard.month_to_date_spend_cents(db, role=role)
+
+    assert raw_cents == 10  # excludes the cache-hit phantom; only the real $0.10
+    assert spent_cents == 35  # credits include the cache fee: (300_000+50_000)/10_000
+    assert spent_cents - raw_cents == 25  # cache fee correctly counted as margin

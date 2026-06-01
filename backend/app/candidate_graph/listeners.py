@@ -91,7 +91,15 @@ def _sync_interview_async(interview_id: int) -> None:
             )
             if interview is None:
                 return
-            sync_module.sync_interview(interview, db=db)
+            # Attribute the indexing spend: ApplicationInterview.organization_id
+            # is non-nullable, so pass it directly rather than relying on the
+            # best-effort application-chain resolution (which lands org=NULL
+            # when the relationship isn't loaded).
+            sync_module.sync_interview(
+                interview,
+                db=db,
+                bill_organization_id=int(interview.organization_id),
+            )
         finally:
             db.close()
     except Exception as exc:
@@ -113,7 +121,15 @@ def _sync_event_async(event_id: int) -> None:
             )
             if ev is None:
                 return
-            sync_module.sync_event(ev)
+            # Pass db + the event's (non-nullable) organization_id so the
+            # graph_sync spend writes a per-org usage_event. The prior call
+            # passed neither, so event-sync Anthropic calls always landed
+            # org=NULL with no usage_event.
+            sync_module.sync_event(
+                ev,
+                db=db,
+                bill_organization_id=int(ev.organization_id),
+            )
         finally:
             db.close()
     except Exception as exc:

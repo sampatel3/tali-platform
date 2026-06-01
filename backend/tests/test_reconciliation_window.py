@@ -9,7 +9,7 @@ never revisited it, leaving a stale negative drift. The window is now 4 days
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import create_engine
@@ -81,9 +81,12 @@ def test_reconcile_recent_pulls_the_widened_window(monkeypatch):
     finally:
         db.close()
 
-    # Default window = _RECONCILE_LOOKBACK_DAYS (4): starting_at = end - 4 days,
+    # Default window = _RECONCILE_LOOKBACK_DAYS (8): starting_at = end - 8 days,
     # ending_at exclusive = end + 1 day. Whole UTC days.
-    assert captured["starting_at"].date() == date(2026, 5, 24)
+    assert (
+        captured["starting_at"].date()
+        == date(2026, 5, 28) - timedelta(days=svc._RECONCILE_LOOKBACK_DAYS)
+    )
     assert captured["ending_at"].date() == date(2026, 5, 29)
     assert captured["bucket_width"] == "1d"
     # No Anthropic rows -> nothing to upsert, but the run completes cleanly.
