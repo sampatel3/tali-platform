@@ -34,9 +34,9 @@ def _resolve_anthropic_client(*, organization_id: int | None = None):
     """Build a metered Anthropic client. ``organization_id`` is bound at
     construction so every rerank call records to the right org without
     each call repeating it."""
-    from ..services.claude_client_resolver import get_shared_client
+    from ..services.claude_client_resolver import get_metered_client
 
-    return get_shared_client(organization_id=organization_id)
+    return get_metered_client(organization_id=organization_id)
 
 
 def _build_candidate_summary(candidate: Candidate, application: CandidateApplication) -> dict:

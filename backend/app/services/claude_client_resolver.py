@@ -193,9 +193,49 @@ def _provision_for_org_safe(org: Organization) -> Optional[str]:
     return provisioned.api_key_plaintext
 
 
+def get_metered_client(
+    *, organization_id: Optional[int] = None
+) -> MeteredAnthropicClient:
+    """The single gated entry point every billable call path should use.
+
+    - ``ANTHROPIC_WORKSPACE_KEYS_ENABLED`` OFF (default) → shared Taali key,
+      with ``organization_id`` bound for metering attribution. Same behaviour
+      as the previous ``get_shared_client(organization_id=...)``.
+    - ON, with an org → route through that org's workspace key (lazily
+      provisioned, graceful shared-key fallback). This is what makes Anthropic
+      report cost per-workspace so per-org reconciliation becomes a measurement
+      rather than an allocation.
+
+    Dormant until the flag is flipped, so wiring call sites to this entry point
+    now is zero behaviour change.
+    """
+    if organization_id is not None and bool(
+        getattr(settings, "ANTHROPIC_WORKSPACE_KEYS_ENABLED", False)
+    ):
+        try:
+            with SessionLocal() as session:
+                org = (
+                    session.query(Organization)
+                    .filter(Organization.id == int(organization_id))
+                    .first()
+                )
+                if org is not None:
+                    return get_client_for_org(org)
+        except Exception:
+            logger.exception(
+                "get_metered_client: per-org routing failed for org=%s; "
+                "falling back to shared key",
+                organization_id,
+            )
+    return get_shared_client(organization_id=organization_id)
+
+
 def get_client_for_org(org: Optional[Organization]) -> MeteredAnthropicClient:
     """Return a metered Anthropic client scoped to ``org``'s workspace key
-    when available, otherwise the shared Taali key.
+    when available, otherwise the shared Taali key. Most call paths should use
+    ``get_metered_client`` (which gates this behind ``ANTHROPIC_WORKSPACE_KEYS_
+    ENABLED``); call this directly only when per-org routing is intentional
+    regardless of the flag.
 
     The returned client auto-records ``usage_events`` rows for every
     ``messages.create`` / ``messages.stream`` call when the caller passes

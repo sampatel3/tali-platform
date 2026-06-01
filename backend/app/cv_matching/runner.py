@@ -123,15 +123,19 @@ def _failed_output(*, error_reason: str, ctx: _RunContext) -> CVMatchOutput:
 _SYSTEM_PROMPT = "You are an expert recruiter. Respond ONLY with valid JSON."
 
 
-def _resolve_anthropic_client():
+def _resolve_anthropic_client(*, organization_id: int | None = None):
     # Always return a ``MeteredAnthropicClient`` so a metering wrapper is
     # always available. v3 scoring sets ``metering={"skip": True}`` because
     # cv_score_orchestrator records the event post-call from the typed
     # CVMatchOutput, but going through the wrapper means a future
     # direct-invocation path can't accidentally bypass metering.
-    from ..services.claude_client_resolver import get_shared_client
+    #
+    # ``organization_id`` flows to the gated resolver: with the per-org
+    # workspace-key flag OFF (default) it just binds the org for metering on
+    # the shared key; with it ON, scoring routes through the org's own key.
+    from ..services.claude_client_resolver import get_metered_client
 
-    return get_shared_client()
+    return get_metered_client(organization_id=organization_id)
 
 
 def run_cv_match(
@@ -191,7 +195,9 @@ def run_cv_match(
     # 2. Resolve client (used for both archetype synthesis and the score call)
     if client is None:
         try:
-            client = _resolve_anthropic_client()
+            client = _resolve_anthropic_client(
+                organization_id=(metering_context or {}).get("organization_id")
+            )
         except Exception as exc:
             out = _failed_output(error_reason=f"client_init_failed: {exc}", ctx=ctx)
             telemetry_module.emit_trace(ctx, final_status=out.scoring_status)

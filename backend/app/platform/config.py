@@ -107,6 +107,15 @@ class Settings(BaseSettings):
     # Empty = workspace provisioning disabled, all calls fall back to
     # ANTHROPIC_API_KEY (the shared Taali key).
     ANTHROPIC_ADMIN_API_KEY: str = ""
+    # Master gate for per-org Anthropic WORKSPACE-KEY routing. OFF (default) =
+    # every call uses the shared Taali key (current behaviour); ON = billable
+    # calls with an org context route through that org's workspace key (lazily
+    # provisioned via the Admin API, graceful shared-key fallback on any
+    # failure). Routing per-org makes Anthropic's Admin API report cost
+    # per-workspace, which is what enables TRUE per-org reconciliation (vs the
+    # allocation in anthropic_reconciliation_allocation). Keep OFF until
+    # ANTHROPIC_ADMIN_API_KEY is set and provisioning has been validated.
+    ANTHROPIC_WORKSPACE_KEYS_ENABLED: bool = False
     E2B_COST_PER_HOUR_USD: float = 0.30
     EMAIL_COST_PER_SEND_USD: float = 0.01
     STORAGE_COST_PER_GB_MONTH_USD: float = 0.023

@@ -83,16 +83,19 @@ def _normalize_decision(value: str) -> PreScreenDecision:
     return "error"
 
 
-def _resolve_anthropic_client():
+def _resolve_anthropic_client(*, organization_id: int | None = None):
     # Always return a ``MeteredAnthropicClient`` so the metering wrapper
     # is available — even when the caller passed nothing. Pre-screen calls
     # set ``metering={"skip": True}`` because cv_score_orchestrator records
     # the event post-call, but going through the wrapper means any caller
     # that *doesn't* set skip (e.g. a future direct-invocation path) is
     # auto-metered instead of going to /dev/null.
-    from ..services.claude_client_resolver import get_shared_client
+    #
+    # ``organization_id`` flows to the gated resolver (per-org workspace-key
+    # routing when ANTHROPIC_WORKSPACE_KEYS_ENABLED; shared key otherwise).
+    from ..services.claude_client_resolver import get_metered_client
 
-    return get_shared_client()
+    return get_metered_client(organization_id=organization_id)
 
 
 def _cache_get(cache_key: str) -> PreScreenResult | None:
@@ -226,7 +229,9 @@ def run_pre_screen(
 
     if client is None:
         try:
-            client = _resolve_anthropic_client()
+            client = _resolve_anthropic_client(
+                organization_id=(metering_context or {}).get("organization_id")
+            )
         except Exception as exc:
             logger.warning("Pre-screen client init failed: %s", exc)
             return PreScreenResult(

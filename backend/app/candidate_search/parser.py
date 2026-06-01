@@ -72,9 +72,9 @@ def _fallback_filter(query: str) -> ParsedFilter:
 
 
 def _resolve_anthropic_client(*, organization_id: int | None = None):
-    from ..services.claude_client_resolver import get_shared_client
+    from ..services.claude_client_resolver import get_metered_client
 
-    return get_shared_client(organization_id=organization_id)
+    return get_metered_client(organization_id=organization_id)
 
 
 def parse_nl_query(

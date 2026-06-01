@@ -36,9 +36,9 @@ def _resolve_anthropic_client():
     not have an org loaded), so the meter falls back to the shared key
     with no organization_id. Callers that DO have an org context should
     pass a pre-built client via the ``client=`` kwarg."""
-    from ..services.claude_client_resolver import get_shared_client
+    from ..services.claude_client_resolver import get_metered_client
 
-    return get_shared_client()
+    return get_metered_client()
 
 
 def parse_cv(
