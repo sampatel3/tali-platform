@@ -81,6 +81,15 @@ _RECONCILE_LOOKBACK_DAYS = 8
 _ALERT_DRIFT_PCT = 10  # percent
 _ALERT_MIN_COST_USD_MICRO = 1_000_000  # $1 — ignore sub-dollar noise rows
 
+# Settlement telemetry: re-reconciling a day re-reads our internal rows, so the
+# change in a day's internal total since its last run measures how long late
+# rows (e.g. the Message Batches retrieve path) keep arriving. Material movement
+# on a day OLDER than _SETTLE_SETTLED_AGE_DAYS means spend is still landing past
+# when we'd expect it settled; movement at the window EDGE means the lookback is
+# too narrow (the assumption the 8-day window rests on, now actually measured).
+_SETTLE_MATERIAL_PCT = 2.0  # percent change in a day's internal cost
+_SETTLE_SETTLED_AGE_DAYS = 3  # days old before we expect a day to be settled
+
 
 def _is_alertable_drift(cost_drift, anthropic_cost_micro: int) -> bool:
     """True when a (day, model) row's cost drift warrants an alert: a real
@@ -91,6 +100,26 @@ def _is_alertable_drift(cost_drift, anthropic_cost_micro: int) -> bool:
         and abs(cost_drift) >= _ALERT_DRIFT_PCT
         and anthropic_cost_micro >= _ALERT_MIN_COST_USD_MICRO
     )
+
+
+def _settlement_delta_pct(
+    *, prev_internal_micro: int, new_internal_micro: int,
+    anthropic_cost_micro: int, age_days: int,
+) -> Optional[float]:
+    """How much a day's internal cost moved on re-reconcile, as a percent —
+    but only when it's a MATERIAL move on a day old enough to expect settled
+    (and on a material-spend day). Returns None otherwise. Pure so the
+    settlement-telemetry logic is unit-testable without the Admin API."""
+    if (
+        prev_internal_micro <= 0
+        or age_days < _SETTLE_SETTLED_AGE_DAYS
+        or anthropic_cost_micro < _ALERT_MIN_COST_USD_MICRO
+    ):
+        return None
+    delta_pct = abs(new_internal_micro - prev_internal_micro) / prev_internal_micro * 100
+    if delta_pct < _SETTLE_MATERIAL_PCT:
+        return None
+    return delta_pct
 
 
 def reconcile_recent(
@@ -235,6 +264,7 @@ def reconcile_recent(
     rows_written = 0
     rows_skipped = 0
     drift_alerts: list[dict[str, Any]] = []
+    settlement_events: list[dict[str, Any]] = []
     for (usage_day, workspace_id, model), tokens in by_key.items():
         org_id = workspace_to_org.get(workspace_id) if workspace_id else None
         anthropic_cost = cost_by_key.get((usage_day, workspace_id, model), 0)
@@ -346,6 +376,26 @@ def reconcile_recent(
             )
             db.add(row)
         else:
+            # Settlement telemetry: how much did THIS day's internal total move
+            # since the last run? Material movement on an already-old day means
+            # late rows are still arriving — measured, not assumed.
+            _prev_internal_cost = int(existing.internal_cost_usd_micro or 0)
+            _age_days = (end - usage_day).days
+            _delta_pct = _settlement_delta_pct(
+                prev_internal_micro=_prev_internal_cost,
+                new_internal_micro=internal["cost_usd_micro"],
+                anthropic_cost_micro=anthropic_cost,
+                age_days=_age_days,
+            )
+            if _delta_pct is not None:
+                settlement_events.append({
+                    "usage_date": usage_day.isoformat(),
+                    "model": model or "",
+                    "age_days": _age_days,
+                    "delta_pct": round(_delta_pct, 1),
+                    "prev_internal_usd": round(_prev_internal_cost / 1e6, 2),
+                    "new_internal_usd": round(internal["cost_usd_micro"] / 1e6, 2),
+                })
             existing.organization_id = org_id
             existing.anthropic_input_tokens = tokens["input"]
             existing.anthropic_output_tokens = tokens["output"]
@@ -394,6 +444,43 @@ def reconcile_recent(
         except Exception:  # pragma: no cover — never let alerting break the run
             pass
 
+    settlement_max_age = 0
+    if settlement_events:
+        settlement_events.sort(key=lambda e: -e["age_days"])
+        settlement_max_age = settlement_events[0]["age_days"]
+        # A day still moving at the window edge ⇒ the lookback may be too narrow
+        # (late rows fall outside it next run and never get re-counted). Below
+        # the edge ⇒ informational (the window is catching them).
+        window_edge = _RECONCILE_LOOKBACK_DAYS - 1
+        too_narrow = settlement_max_age >= window_edge
+        log_fn = logger.error if too_narrow else logger.info
+        log_fn(
+            "anthropic_reconciliation_settlement: %d day/model row(s) still moving "
+            "≥%.0f%% (max age %dd, window %dd) — %s",
+            len(settlement_events), _SETTLE_MATERIAL_PCT, settlement_max_age,
+            _RECONCILE_LOOKBACK_DAYS,
+            "WINDOW MAY BE TOO NARROW; widen _RECONCILE_LOOKBACK_DAYS"
+            if too_narrow else "within window",
+            extra={
+                "event": "anthropic_reconciliation_settlement",
+                "max_age_days": settlement_max_age,
+                "lookback_days": _RECONCILE_LOOKBACK_DAYS,
+                "events": settlement_events[:5],
+            },
+        )
+        if too_narrow:
+            try:  # surface to Sentry like the drift alert
+                import sentry_sdk
+
+                sentry_sdk.capture_message(
+                    f"Anthropic reconciliation settlement at window edge: a day "
+                    f"{settlement_max_age}d old still moved ≥{_SETTLE_MATERIAL_PCT}% "
+                    f"(lookback {_RECONCILE_LOOKBACK_DAYS}d) — late rows may escape the window",
+                    level="warning",
+                )
+            except Exception:  # pragma: no cover
+                pass
+
     return {
         "rows_written": rows_written,
         "rows_skipped": rows_skipped,
@@ -401,4 +488,7 @@ def reconcile_recent(
         "window_end": ending_at.isoformat(),
         "drift_alerts": len(drift_alerts),
         "drift_alert_details": drift_alerts[:10],
+        "settlement_events": len(settlement_events),
+        "settlement_max_age_days": settlement_max_age,
+        "settlement_details": settlement_events[:10],
     }
