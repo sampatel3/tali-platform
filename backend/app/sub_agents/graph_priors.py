@@ -41,7 +41,6 @@ from sqlalchemy.orm import Session
 
 from ..candidate_graph import search as graph_search
 from ..candidate_graph import client as graph_client
-from ..candidate_graph import graphrag_queries
 from ..candidate_search.schemas import GraphPredicate
 from ..cv_matching.calibrators.extractor import _default_role_family_mapper
 from ..decision_policy.engine import load_active_policy
@@ -49,7 +48,6 @@ from ..decision_policy.schema import GraphPriorConfig, PolicyJson
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
-from ..services.mainspring_kg_shadow import shadow_compare_priors
 from ..platform.database import SessionLocal
 from .base import SubAgent, SubAgentRequest, SubAgentResult
 from .registry import register_sub_agent
@@ -139,13 +137,33 @@ def _candidate_predicates(neigh: dict[str, Any]) -> list[GraphPredicate]:
 class GraphPriorsSubAgent:
     name = "graph_priors"
 
-    # Tunables for the GraphRAG path. Conservative defaults — the
+    # Read budget for the GraphRAG path. Conservative defaults — the
     # synthesiser already collapses to confidence=0 when no signal
     # source produces output, so these only affect *which* signals
-    # we attempt to read.
+    # we attempt to read. Post-cutover the actual queries run inside
+    # mainspring's vendored GraphitiBackend, which holds the identical
+    # 10 / 10 / 15 limits; these are retained as documentation of the
+    # read budget the sub-agent expects.
     GRAPHRAG_MAX_SIMILAR = 10
     GRAPHRAG_MAX_OVERLAP_COMPANIES = 10
     GRAPHRAG_MAX_SKILL_PATHS = 15
+
+    @staticmethod
+    def _graph_backend():
+        """Return the vendored mainspring GraphitiBackend (lazy singleton).
+
+        Imported lazily so the substrate's optional graphiti-core / neo4j
+        extra is only touched when the GraphRAG path actually runs; the
+        backend itself imports those libs lazily too, so this never forces
+        them at module load.
+        """
+        backend = getattr(GraphPriorsSubAgent, "_GRAPH_BACKEND", None)
+        if backend is None:
+            from vendor.mainspring_kg.graphiti import GraphitiBackend
+
+            backend = GraphitiBackend()
+            GraphPriorsSubAgent._GRAPH_BACKEND = backend
+        return backend
 
     def _try_graphrag(
         self,
@@ -173,18 +191,17 @@ class GraphPriorsSubAgent:
             return None
         candidate_taali_id = int(app.candidate_id)
         role_taali_id = int(req.role_id)
-        group_id = graph_client.group_id_for_org(int(req.organization_id))
 
         # GraphRAG queries key off the Graphiti-side candidate_id /
         # role_id properties. We use the Tali IDs as the canonical
-        # identifiers (the ingestion path writes them as
-        # ``taali_id=N`` in the episode body, which Graphiti's
-        # extractor binds to entity properties named ``candidate_id``
-        # / ``role_id``). If the graph hasn't ingested this candidate
-        # yet, the queries return empty and the synthesiser returns
-        # p_advance=None — caller falls through.
-        graph_candidate_id = str(candidate_taali_id)
-        graph_role_id = str(role_taali_id)
+        # identifiers (the ingestion path writes them as ``taali_id=N``
+        # in the episode body, which Graphiti's extractor binds to entity
+        # properties named ``candidate_id`` / ``role_id``). The vendored
+        # GraphitiBackend stringifies brand_id/case_id/role_id into the
+        # same group_id + candidate_id + role_id the queries match on. If
+        # the graph hasn't ingested this candidate yet, the queries return
+        # empty and the synthesiser produces no signal — caller falls
+        # through.
         t = datetime.now(timezone.utc)
 
         # Referrer identity is optional and the column shape differs
@@ -197,67 +214,33 @@ class GraphPriorsSubAgent:
                 referrer_id = str(value)
                 break
 
-        referrer = None
-        if referrer_id:
-            try:
-                referrer = graphrag_queries.referrer_signal(
-                    group_id=group_id, referrer_id=referrer_id, t=t
-                )
-            except Exception as exc:
-                logger.warning("referrer_signal failed: %s", exc)
-
+        # ADR-0010 KG cutover: route the GraphRAG prior through mainspring's
+        # vendored GraphitiBackend.get_priors instead of tali's local
+        # graphrag_queries.synthesise_prior. The vendored backend runs the
+        # SAME four multi-hop Cypher queries (character-identical port, same
+        # limits and temporal anchor) and the SAME synthesise_prior, so over
+        # the same Neo4j graph the prior is identical by construction. We
+        # still probe the app for the referrer id (tali-specific column
+        # knowledge) and pass it in; everything else the backend derives.
         try:
-            overlap_rows = graphrag_queries.company_overlap_with_top_performers(
-                group_id=group_id,
-                candidate_id=graph_candidate_id,
-                role_id=graph_role_id,
-                t=t,
-                limit=self.GRAPHRAG_MAX_OVERLAP_COMPANIES,
+            priors = self._graph_backend().get_priors(
+                brand_id=int(req.organization_id),
+                case_id=candidate_taali_id,
+                role_id=role_taali_id,
+                referrer_id=referrer_id,
+                as_of=t,
             )
-        except Exception:
-            overlap_rows = []
-        try:
-            similar_rows = graphrag_queries.similar_past_candidates(
-                group_id=group_id,
-                candidate_id=graph_candidate_id,
-                t=t,
-                top_n=self.GRAPHRAG_MAX_SIMILAR,
-            )
-        except Exception:
-            similar_rows = []
-        try:
-            skill_rows = graphrag_queries.skill_to_outcome_paths(
-                group_id=group_id,
-                candidate_id=graph_candidate_id,
-                role_id=graph_role_id,
-                t=t,
-                limit=self.GRAPHRAG_MAX_SKILL_PATHS,
-            )
-        except Exception:
-            skill_rows = []
+        except Exception as exc:  # pragma: no cover — backend never raises, defensive
+            logger.warning("vendored GraphitiBackend.get_priors failed: %s", exc)
+            return None
 
-        synthesis = graphrag_queries.synthesise_prior(
-            referrer=referrer,
-            overlap_rows=overlap_rows,
-            similar_rows=similar_rows,
-            skill_outcome_rows=skill_rows,
-        )
-        # ADR-0010 cut #5: shadow-check tali's GraphRAG prior against mainspring's
-        # vendored KnowledgeGraphBackend interface and log a conformance diff.
-        # No-op unless MAINSPRING_KG_SHADOW is set; never raises — must not affect
-        # the live prior. Interface-only: mainspring's store stub is never called.
-        shadow_compare_priors(
-            case_id=candidate_taali_id,
-            brand_id=int(req.organization_id),
-            tali_prior={
-                **synthesis,
-                "neighbour_count": len(similar_rows) + len(overlap_rows),
-            },
-        )
-        confidence = float(synthesis.get("confidence") or 0.0)
-        p_advance = synthesis.get("p_advance")
-
-        if p_advance is None:
+        # Adapt mainspring's Priors back to tali's expected dict shape so the
+        # downstream policy weighted-scoring is UNCHANGED. The backend maps the
+        # synthesiser's "no graph signal" sentinel onto Priors.empty (empty
+        # examples / zero confidence), which we translate back to p_advance=None
+        # so the caller falls through to the legacy heuristic exactly as before.
+        components = list(priors.examples or [])
+        if not components:
             # GraphRAG ran but produced nothing — let the caller fall
             # through to the legacy heuristic.
             return SubAgentResult(
@@ -266,10 +249,13 @@ class GraphPriorsSubAgent:
                 output={
                     "p_advance": None,
                     "confidence": 0.0,
-                    "synthesis_note": synthesis.get("synthesis_note"),
+                    "synthesis_note": "no graph paths produced any signal",
                 },
                 confidence=0.0,
             )
+
+        p_advance = float(priors.p_advance)
+        confidence = float(priors.confidence)
 
         # GraphRAG calibrated uncertainty: 1 - confidence is a reasonable
         # initial mapping until Phase 3 isotonic calibration produces a
@@ -278,13 +264,11 @@ class GraphPriorsSubAgent:
             sub_agent=self.name,
             ok=True,
             output={
-                "p_advance": float(p_advance),
-                "p_hired": float(p_advance),
-                "neighbour_count": (
-                    len(similar_rows) + len(overlap_rows)
-                ),
+                "p_advance": p_advance,
+                "p_hired": p_advance,
+                "neighbour_count": int(priors.neighbour_count),
                 "confidence": confidence,
-                "components": synthesis.get("components", []),
+                "components": components,
                 "source": "graphrag",
             },
             confidence=confidence,
@@ -295,7 +279,7 @@ class GraphPriorsSubAgent:
                     "edge_ids": [],
                     "summary": c.get("summary", ""),
                 }
-                for c in (synthesis.get("components") or [])
+                for c in components
             ],
         )
 

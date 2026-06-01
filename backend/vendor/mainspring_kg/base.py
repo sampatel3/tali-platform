@@ -1,13 +1,4 @@
-"""Pluggable backend interface for the platform's knowledge graph.
-
-Mirror-vendored from mainspring ``platform/knowledge_graph/base.py`` (ADR-0010,
-cut #5 — KG-query convergence). Do not edit by hand; re-vendor via
-``backend/scripts/vendor_mainspring_kg.sh``. This file is the ORM-free seam: the
-``KnowledgeGraphBackend`` Protocol plus the pure dataclass shapes
-(``Priors``/``EpisodePayload``/``ReplayResult``). It pulls in nothing but the
-stdlib + typing, so the shadow comparator can structurally check tali's graph
-read surface against the interface without a mainspring DB session.
-"""
+"""Pluggable backend interface for the platform's knowledge graph."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

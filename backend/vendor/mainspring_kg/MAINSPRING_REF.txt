@@ -1,7 +1,11 @@
-mainspring master @ fa03ca7
-Files: knowledge_graph/base.py (ORM-free Protocol + dataclasses only).
-Vendored INTERFACE ONLY (ADR-0010 cut #5, decision: converge the interface, not the store).
-The production GraphitiBackend (knowledge_graph/graphiti.py) is a known
-NotImplementedError stub and is deliberately NOT vendored or called — the
-shadow logs status=mainspring_stub instead. Tali keeps Graphiti as its store.
+mainspring @ 99ef34c
+Files:
+  base.py                       <- spec/knowledge_graph.py (Protocol + dataclasses, ORM-free)
+  graphiti.py                   <- accelerator/knowledge_graph/graphiti.py (REAL GraphitiBackend.get_priors)
+  graphrag/client.py            <- accelerator/knowledge_graph/graphrag/client.py (Graphiti lifecycle)
+  graphrag/graphrag_queries.py  <- accelerator/knowledge_graph/graphrag/graphrag_queries.py (Cypher + synthesise_prior; char-identical port of tali)
+ADR-0010 KG cutover: tali's graph_priors sub-agent routes its GraphRAG
+prior through this vendored GraphitiBackend.get_priors. graphiti-core /
+neo4j are an OPTIONAL mainspring extra, imported lazily inside the
+graphrag client, so these modules import without them.
 Re-vendor: bash backend/scripts/vendor_mainspring_kg.sh

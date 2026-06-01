@@ -146,13 +146,12 @@ class Settings(BaseSettings):
     # delegates to pairwise_fairness_verdict). The log-only MAINSPRING_BIAS_SHADOW
     # flag + its shadow comparator were removed once parity was proven
     # (test_bias_seam_parity.py). (historical)
-    # ADR-0010 KG convergence (cut #5): when True, every GraphRAG prior synthesis
-    # is ALSO checked against mainspring's vendored KnowledgeGraphBackend Protocol
-    # — a structural interface-conformance + shape diff is logged (log-only, no
-    # behaviour change). INTERFACE-ONLY: the mainspring GraphitiBackend store is a
-    # known NotImplementedError stub, so the shadow logs mainspring_stub rather
-    # than calling it. Tali keeps Graphiti as its store.
-    MAINSPRING_KG_SHADOW: bool = False
+    # ADR-0010 KG convergence (cut #5) CUTOVER COMPLETE: the GraphRAG prior is now
+    # mainspring's vendored GraphitiBackend.get_priors (graph_priors sub-agent
+    # routes through vendor/mainspring_kg). The synthesis + Cypher are a
+    # character-identical port, proven by test_kg_graphrag_synthesis_parity.py, so
+    # the prior is identical given the same graph. The log-only MAINSPRING_KG_SHADOW
+    # flag + its shadow comparator were removed once the cutover landed. (historical)
     # Brand service token for the ingest API (sent as Bearer). Empty in shadow.
     MAINSPRING_BRAND_TOKEN: str = ""
     # How far back each sweep looks for newly-resolved decisions / teach
