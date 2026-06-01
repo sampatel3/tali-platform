@@ -22,54 +22,54 @@ const formatCostUsd = (usd) => {
   return `$${safe.toFixed(2)}`;
 };
 
-// Claude-Desktop-prominent markdown: 16px base, 1.7 line-height,
-// stronger ink. The previous 15px bump was too subtle — Sam noted
-// "it looks the same." The site chrome around the chat is reduced
-// via html font-size:14px (rem-based sizes), so 16px chat text now
-// reads materially larger than the surrounding UI by ~25% — same
-// hierarchy as Claude Desktop.
+// Claude Desktop / Codex / Cursor scale: compact and refined, NOT
+// big. Sam's "bolder" feedback was about visual weight, not size —
+// the previous push went 16px and looked oversized against the
+// 14px-scaled chrome. Returned to 14px body / 1.6 line-height
+// (matches Claude Desktop default). Bold reads through TYPE WEIGHT,
+// COLOR CONTRAST, and SPACING — never type size.
 const MARKDOWN_COMPONENTS = {
   p: ({ children }) => (
-    <p className="whitespace-pre-line text-[16px] leading-[1.7] text-[var(--ink)] [&:not(:first-child)]:mt-4">
+    <p className="whitespace-pre-line text-[14px] leading-[1.6] text-[var(--ink)] [&:not(:first-child)]:mt-3">
       {children}
     </p>
   ),
   h1: ({ children }) => (
-    <h1 className="mt-5 text-[20px] font-semibold leading-tight text-[var(--ink)] [&:first-child]:mt-0">
+    <h1 className="mt-4 text-[16px] font-semibold leading-tight text-[var(--ink)] [&:first-child]:mt-0">
       {children}
     </h1>
   ),
   h2: ({ children }) => (
-    <h2 className="mt-5 text-[18px] font-semibold leading-tight text-[var(--ink)] [&:first-child]:mt-0">
+    <h2 className="mt-3.5 text-[14.5px] font-semibold leading-tight text-[var(--ink)] [&:first-child]:mt-0">
       {children}
     </h2>
   ),
   h3: ({ children }) => (
-    <h3 className="mt-4 text-[16.5px] font-semibold leading-tight text-[var(--ink)] [&:first-child]:mt-0">
+    <h3 className="mt-3 text-[13.5px] font-semibold leading-tight text-[var(--ink)] [&:first-child]:mt-0">
       {children}
     </h3>
   ),
   ul: ({ children }) => (
-    <ul className="mt-4 list-disc space-y-2 pl-6 text-[16px] leading-[1.7] text-[var(--ink)] marker:text-[var(--purple)]">
+    <ul className="mt-2.5 list-disc space-y-1 pl-5 text-[14px] leading-[1.6] text-[var(--ink)] marker:text-[var(--purple)]">
       {children}
     </ul>
   ),
   ol: ({ children }) => (
-    <ol className="mt-4 list-decimal space-y-2 pl-6 text-[16px] leading-[1.7] text-[var(--ink)] marker:text-[var(--purple)]">
+    <ol className="mt-2.5 list-decimal space-y-1 pl-5 text-[14px] leading-[1.6] text-[var(--ink)] marker:text-[var(--purple)]">
       {children}
     </ol>
   ),
-  li: ({ children }) => <li className="pl-1.5">{children}</li>,
+  li: ({ children }) => <li className="pl-1">{children}</li>,
   strong: ({ children }) => (
     <strong className="font-semibold text-[var(--ink)]">{children}</strong>
   ),
   em: ({ children }) => <em className="italic text-[var(--ink)]">{children}</em>,
   blockquote: ({ children }) => (
-    <blockquote className="mt-4 border-l-[3px] border-[var(--purple)] bg-[var(--purple-soft)] px-4 py-2.5 text-[15.5px] leading-[1.65] text-[var(--ink-2)]">
+    <blockquote className="mt-3 border-l-[3px] border-[var(--purple)] bg-[var(--purple-soft)] px-3 py-2 text-[13.5px] leading-[1.55] text-[var(--ink-2)]">
       {children}
     </blockquote>
   ),
-  hr: () => <hr className="my-5 border-t border-[var(--line-2)]" />,
+  hr: () => <hr className="my-4 border-t border-[var(--line-2)]" />,
   code: ({ children, className, ...props }) => {
     const isBlock = typeof className === 'string' && className.length > 0;
     if (isBlock) {
@@ -81,7 +81,7 @@ const MARKDOWN_COMPONENTS = {
     }
     return (
       <code
-        className="rounded-md bg-[var(--purple-soft)] px-1.5 py-0.5 font-mono text-[0.92em] text-[var(--purple-2)]"
+        className="rounded-[5px] bg-[var(--purple-soft)] px-1.5 py-0.5 font-mono text-[0.9em] text-[var(--purple-2)]"
         {...props}
       >
         {children}
@@ -89,7 +89,7 @@ const MARKDOWN_COMPONENTS = {
     );
   },
   pre: ({ children }) => (
-    <pre className="mt-4 overflow-x-auto rounded-[12px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-bg)] p-4 font-mono text-[13.5px] leading-[1.65] text-[var(--ink-2)]">
+    <pre className="mt-3 overflow-x-auto rounded-[10px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-bg)] p-3 font-mono text-[12.5px] leading-[1.55] text-[var(--ink-2)]">
       {children}
     </pre>
   ),
@@ -132,23 +132,23 @@ const MessageRow = ({ entry }) => {
   const content = String(entry?.content || '');
 
   return (
-    <div className={`text-[16px] ${isUser ? 'text-right' : ''}`}>
+    <div className={`text-[14px] ${isUser ? 'text-right' : ''}`}>
       <div
-        className={`mb-2 flex gap-2 font-mono text-[11px] uppercase tracking-[0.1em] text-[var(--mute)] ${
+        className={`mb-1.5 flex gap-2 font-mono text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)] ${
           isUser ? 'justify-end' : 'justify-start'
         }`}
       >
         <span>{isUser ? 'You' : 'Claude'}</span>
       </div>
       <div
-        className={`inline-block max-w-[94%] rounded-[18px] px-5 py-4 text-left shadow-sm ${
+        className={`inline-block max-w-[94%] rounded-[12px] px-4 py-2.5 text-left ${
           isUser
-            ? 'rounded-tr-[4px] bg-[var(--purple)] text-white shadow-[0_2px_6px_color-mix(in_oklab,var(--purple)_30%,transparent)]'
-            : 'rounded-tl-[4px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] text-[var(--ink)] shadow-[0_1px_3px_color-mix(in_oklab,var(--ink)_8%,transparent)]'
+            ? 'rounded-tr-[4px] bg-[var(--purple)] text-white'
+            : 'rounded-tl-[4px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] text-[var(--ink)]'
         }`}
       >
         {isUser ? (
-          <p className="whitespace-pre-wrap text-[16px] leading-[1.65] text-inherit">{content}</p>
+          <p className="whitespace-pre-wrap text-[14px] leading-[1.55] text-inherit">{content}</p>
         ) : (
           <ReactMarkdown components={MARKDOWN_COMPONENTS}>{content}</ReactMarkdown>
         )}
@@ -387,11 +387,11 @@ export const AssessmentClaudeChat = ({
         className="min-h-0 flex-1 overflow-y-auto px-5 py-5"
         data-testid="assessment-claude-chat-messages"
       >
-        <div className="space-y-5">
+        <div className="space-y-3">
           {messages.length === 0 && !pending ? (
-            <div className="rounded-[18px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-6 py-6 text-[16px] leading-[1.65] text-[var(--ink-2)] shadow-[0_1px_3px_color-mix(in_oklab,var(--ink)_6%,transparent)]">
-              <div className="mb-3.5 inline-flex items-center gap-2 font-mono text-[11.5px] uppercase tracking-[0.12em] text-[var(--purple)]">
-                <FileSearch size={15} />
+            <div className="rounded-[12px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-4 py-3.5 text-[13.5px] leading-[1.55] text-[var(--ink-2)]">
+              <div className="mb-2 inline-flex items-center gap-2 font-mono text-[10.5px] uppercase tracking-[0.1em] text-[var(--purple)]">
+                <FileSearch size={12} />
                 Claude is ready
               </div>
               Ask Claude to inspect the repo, explain a failure, or suggest the smallest safe patch path before you edit.
@@ -403,14 +403,14 @@ export const AssessmentClaudeChat = ({
           ))}
 
           {pending ? (
-            <div className="text-[15px]" data-testid="assessment-claude-chat-pending">
-              <div className="mb-1.5 flex gap-2 font-mono text-[10.5px] uppercase tracking-[0.1em] text-[var(--mute)]">
+            <div className="text-[14px]" data-testid="assessment-claude-chat-pending">
+              <div className="mb-1.5 flex gap-2 font-mono text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">
                 <span>Claude</span>
                 <span>working</span>
               </div>
-              <div className="inline-block max-w-[94%] rounded-[16px] rounded-tl-[4px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-5 py-3.5 text-left">
-                <div className="inline-flex items-center gap-2.5 text-[var(--mute)]">
-                  <Wrench size={14} className="animate-pulse" />
+              <div className="inline-block max-w-[94%] rounded-[12px] rounded-tl-[4px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-4 py-2.5 text-left">
+                <div className="inline-flex items-center gap-2 text-[var(--mute)]">
+                  <Wrench size={12} className="animate-pulse" />
                   <span className="animate-pulse">Claude is working...</span>
                 </div>
               </div>
@@ -419,15 +419,11 @@ export const AssessmentClaudeChat = ({
         </div>
       </div>
 
-      {/* Input box sized to dominate visually — Claude Desktop scale.
-          140px min-height so it lands as a deliberate surface, 2px
-          border that highlights on focus with a 4px purple ring,
-          16px input text matching the message bubbles. Send button
-          is larger (px-5/py-2.5/text-[14px]) so it reads as the
-          primary action. Sam's previous "looks the same" feedback
-          meant the deltas weren't aggressive enough. */}
-      <div className="border-t border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] px-4 py-4">
-        <div className="rounded-[20px] border-2 border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-bg)] px-5 py-4 shadow-[0_2px_6px_color-mix(in_oklab,var(--ink)_6%,transparent)] transition-all focus-within:border-[var(--purple)] focus-within:shadow-[0_0_0_4px_color-mix(in_oklab,var(--purple)_18%,transparent)]">
+      {/* Input box — Claude Desktop / Codex / Cursor scale:
+          ~80px min-height, modest padding, 1px border with a soft
+          focus ring. Tight, refined, NOT oversized. */}
+      <div className="border-t border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] px-3 py-3">
+        <div className="rounded-[12px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-bg)] px-3 py-2.5 transition-colors focus-within:border-[var(--purple)] focus-within:shadow-[0_0_0_2px_color-mix(in_oklab,var(--purple)_15%,transparent)]">
           <textarea
             value={inputValue}
             onChange={handleInputChange}
@@ -436,20 +432,20 @@ export const AssessmentClaudeChat = ({
             placeholder={placeholder}
             disabled={disabled || pending || isBudgetExhausted}
             aria-label="Message Claude"
-            className="min-h-[140px] w-full resize-none border-0 bg-transparent text-[16px] leading-[1.65] text-[var(--ink)] outline-none placeholder:text-[var(--mute)] disabled:opacity-60"
+            className="min-h-[72px] w-full resize-none border-0 bg-transparent text-[14px] leading-[1.55] text-[var(--ink)] outline-none placeholder:text-[var(--mute)] disabled:opacity-60"
           />
-          <div className="mt-3 flex items-center justify-between gap-3">
-            <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">
+          <div className="mt-2 flex items-center justify-between gap-3">
+            <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-[var(--mute)]">
               Cmd/Ctrl + Enter to send
             </div>
             <button
               type="button"
               onClick={handleSubmit}
               disabled={!canSend}
-              className="inline-flex items-center gap-2 rounded-full bg-[var(--ink)] px-5 py-2.5 text-[14px] font-semibold text-[var(--bg)] transition-colors hover:bg-[var(--purple)] disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-full bg-[var(--ink)] px-3 py-1.5 text-[12px] font-medium text-[var(--bg)] transition-colors hover:bg-[var(--purple)] disabled:opacity-50"
               aria-label="Send message to Claude"
             >
-              <MessageSquare size={15} />
+              <MessageSquare size={12} />
               Send
             </button>
           </div>
