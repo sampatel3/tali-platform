@@ -5,7 +5,17 @@
  * CSS vars, so `data-brand` on <html> re-skins them. Pair with the component
  * layer: `@import "@mainspring/ui/styles/components.css";`.
  */
-export { Button, Pill, Card } from "./primitives";
+export {
+  Button,
+  Pill,
+  Card,
+  Panel,
+  Badge,
+  Input,
+  PageHero,
+  KpiStrip,
+  KpiTile,
+} from "./primitives";
 export { BrandMark } from "./BrandMark";
 export { SpringMark } from "./SpringMark";
 export { CommandBar } from "./CommandBar";
