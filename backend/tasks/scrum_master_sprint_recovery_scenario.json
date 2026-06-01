@@ -180,5 +180,10 @@
     "baseline_failures_meaningful": true,
     "rubric_matches_role": true,
     "timebox_realistic": true
+  },
+  "deliverable": {
+    "kind": "doc",
+    "primary_artifact": "HANDBACK.md",
+    "submission_check": "test_runner"
   }
 }

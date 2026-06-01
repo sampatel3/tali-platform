@@ -142,6 +142,7 @@ def test_canonical_task_catalog_loads_all_shipped_specs():
         "data_eng_data_quality_contract_framework",
         "platform_eng_aws_eks_misconfig_triage",
         "platform_eng_azure_aks_misconfig_triage",
+        "product_mgmt_stakeholder_conflict",
         "scrum_master_sprint_recovery_scenario",
     }
     actual_keys = {spec["task_id"] for spec in specs}

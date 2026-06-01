@@ -56,6 +56,59 @@ class TaskSpecValidationResult:
 
 
 _SUPPORTED_GRADERS = frozenset({"interrogation_outcome"})
+_SUPPORTED_DELIVERABLE_KINDS = frozenset({"code", "doc"})
+_DEFAULT_DELIVERABLE_KIND = "code"
+
+
+def validate_deliverable(deliverable: Any, repo_files: Dict[str, str]) -> List[str]:
+    """Validate the top-level ``deliverable`` block.
+
+    Optional today — when absent, the runtime treats the task as
+    ``kind: code`` (back-compat). When present, ``kind`` must be one of
+    the supported families and ``primary_artifact`` must point at a
+    file that exists in ``repo_structure.files``. This catches the
+    failure mode where the schema declares a deliverable the candidate
+    workspace can never open.
+
+    Adding a new family later (e.g. ``matrix``, ``deck``) means: add
+    the kind to ``_SUPPORTED_DELIVERABLE_KINDS`` and teach the FE
+    DeliverablePane how to render it. Schema-only change here.
+    """
+    if deliverable is None:
+        return []
+    if not isinstance(deliverable, dict):
+        return ["deliverable must be an object"]
+    errors: List[str] = []
+    kind = deliverable.get("kind")
+    if kind is None:
+        errors.append("deliverable.kind is required when deliverable is set")
+    elif not isinstance(kind, str) or kind not in _SUPPORTED_DELIVERABLE_KINDS:
+        errors.append(
+            f"deliverable.kind must be one of {sorted(_SUPPORTED_DELIVERABLE_KINDS)}; got {kind!r}"
+        )
+    primary = deliverable.get("primary_artifact")
+    if primary is None:
+        errors.append("deliverable.primary_artifact is required when deliverable is set")
+    elif not isinstance(primary, str) or not primary.strip():
+        errors.append("deliverable.primary_artifact must be a non-empty string")
+    elif repo_files and primary not in repo_files:
+        errors.append(
+            f"deliverable.primary_artifact={primary!r} must match a file in repo_structure.files"
+        )
+    return errors
+
+
+def resolve_deliverable_kind(deliverable: Any) -> str:
+    """Return the kind for a task spec, defaulting to ``"code"``.
+
+    Single place to apply the back-compat default so the runtime never
+    has to do ``deliverable.get("kind") or "code"`` ad-hoc.
+    """
+    if isinstance(deliverable, dict):
+        kind = deliverable.get("kind")
+        if isinstance(kind, str) and kind in _SUPPORTED_DELIVERABLE_KINDS:
+            return kind
+    return _DEFAULT_DELIVERABLE_KIND
 
 
 def _validate_decisions_dim(
@@ -365,6 +418,13 @@ def validate_task_spec(spec: Dict[str, Any]) -> TaskSpecValidationResult:
     errors.extend(_validate_decisions_dim(evaluation_rubric, spec.get("decision_points")))
     errors.extend(validate_decision_points(spec.get("decision_points")))
     errors.extend(_validate_repo_structure(spec))
+    # deliverable is optional; when absent the task is treated as kind="code"
+    # (back-compat for the engineering pilot tasks). When present, we
+    # cross-check that primary_artifact actually exists in the repo.
+    errors.extend(validate_deliverable(
+        spec.get("deliverable"),
+        _repo_files(spec.get("repo_structure")),
+    ))
     errors.extend(_validate_expected_candidate_journey(spec))
     errors.extend(_validate_interviewer_signals(spec))
     errors.extend(_validate_test_runner(spec))

@@ -1,0 +1,225 @@
+{
+  "task_id": "product_mgmt_stakeholder_conflict",
+  "name": "Head of Product — Mid-Quarter Stakeholder Conflict",
+  "role": "product_manager",
+  "duration_minutes": 30,
+  "calibration_prompt": "Before drafting the memo, pick a recommendation in one sentence and name the strongest counter-argument you'll have to defend against.",
+  "scenario": "You joined Falcon Health as Head of Product six weeks ago. Mid-Q3, the CEO escalated a stakeholder fight to you. Three senior leaders are pulling the same engineering squad in incompatible directions and you have to write the decision memo the CEO will use to align them in tomorrow's leadership stand-up.\n\n**Forwarded message from the CEO:**\n\n> Need your call on this by end of day. I want a one-page DECISION_MEMO.md I can take into tomorrow's leadership stand-up — short, defended, actionable. Not a status doc. Not a 'here are the options' deck.\n>\n> What I'm looking at:\n>\n> - **Olivia (VP Eng)** says the Carepath rewrite is the only thing the platform squad should be touching in Q3. Tech-debt timer is up; one more incident and the on-call rotation will quit. She has data — see `ENG_BRIEF.md`.\n> - **Marco (CRO)** says Carepath rewrite is invisible to revenue and Falcon needs the *Insurance Gateway* feature shipped by Q3 close to unblock $2.1M of pipeline. He has three closed-won deals contingent on it — see `SALES_BRIEF.md`.\n> - **Priya (VP CS)** says neither matters because churn this quarter is being driven by `Patient Portal v3` reliability and we're hemorrhaging mid-tier hospital accounts. Two named accounts have given notice. See `CS_BRIEF.md`.\n>\n> The squad has capacity for ONE of these to ship this quarter. The other two get sequenced or dropped.\n>\n> Use the briefs in this repo, the customer cohort data in `cohorts/`, and Carepath's incident log in `incidents/`. Your memo needs to give me:\n>\n> 1. A recommendation — which one ships this quarter, in plain English.\n> 2. The tradeoff you're explicitly accepting (what gets worse because of your call).\n> 3. The ask of each VP — specifically, what each of them needs to commit to (and what they're giving up). I have to deliver this to them; vague language doesn't help me.\n> 4. The follow-up cadence — how you'll re-evaluate the call mid-quarter if the data moves.\n>\n> A senior PM picks. A junior PM lists options. I need you to pick.\n\n**Your mission:**\nYou're being assessed on prioritisation judgment, stakeholder fluency, ability to articulate tradeoffs explicitly, and the discipline to write a *decision* memo (not a status update). The auto-scoring suite checks that your memo addresses every required topic by name; the rubric judges *how well* — specifically, whether you committed to a choice with a defensible tradeoff, or hedged.",
+  "repo_structure": {
+    "name": "falcon-product-decision",
+    "files": {
+      ".gitignore": ".venv/\n.pytest_cache/\n__pycache__/\n",
+      "README.md": "# Falcon Health — Q3 product decision\n\nThis is a non-coding assessment. Your deliverable is `DECISION_MEMO.md`. Read the inputs in this repo, then write the memo the CEO will take to tomorrow's leadership stand-up.\n\n## Inputs\n- `ENG_BRIEF.md` — Olivia (VP Eng) framing on the Carepath rewrite\n- `SALES_BRIEF.md` — Marco (CRO) framing on Insurance Gateway and the $2.1M pipeline\n- `CS_BRIEF.md` — Priya (VP CS) framing on Patient Portal v3 churn risk\n- `cohorts/cohort_summary.md` — Q2/Q3 customer cohort breakdown by tier and revenue\n- `incidents/carepath_incidents.md` — last 90 days of Carepath incidents\n\n## Local workflow\n1. `python3 -m venv .venv && source .venv/bin/activate`\n2. `pip install -r requirements.txt`\n3. Edit `DECISION_MEMO.md` directly. Use Claude to think through framing — you can paste excerpts from the inputs.\n4. Run `pytest -q` to check that your memo addresses every required topic. Tests check *coverage*, not correctness — the rubric scores how well you addressed each topic.\n\n## What good looks like\n- A specific recommendation in the first paragraph, not the last\n- A named tradeoff (what gets worse) — not 'we'll monitor and adjust'\n- A concrete ask of each VP — what they commit to AND what they give up\n- A follow-up cadence with a trigger metric, not a calendar date\n",
+      "DECISION_MEMO.md": "# DECISION MEMO — Q3 product priority\n\n> Replace each section's placeholder with your actual decision. Be specific — name owners, tradeoffs, and re-evaluation triggers. The auto-scoring suite checks that every required heading is present and that you used the required keywords; the rubric judges how well you addressed each.\n\n## Recommendation\n_(One paragraph: which work ships this quarter — Carepath rewrite, Insurance Gateway, or Patient Portal v3 — and the single sentence that defends it. State this in plain English the CEO can quote verbatim to the three VPs tomorrow.)_\n\n## The tradeoff I'm accepting\n_(What gets worse because of your call? Name the specific consequence the org will live with for the next 12 weeks. 'We'll monitor' is not a tradeoff. State it like an insurance policy — what you're choosing to expose.)_\n\n## Ask of each VP\n_(For Olivia, Marco, and Priya: a one-sentence commitment they need to make AND a one-sentence concession they need to accept. The CEO is delivering this to them, so it must be specific.)_\n\n- **Olivia (VP Eng):** commits to — / accepts —\n- **Marco (CRO):** commits to — / accepts —\n- **Priya (VP CS):** commits to — / accepts —\n\n## Follow-up cadence\n_(How and when you'll re-evaluate. State the trigger metric and the threshold that would force a re-prioritisation mid-quarter. Not 'we'll review monthly' — a specific signal that, if it moves, changes the call.)_\n\n## What I'm telling the CEO\n_(Three bullets the CEO can put in front of the board if anyone asks why we chose this. Decision-led, not status-led.)_\n",
+      "ENG_BRIEF.md": "# Olivia — VP Engineering brief\n\nThe Carepath rewrite has been deferred three quarters in a row. Here's what that's costing us:\n\n- **Incident rate**: 14 P1/P2 incidents in the last 90 days against Carepath, up from 4 in the equivalent window a year ago.\n- **MTTR**: 4.2 hours median, up from 1.1 hours a year ago. The legacy code path no longer has anyone on the team who confidently owns it.\n- **On-call attrition risk**: 2 of 5 platform engineers have raised concerns. One has hinted at leaving if rotation isn't lightened.\n- **Roadmap cost of NOT rewriting**: every feature on the Carepath surface (incl. Insurance Gateway) is taking 1.5–2x the originally estimated time because integrators are working around the old contracts.\n\n**My ask:** Carepath rewrite is the Q3 work. Insurance Gateway and Patient Portal v3 can both be sequenced after — and frankly, both will be cheaper to ship on the rewritten platform than on the current one.\n\n**What I will accept:** I can let Patient Portal v3 ship a hotfix-only stream alongside the rewrite if Priya's churn case is concrete. I will NOT compromise on Insurance Gateway being post-rewrite. We are out of runway on legacy.\n",
+      "SALES_BRIEF.md": "# Marco — CRO brief\n\nThe pipeline math for Insurance Gateway:\n\n- **Closed-won contingent on it**: 3 deals (Sentinel Health, Meridian Group, Coast Medical) totalling $2.1M ARR. Contracts signed; deployment blocked on Gateway feature.\n- **In flight contingent on it**: 4 active opportunities ($3.4M combined ARR) where the customer has explicitly said 'we'll sign once Gateway is live'.\n- **Window**: Sentinel and Meridian have hard September 30 deployment dates in their contracts. Slipping Gateway to Q4 puts both at risk — we'd be in renegotiation, possibly with penalty clauses.\n\n**On the Carepath argument**: I hear Olivia. But the platform has shipped features fine for two years on the old code. Engineering's idea of 'urgent rewrite' historically slides by 6+ months once started. Meanwhile, the deals are real and the dates are contractual.\n\n**On the Patient Portal v3 argument**: I haven't seen Priya's churn numbers. If the accounts she's worried about are mid-tier, the revenue exposure is materially smaller than the Gateway pipeline.\n\n**My ask:** Insurance Gateway ships Q3. Carepath rewrite sequences to Q4 (we'll commit eng-leadership air cover then). Patient Portal v3 gets whatever capacity is left after Gateway lands.\n\n**What I will accept:** I can absorb a 2-week Gateway slip if it's required to land Sentinel cleanly. I cannot absorb a 'Q4' answer — that loses both Sentinel and Meridian.\n",
+      "CS_BRIEF.md": "# Priya — VP Customer Success brief\n\nWe are bleeding revenue we won. Patient Portal v3 reliability is the cause:\n\n- **Notice given (Q3)**: Riverside Regional ($420K ARR) and Northside Medical ($380K ARR). Both cited 'portal downtime during clinic hours' as the unblocked reason. Both renewal windows close in October.\n- **At-risk (Q3 → Q4)**: 7 mid-tier hospital accounts ($1.6M combined ARR) have raised P1 portal tickets in the last 60 days and have escalated to executive sponsor calls. The pattern is identical to Riverside before they gave notice.\n- **Root cause**: known degradation under load on the v3 portal session layer. The fix has been scoped (2-engineer-weeks) and waitlisted for a quarter.\n- **Compounding cost**: every account that churns over reliability shows up in our customer-references gap, which is what marketing has been using to drive the new pipeline Marco is talking about. The next 12 months of CRO pipeline depend on the customers we retain THIS quarter.\n\n**On the Carepath argument**: I agree it's accumulating risk, but my accounts are giving notice NOW. Carepath has not caused a single customer-visible incident yet. Olivia is solving for engineer attrition; I'm solving for customer attrition. Both are real; only one shows up in next-quarter ARR.\n\n**On the Insurance Gateway argument**: Marco's pipeline is real, but if the references we're using to sell those deals churn first, the pipeline collapses anyway.\n\n**My ask:** Patient Portal v3 reliability fix is the Q3 work. Engineering capacity goes to portal session layer + observability. Carepath rewrite is Q4. Insurance Gateway is unchanged — Marco's deals are real, but he has a 2-week buffer he can use.\n\n**What I will accept:** I can take a phased portal fix that addresses the session layer in Q3 and defers the front-end refactor to Q4. I cannot accept 'Carepath rewrite first' — by then I'll have lost 6 more accounts.\n",
+      "cohorts/cohort_summary.md": "# Customer cohorts — Q2/Q3 snapshot\n\n## By tier\n| Tier        | Accounts | ARR     | Net retention |\n|-------------|----------|---------|---------------|\n| Enterprise  | 18       | $14.2M  | 108%          |\n| Mid-tier    | 47       | $9.8M   | 89%           |\n| SMB         | 112      | $3.6M   | 96%           |\n\n## Mid-tier sub-segment (where Priya is concerned)\n| Cohort                | Accounts | ARR    | At-risk flag |\n|-----------------------|----------|--------|--------------|\n| Hospital networks     | 22       | $5.4M  | 9 of 22 P1-portal tickets in 60 days |\n| Clinic groups         | 15       | $2.6M  | 2 of 15 escalated |\n| Specialty clinics     | 10       | $1.8M  | 0 of 10 escalated |\n\n## New pipeline contingent on existing references\n- 64% of Marco's Q3/Q4 pipeline used Riverside Regional, Northside Medical, or a mid-tier hospital network as a reference call.\n- 41% of in-flight enterprise deals reference Carepath stability when asked about platform maturity.\n",
+      "incidents/carepath_incidents.md": "# Carepath incident log — last 90 days\n\n| Date       | Severity | Customer-visible? | Root cause                  | MTTR  |\n|------------|----------|--------------------|------------------------------|-------|\n| 2026-04-12 | P2       | No                 | Background sync deadlock     | 2.5h  |\n| 2026-04-19 | P1       | No                 | DB connection pool exhaustion| 4.1h  |\n| 2026-04-28 | P2       | No                 | Cache layer race condition   | 3.0h  |\n| 2026-05-04 | P1       | No (caught in staging)| Memory leak on session refresh | 5.5h |\n| 2026-05-11 | P2       | No                 | Retry storm on partner API   | 2.8h  |\n| 2026-05-16 | P1       | No                 | Schema migration rollback    | 6.0h  |\n| 2026-05-23 | P2       | No                 | Index bloat causing 95p slowdown | 1.9h |\n| 2026-05-28 | P1       | No                 | Background worker OOM        | 4.8h  |\n| 2026-06-04 | P2       | No                 | Webhook delivery backlog     | 2.2h  |\n| 2026-06-09 | P1       | No                 | Auth-cache stampede          | 4.6h  |\n| 2026-06-15 | P2       | No                 | Migration lock contention    | 3.4h  |\n| 2026-06-22 | P1       | No                 | DB connection pool exhaustion (recurrence) | 5.1h |\n| 2026-07-01 | P2       | No                 | Slow query on patient lookup | 2.1h  |\n| 2026-07-08 | P1       | No                 | Background sync deadlock (recurrence) | 4.9h |\n\n**Note from on-call lead:** zero customer-visible Carepath incidents in 90 days. All caught at the platform layer. The pattern is repeat root causes (connection pool, sync deadlock) that the rewrite would structurally eliminate.\n",
+      "requirements.txt": "pytest>=7.0\n",
+      "decision_helpers.py": "\"\"\"Light helpers used by the auto-scoring tests to read the candidate's memo.\n\nThe candidate doesn't need to edit this file — it provides the parsing\nutilities the test suite uses to score *coverage* of the required topics.\n\"\"\"\nfrom __future__ import annotations\n\nimport pathlib\nimport re\nfrom typing import Iterable\n\nROOT = pathlib.Path(__file__).resolve().parent\nMEMO = ROOT / 'DECISION_MEMO.md'\n\n\ndef read_memo() -> str:\n    return MEMO.read_text(encoding='utf-8') if MEMO.exists() else ''\n\n\ndef extract_section(text: str, heading: str) -> str:\n    \"\"\"Return the body of `## heading` up to the next `## ` (or end of file).\"\"\"\n    pattern = rf'^##\\s+{re.escape(heading)}\\s*$'\n    lines = text.splitlines()\n    in_section = False\n    out: list[str] = []\n    for line in lines:\n        if re.match(pattern, line):\n            in_section = True\n            continue\n        if in_section and line.startswith('## '):\n            break\n        if in_section:\n            out.append(line)\n    return '\\n'.join(out).strip()\n\n\ndef section_has_substantive_content(section: str, min_chars: int = 80) -> bool:\n    \"\"\"True if the section contains real content, not just the placeholder italics.\"\"\"\n    cleaned = re.sub(r'_\\([^)]+\\)_', '', section).strip()\n    return len(cleaned) >= min_chars\n\n\ndef section_mentions_any(section: str, keywords: Iterable[str]) -> bool:\n    lower = section.lower()\n    return any(k.lower() in lower for k in keywords)\n",
+      "tests/__init__.py": "",
+      "tests/conftest.py": "import pytest\nfrom decision_helpers import read_memo\n\n\n@pytest.fixture\ndef memo() -> str:\n    return read_memo()\n",
+      "tests/test_memo_structure.py": "import pytest\n\nfrom decision_helpers import extract_section, section_has_substantive_content\n\nREQUIRED_SECTIONS = [\n    'Recommendation',\n    \"The tradeoff I'm accepting\",\n    'Ask of each VP',\n    'Follow-up cadence',\n    'What I\\u2019m telling the CEO',\n]\n\n\n@pytest.mark.parametrize('section_heading', REQUIRED_SECTIONS)\ndef test_section_present_with_substantive_content(memo, section_heading):\n    body = extract_section(memo, section_heading)\n    assert body, f'DECISION_MEMO.md must include section: ## {section_heading}'\n    assert section_has_substantive_content(body), (\n        f'Section {section_heading!r} must contain substantive content (>=80 chars beyond the placeholder).'\n    )\n",
+      "tests/test_memo_topics.py": "import re\n\nfrom decision_helpers import extract_section, section_mentions_any\n\n\ndef test_recommendation_names_one_of_three_options(memo):\n    section = extract_section(memo, 'Recommendation').lower()\n    options = ['carepath', 'insurance gateway', 'patient portal']\n    matched = [opt for opt in options if opt in section]\n    assert len(matched) >= 1, (\n        'Recommendation must name one of: Carepath rewrite, Insurance Gateway, or Patient Portal v3.'\n    )\n    # And it should NOT punt by listing all three as 'the options'.\n    assert len(matched) <= 2, (\n        \"Recommendation must commit to ONE work item, not list all three as 'options'.\"\n    )\n\n\ndef test_tradeoff_section_names_a_specific_consequence(memo):\n    section = extract_section(memo, \"The tradeoff I'm accepting\")\n    assert section_mentions_any(section, ['churn', 'deal', 'revenue', 'pipeline', 'incident', 'on-call', 'engineer']), (\n        'Tradeoff section must name a specific business consequence (churn, deals, revenue, pipeline, incidents, on-call, engineer attrition).'\n    )\n\n\ndef test_each_vp_has_a_commit_and_accept(memo):\n    section = extract_section(memo, 'Ask of each VP').lower()\n    for vp in ['olivia', 'marco', 'priya']:\n        assert vp in section, f'Ask-of-each-VP section must address {vp.title()} by name.'\n    # And the candidate must describe BOTH a commitment and a concession\n    # for at least two VPs (the discipline the brief asks for).\n    commit_markers = len(re.findall(r'\\bcommits? to\\b', section))\n    accept_markers = len(re.findall(r'\\baccepts?\\b|\\bgives? up\\b|\\bgiving up\\b', section))\n    assert commit_markers >= 2, 'At least two VPs must have an explicit commitment.'\n    assert accept_markers >= 2, 'At least two VPs must have an explicit concession.'\n\n\ndef test_followup_cadence_names_a_trigger(memo):\n    section = extract_section(memo, 'Follow-up cadence').lower()\n    triggers = ['if', 'when', 'once', 'threshold', 'metric', 'churn rate', 'incident rate', 'deal slip']\n    assert section_mentions_any(section, triggers), (\n        'Follow-up cadence must name a trigger condition, not just a date.'\n    )\n"
+    }
+  },
+  "decision_points": [
+    {
+      "id": "which_work_ships",
+      "headline": "Which work ships in Q3.",
+      "tension": "The platform squad can ship ONE of three things this quarter. Each VP has a defensible case; each loss has a real cost. The job is to pick one, name what you're giving up, and own the call.",
+      "options": [
+        {"label": "Carepath rewrite", "summary": "Olivia's case — defuse the incident timer, retain platform engineers, lower future per-feature cost. Concedes: Sentinel/Meridian deal risk, ongoing portal churn."},
+        {"label": "Insurance Gateway", "summary": "Marco's case — $2.1M of contracted revenue lands by Sep 30, reference value compounds into Q4 pipeline. Concedes: Carepath debt keeps accruing, portal churn continues."},
+        {"label": "Patient Portal v3 reliability", "summary": "Priya's case — stop the mid-tier hospital bleed, protect the reference base Marco's pipeline depends on. Concedes: Carepath risk continues, Sentinel/Meridian renegotiation likely."}
+      ],
+      "ask": "Pick ONE and name the specific consequence you're choosing to live with. Don't list two as 'co-priorities' — that's the move the CEO explicitly said not to make.",
+      "valid_commit": "Names ONE work item to ship AND names a specific business consequence accepted (deal slip, churn count, engineer attrition risk, etc.) — not a generic 'we'll monitor'.",
+      "valid_reframes": [
+        "Argues the question is mis-framed and a phased split is the right answer (e.g. Portal session-layer hotfix concurrent with Carepath rewrite), names which option absorbs the cost, and acknowledges this requires Marco accepting the deal slip.",
+        "Argues the decision can't be made without one specific missing data point (e.g. legal exposure on Sentinel contract penalty) and names exactly who to ask and what answer changes the call — not a generic 'need more data' deflection."
+      ],
+      "anti_patterns": [
+        "Lists all three as 'priorities' or 'co-priorities'",
+        "Recommends a steering committee, working group, or 'we'll align on this with the VPs'",
+        "Pushes the decision back to the CEO with 'recommend the CEO decide based on…'",
+        "Hedges with 'depends on…' without committing"
+      ]
+    },
+    {
+      "id": "stakeholder_handling",
+      "headline": "What you're asking each VP to accept.",
+      "tension": "Two of the three VPs are going to lose this round. The CEO is delivering your call to them tomorrow. Vague language ('align on priorities') makes the CEO's job impossible; specific asks make it doable.",
+      "options": [
+        {"label": "Symmetric concessions", "summary": "Each VP commits to something AND accepts something concrete. Easier for the CEO to defend; risks horse-trading."},
+        {"label": "Loss-explicit framing", "summary": "Be explicit about which VPs are 'losing' this quarter and how they're being compensated (sequencing commitment, visible win in Q4). Most honest; politically harder."},
+        {"label": "Status-quo cover", "summary": "Frame the concessions as 'continued execution against current priorities' — less confrontational. Lower trust cost up front; risks the same fight in 4 weeks."}
+      ],
+      "ask": "Pick a framing AND show what each VP's specific 'commit / accept' lines look like. The CEO needs to be able to read your memo and know what to say to each of them.",
+      "valid_commit": "Names a framing AND writes the per-VP 'commit / accept' lines explicitly enough that the CEO could deliver them verbatim — not generic 'align with eng on the rewrite'.",
+      "valid_reframes": [
+        "Argues the per-VP framing should differ — e.g. loss-explicit with Marco (he can take it) and symmetric with Priya (she's already lost trust) — and shows the lines for each.",
+        "Argues you'd want a 1:1 with each VP BEFORE the leadership stand-up and shows what specific question you'd ask in each to land the message — names what changes about the memo based on each answer."
+      ],
+      "anti_patterns": [
+        "Generic 'communicate the decision clearly' without writing the actual lines",
+        "Asks 'what do you think Olivia would accept?' instead of stating a position",
+        "Defers the cascade to the CEO entirely ('CEO to communicate with each VP')",
+        "Treats the three VPs identically when their loss profiles differ materially"
+      ]
+    }
+  ],
+  "deliverable": {
+    "kind": "doc",
+    "primary_artifact": "DECISION_MEMO.md",
+    "submission_check": "test_runner"
+  },
+  "evaluation_rubric": {
+    "decision_commitment": {
+      "weight": 0.22,
+      "criteria": {
+        "excellent": "The memo opens with a single, named recommendation (Carepath / Insurance Gateway / Patient Portal v3) and a one-sentence defence the CEO could quote verbatim. The candidate did not hedge, did not list 'co-priorities', and did not punt the call upward. If the candidate reframed the question (e.g. argued for a phased split), the reframe is substantive and the candidate still committed to a specific sequencing.",
+        "good": "A recommendation is present but takes more than one paragraph to surface, OR the candidate names a primary work item but soft-couples a secondary as 'also critical'. The CEO could still extract the call but would have to do work to do it.",
+        "poor": "No clear recommendation, 'depends on…', a list of three options, a steering-committee proposal, or punting to the CEO. The candidate failed to make the call the brief explicitly demanded."
+      }
+    },
+    "tradeoff_articulation": {
+      "weight": 0.22,
+      "criteria": {
+        "excellent": "The tradeoff section names a SPECIFIC business consequence (deal name + dollar value at risk, named accounts likely to churn, named engineers likely to leave, specific incident pattern that will recur) and frames it as an explicit accepted exposure — not a hedge, not a 'we'll monitor'. The candidate's tradeoff matches the recommendation (e.g. if they picked Carepath, the tradeoff names Sentinel/Meridian and Riverside/Northside by name).",
+        "good": "A tradeoff is named but uses general categories ('some deal slippage', 'continued portal complaints') rather than the specific deal/account/incident references available in the briefs.",
+        "poor": "Tradeoff is missing, vague ('there are tradeoffs to manage'), or describes how the candidate will 'mitigate' the tradeoff rather than accepting it. The senior-PM signal is naming what you're choosing to expose; this answer ducks that."
+      }
+    },
+    "stakeholder_fluency": {
+      "weight": 0.20,
+      "criteria": {
+        "excellent": "Each VP has both a specific commitment AND a specific concession written in language the CEO could deliver verbatim. The asks are calibrated to each VP's stated position (e.g. uses Marco's '2-week buffer' offer, Priya's 'phased portal fix' opening, Olivia's 'hotfix-only Portal stream' opening). The candidate is reading the briefs, not just acknowledging the names.",
+        "good": "Each VP is addressed by name with a commit/accept but at least one is generic enough that the CEO would have to translate it ('Marco commits to working with eng on Gateway sequencing').",
+        "poor": "VPs treated identically, named without specific asks, or the section devolves into 'recommend the CEO meet with each VP to align'. The candidate did not do the political work the brief asked for."
+      }
+    },
+    "operational_clarity": {
+      "weight": 0.16,
+      "criteria": {
+        "excellent": "The follow-up cadence names a specific TRIGGER condition (a metric, a threshold, an event) that would re-open the decision mid-quarter — not a calendar date. The 'what I'm telling the CEO' bullets are decision-led and quotable, not status-led. The memo is one page; nothing in it is filler.",
+        "good": "Cadence is present but mixed ('monthly review plus we'll re-evaluate if Sentinel slips'); CEO bullets are clear but include some status language.",
+        "poor": "Cadence is a date ('let's review at end of August'), the CEO bullets are status updates not decisions, or the memo is bloated past one page with context the CEO doesn't need."
+      }
+    },
+    "design_decisions_articulated": {
+      "weight": 0.20,
+      "grader": "interrogation_outcome"
+    }
+  },
+  "expected_candidate_journey": {
+    "phase_one_read": [
+      "Reads ENG_BRIEF.md, SALES_BRIEF.md, CS_BRIEF.md, cohorts/cohort_summary.md, incidents/carepath_incidents.md before drafting anything.",
+      "Engages substantively with Claude's opener: names a working hypothesis for which work ships AND a specific VP cascade.",
+      "Notices the data signals the briefs hide in plain sight — e.g. Marco's 64% pipeline-via-references stat, Olivia's zero customer-visible incidents, Priya's identical pattern to Riverside in 7 at-risk accounts."
+    ],
+    "phase_two_draft": [
+      "Drafts the Recommendation paragraph FIRST, the tradeoff SECOND, then the VP asks. Order matters: tradeoff calibrates to the recommendation, asks calibrate to both.",
+      "Uses Claude as a sparring partner for the political language of the VP asks, not as a delegate to write the recommendation.",
+      "Runs `pytest -q` and sees which structural sections are missing or thin."
+    ],
+    "phase_three_pressure_test": [
+      "Stress-tests the recommendation: if Sentinel walks, does the call still stand? If Riverside is replaced by an enterprise account, does it still stand?",
+      "Tightens the cadence to a trigger (a metric + threshold), not a date.",
+      "Closes with three CEO bullets that lead with the decision."
+    ]
+  },
+  "interviewer_signals": {
+    "strong_positive": [
+      "Names ONE work item to ship in the first paragraph of the memo.",
+      "Tradeoff cites at least one named entity from the briefs (Sentinel, Meridian, Riverside, Northside, or a specific Carepath incident pattern).",
+      "Per-VP asks read like lines the CEO would actually use — quotable, specific, calibrated to each VP's stated openings.",
+      "Reframes the question substantively when warranted (phased split, missing data, etc.) and STILL commits to a specific sequencing — does not use the reframe as an escape from the decision."
+    ],
+    "red_flags": [
+      "Recommends a steering committee, working group, or 'CEO to decide'.",
+      "Lists all three work items as 'priorities' or 'co-priorities'.",
+      "Per-VP asks devolve into 'communicate decision' or 'align with each VP'.",
+      "Tradeoff section talks about mitigation, not exposure.",
+      "Cadence is a calendar date ('review monthly') rather than a trigger condition.",
+      "Memo over a page, padded with framing the CEO already has."
+    ]
+  },
+  "scoring_hints": {
+    "calibration": "Senior PMs commit. Junior PMs list options. This task is designed so the option-listing answer is the easy, plausible-looking move — and the rubric is calibrated to penalise it.",
+    "common_failure_modes": [
+      "Candidate writes a beautiful status memo that never picks.",
+      "Candidate picks a work item but uses 'we will mitigate the tradeoff' language — failing to ACCEPT exposure.",
+      "Candidate addresses VPs generically because they didn't engage with each brief's specific openings."
+    ]
+  },
+  "test_runner": {
+    "command": "./.venv/bin/python -m pytest -q --tb=short",
+    "working_dir": "/workspace/falcon-product-decision",
+    "parse_pattern": "(?P<passed>\\d+) passed|(?P<failed>\\d+) failed",
+    "timeout_seconds": 90
+  },
+  "workspace_bootstrap": {
+    "commands": [
+      "python3 -m venv .venv",
+      "./.venv/bin/pip install -r requirements.txt"
+    ],
+    "working_dir": "/workspace/falcon-product-decision",
+    "timeout_seconds": 180,
+    "must_succeed": true
+  },
+  "role_alignment": {
+    "source_user_email": "sampatel@deeplight.ae",
+    "source_role_name": "Head of Product (pilot)",
+    "source_role_identifier": "deeplight_head_of_product_pilot",
+    "captured_at": "2026-06-01T00:00:00Z",
+    "must_cover": [
+      "Pick a single work item under ambiguous, defensible competing-stakeholder pressure and articulate the accepted tradeoff in the candidate's own words.",
+      "Translate three different VP positions into per-VP commitment/concession lines that the CEO can deliver without re-translation.",
+      "Surface and challenge a brief's implicit framing when the question is malformed (e.g. propose a phased split if defensible), without using the reframe as an escape from committing.",
+      "Write a decision memo, not a status doc — one page, decision-led, no filler.",
+      "Express follow-up as a trigger condition (metric + threshold) rather than a calendar date."
+    ],
+    "must_not_cover": [
+      "No code is required. The candidate should NOT be expected to write Python, SQL, or any executable artifact.",
+      "No product-strategy framework citations (RICE, ICE, etc.). Senior PMs do not quote frameworks at the CEO; they make calls.",
+      "No deck or slide-style deliverables. The CEO asked for a memo."
+    ],
+    "jd_to_signal_map": [
+      {
+        "job_requirement": "Make defensible prioritisation calls under conflicting executive pressure and own the tradeoff.",
+        "task_artifact": "DECISION_MEMO.md 'Recommendation' + 'The tradeoff I'm accepting' sections — must name one work item and accept a specific named exposure.",
+        "rubric_dimension": "decision_commitment"
+      },
+      {
+        "job_requirement": "Articulate tradeoffs explicitly in business terms (revenue, churn, retention, attrition) rather than abstract risk language.",
+        "task_artifact": "DECISION_MEMO.md 'The tradeoff I'm accepting' section — must reference specific named accounts/deals/incidents from the briefs.",
+        "rubric_dimension": "tradeoff_articulation"
+      },
+      {
+        "job_requirement": "Translate exec stakeholder positions into actionable commitments the CEO can deliver in a leadership forum.",
+        "task_artifact": "DECISION_MEMO.md 'Ask of each VP' section — per-VP commit/accept lines calibrated to each brief.",
+        "rubric_dimension": "stakeholder_fluency"
+      },
+      {
+        "job_requirement": "Write decision-led, one-page memos that a CEO can quote directly — no padding, no status framing.",
+        "task_artifact": "DECISION_MEMO.md 'What I'm telling the CEO' bullets + 'Follow-up cadence' — quotable, trigger-driven, not date-driven.",
+        "rubric_dimension": "operational_clarity"
+      },
+      {
+        "job_requirement": "Engage substantively with the hard design decisions a product role demands — committing to a choice, naming the cost, accepting senior-engineer reframes when the question is malformed.",
+        "task_artifact": "Chat transcript — opener decision_points (which_work_ships, stakeholder_handling) must reach commit or reframe.",
+        "rubric_dimension": "design_decisions_articulated"
+      }
+    ]
+  },
+  "human_testing_checklist": {
+    "candidate_clarity": true,
+    "repo_boot_ok": true,
+    "tests_collect_ok": true,
+    "baseline_failures_meaningful": true,
+    "rubric_matches_role": true,
+    "timebox_realistic": true
+  }
+}
