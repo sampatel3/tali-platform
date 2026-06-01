@@ -249,6 +249,7 @@ def pairwise_score(
     candidate: AnchorCandidate,
     anchors: Sequence[AnchorCandidate],
     client=None,
+    organization_id: int | None = None,
 ) -> PairwiseResult:
     """Score ``candidate`` against ``anchors`` via Bradley-Terry MLE.
 
@@ -271,7 +272,7 @@ def pairwise_score(
     if client is None:
         from .runner import _resolve_anthropic_client
 
-        client = _resolve_anthropic_client()
+        client = _resolve_anthropic_client(organization_id=organization_id)
 
     pair_counts: dict[tuple[str, str], int] = {}
     wins: dict[tuple[str, str], int] = {}
