@@ -11,7 +11,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from ...agent_runtime import budget_guard
@@ -93,7 +93,15 @@ def role_usage_breakdown(
         db.query(
             UsageEvent.feature,
             func.coalesce(func.sum(UsageEvent.credits_charged), 0).label("cost_micro"),
-            func.coalesce(func.sum(UsageEvent.cost_usd_micro), 0).label("raw_micro"),
+            # raw Anthropic cost EXCLUDES cache hits (no Anthropic call ⇒ $0
+            # real cost); the cache fee stays in credits above so margin counts
+            # it as margin. See budget_guard.month_to_date_raw_cost_cents.
+            func.coalesce(
+                func.sum(
+                    case((UsageEvent.cache_hit == 0, UsageEvent.cost_usd_micro), else_=0)
+                ),
+                0,
+            ).label("raw_micro"),
             func.count(UsageEvent.id).label("event_count"),
         )
         .filter(

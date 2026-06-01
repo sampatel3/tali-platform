@@ -29,7 +29,7 @@ from ...services.pricing_service import (
 )
 from ...services.usage_metering_service import usage_summary as _usage_summary
 from ...services.anthropic_reconciliation_service import reconcile_recent
-from sqlalchemy import func
+from sqlalchemy import case, func
 
 router = APIRouter(prefix="/billing", tags=["Billing"])
 
@@ -493,7 +493,14 @@ def get_usage_timeseries(
             func.coalesce(
                 func.sum(UsageEvent.cache_creation_tokens), 0
             ).label("cache_creation_tokens"),
-            func.coalesce(func.sum(UsageEvent.cost_usd_micro), 0).label("cost_usd_micro"),
+            # raw Anthropic cost EXCLUDES cache hits (no call ⇒ $0); credits
+            # keep the cache fee.
+            func.coalesce(
+                func.sum(
+                    case((UsageEvent.cache_hit == 0, UsageEvent.cost_usd_micro), else_=0)
+                ),
+                0,
+            ).label("cost_usd_micro"),
             func.coalesce(func.sum(UsageEvent.credits_charged), 0).label("credits_charged"),
         )
         .filter(
