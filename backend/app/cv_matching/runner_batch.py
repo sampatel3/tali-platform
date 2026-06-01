@@ -119,12 +119,20 @@ def submit_cv_match_batch(
     *,
     client=None,
     skip_cache: bool = False,
+    organization_id: int | None = None,
 ) -> BatchSubmission:
     """Render prompts and submit the un-cached jobs to the Batches API.
 
     Local DB cache is consulted first; hits are returned immediately in
     ``submission.cached_results`` and never touch the API. Misses are
     bundled into one batch request.
+
+    ``organization_id`` routes the batch through that org's workspace key when
+    per-org routing is enabled. A batch goes through ONE key, so pass this ONLY
+    for a single-org batch; a multi-org batch (jobs spanning orgs, tracked
+    per-job via ``metering_by_custom_id``) must omit it and stay on the shared
+    key until per-org batch SPLITTING exists. Internal per-job attribution is
+    unaffected either way.
     """
     job_list = list(jobs)
     if not job_list:
@@ -149,7 +157,7 @@ def submit_cv_match_batch(
         seen_ids.add(job.custom_id)
 
     if client is None:
-        client = _resolve_anthropic_client()
+        client = _resolve_anthropic_client(organization_id=organization_id)
 
     from . import cache as cache_module
 
@@ -410,6 +418,7 @@ def retrieve_cv_match_batch(
     *,
     client=None,
     skip_cache: bool = False,
+    organization_id: int | None = None,
 ) -> tuple[BatchStatus, dict[str, CVMatchOutput]]:
     """Poll batch status; if ended, parse + validate + persist every result.
 
@@ -424,7 +433,7 @@ def retrieve_cv_match_batch(
         return "ended", dict(submission.cached_results)
 
     if client is None:
-        client = _resolve_anthropic_client()
+        client = _resolve_anthropic_client(organization_id=organization_id)
 
     batch = client.messages.batches.retrieve(submission.batch_id)
     if batch.processing_status != "ended":
@@ -585,6 +594,7 @@ def run_cv_match_batch(
     skip_cache: bool = False,
     poll_interval: float = 60.0,
     timeout: float | None = 24 * 60 * 60.0,
+    organization_id: int | None = None,
 ) -> dict[str, CVMatchOutput]:
     """Submit + block-poll + retrieve. Returns the full results map.
 
@@ -592,18 +602,23 @@ def run_cv_match_batch(
     ``timeout`` caps total wait (default 24h, matching the API SLA).
     Returns whatever results are available if the timeout fires before
     the batch ends — caller should inspect ``scoring_status`` per entry.
+
+    ``organization_id`` — single-org batches only; see ``submit_cv_match_batch``.
     """
     if client is None:
-        client = _resolve_anthropic_client()
+        client = _resolve_anthropic_client(organization_id=organization_id)
 
-    submission = submit_cv_match_batch(jobs, client=client, skip_cache=skip_cache)
+    submission = submit_cv_match_batch(
+        jobs, client=client, skip_cache=skip_cache, organization_id=organization_id
+    )
     if submission.batch_id is None:
         return submission.cached_results
 
     deadline = (time.monotonic() + timeout) if timeout else None
     while True:
         status, results = retrieve_cv_match_batch(
-            submission, client=client, skip_cache=skip_cache
+            submission, client=client, skip_cache=skip_cache,
+            organization_id=organization_id,
         )
         if status == "ended":
             return results
