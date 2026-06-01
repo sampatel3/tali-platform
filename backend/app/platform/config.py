@@ -130,12 +130,13 @@ class Settings(BaseSettings):
     # billed cost directly through mainspring's vendored seam (the single source
     # of truth). The pre-cutover shadow comparator + its MAINSPRING_METERING_SHADOW
     # flag have been retired now that the seam is the live pricer.
-    # ADR-0010 decision-policy convergence (cut #2): when True, every policy
-    # verdict is ALSO re-derived through mainspring's vendored deterministic
-    # PolicyEngine (a DomainSpec translated from the tali DecisionPolicyRow) and
-    # a verdict agreement/disagreement diff is logged (log-only, no behaviour
-    # change) — the at-parity evidence before any cutover. Default OFF.
-    MAINSPRING_POLICY_SHADOW: bool = False
+    # ADR-0010 decision-policy convergence: CUT OVER. The verdict cascade is now
+    # PRODUCED by mainspring's vendored deterministic PolicyEngine
+    # (evaluate_decision_points) via decision_policy/mainspring_engine.py — net-
+    # zero behaviour change on decision_type (proved by the parity corpus in
+    # tests/decision_policy/test_engine_mainspring_parity.py). The log-only
+    # MAINSPRING_POLICY_SHADOW flag + its shadow comparator were removed once
+    # parity was proven. (historical)
     # ADR-0010 convergence (cut #3, promotion gate): CUT OVER. The gate now
     # composes its AND-decision via mainspring's vendored gate seam unconditionally
     # (decision_policy/promotion_gate.py); the log-only MAINSPRING_GATE_SHADOW flag

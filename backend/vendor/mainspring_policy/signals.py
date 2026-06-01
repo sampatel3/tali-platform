@@ -1,17 +1,8 @@
-"""Signal producers — the pluggable "sub-agents" that score an entity.
+"""VENDORED from mainspring (ADR-0010, decision-policy). DO NOT EDIT BY HAND.
 
-A :class:`SignalProducer` turns an entity into one or more named
-:class:`Signal` values with confidences. A producer can be anything: a
-deterministic calculator (debt-to-income ratio), an API call (a KYC
-vendor), a classical ML model, or an LLM scorer. The framework only cares
-about the :class:`Signal` shape it returns.
-
-Producers are intentionally dumb about each other — each is independent, so
-the runtime can run them in any order (or in parallel) and compose the
-results. Disagreement *between* producers is what the policy layer later
-turns into an escalation.
-"""
-
+Assembled flat from mainspring/spec/signal_types.py (pure types) +
+mainspring/governance/signals.py (gather_signals). Re-vendor via
+backend/scripts/vendor_mainspring_policy.sh."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -19,7 +10,6 @@ from typing import Any, Protocol, runtime_checkable
 
 from .budget import BudgetGovernor
 from .pipeline import Entity
-
 
 @dataclass
 class Signal:

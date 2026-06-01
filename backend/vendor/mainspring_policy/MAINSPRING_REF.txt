@@ -1,12 +1,9 @@
-mainspring master @ fa03ca7
-Files: core/policy.py, core/signals.py, core/budget.py, core/pipeline.py
-       (the ORM-free deterministic PolicyEngine + its pure deps — zero
-       sqlalchemy/Session imports; verified ORM-free at vendor time).
-
-The shadow comparator (ADR-0010 cut #2, decision-policy) only needs
-PolicyEngine/Rule/Verdict from policy.py and SignalBundle/Signal from
-signals.py. policy.py imports SignalBundle from signals.py, and signals.py
-imports BudgetGovernor/Entity from budget.py/pipeline.py, so all four are
-vendored verbatim to keep the relative imports intact (no hand edits).
-
-Re-vendor: bash backend/scripts/vendor_mainspring_policy.sh
+mainspring @ e7ffa22
+Assembled flat (post-carve) from:
+  spec/policy_types.py + governance/policy.py   -> policy.py
+  spec/signal_types.py + governance/signals.py  -> signals.py
+  governance/budget.py                          -> budget.py
+  spec/pipeline.py                              -> pipeline.py
+(ORM-free deterministic PolicyEngine + weighted decision-point cascade
+ + its pure deps. Cross-layer imports rewritten to local relative ones.)
+Re-vendor: MAINSPRING_DIR=... bash backend/scripts/vendor_mainspring_policy.sh
