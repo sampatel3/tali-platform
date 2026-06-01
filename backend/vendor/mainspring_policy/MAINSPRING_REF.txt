@@ -1,4 +1,4 @@
-mainspring @ e7ffa22
+mainspring @ ec93dd7
 Assembled flat (post-carve) from:
   spec/policy_types.py + governance/policy.py   -> policy.py
   spec/signal_types.py + governance/signals.py  -> signals.py
