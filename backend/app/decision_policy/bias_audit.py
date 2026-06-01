@@ -25,9 +25,14 @@ from typing import Sequence
 
 from sqlalchemy.orm import Session
 
+from vendor.mainspring_bias.seam import (
+    SegmentMetrics,
+    BiasThresholds as SeamBiasThresholds,
+    pairwise_fairness_verdict,
+)
+
 from ..models.policy_version import PolicyVersion
 from ..models.promotion_gate import BiasAuditResult
-from ..services.mainspring_bias_shadow import shadow_compare as bias_shadow_compare
 from .fitted_policy import FittedModel, apply_calibration, predict_proba_with_model
 
 
@@ -142,6 +147,14 @@ def audit(
 
     Returns ``(metrics_json, violations_list)``. ``violations_list``
     is empty iff the audit passes.
+
+    ADR-0010 cut #4 CUTOVER: tali still computes the per-segment metrics
+    (selection / outcome / calibration rates) here, but the fairness VERDICT
+    (the EEOC 4/5ths pairwise disparate-impact test + the three parity gaps) is
+    delegated to mainspring's vendored bias seam
+    (:func:`pairwise_fairness_verdict`) — the same pure rule, now owned by the
+    substrate. The verdict is byte-identical to tali's prior inline logic (locked
+    by ``test_bias_seam_parity.py``); only its location moves.
     """
     if not examples:
         return ({}, [{"reason": "audit_set_empty", "severity": "blocker"}])
@@ -150,9 +163,9 @@ def audit(
     preds = [predict_proba_with_model(model, ex.features) for ex in examples]
     labels = [ex.label for ex in examples]
 
-    metrics: dict = {}
-    violations: list[dict] = []
-
+    # Compute per-attribute, per-segment metrics (UNCHANGED). The verdict over
+    # these metrics is then rendered by the vendored seam.
+    metrics_by_attr: dict[str, list[SegmentMetrics]] = {}
     for attr in thresholds.protected_attributes:
         # Group examples by segment value for this attribute.
         groups: dict[str, list[int]] = {}
@@ -161,67 +174,31 @@ def audit(
             if seg is None:
                 continue
             groups.setdefault(seg, []).append(i)
-        if len(groups) < 2:
-            # Can't measure parity without at least 2 segments. Record
-            # the gap and move on — not a blocking violation.
-            metrics[attr] = {"status": "insufficient_segments", "segments": list(groups.keys())}
-            continue
-
-        seg_summary: dict[str, dict] = {}
+        seg_list: list[SegmentMetrics] = []
         for seg, idxs in groups.items():
             seg_preds = [preds[i] for i in idxs]
             seg_labels = [labels[i] for i in idxs]
-            seg_summary[seg] = {
-                "n": len(idxs),
-                "selection_rate": _selection_rate(seg_preds),
-                "hire_rate": _hire_rate(seg_labels),
-                "ece": _ece(seg_preds, seg_labels),
-            }
-        metrics[attr] = seg_summary
+            seg_list.append(SegmentMetrics(
+                segment=seg,
+                n=len(idxs),
+                selection_rate=_selection_rate(seg_preds),
+                hire_rate=_hire_rate(seg_labels),
+                ece=_ece(seg_preds, seg_labels),
+            ))
+        metrics_by_attr[attr] = seg_list
 
-        # Pairwise comparisons.
-        seg_names = list(groups.keys())
-        for i, a in enumerate(seg_names):
-            for b in seg_names[i + 1 :]:
-                ra = seg_summary[a]["selection_rate"] or 1e-9
-                rb = seg_summary[b]["selection_rate"] or 1e-9
-                dir_ratio = min(ra, rb) / max(ra, rb)
-                if dir_ratio < thresholds.disparate_impact_ratio_min:
-                    violations.append({
-                        "attr": attr,
-                        "kind": "disparate_impact",
-                        "segments": [a, b],
-                        "observed": dir_ratio,
-                        "threshold": thresholds.disparate_impact_ratio_min,
-                    })
-                sel_gap = abs(ra - rb)
-                if sel_gap > thresholds.selection_rate_parity_max_gap:
-                    violations.append({
-                        "attr": attr,
-                        "kind": "selection_rate_gap",
-                        "segments": [a, b],
-                        "observed": sel_gap,
-                        "threshold": thresholds.selection_rate_parity_max_gap,
-                    })
-                hire_gap = abs(seg_summary[a]["hire_rate"] - seg_summary[b]["hire_rate"])
-                if hire_gap > thresholds.outcome_parity_max_gap:
-                    violations.append({
-                        "attr": attr,
-                        "kind": "outcome_gap",
-                        "segments": [a, b],
-                        "observed": hire_gap,
-                        "threshold": thresholds.outcome_parity_max_gap,
-                    })
-                ece_gap = abs(seg_summary[a]["ece"] - seg_summary[b]["ece"])
-                if ece_gap > thresholds.calibration_parity_max_gap:
-                    violations.append({
-                        "attr": attr,
-                        "kind": "calibration_gap",
-                        "segments": [a, b],
-                        "observed": ece_gap,
-                        "threshold": thresholds.calibration_parity_max_gap,
-                    })
-
+    seam_thresholds = SeamBiasThresholds(
+        disparate_impact_ratio_min=thresholds.disparate_impact_ratio_min,
+        selection_rate_parity_max_gap=thresholds.selection_rate_parity_max_gap,
+        outcome_parity_max_gap=thresholds.outcome_parity_max_gap,
+        calibration_parity_max_gap=thresholds.calibration_parity_max_gap,
+        protected_attributes=tuple(thresholds.protected_attributes),
+    )
+    metrics, violations = pairwise_fairness_verdict(
+        metrics_by_attr=metrics_by_attr,
+        thresholds=seam_thresholds,
+        protected_attributes=list(thresholds.protected_attributes),
+    )
     return metrics, violations
 
 
@@ -234,17 +211,11 @@ def write_audit_result(
     thresholds: BiasThresholds | None = None,
 ) -> BiasAuditResult:
     thr = thresholds or load_thresholds()
+    # ADR-0010 cut #4 CUTOVER: the verdict is now mainspring's vendored bias seam
+    # (delegated inside ``audit`` via ``pairwise_fairness_verdict``). The shadow
+    # comparator + ``MAINSPRING_BIAS_SHADOW`` flag were removed once parity was
+    # proven (see ``test_bias_seam_parity.py``); the substrate now IS the verdict.
     metrics, violations = audit(model=model, examples=examples, thresholds=thr)
-    # ADR-0010 cut #4: shadow-score the same per-group selection rates through
-    # mainspring's vendored bias seam and log whether the fairness verdicts agree.
-    # No-op unless MAINSPRING_BIAS_SHADOW is set; never raises — must not affect
-    # the live audit / promotion gate.
-    bias_shadow_compare(
-        candidate_id=int(policy_version.id),
-        tali_passed=len(violations) == 0,
-        tali_metrics=metrics,
-        tali_violations=violations,
-    )
     row = BiasAuditResult(
         policy_version_id=int(policy_version.id),
         metrics_json=metrics,
