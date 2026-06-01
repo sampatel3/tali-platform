@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import time
+from contextlib import contextmanager
 from typing import Any, Iterable
 
 from . import client as graph_client
@@ -42,6 +43,34 @@ DEFAULT_SEARCH_LIMIT = 50
 # pipeline events) is not silently clipped in the graph view.
 SUBGRAPH_LIMIT = 500
 NEIGHBOURHOOD_LIMIT = 60
+
+
+@contextmanager
+def _attribute_search(organization_id: int, label: str):
+    """Set ``graph_metering_ctx`` around a ``graphiti.search`` call so the
+    Voyage query-embed (and any Anthropic call) it makes inside the Graphiti
+    loop is attributed to the org — propagated onto the loop thread by
+    ``run_async``'s copy_context. Without this, search-time embeds land in
+    call_log with organization_id=NULL (reconcilable but un-attributed).
+
+    Tagged ``graph_search:<label>`` in metadata so search spend is
+    distinguishable from graph_sync indexing in the usage breakdown.
+    """
+    from ..services.metered_async_anthropic_client import (
+        GraphMeteringContext,
+        graph_metering_ctx,
+    )
+
+    token = graph_metering_ctx.set(
+        GraphMeteringContext(
+            organization_id=int(organization_id),
+            episode_name=f"graph_search:{label}",
+        )
+    )
+    try:
+        yield
+    finally:
+        graph_metering_ctx.reset(token)
 
 
 def _query_for_predicate(predicate: GraphPredicate) -> str:
@@ -72,9 +101,10 @@ def candidate_ids_for_predicate(
     group_id = graph_client.group_id_for_org(organization_id)
     query = _query_for_predicate(predicate)
     try:
-        results = graph_client.run_async(
-            graphiti.search(query=query, group_ids=[group_id], num_results=DEFAULT_SEARCH_LIMIT)
-        )
+        with _attribute_search(organization_id, "predicate"):
+            results = graph_client.run_async(
+                graphiti.search(query=query, group_ids=[group_id], num_results=DEFAULT_SEARCH_LIMIT)
+            )
     except Exception as exc:
         logger.warning("Graphiti search failed for predicate=%s: %s", predicate, exc)
         return set()
@@ -449,13 +479,14 @@ def colleague_neighbourhood(
     graphiti = graph_client.get_graphiti()
     group_id = graph_client.group_id_for_org(organization_id)
     try:
-        results = graph_client.run_async(
-            graphiti.search(
-                query=f"work history, education, and colleagues of candidate {candidate_id}",
-                group_ids=[group_id],
-                num_results=NEIGHBOURHOOD_LIMIT,
+        with _attribute_search(organization_id, "neighbourhood"):
+            results = graph_client.run_async(
+                graphiti.search(
+                    query=f"work history, education, and colleagues of candidate {candidate_id}",
+                    group_ids=[group_id],
+                    num_results=NEIGHBOURHOOD_LIMIT,
+                )
             )
-        )
     except Exception as exc:
         logger.warning("colleague_neighbourhood failed: %s", exc)
         return {"companies": [], "schools": [], "skills": []}
