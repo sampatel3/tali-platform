@@ -118,17 +118,20 @@ html[data-theme="dark"] {
     font-feature-settings: "ss01", "cv11";
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    /* Sam's stated preference (2026-06-01): the whole site should
-       read as if at 80% browser zoom by default. Earlier attempts:
-       (a) ``zoom: 0.85`` broke viewport math; (b) ``html { font-size:
-       14px }`` only scaled rem things, leaving px-explicit components
-       at full size. ``zoom: 0.8`` here is the only mechanism that
-       gives uniform scale across BOTH rem and px sizes — the
-       trade-off is viewport-unit math has to compensate explicitly
-       (see ``AssessmentWorkspace.jsx`` max-h, calc(125dvh - X) where
-       X is the pre-zoom header reserve). Affects all browsers
-       (Firefox since 126). */
-    zoom: 0.8;
+    /* No global zoom or root font-size scale. Several attempts to
+       bake Sam's 80% browser-zoom preference into the page broke
+       different things each time:
+       - ``zoom: 0.85`` and ``zoom: 0.8``: broke any page sized to
+         100vh/100dvh — login, demo-lead, etc. rendered at 80vh and
+         left empty viewport below.
+       - ``html { font-size: 14px }``: only scaled rem-based sizes;
+         px-explicit Tailwind classes (which most of the assessment
+         runtime uses) stayed full size, leading to uneven density.
+       The honest answer: there isn't a global scale mechanism that
+       composes cleanly with viewport-unit layouts. Sam's manual
+       browser-zoom to 80% is the right user-side choice; the site
+       renders at native scale and ships per-surface density passes
+       where the chrome reads too heavy (the chat already got one). */
   }
 
   a {
