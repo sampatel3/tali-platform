@@ -1,10 +1,26 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FileSearch, MessageSquare, Wrench } from 'lucide-react';
+import { Activity, FileSearch, MessageSquare, Wrench } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
 import { assessments } from '../../shared/api';
 
 const MESSAGE_BUFFER_LIMIT = 30;
+
+// Compact token-count formatter (12000 → "12.0k", 8 → "8"). Used in
+// the token-tracker pill so the candidate sees activity without a
+// big four-digit number stealing focus.
+const formatTokenCount = (n) => {
+  const safe = Math.max(0, Number(n) || 0);
+  if (safe < 1000) return String(Math.round(safe));
+  return `${(safe / 1000).toFixed(safe < 10_000 ? 1 : 0)}k`;
+};
+
+const formatCostUsd = (usd) => {
+  const safe = Math.max(0, Number(usd) || 0);
+  // Always two decimals so the pill width stays stable as the number
+  // ticks up; <$0.01 still shows $0.00 (we don't want $0.005, etc.).
+  return `$${safe.toFixed(2)}`;
+};
 
 const MARKDOWN_COMPONENTS = {
   p: ({ children }) => (
@@ -162,6 +178,27 @@ export const AssessmentClaudeChat = ({
 
   const isBudgetExhausted = Boolean(claudeBudget?.enabled && claudeBudget?.is_exhausted);
 
+  // Token tracker: persistent pill showing tokens used + USD spent.
+  // Highlights briefly when the value ticks up so the candidate sees
+  // confirmation that their message landed and was costed. Sam wanted
+  // this as a "shows the system is working" signal — same data the
+  // workspace top-bar budget chip uses, just framed as accumulation
+  // (used) rather than depletion (remaining).
+  const tokensUsed = Number(claudeBudget?.tokens_used || 0);
+  const usedUsd = Number(claudeBudget?.used_usd || 0);
+  const [trackerHighlight, setTrackerHighlight] = useState(false);
+  const prevTokensRef = useRef(tokensUsed);
+  useEffect(() => {
+    if (tokensUsed > prevTokensRef.current) {
+      setTrackerHighlight(true);
+      const t = setTimeout(() => setTrackerHighlight(false), 900);
+      prevTokensRef.current = tokensUsed;
+      return () => clearTimeout(t);
+    }
+    prevTokensRef.current = tokensUsed;
+    return undefined;
+  }, [tokensUsed]);
+
   const trimmedInput = inputValue.trim();
   const canSend = trimmedInput.length > 0 && !pending && !disabled && !isBudgetExhausted && Boolean(assessmentId) && Boolean(token);
 
@@ -274,6 +311,35 @@ export const AssessmentClaudeChat = ({
       className="flex h-full min-h-0 flex-col rounded-[var(--radius-lg)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)]"
       data-testid="assessment-claude-chat"
     >
+      {/* Token tracker. Always visible so the candidate has a persistent
+          read on accumulating spend; pulses briefly after each Claude
+          response so they SEE the system ticking. Data comes from the
+          same claude_budget snapshot the workspace top-bar uses. */}
+      <div
+        className={`flex items-center justify-between gap-3 border-b border-[var(--taali-runtime-border)] px-5 py-2.5 font-mono text-[11px] transition-colors duration-700 ${
+          trackerHighlight
+            ? 'bg-[var(--purple-soft)] text-[var(--purple)]'
+            : 'text-[var(--mute)]'
+        }`}
+        data-testid="assessment-claude-chat-token-tracker"
+      >
+        <div className="flex items-center gap-2">
+          <Activity size={12} className={trackerHighlight ? 'animate-pulse' : ''} />
+          <span style={{ letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+            Session
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          <span data-testid="token-tracker-tokens">
+            {formatTokenCount(tokensUsed)} tokens
+          </span>
+          <span aria-hidden="true">·</span>
+          <span data-testid="token-tracker-usd">
+            {formatCostUsd(usedUsd)}
+          </span>
+        </div>
+      </div>
+
       <div
         ref={listRef}
         className="min-h-0 flex-1 overflow-y-auto px-5 py-5"

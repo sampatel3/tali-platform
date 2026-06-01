@@ -340,11 +340,14 @@ class TestClassifyResponse:
             "severity": {"status": "reframe", "rationale": "ask finance first"},
         }
         assert outcome.error is None
-        # Metering metadata pinned: sub_feature must match the platform
-        # invariant so usage events are attributable.
+        # Metering shape pinned: MeteredAnthropicClient only persists
+        # metering["metadata"] onto the UsageEvent row's metadata
+        # column. ``sub_feature`` MUST live inside that nested dict —
+        # at the top level it gets silently dropped (the bug fixed
+        # 2026-06-01).
         call_kwargs = client.messages.create.call_args.kwargs
-        assert call_kwargs["metering"]["sub_feature"] == "interrogation_classifier"
         assert call_kwargs["metering"]["organization_id"] == 42
+        assert call_kwargs["metering"]["metadata"]["sub_feature"] == "interrogation_classifier"
 
     @patch("app.components.assessments.interrogation.Anthropic")
     @patch("app.components.assessments.interrogation.MeteredAnthropicClient")

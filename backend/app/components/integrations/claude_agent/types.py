@@ -45,3 +45,10 @@ class ChatTurn:
     total_cost_usd: float = 0.0
     num_turns: int = 0
     stop_reason: str | None = None
+    # Model alias used for this chat turn. Persisted onto the ai_prompts
+    # record so candidate-budget pricing stays model-aware after future
+    # model swaps (claude_budget.summarize_prompt_usage walks records
+    # and prices each turn against its model). Defaults to empty string
+    # when the SDK doesn't report one — the budget code falls back to
+    # the chat-path default (Haiku 4.5).
+    model: str = ""

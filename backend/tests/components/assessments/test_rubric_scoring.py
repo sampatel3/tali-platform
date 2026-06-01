@@ -257,14 +257,18 @@ def test_grade_dimension_threads_metering_kwargs(
     scorer = RubricScorer(api_key="sk-fake", organization_id=42, assessment_id=99)
     scorer.grade_dimension("framework_assessment", {}, sample_artifacts)
 
+    # Metering shape: MeteredAnthropicClient only persists keys from
+    # metering["metadata"] onto the UsageEvent row. ``sub_feature`` /
+    # ``dimension`` / ``assessment_id`` MUST ride inside the nested
+    # metadata dict (was top-level; fixed 2026-06-01).
     call = patched_metered_client["calls"][0]
     assert "metering" in call
     meta = call["metering"]
     assert meta["feature"] == "assessment"
-    assert meta["sub_feature"] == "rubric_scoring"
     assert meta["organization_id"] == 42
-    assert meta["dimension"] == "framework_assessment"
     assert meta["entity_id"] == "assessment:99"
+    assert meta["metadata"]["sub_feature"] == "rubric_scoring"
+    assert meta["metadata"]["dimension"] == "framework_assessment"
 
 
 # ---- RubricScorer.grade_rubric (aggregation) -------------------------------
