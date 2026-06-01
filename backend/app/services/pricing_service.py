@@ -96,6 +96,38 @@ def _resolve_model_rates(model: Optional[str]) -> tuple[Decimal, Decimal]:
     )
 
 
+# Voyage AI embedding rates ($ per 1M tokens). Anthropic has no embeddings API
+# and recommends Voyage; Graphiti uses it for the knowledge-graph vector layer
+# (the LLM extraction stays on Anthropic/Haiku, already metered). Embeddings
+# bill on INPUT tokens ONLY — no output, no cache, no service tier. Numerically
+# $X per 1M tokens == X micro-USD per token, so cost_usd_micro = tokens * rate.
+_VOYAGE_RATES: dict[str, Decimal] = {
+    "voyage-3": Decimal("0.06"),
+    "voyage-3.5": Decimal("0.06"),
+    "voyage-3-large": Decimal("0.18"),
+    "voyage-3.5-lite": Decimal("0.02"),
+    "voyage-3-lite": Decimal("0.02"),
+    "voyage-2": Decimal("0.10"),
+    "voyage-code-2": Decimal("0.12"),
+    "voyage-finance-2": Decimal("0.12"),
+    "voyage-law-2": Decimal("0.12"),
+}
+_VOYAGE_DEFAULT_RATE = Decimal("0.06")  # voyage-3 price point
+
+
+def is_voyage_model(model: Optional[str]) -> bool:
+    """True for Voyage embedding models — they price on a separate (non-Anthropic)
+    rate table and are excluded from the Anthropic Admin-API reconciliation."""
+    return bool(model) and model.lower().strip().startswith("voyage")
+
+
+def voyage_cost_micro(*, model: Optional[str], input_tokens: int) -> int:
+    """Voyage embedding cost in micro-USD (input tokens only, ROUND_UP)."""
+    rate = _VOYAGE_RATES.get((model or "").lower().strip(), _VOYAGE_DEFAULT_RATE)
+    micro = Decimal(int(input_tokens or 0)) * rate
+    return int(micro.quantize(Decimal("1"), rounding=ROUND_UP))
+
+
 class Feature(str, Enum):
     PRESCREEN = "prescreen"
     SCORE = "score"

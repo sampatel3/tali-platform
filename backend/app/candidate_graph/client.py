@@ -184,6 +184,13 @@ async def _init_graphiti_async():
             embedding_model=settings.GRAPHITI_EMBEDDING_MODEL,
         )
     )
+    # Meter Voyage embedding spend the same way as the Anthropic graph calls:
+    # wrap the embedder's client so every embed() books a usage_event +
+    # call_log attributed via graph_metering_ctx. Without this, Voyage spend
+    # (the only non-Anthropic provider) is invisible to billing + the budget.
+    from ..services.metered_voyage_embedder import wrap_voyage_embedder
+
+    embedder = wrap_voyage_embedder(embedder)
     neo4j_driver = Neo4jDriver(
         uri=settings.NEO4J_URI,
         user=settings.NEO4J_USER,

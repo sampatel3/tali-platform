@@ -30,6 +30,8 @@ from .pricing_service import (
     credits_charged,
     estimate_reservation,
     feature_pricing,
+    is_voyage_model,
+    voyage_cost_micro,
 )
 from vendor.mainspring_metering.pricing import cost_for as seam_cost_for
 
@@ -130,15 +132,26 @@ def record_event(
     # full model x usage x {standard,batch} corpus — see
     # tests/test_metering_pricing_parity.py), so this is a zero-behaviour-change
     # swap. The per-feature markup below stays tali business logic.
-    raw_anthropic_cost_micro = seam_cost_for(
-        model=model,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        cache_read_tokens=cache_read_tokens,
-        cache_creation_tokens=cache_creation_tokens,
-        cache_creation_1h_tokens=cache_creation_1h_tokens,
-        service_tier=service_tier,
-    )
+    if is_voyage_model(model):
+        # Voyage embeddings (Graphiti's vector layer) are a non-Anthropic
+        # provider: input tokens only, no output/cache/tier. Price via the
+        # Voyage rate table instead of the Anthropic seam so the spend still
+        # flows into credits + the org budget. ``model="voyage-*"`` never
+        # matches an Anthropic model family, so these rows are naturally
+        # excluded from the Anthropic Admin-API reconciliation.
+        raw_anthropic_cost_micro = voyage_cost_micro(
+            model=model, input_tokens=input_tokens
+        )
+    else:
+        raw_anthropic_cost_micro = seam_cost_for(
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_creation_tokens=cache_creation_tokens,
+            cache_creation_1h_tokens=cache_creation_1h_tokens,
+            service_tier=service_tier,
+        )
     # ``credits_charged`` (what the customer pays) is still derived from the
     # full cost × the cache-hit markup — preserving the small fee that stops
     # unlimited free re-scoring. ``cost_usd_micro`` and the token columns,
