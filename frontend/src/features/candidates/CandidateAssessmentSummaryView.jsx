@@ -61,7 +61,7 @@ const RoleFitSummaryPanel = ({ reportModel }) => {
           </div>
         </div>
         {reportModel?.summaryModel?.roleFitScore != null ? (
-          <Badge variant="purple" className="font-mono text-[11px]">
+          <Badge variant="purple" className="font-mono text-[0.6875rem]">
             Role fit {Math.round(reportModel.summaryModel.roleFitScore)} / 100
           </Badge>
         ) : null}
@@ -157,7 +157,7 @@ const FirefliesCapturePanel = ({ reportModel }) => {
           <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Fireflies capture</div>
           <div className="mt-2 text-xl font-semibold text-[var(--taali-text)]">{firefliesModel.statusLabel}</div>
         </div>
-        <Badge variant={firefliesModel.badgeVariant || 'muted'} className="font-mono text-[11px]">
+        <Badge variant={firefliesModel.badgeVariant || 'muted'} className="font-mono text-[0.6875rem]">
           {firefliesModel.linked ? 'Linked' : (firefliesModel.captureExpected ? 'Workable flow' : 'Optional')}
         </Badge>
       </div>

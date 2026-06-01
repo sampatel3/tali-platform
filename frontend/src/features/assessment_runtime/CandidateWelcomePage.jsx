@@ -17,8 +17,8 @@ const CANDIDATE_START_BLOCKED_MESSAGE = 'This assessment is not available yet. P
 
 const InfoRow = ({ label, value }) => (
   <div className="rounded-[16px] border border-[var(--line)] bg-[var(--bg)] p-4">
-    <div className="font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--mute)]">{label}</div>
-    <div className="mt-2 text-[14px] font-medium text-[var(--ink-2)]">{value}</div>
+    <div className="font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--mute)]">{label}</div>
+    <div className="mt-2 text-[0.875rem] font-medium text-[var(--ink-2)]">{value}</div>
   </div>
 );
 
@@ -168,10 +168,10 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
     <div className="min-h-screen bg-[var(--bg)] text-[var(--ink)]">
       <CandidateMiniNav />
 
-      <div className="mx-auto max-w-[1120px] px-6 py-10 md:px-10 md:py-14">
+      <div className="mx-auto max-w-[70rem] px-6 py-10 md:px-10 md:py-14">
         <div className="grid gap-6 lg:grid-cols-[1.08fr_.92fr]">
           <div className="relative overflow-hidden rounded-[var(--radius-xl)] border border-[var(--line)] bg-[var(--bg-2)] p-8 shadow-[var(--shadow-lg)]">
-            <div className="absolute right-[-60px] top-[-60px] h-56 w-56 rounded-full bg-[radial-gradient(circle,var(--purple-soft),transparent_68%)] opacity-80" />
+            <div className="absolute right-[-3.75rem] top-[-3.75rem] h-56 w-56 rounded-full bg-[radial-gradient(circle,var(--purple-soft),transparent_68%)] opacity-80" />
             <div className="relative">
               <div className="kicker">{organizationName ? `Invited by ${organizationName}` : 'Candidate assessment'}</div>
               {/* No text-swap flash on the greeting. Earlier attempts
@@ -194,7 +194,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
                   <>Ready to show your <em>work</em>?</>
                 )}
               </h1>
-              <p className="mt-4 max-w-[620px] text-[15px] leading-7 text-[var(--mute)]">
+              <p className="mt-4 max-w-[38.75rem] text-[0.9375rem] leading-7 text-[var(--mute)]">
                 This is a real engineering task, not a puzzle. You’ll work in a browser-based IDE with the same repo, runtime, and AI tooling your hiring team wants to evaluate. The brief opens when you click start.
               </p>
 
@@ -213,7 +213,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
                 ].map((item) => (
                   <div key={item} className="flex items-start gap-3 rounded-[14px] border border-[var(--line)] bg-[var(--bg)] px-4 py-3">
                     <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-[var(--purple)]" />
-                    <div className="text-[13px] leading-6 text-[var(--ink-2)]">{item}</div>
+                    <div className="text-[0.8125rem] leading-6 text-[var(--ink-2)]">{item}</div>
                   </div>
                 ))}
               </div>
@@ -251,11 +251,11 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
 
           <div className="space-y-4">
             <div className="rounded-[var(--radius-xl)] bg-[var(--ink)] p-6 text-[var(--bg)] shadow-[var(--shadow-lg)]">
-              <div className="font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--purple-2)]">What to expect</div>
-              <h2 className="mt-4 font-[var(--font-display)] text-[30px] font-semibold leading-[1] tracking-[-0.03em]">
+              <div className="font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--purple-2)]">What to expect</div>
+              <h2 className="mt-4 font-[var(--font-display)] text-[1.875rem] font-semibold leading-[1] tracking-[-0.03em]">
                 Repo, editor, and Claude - all in one workspace.
               </h2>
-              <p className="mt-4 text-[14px] leading-7 text-white/72">
+              <p className="mt-4 text-[0.875rem] leading-7 text-white/72">
                 We record prompts, accept/reject decisions, and validation runs so the hiring team can review your process with context.
               </p>
               {/* Same fade-in pattern as the H1 — metaTitle assembles
@@ -264,7 +264,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
                   the "Candidate workspace" fallback from briefly
                   flashing before the real label. */}
               <div
-                className="mt-5 rounded-[14px] border border-white/10 bg-white/10 px-4 py-3 font-mono text-[11px] uppercase tracking-[0.12em] text-white/80 transition-opacity duration-300 ease-out"
+                className="mt-5 rounded-[14px] border border-white/10 bg-white/10 px-4 py-3 font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-white/80 transition-opacity duration-300 ease-out"
                 style={{ opacity: previewLoading ? 0 : 1 }}
                 aria-busy={previewLoading}
               >
@@ -273,8 +273,8 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
             </div>
 
             <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
-              <div className="text-[20px] font-semibold tracking-[-0.02em]">System check</div>
-              <div className="mt-4 space-y-3 text-[13px]">
+              <div className="text-[1.25rem] font-semibold tracking-[-0.02em]">System check</div>
+              <div className="mt-4 space-y-3 text-[0.8125rem]">
                 {[
                   ['Browser', systemCheck.browser, Monitor],
                   ['Connection', systemCheck.connection, Wifi],
@@ -293,8 +293,8 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
             </div>
 
             <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
-              <div className="text-[20px] font-semibold tracking-[-0.02em]">Your rights</div>
-              <div className="mt-4 rounded-[14px] bg-[var(--bg-3)] p-4 text-[13px] leading-6 text-[var(--ink-2)]">
+              <div className="text-[1.25rem] font-semibold tracking-[-0.02em]">Your rights</div>
+              <div className="mt-4 rounded-[14px] bg-[var(--bg-3)] p-4 text-[0.8125rem] leading-6 text-[var(--ink-2)]">
                 <div className="flex items-start gap-3">
                   <Shield size={18} className="mt-0.5 shrink-0 text-[var(--purple)]" />
                   <div>
@@ -308,7 +308,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
 
         {(previewLoading || previewError) ? (
           <div className="mt-6 rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-5 shadow-[var(--shadow-sm)]">
-            <div className="font-mono text-[12px] text-[var(--mute)]">
+            <div className="font-mono text-[0.75rem] text-[var(--mute)]">
               {previewLoading ? 'Loading task preview...' : previewError}
             </div>
           </div>

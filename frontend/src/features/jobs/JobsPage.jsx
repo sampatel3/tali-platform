@@ -740,7 +740,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
         </div>
 
         {loading ? (
-          <div className="flex min-h-[240px] items-center justify-center">
+          <div className="flex min-h-[15rem] items-center justify-center">
             <Spinner size={20} />
           </div>
         ) : error ? (
@@ -860,7 +860,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                         <h3 className="role-name">{role.name}</h3>
                         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--mute)' }}>#{role.id}</span>
                         {workableRole ? (
-                          <WorkableTag label="WORKABLE" size="sm" className="wk-tag !border-0 !px-2 !py-1 !text-[9.5px]" />
+                          <WorkableTag label="WORKABLE" size="sm" className="wk-tag !border-0 !px-2 !py-1 !text-[0.59375rem]" />
                         ) : (
                           <span className={`chip ${isRoleDraft(role) ? '' : 'purple'}`} style={{ fontSize: 10 }}>
                             {roleBadgeLabel}

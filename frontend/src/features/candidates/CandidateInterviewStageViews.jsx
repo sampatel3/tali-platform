@@ -77,7 +77,7 @@ const SourceCard = ({
       }}
     >
       <div
-        className="text-[11px] font-semibold uppercase tracking-[0.08em]"
+        className="text-[0.6875rem] font-semibold uppercase tracking-[0.08em]"
         style={{ color: resolved.labelColor }}
       >
         {status}
@@ -109,7 +109,7 @@ const InterviewQuestionCard = ({
           <div className="mt-2 text-base font-semibold text-[var(--taali-text)]">{questionLabel}</div>
         </div>
         {evidenceAnchor ? (
-          <Badge variant="muted" className="max-w-full font-mono text-[11px]">
+          <Badge variant="muted" className="max-w-full font-mono text-[0.6875rem]">
             {evidenceAnchor}
           </Badge>
         ) : null}
@@ -189,12 +189,12 @@ const InterviewPackPanel = ({
           </div>
           <div className="flex flex-wrap gap-2">
             {pack?.source ? (
-              <Badge variant="muted" className="font-mono text-[11px]">
+              <Badge variant="muted" className="font-mono text-[0.6875rem]">
                 {pack.source.replace(/_/g, ' ')}
               </Badge>
             ) : null}
             {generatedAt ? (
-              <Badge variant="muted" className="font-mono text-[11px]">
+              <Badge variant="muted" className="font-mono text-[0.6875rem]">
                 Generated {generatedAt}
               </Badge>
             ) : null}
@@ -248,12 +248,12 @@ export const CandidateStageOneScreeningTab = ({
           </div>
           <div className="flex flex-wrap gap-2">
             {preScreenRecommendation ? (
-              <Badge variant="purple" className="font-mono text-[11px]">
+              <Badge variant="purple" className="font-mono text-[0.6875rem]">
                 {preScreenRecommendation}
               </Badge>
             ) : null}
             {preScreenScore != null ? (
-              <Badge variant="muted" className="font-mono text-[11px]">
+              <Badge variant="muted" className="font-mono text-[0.6875rem]">
                 Pre-screen {Math.round(Number(preScreenScore))}/100
               </Badge>
             ) : null}
@@ -278,7 +278,7 @@ export const CandidateStageOneScreeningTab = ({
                 The pre-screen agent capped this candidate&rsquo;s score so they were filtered before the full CV match ran. Review the matched chunks below — common boilerplate like &ldquo;strong communication skills&rdquo; would not normally trigger this.
               </p>
             </div>
-            <Badge variant="danger" className="font-mono text-[11px]">
+            <Badge variant="danger" className="font-mono text-[0.6875rem]">
               Threshold {Math.round(Number(fraudCopyPaste.threshold || 0) * 100)}%
             </Badge>
           </div>
@@ -316,7 +316,7 @@ export const CandidateStageOneScreeningTab = ({
             {matchingSkills.length > 0 ? (
               <div className="mt-3 flex flex-wrap gap-2">
                 {matchingSkills.map((item) => (
-                  <Badge key={item} variant="success" className="text-[11px]">
+                  <Badge key={item} variant="success" className="text-[0.6875rem]">
                     {item}
                   </Badge>
                 ))}
@@ -427,10 +427,10 @@ export const TranscriptPanel = ({
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Badge variant={screeningInterview?.source === 'fireflies' ? 'warning' : 'muted'} className="font-mono text-[11px]">
+            <Badge variant={screeningInterview?.source === 'fireflies' ? 'warning' : 'muted'} className="font-mono text-[0.6875rem]">
               {screeningInterview?.source === 'fireflies' ? 'Fireflies linked' : 'Manual transcript'}
             </Badge>
-            <Badge variant="muted" className="font-mono text-[11px]">
+            <Badge variant="muted" className="font-mono text-[0.6875rem]">
               {formatDateTime(screeningInterview?.meeting_date || screeningInterview?.linked_at)}
             </Badge>
           </div>
@@ -438,19 +438,19 @@ export const TranscriptPanel = ({
 
         <div className="mt-4 grid gap-3 md:grid-cols-3">
           <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-3">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Provider</div>
+            <div className="text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Provider</div>
             <div className="mt-2 text-sm font-semibold text-[var(--taali-text)]">
               {safeText(screeningInterview?.provider) || 'Transcript'}
             </div>
           </div>
           <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-3">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Speakers</div>
+            <div className="text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Speakers</div>
             <div className="mt-2 text-sm font-semibold text-[var(--taali-text)]">
               {speakers.length > 0 ? speakers.join(', ') : 'Not provided'}
             </div>
           </div>
           <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-3">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Transcript</div>
+            <div className="text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Transcript</div>
             <div className="mt-2 text-sm font-semibold text-[var(--taali-text)]">
               {transcriptUrl ? (
                 <a href={transcriptUrl} target="_blank" rel="noreferrer" className="text-[var(--taali-purple-hover)] underline-offset-2 hover:underline">
@@ -482,7 +482,7 @@ export const TranscriptPanel = ({
                 This build shows the linked screening question set and transcript evidence. Per-question asked/not-asked transcript coverage is not yet stored in the backend.
               </p>
             </div>
-            <Badge variant="muted" className="font-mono text-[11px]">
+            <Badge variant="muted" className="font-mono text-[0.6875rem]">
               {screeningPackQuestions.length} questions attached
             </Badge>
           </div>
@@ -538,7 +538,7 @@ export const TranscriptPanel = ({
                   : 'You can still link a Fireflies meeting ID manually if the workspace credentials are already configured.'}
               </p>
             </div>
-            <Badge variant={firefliesConnected ? 'success' : 'muted'} className="font-mono text-[11px]">
+            <Badge variant={firefliesConnected ? 'success' : 'muted'} className="font-mono text-[0.6875rem]">
               {firefliesConnected ? 'Workspace connected' : 'Manual link only'}
             </Badge>
           </div>
@@ -851,7 +851,7 @@ export const CandidateTeamNotesTab = ({
             <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
               Workable Comments
             </div>
-            <Badge variant="purple" className="font-mono text-[11px]">Synced from Workable</Badge>
+            <Badge variant="purple" className="font-mono text-[0.6875rem]">Synced from Workable</Badge>
           </div>
           <div className="mt-3 space-y-2">
             {workableComments.map((comment, index) => (
@@ -867,7 +867,7 @@ export const CandidateTeamNotesTab = ({
             <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
               Questionnaire Responses
             </div>
-            <Badge variant="purple" className="font-mono text-[11px]">LinkedIn / Workable apply</Badge>
+            <Badge variant="purple" className="font-mono text-[0.6875rem]">LinkedIn / Workable apply</Badge>
           </div>
           <div className="mt-3 space-y-2">
             {workableAnswers.map((entry, index) => (
@@ -883,7 +883,7 @@ export const CandidateTeamNotesTab = ({
             <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
               Workable Activity
             </div>
-            <Badge variant="muted" className="font-mono text-[11px]">Synced from Workable</Badge>
+            <Badge variant="muted" className="font-mono text-[0.6875rem]">Synced from Workable</Badge>
           </div>
           <ul className="mt-3 space-y-2">
             {workableActivity.map((entry, index) => (

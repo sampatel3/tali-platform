@@ -85,15 +85,15 @@ export const AgentDecisionCard = ({ decision, onApprove, onOverride, onReEvaluat
             <ArrowRight size={14} className="text-taali-fg-muted" aria-hidden />
             <span className="font-medium text-taali-accent">{decisionLabel}</span>
             {confidenceLabel ? (
-              <span className={`rounded px-2 py-0.5 text-[11px] ${bandClass}`}>
+              <span className={`rounded px-2 py-0.5 text-[0.6875rem] ${bandClass}`}>
                 {confidenceLabel}
               </span>
             ) : null}
-            <span className="text-[11px] text-taali-fg-muted">{ageLabel}</span>
+            <span className="text-[0.6875rem] text-taali-fg-muted">{ageLabel}</span>
           </div>
 
           {isStale ? (
-            <div className="mt-1.5 inline-flex items-center gap-1.5 rounded-md bg-taali-accent/10 px-2 py-1 text-[11px] font-medium text-taali-accent">
+            <div className="mt-1.5 inline-flex items-center gap-1.5 rounded-md bg-taali-accent/10 px-2 py-1 text-[0.6875rem] font-medium text-taali-accent">
               <RefreshCw size={12} aria-hidden />
               <span>Inputs changed{stalenessSummary ? ` · ${stalenessSummary}` : ''}</span>
             </div>
@@ -121,11 +121,11 @@ export const AgentDecisionCard = ({ decision, onApprove, onOverride, onReEvaluat
                 <p className="text-xs text-taali-fg-muted">No structured evidence cited.</p>
               )}
               {isStale && stalenessReasons.length ? (
-                <div className="mt-2 text-[11px] text-taali-accent">
+                <div className="mt-2 text-[0.6875rem] text-taali-accent">
                   Stale because: {stalenessReasons.join(', ')}
                 </div>
               ) : null}
-              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-taali-fg-muted">
+              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[0.6875rem] text-taali-fg-muted">
                 <span>model: {decision.model_version}</span>
                 <span>prompt: {decision.prompt_version}</span>
                 {decision.agent_run_id ? <span>run #{decision.agent_run_id}</span> : null}

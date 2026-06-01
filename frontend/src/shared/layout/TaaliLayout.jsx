@@ -256,7 +256,7 @@ export const MarketingNav = ({ onNavigate }) => {
               <button
                 key={tab.id}
                 type="button"
-                className="w-full rounded-[10px] px-3 py-3 text-left text-[15px] font-medium text-[var(--ink)] transition hover:bg-[var(--bg-3)]"
+                className="w-full rounded-[10px] px-3 py-3 text-left text-[0.9375rem] font-medium text-[var(--ink)] transition hover:bg-[var(--bg-3)]"
                 onClick={() => {
                   closeMenu();
                   navigateToMarketingSection(tab.id, onNavigate);

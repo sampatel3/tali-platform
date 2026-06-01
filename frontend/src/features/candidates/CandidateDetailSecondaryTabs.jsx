@@ -128,19 +128,19 @@ export const CandidateAiUsageTab = ({ candidate }) => {
               <Card key={i} className="p-3">
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
-                    <Badge variant="purple" className="font-mono text-[11px]">#{i + 1}</Badge>
+                    <Badge variant="purple" className="font-mono text-[0.6875rem]">#{i + 1}</Badge>
                     {p.timestamp ? <span className="font-mono text-xs text-[var(--taali-muted)]">{new Date(p.timestamp).toLocaleTimeString()}</span> : null}
                     {perPrompt ? <span className="font-mono text-xs text-[var(--taali-muted)]">{perPrompt.word_count} words</span> : null}
                   </div>
                   {perPrompt ? (
                     <div className="flex items-center gap-1">
-                      <Badge variant="purple" className="font-mono text-[11px]" title="Clarity: how understandable and structured the prompt is.">
+                      <Badge variant="purple" className="font-mono text-[0.6875rem]" title="Clarity: how understandable and structured the prompt is.">
                         Clarity: {perPrompt.clarity}
                       </Badge>
-                      <Badge variant="muted" className="font-mono text-[11px]" title="Specificity: how concrete the prompt context is (files, errors, code).">
+                      <Badge variant="muted" className="font-mono text-[0.6875rem]" title="Specificity: how concrete the prompt context is (files, errors, code).">
                         Specificity: {perPrompt.specificity}
                       </Badge>
-                      <Badge variant="muted" className="font-mono text-[11px]" title="Efficiency: whether the prompt led to actionable iteration.">
+                      <Badge variant="muted" className="font-mono text-[0.6875rem]" title="Efficiency: whether the prompt led to actionable iteration.">
                         Efficiency: {perPrompt.efficiency}
                       </Badge>
                     </div>
@@ -152,10 +152,10 @@ export const CandidateAiUsageTab = ({ candidate }) => {
                 </div>
 
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                  {perPrompt?.has_context ? <Badge variant="success" className="font-mono text-[11px]">Has Context</Badge> : null}
-                  {perPrompt?.is_vague ? <Badge variant="warning" className="font-mono text-[11px]">Vague</Badge> : null}
-                  {p.paste_detected ? <Badge variant="warning" className="font-mono text-[11px]">PASTED</Badge> : null}
-                  {p.response_latency_ms ? <Badge variant="muted" className="font-mono text-[11px]">{p.response_latency_ms}ms</Badge> : null}
+                  {perPrompt?.has_context ? <Badge variant="success" className="font-mono text-[0.6875rem]">Has Context</Badge> : null}
+                  {perPrompt?.is_vague ? <Badge variant="warning" className="font-mono text-[0.6875rem]">Vague</Badge> : null}
+                  {p.paste_detected ? <Badge variant="warning" className="font-mono text-[0.6875rem]">PASTED</Badge> : null}
+                  {p.response_latency_ms ? <Badge variant="muted" className="font-mono text-[0.6875rem]">{p.response_latency_ms}ms</Badge> : null}
                 </div>
               </Card>
             );

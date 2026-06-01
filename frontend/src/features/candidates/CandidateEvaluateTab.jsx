@@ -246,7 +246,7 @@ export const CandidateEvaluateTab = ({
                   }`}
                   onClick={() => setManualEvalDecision(option.value)}
                 >
-                  <div className="font-mono text-[10px] uppercase tracking-[0.1em] text-[var(--taali-muted)]">
+                  <div className="font-mono text-[0.625rem] uppercase tracking-[0.1em] text-[var(--taali-muted)]">
                     {active ? 'Selected' : 'Decision'}
                   </div>
                   <div className="mt-2 text-lg font-semibold">{option.label}</div>
@@ -257,11 +257,11 @@ export const CandidateEvaluateTab = ({
           </div>
 
           <div className="mt-5">
-            <label className="mb-2 block font-mono text-[10.5px] uppercase tracking-[0.1em] text-[var(--taali-muted)]">
+            <label className="mb-2 block font-mono text-[0.65625rem] uppercase tracking-[0.1em] text-[var(--taali-muted)]">
               Your rationale
             </label>
             <Textarea
-              className="min-h-[120px] text-sm"
+              className="min-h-[7.5rem] text-sm"
               placeholder="Why are you advancing, holding, or rejecting this candidate?"
               value={manualEvalRationale}
               onChange={(event) => setManualEvalRationale(event.target.value)}
@@ -269,7 +269,7 @@ export const CandidateEvaluateTab = ({
           </div>
 
           <div className="mt-5">
-            <div className="mb-2 font-mono text-[10.5px] uppercase tracking-[0.1em] text-[var(--taali-muted)]">
+            <div className="mb-2 font-mono text-[0.65625rem] uppercase tracking-[0.1em] text-[var(--taali-muted)]">
               Confidence
             </div>
             <div className="flex flex-wrap gap-2">
@@ -294,7 +294,7 @@ export const CandidateEvaluateTab = ({
           </div>
 
           <div className="mt-5">
-            <div className="mb-2 font-mono text-[10.5px] uppercase tracking-[0.1em] text-[var(--taali-muted)]">
+            <div className="mb-2 font-mono text-[0.65625rem] uppercase tracking-[0.1em] text-[var(--taali-muted)]">
               Next steps
             </div>
             <div className="grid gap-2 md:grid-cols-2">
@@ -382,7 +382,7 @@ export const CandidateEvaluateTab = ({
 
           {(recommendation?.label || recruiterSummary) ? (
             <div className="mt-5 rounded-[var(--taali-radius-card)] border border-[var(--taali-purple)]/25 bg-[var(--taali-purple-soft)] p-4">
-              <div className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-[var(--taali-purple)]">
+              <div className="font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[var(--taali-purple)]">
                 Taali recommends
               </div>
               <div className="mt-2 text-sm font-semibold text-[var(--taali-text)]">
@@ -420,17 +420,17 @@ export const CandidateEvaluateTab = ({
                 <Card key={key} className="mb-3 bg-[var(--taali-surface)] p-3 last:mb-0">
                   <div className="mb-2 flex items-center justify-between">
                     <span className="font-mono text-sm font-bold capitalize">{String(key).replace(/_/g, ' ')}</span>
-                    <Badge variant="muted" className="font-mono text-[11px]">{weight}%</Badge>
+                    <Badge variant="muted" className="font-mono text-[0.6875rem]">{weight}%</Badge>
                   </div>
                   {hasCriteria ? (
                     <div className="mb-2 grid gap-1 border border-[var(--taali-border)] bg-[var(--taali-bg)] p-2">
-                      <div className="font-mono text-[11px] text-[var(--taali-muted)]">
+                      <div className="font-mono text-[0.6875rem] text-[var(--taali-muted)]">
                         <span className="font-bold text-[var(--taali-success)]">Excellent:</span> {criteria.excellent || '—'}
                       </div>
-                      <div className="font-mono text-[11px] text-[var(--taali-muted)]">
+                      <div className="font-mono text-[0.6875rem] text-[var(--taali-muted)]">
                         <span className="font-bold text-[var(--taali-info)]">Good:</span> {criteria.good || '—'}
                       </div>
-                      <div className="font-mono text-[11px] text-[var(--taali-muted)]">
+                      <div className="font-mono text-[0.6875rem] text-[var(--taali-muted)]">
                         <span className="font-bold text-[var(--taali-warning)]">Poor:</span> {criteria.poor || '—'}
                       </div>
                     </div>
@@ -450,7 +450,7 @@ export const CandidateEvaluateTab = ({
                       <option value="poor">Poor</option>
                     </Select>
                     <Textarea
-                      className="min-h-[70px] font-mono text-xs"
+                      className="min-h-[4.375rem] font-mono text-xs"
                       placeholder="Evidence (required for this category)"
                       value={current.evidence ?? ''}
                       onChange={(event) => setManualEvalScores((previous) => ({
@@ -500,7 +500,7 @@ export const CandidateEvaluateTab = ({
           <div>
             <div className="mb-1 font-mono text-xs text-gray-500">Strengths (one per line)</div>
             <Textarea
-              className="min-h-[90px] font-mono text-xs"
+              className="min-h-[5.625rem] font-mono text-xs"
               placeholder="Strong debugging discipline"
               value={manualEvalStrengths}
               onChange={(event) => setManualEvalStrengths(event.target.value)}
@@ -509,7 +509,7 @@ export const CandidateEvaluateTab = ({
           <div>
             <div className="mb-1 font-mono text-xs text-gray-500">Improvements (one per line)</div>
             <Textarea
-              className="min-h-[90px] font-mono text-xs"
+              className="min-h-[5.625rem] font-mono text-xs"
               placeholder="Add stronger edge-case tests"
               value={manualEvalImprovements}
               onChange={(event) => setManualEvalImprovements(event.target.value)}

@@ -128,7 +128,7 @@ export const PendingAgentDecisionsPanel = ({ role, onAfterAction }) => {
           <Bot size={18} className="text-taali-accent" aria-hidden />
           <h2 className="text-base font-semibold">Pending agent decisions</h2>
           {hasPending ? (
-            <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-taali-accent px-1.5 text-[11px] font-semibold text-white">
+            <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-taali-accent px-1.5 text-[0.6875rem] font-semibold text-white">
               {decisions.length}
             </span>
           ) : null}

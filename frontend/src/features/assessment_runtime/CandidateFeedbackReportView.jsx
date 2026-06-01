@@ -47,7 +47,7 @@ export const CandidateFeedbackReportView = ({
             <Logo onClick={() => {}} />
             <span className="font-mono text-xs text-[var(--taali-muted)]">Candidate feedback</span>
           </div>
-          <Badge variant="muted" className="font-mono text-[11px]">
+          <Badge variant="muted" className="font-mono text-[0.6875rem]">
             {payload?.organization_name || feedback?.organization_name || 'Company'}
           </Badge>
         </div>

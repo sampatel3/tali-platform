@@ -168,7 +168,7 @@ export const RoleSheet = ({
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               placeholder="Optional summary for recruiters."
-              className="min-h-[140px]"
+              className="min-h-[8.75rem]"
               maxLength={ROLE_DESCRIPTION_MAX_LENGTH}
             />
             <span className="mt-1 block text-xs text-[var(--taali-muted)]">
@@ -217,7 +217,7 @@ export const RoleSheet = ({
               className="py-8"
             />
           ) : (
-            <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1">
+            <div className="max-h-[22.5rem] space-y-2 overflow-y-auto pr-1">
               {allTasks.map((task) => {
                 const checked = selectedTaskIds.includes(Number(task.id));
                 return (

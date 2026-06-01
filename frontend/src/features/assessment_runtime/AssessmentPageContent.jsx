@@ -1267,7 +1267,7 @@ export default function AssessmentPage({
       />
 
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[1440px] px-4 py-4 lg:px-8 lg:py-5">
+        <div className="mx-auto max-w-[90rem] px-4 py-4 lg:px-8 lg:py-5">
           <AssessmentContextWindow
             ref={contextWindowRef}
             taskName={assessment?.task_name || 'Assessment brief'}
@@ -1343,26 +1343,26 @@ export default function AssessmentPage({
 
           <section className="mt-4 grid gap-4 rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] px-5 py-5 shadow-[var(--shadow-sm)] lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center lg:px-6">
             <div className="flex flex-wrap items-center gap-4">
-              <span className="font-mono text-[11px] uppercase tracking-[0.1em] text-[var(--mute)]">Progress</span>
-              <div className="min-w-[220px] flex-1 overflow-hidden rounded-full bg-[var(--bg-3)]">
+              <span className="font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-[var(--mute)]">Progress</span>
+              <div className="min-w-[13.75rem] flex-1 overflow-hidden rounded-full bg-[var(--bg-3)]">
                 <div
                   className="h-2 rounded-full bg-[linear-gradient(90deg,var(--purple),var(--purple-2))]"
                   style={{ width: `${Math.max(4, progressPercent)}%` }}
                 />
               </div>
-              <span className="min-w-[42px] font-mono text-[12px] text-[var(--ink-2)]">{progressPercent}%</span>
-              <span className="text-[12px] leading-5 text-[var(--mute)]">{progressLabel}</span>
+              <span className="min-w-[2.625rem] font-mono text-[0.75rem] text-[var(--ink-2)]">{progressPercent}%</span>
+              <span className="text-[0.75rem] leading-5 text-[var(--mute)]">{progressLabel}</span>
             </div>
 
             <div className="flex flex-wrap items-center gap-3 lg:justify-end">
-              <span className="max-w-[280px] text-[12px] leading-5 text-[var(--mute)]">
+              <span className="max-w-[17.5rem] text-[0.75rem] leading-5 text-[var(--mute)]">
                 You can submit any time. Save keeps your current file synced into the live workspace before you finalize.
               </span>
               <button
                 type="button"
                 onClick={() => handleSave(codeRef.current)}
                 disabled={isTimerPaused || savingRepoFile}
-                className="rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-4 py-2 text-[12px] font-medium text-[var(--ink-2)] transition-colors hover:border-[var(--ink)] hover:text-[var(--ink)] disabled:opacity-50"
+                className="rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-4 py-2 text-[0.75rem] font-medium text-[var(--ink-2)] transition-colors hover:border-[var(--ink)] hover:text-[var(--ink)] disabled:opacity-50"
               >
                 {savingRepoFile ? 'Saving...' : 'Save draft'}
               </button>
@@ -1370,21 +1370,21 @@ export default function AssessmentPage({
                 type="button"
                 onClick={() => handleSubmit(false)}
                 disabled={isTimerPaused}
-                className="rounded-full bg-[var(--purple)] px-4 py-2 text-[12px] font-medium text-white transition-colors hover:bg-[var(--purple-2)] disabled:opacity-50"
+                className="rounded-full bg-[var(--purple)] px-4 py-2 text-[0.75rem] font-medium text-white transition-colors hover:bg-[var(--purple-2)] disabled:opacity-50"
               >
                 Submit
               </button>
             </div>
           </section>
 
-          <footer className="mt-4 mb-6 flex flex-col gap-3 px-1 text-[11.5px] text-[var(--mute)] md:flex-row md:items-center md:justify-between">
+          <footer className="mt-4 mb-6 flex flex-col gap-3 px-1 text-[0.71875rem] text-[var(--mute)] md:flex-row md:items-center md:justify-between">
             <div>
               We record your editor, terminal, and Claude chat for this session only. <a href={reportIssueHref} className="text-[var(--purple)]">Need help?</a>
             </div>
             <div className="flex flex-wrap items-center gap-4">
               {privacyFlags.map((flag) => (
                 <span key={flag} className="inline-flex items-center gap-2 font-mono">
-                  <span className="h-[6px] w-[6px] rounded-full bg-[var(--green)]" />
+                  <span className="h-[0.375rem] w-[0.375rem] rounded-full bg-[var(--green)]" />
                   {flag}
                 </span>
               ))}
@@ -1403,11 +1403,11 @@ export default function AssessmentPage({
           <div className="w-full max-w-xl rounded-[var(--taali-radius-panel)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] p-7 text-[var(--taali-runtime-text)] shadow-[var(--taali-shadow-strong)] backdrop-blur-sm">
             <h2
               id="assessment-submit-confirm-title"
-              className="font-display text-[24px] font-semibold tracking-[-0.02em] text-[var(--taali-runtime-text)]"
+              className="font-display text-[1.5rem] font-semibold tracking-[-0.02em] text-[var(--taali-runtime-text)]"
             >
               Submit assessment<span className="text-[var(--taali-purple)]">?</span>
             </h2>
-            <p className="mt-3 text-[14px] leading-[1.6] text-[var(--taali-runtime-muted)]">
+            <p className="mt-3 text-[0.875rem] leading-[1.6] text-[var(--taali-runtime-muted)]">
               Your work will be locked in and the hiring team will start their review. You won&rsquo;t be able to make further changes.
             </p>
             <div className="mt-6 flex items-center justify-end gap-3">

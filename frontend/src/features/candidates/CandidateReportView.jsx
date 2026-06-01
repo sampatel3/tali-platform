@@ -64,7 +64,7 @@ const EvidenceSectionCard = ({ section }) => {
           {section.title}
         </div>
         {section.badgeLabel ? (
-          <Badge variant={section.badgeVariant || 'muted'} className="font-mono text-[11px]">
+          <Badge variant={section.badgeVariant || 'muted'} className="font-mono text-[0.6875rem]">
             {section.badgeLabel}
           </Badge>
         ) : null}
@@ -152,7 +152,7 @@ export function CandidateReportView({
             {renderIdentityBadges(identity).length ? (
               <div className="mt-4 flex flex-wrap gap-2">
                 {renderIdentityBadges(identity).map((label) => (
-                  <Badge key={label} variant="muted" className="font-mono text-[11px]">{label}</Badge>
+                  <Badge key={label} variant="muted" className="font-mono text-[0.6875rem]">{label}</Badge>
                 ))}
               </div>
             ) : null}
@@ -164,9 +164,9 @@ export function CandidateReportView({
                     Dimension profile
                   </div>
                   {hasDimensionSignal ? (
-                    <Badge variant="muted" className="font-mono text-[11px]">{dimensionEntries.length} dimensions</Badge>
+                    <Badge variant="muted" className="font-mono text-[0.6875rem]">{dimensionEntries.length} dimensions</Badge>
                   ) : (
-                    <Badge variant={hasCompletedAssessment ? 'warning' : 'muted'} className="font-mono text-[11px]">
+                    <Badge variant={hasCompletedAssessment ? 'warning' : 'muted'} className="font-mono text-[0.6875rem]">
                       {hasCompletedAssessment ? 'Signal pending' : 'Pre-assessment'}
                     </Badge>
                   )}
@@ -194,7 +194,7 @@ export function CandidateReportView({
                     Dimension scores
                   </div>
                   {source ? (
-                    <Badge variant={source.badgeVariant} className="font-mono text-[11px]">{source.label}</Badge>
+                    <Badge variant={source.badgeVariant} className="font-mono text-[0.6875rem]">{source.label}</Badge>
                   ) : null}
                 </div>
                 {hasDimensionSignal ? (

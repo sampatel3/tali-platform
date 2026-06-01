@@ -54,10 +54,10 @@ export default function CodeEditor({
   return (
     <div className="flex h-full flex-col bg-[var(--bg-2)]">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-3">
-        <div className="min-w-0 flex items-center gap-2 text-[13px] text-[var(--ink-2)]">
+        <div className="min-w-0 flex items-center gap-2 text-[0.8125rem] text-[var(--ink-2)]">
           <FileText size={13} />
           <span className="truncate font-mono">{filename}</span>
-          <span className="rounded bg-[var(--bg-3)] px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-[var(--mute)]">
+          <span className="rounded bg-[var(--bg-3)] px-2 py-0.5 font-mono text-[0.625rem] uppercase tracking-[0.08em] text-[var(--mute)]">
             {language}
           </span>
         </div>
@@ -67,7 +67,7 @@ export default function CodeEditor({
             type="button"
             onClick={handleSave}
             disabled={disabled || saving}
-            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3 py-1.5 text-[12px] font-medium text-[var(--mute)] transition-colors hover:border-[var(--ink)] hover:text-[var(--ink)] disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--mute)] transition-colors hover:border-[var(--ink)] hover:text-[var(--ink)] disabled:opacity-50"
           >
             <Save size={12} />
             {saving ? 'Saving...' : 'Save'}
@@ -77,7 +77,7 @@ export default function CodeEditor({
               type="button"
               onClick={onOpenTerminal}
               disabled={disabled}
-              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3 py-1.5 text-[12px] font-medium text-[var(--ink-2)] transition-colors hover:border-[var(--purple)] hover:text-[var(--purple)] disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--ink-2)] transition-colors hover:border-[var(--purple)] hover:text-[var(--purple)] disabled:opacity-50"
             >
               <TerminalSquare size={12} />
               Run tests
@@ -87,7 +87,7 @@ export default function CodeEditor({
             type="button"
             onClick={handleRun}
             disabled={disabled}
-            className="inline-flex items-center gap-1.5 rounded-full bg-[var(--purple)] px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-[var(--purple-2)] disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-full bg-[var(--purple)] px-3 py-1.5 text-[0.75rem] font-medium text-white transition-colors hover:bg-[var(--purple-2)] disabled:opacity-50"
           >
             <Play size={12} fill="currentColor" />
             Run

@@ -149,7 +149,7 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
       />
       <div className="mc-page mc-page-narrow">
         {loading ? (
-          <div className="flex min-h-[260px] items-center justify-center">
+          <div className="flex min-h-[16.25rem] items-center justify-center">
             <Spinner size={32} />
           </div>
         ) : (
@@ -188,7 +188,7 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
                 <div className="text-2xl font-bold text-[var(--ink)]">
                   {decisionsKpi.current.toLocaleString()}
                 </div>
-                <div className="mt-1 text-[12px] text-[var(--mute)]" style={{ color: decisionsDelta != null && decisionsDelta > 0 ? 'var(--purple)' : 'var(--mute)' }}>
+                <div className="mt-1 text-[0.75rem] text-[var(--mute)]" style={{ color: decisionsDelta != null && decisionsDelta > 0 ? 'var(--purple)' : 'var(--mute)' }}>
                   {decisionsDeltaLabel}
                 </div>
               </Panel>
@@ -197,7 +197,7 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
                 <div className="text-2xl font-bold text-[var(--purple)]">
                   {advancedKpi.current}
                 </div>
-                <div className="mt-1 text-[12px] text-[var(--mute)]">
+                <div className="mt-1 text-[0.75rem] text-[var(--mute)]">
                   {advancedKpi.borderlines_flagged > 0
                     ? `+${advancedKpi.borderlines_flagged} borderline${advancedKpi.borderlines_flagged === 1 ? '' : 's'} flagged`
                     : 'No borderlines flagged'}
@@ -206,7 +206,7 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
               <Panel className="p-4">
                 <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--mute)]">Auto-rejected</div>
                 <div className="text-2xl font-bold text-[var(--ink)]">{rejectedKpi.current}</div>
-                <div className="mt-1 text-[12px] text-[var(--mute)]">All below role threshold</div>
+                <div className="mt-1 text-[0.75rem] text-[var(--mute)]">All below role threshold</div>
               </Panel>
               <Panel className="p-4">
                 <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--mute)]">
@@ -218,7 +218,7 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
                     <span className="text-base font-normal text-[var(--mute)]"> / {formatDollars(spendKpi.budget_cents)}</span>
                   ) : null}
                 </div>
-                <div className="mt-1 text-[12px]" style={{ color: overBudget ? 'var(--amber)' : 'var(--mute)' }}>
+                <div className="mt-1 text-[0.75rem]" style={{ color: overBudget ? 'var(--amber)' : 'var(--mute)' }}>
                   {spendKpi.active_role_count === 0
                     ? 'No agent-enabled roles yet'
                     : overBudget
@@ -232,7 +232,7 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
               {/* Decisions feed (left, larger). */}
               <Panel className="p-4">
                 <h2 className="mb-1 font-bold text-base">Decisions feed</h2>
-                <p className="mb-3 text-[12.5px] text-[var(--mute)]">
+                <p className="mb-3 text-[0.78125rem] text-[var(--mute)]">
                   A reverse-chronological log of every consequential action.
                 </p>
                 {summary.decisions_feed.length === 0 ? (
@@ -282,9 +282,9 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
               <div className="flex flex-col gap-4">
                 <Panel className="p-4">
                   <h2 className="mb-1 font-bold text-base">Anomalies</h2>
-                  <p className="mb-3 text-[12.5px] text-[var(--mute)]">Things worth your attention.</p>
+                  <p className="mb-3 text-[0.78125rem] text-[var(--mute)]">Things worth your attention.</p>
                   {summary.anomalies.length === 0 ? (
-                    <p className="text-[12.5px] text-[var(--mute)]">
+                    <p className="text-[0.78125rem] text-[var(--mute)]">
                       Anomalies appear once the agent has graded enough assessments to spot drift.
                     </p>
                   ) : (
@@ -298,7 +298,7 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
 
                 <Panel className="p-4">
                   <h2 className="mb-1 font-bold text-base">Funnel · org-wide</h2>
-                  <p className="mb-3 text-[12.5px] text-[var(--mute)]">From application through review to hire.</p>
+                  <p className="mb-3 text-[0.78125rem] text-[var(--mute)]">From application through review to hire.</p>
                   <div className="flex flex-col gap-2">
                     {(summary.funnel.length ? summary.funnel : [
                       { label: 'APPLIED', count: 0, percentage: 0 },
@@ -308,7 +308,7 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
                       { label: 'HIRED', count: 0, percentage: 0 },
                     ]).map((stage) => (
                       <div key={stage.label} className="grid grid-cols-[110px_1fr_auto] items-center gap-3">
-                        <span className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">{stage.label}</span>
+                        <span className="font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[var(--mute)]">{stage.label}</span>
                         <div className="relative h-2.5 overflow-hidden rounded-full bg-[var(--bg-3)]">
                           <div
                             className="absolute inset-y-0 left-0 rounded-full"
@@ -318,7 +318,7 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
                             }}
                           />
                         </div>
-                        <span className="font-mono text-[11.5px] text-[var(--ink-2)]">{safeNumber(stage.count).toLocaleString()}</span>
+                        <span className="font-mono text-[0.71875rem] text-[var(--ink-2)]">{safeNumber(stage.count).toLocaleString()}</span>
                       </div>
                     ))}
                   </div>
@@ -328,8 +328,8 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
 
             <Panel className="p-4">
               <h2 className="mb-1 font-bold text-base">Score distribution</h2>
-              <p className="mb-3 text-[12.5px] text-[var(--mute)]">Composite scores bucketed into deciles.</p>
-              <div className="h-[260px]">
+              <p className="mb-3 text-[0.78125rem] text-[var(--mute)]">Composite scores bucketed into deciles.</p>
+              <div className="h-[16.25rem]">
                 <ResponsiveContainer>
                   <BarChart data={histogramData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
@@ -369,8 +369,8 @@ const AnomalyRow = ({ tone, title, body }) => {
         aria-hidden="true"
       />
       <div>
-        <div className="text-[13px] font-medium text-[var(--ink)]">{title}</div>
-        <div className="mt-0.5 text-[12px] leading-[1.45] text-[var(--mute)]">{body}</div>
+        <div className="text-[0.8125rem] font-medium text-[var(--ink)]">{title}</div>
+        <div className="mt-0.5 text-[0.75rem] leading-[1.45] text-[var(--mute)]">{body}</div>
       </div>
     </div>
   );

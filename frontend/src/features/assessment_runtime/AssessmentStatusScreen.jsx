@@ -70,19 +70,19 @@ export const AssessmentStatusScreen = ({
             markSizeClass="w-9 h-9"
           />
         </div>
-        <div className="mb-3 font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--purple)]">
+        <div className="mb-3 font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--purple)]">
           ASSESSMENT · COMPLETE
         </div>
-        <h1 className="mb-4 font-[var(--font-display)] text-[34px] font-semibold leading-[1] tracking-[-0.025em] text-[var(--taali-runtime-text)]">
+        <h1 className="mb-4 font-[var(--font-display)] text-[2.125rem] font-semibold leading-[1] tracking-[-0.025em] text-[var(--taali-runtime-text)]">
           Task submitted<span className="text-[var(--purple)]">.</span>
         </h1>
-        <p className="mb-6 text-[14px] leading-[1.55] text-[var(--taali-runtime-muted)]">
+        <p className="mb-6 text-[0.875rem] leading-[1.55] text-[var(--taali-runtime-muted)]">
           Your work is locked in. The hiring team will review the transcript, your prompts, and the evidence.
         </p>
         {closeAttempted ? (
-          <div className="rounded-[14px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-bg)] px-5 py-4 text-[13.5px] leading-6 text-[var(--taali-runtime-text)]">
+          <div className="rounded-[14px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-bg)] px-5 py-4 text-[0.84375rem] leading-6 text-[var(--taali-runtime-text)]">
             Your browser doesn’t allow this page to close itself. Press{' '}
-            <kbd className="mx-1 rounded-md border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt,var(--taali-runtime-panel))] px-2 py-0.5 font-mono text-[12px] text-[var(--taali-runtime-text)]">
+            <kbd className="mx-1 rounded-md border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt,var(--taali-runtime-panel))] px-2 py-0.5 font-mono text-[0.75rem] text-[var(--taali-runtime-text)]">
               {shortcutLabel}
             </kbd>
             to close this tab.

@@ -1274,7 +1274,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       <div>
         {NavComponent && !isInterviewView ? <NavComponent currentPage="candidates" onNavigate={onNavigate} /> : null}
         <div className="page">
-          <div className="flex min-h-[280px] items-center justify-center">
+          <div className="flex min-h-[17.5rem] items-center justify-center">
             <Spinner size={22} />
           </div>
         </div>

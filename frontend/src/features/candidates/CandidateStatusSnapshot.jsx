@@ -8,7 +8,7 @@ import {
 
 const InfoCard = ({ label, value }) => (
   <div className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface-subtle)] px-3 py-3">
-    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{label}</p>
+    <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{label}</p>
     <p className="mt-2 text-sm font-semibold text-[var(--taali-text)]">{value}</p>
   </div>
 );
@@ -32,7 +32,7 @@ export function CandidateStatusSnapshot({ application, title = 'General status' 
 
   return (
     <Panel className="p-4">
-      <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{title}</p>
+      <p className="mb-3 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{title}</p>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {items.map((item) => (
           <InfoCard key={item.label} label={item.label} value={item.value} />

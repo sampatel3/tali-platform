@@ -118,20 +118,20 @@ html[data-theme="dark"] {
     font-feature-settings: "ss01", "cv11";
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    /* Sam's stated preference: site at 80% browser-zoom density by
-       default. ``zoom: 0.8`` scales rem + px uniformly (the only
-       mechanism that does so), at the cost of viewport-unit math —
-       elements sized 100vh render at 80vh on screen. Compensation
-       below overrides the Tailwind ``.min-h-screen`` / ``.h-screen``
-       utilities to use 125vh so they render as 100vh after the
-       zoom. Any calc-based viewport heights elsewhere are inflated
-       proportionally — search ``125vh`` / ``125dvh`` for the pattern. */
-    zoom: 0.8;
   }
 
-  /* Override Tailwind's ``.min-h-screen`` / ``.h-screen`` lives in
-     ``@layer utilities`` (below) — declaring it here in ``@layer base``
-     loses to Tailwind's own utility in the cascade. */
+  /* Global 80% density via rem-based scaling (Sam's preference,
+     2026-06-01). Setting the html root font-size to 12.8px (80% of
+     the browser default 16px) shrinks every rem-based size in the
+     codebase — including all Tailwind named utilities AND every
+     ``text-[Xrem]`` / ``p-[Xrem]`` / ``min-h-[Xrem]`` etc. that the
+     conversion pass in this PR replaced for the prior ``[Xpx]``
+     values. Earlier attempts using ``zoom: 0.8`` worked uniformly but
+     broke viewport-unit math everywhere; that fragility is gone
+     because viewport units (vh, dvh, %) are unaffected by font-size. */
+  html {
+    font-size: 12.8px;
+  }
 
   a {
     color: inherit;
@@ -168,20 +168,3 @@ html[data-theme="dark"] {
   }
 }
 
-/* Viewport-height compensation for ``body { zoom: 0.8 }``. Without
-   these overrides, Tailwind's ``.min-h-screen`` (= ``min-height: 100vh``)
-   renders at 80vh after the zoom, leaving empty viewport below the
-   login shell, demo-lead, marketing pages, etc. Declared in
-   ``@layer utilities`` so the cascade beats Tailwind's own utility
-   class (declared in ``@layer base`` doesn't — that was the bug in
-   the previous push). 125 × 0.8 = 100 ✓ */
-@layer utilities {
-  .min-h-screen {
-    min-height: 125vh;
-    min-height: 125dvh;
-  }
-  .h-screen {
-    height: 125vh;
-    height: 125dvh;
-  }
-}

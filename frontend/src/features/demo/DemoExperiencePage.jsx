@@ -344,7 +344,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
                     Open walkthrough <span className="arrow">→</span>
                   </button>
                 </div>
-                <div className="mt-5 text-center text-[13px] text-[var(--mute)]">
+                <div className="mt-5 text-center text-[0.8125rem] text-[var(--mute)]">
                   Already know what you need?{' '}
                   <button type="button" className="text-[var(--purple)]" onClick={() => onNavigate?.('login')}>
                     Sign in

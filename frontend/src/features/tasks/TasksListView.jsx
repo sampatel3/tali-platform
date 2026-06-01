@@ -109,7 +109,7 @@ export const TasksListView = ({
     />
 
     {loading ? (
-      <div className="flex min-h-[260px] items-center justify-center">
+      <div className="flex min-h-[16.25rem] items-center justify-center">
         <Spinner size={32} />
       </div>
     ) : tasksList.length === 0 ? (

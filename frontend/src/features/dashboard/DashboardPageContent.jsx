@@ -308,7 +308,7 @@ export const DashboardPage = ({
         ) : null}
 
         {loading ? (
-          <div className="mb-5 flex min-h-[140px] items-center justify-center">
+          <div className="mb-5 flex min-h-[8.75rem] items-center justify-center">
             <Spinner size={32} />
           </div>
         ) : (
@@ -428,7 +428,7 @@ export const DashboardPage = ({
           </div>
 
           {loading ? (
-            <div className="flex min-h-[260px] items-center justify-center">
+            <div className="flex min-h-[16.25rem] items-center justify-center">
               <Spinner size={32} />
             </div>
           ) : (
@@ -437,7 +437,7 @@ export const DashboardPage = ({
               <thead>
                 <tr className="border-b border-[var(--taali-border-soft)] bg-[var(--taali-table-header)]">
                   {['Candidate', 'Role', 'Task', 'Status', 'TAALI Score', 'Assessment Score', 'Sent', 'Completed', 'Actions'].map((label) => (
-                    <th key={label} className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase tracking-[0.08em]">{label}</th>
+                    <th key={label} className="px-4 py-2.5 text-left font-mono text-[0.6875rem] font-bold uppercase tracking-[0.08em]">{label}</th>
                   ))}
                 </tr>
               </thead>
