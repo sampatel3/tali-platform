@@ -1,4 +1,4 @@
-mainspring sam/autoresearch-core @ 189e425 (PR #29, pending merge to master)
+mainspring master @ 63aa13e
 Source: mainspring/core/autoresearch.py
 Vendored: the WHOLE module, verbatim. Unlike the bias/gate seams, this is a
 pure core-layer module (stdlib only, no ORM/LLM/platform), so it is copied
