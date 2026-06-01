@@ -148,7 +148,14 @@ def write_aggregated_usage_event(
                 user_id=None,
                 role_id=None,
                 feature=feature_enum.value,
-                entity_id=str(assessment_id),
+                # entity_id uses the namespaced ``assessment:{id}`` format
+                # so it matches the classifier (interrogation.py) and rubric
+                # grader (rubric_scoring.py) writers — recruiter-side
+                # spend queries that filter by entity_id prefix would
+                # otherwise miss this row entirely. Was bare ``str(id)``
+                # which silently under-counted session cost by ~50-65%
+                # in any join that keyed on entity_id (2026-06-01).
+                entity_id=f"assessment:{int(assessment_id)}",
                 model=str(model or "(unknown)"),
                 input_tokens=int(input_tokens or 0),
                 output_tokens=int(output_tokens or 0),

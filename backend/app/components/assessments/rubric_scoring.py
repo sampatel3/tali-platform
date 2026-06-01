@@ -271,15 +271,23 @@ class RubricScorer:
     # ---- internal --------------------------------------------------------
 
     def _metering(self, dimension_id: str) -> Dict[str, Any]:
-        meta: Dict[str, Any] = {
-            "feature": "assessment",
+        # MeteredAnthropicClient only persists keys from ``metering[metadata]``
+        # onto the UsageEvent row's metadata column. ``sub_feature`` and
+        # ``dimension`` have to ride inside metadata or they disappear,
+        # which left rubric_scoring rows un-attributable until 2026-06-01.
+        grader_meta: Dict[str, Any] = {
             "sub_feature": "rubric_scoring",
-            "organization_id": self._organization_id,
             "dimension": dimension_id,
         }
         if self._assessment_id is not None:
+            grader_meta["assessment_id"] = str(self._assessment_id)
+        meta: Dict[str, Any] = {
+            "feature": "assessment",
+            "organization_id": self._organization_id,
+            "metadata": grader_meta,
+        }
+        if self._assessment_id is not None:
             meta["entity_id"] = f"assessment:{self._assessment_id}"
-            meta["assessment_id"] = str(self._assessment_id)
         return meta
 
     def _parse_grader_response(self, raw: str, dimension_id: str) -> Dict[str, Any]:

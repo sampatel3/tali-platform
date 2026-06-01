@@ -423,6 +423,7 @@ class AgentSDKChatService:
             total_cost_usd=total_cost,
             num_turns=num_turns,
             stop_reason=stop_reason,
+            model=str(self._model or ""),
         )
 
     # ----- helpers --------------------------------------------------------

@@ -312,6 +312,12 @@ async def chat_with_claude_agentic(
         # undercounting by ~2x).
         "cache_read_input_tokens": int(getattr(chat_turn, "cache_read_input_tokens", 0) or 0),
         "cache_creation_input_tokens": int(getattr(chat_turn, "cache_creation_input_tokens", 0) or 0),
+        # Model alias for this chat turn — read by
+        # ``summarize_prompt_usage`` to price the per-turn tokens at the
+        # correct rate (Haiku today; future model swaps drift through
+        # this field). Empty string when the SDK didn't report one;
+        # the consumer falls back to the chat-path default.
+        "model": str(getattr(chat_turn, "model", "") or ""),
         "timestamp": utcnow().isoformat(),
         # Analytics: the whole tool loop = one user-visible turn. Scoring
         # already reads ``message``/``response``/``input_tokens``/etc.; the

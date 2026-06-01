@@ -422,14 +422,24 @@ def classify_response(
         inner=Anthropic(api_key=api_key),
         organization_id=int(organization_id),
     )
+    # MeteredAnthropicClient extracts ``feature`` / ``entity_id`` /
+    # ``user_id`` / ``role_id`` / ``metadata`` from this dict; everything
+    # else has to ride inside ``metadata`` to land on the UsageEvent row
+    # (otherwise it silently disappears — the pre-2026-06-01 attribution
+    # gap that left every classifier row with ``metadata=null`` and made
+    # the cost reconciler bucket them as "other").
+    classifier_meta: Dict[str, Any] = {
+        "sub_feature": "interrogation_classifier",
+    }
+    if assessment_id is not None:
+        classifier_meta["assessment_id"] = str(assessment_id)
     metering: Dict[str, Any] = {
         "feature": "assessment",
-        "sub_feature": "interrogation_classifier",
         "organization_id": int(organization_id),
+        "metadata": classifier_meta,
     }
     if assessment_id is not None:
         metering["entity_id"] = f"assessment:{assessment_id}"
-        metering["assessment_id"] = str(assessment_id)
 
     user_payload = {
         "decision_points": _decision_points_for_classifier(decision_points),
