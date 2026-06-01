@@ -213,7 +213,7 @@ def test_run_one_passes_against_stub(monkeypatch, placeholder_case):
 
     monkeypatch.setattr(
         "app.cv_matching.runner._resolve_anthropic_client",
-        lambda: stub,
+        lambda **_kw: stub,
     )
 
     result = run_one(placeholder_case, skip_cache=True)
@@ -241,7 +241,7 @@ def test_run_one_records_failure_when_must_meet_misses(monkeypatch, placeholder_
     stub = _stub_client(_tu(payload))
     monkeypatch.setattr(
         "app.cv_matching.runner._resolve_anthropic_client",
-        lambda: stub,
+        lambda **_kw: stub,
     )
     result = run_one(placeholder_case, skip_cache=True)
     assert not result.passed
@@ -263,7 +263,7 @@ def test_main_writes_baseline_snapshot(monkeypatch, tmp_path):
     stub = _stub_client(_tu(_build_passing_response(cv_text)))
     monkeypatch.setattr(
         "app.cv_matching.runner._resolve_anthropic_client",
-        lambda: stub,
+        lambda **_kw: stub,
     )
 
     monkeypatch.setattr(run_evals, "BASELINE_DIR", tmp_path / "baselines")
@@ -293,7 +293,7 @@ def test_main_baseline_md_writes_markdown(monkeypatch, tmp_path):
     stub = _stub_client(_tu(_build_passing_response(cv_text)))
     monkeypatch.setattr(
         "app.cv_matching.runner._resolve_anthropic_client",
-        lambda: stub,
+        lambda **_kw: stub,
     )
     monkeypatch.setattr(run_evals, "BASELINE_DIR", tmp_path / "baselines")
     monkeypatch.setattr(
