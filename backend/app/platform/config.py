@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from dataclasses import dataclass
 from typing import Optional
@@ -291,6 +292,16 @@ class Settings(BaseSettings):
     ASSESSMENT_PRICE_PENCE: int = 2500
     ASSESSMENT_EXPIRY_DAYS: int = 7
     EMAIL_FROM: str = brand_email_from()
+
+    @field_validator("EMAIL_FROM", mode="before")
+    @classmethod
+    def _coerce_empty_email_from(cls, v):
+        # An ``EMAIL_FROM=`` env var (set but empty) would otherwise override
+        # the field default with "", which Resend rejects as an invalid domain.
+        # Treat empty/whitespace as "use the brand default."
+        if v is None or not str(v).strip():
+            return brand_email_from()
+        return v
 
     # Prompt Scoring Weights (configurable per deployment)
     # Keys: tests, code_quality, prompt_quality, prompt_efficiency, independence,
