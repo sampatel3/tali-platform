@@ -1,4 +1,4 @@
-mainspring @ 99ef34c
+mainspring @ 0653221
 Files:
   base.py                       <- spec/knowledge_graph.py (Protocol + dataclasses, ORM-free)
   graphiti.py                   <- accelerator/knowledge_graph/graphiti.py (REAL GraphitiBackend.get_priors)
