@@ -262,7 +262,22 @@ def drain(
             failed += 1
             continue
         try:
-            n = episode_module.dispatch([episode])
+            # Attribute the spend: the row always carries organization_id,
+            # and the payload carries role/candidate for DECISION episodes.
+            # Passing db + bill_* makes the metered async wrapper write a
+            # per-org usage_event (feature=graph_sync) for each Anthropic
+            # call, so outbox-drained indexing flows into the org's budget
+            # instead of landing as an unattributed (org=NULL) call_log row.
+            payload = dict(row.payload or {})
+            _role_id = payload.get("role_id")
+            _cand_id = payload.get("candidate_taali_id")
+            n = episode_module.dispatch(
+                [episode],
+                db=db,
+                bill_organization_id=int(row.organization_id),
+                bill_role_id=int(_role_id) if _role_id is not None else None,
+                bill_candidate_id=int(_cand_id) if _cand_id is not None else None,
+            )
             err: str | None = None
         except Exception as exc:  # dispatch swallows per-episode errors, but be safe
             n = 0
