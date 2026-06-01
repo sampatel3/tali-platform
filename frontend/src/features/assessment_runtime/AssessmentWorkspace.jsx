@@ -472,8 +472,12 @@ export const AssessmentWorkspace = ({
     const handleMove = (moveEvt) => {
       const ctx = resizingRef.current;
       if (!ctx) return;
-      // Drag-left widens the panel (the panel is on the right edge).
-      const delta = ctx.startX - moveEvt.clientX;
+      // Chat-centred layout (2026-06-01): the divider sits on the
+      // chat's RIGHT edge (between chat and editor on the right).
+      // Drag-RIGHT widens chat (chat extends into editor's space);
+      // drag-LEFT shrinks chat. Sign flipped vs the old "chat on the
+      // right" layout where the divider was on chat's left edge.
+      const delta = moveEvt.clientX - ctx.startX;
       const next = Math.max(
         ASSISTANT_PANEL_MIN,
         Math.min(ASSISTANT_PANEL_MAX, ctx.startWidth + delta),
@@ -493,14 +497,37 @@ export const AssessmentWorkspace = ({
     document.body.style.userSelect = 'none';
   }, [assistantPanelCollapsed, assistantPanelWidth]);
 
+  // Chat-centred grid (2026-06-01). New layout order: [repo] [chat] [editor].
+  // The editor pane is REVEALED only when ``selectedFilePath`` is set —
+  // either via a doc-kind task auto-opening its primary_artifact, or via
+  // the candidate clicking a file. When no file is selected the editor
+  // column drops out of the grid entirely and chat expands to fill the
+  // remaining space (1fr), which is the canonical "agent is the work"
+  // shape. When a file IS selected, chat keeps its preferred fixed
+  // pixel width and the editor takes 1fr on the right.
+  const editorVisible = Boolean(selectedFilePath);
   const workspaceGridStyle = useMemo(() => {
-    const assistantTrack = assistantPanelCollapsed ? '76px' : `${assistantPanelWidth}px`;
-    return {
-      '--workspace-grid': hasRepoStructure
-        ? `${repoPanelCollapsed ? '72px' : '248px'} minmax(0,1fr) ${assistantTrack}`
-        : `minmax(0,1fr) ${assistantTrack}`,
-    };
-  }, [assistantPanelCollapsed, assistantPanelWidth, hasRepoStructure, repoPanelCollapsed]);
+    const repoTrack = hasRepoStructure
+      ? (repoPanelCollapsed ? '72px' : '248px')
+      : null;
+    let chatTrack;
+    if (assistantPanelCollapsed) {
+      chatTrack = '76px';
+    } else if (editorVisible) {
+      chatTrack = `${assistantPanelWidth}px`;
+    } else {
+      chatTrack = 'minmax(0,1fr)';
+    }
+    const editorTrack = editorVisible ? 'minmax(0,1fr)' : null;
+    const tracks = [repoTrack, chatTrack, editorTrack].filter(Boolean);
+    return { '--workspace-grid': tracks.join(' ') };
+  }, [
+    assistantPanelCollapsed,
+    assistantPanelWidth,
+    editorVisible,
+    hasRepoStructure,
+    repoPanelCollapsed,
+  ]);
 
   const handleOpenTerminal = () => {
     if (terminalSurfaceEnabled && !showTerminalPanel) {
@@ -654,58 +681,18 @@ export const AssessmentWorkspace = ({
             </aside>
           ) : null}
 
-          <main className="min-w-0 border-r border-[var(--line)] bg-[var(--bg-2)]">
-            <div className="flex h-full min-h-[420px] flex-col">
-              <div className="min-h-0 flex-1">
-                <RuntimeSurfaceBoundary
-                  fallback={({ retry }) => (
-                    <EditorFallback
-                      assessmentStarterCode={assessmentStarterCode}
-                      editorContent={editorContent}
-                      onEditorChange={onEditorChange}
-                      onExecute={onExecute}
-                      onSave={onSave}
-                      onOpenTerminal={handleOpenTerminal}
-                      editorLanguage={editorLanguage}
-                      editorFilename={editorFilename}
-                      isTimerPaused={isTimerPaused}
-                      saving={savingRepoFile}
-                      showTerminalAction={showTerminal}
-                      onRetry={retry}
-                    />
-                  )}
-                >
-                  <Suspense fallback={<EditorLoadingFallback />}>
-                    <LazyCodeEditor
-                      initialCode={assessmentStarterCode}
-                      value={editorContent}
-                      onChange={onEditorChange}
-                      onExecute={onExecute}
-                      onSave={onSave}
-                      onOpenTerminal={handleOpenTerminal}
-                      saving={savingRepoFile}
-                      language={editorLanguage}
-                      filename={editorFilename}
-                      disabled={isTimerPaused}
-                      lightMode={lightMode}
-                      showTerminalAction={showTerminal}
-                    />
-                  </Suspense>
-                </RuntimeSurfaceBoundary>
-              </div>
-            </div>
-          </main>
-
+          {/* Chat-centred layout (2026-06-01): the chat <aside> renders
+              BEFORE the editor <main> so chat sits in the middle column
+              of the [repo | chat | editor] grid. The editor only
+              renders when a file is selected (Sam: "start without the
+              coding window and only open it when a file is selected").
+              Drag handle moves to chat's RIGHT edge — between chat and
+              editor — and only mounts when the editor is visible. */}
           <aside
             className="relative min-h-0"
             style={{ background: 'color-mix(in oklab, var(--bg) 60%, transparent)' }}
           >
-            {/* Drag handle for the Claude panel — absolutely positioned
-                on the aside's left edge so it doesn't disturb the grid
-                column count. Hidden while collapsed (no useful resize
-                range). Sam called out (2026-05-26) that the fixed
-                380px column was too narrow for longer replies. */}
-            {!assistantPanelCollapsed ? (
+            {editorVisible && !assistantPanelCollapsed ? (
               <div
                 role="separator"
                 aria-label="Resize Claude panel"
@@ -713,7 +700,7 @@ export const AssessmentWorkspace = ({
                 tabIndex={0}
                 onMouseDown={handleResizeStart}
                 onDoubleClick={() => setAssistantPanelWidth(ASSISTANT_PANEL_DEFAULT)}
-                className="group absolute inset-y-0 left-0 z-10 hidden w-[7px] -translate-x-[3px] cursor-col-resize xl:block"
+                className="group absolute inset-y-0 right-0 z-10 hidden w-[7px] translate-x-[3px] cursor-col-resize xl:block"
                 title="Drag to resize · double-click to reset"
               >
                 <div className="pointer-events-none absolute left-1/2 top-1/2 h-12 w-[2px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--line-2)] transition-colors group-hover:bg-[var(--purple)]" />
@@ -891,6 +878,58 @@ export const AssessmentWorkspace = ({
               )}
             </div>
           </aside>
+
+          {/* Editor pane — RIGHT column of the chat-centred grid.
+              Mounts only when a file is selected (Sam: "code window
+              appears on the right hand side if a user selects one of
+              the repo files"). For doc-kind tasks the deliverable's
+              primary_artifact pre-selects the file, so the editor is
+              visible from session start. For code-kind tasks the
+              candidate clicks a file in the repo tree to reveal the
+              editor. */}
+          {editorVisible ? (
+            <main className="min-w-0 border-l border-[var(--line)] bg-[var(--bg-2)]">
+              <div className="flex h-full min-h-[420px] flex-col">
+                <div className="min-h-0 flex-1">
+                  <RuntimeSurfaceBoundary
+                    fallback={({ retry }) => (
+                      <EditorFallback
+                        assessmentStarterCode={assessmentStarterCode}
+                        editorContent={editorContent}
+                        onEditorChange={onEditorChange}
+                        onExecute={onExecute}
+                        onSave={onSave}
+                        onOpenTerminal={handleOpenTerminal}
+                        editorLanguage={editorLanguage}
+                        editorFilename={editorFilename}
+                        isTimerPaused={isTimerPaused}
+                        saving={savingRepoFile}
+                        showTerminalAction={showTerminal}
+                        onRetry={retry}
+                      />
+                    )}
+                  >
+                    <Suspense fallback={<EditorLoadingFallback />}>
+                      <LazyCodeEditor
+                        initialCode={assessmentStarterCode}
+                        value={editorContent}
+                        onChange={onEditorChange}
+                        onExecute={onExecute}
+                        onSave={onSave}
+                        onOpenTerminal={handleOpenTerminal}
+                        saving={savingRepoFile}
+                        language={editorLanguage}
+                        filename={editorFilename}
+                        disabled={isTimerPaused}
+                        lightMode={lightMode}
+                        showTerminalAction={showTerminal}
+                      />
+                    </Suspense>
+                  </RuntimeSurfaceBoundary>
+                </div>
+              </div>
+            </main>
+          ) : null}
         </div>
 
         <div
