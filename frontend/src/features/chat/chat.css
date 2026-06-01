@@ -37,7 +37,9 @@
 .cp-root {
   display: grid;
   grid-template-columns: 240px minmax(640px, 1fr);
-  height: calc(100vh - 64px);
+  /* 125vh × 0.8 = 100vh on screen; 80px × 0.8 = 64px header reserve.
+     Compensates for body { zoom: 0.8 } global scale. */
+  height: calc(125vh - 80px);
   background: var(--c-bg);
   border-top: 1px solid var(--c-line);
   color: var(--c-ink);

@@ -1506,7 +1506,8 @@
 
 .rq-modal {
   width: min(640px, 100%);
-  max-height: calc(100vh - 64px);
+  /* 125vh × 0.8 = 100vh on screen; compensates for body { zoom: 0.8 }. */
+  max-height: calc(125vh - 80px);
   overflow-y: auto;
   background: var(--bg-2);
   border: 1px solid var(--line);
