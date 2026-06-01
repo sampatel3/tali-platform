@@ -9,6 +9,7 @@ import {
   MessageSquare,
   Plus,
   TerminalSquare,
+  X,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
@@ -681,18 +682,22 @@ export const AssessmentWorkspace = ({
             </aside>
           ) : null}
 
-          {/* Chat-centred layout (2026-06-01): the chat <aside> renders
-              BEFORE the editor <main> so chat sits in the middle column
-              of the [repo | chat | editor] grid. The editor only
-              renders when a file is selected (Sam: "start without the
-              coding window and only open it when a file is selected").
-              Drag handle moves to chat's RIGHT edge — between chat and
-              editor — and only mounts when the editor is visible. */}
+          {/* Chat-centred layout: chat <aside> renders BEFORE the editor
+              <main> so chat sits in the middle column of the
+              [repo | chat | editor] grid. The editor only renders when
+              a file is selected; chat itself is non-collapsible —
+              Sam (2026-06-01): "chat shouldn't be collapsable, code
+              should — chat is central." The previous chevron collapse
+              for chat is gone. Editor pane has an explicit close (×)
+              button that clears the file selection, dropping the
+              editor column out of the grid entirely.
+              Drag handle stays on chat's RIGHT edge (between chat and
+              editor) and only mounts when the editor is visible. */}
           <aside
             className="relative min-h-0"
             style={{ background: 'color-mix(in oklab, var(--bg) 60%, transparent)' }}
           >
-            {editorVisible && !assistantPanelCollapsed ? (
+            {editorVisible ? (
               <div
                 role="separator"
                 aria-label="Resize Claude panel"
@@ -707,60 +712,34 @@ export const AssessmentWorkspace = ({
               </div>
             ) : null}
             <div className="flex h-full min-h-[420px] flex-col">
-              <div className={`flex items-center gap-3 border-b border-[var(--line)] py-4 ${assistantPanelCollapsed ? 'justify-center px-2' : 'justify-between px-5'}`}>
-                {assistantPanelCollapsed ? (
-                  <div className="grid h-8 w-8 place-items-center rounded-[10px] bg-[linear-gradient(135deg,var(--purple)_0%,var(--purple-soft)_100%)] font-mono text-[11px] font-semibold text-[var(--taali-inverse-text)]">
-                    C
-                  </div>
-                ) : (
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <div className="grid h-7 w-7 place-items-center rounded-[8px] bg-[linear-gradient(135deg,var(--purple)_0%,var(--purple-soft)_100%)] font-mono text-[11px] font-semibold text-[var(--taali-inverse-text)]">
-                        C
-                      </div>
-                      <div className="min-w-0">
-                        <div className="truncate text-[13.5px] font-semibold text-[var(--ink)]">Claude</div>
-                        <div className="truncate font-mono text-[10px] uppercase tracking-[0.08em] text-[var(--mute)]">
-                          {showTerminal ? 'Live repo assistant' : 'Chat guidance'}
-                        </div>
+              <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <div className="grid h-6 w-6 place-items-center rounded-[7px] bg-[linear-gradient(135deg,var(--purple)_0%,var(--purple-soft)_100%)] font-mono text-[10px] font-semibold text-[var(--taali-inverse-text)]">
+                      C
+                    </div>
+                    <div className="min-w-0">
+                      <div className="truncate text-[12px] font-semibold text-[var(--ink)]">Claude</div>
+                      <div className="truncate font-mono text-[9px] uppercase tracking-[0.08em] text-[var(--mute)]">
+                        {showTerminal ? 'Live repo assistant' : 'Chat guidance'}
                       </div>
                     </div>
                   </div>
-                )}
-
-                <div className="flex items-center gap-2">
-                  {!assistantPanelCollapsed && showTerminal ? (
-                    <div className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 font-mono text-[10.5px] uppercase tracking-[0.06em] ${
-                      terminalConnected
-                        ? 'border-[var(--line)] bg-[var(--bg)] text-[var(--green)]'
-                        : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)]'
-                    }`}>
-                      <span className={`h-[6px] w-[6px] rounded-full ${terminalConnected ? 'bg-[var(--green)]' : 'bg-[var(--mute-2)]'}`} />
-                      {terminalConnected ? 'Terminal ready' : 'Terminal idle'}
-                    </div>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => onToggleAssistantPanel?.()}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--mute)] transition-colors hover:bg-[var(--bg-3)] hover:text-[var(--purple)]"
-                    aria-label={assistantPanelCollapsed ? 'Expand Claude panel' : 'Collapse Claude panel'}
-                  >
-                    {assistantPanelCollapsed ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
-                  </button>
                 </div>
+
+                {showTerminal ? (
+                  <div className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-[9.5px] uppercase tracking-[0.06em] ${
+                    terminalConnected
+                      ? 'border-[var(--line)] bg-[var(--bg)] text-[var(--green)]'
+                      : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)]'
+                  }`}>
+                    <span className={`h-[5px] w-[5px] rounded-full ${terminalConnected ? 'bg-[var(--green)]' : 'bg-[var(--mute-2)]'}`} />
+                    {terminalConnected ? 'Terminal ready' : 'Terminal idle'}
+                  </div>
+                ) : null}
               </div>
 
-              {assistantPanelCollapsed ? (
-                <div className="flex flex-1 flex-col items-center gap-3 px-2 py-4 text-center">
-                  <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--mute)]">Claude</div>
-                  {showTerminal ? (
-                    <div className={`h-2.5 w-2.5 rounded-full ${terminalConnected ? 'bg-[var(--green)]' : 'bg-[var(--mute-2)]'}`} />
-                  ) : null}
-                  <div className="text-[11px] leading-5 text-[var(--mute)]">
-                    Expand for chat
-                  </div>
-                </div>
-              ) : agenticChatEnabled ? (
+              {agenticChatEnabled ? (
                 <div className="min-h-0 flex-1 px-4 py-4">
                   <AssessmentClaudeChat
                     assessmentId={assessmentId}
@@ -890,6 +869,26 @@ export const AssessmentWorkspace = ({
           {editorVisible ? (
             <main className="min-w-0 border-l border-[var(--line)] bg-[var(--bg-2)]">
               <div className="flex h-full min-h-[420px] flex-col">
+                {/* Editor header strip with close (×) — clears the file
+                    selection so the editor column drops out of the
+                    grid entirely and chat expands back to fill the
+                    space. Sam (2026-06-01): "the code window should
+                    be collapsable not the chat window — it should
+                    completely collapse so not visible." */}
+                <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-2">
+                  <div className="min-w-0 truncate font-mono text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">
+                    {editorFilename || selectedFilePath || 'Editor'}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onSelectRepoFile?.(null)}
+                    className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--mute)] transition-colors hover:bg-[var(--bg-3)] hover:text-[var(--purple)]"
+                    aria-label="Close editor"
+                    title="Close editor"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
                 <div className="min-h-0 flex-1">
                   <RuntimeSurfaceBoundary
                     fallback={({ retry }) => (

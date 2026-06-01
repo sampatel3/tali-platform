@@ -88,18 +88,38 @@ const buildExecutionOutput = (result) => {
 const initializeRepoEditorState = (runtimeData) => {
   const files = extractRepoFiles(runtimeData?.repo_structure);
   const starter = runtimeData?.starter_code || '';
-  if (files.length > 0) {
+  if (files.length === 0) {
     return {
-      repoFiles: files,
-      selectedRepoFile: files[0].path,
-      editorContent: files[0].content ?? '',
+      repoFiles: [],
+      selectedRepoFile: null,
+      editorContent: starter,
     };
   }
-
+  // Chat-centred init (2026-06-01): code-kind tasks land with NO file
+  // selected so the editor pane stays hidden and the candidate's first
+  // surface is chat only. Doc-kind tasks (PM, Scrum Master) auto-open
+  // their deliverable's primary_artifact so the markdown editor is
+  // visible from the start. Selecting the first file alphabetically
+  // (the old default) put .gitignore in front of every engineering
+  // candidate — wrong framing.
+  const deliverable = runtimeData?.deliverable;
+  const primary = (deliverable && typeof deliverable === 'object')
+    ? String(deliverable.primary_artifact || '').trim()
+    : '';
+  const primaryFile = primary
+    ? files.find((file) => file.path === primary)
+    : null;
+  if (primaryFile) {
+    return {
+      repoFiles: files,
+      selectedRepoFile: primaryFile.path,
+      editorContent: primaryFile.content ?? '',
+    };
+  }
   return {
-    repoFiles: [],
+    repoFiles: files,
     selectedRepoFile: null,
-    editorContent: starter,
+    editorContent: '',
   };
 };
 
