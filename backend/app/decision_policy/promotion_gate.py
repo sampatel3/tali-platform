@@ -33,7 +33,7 @@ from .bias_audit import (
 )
 from .fitted_policy import FittedModel, predict_proba_with_model
 from .shadow_mode import conclude_shadow_run, is_eligible_for_conclusion
-from ..services.mainspring_gate_shadow import shadow_compare_gate
+from vendor.mainspring_gate.seam import SubCheck, evaluate_gate
 
 
 logger = logging.getLogger("taali.decision_policy.promotion_gate")
@@ -221,38 +221,42 @@ def run_gate(
         else:
             shadow_passed = True
 
-    all_pass = gold_passed and bias_passed and shadow_passed
+    # ADR-0010 cut #3 CUTOVER: the gate's AND-composition + promote decision is
+    # sourced from mainspring's vendored gate-decision seam (``evaluate_gate``),
+    # not hand-rolled here. The three sub-checks above (gold / bias / shadow) are
+    # computed by tali exactly as before; only their composition moves to the
+    # seam. Mapping into the seam's slots: gold → holdout (both are candidate-vs-
+    # incumbent log-loss within tolerance), bias → bias, shadow → shadow. The seam
+    # composes ``holdout ∧ bias ∧ shadow`` — identical to tali's prior
+    # ``gold ∧ bias ∧ shadow``. ``decision.passed`` is the composite verdict and
+    # ``decision.promoted`` is True iff passed-and-auto_apply; we drive tali's
+    # existing status mutations + ``GateResult.promoted`` off those, so the
+    # persisted ``PolicyVersion.status`` strings stay byte-identical. (The seam's
+    # own status enum — active/gated/failed_gate — is mainspring's vocabulary and
+    # is NOT written to tali rows; tali's status strings are live/rejected/
+    # unchanged, unchanged by this cut.)
+    decision = evaluate_gate(
+        shadow=SubCheck(passed=shadow_passed),
+        holdout=SubCheck(passed=gold_passed),
+        bias=SubCheck(passed=bias_passed),
+        auto_apply=auto_promote,
+    )
     result = GateResult(
-        promoted=False,
+        promoted=decision.promoted,
         reasons=reasons,
         gold_passed=gold_passed,
         bias_passed=bias_passed,
         shadow_passed=shadow_passed,
     )
 
-    # ADR-0010 cut #3: shadow-evaluate the same sub-check metrics through
-    # mainspring's vendored gate-decision seam and log a gate-decision agreement
-    # diff. No-op unless MAINSPRING_GATE_SHADOW is set; never raises — must not
-    # affect the gate run.
-    shadow_compare_gate(
-        policy_version_id=candidate.id,
-        tali_passed=all_pass,
-        gold_passed=gold_passed,
-        bias_passed=bias_passed,
-        shadow_passed=shadow_passed,
-        auto_apply=auto_promote,
-        tali_reasons=reasons,
-    )
-
-    if all_pass and auto_promote:
-        # Archive the current live row first.
+    if decision.promoted:
+        # passed ∧ auto_promote → flip live. Archive the current live row first.
         if live is not None:
             live.status = "archived"
             live.archived_at = datetime.now(timezone.utc)
         candidate.status = "live"
         candidate.promoted_at = datetime.now(timezone.utc)
-        result.promoted = True
-    elif not all_pass:
+    elif not decision.passed:
         candidate.status = "rejected"
 
     db.flush()

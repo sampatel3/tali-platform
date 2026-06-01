@@ -136,11 +136,10 @@ class Settings(BaseSettings):
     # a verdict agreement/disagreement diff is logged (log-only, no behaviour
     # change) — the at-parity evidence before any cutover. Default OFF.
     MAINSPRING_POLICY_SHADOW: bool = False
-    # ADR-0010 convergence (cut #3, promotion gate): when True, every promotion-
-    # gate run is ALSO evaluated through mainspring's vendored gate-decision seam
-    # and a gate-decision agreement diff is logged (log-only, no behaviour
-    # change) — the at-parity evidence before any gate cutover. Default OFF.
-    MAINSPRING_GATE_SHADOW: bool = False
+    # ADR-0010 convergence (cut #3, promotion gate): CUT OVER. The gate now
+    # composes its AND-decision via mainspring's vendored gate seam unconditionally
+    # (decision_policy/promotion_gate.py); the log-only MAINSPRING_GATE_SHADOW flag
+    # and its shadow comparator were removed once parity was proven. (historical)
     # ADR-0010 convergence (cut #4): when True, every bias/EEOC audit ALSO scores
     # the same per-group selection rates through mainspring's vendored bias seam
     # and logs whether the two fairness verdicts (passed) agree (log-only, no

@@ -8,9 +8,11 @@ fallback values.
 
 from __future__ import annotations
 
+import itertools
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import event
 
 from app.decision_policy import (
@@ -319,3 +321,66 @@ def test_gate_refuses_without_gold_set(db):
     )
     assert result.gold_passed is False
     assert result.promoted is False
+
+
+# ---------------------------------------------------------------------------
+# Gate composition is sourced from mainspring's vendored seam (ADR-0010 cut #3).
+# These tests lock the AND truth table + status mapping so future drift in the
+# seam or the cutover wiring fails CI rather than silently changing promotions.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "gold,bias,shadow,auto_apply",
+    list(itertools.product([False, True], repeat=4)),
+)
+def test_gate_seam_composition_matches_and_truth_table(gold, bias, shadow, auto_apply):
+    """The seam's ``evaluate_gate`` must reduce to a pure AND of the three
+    sub-checks for ``passed``, with ``promoted`` True iff passed-and-auto_apply,
+    and a status of FAILED_GATE / ACTIVE / GATED accordingly. This is exactly
+    tali's prior hand-rolled ``gold ∧ bias ∧ shadow`` composition, so a divergence
+    here is a behaviour change in the promotion gate."""
+    from vendor.mainspring_gate.seam import (
+        STATUS_ACTIVE,
+        STATUS_FAILED_GATE,
+        STATUS_GATED,
+        SubCheck,
+        evaluate_gate,
+    )
+
+    decision = evaluate_gate(
+        shadow=SubCheck(passed=shadow),
+        holdout=SubCheck(passed=gold),
+        bias=SubCheck(passed=bias),
+        auto_apply=auto_apply,
+    )
+
+    expected_passed = gold and bias and shadow
+    expected_promoted = expected_passed and auto_apply
+    if not expected_passed:
+        expected_status = STATUS_FAILED_GATE
+    elif auto_apply:
+        expected_status = STATUS_ACTIVE
+    else:
+        expected_status = STATUS_GATED
+
+    assert decision.passed is expected_passed
+    assert decision.promoted is expected_promoted
+    assert decision.status == expected_status
+
+    # ...and the seam outcome maps onto the EXACT PolicyVersion.status string the
+    # tali gate persists (the only observable DB side effect): live on a promoted
+    # pass, rejected on a fail, unchanged otherwise. The seam's own status enum is
+    # mainspring vocabulary and is never written to a tali row.
+    if decision.promoted:
+        persisted = "live"
+    elif not decision.passed:
+        persisted = "rejected"
+    else:
+        persisted = "unchanged"
+    expected_persisted = (
+        "live" if expected_promoted
+        else "rejected" if not expected_passed
+        else "unchanged"
+    )
+    assert persisted == expected_persisted
