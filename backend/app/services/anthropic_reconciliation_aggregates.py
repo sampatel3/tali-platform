@@ -70,7 +70,7 @@ def _base_alias_for(anthropic_model: Optional[str]) -> Optional[str]:
     return None
 
 
-def _sum_table(db, table, *, organization_ids, model, day_start, day_end, include_alias=True, extra_filters=None) -> dict[str, int]:
+def _sum_table(db, table, *, organization_ids, model, day_start, day_end, include_alias=True, extra_filters=None, include_null_org=False) -> dict[str, int]:
     """Sum the token/cost columns of either ``ClaudeCallLog`` or
     ``UsageEvent`` (same column names) for the org set / model / day.
 
@@ -79,7 +79,21 @@ def _sum_table(db, table, *, organization_ids, model, day_start, day_end, includ
     ``_model_match_filter`` accepts both. ``extra_filters`` appends extra
     SQL predicates (e.g. excluding usage_events already linked to a
     call_log row).
+
+    ``include_null_org``: also count rows whose ``organization_id`` is NULL.
+    An ``IN (...)`` predicate never matches NULL, so without this every
+    unattributed call (notably Graphiti graph_sync, whose async wrapper
+    writes ``claude_call_log`` with ``organization_id=None`` when the
+    metering contextvar isn't set) is silently dropped from the internal
+    aggregate. For the shared-key (Default-workspace) bucket those NULL-org
+    calls ARE shared-key spend Anthropic billed, so they must be counted —
+    dropping them was the dominant cause of the −28%..−46% Haiku drift.
     """
+    org_predicate = table.organization_id.in_(organization_ids)
+    if include_null_org:
+        org_predicate = func.coalesce(table.organization_id.in_(organization_ids), False) | (
+            table.organization_id.is_(None)
+        )
     q = db.query(
         func.count(table.id).label("event_count"),
         func.coalesce(func.sum(table.input_tokens), 0).label("input_tokens"),
@@ -88,7 +102,7 @@ def _sum_table(db, table, *, organization_ids, model, day_start, day_end, includ
         func.coalesce(func.sum(table.cache_creation_tokens), 0).label("cache_creation_tokens"),
         func.coalesce(func.sum(table.cost_usd_micro), 0).label("cost_usd_micro"),
     ).filter(
-        table.organization_id.in_(organization_ids),
+        org_predicate,
         table.created_at >= day_start,
         table.created_at < day_end,
     )
@@ -143,12 +157,21 @@ def _aggregate_internal_multi(
     model: Optional[str],
     usage_day: date,
     include_alias: bool = True,
+    include_null_org: bool = False,
 ) -> dict[str, int]:
     """Internal aggregate across multiple orgs for one (model, day).
 
     Used both for the single-org case and for the shared-key
     (workspace_id=None) case where Anthropic's Default-workspace bucket
     is the sum of every Tali org on the shared key.
+
+    ``include_null_org`` adds rows with ``organization_id IS NULL`` to the
+    aggregate. Set ONLY for the shared-key bucket: unattributed calls
+    (Graphiti graph_sync writes ``claude_call_log`` with NULL org when the
+    metering contextvar is unset) run on the shared key and are billed by
+    Anthropic to the Default workspace, so they belong in this bucket. Left
+    False for workspace-scoped orgs so a NULL-org call isn't double-counted
+    into every org's bucket.
 
     **Source of truth = ``claude_call_log``.** Every Anthropic call
     writes a call_log row unconditionally (since PR #237), so it captures
@@ -177,15 +200,19 @@ def _aggregate_internal_multi(
         organization_ids=organization_ids, model=model,
         day_start=day_start, day_end=day_end,
         include_alias=include_alias,
+        include_null_org=include_null_org,
     )
     if call_log["event_count"] == 0:
         # Pre-#237 day (no call_log at all): the legacy usage_events
-        # aggregate is the only internal number available.
+        # aggregate is the only internal number available. NULL-org
+        # usage_events don't exist (record_event requires an org), so
+        # include_null_org is a no-op on this fallback.
         return _sum_table(
             db, UsageEvent,
             organization_ids=organization_ids, model=model,
             day_start=day_start, day_end=day_end,
             include_alias=include_alias,
+            include_null_org=include_null_org,
         )
 
     # call_log present: add usage_events that have no linked call_log row in
@@ -214,11 +241,14 @@ def _aggregate_internal_multi(
     # Both exclusions are safe: (1) cache hits by definition didn't talk to
     # Anthropic; (2) the agent path is fully represented in claude_call_log
     # via the wrapper's unconditional write since #237.
+    _linked_org_predicate = ClaudeCallLog.organization_id.in_(organization_ids)
+    if include_null_org:
+        _linked_org_predicate = _linked_org_predicate | ClaudeCallLog.organization_id.is_(None)
     linked_usage_event_ids = (
         db.query(ClaudeCallLog.usage_event_id)
         .filter(
             ClaudeCallLog.usage_event_id.isnot(None),
-            ClaudeCallLog.organization_id.in_(organization_ids),
+            _linked_org_predicate,
             ClaudeCallLog.created_at >= day_start,
             ClaudeCallLog.created_at < day_end,
         )

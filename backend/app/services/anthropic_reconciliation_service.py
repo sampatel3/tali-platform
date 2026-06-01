@@ -258,12 +258,21 @@ def reconcile_recent(
                 include_alias=include_alias,
             )
         elif workspace_id is None and _shared_key_org_ids:
+            # Default-workspace bucket = ALL spend on the shared key. That
+            # includes calls Tali couldn't attribute to an org (NULL
+            # organization_id) — chiefly Graphiti graph_sync, whose async
+            # wrapper writes claude_call_log with NULL org when its metering
+            # contextvar isn't set. Anthropic still billed those to the
+            # Default workspace, so include_null_org folds them in. Omitting
+            # them dropped ~13.5M Haiku input tokens/day → the −28%..−46%
+            # Haiku reconciliation drift.
             internal = _aggregate_internal_multi(
                 db,
                 organization_ids=_shared_key_org_ids,
                 model=model,
                 usage_day=usage_day,
                 include_alias=include_alias,
+                include_null_org=True,
             )
         else:
             internal = _zero_internal()

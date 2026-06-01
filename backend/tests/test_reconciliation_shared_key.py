@@ -256,6 +256,66 @@ def test_excludes_cache_hit_usage_events_from_internal_cost(db):
     assert agg["event_count"] == 3
 
 
+def test_shared_key_aggregate_includes_null_org_call_log(db):
+    """Default-workspace (shared-key) bucket must count calls Tali couldn't
+    attribute to an org. Graphiti's async wrapper writes claude_call_log with
+    organization_id=None when its metering contextvar isn't set; Anthropic
+    still bills those to the Default workspace. An ``IN (...)`` org predicate
+    never matches NULL, so without ``include_null_org`` the shared-key
+    aggregate silently dropped ~13.5M Haiku input tokens/day — the dominant
+    cause of the −28%..−46% Haiku reconciliation drift on 2026-05-31.
+    """
+    org_a = Organization(name="SA", slug=f"sa-{id(db)}")
+    db.add(org_a); db.commit()
+    when = datetime(2026, 5, 31, 10, 0, tzinfo=timezone.utc)
+    # Attributed shared-key spend: $4 of org_a call_log.
+    _seed_call_log(db, org_id=int(org_a.id), model="claude-haiku-4-5-20251001", cost_micro=4_000_000, when=when)
+    # Unattributed shared-key spend: $6 of graph_sync with NULL org.
+    _seed_call_log(db, org_id=None, model="claude-haiku-4-5-20251001", cost_micro=6_000_000, when=when)
+    db.commit()
+
+    # Without include_null_org (workspace-scoped org path): NULL-org dropped.
+    scoped = _aggregate_internal_multi(
+        db, organization_ids=[int(org_a.id)],
+        model="claude-haiku-4-5-20251001", usage_day=date(2026, 5, 31),
+    )
+    assert scoped["cost_usd_micro"] == 4_000_000
+    assert scoped["event_count"] == 1
+
+    # Shared-key bucket sets include_null_org=True: NULL-org spend counted.
+    shared = _aggregate_internal_multi(
+        db, organization_ids=[int(org_a.id)],
+        model="claude-haiku-4-5-20251001", usage_day=date(2026, 5, 31),
+        include_null_org=True,
+    )
+    assert shared["cost_usd_micro"] == 10_000_000  # $4 attributed + $6 NULL-org
+    assert shared["event_count"] == 2
+
+
+def test_shared_key_null_org_does_not_double_count_linked_events(db):
+    """A NULL-org call_log row that FK-links a usage_event must not be added
+    twice in the shared-key bucket: the call_log already represents the spend,
+    and the linked usage_event is deduped via the (now NULL-org-aware) linked
+    subquery."""
+    org = Organization(name="SB", slug=f"sb-{id(db)}")
+    db.add(org); db.commit()
+    when = datetime(2026, 5, 31, 11, 0, tzinfo=timezone.utc)
+    # NULL-org graph_sync call that DID get a usage_event (contextvar was set
+    # on this one): usage_event carries the org, call_log is NULL-org & linked.
+    ev = _seed_event(db, org_id=int(org.id), model="claude-haiku-4-5-20251001", cost_micro=5_000_000, when=when, feature="graph_sync")
+    _seed_call_log(db, org_id=None, model="claude-haiku-4-5-20251001", cost_micro=5_000_000, when=when, usage_event_id=int(ev.id))
+    db.commit()
+
+    shared = _aggregate_internal_multi(
+        db, organization_ids=[int(org.id)],
+        model="claude-haiku-4-5-20251001", usage_day=date(2026, 5, 31),
+        include_null_org=True,
+    )
+    # Just the one call: counted once via call_log, the linked usage_event deduped.
+    assert shared["cost_usd_micro"] == 5_000_000
+    assert shared["event_count"] == 1
+
+
 def test_excludes_agent_autonomous_unlinked_usage_events(db):
     """The agent orchestrator passes ``metering={"skip": True}`` to the
     wrapper (so the wrapper writes ONLY a call_log row) and then writes

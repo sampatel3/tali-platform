@@ -130,7 +130,7 @@ def record_event(
     # full model x usage x {standard,batch} corpus — see
     # tests/test_metering_pricing_parity.py), so this is a zero-behaviour-change
     # swap. The per-feature markup below stays tali business logic.
-    cost_usd_micro = seam_cost_for(
+    raw_anthropic_cost_micro = seam_cost_for(
         model=model,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
@@ -139,13 +139,43 @@ def record_event(
         cache_creation_1h_tokens=cache_creation_1h_tokens,
         service_tier=service_tier,
     )
+    # ``credits_charged`` (what the customer pays) is still derived from the
+    # full cost × the cache-hit markup — preserving the small fee that stops
+    # unlimited free re-scoring. ``cost_usd_micro`` and the token columns,
+    # however, must reflect what Anthropic ACTUALLY billed us for THIS event.
     charged = credits_charged(
-        feature=feature_enum, cost_usd_micro=cost_usd_micro, cache_hit=cache_hit
+        feature=feature_enum, cost_usd_micro=raw_anthropic_cost_micro, cache_hit=cache_hit
     )
     pricing = feature_pricing(feature_enum)
     multiplier = (
         pricing.cache_hit_multiplier if cache_hit else pricing.markup_multiplier
     )
+
+    # Cache-hit events make NO Anthropic call (the result is served from
+    # cv_score_cache), so ``claude_call_log`` — the reconciliation oracle —
+    # records nothing for them. Persisting the cached result's token counts
+    # and full cost on the usage_event therefore fabricates Anthropic spend
+    # that never happened: it inflates naive SUM(usage_events) reconciliation
+    # (the haiku output over-count), and double-counts against the role's
+    # monthly USD budget (budget_guard sums cost_usd_micro). A single open
+    # application re-scored off cache 25-29× per day booked 25-29× phantom
+    # Anthropic spend. Zero the Anthropic-attributable columns so usage_events
+    # agrees with claude_call_log (no call ⇒ no spend); the customer-facing
+    # ``credits_charged`` cache fee above is unaffected.
+    if cache_hit:
+        recorded_input = 0
+        recorded_output = 0
+        recorded_cache_read = 0
+        recorded_cache_creation = 0
+        recorded_cache_creation_1h = 0 if cache_creation_1h_tokens is not None else None
+        recorded_cost_micro = 0
+    else:
+        recorded_input = input_tokens
+        recorded_output = output_tokens
+        recorded_cache_read = cache_read_tokens
+        recorded_cache_creation = cache_creation_tokens
+        recorded_cache_creation_1h = cache_creation_1h_tokens
+        recorded_cost_micro = raw_anthropic_cost_micro
 
     # Persist the tier in metadata (there is no dedicated column yet) so batch
     # spend stays queryable and reconciliation can tell standard vs batch apart.
@@ -160,12 +190,12 @@ def record_event(
         feature=feature_enum.value,
         entity_id=entity_id,
         model=model,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        cache_read_tokens=cache_read_tokens,
-        cache_creation_tokens=cache_creation_tokens,
-        cache_creation_1h_tokens=cache_creation_1h_tokens,
-        cost_usd_micro=cost_usd_micro,
+        input_tokens=recorded_input,
+        output_tokens=recorded_output,
+        cache_read_tokens=recorded_cache_read,
+        cache_creation_tokens=recorded_cache_creation,
+        cache_creation_1h_tokens=recorded_cache_creation_1h,
+        cost_usd_micro=recorded_cost_micro,
         markup_multiplier=multiplier,
         credits_charged=charged,
         cache_hit=1 if cache_hit else 0,
