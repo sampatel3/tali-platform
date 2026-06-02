@@ -231,6 +231,107 @@ def list_tasks(
     return [_serialize_task_response(task) for task in tasks]
 
 
+@router.get("/drafts", response_model=List[TaskResponse])
+def list_generated_drafts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Generated task drafts awaiting recruiter review.
+
+    These are org-owned, ``is_active=False`` tasks the JD→spec generator
+    authored (``extra_data.generated``). The recruiter reviews each and
+    approves (activates) or rejects it. Ordered newest-first.
+    """
+    drafts = (
+        db.query(Task)
+        .filter(
+            Task.organization_id == current_user.organization_id,
+            Task.is_active == False,  # noqa: E712
+        )
+        .order_by(Task.id.desc())
+        .all()
+    )
+    out = []
+    for t in drafts:
+        extra = t.extra_data if isinstance(t.extra_data, dict) else {}
+        if extra.get("generated"):
+            out.append(_serialize_task_response(t))
+    return out
+
+
+@router.post("/{task_id}/approve", response_model=TaskResponse)
+def approve_generated_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Activate a generated draft so it can be assigned to candidates.
+
+    Sets ``is_active=True``, clears the ``needs_review`` flag, and ensures
+    the template repo exists (best-effort — a generated draft may not have
+    had its repo provisioned at generation time).
+    """
+    task = (
+        db.query(Task)
+        .filter(Task.id == task_id, Task.organization_id == current_user.organization_id)
+        .first()
+    )
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    extra = dict(task.extra_data) if isinstance(task.extra_data, dict) else {}
+    if not extra.get("generated"):
+        raise HTTPException(status_code=400, detail="Task is not a generated draft")
+
+    task.is_active = True
+    extra["needs_review"] = False
+    extra["approved_by_user_id"] = int(current_user.id)
+    task.extra_data = extra
+    try:
+        db.flush()
+        try:
+            recreate_task_main_repo(task)
+            repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
+            repo_service.create_template_repo(task)
+        except Exception:
+            logger.warning("repo (re)provision failed on approve for task %s", task.id, exc_info=True)
+        db.commit()
+        db.refresh(task)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to approve task")
+    return _serialize_task_response(task)
+
+
+@router.delete("/{task_id}/reject", status_code=status.HTTP_204_NO_CONTENT)
+def reject_generated_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Reject (delete) a generated draft. Only un-approved generated drafts
+    can be rejected this way."""
+    task = (
+        db.query(Task)
+        .filter(Task.id == task_id, Task.organization_id == current_user.organization_id)
+        .first()
+    )
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    extra = task.extra_data if isinstance(task.extra_data, dict) else {}
+    if not extra.get("generated") or task.is_active:
+        raise HTTPException(status_code=400, detail="Only un-approved generated drafts can be rejected")
+    # Unlink from any roles, then delete the draft.
+    try:
+        from sqlalchemy import text as _text
+        db.execute(_text("DELETE FROM role_tasks WHERE task_id = :t"), {"t": int(task.id)})
+        db.delete(task)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to reject task")
+    return None
+
+
 @router.get("/{task_id}/rubric")
 def get_task_rubric(
     task_id: int,

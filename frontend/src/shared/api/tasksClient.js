@@ -9,4 +9,8 @@ export const tasks = {
   delete: (id) => api.delete(`/tasks/${id}`),
   remove: (id) => api.delete(`/tasks/${id}`),
   generateWithAi: (id, payload = {}) => api.post(`/tasks/${id}/generate`, payload),
+  // Generated draft review (auto-provisioned tasks awaiting approval).
+  drafts: () => api.get('/tasks/drafts'),
+  approve: (id) => api.post(`/tasks/${id}/approve`, {}),
+  reject: (id) => api.delete(`/tasks/${id}/reject`),
 };

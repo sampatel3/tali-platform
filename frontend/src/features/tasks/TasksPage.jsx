@@ -6,6 +6,7 @@ import { useToast } from '../../context/ToastContext';
 import { tasks as tasksApi } from '../../shared/api';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
+import { GeneratedDraftsPanel } from './GeneratedDraftsPanel';
 
 const AssessmentPage = lazy(() => import('../assessment_runtime/AssessmentPage'));
 
@@ -166,6 +167,8 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
         subtitle="Browse the assessment task library, preview the candidate workspace, and assign tasks to candidates from a role."
       />
       <div className="mc-page">
+
+        <GeneratedDraftsPanel onChange={loadTasks} />
 
         <div className="tasks-toolbar">
           <div className="seg">
