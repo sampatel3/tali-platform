@@ -208,7 +208,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
                 {[
                   'A real prompt, not a riddle.',
                   'Work the way you normally do with Claude and the live repo.',
-                  'We evaluate how you collaborate with AI, not just the final answer.',
+                  'You are scored on how you steer and the design decisions you make — not on whether you reach working code. The agent can write code; the judgment is yours to show.',
                   'The session transcript is reviewed - not your screen, mic, or camera.',
                 ].map((item) => (
                   <div key={item} className="flex items-start gap-3 rounded-[14px] border border-[var(--line)] bg-[var(--bg)] px-4 py-3">

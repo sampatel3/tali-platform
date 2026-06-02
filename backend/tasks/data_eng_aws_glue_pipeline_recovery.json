@@ -34,40 +34,35 @@
   },
   "evaluation_rubric": {
     "situational_assessment": {
-      "weight": 0.18,
+      "weight": 0.2,
+      "lens": "decision",
       "criteria": {
-        "excellent": "Reads diagnostics/audit_findings.md and job_run.log before touching code. Correctly identifies the four failure modes — quality gate stub, dedup no-op, bookmark ignoring quality_passed, and loading method hardcoded to full_load — and treats the data contract gap as a fifth. Keeps DPU tuning explicitly out of scope.",
-        "good": "Finds the main incident themes with minor gaps — for example identifies duplicates and bookmark issues but misses the loading method decision or data contract violation.",
-        "poor": "Jumps into code without reading the diagnostics. Cannot explain the business impact of the type mapping fallbacks or the bookmark advancement bug."
-      }
-    },
-    "prioritisation_judgment": {
-      "weight": 0.18,
-      "criteria": {
-        "excellent": "Fixes what restores trust in the next finance-close run first: quality gate, dedup logic, and bookmark gating before schema DDL or loading strategy. Clearly separates near-term incident recovery from backlog items like DPU tuning and Terraform automation.",
-        "good": "Picks a mostly sensible order with limited tradeoff explanation — for example fixes dedup but leaves the bookmark bug or contract validation untouched.",
-        "poor": "Focuses on schema planning or performance optimisation while duplicate inflation and bookmark trust remain broken."
-      }
-    },
-    "technical_design": {
-      "weight": 0.17,
-      "criteria": {
-        "excellent": "Implements credible logic for: duplicate detection by transaction_id, bookmark gating on quality_passed, loading method selection (delta for recovery with primary key, CDC when supported), and required-column contract validation. Changes are focused and explainable under pressure.",
-        "good": "Improves the design meaningfully — fixes dedup and quality gate — but leaves one major gap such as loading method or contract validation.",
-        "poor": "Makes ad-hoc fixes that do not restore operator trust — for example hardcodes dedup or patches bookmark logic without fixing the underlying quality gate."
-      }
-    },
-    "implementation_quality": {
-      "weight": 0.17,
-      "criteria": {
-        "excellent": "Ships focused code changes that make the failing tests pass. Type mapping additions are correct (DOUBLE, INT). Dedup keeps latest updated_at. Bookmark only advances when quality_passed is True. Contract check returns meaningful missing_columns list.",
-        "good": "Fixes the main failing behaviours with some rough edges — for example correct dedup but an off-by-one in the updated_at comparison.",
-        "poor": "Leaves failing tests or introduces new failures. Cannot explain what the code change does in terms the VP can understand."
+        "excellent": "The candidate diagnoses the CDC gap + the finance-close clock themselves and reasons about the recovery options before acting — they drive the assessment.",
+        "good": "Grasps the situation but leans on the agent to surface it.",
+        "poor": "Never engages the diagnosis; 'just fix the pipeline'."
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.3,
+      "weight": 0.4,
       "grader": "interrogation_outcome"
+    },
+    "technical_design": {
+      "weight": 0.2,
+      "lens": "deliverable",
+      "criteria": {
+        "excellent": "The shipped recovery implements the load method the candidate chose, handling the known duplicate transaction_ids / lock window correctly. Credit the working artifact.",
+        "good": "Implemented with a gap.",
+        "poor": "Wrong approach implemented / broken / nothing shipped."
+      }
+    },
+    "implementation_quality": {
+      "weight": 0.2,
+      "lens": "deliverable",
+      "criteria": {
+        "excellent": "Shipped should_advance_bookmark() / idempotency handling matches the candidate's stated failure-mode decision and passes tests.",
+        "good": "Works with a gap.",
+        "poor": "Not implemented / broken / nothing shipped."
+      }
     }
   },
   "expected_candidate_journey": {
@@ -151,29 +146,24 @@
     ],
     "jd_to_signal_map": [
       {
-        "job_requirement": "Work in a fast-paced environment and deliver aggressive migration targets while coordinating with data assurance and platform stakeholders.",
-        "task_artifact": "diagnostics/job_run.log + diagnostics/audit_findings.md — incident framing with finance-close deadline",
+        "job_requirement": "Diagnose pipeline failures under time pressure and assess recovery options.",
+        "task_artifact": "Chat transcript — candidate diagnoses the CDC gap + close clock themselves.",
         "rubric_dimension": "situational_assessment"
       },
       {
-        "job_requirement": "Implement correct loading methods based on source requirements such as CDC, full load, delta, and snapshot.",
-        "task_artifact": "glue_jobs/loading_strategy.py — select_load_method() always returns full_load; test_loading_strategy.py asserts correct delta and CDC selection",
-        "rubric_dimension": "prioritisation_judgment"
+        "job_requirement": "Own the recovery decisions (load method, bookmark idempotency) and the trade-offs.",
+        "task_artifact": "Chat transcript — load_method + bookmark_idempotency decisions, owned.",
+        "rubric_dimension": "design_decisions_articulated"
       },
       {
-        "job_requirement": "Build AWS Glue ETL ingestion jobs with strong knowledge of Lakehouse architecture, Medallion patterns, and historical ingestion strategies.",
-        "task_artifact": "glue_jobs/schema_registry.py, glue_jobs/revenue_pipeline.py, ARCHITECTURE.md — Bronze-layer shape and type registry gaps",
+        "job_requirement": "Implement a correct batch-recovery handling duplicates and lock windows.",
+        "task_artifact": "Shipped recovery code + tests.",
         "rubric_dimension": "technical_design"
       },
       {
-        "job_requirement": "Ensure jobs comply with data contracts and are properly monitored with quality checks.",
-        "task_artifact": "glue_jobs/data_contract.py, glue_jobs/quality.py — validate_contract() and quality_gate() stubs that always pass",
+        "job_requirement": "Build idempotent, consistency-safe bookmark advancement.",
+        "task_artifact": "Shipped should_advance_bookmark() + tests.",
         "rubric_dimension": "implementation_quality"
-      },
-      {
-        "job_requirement": "Incident-response ownership for production data pipelines. Make defensible load-method / dedup / idempotency choices under named operational constraints, and hand off cleanly to the next on-call.",
-        "task_artifact": "Chat transcript — Claude opens with the load-method and bookmark-idempotency decisions; candidate's answers in the transcript are the incident-handover evidence.",
-        "rubric_dimension": "design_decisions_articulated"
       }
     ]
   },

@@ -28,40 +28,35 @@
   },
   "evaluation_rubric": {
     "system_risk_assessment": {
-      "weight": 0.18,
+      "weight": 0.2,
+      "lens": "decision",
       "criteria": {
-        "excellent": "Reads EVAL_SPEC.md and diagnostics/eval_report.md before coding. Correctly diagnoses that the harness greenlights unsafe releases because the metrics AND the gate are stubbed, and frames this as a release-safety risk, not a cosmetic bug.",
-        "good": "Identifies that the harness over-reports but misses one root cause (e.g. fixes metrics but not the gate, or vice versa).",
-        "poor": "Edits code without reading the spec; cannot explain why a broken release passed."
-      }
-    },
-    "retrieval_evaluation": {
-      "weight": 0.17,
-      "criteria": {
-        "excellent": "Implements recall@k and precision@k per the spec, respecting the k cutoff and relevant-set semantics. Matches the worked examples exactly.",
-        "good": "Implements recall@k correctly but precision@k is off or ignores k.",
-        "poor": "Leaves the retrieval metrics returning hardcoded 1.0."
-      }
-    },
-    "faithfulness_grounding": {
-      "weight": 0.18,
-      "criteria": {
-        "excellent": "Implements unsupported_claims so ungrounded answer claims are detected against the retrieved context, and faithfulness_score reflects them.",
-        "good": "Detects ungrounded claims but with a brittle rule that misses the fixture case.",
-        "poor": "Leaves unsupported_claims returning [] — hallucinations are never flagged."
-      }
-    },
-    "eval_gate_design": {
-      "weight": 0.17,
-      "criteria": {
-        "excellent": "Implements eval_gate so it fails and names the failing metrics whenever an aggregate is below threshold, and confirms run_eval now FAILS the bad fixture dataset.",
-        "good": "Gate fails on low metrics but does not surface which metric failed.",
-        "poor": "Gate still passes everything; the runner still greenlights the bad dataset."
+        "excellent": "The candidate diagnoses why substring-match faithfulness shipped the v1.4 hallucination and reasons about what a real metric must capture — driving the design, not delegating it.",
+        "good": "Grasps the failure but leans on the agent to explain it.",
+        "poor": "Never engages why the old metric failed."
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.3,
+      "weight": 0.4,
       "grader": "interrogation_outcome"
+    },
+    "faithfulness_grounding": {
+      "weight": 0.22,
+      "lens": "deliverable",
+      "criteria": {
+        "excellent": "The shipped faithfulness metric implements the rule the candidate specified and handles the adversarial off-topic-entity case as they decided. Credit the working artifact.",
+        "good": "Implemented with a gap (one fixture case wrong).",
+        "poor": "Metric not implemented / broken / nothing shipped."
+      }
+    },
+    "eval_gate_design": {
+      "weight": 0.18,
+      "lens": "deliverable",
+      "criteria": {
+        "excellent": "The shipped harness wires the metric into a usable eval gate that passes the suite.",
+        "good": "Harness works with a gap.",
+        "poor": "Not implemented / broken / nothing shipped."
+      }
     }
   },
   "expected_candidate_journey": {
@@ -139,29 +134,24 @@
     ],
     "jd_to_signal_map": [
       {
-        "job_requirement": "Own the evaluation and release-safety process for production GenAI features.",
-        "task_artifact": "EVAL_SPEC.md + diagnostics/eval_report.md — a harness that greenlit a broken release",
+        "job_requirement": "Diagnose eval-metric failures and reason about what a faithfulness metric must capture.",
+        "task_artifact": "Chat transcript — candidate diagnoses the substring-match failure themselves.",
         "rubric_dimension": "system_risk_assessment"
       },
       {
-        "job_requirement": "Measure retrieval quality for RAG systems with standard IR metrics.",
-        "task_artifact": "harness/metrics.py — recall_at_k/precision_at_k stubs; tests/test_metrics.py",
-        "rubric_dimension": "retrieval_evaluation"
+        "job_requirement": "Define the operational faithfulness metric and own the edge-case calls.",
+        "task_artifact": "Chat transcript — faithfulness_definition + off_topic_entity decisions, owned.",
+        "rubric_dimension": "design_decisions_articulated"
       },
       {
-        "job_requirement": "Detect hallucination / ungrounded answers against retrieved context.",
-        "task_artifact": "harness/faithfulness.py — unsupported_claims stub; tests/test_faithfulness.py",
+        "job_requirement": "Implement a faithfulness metric that handles adversarial grounding cases.",
+        "task_artifact": "Shipped harness/faithfulness.py + adversarial fixture results.",
         "rubric_dimension": "faithfulness_grounding"
       },
       {
-        "job_requirement": "Build release gates that block changes failing evaluation thresholds.",
-        "task_artifact": "harness/gate.py + harness/runner.py — eval_gate stub; tests/test_gate.py and test_runner.py",
+        "job_requirement": "Wire the metric into a usable evaluation gate.",
+        "task_artifact": "Shipped eval harness + passing suite.",
         "rubric_dimension": "eval_gate_design"
-      },
-      {
-        "job_requirement": "RAG evaluation design: own the metric that decides whether a release ships. Defend a faithfulness operational definition against adversarial cases, name failure modes, anticipate drift.",
-        "task_artifact": "Chat transcript — Claude opens with the faithfulness-definition and off-topic-entity decisions; candidate's answers in the transcript are the metric-design evidence.",
-        "rubric_dimension": "design_decisions_articulated"
       }
     ]
   },

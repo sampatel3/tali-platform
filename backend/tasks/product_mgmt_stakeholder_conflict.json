@@ -30,9 +30,18 @@
       "headline": "Which work ships in Q3.",
       "tension": "The platform squad can ship ONE of three things this quarter. Each VP has a defensible case; each loss has a real cost. The job is to pick one, name what you're giving up, and own the call.",
       "options": [
-        {"label": "Carepath rewrite", "summary": "Olivia's case — defuse the incident timer, retain platform engineers, lower future per-feature cost. Concedes: Sentinel/Meridian deal risk, ongoing portal churn."},
-        {"label": "Insurance Gateway", "summary": "Marco's case — $2.1M of contracted revenue lands by Sep 30, reference value compounds into Q4 pipeline. Concedes: Carepath debt keeps accruing, portal churn continues."},
-        {"label": "Patient Portal v3 reliability", "summary": "Priya's case — stop the mid-tier hospital bleed, protect the reference base Marco's pipeline depends on. Concedes: Carepath risk continues, Sentinel/Meridian renegotiation likely."}
+        {
+          "label": "Carepath rewrite",
+          "summary": "Olivia's case — defuse the incident timer, retain platform engineers, lower future per-feature cost. Concedes: Sentinel/Meridian deal risk, ongoing portal churn."
+        },
+        {
+          "label": "Insurance Gateway",
+          "summary": "Marco's case — $2.1M of contracted revenue lands by Sep 30, reference value compounds into Q4 pipeline. Concedes: Carepath debt keeps accruing, portal churn continues."
+        },
+        {
+          "label": "Patient Portal v3 reliability",
+          "summary": "Priya's case — stop the mid-tier hospital bleed, protect the reference base Marco's pipeline depends on. Concedes: Carepath risk continues, Sentinel/Meridian renegotiation likely."
+        }
       ],
       "ask": "Pick ONE and name the specific consequence you're choosing to live with. Don't list two as 'co-priorities' — that's the move the CEO explicitly said not to make.",
       "valid_commit": "Names ONE work item to ship AND names a specific business consequence accepted (deal slip, churn count, engineer attrition risk, etc.) — not a generic 'we'll monitor'.",
@@ -52,9 +61,18 @@
       "headline": "What you're asking each VP to accept.",
       "tension": "Two of the three VPs are going to lose this round. The CEO is delivering your call to them tomorrow. Vague language ('align on priorities') makes the CEO's job impossible; specific asks make it doable.",
       "options": [
-        {"label": "Symmetric concessions", "summary": "Each VP commits to something AND accepts something concrete. Easier for the CEO to defend; risks horse-trading."},
-        {"label": "Loss-explicit framing", "summary": "Be explicit about which VPs are 'losing' this quarter and how they're being compensated (sequencing commitment, visible win in Q4). Most honest; politically harder."},
-        {"label": "Status-quo cover", "summary": "Frame the concessions as 'continued execution against current priorities' — less confrontational. Lower trust cost up front; risks the same fight in 4 weeks."}
+        {
+          "label": "Symmetric concessions",
+          "summary": "Each VP commits to something AND accepts something concrete. Easier for the CEO to defend; risks horse-trading."
+        },
+        {
+          "label": "Loss-explicit framing",
+          "summary": "Be explicit about which VPs are 'losing' this quarter and how they're being compensated (sequencing commitment, visible win in Q4). Most honest; politically harder."
+        },
+        {
+          "label": "Status-quo cover",
+          "summary": "Frame the concessions as 'continued execution against current priorities' — less confrontational. Lower trust cost up front; risks the same fight in 4 weeks."
+        }
       ],
       "ask": "Pick a framing AND show what each VP's specific 'commit / accept' lines look like. The CEO needs to be able to read your memo and know what to say to each of them.",
       "valid_commit": "Names a framing AND writes the per-VP 'commit / accept' lines explicitly enough that the CEO could deliver them verbatim — not generic 'align with eng on the rewrite'.",
@@ -76,41 +94,45 @@
     "submission_check": "test_runner"
   },
   "evaluation_rubric": {
+    "design_decisions_articulated": {
+      "weight": 0.35,
+      "grader": "interrogation_outcome"
+    },
     "decision_commitment": {
-      "weight": 0.22,
+      "weight": 0.15,
+      "lens": "decision",
       "criteria": {
-        "excellent": "The memo opens with a single, named recommendation (Carepath / Insurance Gateway / Patient Portal v3) and a one-sentence defence the CEO could quote verbatim. The candidate did not hedge, did not list 'co-priorities', and did not punt the call upward. If the candidate reframed the question (e.g. argued for a phased split), the reframe is substantive and the candidate still committed to a specific sequencing.",
-        "good": "A recommendation is present but takes more than one paragraph to surface, OR the candidate names a primary work item but soft-couples a secondary as 'also critical'. The CEO could still extract the call but would have to do work to do it.",
-        "poor": "No clear recommendation, 'depends on…', a list of three options, a steering-committee proposal, or punting to the CEO. The candidate failed to make the call the brief explicitly demanded."
+        "excellent": "The memo opens with a single named recommendation and a one-sentence defence — the candidate committed, did not hedge or punt the call upward.",
+        "good": "A recommendation is present but takes work to extract, or soft-couples a second priority.",
+        "poor": "No clear recommendation, 'depends', a list of options, or punting to the CEO."
       }
     },
     "tradeoff_articulation": {
-      "weight": 0.22,
+      "weight": 0.1,
+      "lens": "decision",
       "criteria": {
-        "excellent": "The tradeoff section names a SPECIFIC business consequence (deal name + dollar value at risk, named accounts likely to churn, named engineers likely to leave, specific incident pattern that will recur) and frames it as an explicit accepted exposure — not a hedge, not a 'we'll monitor'. The candidate's tradeoff matches the recommendation (e.g. if they picked Carepath, the tradeoff names Sentinel/Meridian and Riverside/Northside by name).",
-        "good": "A tradeoff is named but uses general categories ('some deal slippage', 'continued portal complaints') rather than the specific deal/account/incident references available in the briefs.",
-        "poor": "Tradeoff is missing, vague ('there are tradeoffs to manage'), or describes how the candidate will 'mitigate' the tradeoff rather than accepting it. The senior-PM signal is naming what you're choosing to expose; this answer ducks that."
+        "excellent": "Names a SPECIFIC accepted exposure (named deal/account/incident from the briefs) — not a hedge, not 'we'll monitor'.",
+        "good": "A tradeoff is named but in general categories.",
+        "poor": "Missing, vague, or describes mitigation instead of accepted exposure."
       }
     },
     "stakeholder_fluency": {
-      "weight": 0.20,
+      "weight": 0.22,
+      "lens": "deliverable",
       "criteria": {
-        "excellent": "Each VP has both a specific commitment AND a specific concession written in language the CEO could deliver verbatim. The asks are calibrated to each VP's stated position (e.g. uses Marco's '2-week buffer' offer, Priya's 'phased portal fix' opening, Olivia's 'hotfix-only Portal stream' opening). The candidate is reading the briefs, not just acknowledging the names.",
-        "good": "Each VP is addressed by name with a commit/accept but at least one is generic enough that the CEO would have to translate it ('Marco commits to working with eng on Gateway sequencing').",
-        "poor": "VPs treated identically, named without specific asks, or the section devolves into 'recommend the CEO meet with each VP to align'. The candidate did not do the political work the brief asked for."
+        "excellent": "The shipped memo gives each VP a specific commit AND concession in language the CEO could deliver verbatim, calibrated to each brief. Judge the written artifact.",
+        "good": "Each VP addressed but at least one ask is generic.",
+        "poor": "VPs treated identically / named without asks / 'CEO to align with each VP'."
       }
     },
     "operational_clarity": {
-      "weight": 0.16,
+      "weight": 0.18,
+      "lens": "deliverable",
       "criteria": {
-        "excellent": "The follow-up cadence names a specific TRIGGER condition (a metric, a threshold, an event) that would re-open the decision mid-quarter — not a calendar date. The 'what I'm telling the CEO' bullets are decision-led and quotable, not status-led. The memo is one page; nothing in it is filler.",
-        "good": "Cadence is present but mixed ('monthly review plus we'll re-evaluate if Sentinel slips'); CEO bullets are clear but include some status language.",
-        "poor": "Cadence is a date ('let's review at end of August'), the CEO bullets are status updates not decisions, or the memo is bloated past one page with context the CEO doesn't need."
+        "excellent": "The shipped memo names a trigger-based follow-up cadence (metric+threshold) and decision-led CEO bullets; one page, no filler.",
+        "good": "Cadence present but mixed; some status language.",
+        "poor": "Cadence is a date, CEO bullets are status updates, or the memo is bloated."
       }
-    },
-    "design_decisions_articulated": {
-      "weight": 0.20,
-      "grader": "interrogation_outcome"
     }
   },
   "expected_candidate_journey": {
@@ -188,29 +210,29 @@
     ],
     "jd_to_signal_map": [
       {
-        "job_requirement": "Make defensible prioritisation calls under conflicting executive pressure and own the tradeoff.",
-        "task_artifact": "DECISION_MEMO.md 'Recommendation' + 'The tradeoff I'm accepting' sections — must name one work item and accept a specific named exposure.",
+        "job_requirement": "Engage the load-bearing product decisions and own them under conflicting exec pressure.",
+        "task_artifact": "Chat transcript — which_work_ships + stakeholder_handling decisions, owned.",
+        "rubric_dimension": "design_decisions_articulated"
+      },
+      {
+        "job_requirement": "Make a defensible prioritisation call and commit to it.",
+        "task_artifact": "DECISION_MEMO.md Recommendation — one named work item.",
         "rubric_dimension": "decision_commitment"
       },
       {
-        "job_requirement": "Articulate tradeoffs explicitly in business terms (revenue, churn, retention, attrition) rather than abstract risk language.",
-        "task_artifact": "DECISION_MEMO.md 'The tradeoff I'm accepting' section — must reference specific named accounts/deals/incidents from the briefs.",
+        "job_requirement": "Articulate the accepted tradeoff in concrete business terms.",
+        "task_artifact": "DECISION_MEMO.md tradeoff section — a named exposure.",
         "rubric_dimension": "tradeoff_articulation"
       },
       {
-        "job_requirement": "Translate exec stakeholder positions into actionable commitments the CEO can deliver in a leadership forum.",
-        "task_artifact": "DECISION_MEMO.md 'Ask of each VP' section — per-VP commit/accept lines calibrated to each brief.",
+        "job_requirement": "Translate exec positions into actionable per-VP commitments the CEO can deliver.",
+        "task_artifact": "DECISION_MEMO.md Ask-of-each-VP — per-VP commit/accept lines.",
         "rubric_dimension": "stakeholder_fluency"
       },
       {
-        "job_requirement": "Write decision-led, one-page memos that a CEO can quote directly — no padding, no status framing.",
-        "task_artifact": "DECISION_MEMO.md 'What I'm telling the CEO' bullets + 'Follow-up cadence' — quotable, trigger-driven, not date-driven.",
+        "job_requirement": "Write decision-led, one-page memos with trigger-based follow-up.",
+        "task_artifact": "DECISION_MEMO.md cadence + CEO bullets.",
         "rubric_dimension": "operational_clarity"
-      },
-      {
-        "job_requirement": "Engage substantively with the hard design decisions a product role demands — committing to a choice, naming the cost, accepting senior-engineer reframes when the question is malformed.",
-        "task_artifact": "Chat transcript — opener decision_points (which_work_ships, stakeholder_handling) must reach commit or reframe.",
-        "rubric_dimension": "design_decisions_articulated"
       }
     ]
   },
