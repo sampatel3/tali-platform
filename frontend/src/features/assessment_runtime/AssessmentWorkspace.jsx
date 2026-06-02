@@ -406,6 +406,8 @@ export const AssessmentWorkspace = ({
   // Fixed chat-panel width for static/marketing snapshots. When set, the
   // panel ignores localStorage entirely (see assistantPanelWidth below).
   staticAssistantPanelWidth = null,
+  // Read-only demo: lock chat sending (transcript is pre-seeded, no backend).
+  chatLocked = false,
 }) => {
   const agenticChatEnabled = useAgenticClaudeChat();
   const modifiedPathSet = useMemo(
@@ -764,6 +766,7 @@ export const AssessmentWorkspace = ({
                     onBudgetUpdate={onClaudeBudgetUpdate}
                     disabled={claudePromptDisabled}
                     initialAiPrompts={initialAiPrompts}
+                    locked={chatLocked}
                   />
                 </div>
               ) : (

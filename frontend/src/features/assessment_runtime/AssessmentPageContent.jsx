@@ -123,6 +123,33 @@ const initializeRepoEditorState = (runtimeData) => {
   };
 };
 
+// Demo transcripts are authored as alternating { role, content } turns (see
+// PRODUCT_WALKTHROUGH.runtime.claudeConversation). The live agentic chat
+// hydrates from ai_prompts ({ message, response }), not that shape — so flatten
+// the turns into user→assistant pairs here. A leading assistant turn (an
+// unprompted opener) becomes { message: '', response }.
+const conversationToAiPrompts = (conversation) => {
+  if (!Array.isArray(conversation)) return [];
+  const prompts = [];
+  for (let i = 0; i < conversation.length; i += 1) {
+    const turn = conversation[i];
+    const role = String(turn?.role || '').toLowerCase();
+    const content = String(turn?.content || '');
+    if (role === 'assistant') {
+      prompts.push({ message: '', response: content });
+      continue;
+    }
+    const next = conversation[i + 1];
+    if (next && String(next.role || '').toLowerCase() === 'assistant') {
+      prompts.push({ message: content, response: String(next.content || '') });
+      i += 1;
+    } else {
+      prompts.push({ message: content, response: '' });
+    }
+  }
+  return prompts;
+};
+
 export default function AssessmentPage({
   assessmentId,
   token,
@@ -434,6 +461,13 @@ export default function AssessmentPage({
   }, [proctoringEnabled]);
 
   const assessmentTokenForApi = assessment?.token ?? token;
+
+  // In demo mode the chat is read-only and pre-seeded from the walkthrough
+  // transcript; the live runtime uses the candidate's real ai_prompts.
+  const demoInitialAiPrompts = useMemo(
+    () => (demoMode ? conversationToAiPrompts(demoProfile?.claudeConversation) : null),
+    [demoMode, demoProfile?.claudeConversation],
+  );
   const taskContext = assessment?.scenario || assessment?.description || "";
   const repoFiles = mergeEditorContentIntoRepoFiles(
     repoFilesState,
@@ -1275,6 +1309,10 @@ export default function AssessmentPage({
             taskContext={taskContext}
             repoFiles={repoFiles}
             cloneCommand={assessment?.clone_command}
+            // Demo showcase opens with the brief collapsed so the workspace
+            // (locked chat + seeded transcript + clickable repo) is the first
+            // thing a visitor sees in the iframe; live candidates read it first.
+            defaultExpanded={!demoMode}
           />
 
           <AssessmentWorkspace
@@ -1338,7 +1376,8 @@ export default function AssessmentPage({
             codeContext={editorContent}
             lightMode={assessmentLightMode}
             branchName={assessment?.branch_name}
-            initialAiPrompts={assessment?.ai_prompts || null}
+            initialAiPrompts={demoMode ? demoInitialAiPrompts : (assessment?.ai_prompts || null)}
+            chatLocked={demoMode}
           />
 
           <section className="mt-4 grid gap-4 rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] px-5 py-5 shadow-[var(--shadow-sm)] lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center lg:px-6">

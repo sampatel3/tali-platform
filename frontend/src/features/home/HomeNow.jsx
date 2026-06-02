@@ -436,7 +436,10 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
   );
 };
 
-const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze, onNavigate, onReEvaluate, busy }) => {
+// Exported so the public demo showcase (HomeShowcaseView) can render the
+// exact same decision-detail + action bar the recruiter sees on /home,
+// wired to mock handlers instead of the live API.
+export const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze, onNavigate, onReEvaluate, busy }) => {
   if (!decision) {
     return (
       <section className="rq-hybrid-detail">

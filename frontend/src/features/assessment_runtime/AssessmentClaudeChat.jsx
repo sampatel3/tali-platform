@@ -210,6 +210,10 @@ export const AssessmentClaudeChat = ({
   onBudgetUpdate,
   disabled = false,
   initialAiPrompts = null,
+  // Read-only demo mode: the transcript is pre-seeded and sending is fully
+  // disabled (no backend assessment behind it). The candidate-facing live
+  // runtime never sets this.
+  locked = false,
 }) => {
   const [messages, setMessages] = useState(() => hydrateMessagesFromAiPrompts(initialAiPrompts));
   const [pending, setPending] = useState(false);
@@ -242,7 +246,7 @@ export const AssessmentClaudeChat = ({
   }, [tokensUsed]);
 
   const trimmedInput = inputValue.trim();
-  const canSend = trimmedInput.length > 0 && !pending && !disabled && !isBudgetExhausted && Boolean(assessmentId) && Boolean(token);
+  const canSend = trimmedInput.length > 0 && !pending && !disabled && !isBudgetExhausted && !locked && Boolean(assessmentId) && Boolean(token);
 
   const handleInputChange = useCallback((event) => {
     const next = event.target.value;
@@ -334,10 +338,11 @@ export const AssessmentClaudeChat = ({
   }, [canSend, handleSubmit]);
 
   const placeholder = useMemo(() => {
+    if (locked) return 'Read-only demo — the transcript above is a real candidate session. Book a demo to drive Claude yourself.';
     if (isBudgetExhausted) return 'Claude budget exhausted for this assessment.';
     if (disabled) return 'Claude is unavailable right now.';
     return 'Ask Claude to inspect the repo, explain a failure, or suggest a patch path…';
-  }, [disabled, isBudgetExhausted]);
+  }, [disabled, isBudgetExhausted, locked]);
 
   // Auto-scroll the message list as new turns arrive.
   const listRef = useRef(null);
@@ -430,7 +435,7 @@ export const AssessmentClaudeChat = ({
             onPaste={handlePaste}
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
-            disabled={disabled || pending || isBudgetExhausted}
+            disabled={disabled || pending || isBudgetExhausted || locked}
             aria-label="Message Claude"
             className="min-h-[4.5rem] w-full resize-none border-0 bg-transparent text-[0.875rem] leading-[1.55] text-[var(--ink)] outline-none placeholder:text-[var(--mute)] disabled:opacity-60"
           />
