@@ -376,6 +376,13 @@ class Settings(BaseSettings):
     TAALI_WEIGHT_CV_FIT: float = 0.5
     TAALI_WEIGHT_REQUIREMENTS_FIT: float = 0.5
 
+    # When a new role is created (in Taali or via Workable sync), auto-generate
+    # a DRAFT assessment task from its JD (JD→spec generator) and link it,
+    # pending recruiter review. Default OFF: generation is a paid Sonnet
+    # operation, so an org opts in before its whole role catalog gets
+    # auto-authored. Generated tasks are is_active=False until approved.
+    AUTO_GENERATE_ASSESSMENT_TASKS: bool = False
+
     @property
     def mvp_flags(self) -> MvpFeatureFlags:
         return MvpFeatureFlags(

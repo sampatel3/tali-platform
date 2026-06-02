@@ -1623,6 +1623,22 @@ class WorkableSyncService:
             ):
                 role.starred_for_auto_sync = False
                 role.star_auto_managed = False
+
+        # New Workable role → auto-provision a draft assessment task from its
+        # JD (gated by AUTO_GENERATE_ASSESSMENT_TASKS; default off). countdown
+        # gives the surrounding sync transaction time to commit before the
+        # worker reads the role. Best-effort; never breaks the sync.
+        if created and (role.job_spec_text or "").strip():
+            try:
+                from ....platform.config import settings
+                if getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False):
+                    from ....tasks.assessment_tasks import generate_assessment_task_for_role
+                    generate_assessment_task_for_role.apply_async(
+                        args=[int(role.id), int(org.id)], countdown=45,
+                    )
+            except Exception:  # pragma: no cover
+                logger.warning("auto-generate enqueue failed for synced role %s", getattr(role, "id", "?"), exc_info=True)
+
         return role, created
 
     def _sync_candidate_for_role(
