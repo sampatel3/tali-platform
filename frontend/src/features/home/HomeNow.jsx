@@ -276,7 +276,7 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction }) => (
         ))}
       </div>
     </div>
-    <div className="rq-toolbar-r" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div className="rq-toolbar-r">
       {bulkAction}
       <span className="rq-search">
         <Search size={13} strokeWidth={2} aria-hidden="true" />
@@ -471,7 +471,7 @@ const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze,
         ) : null}
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 14 }}>
+      <div className="rq-detail-identity" style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 14 }}>
         <Avatar initials={initialsFrom(decision.candidate_name)} size={48} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <h2 className="home-title-md" style={{ margin: 0, lineHeight: 1.2 }}>
@@ -490,7 +490,7 @@ const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze,
             {decision.candidate_email || ''}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8, flexShrink: 0, alignItems: 'center', marginRight: 16 }}>
+        <div className="rq-detail-links" style={{ display: 'flex', gap: 8, flexShrink: 0, alignItems: 'center', marginRight: 16 }}>
           <DeepLinkRow
             Icon={FileText}
             label="Open candidate report"

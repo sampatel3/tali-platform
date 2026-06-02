@@ -7,6 +7,26 @@
   gap: 12px;
 }
 
+/* Phone: a 2-up grid keeps the four decision KPIs scannable in one glance
+   instead of a tall single-file stack the recruiter has to scroll past to
+   reach the queue. */
+@media (max-width: 560px) {
+  .kpi-strip {
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .kpi-tile {
+    padding: 11px 12px;
+    border-radius: 12px;
+  }
+  .kpi-v {
+    font-size: 22px;
+  }
+  .kpi-v .kpi-unit {
+    font-size: 13px;
+  }
+}
+
 @media (min-width: 900px) {
   .kpi-strip {
     grid-template-columns: repeat(var(--kpi-cols, 4), minmax(0, 1fr));

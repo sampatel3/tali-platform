@@ -139,3 +139,21 @@
   text-transform: uppercase;
   color: var(--mute-2, var(--mute));
 }
+
+/* Phone: six stat columns + nowrap decision chips are wider than the screen.
+   Rather than push the whole page wide (which forced Safari to render the
+   document zoomed out), scroll the funnel *inside its own card* and keep the
+   two grids width-locked so the stage numbers stay aligned with their chips. */
+@media (max-width: 720px) {
+  .funnel-board {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 12px 14px;
+  }
+  .fb-grid {
+    min-width: 460px;
+  }
+  .fb-v {
+    font-size: 18px;
+  }
+}

@@ -1861,4 +1861,98 @@
   .rq-history-row {
     min-width: 640px;
   }
+
+  /* --- Toolbar: stack into full-width controls; scroll the filter pills in
+     one line each instead of letting them wrap into a cramped block. --- */
+  .rq-toolbar {
+    padding: 10px;
+    gap: 10px;
+  }
+  .rq-toolbar-l,
+  .rq-toolbar-r {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .rq-select {
+    width: 100%;
+    max-width: none;
+  }
+  .rq-tabset {
+    display: flex;
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .rq-tabset::-webkit-scrollbar { display: none; }
+  .rq-tabset button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 9px 12px;
+  }
+  .rq-search {
+    width: 100%;
+    min-width: 0;
+    padding: 9px 12px;
+  }
+  /* The bulk-approve CTA spans the row so it's an easy thumb target. */
+  .rq-toolbar-r .btn {
+    width: 100%;
+    justify-content: center;
+    height: 40px;
+  }
+
+  /* --- Decision detail: reflow the identity row so the deep-link buttons
+     drop to their own full-width line below the name + score instead of
+     overlapping them (the bug visible on the candidate card). --- */
+  .rq-hybrid-detail {
+    padding: 16px 14px 14px;
+  }
+  .rq-detail-identity {
+    flex-wrap: wrap;
+  }
+  .rq-detail-links {
+    order: 5;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    margin: 10px 0 0 !important;
+  }
+  .rq-detail-links > * {
+    flex: 1 1 150px;
+  }
+
+  /* --- Action bar: stack with big, centred tap targets so a recruiter can
+     approve / override one-handed. --- */
+  .rq-action-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .rq-action-l {
+    width: 100%;
+  }
+  .rq-action-l .rq-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+    min-height: 44px;
+    font-size: 14px;
+  }
+  .rq-action-bar > .rq-defer {
+    width: 100%;
+    justify-content: center;
+    min-height: 42px;
+  }
+
+  /* Trim the pending list so the detail pane below isn't buried under a long
+     scroll on a small screen. */
+  .rq-split-list-body {
+    max-height: 320px;
+  }
+
+  /* Modal: less inset so the dialog uses the screen on a phone. */
+  .rq-modal-backdrop {
+    padding: 14px;
+  }
 }
