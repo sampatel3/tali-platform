@@ -8,6 +8,7 @@ from .assessment_tasks import (
     sync_agent_mode_roles,
     sync_workable_daily_candidates,
     reap_stuck_workable_sync_runs,
+    generate_assessment_task_for_role,
 )
 # Eager-import the canonical email-task module so Celery registers
 # send_assessment_email / send_results_email / send_application_rejected_email

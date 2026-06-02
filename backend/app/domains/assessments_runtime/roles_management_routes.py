@@ -106,7 +106,28 @@ def create_role(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to create role")
+
+    # Auto-provision a draft assessment task from the role's JD (gated;
+    # default off). Off-request via Celery — generation is slow + paid.
+    _maybe_autogenerate_assessment_task(role)
     return role_to_response(role)
+
+
+def _maybe_autogenerate_assessment_task(role) -> None:
+    """Enqueue draft-task generation for a new role when the org has
+    opted in (``AUTO_GENERATE_ASSESSMENT_TASKS``). Best-effort; never
+    blocks role creation."""
+    try:
+        from ...platform.config import settings
+        if not getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False):
+            return
+        from ...tasks.assessment_tasks import generate_assessment_task_for_role
+        generate_assessment_task_for_role.delay(int(role.id), int(role.organization_id))
+    except Exception:  # pragma: no cover — provisioning must never break role create
+        import logging
+        logging.getLogger("taali.roles").warning(
+            "auto-generate enqueue failed for role %s", getattr(role, "id", "?"), exc_info=True
+        )
 
 
 @router.get("/roles")

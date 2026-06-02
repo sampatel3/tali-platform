@@ -900,3 +900,48 @@ def reap_stuck_workable_sync_runs():
         }
     finally:
         db.close()
+
+
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=300)
+def generate_assessment_task_for_role(self, role_id: int, organization_id: int):
+    """Auto-provision an assessment task for a newly-created role from its JD.
+
+    Generation is a multi-call Sonnet operation, so it runs off the
+    request path here. The generated task is persisted as a DRAFT
+    (needs recruiter review) and linked to the role. No-op if the role
+    already has an active task or the JD is too thin.
+
+    Gated by ``settings.AUTO_GENERATE_ASSESSMENT_TASKS`` at the enqueue
+    site — this task assumes the caller already checked the flag.
+    """
+    from sqlalchemy.orm import Session
+    from ..platform.database import SessionLocal
+    from ..platform.config import settings
+    from ..models.role import Role
+    from ..services.task_provisioning_service import generate_and_link_task_for_role
+
+    api_key = str(getattr(settings, "ANTHROPIC_API_KEY", "") or "").strip()
+    if not api_key:
+        logger.warning("generate_assessment_task_for_role: no ANTHROPIC_API_KEY; skipping role=%s", role_id)
+        return {"status": "skipped", "reason": "no_api_key"}
+
+    db: Session = SessionLocal()
+    try:
+        role = (
+            db.query(Role)
+            .filter(Role.id == role_id, Role.organization_id == organization_id)
+            .first()
+        )
+        if role is None:
+            return {"status": "skipped", "reason": "role_not_found"}
+        task = generate_and_link_task_for_role(
+            db, role, api_key=api_key, organization_id=organization_id,
+        )
+        if task is None:
+            return {"status": "noop"}
+        return {"status": "generated", "task_id": int(task.id), "task_key": task.task_key, "needs_review": True}
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.exception("generate_assessment_task_for_role failed role=%s", role_id)
+        raise self.retry(exc=exc)
+    finally:
+        db.close()
