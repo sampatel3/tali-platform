@@ -94,7 +94,10 @@ class TestInterrogationOutcomeGrader:
         assert grade.rating == "excellent"
         assert grade.score == 9.5
 
-    def test_half_resolved_is_good(self, scorer):
+    def test_half_resolved_is_poor_not_good(self, scorer):
+        # Judgment-first buckets (2026-06-02): owning 1 of 2 decisions is
+        # PARTIAL steering and scores LOW (4.5/poor), not "good"/6.5. The
+        # skill is steering EVERY decision.
         artifacts = ScoringArtifacts(
             prompt_transcript=_transcript([
                 {"shape": "commit", "severity": "vague"},
@@ -104,8 +107,8 @@ class TestInterrogationOutcomeGrader:
         grade = scorer.grade_dimension_via_interrogation_outcome(
             "design_decisions_articulated", artifacts, weight=0.3,
         )
-        assert grade.rating == "good"
-        assert grade.score == 6.5
+        assert grade.rating == "poor"
+        assert grade.score == 4.5  # 2.0 + (1/2)·5
 
     def test_any_dodge_is_poor_regardless_of_other(self, scorer):
         # Even one dodge sinks the dim — the rubric is explicit that
@@ -120,7 +123,7 @@ class TestInterrogationOutcomeGrader:
             "design_decisions_articulated", artifacts, weight=0.3,
         )
         assert grade.rating == "poor"
-        assert grade.score == 2.0
+        assert grade.score == 1.5
         assert "1 dodge" in grade.reasoning
 
     def test_all_unaddressed_is_poor(self, scorer):
@@ -132,7 +135,7 @@ class TestInterrogationOutcomeGrader:
             "design_decisions_articulated", artifacts, weight=0.3,
         )
         assert grade.rating == "poor"
-        assert grade.score == 3.0  # poor-without-dodge tier
+        assert grade.score == 2.0  # 0 resolved, no dodge → 2.0 + 0
 
     def test_carry_forward_means_late_commit_still_counts(self, scorer):
         # Turn 1: vague on both. Turn 2: commit on both. Late commit
@@ -196,7 +199,7 @@ class TestGraderDispatchInGradeRubric:
         # The "other_dim" criteria grader would call Anthropic. Stub via
         # monkeypatching the method since we only care about dispatch
         # here.
-        scorer.grade_dimension = lambda dim_id, criteria, artifacts, *, weight: type(
+        scorer.grade_dimension = lambda dim_id, criteria, artifacts, *, weight, lens=None: type(
             "G", (), {"dimension_id": dim_id, "score": 0.0, "rating": "poor",
                       "reasoning": "", "evidence_citations": [], "weight": weight,
                       "error": None}
@@ -205,3 +208,47 @@ class TestGraderDispatchInGradeRubric:
         by_id = {d.dimension_id: d for d in result.dimensions}
         assert by_id["design_decisions_articulated"].rating == "excellent"
         assert by_id["design_decisions_articulated"].score == 9.5
+
+
+class TestLensAwareGrading:
+    """Pin the lens model: decision lens punishes delegation, deliverable
+    lens credits the shipped artifact regardless of who typed it."""
+
+    def test_lens_selects_system_prompt(self):
+        from app.components.assessments.rubric_scoring import (
+            _system_prompt_for_lens,
+            _DECISION_LENS_PROMPT,
+            _DELIVERABLE_LENS_PROMPT,
+        )
+        assert _system_prompt_for_lens("decision") is _DECISION_LENS_PROMPT
+        assert _system_prompt_for_lens("deliverable") is _DELIVERABLE_LENS_PROMPT
+        # Unknown / missing → decision frame (back-compat).
+        assert _system_prompt_for_lens(None) is _DECISION_LENS_PROMPT
+        assert _system_prompt_for_lens("nonsense") is _DECISION_LENS_PROMPT
+
+    def test_decision_prompt_punishes_delegation(self):
+        from app.components.assessments.rubric_scoring import _DECISION_LENS_PROMPT
+        assert "DECISION" in _DECISION_LENS_PROMPT
+        assert "delegated" in _DECISION_LENS_PROMPT.lower()
+        assert "design thinking" in _DECISION_LENS_PROMPT.lower()
+
+    def test_deliverable_prompt_credits_agent_use(self):
+        from app.components.assessments.rubric_scoring import _DELIVERABLE_LENS_PROMPT
+        assert "DELIVERABLE" in _DELIVERABLE_LENS_PROMPT
+        assert "do not penalise" in _DELIVERABLE_LENS_PROMPT.lower()
+        assert "shipped" in _DELIVERABLE_LENS_PROMPT.lower()
+
+    def test_tuned_buckets_full_table(self, scorer):
+        # The validated bucket table (Sam, 2026-06-02).
+        def sc(state):
+            from app.components.assessments.rubric_scoring import ScoringArtifacts
+            a = ScoringArtifacts(
+                prompt_transcript=[{"interrogation_state": {k: {"status": v} for k, v in state.items()}}],
+                decision_points=_dps(),
+            )
+            g = scorer.grade_dimension_via_interrogation_outcome("d", a, weight=0.4)
+            return g.score
+        assert sc({"shape": "commit", "severity": "reframe"}) == 9.5   # all resolved
+        assert sc({"shape": "commit", "severity": "vague"}) == 4.5     # 1 of 2 owned
+        assert sc({"shape": "vague", "severity": "vague"}) == 2.0      # none owned, no dodge
+        assert sc({"shape": "commit", "severity": "dodge"}) == 1.5     # any dodge floors

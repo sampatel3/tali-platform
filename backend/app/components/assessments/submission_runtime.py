@@ -105,6 +105,60 @@ def _execution_stdout_text(result: Any) -> str:
     return str(getattr(result, "stdout", "") or "")
 
 
+def _capture_sandbox_repo_files(
+    sandbox: Any, repo_root: str, *, max_files: int = 40, max_file_chars: int = 12000
+) -> Dict[str, str]:
+    """Read the candidate's REAL final repo from the E2B sandbox.
+
+    The agent-SDK chat path writes code to the sandbox via MCP tools — it
+    never round-trips through the browser editor, so ``code_snapshots``
+    and ``final_repo_state`` capture almost nothing for these
+    assessments. The rubric's deliverable-lens grader needs the actual
+    shipped artifact, so we walk ``repo_root`` in-sandbox and return
+    ``{relpath: content}``.
+
+    Bounded for prompt safety: skips VCS/venv/cache/binary, caps file
+    count + per-file chars. Never raises — capture is best-effort; on
+    failure the grader falls back to whatever ``code_snapshots`` held.
+    """
+    snippet = (
+        "import os, json\n"
+        f"root = {repo_root!r}\n"
+        "skip_dirs = {'.git', '.venv', 'venv', '__pycache__', '.pytest_cache', 'node_modules', '.mypy_cache'}\n"
+        "text_ext = {'.py','.md','.txt','.json','.yaml','.yml','.toml','.cfg','.ini','.sh','.sql','.js','.ts','.tsx','.jsx','.html','.css'}\n"
+        "out = {}\n"
+        "count = 0\n"
+        "for dirpath, dirnames, filenames in os.walk(root):\n"
+        "    dirnames[:] = [d for d in dirnames if d not in skip_dirs]\n"
+        "    for fn in sorted(filenames):\n"
+        f"        if count >= {max_files}:\n"
+        "            break\n"
+        "        ext = os.path.splitext(fn)[1].lower()\n"
+        "        if ext and ext not in text_ext:\n"
+        "            continue\n"
+        "        full = os.path.join(dirpath, fn)\n"
+        "        rel = os.path.relpath(full, root)\n"
+        "        try:\n"
+        "            with open(full, 'r', encoding='utf-8', errors='replace') as fh:\n"
+        f"                out[rel] = fh.read()[:{max_file_chars}]\n"
+        "            count += 1\n"
+        "        except Exception:\n"
+        "            continue\n"
+        "print(json.dumps(out))\n"
+    )
+    try:
+        result = sandbox.run_code(snippet)
+        text = _execution_stdout_text(result).strip().splitlines()
+        if not text:
+            return {}
+        payload = json.loads(text[-1])
+        if isinstance(payload, dict):
+            return {str(k): str(v) for k, v in payload.items()}
+    except Exception:
+        logger.warning("sandbox repo-file capture failed; falling back to code_snapshots", exc_info=True)
+    return {}
+
+
 def _parse_test_runner_results(output: str, parse_pattern: str | None) -> Dict[str, Any]:
     if not parse_pattern:
         return {"passed": 0, "failed": 0, "total": 0, "parse_error": False}
@@ -342,6 +396,11 @@ def submit_assessment_impl(
 
     passed = test_results.get("passed", 0)
     total = test_results.get("total", 0)
+
+    # Capture the REAL final repo from the sandbox (the agent-SDK path
+    # writes here via tools, not the browser editor) so the rubric's
+    # deliverable-lens grader sees the actual shipped artifact. Best-effort.
+    sandbox_repo_files = _capture_sandbox_repo_files(sandbox, repo_root)
 
     # --- 2. Capture git evidence and persist branch state (store before push so diff not lost on failure) ---
     try:
@@ -658,7 +717,10 @@ def submit_assessment_impl(
         try:
             from .rubric_scoring import RubricScorer, ScoringArtifacts
 
-            # Build artifacts from the actual submission state.
+            # Build artifacts from the actual submission state. Prefer the
+            # real sandbox repo (where the agent-SDK path wrote the code);
+            # fall back to / merge with code_snapshots for the legacy
+            # browser-editor path. Sandbox files win on key collision.
             repo_files_for_grader: Dict[str, str] = {}
             for snap in (assessment.code_snapshots or []) + [{"final": final_code}]:
                 if not isinstance(snap, dict):
@@ -666,6 +728,8 @@ def submit_assessment_impl(
                 for k, v in snap.items():
                     if isinstance(v, str) and "/" in k:
                         repo_files_for_grader[k] = v
+            if sandbox_repo_files:
+                repo_files_for_grader.update(sandbox_repo_files)
             # Pull DESIGN.md-style files from final_code if it was the last edit
             # (legacy path; new tasks don't ship scaffolds, transcript IS the doc).
             design_doc = ""

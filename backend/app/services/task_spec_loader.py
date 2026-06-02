@@ -58,6 +58,11 @@ class TaskSpecValidationResult:
 _SUPPORTED_GRADERS = frozenset({"interrogation_outcome"})
 _SUPPORTED_DELIVERABLE_KINDS = frozenset({"code", "doc"})
 _DEFAULT_DELIVERABLE_KIND = "code"
+# Rubric-dimension lens (selects the grader frame): "decision" punishes lazy
+# delegation (judgment from the transcript); "deliverable" credits the shipped
+# artifact regardless of who typed it. LLM-criteria dims should declare one;
+# interrogation_outcome dims are inherently decision-lens and don't.
+_SUPPORTED_LENSES = frozenset({"decision", "deliverable"})
 
 
 def validate_deliverable(deliverable: Any, repo_files: Dict[str, str]) -> List[str]:
@@ -139,6 +144,20 @@ def _validate_decisions_dim(
             )
         if grader == "interrogation_outcome":
             dims_with_interrogation_grader.append(dim_id)
+        # Lens (selects the grader frame). Optional for back-compat; when
+        # set it must be supported. interrogation_outcome dims are
+        # inherently decision-lens and should not also declare a lens.
+        lens = details.get("lens")
+        if lens is not None:
+            if not isinstance(lens, str) or lens not in _SUPPORTED_LENSES:
+                errors.append(
+                    f"evaluation_rubric.{dim_id}.lens={lens!r} must be one of {sorted(_SUPPORTED_LENSES)}"
+                )
+            elif grader == "interrogation_outcome":
+                errors.append(
+                    f"evaluation_rubric.{dim_id} declares grader=interrogation_outcome AND lens={lens!r}; "
+                    "interrogation_outcome is inherently decision-lens — drop the lens field"
+                )
     has_decisions = isinstance(decision_points, list) and len(decision_points) > 0
     if dims_with_interrogation_grader and not has_decisions:
         errors.append(
@@ -411,8 +430,14 @@ def validate_task_spec(spec: Dict[str, Any]) -> TaskSpecValidationResult:
         rubric_dimensions: set[str] = set()
     else:
         rubric_dimensions = set(evaluation_rubric.keys())
-        if len(rubric_dimensions) != 5:
-            errors.append(f"evaluation_rubric must define exactly 5 dimensions; got {len(rubric_dimensions)}")
+        # 4-6 dimensions. The lens model (decision/deliverable) drives the
+        # natural count per task — e.g. data_quality is 4 (diagnosis +
+        # interrogation + 2 deliverable). The old "exactly 5" was an
+        # artificial constraint from the pre-lens rubric design.
+        if not (4 <= len(rubric_dimensions) <= 6):
+            errors.append(
+                f"evaluation_rubric must define 4-6 dimensions; got {len(rubric_dimensions)}"
+            )
 
     errors.extend(validate_rubric_weights(evaluation_rubric))
     errors.extend(_validate_decisions_dim(evaluation_rubric, spec.get("decision_points")))
