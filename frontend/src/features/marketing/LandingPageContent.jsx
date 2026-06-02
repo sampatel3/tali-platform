@@ -643,13 +643,17 @@ export const LandingPage = ({ onNavigate }) => {
             </div>
           </div>
 
-          {/* IDE preview at the end of the AI-NATIVE section — the
-              actual workspace component (AssessmentRuntimePreviewView).
+          {/* IDE preview at the end of the AI-NATIVE section — the actual
+              workspace component (AssessmentRuntimePreviewView) in
+              staticPreview mode: a non-interactive snapshot of a live
+              candidate session — brief collapsed, the code editor open on
+              the right, and a real candidate↔Claude transcript in the chat.
               Scaled to 80% via CSS transform so the IDE renders at its
-              natural 1440-wide layout and visually fits the landing
-              band without cramping. The wrapper compensates for the
-              scale (width 125% = 1/0.8) and the outer band clips with
-              overflow-hidden. */}
+              natural ~1440-wide layout and visually fits the landing band
+              without cramping. The wrapper compensates for the scale
+              (width 125% = 1/0.8); the outer band clips with overflow-hidden.
+              Height is sized to show brief → workspace → dock without a
+              scrollbar (the snapshot has no internal scroll). */}
           <p className="mt-12 mb-3 text-[0.875rem] text-[var(--ink-2)]">
             <strong className="text-[var(--ink)]">Candidates work here.</strong>{' '}
             Claude sits at the centre — they drive the task in conversation, open and edit files beside it, run tests in a live terminal. We watch every prompt.
@@ -662,16 +666,17 @@ export const LandingPage = ({ onNavigate }) => {
               <span className="ml-3">app.taali.ai/assess/preview</span>
               <span className="ml-auto rounded-full bg-[color:var(--bg)] px-2 py-0.5 text-[0.625rem] font-semibold text-[var(--mute)]">Locked preview</span>
             </div>
-            <div style={{ height: 640, overflow: 'hidden', position: 'relative' }}>
+            <div style={{ height: 740, overflow: 'hidden', position: 'relative' }}>
               <div
                 style={{
-                  width: '125%',
-                  height: 'calc(100% / 0.8)',
-                  transform: 'scale(0.8)',
+                  width: '140%',
+                  height: 'calc(100% / 0.714)',
+                  transform: 'scale(0.714)',
                   transformOrigin: 'top left',
                 }}
               >
                 <AssessmentRuntimePreviewView
+                  staticPreview
                   heightClass="h-full"
                   lightMode={false}
                   taskName="Revenue Recovery Incident"
