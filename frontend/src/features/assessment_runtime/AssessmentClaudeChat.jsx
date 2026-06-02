@@ -395,7 +395,7 @@ export const AssessmentClaudeChat = ({
         <div className="space-y-3">
           {messages.length === 0 && !pending ? (
             <div className="rounded-[12px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-4 py-3.5 text-[0.84375rem] leading-[1.55] text-[var(--ink-2)]">
-              <div className="mb-2 inline-flex items-center gap-2 font-mono text-[0.65625rem] uppercase tracking-[0.1em] text-[var(--purple)]">
+              <div className="mb-2 flex items-center gap-2 font-mono text-[0.65625rem] uppercase tracking-[0.1em] text-[var(--purple)]">
                 <FileSearch size={12} />
                 Claude is ready
               </div>
@@ -428,7 +428,7 @@ export const AssessmentClaudeChat = ({
           ~80px min-height, modest padding, 1px border with a soft
           focus ring. Tight, refined, NOT oversized. */}
       <div className="border-t border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] px-3 py-3">
-        <div className="rounded-[12px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-bg)] px-3 py-2.5 transition-colors focus-within:border-[var(--purple)] focus-within:shadow-[0_0_0_2px_color-mix(in_oklab,var(--purple)_15%,transparent)]">
+        <div className="rounded-[12px] border-[1.5px] border-[color-mix(in_oklab,var(--mute-2)_50%,var(--line))] bg-[var(--bg-3)] px-3 py-2.5 transition-colors focus-within:border-[var(--purple)] focus-within:shadow-[0_0_0_2px_color-mix(in_oklab,var(--purple)_15%,transparent)]">
           <textarea
             value={inputValue}
             onChange={handleInputChange}
