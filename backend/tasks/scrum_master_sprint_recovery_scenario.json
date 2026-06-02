@@ -25,44 +25,44 @@
     }
   },
   "evaluation_rubric": {
-    "facilitation_judgment": {
-      "weight": 0.24,
-      "criteria": {
-        "excellent": "Stand-up plan distinguishes 'facilitate the team to solve' from 'escalate' from 'block off entirely'. Names specific facilitation moves (timebox, parking lot, decision-vs-discussion) and uses them deliberately. Identifies the SHIP-1170 acceptance-criteria dispute as a review-time problem, not a stand-up problem.",
-        "good": "Sound facilitation framing but mostly textbook — names the technique without showing how it changes the next-day behaviour.",
-        "poor": "Quotes Scrum Guide language without operational specifics, or treats every blocker as something to escalate."
-      }
+    "design_decisions_articulated": {
+      "weight": 0.35,
+      "grader": "interrogation_outcome"
     },
     "blocker_triage": {
-      "weight": 0.24,
+      "weight": 0.15,
+      "lens": "decision",
       "criteria": {
-        "excellent": "Maps each blocker to category (team / leadership / PO), names the owner, and gives a deadline. Recognises that SHIP-1142 is a cross-squad ownership problem (Treasury squad), SHIP-1156 is a capacity problem to manage with the PO, and SHIP-1170 is a hard PO conversation that should not be dressed up as a 'team' issue.",
-        "good": "Categorises 2 of 3 correctly but misclassifies the SHIP-1170 dispute.",
-        "poor": "Treats all three as the same kind of problem or hands them all to leadership."
+        "excellent": "Each blocker is owned with a specific next action + escalation bucket; the candidate's triage judgment is evident, not the agent's.",
+        "good": "Most blockers triaged but at least one is generic.",
+        "poor": "Blockers lumped together or delegated."
       }
     },
     "sprint_economics": {
-      "weight": 0.2,
+      "weight": 0.1,
+      "lens": "decision",
       "criteria": {
-        "excellent": "Declines the PO's pull-in request with a defensible reason: completed-work slack does not increase capacity for in-progress work; WIP is already high; SHIP-1145 risk threatens the PI commit. Frames this as a trade-off the Director can defend in leadership stand-up, not as 'no because Scrum'.",
-        "good": "Declines but the reasoning is weak (e.g. cites 'velocity' without the WIP / risk specifics).",
-        "poor": "Accepts the pull-in or cannot articulate why slack on done work is not equivalent to capacity for in-progress work."
+        "excellent": "The over-commit call is defended with capacity/WIP/risk math the Director could repeat verbatim.",
+        "good": "A call is made but the reasoning is thin on the numbers.",
+        "poor": "No defensible call, or 'whatever the PO wants'."
+      }
+    },
+    "facilitation_judgment": {
+      "weight": 0.22,
+      "lens": "deliverable",
+      "criteria": {
+        "excellent": "The shipped HANDBACK lays out a concrete stand-up + end-of-sprint-review facilitation plan (named moves, not Scrum-Guide platitudes). Judge the written artifact.",
+        "good": "A plan is present but partly generic.",
+        "poor": "Platitudes, or the facilitation sections are empty."
       }
     },
     "stakeholder_communication": {
       "weight": 0.18,
+      "lens": "deliverable",
       "criteria": {
-        "excellent": "The 3-bullet leadership message is sharp: clear ask, clear decision the Director needs, clear risk if no decision. Tone is non-blaming and decision-driving. Surfaces the recurring 'PO changes scope mid-sprint' pattern as a leadership-visible issue without making it a personal escalation.",
-        "good": "Clear bullets but one is vague (e.g. 'help us with the PO' without a specific ask).",
-        "poor": "Reads as a status update, not a decision document; or escalates the PO interpersonally instead of structurally."
-      }
-    },
-    "operational_clarity": {
-      "weight": 0.14,
-      "criteria": {
-        "excellent": "Retro action list is honest: cuts 'time-box stand-ups to 15min' (it's a discipline, not an action) or sharpens it; keeps the scope-change protocol but turns it into a concrete next step with an owner; adds one new action that addresses the strongest pain. Deletes nothing without justification.",
-        "good": "Some pruning but keeps a vague action without sharpening it.",
-        "poor": "Adds new actions without cutting any, or keeps every carry-over from prior retros without explanation."
+        "excellent": "The shipped 'What I'm telling leadership' is a tight, decision-led 3-bullet message the Director could take into stand-up verbatim.",
+        "good": "Present but mixes status and decision.",
+        "poor": "Status update, vague, or missing."
       }
     }
   },
@@ -147,29 +147,29 @@
     ],
     "jd_to_signal_map": [
       {
-        "job_requirement": "Facilitate Scrum events with deliberate technique and protect the team from mid-sprint scope changes.",
-        "task_artifact": "PO_CHAT.md + HANDBACK.md sections 'Stand-up plan' and 'End-of-sprint review move' — candidate must show facilitation moves, not platitudes",
-        "rubric_dimension": "facilitation_judgment"
+        "job_requirement": "Own the load-bearing sprint-recovery decisions under PO and leadership pressure.",
+        "task_artifact": "Chat transcript — po_overcommit + blocker_ownership decisions, owned.",
+        "rubric_dimension": "design_decisions_articulated"
       },
       {
-        "job_requirement": "Triage cross-squad blockers and distinguish what the team owns from what needs leadership intervention.",
-        "task_artifact": "SPRINT_BOARD.md blocked column + RACI.md ambiguity + HANDBACK.md 'Blocker triage' section",
+        "job_requirement": "Triage blockers to the right owner and escalation path.",
+        "task_artifact": "HANDBACK Blocker-triage section — per-blocker owner + next action.",
         "rubric_dimension": "blocker_triage"
       },
       {
-        "job_requirement": "Defend sprint scope decisions using capacity, WIP, and risk arguments rather than process language.",
-        "task_artifact": "PO_CHAT.md over-commit request + HANDBACK.md 'PO over-commit decision' section",
+        "job_requirement": "Reason about sprint economics (capacity vs WIP vs risk) to defend a recovery call.",
+        "task_artifact": "HANDBACK PO-over-commit decision — defended with the numbers.",
         "rubric_dimension": "sprint_economics"
       },
       {
-        "job_requirement": "Communicate sprint risk to leadership in a decision-driving format.",
-        "task_artifact": "LEADERSHIP_BRIEF.md framing + HANDBACK.md 'What I'm telling leadership' section (3-bullet, decision-led)",
-        "rubric_dimension": "stakeholder_communication"
+        "job_requirement": "Facilitate Scrum events with deliberate technique, not Scrum-Guide platitudes.",
+        "task_artifact": "HANDBACK stand-up + end-of-sprint-review plan.",
+        "rubric_dimension": "facilitation_judgment"
       },
       {
-        "job_requirement": "Maintain retro action lists with honesty — prune the items that aren't making the sprint better and sharpen the ones that are.",
-        "task_artifact": "RETRO_NOTES.md carry-over action items + HANDBACK.md 'Retro action list — keep / cut / add' section",
-        "rubric_dimension": "operational_clarity"
+        "job_requirement": "Communicate decisions up to leadership crisply.",
+        "task_artifact": "HANDBACK 'What I'm telling leadership' 3-bullet message.",
+        "rubric_dimension": "stakeholder_communication"
       }
     ]
   },
@@ -185,5 +185,66 @@
     "kind": "doc",
     "primary_artifact": "HANDBACK.md",
     "submission_check": "test_runner"
-  }
+  },
+  "decision_points": [
+    {
+      "id": "po_overcommit",
+      "headline": "The PO over-commit request.",
+      "tension": "The PO wants the team to pull in two more stories to 'recover velocity' — at day 6 of 10, 22 of 58 points done, three stories blocked, a PI commit landing end of sprint.",
+      "options": [
+        {
+          "label": "Accept",
+          "summary": "pull the stories in; signals responsiveness, risks the PI commit and burns the team"
+        },
+        {
+          "label": "Refuse",
+          "summary": "hold the line; protects the sprint + PI commit, risks a PO conflict the Director has to manage"
+        },
+        {
+          "label": "Counter",
+          "summary": "refuse the pull-in but offer a specific alternative (re-scope, swap, defer) the PO can accept"
+        }
+      ],
+      "ask": "Accept, refuse, or counter — and defend it with the capacity/WIP/risk math the Director can repeat in stand-up. Don't say 'it depends'.",
+      "valid_commit": "Names accept/refuse/counter with reasoning grounded in the actual numbers (capacity 64, committed 58, done 22, day 6/10, PI commit at risk).",
+      "valid_reframes": [
+        "Argues the real issue is the mid-sprint scope-change pattern from the retro, and proposes a process fix (scope freeze / WIP limit) alongside the immediate no.",
+        "Argues the decision can't be made without confirming the PI commit's hard dependency, names exactly what to confirm and how it changes the call."
+      ],
+      "anti_patterns": [
+        "'it depends' without committing",
+        "defers the call to the Director or PO",
+        "accepts to avoid conflict with no capacity reasoning"
+      ]
+    },
+    {
+      "id": "blocker_ownership",
+      "headline": "Blocker ownership split.",
+      "tension": "Three stories are blocked for different reasons (SHIP-1142 external API contract, SHIP-1156 engineer out sick, SHIP-1170 disputed acceptance criteria). Each needs a different owner and escalation path.",
+      "options": [
+        {
+          "label": "Team-solvable",
+          "summary": "the team can unblock within the sprint"
+        },
+        {
+          "label": "Needs leadership",
+          "summary": "requires the Director / cross-team escalation"
+        },
+        {
+          "label": "Needs PO conversation",
+          "summary": "requires a hard conversation with the PO (scope/criteria)"
+        }
+      ],
+      "ask": "For EACH of the three blockers, assign it to one bucket and name the next action + owner. Don't lump them together.",
+      "valid_commit": "Each of the three blockers is individually categorised with a named next action and owner — not a generic 'escalate the blockers'.",
+      "valid_reframes": [
+        "Argues one blocker is mis-categorised by the brief (e.g. SHIP-1170 is really a PO conversation masquerading as a team task) and re-buckets it with reasoning."
+      ],
+      "anti_patterns": [
+        "treats all three blockers identically",
+        "'escalate to leadership' without per-blocker ownership",
+        "delegates the triage to the agent"
+      ]
+    }
+  ]
 }

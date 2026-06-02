@@ -34,39 +34,43 @@
   "evaluation_rubric": {
     "system_risk_assessment": {
       "weight": 0.2,
+      "lens": "decision",
       "criteria": {
-        "excellent": "Rapidly identifies all launch blockers across regulatory safety, PII data residency, retrieval grounding, audit compliance, and cost controls. Distinguishes hard blockers (PII in prompts, missing audit trail, unreviewed financial advice) from issues that can wait for a phased rollout. Frames risk in terms a Chief Risk Officer would recognise.",
-        "good": "Finds the major launch risks and prioritises most of them correctly, but may conflate regulatory and product risks or miss the audit trail gap.",
-        "poor": "Focuses on implementation details or cost optimisation while leaving PII leakage or missing human review in place."
-      }
-    },
-    "safety_guardrails": {
-      "weight": 0.18,
-      "criteria": {
-        "excellent": "Enables PII redaction before prompt construction. Fixes the review logic so that any churn_risk action with a recommended action triggers human review regardless of confidence — correctly framing this as a regulatory requirement, not a test-only concern. Treats the degraded-mode gap as a reliability blocker.",
-        "good": "Addresses the main safety gaps but leaves edge cases — for example enables PII redaction but does not fix the high-confidence review suppression bug.",
-        "poor": "Ships with pii_redaction_enabled: False or treats human review as optional overhead in a banking context."
-      }
-    },
-    "grounding_and_retrieval": {
-      "weight": 0.17,
-      "criteria": {
-        "excellent": "Implements retrieve_relevant_context() so it returns real customer documents from db.query_context_docs(). Ensures the CHURN_PROMPT receives and uses retrieved context. Explains why raw ticket text alone is insufficient for regulated financial recommendations and what traceability requires.",
-        "good": "Improves grounding or evidence handling but leaves some traceability gaps — for example retriever is wired but the prompt still doesn't surface citations.",
-        "poor": "Leaves the retriever as a stub returning [] and treats model output as acceptable without grounded evidence."
-      }
-    },
-    "compliance_and_observability": {
-      "weight": 0.15,
-      "criteria": {
-        "excellent": "Implements ObservabilityLogger.log_insight() so audit events are stored and retrievable. Confirms that high_risk_events() correctly surfaces review-required insights for the compliance team. Explains what the audit trail enables for the bank's compliance function.",
-        "good": "Wires the observability logger to store events but leaves the high-risk queue or the customer-scoped trail incomplete.",
-        "poor": "Leaves observability.py as a stub and cannot explain what the compliance team needs from an audit trail."
+        "excellent": "The candidate, in the transcript, independently surfaces the PII/consent vs CBUAE-residency contradiction and reasons about its launch implications — they own the risk call rather than handing it to the agent.",
+        "good": "Identifies the risk but leans on the agent to frame it, or misses the residency-vs-consent tension.",
+        "poor": "Never engages the risk; delegates the launch judgment wholesale."
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.3,
+      "weight": 0.4,
       "grader": "interrogation_outcome"
+    },
+    "safety_guardrails": {
+      "weight": 0.16,
+      "lens": "deliverable",
+      "criteria": {
+        "excellent": "The shipped should_require_human_review() correctly implements the review policy the candidate chose, against the CBUAE-restricted actions / confidence band. Credit the working artifact regardless of who typed it.",
+        "good": "Guardrail mostly works with a gap (one branch wrong, an edge missed).",
+        "poor": "Review gate not implemented, broken, or nothing shipped."
+      }
+    },
+    "grounding_and_retrieval": {
+      "weight": 0.13,
+      "lens": "deliverable",
+      "criteria": {
+        "excellent": "Shipped grounding/PII-redaction logic matches the candidate's residency decision and passes the relevant tests.",
+        "good": "Implemented with a gap.",
+        "poor": "Not implemented / broken / nothing shipped."
+      }
+    },
+    "compliance_and_observability": {
+      "weight": 0.11,
+      "lens": "deliverable",
+      "criteria": {
+        "excellent": "Shipped audit/observability hooks make the verdict legally reviewable as the scenario requires.",
+        "good": "Partial observability.",
+        "poor": "Absent / broken / nothing shipped."
+      }
     }
   },
   "expected_candidate_journey": {
@@ -149,29 +153,29 @@
     ],
     "jd_to_signal_map": [
       {
-        "job_requirement": "Governance and Safety: embed responsible AI practices including hallucination control, bias mitigation, and auditability in a regulated banking environment.",
-        "task_artifact": "RISKS.md, intelligence/review.py, intelligence/observability.py — review logic bug and audit log stub",
+        "job_requirement": "Assess production risk in a regulated GenAI system under conflicting stakeholder pressure.",
+        "task_artifact": "Chat transcript — candidate surfaces the PII/consent vs residency contradiction themselves.",
         "rubric_dimension": "system_risk_assessment"
       },
       {
-        "job_requirement": "Experience with model evaluation, data privacy, and bias mitigation in production GenAI applications within regulated environments.",
-        "task_artifact": "intelligence/config.py pii_redaction_enabled: False, intelligence/safety.py, tests/test_analyzer.py::test_redacts_ticket_pii_before_prompt",
+        "job_requirement": "Make and own the load-bearing launch decisions (PII default, review policy).",
+        "task_artifact": "Chat transcript — pii_consent_contradiction + review_policy decisions, owned not delegated.",
+        "rubric_dimension": "design_decisions_articulated"
+      },
+      {
+        "job_requirement": "Implement human-in-the-loop review gates aligned to compliance rules.",
+        "task_artifact": "Shipped should_require_human_review() + tests.",
         "rubric_dimension": "safety_guardrails"
       },
       {
-        "job_requirement": "RAG System Architecture and Data Grounding: manage context-aware retrieval and keep model behaviour tied to reliable source context.",
-        "task_artifact": "intelligence/retriever.py — retrieve_relevant_context() stub, intelligence/prompts.py {retrieved_context} slot, tests/test_retrieval.py",
+        "job_requirement": "Implement grounding / PII handling consistent with data-residency rules.",
+        "task_artifact": "Shipped redaction/grounding logic + tests.",
         "rubric_dimension": "grounding_and_retrieval"
       },
       {
-        "job_requirement": "Establish engineering standards for model security, explainability, and operational resilience — including observability frameworks for monitoring agentic workflows.",
-        "task_artifact": "intelligence/observability.py — log_insight() stub, tests/test_observability.py",
+        "job_requirement": "Make the system's verdicts auditable and observable for legal review.",
+        "task_artifact": "Shipped audit/observability hooks.",
         "rubric_dimension": "compliance_and_observability"
-      },
-      {
-        "job_requirement": "Proven delivery of production-grade GenAI tools in regulated environments. Ability to take a defended launch verdict to legal under time pressure, naming hard blockers and resolving stakeholder contradictions.",
-        "task_artifact": "Chat transcript — Claude opens with the PII contradiction and review-policy decisions; candidate's answers in the transcript are the launch evidence.",
-        "rubric_dimension": "design_decisions_articulated"
       }
     ]
   },

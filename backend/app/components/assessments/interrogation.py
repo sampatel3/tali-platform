@@ -163,14 +163,16 @@ def validate_decision_points(decision_points: Any) -> List[str]:
 # ---------------------------------------------------------------------------
 
 _OPENER_PREAMBLE = (
-    "Before I touch any code, {n} {decision_word} that need to come from you — "
-    "not from me. These shape everything else; I'm not going to write substantive "
-    "code until you've made a call on each."
+    "Before we start, {n} {decision_word} that need to come from you — "
+    "not from me. These shape everything else; I'm not going to do the "
+    "substantive work until you've made a call on each."
 )
 _OPENER_CLOSING = (
     "Once I have your answers I'll write the implementation that matches your "
     "choices. If you tell me \"whatever you think\" I'll push back — these need "
-    "to come from you."
+    "to come from you. You're assessed on the steering and design thinking you "
+    "show here, not on whether we reach working code — I can write the code; "
+    "the judgment is the part that's yours."
 )
 
 

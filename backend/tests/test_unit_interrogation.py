@@ -442,7 +442,7 @@ class TestPilotTaskGoldens:
         assert validate_decision_points(dps) == []
         # Renders to a non-trivial opener.
         rendered = render_opener(dps)
-        assert "Before I touch any code" in rendered
+        assert "Before we start" in rendered
         assert "whatever you think" in rendered
         # Rubric must declare interrogation_outcome grader.
         ddi = (spec.get("evaluation_rubric") or {}).get("design_decisions_articulated") or {}
