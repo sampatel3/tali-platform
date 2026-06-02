@@ -49,12 +49,69 @@ class BudgetCheck:
     reason: Optional[str] = None
 
 
-def _month_start_utc(now: datetime) -> datetime:
+def month_start() -> datetime:
+    """First day of the current month at 00:00 **UTC** — the single canonical
+    month boundary every budget/usage surface must measure spend over. Use this
+    everywhere; do NOT recompute a month start from local time."""
+    now = datetime.now(timezone.utc)
     return datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+
+
+def _month_start_utc(now: datetime) -> datetime:
+    # Back-compat shim — prefer the no-arg ``month_start()``.
+    return datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+
+
+def micro_to_cents(micro) -> int:
+    """The one micro-credits → cents conversion (1 cent = 10_000 micro-credits).
+    Every budget/usage cents figure goes through here so units never diverge."""
+    return int(int(micro or 0) / 10_000)
 
 
 def role_monthly_usd_cents(role: Role) -> int:
     return int(role.monthly_usd_budget_cents or DEFAULT_USD_BUDGET_MONTHLY_CENTS)
+
+
+def spend_by_role_map(db: Session, *, organization_id: int) -> dict:
+    """``{role_id: MTD spend cents}`` for the org, EXCLUDING ``role_id IS NULL``.
+
+    The single definition the per-role agent cards and the org rollup share, so
+    they reconcile by construction (``org spend == Σ card spends``). Same
+    basis/window/unit as ``month_to_date_spend_cents``."""
+    rows = (
+        db.query(
+            UsageEvent.role_id,
+            func.coalesce(func.sum(UsageEvent.credits_charged), 0),
+        )
+        .filter(
+            UsageEvent.organization_id == organization_id,
+            UsageEvent.role_id.isnot(None),
+            UsageEvent.created_at >= month_start(),
+        )
+        .group_by(UsageEvent.role_id)
+        .all()
+    )
+    return {int(rid): micro_to_cents(micro) for rid, micro in rows}
+
+
+def org_month_to_date_spend_cents(db: Session, *, organization_id: int) -> int:
+    """Org MTD spend in cents = Σ per-role *attributed* spend (EXCLUDES
+    ``role_id IS NULL``), so the org budget tile reconciles exactly with the
+    sum of the per-role job cards. Unattributed spend (graph_sync
+    candidate-indexing, etc.) is org overhead surfaced on the Usage tab — it is
+    NOT charged against the per-role caps, whose denominator (Σ role budgets)
+    has no bucket for it."""
+    spent_micro = (
+        db.query(func.coalesce(func.sum(UsageEvent.credits_charged), 0))
+        .filter(
+            UsageEvent.organization_id == organization_id,
+            UsageEvent.role_id.isnot(None),
+            UsageEvent.created_at >= month_start(),
+        )
+        .scalar()
+        or 0
+    )
+    return micro_to_cents(spent_micro)
 
 
 def month_to_date_spend_cents(db: Session, *, role: Role) -> int:
@@ -65,18 +122,17 @@ def month_to_date_spend_cents(db: Session, *, role: Role) -> int:
     Same unit as ``Role.monthly_usd_budget_cents`` so the cap check and
     every customer-facing display reconcile.
     """
-    month_start = _month_start_utc(datetime.now(timezone.utc))
     spent_micro = (
         db.query(func.coalesce(func.sum(UsageEvent.credits_charged), 0))
         .filter(
             UsageEvent.organization_id == role.organization_id,
             UsageEvent.role_id == role.id,
-            UsageEvent.created_at >= month_start,
+            UsageEvent.created_at >= month_start(),
         )
         .scalar()
         or 0
     )
-    return int(int(spent_micro) / 10_000)  # micro-USD → cents
+    return micro_to_cents(spent_micro)
 
 
 def month_to_date_raw_cost_cents(db: Session, *, role: Role) -> int:
@@ -96,19 +152,18 @@ def month_to_date_raw_cost_cents(db: Session, *, role: Role) -> int:
     cache FEE stays in ``month_to_date_spend_cents`` (credits), so the margin
     correctly counts it as margin.
     """
-    month_start = _month_start_utc(datetime.now(timezone.utc))
     raw_micro = (
         db.query(func.coalesce(func.sum(UsageEvent.cost_usd_micro), 0))
         .filter(
             UsageEvent.organization_id == role.organization_id,
             UsageEvent.role_id == role.id,
-            UsageEvent.created_at >= month_start,
+            UsageEvent.created_at >= month_start(),
             UsageEvent.cache_hit == 0,
         )
         .scalar()
         or 0
     )
-    return int(int(raw_micro) / 10_000)  # micro-USD → cents
+    return micro_to_cents(raw_micro)
 
 
 def check_monthly_usd(db: Session, *, role: Role) -> BudgetCheck:

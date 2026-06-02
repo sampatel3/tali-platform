@@ -86,8 +86,10 @@ def role_usage_breakdown(
     if role is None:
         raise HTTPException(status_code=404, detail=f"role {role_id} not found")
 
-    now = datetime.now().astimezone()
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    # Canonical UTC month boundary — the per-feature breakdown below MUST use
+    # the same window as the headline spent/raw figures (which come from
+    # budget_guard) or the feature rows won't sum to the headline.
+    month_start = budget_guard.month_start()
 
     rows = (
         db.query(
