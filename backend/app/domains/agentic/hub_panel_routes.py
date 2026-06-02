@@ -37,9 +37,9 @@ from ...models.agent_decision import AgentDecision
 from ...models.agent_run import AgentRun
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
+from ...agent_runtime import budget_guard
 from ...models.cv_score_job import SCORE_JOB_PENDING, CvScoreJob
 from ...models.role import Role
-from ...models.usage_event import UsageEvent
 from ...models.user import User
 from ...platform.database import get_db
 
@@ -218,16 +218,9 @@ def agent_panel(
         .group_by(AgentRun.role_id)
         .all()
     )
-    spend_by_role = dict(
-        db.query(UsageEvent.role_id, func.coalesce(func.sum(UsageEvent.credits_charged), 0))
-        .filter(
-            UsageEvent.organization_id == org_id,
-            UsageEvent.created_at >= month_start,
-            UsageEvent.role_id.isnot(None),
-        )
-        .group_by(UsageEvent.role_id)
-        .all()
-    )
+    # Canonical per-role MTD spend (cents) — one definition shared with the org
+    # rollup, so the agent cards and the workspace tile reconcile.
+    spend_cents_by_role = budget_guard.spend_by_role_map(db, organization_id=org_id)
     running_rounds_by_role = dict(
         db.query(AgentRun.role_id, AgentRun.rounds_executed)
         .filter(AgentRun.organization_id == org_id, AgentRun.status == "running")
@@ -255,7 +248,7 @@ def agent_panel(
     for role in roles:
         rid = int(role.id)
         paused = role.agent_paused_at is not None
-        spent_micro = int(spend_by_role.get(rid, 0) or 0)
+        role_spent_cents = int(spend_cents_by_role.get(rid, 0) or 0)
         agents.append(
             AgentCard(
                 role_id=rid,
@@ -263,7 +256,7 @@ def agent_panel(
                 running=not paused,
                 paused_reason=role.agent_paused_reason,
                 paused_at=role.agent_paused_at,
-                budget_spent_cents=int(spent_micro / 10_000),
+                budget_spent_cents=role_spent_cents,
                 budget_cap_cents=int(role.monthly_usd_budget_cents or 0),
                 last_run_at=role.agent_last_run_at,
                 next_run_at=role.agent_next_run_at,

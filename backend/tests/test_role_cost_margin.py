@@ -83,6 +83,35 @@ def test_raw_cost_isolated_per_role(db):
     assert budget_guard.month_to_date_raw_cost_cents(db, role=role_b) == 20
 
 
+def test_org_spend_equals_sum_of_roles_and_excludes_null_role(db):
+    """Consistency invariant: org MTD spend == Σ per-role cards, and neither
+    counts role_id=NULL spend (graph_sync / unattributed). This is what makes a
+    $50 job's usage align everywhere and org budget == sum of job cards."""
+    org = Organization(name="ConsistencyCo", slug=f"cons-{id(db)}")
+    db.add(org)
+    db.flush()
+    role_a = Role(organization_id=org.id, name="A", source="manual", job_spec_text="x")
+    role_b = Role(organization_id=org.id, name="B", source="manual", job_spec_text="x")
+    db.add_all([role_a, role_b])
+    db.flush()
+
+    _seed(db, org.id, role_a.id, feature="score", raw_micro=0, charged_micro=300_000, markup=3)
+    _seed(db, org.id, role_b.id, feature="score", raw_micro=0, charged_micro=200_000, markup=3)
+    # Unattributed (null-role) spend — must NOT count toward any role or the org cap.
+    _seed(db, org.id, None, feature="graph_sync", raw_micro=0, charged_micro=500_000, markup=1)
+    db.flush()
+
+    a = budget_guard.month_to_date_spend_cents(db, role=role_a)
+    b = budget_guard.month_to_date_spend_cents(db, role=role_b)
+    by_role = budget_guard.spend_by_role_map(db, organization_id=org.id)
+    org_total = budget_guard.org_month_to_date_spend_cents(db, organization_id=org.id)
+
+    assert a == 30 and b == 20
+    assert by_role == {role_a.id: 30, role_b.id: 20}  # null-role excluded
+    assert org_total == 50  # excludes the $0.50 null-role event
+    assert org_total == a + b == sum(by_role.values())  # org == Σ cards
+
+
 def test_cache_hit_excluded_from_raw_cost_but_kept_in_credits(db):
     """A cache hit makes NO Anthropic call ⇒ $0 raw cost, even if a pre-#476
     row still carries the cached cost. The cache FEE stays in credits, so it is

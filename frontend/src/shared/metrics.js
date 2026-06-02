@@ -165,10 +165,13 @@ export const budgetTile = (spentCents, capCents) => {
   const hasCap = cap > 0;
   const rawPct = hasCap ? Math.round((spent / cap) * 100) : null;
   const barPct = rawPct != null ? Math.min(100, rawPct) : null;
-  // End-of-month straight-line projection from month-to-date spend.
+  // End-of-month straight-line projection from month-to-date spend. Uses UTC
+  // day-of-month so the projection matches the UTC calendar-month window the
+  // backend measures `spent` over (budget_guard.month_start()) — otherwise the
+  // projection drifts by the viewer's timezone near month edges.
   const now = new Date();
-  const day = now.getDate();
-  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const day = now.getUTCDate();
+  const daysInMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
   const projectedCents = day > 0 ? Math.round((spent * daysInMonth) / day) : spent;
   return {
     value: formatMoneyUsd(spent),

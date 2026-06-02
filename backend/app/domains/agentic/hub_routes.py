@@ -35,11 +35,11 @@ from ._hub_shared import (
     short_role_name,
     start_of_day_utc,
 )
+from ...agent_runtime import budget_guard
 from ...deps import get_current_user
 from ...models.agent_decision import AgentDecision
 from ...models.agent_needs_input import AgentNeedsInput
 from ...models.role import Role
-from ...models.usage_event import UsageEvent
 from ...models.user import User
 from ...platform.database import get_db
 from ..assessments_runtime.pipeline_service import role_pipeline_counts_bulk
@@ -182,19 +182,13 @@ def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> 
     )
 
     # Customer-facing org spend = Tali charged credits (raw Anthropic cost ×
-    # per-feature markup). One unit across Usage tab / Jobs budget / role caps
-    # so caps and displayed spend reconcile. Raw cost lives in cost_usd_micro
-    # for internal Anthropic reconciliation; we never surface it to recruiters.
-    spent_micro = (
-        db.query(func.coalesce(func.sum(UsageEvent.credits_charged), 0))
-        .filter(
-            UsageEvent.organization_id == organization_id,
-            UsageEvent.created_at >= month_start,
-        )
-        .scalar()
-        or 0
+    # per-feature markup). Canonical helper EXCLUDES role_id IS NULL so the org
+    # tile == Σ of the per-role job cards (whose cap denominator has no bucket
+    # for unattributed spend). Unattributed/overhead spend surfaces on the
+    # Usage tab, not against the per-role caps. One unit across every surface.
+    spent_cents = budget_guard.org_month_to_date_spend_cents(
+        db, organization_id=organization_id
     )
-    spent_cents = int(int(spent_micro) / 10_000)
 
     return OrgKpiPayload(
         pending=int(pending),
@@ -338,15 +332,10 @@ def roles_breakdown(
         .group_by(AgentDecision.role_id)
         .all()
     )
-    spend_by_role = dict(
-        db.query(UsageEvent.role_id, func.coalesce(func.sum(UsageEvent.credits_charged), 0))
-        .filter(
-            UsageEvent.organization_id == current_user.organization_id,
-            UsageEvent.created_at >= month_start,
-            UsageEvent.role_id.isnot(None),
-        )
-        .group_by(UsageEvent.role_id)
-        .all()
+    # Canonical per-role MTD spend (cents), excludes null-role — same definition
+    # the org rollup sums, so org == Σ cards by construction.
+    spend_cents_by_role = budget_guard.spend_by_role_map(
+        db, organization_id=current_user.organization_id
     )
 
     # Override / teach rates per role over the last 7d.
@@ -376,7 +365,7 @@ def roles_breakdown(
         total, ovr, tch = disposition_by_role.get(rid, (0, 0, 0))
         ovr_pct = (ovr / total * 100.0) if total else 0.0
         tch_pct = (tch / total * 100.0) if total else 0.0
-        spent_micro = int(spend_by_role.get(rid, 0) or 0)
+        role_spent_cents = int(spend_cents_by_role.get(rid, 0) or 0)
         rows.append(
             RoleBreakdownRow(
                 role_id=rid,
@@ -386,7 +375,7 @@ def roles_breakdown(
                 today=int(today_by_role.get(rid, 0)),
                 week=int(week_by_role.get(rid, 0)),
                 decisions_total=int(total_by_role.get(rid, 0)),
-                budget_cents=int(spent_micro / 10_000),
+                budget_cents=role_spent_cents,
                 cap_cents=int(role.monthly_usd_budget_cents or 0),
                 override_rate_pct=round(ovr_pct, 1),
                 teach_rate_pct=round(tch_pct, 1),
