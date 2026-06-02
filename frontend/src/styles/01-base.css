@@ -106,6 +106,19 @@ html[data-theme="dark"] {
     min-height: 100%;
   }
 
+  /* Page-level horizontal-overflow guardrail. A single wide child (e.g. the
+     pipeline funnel or a data table) used to push the document wider than the
+     viewport on phones — mobile Safari then renders the whole page "zoomed
+     out" to fit, which is what made pinch-zoom feel broken. `clip` contains
+     that overflow without creating a scroll container, so position:sticky and
+     smooth-scroll keep working. Wide components scroll *inside their own card*
+     instead (see .funnel-board / table mobile rules). */
+  html,
+  body {
+    overflow-x: clip;
+    max-width: 100%;
+  }
+
   html {
     scroll-behavior: smooth;
   }

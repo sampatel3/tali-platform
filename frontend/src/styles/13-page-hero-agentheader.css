@@ -258,7 +258,9 @@
 .agent-header-left h1 {
   margin: 0;
   font-family: var(--font-display);
-  font-size: 48px;
+  /* Fluid down to phones so "Good morning, Sam" doesn't dominate the slab —
+     stays 48px on desktop (8vw caps out at the 600px breakpoint). */
+  font-size: clamp(30px, 8vw, 48px);
   letter-spacing: -.03em;
   font-weight: 600;
   line-height: 1.02;
@@ -668,6 +670,22 @@
   .agent-header-inner { grid-template-columns: 1fr; }
   .agent-panel { width: 100%; }
   .ah-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Phone: the 320px floor + 32px padding left the hero feeling like a wasted
+   full screen before any content. Tighten it and let the slab size to its
+   content so the queue sits higher up the page. */
+@media (max-width: 600px) {
+  .agent-header {
+    padding: 22px 18px 24px;
+    min-height: 0;
+  }
+  .agent-header-inner { gap: 18px; }
+  .agent-header-left .ah-title-row { gap: 10px; }
+  .agent-header-left p.ah-subtitle {
+    font-size: 13px;
+    margin-top: 8px;
+  }
 }
 
 /* ============== Nav agent-running chip (Jobs / Role detail only) ============== */
