@@ -22,8 +22,12 @@ export const AssessmentContextWindow = forwardRef(({
   taskContext,
   repoFiles = [],
   cloneCommand,
+  // Marketing/static surfaces (the landing-page workspace snapshot) start
+  // the brief collapsed so the editor + chat are the focus; the live runtime
+  // keeps the default expanded so candidates read the brief first.
+  defaultExpanded = true,
 }, ref) => {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(defaultExpanded);
 
   const scenarioSummary = useMemo(() => {
     const compact = String(taskContext || '')

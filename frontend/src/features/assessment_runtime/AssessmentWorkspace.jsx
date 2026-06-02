@@ -403,6 +403,9 @@ export const AssessmentWorkspace = ({
   // time. Threaded into AssessmentClaudeChat as initialAiPrompts so the
   // candidate sees the decision questions on first chat open (#37).
   initialAiPrompts = null,
+  // Fixed chat-panel width for static/marketing snapshots. When set, the
+  // panel ignores localStorage entirely (see assistantPanelWidth below).
+  staticAssistantPanelWidth = null,
 }) => {
   const agenticChatEnabled = useAgenticClaudeChat();
   const modifiedPathSet = useMemo(
@@ -443,7 +446,15 @@ export const AssessmentWorkspace = ({
   const ASSISTANT_PANEL_MAX = 900;
   const ASSISTANT_PANEL_DEFAULT = 600;
   const ASSISTANT_PANEL_STORAGE_KEY = 'taali.assessmentRuntime.assistantPanelWidth';
+  // Static surfaces (the landing-page snapshot) pin a fixed chat width so the
+  // preview is deterministic — never read from or written to localStorage, so
+  // a visitor who resized chat in a real assessment can't skew the marketing
+  // render, and the editor always gets a predictable amount of room.
+  const hasStaticPanelWidth = Number.isFinite(Number(staticAssistantPanelWidth));
   const [assistantPanelWidth, setAssistantPanelWidth] = useState(() => {
+    if (hasStaticPanelWidth) {
+      return Math.min(ASSISTANT_PANEL_MAX, Math.max(ASSISTANT_PANEL_MIN, Number(staticAssistantPanelWidth)));
+    }
     if (typeof window === 'undefined') return ASSISTANT_PANEL_DEFAULT;
     const raw = window.localStorage?.getItem(ASSISTANT_PANEL_STORAGE_KEY);
     const parsed = Number(raw);
@@ -453,14 +464,14 @@ export const AssessmentWorkspace = ({
     return ASSISTANT_PANEL_DEFAULT;
   });
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || hasStaticPanelWidth) return;
     try {
       window.localStorage?.setItem(ASSISTANT_PANEL_STORAGE_KEY, String(assistantPanelWidth));
     } catch {
       // localStorage may be disabled (private mode); the runtime width
       // still works in-session, just doesn't persist.
     }
-  }, [assistantPanelWidth]);
+  }, [assistantPanelWidth, hasStaticPanelWidth]);
 
   const resizingRef = useRef(null);
   const handleResizeStart = useCallback((event) => {
