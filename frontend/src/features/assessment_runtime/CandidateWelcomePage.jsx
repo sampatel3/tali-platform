@@ -66,7 +66,10 @@ const detectBrowser = (userAgent) => {
 };
 
 export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
-  const [previewLoading, setPreviewLoading] = useState(false);
+  // Start in the loading state when we have a token to resolve, so the
+  // page never first-paints a no-name / placeholder version. The whole
+  // welcome page renders in one go once the preview lands (incl. "Hi Sam").
+  const [previewLoading, setPreviewLoading] = useState(Boolean(token));
   const [previewData, setPreviewData] = useState(null);
   const [previewError, setPreviewError] = useState('');
   const [loadingStart, setLoadingStart] = useState(false);
@@ -164,30 +167,43 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
     candidateName || null,
   ].filter(Boolean).join(' · ');
 
+  // Render the page in ONE GO once the preview resolves: while it's in
+  // flight, show a clean full-page loader rather than the page with a
+  // blank/placeholder heading that then fades in. The candidate sees
+  // nothing → the complete page with "Hi Sam …" already present.
+  if (previewLoading) {
+    return (
+      <div className="min-h-screen bg-[var(--bg)] text-[var(--ink)]">
+        <CandidateMiniNav />
+        <div className="flex min-h-[60vh] items-center justify-center px-6">
+          <div className="flex items-center gap-3 text-[var(--mute)]">
+            <Loader2 size={20} className="animate-spin text-[var(--purple)]" />
+            <span className="text-[0.9375rem]">Preparing your assessment…</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--ink)]">
       <CandidateMiniNav />
 
       <div className="mx-auto max-w-[70rem] px-6 py-10 md:px-10 md:py-14">
-        <div className="grid gap-6 lg:grid-cols-[1.08fr_.92fr]">
+        <div className="grid items-start gap-6 lg:grid-cols-[1.08fr_.92fr]">
           <div className="relative overflow-hidden rounded-[var(--radius-xl)] border border-[var(--line)] bg-[var(--bg-2)] p-8 shadow-[var(--shadow-lg)]">
             <div className="absolute right-[-3.75rem] top-[-3.75rem] h-56 w-56 rounded-full bg-[radial-gradient(circle,var(--purple-soft),transparent_68%)] opacity-80" />
             <div className="relative">
               <div className="kicker">{organizationName ? `Invited by ${organizationName}` : 'Candidate assessment'}</div>
-              {/* No text-swap flash on the greeting. Earlier attempts
-                  (#408, #410) rendered different placeholders during
-                  load — still visibly changed once the preview API
-                  resolved. Now the H1 stays mounted with the final
-                  named greeting but opacity-fades in once data lands,
-                  so the candidate sees nothing → "Hi Sam — ready to
-                  show your work?" with no intermediate text. The
-                  ``aria-busy`` flag tells screen readers to wait for
-                  the loaded state before announcing the heading. */}
-              <h1
-                className="mt-4 font-[var(--font-display)] text-[clamp(42px,5vw,64px)] font-semibold leading-[0.96] tracking-[-0.04em] transition-opacity duration-300 ease-out"
-                style={{ opacity: previewLoading ? 0 : 1 }}
-                aria-busy={previewLoading}
-              >
+              {/* The whole page only renders once the preview has
+                  resolved (see the loader gate above), so the named
+                  greeting is present on first paint — no placeholder,
+                  no fade. The clamp bounds are in REM so the heading
+                  scales with the global root font-size (80%) like the
+                  rest of the page; px bounds stayed full-size and made
+                  this heading oversized + wrap to 4 lines, stretching
+                  the column (Sam, 2026-06-02). */}
+              <h1 className="mt-4 font-[var(--font-display)] text-[clamp(2.25rem,4vw,3.25rem)] font-semibold leading-[0.98] tracking-[-0.04em]">
                 {candidateName ? (
                   <>Hi {getFirstName(candidateName)} - ready to show your <em>work</em>?</>
                 ) : (
@@ -258,16 +274,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
               <p className="mt-4 text-[0.875rem] leading-7 text-white/72">
                 We record prompts, accept/reject decisions, and validation runs so the hiring team can review your process with context.
               </p>
-              {/* Same fade-in pattern as the H1 — metaTitle assembles
-                  org · role · candidate-name, all of which arrive
-                  with the preview API. Fading from opacity-0 prevents
-                  the "Candidate workspace" fallback from briefly
-                  flashing before the real label. */}
-              <div
-                className="mt-5 rounded-[14px] border border-white/10 bg-white/10 px-4 py-3 font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-white/80 transition-opacity duration-300 ease-out"
-                style={{ opacity: previewLoading ? 0 : 1 }}
-                aria-busy={previewLoading}
-              >
+              <div className="mt-5 rounded-[14px] border border-white/10 bg-white/10 px-4 py-3 font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-white/80">
                 {metaTitle || 'Candidate workspace'}
               </div>
             </div>
@@ -306,13 +313,6 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
           </div>
         </div>
 
-        {(previewLoading || previewError) ? (
-          <div className="mt-6 rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-5 shadow-[var(--shadow-sm)]">
-            <div className="font-mono text-[0.75rem] text-[var(--mute)]">
-              {previewLoading ? 'Loading task preview...' : previewError}
-            </div>
-          </div>
-        ) : null}
       </div>
 
     </div>
