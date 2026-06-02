@@ -26,7 +26,7 @@ const SHOWCASE_TABS = [
     why: {
       headline: 'See the real Jobs board the agent works against.',
       outcomes: [
-        'Live agent bar shows what was advanced, rejected, flagged in the last hour',
+        'Live agent bar shows what it advanced, escalated, or pre-screen rejected in the last hour',
         'Each role has its own budget, autonomy dial, and decisions feed',
         'Click into a role to see the pipeline the way your team will every morning',
       ],
@@ -40,9 +40,9 @@ const SHOWCASE_TABS = [
     src: '/assessment/live?demo=1&showcase=1',
     urlLabel: 'taali.ai/assess · candidate workspace',
     why: {
-      headline: 'Step into the IDE the candidate uses.',
+      headline: 'Step into the chat-first workspace the candidate drives.',
       outcomes: [
-        'Real Monaco editor + sandboxed runtime + Claude pair-programming',
+        'Claude at the centre, a real editor + sandboxed runtime alongside — the agent is the work',
         'Every prompt, paste, and edit captured for replay',
         'No proctoring overlay — the transcript is the record',
       ],
@@ -58,7 +58,7 @@ const SHOWCASE_TABS = [
     why: {
       headline: 'The standing report your hiring manager opens.',
       outcomes: [
-        'Five recruiter-readable bars: coding, AI use, problem solving, independence, communication',
+        'Six evidence-linked axes: systems design, code craft, reasoning under pressure, AI collaboration, release safety, communication',
         'Every score links back to the moment in the session it came from',
         'Shareable link, expiring, no PDFs, no leaks',
       ],
@@ -90,7 +90,7 @@ const SHOWCASE_TABS = [
     why: {
       headline: 'The Hub is where you keep the agent honest.',
       outcomes: [
-        'Decision feed: advanced, rejected, flagged — all reviewable, all reversible',
+        'Decision feed: advanced, escalated, pre-screen rejected — all reviewable, all reversible',
         'Pending sidebar surfaces where the agent paused for your judgment',
         'Approve, override, or teach — your calls become its training signal',
       ],

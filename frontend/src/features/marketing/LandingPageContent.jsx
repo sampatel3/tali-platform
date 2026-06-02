@@ -13,47 +13,80 @@ import { MarketingNav, TaaliLogo } from '../../shared/layout/TaaliLayout';
 const containerClass = 'mx-auto max-w-[85rem] px-6 md:px-10 xl:px-16';
 
 // Mock rows for the marketing decision feed. Shape mirrors the
-// AgentDecision API response that ActivityFeed consumes on /home.
-// Timestamps are anchored to a recent UTC moment so formatRelativeAge
-// renders human-readable "Xm/h ago" labels.
+// AgentDecisionPayload the live <ActivityFeed> consumes on /home, so the
+// feed renders with the same score chips, role pills, confidence line, and
+// decision-type badges the recruiter sees in product. Each row carries
+// role_name (drives RolePill), taali_score (ScoreChip — null for pre-screen
+// rejects, which aren't scored), and confidence (drives "agent N% confident").
+// The decision types span the agent's real vocabulary: advance_to_interview
+// (ADVANCE), escalate_low_confidence (ESCALATE — sub-agents disagreed),
+// skip_assessment_reject (pre-screen REJECT, deeper red, unscored), and a
+// post-assessment reject overridden + taught back to the agent. Timestamps
+// are anchored to a recent moment so formatRelativeAge renders "Xm/h ago".
 const _NOW = Date.now();
 const MARKETING_DECISION_FEED_ROWS = [
   {
-    id: 21,
+    id: 312,
     status: 'pending',
     decision_type: 'advance_to_interview',
     candidate_name: 'Maya Chen',
     application_id: 1042,
     role_id: 109,
-    reasoning: "Strong fit. Top of this role's pipeline.",
+    role_name: 'Senior Backend Engineer',
+    taali_score: 88,
+    confidence: 0.91,
+    reasoning:
+      "Clears every must-have with strong AWS + Python evidence. Assessment 88/100 — top of this role's pipeline. Ready for the technical panel.",
     created_at: new Date(_NOW - 6 * 60 * 1000).toISOString(),
   },
   {
-    id: 20,
+    id: 311,
     status: 'pending',
-    decision_type: 'reject',
-    candidate_name: 'Tariq Al-Ahmad',
-    application_id: 1018,
+    decision_type: 'escalate_low_confidence',
+    candidate_name: 'Aisha Bello',
+    application_id: 1031,
     role_id: 109,
-    reasoning: 'Well below your bar. Missing the must-have skills.',
-    created_at: new Date(_NOW - 44 * 60 * 1000).toISOString(),
+    role_name: 'Senior Backend Engineer',
+    taali_score: 64,
+    confidence: 0.5,
+    reasoning:
+      "Sub-agents split on systems-design depth — two said advance, one said assess again. I can't call this one confidently. Over to you.",
+    created_at: new Date(_NOW - 23 * 60 * 1000).toISOString(),
   },
   {
-    id: 19,
+    id: 309,
+    status: 'pending',
+    decision_type: 'skip_assessment_reject',
+    candidate_name: 'Marco Rossi',
+    application_id: 1024,
+    role_id: 112,
+    role_name: 'Data Engineer',
+    taali_score: null,
+    reasoning:
+      "Pre-screen: the must-have Spark / streaming experience isn't evidenced, and the AI-tooling claims have no supporting projects. Not worth an assessment seat.",
+    created_at: new Date(_NOW - 38 * 60 * 1000).toISOString(),
+  },
+  {
+    id: 305,
     status: 'approved',
     decision_type: 'advance_to_interview',
     candidate_name: 'Priya Raman',
     application_id: 1003,
-    role_id: 109,
+    role_id: 112,
+    role_name: 'Data Engineer',
+    taali_score: 84,
+    human_disposition: 'approved',
     resolved_at: new Date(_NOW - 18 * 60 * 1000).toISOString(),
   },
   {
-    id: 18,
+    id: 301,
     status: 'overridden',
     decision_type: 'reject',
     candidate_name: 'Jonas Weber',
     application_id: 994,
     role_id: 109,
+    role_name: 'Senior Backend Engineer',
+    taali_score: 58,
     human_disposition: 'taught',
     resolution_note: 'override → advance',
     resolved_at: new Date(_NOW - 52 * 60 * 1000).toISOString(),
@@ -495,7 +528,7 @@ export const LandingPage = ({ onNavigate }) => {
               {
                 n: '02',
                 t: 'Assess — for the AI era',
-                d: 'Hands-on, role-relevant tasks in a real IDE. We track every prompt, paste, and decision — then score AI fluency alongside craft. The only platform that tells you whether a candidate can actually ship with AI.',
+                d: "Hands-on, role-relevant tasks in a chat-first workspace — Claude in the candidate's hands. We track every prompt, paste, and decision — then score AI collaboration alongside craft. The only platform that tells you whether a candidate can actually ship with AI.",
               },
               {
                 n: '03',
@@ -534,7 +567,7 @@ export const LandingPage = ({ onNavigate }) => {
                 selectedId={null}
                 onSelect={() => {}}
                 onNavigate={() => {}}
-                subtitle="Every recommendation the agent has made for this role today. Approve, override, or teach it in one click."
+                subtitle="Every call the agent made across your open roles today — advance, escalate, pre-screen reject. Approve, override, or teach it back in one click."
               />
             </div>
           </div>
@@ -554,13 +587,13 @@ export const LandingPage = ({ onNavigate }) => {
                 We&apos;re the only platform that measures it.
               </h2>
               <p className="mt-5 text-[1rem] leading-[1.6] text-[var(--ink-2)]">
-                Every assessment opens a real in-browser IDE — editor, terminal, your repo, and Claude Code / Cursor / Copilot in the candidate&apos;s hand — exactly as they&apos;d work on the job.
+                Every assessment opens a chat-first workspace — Claude at the centre, your repo, a real editor, and a live terminal around it — exactly the way engineers ship now.
                 Behind the scenes the runtime captures every prompt, paste, edit, file open, test run, and commit, time-stamped to the second.
-                Those traces feed a 6-axis rubric (prompt quality, error recovery, context utilisation, independence, design thinking, debugging strategy) so AI fluency is scored as a first-class dimension alongside craft.
+                Those traces feed a six-axis rubric — systems design, code craft, reasoning under pressure, AI collaboration, release safety, communication — so how a candidate works with AI is scored as a first-class dimension alongside craft.
               </p>
               <ul className="mt-7 flex flex-col gap-3.5">
                 {[
-                  { t: 'AI fluency score', d: 'Did they prompt well? Catch a hallucination? Know when not to use it?' },
+                  { t: 'AI collaboration score', d: 'Did they prompt well? Catch a hallucination? Know when not to use it?' },
                   { t: 'Prompt-by-prompt replay', d: 'See exactly how they worked the agent — not just the final code.' },
                   { t: 'Full session telemetry', d: 'Edit timeline, test runs, terminal output, file opens — everything tied back to the final report.' },
                   { t: 'Autopilot detection', d: 'We flag candidates who pasted without reading. Calibrated, not punitive.' },
@@ -578,27 +611,27 @@ export const LandingPage = ({ onNavigate }) => {
               </ul>
             </div>
 
-            {/* Standing report bars — bar layout from
-                CandidateFeedbackReportView, simplified to 5 recruiter-
-                readable labels (the canonical 8 dimensions collapse
-                into roughly these buckets in a recruiter's mental
-                model). Mock score values only. */}
+            {/* Standing report — the six recruiter-facing axes the live
+                CandidateStandingReportPage renders (computeFluencyAxes rolls
+                the atomic backend scores into these six). Verdict uses the
+                production band vocabulary (Strong Hire ≥ 80). Mock scores. */}
             <div className="overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
               <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3 font-[var(--font-mono)] text-[0.71875rem] text-[var(--mute)]">
                 <span>MAYA CHEN · CANDIDATE REPORT</span>
-                <span className="font-semibold text-[var(--purple)]">Strong overall fit</span>
+                <span className="font-semibold text-[var(--purple)]">Strong Hire · Tali 86</span>
               </div>
               <div className="space-y-4 px-5 py-6">
                 {[
-                  { label: 'Coding ability', score: 88 },
-                  { label: 'Working with AI', score: 84 },
-                  { label: 'Problem solving', score: 86 },
-                  { label: 'Independence', score: 81 },
-                  { label: 'Communication', score: 74 },
+                  { label: 'Systems design', score: 86 },
+                  { label: 'Code craft', score: 88 },
+                  { label: 'Reasoning under pressure', score: 82 },
+                  { label: 'AI collaboration', score: 90 },
+                  { label: 'Release safety', score: 79 },
+                  { label: 'Communication', score: 84 },
                 ].map(({ label, score }) => (
                   <div
                     key={label}
-                    className="grid grid-cols-[160px_minmax(0,1fr)] items-center gap-3"
+                    className="grid grid-cols-[184px_minmax(0,1fr)] items-center gap-3"
                   >
                     <div className="text-[0.875rem] text-[var(--ink)]">{label}</div>
                     <div className="h-2 overflow-hidden rounded-full bg-[var(--line)]">
@@ -619,7 +652,7 @@ export const LandingPage = ({ onNavigate }) => {
               overflow-hidden. */}
           <p className="mt-12 mb-3 text-[0.875rem] text-[var(--ink-2)]">
             <strong className="text-[var(--ink)]">Candidates work here.</strong>{' '}
-            Real editor, real terminal, AI in the side panel — and we watch how they use it.
+            Claude sits at the centre — they drive the task in conversation, open and edit files beside it, run tests in a live terminal. We watch every prompt.
           </p>
           <div className="overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
             <div className="flex items-center gap-2 border-b border-[var(--line)] px-4 py-2.5 font-[var(--font-mono)] text-[0.6875rem] text-[var(--mute)]">
