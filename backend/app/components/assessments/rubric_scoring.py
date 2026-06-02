@@ -173,28 +173,68 @@ class RubricResult:
 
 # ---- Prompt construction ----------------------------------------------------
 
-_SYSTEM_PROMPT = (
-    "You are grading a candidate's technical assessment against a specific "
-    "rubric criterion. You will receive: (1) the criterion's excellent / "
-    "good / poor descriptors, (2) the relevant submission artifacts (final "
-    "code, design doc, chat transcript), (3) the task scenario the "
-    "candidate was given. "
-    "\n\n"
-    "Your job: choose ONE rating tier ('excellent', 'good', or 'poor'), "
-    "assign a 0-10 score, write a 1-3 sentence reasoning, and list specific "
-    "evidence citations (e.g. 'dq/gate.py line 23', 'transcript turn 4'). "
-    "Score 9-10 for excellent, 5-8 for good, 0-4 for poor. "
-    "\n\n"
-    "Be specific and evidence-based. A candidate who delegated the entire "
-    "task to the model with 'fix it' prompts should not score 'excellent' "
-    "on any design or judgment dimension regardless of code outcome — the "
-    "rubric measures the candidate's reasoning, not the model's. "
+_GRADER_PREAMBLE = (
+    "You are grading ONE rubric dimension of a technical assessment where the "
+    "candidate works WITH an AI coding agent. You will receive: (1) the "
+    "criterion's excellent / good / poor descriptors, (2) the submission "
+    "artifacts (the final repo the candidate shipped, the chat transcript "
+    "with the agent), (3) the task scenario."
+)
+_GRADER_OUTPUT = (
+    "\n\nChoose ONE rating tier ('excellent', 'good', or 'poor'), assign a "
+    "0-10 score, write a 1-3 sentence reasoning, and list specific evidence "
+    "citations (e.g. 'dq/gate.py line 23', 'transcript turn 4'). Score 9-10 "
+    "for excellent, 5-8 for good, 0-4 for poor. Be specific and "
+    "evidence-based."
     "\n\n"
     "Respond ONLY with valid JSON, no markdown formatting, matching:\n"
     '{"score": <0-10>, "rating": "<excellent|good|poor>", '
     '"reasoning": "<1-3 sentences>", '
     '"evidence_citations": ["<citation>", ...]}'
 )
+
+# DECISION lens — judgment as evidenced in the transcript. Lazy delegation
+# is punished HERE (and only here). This is where "did the candidate steer +
+# reason" lives.
+_DECISION_LENS_PROMPT = (
+    _GRADER_PREAMBLE
+    + "\n\nLENS: DECISION. You are grading the candidate's JUDGMENT and "
+    "STEERING as evidenced in the chat transcript. What matters is whether "
+    "THE CANDIDATE made and owned the load-bearing calls, diagnosed the real "
+    "problem, and directed the work — not what the agent produced. A "
+    "candidate who delegated with 'fix it' / 'do all 3' and never engaged "
+    "the decision scores POOR here regardless of how good the agent's output "
+    "was; this lens measures the candidate's reasoning, not the model's. "
+    "Reaching a working result without demonstrating design thinking is NOT "
+    "the target — design thinking is."
+    + _GRADER_OUTPUT
+)
+
+# DELIVERABLE lens — the shipped artifact on its own merits. Credit good
+# output regardless of who typed it; directing an agent to a correct
+# solution IS the skill. Nothing-shipped = poor.
+_DELIVERABLE_LENS_PROMPT = (
+    _GRADER_PREAMBLE
+    + "\n\nLENS: DELIVERABLE. You are grading the SHIPPED ARTIFACT on its own "
+    "merits. The candidate is EXPECTED to use the AI agent — directing an "
+    "agent to a correct, well-structured solution IS the skill being "
+    "measured. DO NOT penalise the candidate for using the agent to produce "
+    "the artifact; judge what was actually shipped in the final repo. If "
+    "nothing coherent was shipped (empty / stubbed / broken, tests failing), "
+    "that is POOR — the candidate is accountable for shipping a working "
+    "result."
+    + _GRADER_OUTPUT
+)
+
+# Back-compat default for any dimension that doesn't declare a lens (treated
+# as decision-leaning, the historical behaviour).
+_SYSTEM_PROMPT = _DECISION_LENS_PROMPT
+
+
+def _system_prompt_for_lens(lens: Optional[str]) -> str:
+    if (lens or "").strip().lower() == "deliverable":
+        return _DELIVERABLE_LENS_PROMPT
+    return _DECISION_LENS_PROMPT
 
 
 def _build_user_prompt(
@@ -327,15 +367,14 @@ class RubricScorer:
 
         Mapping is fixed and explicit:
         - any decision ended at ``dodge``               → poor   (score=2.0)
-        - all decisions in {commit, reframe}            → excellent (score=9.5)
-        - ≥50% in {commit, reframe}, no dodges           → good   (score=6.5)
-        - otherwise (all vague/unaddressed, no dodges)   → poor   (score=3.0)
+        - all decisions in {commit, reframe}            → excellent (9.5)
+        - any dodge (decision handed back to the agent)  → poor   (1.5)
+        - partial, no dodge: 2.0 + (resolved/total)·5
+            e.g. 1-of-2 owned → 4.5 (poor); both vague → 2.0 (poor)
 
-        Why fixed scores: the rubric's job is signal differentiation,
-        not a continuous score. Two consultants both committing
-        substantively to every decision should both land at "excellent"
-        — variance there is noise. The thresholds live in one place;
-        change them centrally if calibration data demands it.
+        Judgment-first: steering EVERY decision is the skill, so partial
+        engagement scores low. The thresholds live in one place; change
+        them centrally if calibration data demands it.
 
         No Anthropic call → zero metering rows for this dim. The classifier
         ran per-turn during the chat (already metered as
@@ -379,18 +418,25 @@ class RubricScorer:
                 error="no_valid_decision_points",
             )
 
+        # Judgment-first buckets (Sam, 2026-06-02): steering EVERY decision
+        # is the skill, so partial engagement scores LOW. Reaching a working
+        # result without owning the decisions is not the target — owning them
+        # is. A single dodge (decision handed back to the agent) is the
+        # canonical lazy-delegation signal and floors the dimension.
+        #   all resolved (commit/reframe)        → 9.5 excellent
+        #   any dodge                            → 1.5 poor
+        #   partial (some resolved, no dodge)    → 2.0 + (resolved/total)·5
+        #     e.g. 1-of-2 owned → 4.5 (poor); both vague → 2.0 (poor)
         if n_dodge > 0:
-            score = 2.0
+            score = 1.5
             rating = "poor"
         elif n_resolved == n_total:
             score = 9.5
             rating = "excellent"
-        elif n_resolved * 2 >= n_total:
-            score = 6.5
-            rating = "good"
         else:
-            score = 3.0
-            rating = "poor"
+            frac = n_resolved / n_total if n_total else 0.0
+            score = round(2.0 + frac * 5.0, 1)
+            rating = "good" if frac >= 0.75 else "poor"
 
         reasoning = (
             f"Per-decision outcomes — {'; '.join(per_dp_lines)}. "
@@ -434,8 +480,14 @@ class RubricScorer:
         artifacts: ScoringArtifacts,
         *,
         weight: float = 0.0,
+        lens: Optional[str] = None,
     ) -> DimensionGrade:
         """Send one rubric dimension to Claude and return its graded result.
+
+        ``lens`` selects the grader frame: ``"decision"`` punishes lazy
+        delegation (judgment from the transcript), ``"deliverable"`` credits
+        the shipped artifact regardless of who typed it. Defaults to the
+        decision frame for back-compat with un-lensed dimensions.
 
         Never raises. On failure returns a ``DimensionGrade`` with
         ``score=0`` and ``error`` set so the aggregator can flag the gap
@@ -451,7 +503,7 @@ class RubricScorer:
                 # same grade (NORTH_STAR principle 4). Without it the Anthropic
                 # default (1.0) makes identical submissions score differently.
                 temperature=0,
-                system=_SYSTEM_PROMPT,
+                system=_system_prompt_for_lens(lens),
                 messages=[{"role": "user", "content": user_prompt}],
                 metering=self._metering(dimension_id),
             )
@@ -514,6 +566,7 @@ class RubricScorer:
                     criteria = {}
                 grade = self.grade_dimension(
                     dim_id, criteria, artifacts, weight=weight,
+                    lens=dim_spec.get("lens"),
                 )
             graded.append(grade)
             total_weight += weight

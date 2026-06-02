@@ -26,41 +26,36 @@
     }
   },
   "evaluation_rubric": {
-    "framework_assessment": {
-      "weight": 0.18,
+    "problem_diagnosis": {
+      "weight": 0.2,
+      "lens": "decision",
       "criteria": {
-        "excellent": "Reads CONTRACT_SPEC.md and diagnostics/quality_report.md before coding. Correctly diagnoses that the contract validator, the checks, and the gate are all stubbed, and frames it as a data-reliability failure that promoted bad data to production.",
-        "good": "Identifies that the framework over-passes but misses one stubbed layer.",
-        "poor": "Edits code without reading the spec; cannot explain how bad data was promoted."
-      }
-    },
-    "contract_validation": {
-      "weight": 0.17,
-      "criteria": {
-        "excellent": "Implements validate_schema to enforce required columns and value types per the spec, returning a meaningful errors list.",
-        "good": "Checks required columns but not types, or vice versa.",
-        "poor": "Leaves validate_schema returning passed=True."
-      }
-    },
-    "quality_checks": {
-      "weight": 0.17,
-      "criteria": {
-        "excellent": "Implements not_null, unique, accepted_values, and freshness checks correctly, each returning the failing rows/values.",
-        "good": "Implements most checks but one is incorrect or ignores failing rows.",
-        "poor": "Leaves the checks rubber-stamping."
-      }
-    },
-    "severity_gating": {
-      "weight": 0.18,
-      "criteria": {
-        "excellent": "Implements promotion_gate to block only on ERROR-severity failures while letting WARN-severity failures through, and names the blockers.",
-        "good": "Blocks on failures but ignores the severity distinction.",
-        "poor": "Gate still passes everything."
+        "excellent": "The candidate demonstrates (in the chat) that THEY understood the failure: that the contract validator, the checks, and the gate are all stubbed to pass, and that this is how the bad batch was promoted. They direct the investigation — asking the agent to confirm specifics, reading CONTRACT_SPEC.md / diagnostics/quality_report.md — rather than handing the whole problem over. The understanding is the candidate's, evidenced by what they ask and assert.",
+        "good": "The candidate grasps that the framework over-passes but leans on the agent to surface the diagnosis, or misses one stubbed layer.",
+        "poor": "The candidate never engages with the diagnosis ('fix it', 'do all 3') and shows no understanding of how bad data was promoted."
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.3,
+      "weight": 0.4,
       "grader": "interrogation_outcome"
+    },
+    "contract_and_checks_correctness": {
+      "weight": 0.22,
+      "lens": "deliverable",
+      "criteria": {
+        "excellent": "The SHIPPED code correctly implements schema/contract validation (validate_schema enforces CONTRACT_SPEC) and the quality checks (not_null / unique / accepted_values / freshness) against the spec. Judge the artifact that was shipped — directing the agent to a correct implementation counts fully; do not penalise use of the agent.",
+        "good": "Mostly-correct implementation with a gap (one check left stubbed, an edge missed).",
+        "poor": "The submitted code does not implement the validation/checks, ships broken/stubbed logic, or nothing coherent was shipped (tests failing). The candidate is accountable for shipping a working result."
+      }
+    },
+    "severity_gating_correctness": {
+      "weight": 0.18,
+      "lens": "deliverable",
+      "criteria": {
+        "excellent": "The submitted gate blocks on ERROR, lets WARN through, and returns the shape the candidate committed to. Correct shipped artifact — credit regardless of who typed it.",
+        "good": "The gate works but with a gap (e.g. its return shape doesn't match the decision the candidate stated).",
+        "poor": "The gate is wrong, not implemented, or nothing functional was shipped."
+      }
     }
   },
   "expected_candidate_journey": {
@@ -138,29 +133,24 @@
     ],
     "jd_to_signal_map": [
       {
-        "job_requirement": "Own data reliability and the gate that protects production data.",
-        "task_artifact": "CONTRACT_SPEC.md + diagnostics/quality_report.md — a gate that promoted a bad batch",
-        "rubric_dimension": "framework_assessment"
+        "job_requirement": "Own data reliability and the gate that protects production data; diagnose how unsafe data reaches production.",
+        "task_artifact": "Chat transcript + CONTRACT_SPEC.md / diagnostics/quality_report.md — candidate must show THEY diagnosed the stubbed framework, not the agent.",
+        "rubric_dimension": "problem_diagnosis"
       },
       {
-        "job_requirement": "Enforce data contracts: schema, required columns, and types.",
-        "task_artifact": "dq/contract.py — validate_schema stub; tests/test_contract.py",
-        "rubric_dimension": "contract_validation"
+        "job_requirement": "Data Platform Engineering: own shared libraries used across pipelines; make explicit API design decisions under conflicting consumer needs.",
+        "task_artifact": "Chat transcript — the gate-shape and freshness-severity decisions; candidate must own each, not delegate.",
+        "rubric_dimension": "design_decisions_articulated"
       },
       {
-        "job_requirement": "Implement data-quality checks across pipelines.",
-        "task_artifact": "dq/checks.py — not_null/unique/accepted_values/freshness stubs; tests/test_checks.py",
-        "rubric_dimension": "quality_checks"
+        "job_requirement": "Enforce data contracts (schema, required columns, types) and implement data-quality checks across pipelines.",
+        "task_artifact": "Shipped dq/contract.py (validate_schema) + dq/checks.py (not_null/unique/accepted_values/freshness) against CONTRACT_SPEC; tests.",
+        "rubric_dimension": "contract_and_checks_correctness"
       },
       {
         "job_requirement": "Design promotion gates that block unsafe data based on severity.",
-        "task_artifact": "dq/gate.py + dq/severity.py — promotion_gate stub; tests/test_gate.py",
-        "rubric_dimension": "severity_gating"
-      },
-      {
-        "job_requirement": "Data Platform Engineering: own shared libraries used across pipelines. Make explicit API design decisions and communicate trade-offs to internal consumers (orchestrator, on-call, dashboard).",
-        "task_artifact": "Chat transcript — Claude opens with the gate-shape and freshness-severity decisions; candidate's answers in the transcript are the design evidence.",
-        "rubric_dimension": "design_decisions_articulated"
+        "task_artifact": "Shipped dq/gate.py + dq/severity.py — gate blocks ERROR, passes WARN, returns the committed shape; tests/test_gate.py.",
+        "rubric_dimension": "severity_gating_correctness"
       }
     ]
   },
