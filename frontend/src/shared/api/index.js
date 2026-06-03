@@ -13,6 +13,7 @@ export { tasks } from './tasksClient';
 export { candidates } from './candidatesClient';
 export { team } from './teamClient';
 export { agent } from './agentClient';
+export { agentChat } from './agentChatClient';
 export {
   getCachedDocumentBlob,
   prefetchDocumentBlob,

@@ -5,7 +5,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
-import { agent as agentApi } from '../../shared/api';
+import { MessageSquare } from 'lucide-react';
+
+import { agent as agentApi, agentChat } from '../../shared/api';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
@@ -16,6 +18,9 @@ import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { HomeNow } from './HomeNow';
 import { HomeMonitoring } from './HomeMonitoring';
 import { HomePlatformUpdates } from './HomePlatformUpdates';
+import { AgentSidebar } from './agentchat/AgentSidebar';
+import { AgentChatDock } from './agentchat/AgentChatDock';
+import './agentchat/agentchat.css';
 
 const ORG_STATUS_POLL_MS = 30_000;
 
@@ -116,6 +121,13 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   const [loadingDecisions, setLoadingDecisions] = useState(true);
   const [loadingRoles, setLoadingRoles] = useState(true);
   const [loadingSignal, setLoadingSignal] = useState(true);
+
+  // Agent chat (Option C): active agents for the left rail + the dock's target
+  // role. Progressive enhancement — if the /agent-chat endpoints aren't
+  // reachable, `agents` stays empty and the home renders exactly as before.
+  const [agents, setAgents] = useState([]);
+  const [activeRoleId, setActiveRoleId] = useState(null);
+  const [dockCollapsed, setDockCollapsed] = useState(false);
 
   // Track in-flight reloads so rapid clicks don't pile up requests.
   const reloadCounter = useRef(0);
@@ -243,6 +255,47 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     } catch { /* silent */ }
   }, [loadDecisions, loadRoles, loadSignal]);
 
+  // Poll the active-agents list for the left rail + notification badges.
+  // Self-contained: a missing/erroring endpoint degrades to the plain home
+  // (no rail/dock), so this can't break the central page.
+  const loadAgents = useCallback(async () => {
+    try {
+      const { data } = await agentChat.listConversations();
+      const list = Array.isArray(data?.agents) ? data.agents : [];
+      setAgents(list);
+      setActiveRoleId((cur) => {
+        if (cur && list.some((a) => a.role_id === cur)) return cur;
+        const ranked = [...list].sort((a, b) => (b.attention || 0) - (a.attention || 0));
+        return ranked.length ? ranked[0].role_id : null;
+      });
+    } catch {
+      setAgents([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadAgents();
+    const id = window.setInterval(() => { void loadAgents(); }, ORG_STATUS_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [loadAgents]);
+
+  // Selecting an agent focuses both the chat dock and the decision feed on
+  // that role so the two surfaces stay in sync.
+  const handleSelectAgent = useCallback((roleId) => {
+    setActiveRoleId(roleId);
+    setDockCollapsed(false);
+    setFilters((f) => ({ ...f, role_id: roleId }));
+  }, [setFilters]);
+
+  const activeAgent = useMemo(
+    () => agents.find((a) => a.role_id === activeRoleId) || null,
+    [agents, activeRoleId]
+  );
+  const totalAttention = useMemo(
+    () => agents.reduce((sum, a) => sum + (a.attention || 0), 0),
+    [agents]
+  );
+
   // KPIs come from org-status; while it's loading, fall back to derived
   // counts so the strip never shows blanks on first paint.
   const kpis = orgStatus || {
@@ -290,9 +343,16 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     );
   }, [rolesBreakdown]);
 
+  const hasAgents = agents.length > 0;
+
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="home" onNavigate={onNavigate} /> : null}
+      <div className={hasAgents ? `ac-shell ${dockCollapsed ? 'ac-dock-collapsed' : ''}` : undefined}>
+        {hasAgents && (
+          <AgentSidebar agents={agents} activeRoleId={activeRoleId} onSelect={handleSelectAgent} />
+        )}
+        <div className={hasAgents ? 'ac-main' : undefined}>
       <AgentHeader
         breadcrumbs={[{ label: 'Home' }]}
         kicker={`HUB · ${formatCount(pendingDecisions)} AWAITING YOU · ${formatCount(kpis.active_role_count)} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
@@ -379,6 +439,23 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
         />
 
         <HomePlatformUpdates />
+      </div>
+        </div>
+        {hasAgents && (dockCollapsed ? (
+          <div className="ac-dock-handle">
+            <button className="ac-reopen" onClick={() => setDockCollapsed(false)}>
+              <MessageSquare size={15} /> Ask the agent
+              {totalAttention > 0 && <span className="ac-badge-count">{totalAttention}</span>}
+            </button>
+          </div>
+        ) : (
+          <AgentChatDock
+            roleId={activeRoleId}
+            roleName={activeAgent?.role_name}
+            onReload={reloadAll}
+            onCollapse={() => setDockCollapsed(true)}
+          />
+        ))}
       </div>
     </div>
   );

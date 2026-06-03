@@ -130,6 +130,17 @@ from .role_intent import RoleIntent
 from .role_feedback_note import RoleFeedbackNote
 from .task_calibration import TaskCalibration
 from .agent_needs_input import NEEDS_INPUT_KINDS, AgentNeedsInput
+from .agent_conversation import (
+    AUTHOR_ROLE_ASSISTANT,
+    AUTHOR_ROLE_USER,
+    MESSAGE_KIND_ACTION,
+    MESSAGE_KIND_CHAT,
+    MESSAGE_KIND_SYSTEM,
+    MESSAGE_KIND_TOOL,
+    AgentConversation,
+    AgentConversationMessage,
+    AgentConversationRead,
+)
 from .anthropic_usage_reconciliation import AnthropicUsageReconciliation
 from .share_link import (
     SHARE_LINK_MODE_CLIENT,
@@ -225,6 +236,15 @@ __all__ = [
     "DecisionPolicy",
     "AgentNeedsInput",
     "NEEDS_INPUT_KINDS",
+    "AgentConversation",
+    "AgentConversationMessage",
+    "AgentConversationRead",
+    "AUTHOR_ROLE_USER",
+    "AUTHOR_ROLE_ASSISTANT",
+    "MESSAGE_KIND_CHAT",
+    "MESSAGE_KIND_ACTION",
+    "MESSAGE_KIND_TOOL",
+    "MESSAGE_KIND_SYSTEM",
     "AnthropicUsageReconciliation",
     "GraphEpisodeOutbox",
     "EPISODE_KIND_HIRING_OUTCOME",

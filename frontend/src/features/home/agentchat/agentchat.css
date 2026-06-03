@@ -1,0 +1,138 @@
+/* Option C — agent sidebar + chat dock flanking the decision feed.
+   Design-token driven (re-skins with the brand). Prefix: ac-. */
+
+.ac-shell {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr) 404px;
+  gap: 0;
+  align-items: start;
+}
+/* When the dock is collapsed, drop the right column. */
+.ac-shell.ac-dock-collapsed { grid-template-columns: 248px minmax(0, 1fr) 0; }
+.ac-main { min-width: 0; }
+
+/* Rails stick within the scrolling page, below the fixed top nav. */
+.ac-sidebar,
+.ac-dock {
+  position: sticky;
+  top: 64px;
+  height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-2);
+}
+.ac-sidebar { border-right: 1px solid var(--line); }
+.ac-dock { border-left: 1px solid var(--line); }
+
+/* ---- Sidebar ----------------------------------------------------------- */
+.ac-sidebar-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 9px; }
+.ac-kicker { font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); }
+.ac-sidebar-count { font-size: 11px; color: var(--purple-2); font-weight: 600; }
+.ac-agent-list { flex: 1; overflow-y: auto; padding: 2px 8px 12px; display: flex; flex-direction: column; gap: 3px; }
+.ac-agent { display: flex; align-items: center; gap: 10px; padding: 10px 11px; border-radius: var(--radius); border: 1px solid transparent; background: transparent; cursor: pointer; text-align: left; width: 100%; transition: background 0.12s ease; }
+.ac-agent:hover { background: var(--bg-3); }
+.ac-agent.is-active { background: var(--purple-soft); border-color: var(--purple); }
+.ac-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex-shrink: 0; }
+.ac-dot.is-on { background: var(--green); box-shadow: 0 0 0 3px color-mix(in oklab, var(--green) 22%, transparent); }
+.ac-dot.is-paused { background: var(--amber); }
+.ac-agent-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ac-agent-role { font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ac-agent-preview { font-size: 11.5px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ac-agent-meta { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+.ac-agent-time { font-size: 11px; color: var(--ink-soft); }
+.ac-badge-count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--purple); color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; }
+.ac-empty { padding: 24px 16px; font-size: 12.5px; color: var(--ink-soft); text-align: center; line-height: 1.5; }
+
+/* ---- Dock -------------------------------------------------------------- */
+.ac-dock-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 700; }
+.ac-dock-head svg { color: var(--purple); }
+.ac-dock-role { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--purple-2); background: var(--purple-soft); padding: 4px 9px; border-radius: 999px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-dock-collapse { background: transparent; border: none; cursor: pointer; color: var(--ink-soft); padding: 4px; border-radius: 6px; display: grid; place-items: center; }
+.ac-dock-collapse:hover { background: var(--bg-3); color: var(--ink); }
+.ac-stream { flex: 1; overflow-y: auto; min-height: 0; padding: 16px; display: flex; flex-direction: column; gap: 13px; background: var(--bg); }
+
+/* Collapsed handle */
+.ac-dock-handle { position: sticky; top: 64px; height: calc(100vh - 64px); width: 0; }
+.ac-reopen { position: sticky; top: 80px; float: right; margin-right: 4px; display: inline-flex; align-items: center; gap: 7px; padding: 9px 13px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg-2); color: var(--ink); font-size: 12.5px; font-weight: 600; cursor: pointer; box-shadow: var(--shadow-md); }
+.ac-reopen svg { color: var(--purple); }
+.ac-reopen .ac-badge-count { position: relative; top: 0; }
+
+/* ---- Chat bubbles ------------------------------------------------------ */
+.ac-row { display: flex; gap: 9px; max-width: 100%; }
+.ac-row-user { flex-direction: row-reverse; }
+.ac-bubble-wrap { display: flex; flex-direction: column; gap: 7px; min-width: 0; max-width: 86%; }
+.ac-row-user .ac-bubble-wrap { align-items: flex-end; }
+.ac-bubble { padding: 10px 13px; border-radius: 15px; font-size: 13px; line-height: 1.5; }
+.ac-bubble-agent { background: var(--bg-2); border: 1px solid var(--line); border-top-left-radius: 5px; box-shadow: var(--shadow-sm); }
+.ac-bubble-user { background: var(--purple); color: #fff; border-top-right-radius: 5px; }
+.ac-time { font-size: 10px; color: var(--ink-soft); font-family: var(--font-mono); padding: 0 4px; }
+.ac-avatar { border-radius: 50%; display: grid; place-items: center; font-family: var(--font-mono); font-weight: 700; font-size: 11px; flex-shrink: 0; }
+.ac-avatar-agent { background: var(--purple); color: #fff; }
+.ac-avatar-cand { background: var(--purple-soft); color: var(--purple-2); }
+.ac-thinking { display: inline-flex; gap: 4px; padding: 12px 14px; }
+.ac-thinking span { width: 6px; height: 6px; border-radius: 50%; background: var(--purple); opacity: 0.5; animation: ac-bounce 1.2s infinite; }
+.ac-thinking span:nth-child(2) { animation-delay: 0.15s; }
+.ac-thinking span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes ac-bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-4px); opacity: 1; } }
+
+/* ---- Impact cards ------------------------------------------------------ */
+.ac-card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-2); padding: 12px 14px; box-shadow: var(--shadow-sm); display: flex; flex-direction: column; gap: 9px; }
+.ac-card-head { display: flex; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 700; }
+.ac-card-head svg { color: var(--purple); }
+.ac-card-live { margin-left: auto; display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 10.5px; color: var(--purple-2); }
+.ac-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--purple); animation: ac-pulse 1.4s ease-in-out infinite; }
+@keyframes ac-pulse { 0%,100% { opacity: 0.35; transform: scale(0.85);} 50% { opacity: 1; transform: scale(1.1);} }
+.ac-card-constraint { background: linear-gradient(180deg, var(--purple-soft), var(--bg-2)); border-color: var(--purple-soft); }
+.ac-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.ac-constraint-chip { font-size: 12px; font-weight: 600; color: var(--purple-2); background: var(--bg-2); border: 1px solid var(--purple-soft); padding: 5px 10px; border-radius: 999px; }
+.ac-name-chip { font-size: 11px; font-weight: 600; color: var(--ink-2); background: var(--bg-3); padding: 4px 9px; border-radius: 999px; }
+.ac-thresh-line { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.ac-arrow { color: var(--ink-soft); font-size: 16px; }
+.ac-thresh-old { font-family: var(--font-display); font-size: 21px; font-weight: 700; color: var(--ink-soft); text-decoration: line-through; text-decoration-color: var(--line); }
+.ac-thresh-new { font-family: var(--font-display); font-size: 27px; font-weight: 700; color: var(--purple); }
+.ac-thresh-applied { color: var(--green); }
+.ac-thresh-gain { font-size: 11.5px; font-weight: 600; color: var(--green); background: color-mix(in oklab, var(--green) 12%, transparent); padding: 4px 9px; border-radius: 999px; }
+.ac-statrow { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11px; color: var(--ink-soft); }
+.ac-statrow b { color: var(--ink); font-weight: 700; }
+.ac-card-applied { border-color: color-mix(in oklab, var(--green) 35%, var(--line)); }
+.ac-card-applied .ac-card-head svg { color: var(--green); }
+.ac-card-actions { display: flex; gap: 7px; }
+
+/* ---- Needs-input cards ------------------------------------------------- */
+.ac-needs { border: 1px solid var(--purple); border-left-width: 3px; border-radius: var(--radius); background: linear-gradient(180deg, var(--purple-soft), var(--bg-2)); padding: 13px 14px; display: flex; flex-direction: column; gap: 9px; }
+.ac-needs-head { display: flex; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 700; color: var(--purple-2); }
+.ac-needs-prompt { font-size: 12.5px; line-height: 1.5; margin: 0; color: var(--ink); }
+.ac-needs-options { display: flex; gap: 7px; flex-wrap: wrap; }
+.ac-needs-answered { font-size: 11.5px; color: var(--green); font-weight: 600; display: flex; align-items: center; gap: 5px; }
+
+/* ---- Buttons ----------------------------------------------------------- */
+.ac-btn { display: inline-flex; align-items: center; gap: 6px; justify-content: center; padding: 7px 12px; border-radius: 9px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid transparent; font-family: var(--font-sans); transition: all 0.13s ease; white-space: nowrap; }
+.ac-btn:disabled { opacity: 0.5; cursor: default; }
+.ac-btn-primary { background: linear-gradient(135deg, var(--purple), var(--purple-2)); color: #fff; box-shadow: var(--shadow-sm); }
+.ac-btn-primary:hover:not(:disabled) { filter: brightness(1.06); }
+.ac-btn-ghost { background: var(--bg-2); border-color: var(--line); color: var(--ink-soft); }
+.ac-btn-ghost:hover:not(:disabled) { border-color: var(--ink-soft); color: var(--ink); }
+.ac-btn-soft { background: var(--purple-soft); color: var(--purple-2); }
+.ac-btn-soft:hover:not(:disabled) { filter: brightness(0.98); }
+
+/* ---- Composer ---------------------------------------------------------- */
+.ac-composer { padding: 12px 16px 14px; border-top: 1px solid var(--line); background: var(--bg-2); }
+.ac-composer-well { display: flex; align-items: flex-end; gap: 9px; background: var(--bg-3); border: 1px solid var(--line); border-radius: 13px; padding: 8px 8px 8px 14px; }
+.ac-composer-well textarea { flex: 1; border: none; background: transparent; resize: none; outline: none; font-family: var(--font-sans); font-size: 13px; color: var(--ink); padding: 4px 0; line-height: 1.4; max-height: 120px; }
+.ac-composer-well textarea::placeholder { color: var(--ink-soft); }
+.ac-send { width: 32px; height: 32px; border-radius: 9px; border: none; cursor: pointer; background: linear-gradient(135deg, var(--purple), var(--purple-2)); color: #fff; display: grid; place-items: center; flex-shrink: 0; }
+.ac-send:disabled { opacity: 0.45; cursor: default; }
+.ac-hints { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.ac-hint-chip { font-size: 10.5px; color: var(--ink-soft); background: var(--bg-3); border: 1px solid var(--line); padding: 4px 9px; border-radius: 999px; cursor: pointer; }
+.ac-hint-chip:hover { border-color: var(--purple-soft); color: var(--purple-2); }
+
+.ac-stream::-webkit-scrollbar, .ac-agent-list::-webkit-scrollbar { width: 8px; }
+.ac-stream::-webkit-scrollbar-thumb, .ac-agent-list::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+
+/* Narrow screens: drop the rails to keep the feed usable. */
+@media (max-width: 1180px) {
+  .ac-shell, .ac-shell.ac-dock-collapsed { grid-template-columns: 1fr; }
+  .ac-sidebar { display: none; }
+  .ac-dock { position: fixed; right: 0; top: 64px; width: min(404px, 92vw); z-index: 40; box-shadow: var(--shadow-lg); }
+}

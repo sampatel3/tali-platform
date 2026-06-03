@@ -360,6 +360,13 @@ from .domains.taali_chat import router as taali_chat_router  # noqa: E402
 
 app.include_router(taali_chat_router, prefix="/api/v1")
 
+# Role-agent chat: conversational steering of a role's autonomous agent
+# (constraint/threshold edits + impact analysis), with the role's HITL
+# questions + decisions merged into one timeline.
+from .domains.agent_chat import router as agent_chat_router  # noqa: E402
+
+app.include_router(agent_chat_router, prefix="/api/v1")
+
 # Agentic recruiting: per-job autonomous agent + recruiter approval queue.
 # The package's ``router`` already bundles routes/usage/cohort_signals.
 from .domains.agentic import router as agentic_router  # noqa: E402

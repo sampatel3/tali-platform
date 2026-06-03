@@ -134,6 +134,7 @@ class Feature(str, Enum):
     ASSESSMENT = "assessment"
     TAALI_CHAT = "taali_chat"
     AGENT_AUTONOMOUS = "agent_autonomous"
+    AGENT_CHAT = "agent_chat"  # recruiter ↔ role-agent conversational steering
     # Granular attribution for the rest of the Claude call sites. Added
     # 2026-05 when reconciliation against Anthropic billing started — every
     # billable call must land in a specific bucket so per-cent attribution
@@ -210,6 +211,15 @@ _FEATURE_PRICING: dict[Feature, FeaturePricing] = {
         # cadence, so per-job budget caps in agent_runtime/budget_guard
         # bound the spend separately from this multiplier.
         feature=Feature.AGENT_AUTONOMOUS,
+        markup_multiplier=Decimal("2.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.AGENT_CHAT: FeaturePricing(
+        # Recruiter ↔ role-agent chat (constraint steering + impact analysis).
+        # Same 2× shape as taali_chat/agent — recruiter-facing AI. Metered
+        # against the role's monthly budget (role_id is set) so chat spend
+        # shows up alongside the autonomous cycles on the same role.
+        feature=Feature.AGENT_CHAT,
         markup_multiplier=Decimal("2.0"),
         cache_hit_multiplier=Decimal("0.10"),
     ),
@@ -433,6 +443,7 @@ def estimate_reservation(feature: Feature | str) -> int:
         Feature.ASSESSMENT: 60_000,  # ~$0.06 per Claude turn (3× markup)
         Feature.TAALI_CHAT: 10_000,
         Feature.AGENT_AUTONOMOUS: 20_000,  # ~$0.02 per agent Claude turn
+        Feature.AGENT_CHAT: 12_000,  # ~$0.012 per role-agent chat turn (tool loop)
         Feature.CV_PARSE: 2_000,
         Feature.CV_RERANK: 5_000,
         Feature.SEARCH_PARSE: 500,
