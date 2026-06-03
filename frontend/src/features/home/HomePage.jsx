@@ -346,7 +346,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   const hasAgents = agents.length > 0;
 
   return (
-    <div>
+    <div className="home-zoom">
       {NavComponent ? <NavComponent currentPage="home" onNavigate={onNavigate} /> : null}
       <div className={hasAgents ? `ac-shell ${dockCollapsed ? 'ac-dock-collapsed' : ''}` : undefined}>
         {hasAgents && (

@@ -11,7 +11,7 @@ import { useToast } from '../../../context/ToastContext';
 import { Avatar, ChatBubble, ImpactCard, NeedsInputCard, ThinkingBubble } from './cards.jsx';
 
 const HINTS = [
-  're-screen at a £25k salary cap',
+  'cap salary at AED 25k',
   'what if I drop the cut-off to 60?',
   'bring 5 more through',
 ];

@@ -28,7 +28,7 @@ const TIMELINE = [
   {
     kind: 'message', id: 'm2', author: 'agent', text: 'Updated and re-screening.',
     created_at: '2026-06-03T09:00:05Z',
-    actions: [{ type: 'constraint_change', action: 'updated', criterion: { text: 'Salary ≤ £25,000' }, rescreening_count: 47 }],
+    actions: [{ type: 'constraint_change', action: 'updated', criterion: { text: 'Salary ≤ AED 25,000' }, rescreening_count: 47 }],
   },
   {
     kind: 'needs_input', id: 'q1', needs_input_id: 9, question_kind: 'candidate_tie_break',
@@ -61,7 +61,7 @@ describe('AgentChatDock', () => {
 
     expect(await screen.findByText('Updated and re-screening.')).toBeInTheDocument();
     // Impact card from the agent message.
-    expect(screen.getByText('Salary ≤ £25,000')).toBeInTheDocument();
+    expect(screen.getByText('Salary ≤ AED 25,000')).toBeInTheDocument();
     expect(screen.getByText(/re-screening 47/)).toBeInTheDocument();
     // The agent's question + its options.
     expect(screen.getByText('Marcus or Lena?')).toBeInTheDocument();
