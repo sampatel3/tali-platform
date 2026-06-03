@@ -32,11 +32,3 @@
 @import "./styles/20-role-agent-tab.css";
 @import "./styles/21-demo.css";
 @import "./styles/22-tail-misc.css";
-
-/* App-wide 80% zoom — the console runs at this density. `zoom` (vs
-   transform/font-size) scales layout + vh/sticky/fixed consistently, exactly
-   like a browser zoom, so full-height rails, the top nav, and modals all lay
-   out correctly. Applies to the whole site, every page. */
-html {
-  zoom: 0.8;
-}
