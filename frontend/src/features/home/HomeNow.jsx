@@ -344,16 +344,16 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
   return (
   <aside className="rq-split-list">
     <div className="rq-split-list-head">
-      <span style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 600, color: 'var(--ink)' }}>
+      <span style={{ fontFamily: 'var(--font-display)', fontSize: '0.875rem', fontWeight: 600, color: 'var(--ink)' }}>
         Pending <span style={{ color: 'var(--purple)', marginLeft: 4 }}>{pending.length}</span>
       </span>
-      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--mute)', letterSpacing: '.06em' }}>
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65625rem', color: 'var(--mute)', letterSpacing: '.06em' }}>
         {oldestCreatedAt ? `OLDEST ${formatRelativeAge(oldestCreatedAt)}` : ''}
       </span>
     </div>
     <div className="rq-split-list-body">
       {loading && pending.length === 0 ? (
-        <div style={{ padding: 16, fontSize: 13, color: 'var(--mute)' }}>Loading…</div>
+        <div style={{ padding: 16, fontSize: '0.8125rem', color: 'var(--mute)' }}>Loading…</div>
       ) : pending.length === 0 ? (
         <div className="home-empty" style={{ margin: 6 }}>
           <Inbox size={18} aria-hidden="true" style={{ marginBottom: 6, color: 'var(--mute)' }} />
@@ -385,11 +385,11 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
               {p.status === 'processing' ? (
                 <span className="rq-proc-tag">Processing…</span>
               ) : null}
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--mute)', letterSpacing: '.06em', marginLeft: 'auto' }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.625rem', color: 'var(--mute)', letterSpacing: '.06em', marginLeft: 'auto' }}>
                 {formatRelativeAge(p.created_at)}
               </span>
             </div>
-            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink)', lineHeight: 1.35 }}>
+            <div style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--ink)', lineHeight: 1.35 }}>
               <a
                 href={pathForPage('candidate-report', { candidateApplicationId: p.application_id, fromHome: true })}
                 target="_blank"
@@ -407,7 +407,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
                 <RolePill roleName={p.role_name} roleId={p.role_id} />
               </div>
             ) : null}
-            <div style={{ fontSize: 11, color: 'var(--mute)', marginTop: 5, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ fontSize: '0.6875rem', color: 'var(--mute)', marginTop: 5, display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontFamily: 'var(--font-mono)', letterSpacing: '.04em' }}>#{p.id}</span>
               {p.confidence != null ? (
                 <>
@@ -426,7 +426,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
     </div>
     <div style={{
       padding: '10px 14px', borderTop: '1px solid var(--line)', fontFamily: 'var(--font-mono)',
-      fontSize: 10.5, color: 'var(--mute)', letterSpacing: '.06em',
+      fontSize: '0.65625rem', color: 'var(--mute)', letterSpacing: '.06em',
       display: 'flex', alignItems: 'center', gap: 6,
     }}>
       <ListChecks size={12} aria-hidden="true" />
@@ -457,7 +457,7 @@ export const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, on
       <div className="rq-split-detail-head">
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <TypeBadge type={decision.decision_type} />
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--mute)', letterSpacing: '.06em' }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.6875rem', color: 'var(--mute)', letterSpacing: '.06em' }}>
             D-{decision.id} · {formatRelativeAge(decision.created_at)} ago
           </span>
           {decision.status === 'pending' ? (
@@ -489,7 +489,7 @@ export const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, on
               {decision.candidate_name || `Application #${decision.application_id}`}
             </a>
           </h2>
-          <div style={{ fontSize: 13, color: 'var(--mute)', marginTop: 2 }}>
+          <div style={{ fontSize: '0.8125rem', color: 'var(--mute)', marginTop: 2 }}>
             {decision.candidate_email || ''}
           </div>
         </div>
@@ -510,12 +510,12 @@ export const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, on
         ) : null}
       </div>
 
-      <p style={{ margin: '0 0 14px', fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: 760 }}>
+      <p style={{ margin: '0 0 14px', fontSize: '0.875rem', color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: 760 }}>
         {decision.reasoning}
       </p>
 
       {isStale && (decision.status === 'pending' || decision.status === 'reverted_for_feedback') ? (
-        <div className="rq-stale-banner" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 14px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: 13, fontWeight: 500 }}>
+        <div className="rq-stale-banner" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 14px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: '0.8125rem', fontWeight: 500 }}>
           <RefreshCw size={14} strokeWidth={2} aria-hidden="true" />
           <span>
             Inputs changed since this was decided{stalenessSummary ? ` · ${stalenessSummary}` : ''}. Re-evaluate before approving.
@@ -528,7 +528,7 @@ export const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, on
           Surface the reason so the recruiter doesn't blindly re-approve into the
           same failure; a fresh pending decision has no note. */}
       {decision.status === 'pending' && decision.resolution_note ? (
-        <div className="rq-returned-banner" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, margin: '0 0 14px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: 13, fontWeight: 500, lineHeight: 1.45 }}>
+        <div className="rq-returned-banner" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, margin: '0 0 14px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: '0.8125rem', fontWeight: 500, lineHeight: 1.45 }}>
           <Inbox size={14} strokeWidth={2} aria-hidden="true" style={{ marginTop: 1, flexShrink: 0 }} />
           <span>{decision.resolution_note}</span>
         </div>
@@ -558,7 +558,7 @@ export const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, on
                 <span className={`rq-trace-dot rq-trace-${s.who || 'agent'}`} />
                 <div>
                   <div className="rq-trace-t">
-                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--mute)', letterSpacing: '.08em', marginRight: 8, textTransform: 'uppercase' }}>{s.who || 'agent'}</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.625rem', color: 'var(--mute)', letterSpacing: '.08em', marginRight: 8, textTransform: 'uppercase' }}>{s.who || 'agent'}</span>
                     {s.t || s.title}
                   </div>
                   {s.m || s.message ? <div className="rq-trace-m">{s.m || s.message}</div> : null}
@@ -1039,7 +1039,7 @@ export const HomeNow = ({
                   {`Approve ${bulkConfirm.count} ${bulkConfirm.typeLabel}${bulkConfirm.count === 1 ? '' : 's'} on ${bulkConfirm.roleScope}?`}
                 </h3>
                 {bulkConfirm.sample ? (
-                  <p style={{ margin: 0, fontSize: 13, color: 'var(--ink-2)', maxWidth: 420, lineHeight: 1.5 }}>
+                  <p style={{ margin: 0, fontSize: '0.8125rem', color: 'var(--ink-2)', maxWidth: 420, lineHeight: 1.5 }}>
                     {`${bulkConfirm.sample}${bulkConfirm.more}`}
                   </p>
                 ) : null}
@@ -1061,13 +1061,13 @@ export const HomeNow = ({
                     const picked = bulkStages[r.role_id];
                     return (
                       <div key={r.role_id} style={{ marginTop: 10 }}>
-                        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginBottom: 6 }}>
+                        <div style={{ fontSize: '0.78125rem', color: 'var(--ink-2)', marginBottom: 6 }}>
                           {r.role_name} · {r.count} advancing
                         </div>
                         {raw === undefined || raw === 'loading' ? (
-                          <span style={{ fontSize: 12, color: 'var(--mute)' }}>Loading stages…</span>
+                          <span style={{ fontSize: '0.75rem', color: 'var(--mute)' }}>Loading stages…</span>
                         ) : raw === 'error' ? (
-                          <span style={{ fontSize: 12, color: 'var(--ink-2)', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: '0.75rem', color: 'var(--ink-2)', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                             Couldn&apos;t load Workable stages.
                             <button
                               type="button"
@@ -1080,7 +1080,7 @@ export const HomeNow = ({
                             </button>
                           </span>
                         ) : stages.length === 0 ? (
-                          <span style={{ fontSize: 12, color: 'var(--mute)' }}>
+                          <span style={{ fontSize: '0.75rem', color: 'var(--mute)' }}>
                             No Workable stages found for this role. These candidates' internal stage will still update; nothing posts to Workable.
                           </span>
                         ) : (
@@ -1107,7 +1107,7 @@ export const HomeNow = ({
                   })}
                 </div>
               ) : null}
-              <p style={{ margin: bulkConfirm.advanceRoles.length > 0 ? '12px 0 0' : 0, fontSize: 13, color: 'var(--mute)', lineHeight: 1.5 }}>
+              <p style={{ margin: bulkConfirm.advanceRoles.length > 0 ? '12px 0 0' : 0, fontSize: '0.8125rem', color: 'var(--mute)', lineHeight: 1.5 }}>
                 This runs each approval in turn and reports any failures.
               </p>
             </div>
