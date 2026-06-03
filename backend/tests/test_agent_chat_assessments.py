@@ -95,3 +95,18 @@ def test_rescreen_scoped_only_marks_the_affected_subset(db):
     assert result["type"] == "rescreen_started" and result["scoped"] is True
     _, kwargs = stale.call_args
     assert set(kwargs["application_ids"]) == {bo.id, cy.id}   # only the missing, not Ada
+
+
+def test_search_candidates_reuses_the_search_handler(db):
+    """P4: the role-agent gets the Search page's candidate search."""
+    org = _org(db)
+    role = _role(db, org)
+    with patch(
+        "app.mcp.handlers.nl_search_candidates", return_value={"results": ["x"]}
+    ) as srch:
+        out = tools.dispatch_tool(
+            "search_candidates", {"query": "based in MENA"}, db=db, role=role, user=None
+        )
+    assert out == {"results": ["x"]}
+    _, kwargs = srch.call_args
+    assert kwargs["query"] == "based in MENA" and kwargs["role_id"] == role.id

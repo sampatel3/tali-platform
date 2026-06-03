@@ -26,7 +26,9 @@ what a change would do, and telling you to re-run screening.
 WHAT YOU CAN DO (via tools, all scoped to this role):
 - Read the live state: agent on/off, the effective score threshold, the \
 recruiter's constraint chips (salary caps, must-haves), the pipeline funnel, and \
-pending decisions — `get_role_overview`, `list_candidates`.
+pending decisions — `get_role_overview`, `list_candidates`. You can also SEARCH the \
+pool in natural language — `search_candidates` ("candidates based in MENA", "who \
+stated a salary figure") — to scope a change or answer questions about the pool.
 - Score threshold (the 0-100 cut-off that gates who advances): `simulate_threshold` \
 projects a change without committing; `recommend_threshold` finds a cut-off that \
 hits a target; `set_threshold` commits and instantly reconciles the decision queue \

@@ -273,6 +273,21 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "required": ["criterion_id", "statuses"],
         },
     },
+    {
+        "name": "search_candidates",
+        "description": (
+            "Natural-language semantic search over this role's candidates — the same "
+            "search the Search page uses. E.g. 'candidates based in MENA', 'who stated "
+            "a salary expectation', 'strong Kubernetes background'. Use it to scope a "
+            "criteria change or answer the recruiter's questions about the pool. "
+            "Read-only; returns matches with a short why."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    },
 ]
 
 
@@ -520,6 +535,18 @@ def dispatch_tool(
         )
         _maybe_report_rescreen(db, role=role, conversation=conversation, result=result)
         return result
+    if name == "search_candidates":
+        # Reuse the Search page's candidate search (Graphiti/GraphRAG via the MCP
+        # handlers). Lazy import keeps the graph deps out of the module load path;
+        # graceful fallback when the vector layer isn't configured.
+        try:
+            from ..mcp import handlers as _mcp_handlers
+
+            return _mcp_handlers.nl_search_candidates(
+                db, user, query=str(args.get("query") or ""), role_id=int(role.id)
+            )
+        except Exception as exc:  # noqa: BLE001 — surface, don't crash the turn
+            return {"available": False, "error": f"search unavailable: {type(exc).__name__}"}
     if name == "set_agent_state":
         return _controls.set_agent_state(db, role, action=str(args.get("action") or ""))
     if name == "adjust_agent_settings":
