@@ -30,16 +30,18 @@
 .ac-kicker { font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); }
 .ac-sidebar-count { font-size: 11px; color: var(--purple-2); font-weight: 600; }
 .ac-agent-list { flex: 1; overflow-y: auto; padding: 2px 8px 12px; display: flex; flex-direction: column; gap: 3px; }
-.ac-agent { display: flex; align-items: center; gap: 10px; padding: 10px 11px; border-radius: var(--radius); border: 1px solid transparent; background: transparent; cursor: pointer; text-align: left; width: 100%; transition: background 0.12s ease; }
+.ac-agent { display: flex; align-items: flex-start; gap: 10px; padding: 10px 11px; border-radius: var(--radius); border: 1px solid transparent; background: transparent; cursor: pointer; text-align: left; width: 100%; transition: background 0.12s ease; }
 .ac-agent:hover { background: var(--bg-3); }
 .ac-agent.is-active { background: var(--purple-soft); border-color: var(--purple); }
-.ac-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex-shrink: 0; }
+.ac-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex-shrink: 0; margin-top: 5px; }
 .ac-dot.is-on { background: var(--green); box-shadow: 0 0 0 3px color-mix(in oklab, var(--green) 22%, transparent); }
 .ac-dot.is-paused { background: var(--amber); }
 .ac-agent-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.ac-agent-role { font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ac-agent-preview { font-size: 11.5px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ac-agent-meta { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+.ac-agent-role { font-size: 13px; font-weight: 600; color: var(--ink); line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.ac-agent-preview { font-size: 11.5px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+.ac-agent-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; margin-top: 1px; }
+.ac-badge-q { display: inline-flex; align-items: center; gap: 3px; background: var(--purple); color: #fff; font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 999px; line-height: 1.4; }
+.ac-badge-d { font-size: 10px; font-weight: 600; color: var(--ink-soft); background: var(--bg-3); border: 1px solid var(--line); padding: 1px 6px; border-radius: 999px; line-height: 1.5; }
 .ac-agent-time { font-size: 11px; color: var(--ink-soft); }
 .ac-badge-count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--purple); color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; }
 .ac-empty { padding: 24px 16px; font-size: 12.5px; color: var(--ink-soft); text-align: center; line-height: 1.5; }

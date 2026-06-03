@@ -7,14 +7,6 @@
    :root in index.css — no new colours.
    ========================================================== */
 
-/* Render the Hub at 80% — the agent rail + chat dock make the 3-column layout
-   dense at 100%; zooming the whole page (nav included) matches the browser-80%
-   view recruiters were using. `zoom` (vs transform:scale) keeps layout + the
-   sticky rails' coordinate system consistent in Chromium/WebKit. */
-.home-zoom {
-  zoom: 0.8;
-}
-
 .home-body {
   padding: 28px 32px 48px;
   max-width: 1440px;

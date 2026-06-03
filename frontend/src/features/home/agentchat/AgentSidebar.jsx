@@ -1,7 +1,9 @@
-// Left rail listing the org's active agents with notification badges. Pure
-// presentation — HomePage owns the polled conversation list and selection.
+// Left rail listing the org's active agents with two notification indicators.
+// Pure presentation — HomePage owns the polled conversation list and selection.
 
-import { ChevronRight } from 'lucide-react';
+import { MessageSquare } from 'lucide-react';
+
+const fmtCount = (n) => (n > 999 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 
 export function AgentSidebar({ agents = [], activeRoleId, onSelect }) {
   const activeCount = agents.filter((a) => a.agent_enabled).length;
@@ -16,16 +18,20 @@ export function AgentSidebar({ agents = [], activeRoleId, onSelect }) {
           <div className="ac-empty">No active agents yet. Turn an agent on for a role to chat with it.</div>
         ) : (
           agents.map((a) => {
-            // The badge is a CHAT notification: unread agent messages + open
-            // questions awaiting you. The bulk pending-decision queue is the
-            // feed's "Pending N", not a per-agent chat count.
-            const badge = (a.unread_messages || 0) + (a.open_questions || 0);
+            // Two distinct indicators:
+            //  • questions (purple) — the agent is asking you something:
+            //    open questions + unread agent messages.
+            //  • decisions (muted)  — the bulk pending-decision queue (same as
+            //    the feed's "Pending N").
+            const questions = (a.unread_messages || 0) + (a.open_questions || 0);
+            const decisions = a.pending_decisions || 0;
             const dotClass = a.agent_paused ? 'is-paused' : a.agent_enabled ? 'is-on' : '';
             return (
               <button
                 key={a.role_id}
                 className={`ac-agent ${a.role_id === activeRoleId ? 'is-active' : ''}`}
                 onClick={() => onSelect?.(a.role_id)}
+                title={a.role_name}
               >
                 <span className={`ac-dot ${dotClass}`} />
                 <span className="ac-agent-body">
@@ -37,8 +43,16 @@ export function AgentSidebar({ agents = [], activeRoleId, onSelect }) {
                   </span>
                 </span>
                 <span className="ac-agent-meta">
-                  {badge > 0 ? <span className="ac-badge-count">{badge}</span> : null}
-                  <ChevronRight size={14} style={{ color: 'var(--ink-soft)' }} />
+                  {questions > 0 && (
+                    <span className="ac-badge-q" title={`${questions} awaiting your reply`}>
+                      <MessageSquare size={10} /> {questions}
+                    </span>
+                  )}
+                  {decisions > 0 && (
+                    <span className="ac-badge-d" title={`${decisions} pending decisions`}>
+                      {fmtCount(decisions)}
+                    </span>
+                  )}
                 </span>
               </button>
             );

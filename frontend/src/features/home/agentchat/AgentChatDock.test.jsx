@@ -106,16 +106,17 @@ describe('AgentSidebar', () => {
     { role_id: 2, role_name: 'GenAI Engineer', agent_enabled: true, unread_messages: 0, open_questions: 0, pending_decisions: 9, last_message_preview: 'queue clear' },
   ];
 
-  it('badges chat attention (unread + questions), excluding the decision queue', () => {
+  it('shows two separate indicators: questions and pending decisions', () => {
     const onSelect = vi.fn();
     render(<AgentSidebar agents={AGENTS} activeRoleId={1} onSelect={onSelect} />);
 
     expect(screen.getByText('Data Eng')).toBeInTheDocument();
     expect(screen.getByText('GenAI Engineer')).toBeInTheDocument();
-    expect(screen.getByText('3')).toBeInTheDocument(); // 2 unread + 1 question
-    // The 50 pending decisions must NOT leak into the badge.
+    // Questions indicator: 2 unread + 1 question = 3.
+    expect(screen.getByText('3')).toBeInTheDocument();
+    // Decisions indicator: 50, shown separately (NOT summed into the questions badge).
+    expect(screen.getByText('50')).toBeInTheDocument();
     expect(screen.queryByText('53')).not.toBeInTheDocument();
-    expect(screen.queryByText('50')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByText('GenAI Engineer'));
     expect(onSelect).toHaveBeenCalledWith(2);
