@@ -54,11 +54,35 @@
 .ac-dock-collapse:hover { background: var(--bg-3); color: var(--ink); }
 .ac-stream { flex: 1; overflow-y: auto; min-height: 0; padding: 16px; display: flex; flex-direction: column; gap: 13px; background: var(--bg); }
 
-/* Collapsed handle */
-.ac-dock-handle { position: sticky; top: 64px; height: calc(100vh - 64px); width: 0; }
-.ac-reopen { position: sticky; top: 80px; float: right; margin-right: 4px; display: inline-flex; align-items: center; gap: 7px; padding: 9px 13px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg-2); color: var(--ink); font-size: 0.78125rem; font-weight: 600; cursor: pointer; box-shadow: var(--shadow-md); }
-.ac-reopen svg { color: var(--purple); }
-.ac-reopen .ac-badge-count { position: relative; top: 0; }
+/* Collapsed handle — a clean vertical drawer tab on the right edge. */
+.ac-dock-handle { width: 0; }
+.ac-reopen {
+  position: fixed;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 16px 9px;
+  border: 1px solid var(--line);
+  border-right: none;
+  border-radius: 12px 0 0 12px;
+  background: var(--bg-2);
+  color: var(--ink-2);
+  box-shadow: var(--shadow-lg);
+  cursor: pointer;
+  z-index: 45;
+  writing-mode: vertical-rl;
+  font-size: 0.78125rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.ac-reopen:hover { background: var(--purple); color: #fff; border-color: var(--purple); }
+.ac-reopen svg { color: var(--purple); flex-shrink: 0; }
+.ac-reopen:hover svg { color: #fff; }
+.ac-reopen .ac-badge-count { writing-mode: horizontal-tb; min-width: 18px; height: 18px; font-size: 0.625rem; }
 
 /* ---- Chat bubbles ------------------------------------------------------ */
 .ac-row { display: flex; gap: 9px; max-width: 100%; }

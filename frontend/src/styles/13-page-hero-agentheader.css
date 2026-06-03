@@ -86,7 +86,7 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   position: relative;
   overflow: hidden;
-  padding: 32px 32px 36px;
+  padding: 22px 32px 24px;
   /* Floor sized to absorb the tallest normal layout (Role-detail
      back-link + kicker + h1 + actions + 4-fact grid + 4-row agent
      panel on the right) so every recruiter-page header lines up at
@@ -94,7 +94,7 @@
      fixed `height`) so an unusually long role name — backend allows
      up to 200 chars and we render it in both kicker and title — can
      wrap without getting clipped by overflow: hidden. */
-  min-height: 320px;
+  min-height: 176px;
   display: flex;
   /* Anchor inner content to the top so the title sits at the same y position
      on every page, with or without a right-side agent panel. (Centering left
@@ -118,7 +118,7 @@
 }
 
 /* Compact variant deprecated — normalized to default height. */
-.agent-header.compact { padding: 32px 32px 36px; }
+.agent-header.compact { padding: 22px 32px 24px; }
 
 /* === Bright agent-running gradient lives on a separate overlay layer so
    the OFF→ON state change cross-fades opacity instead of snapping between
@@ -314,8 +314,8 @@
      budget input + button) is the tallest natural layout; ON / PAUSED
      have empty room below the action row. min-height (vs fixed) lets
      edge cases like the inline budget error grow gracefully without
-     clipping, while every common state still settles at exactly 240px. */
-  min-height: 240px;
+     clipping, while every common state still settles at this height. */
+  min-height: 150px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(167, 139, 250, 0.32);
   border-radius: 14px;
