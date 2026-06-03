@@ -346,22 +346,22 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     );
   }, [rolesBreakdown]);
 
-  const hasAgents = agents.length > 0;
-
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="home" onNavigate={onNavigate} /> : null}
-      <div className={hasAgents ? `ac-shell ${dockCollapsed ? 'ac-dock-collapsed' : ''}` : undefined}>
-        {hasAgents && (
-          <AgentSidebar agents={agents} activeRoleId={activeRoleId} onSelect={handleSelectAgent} />
-        )}
-        <div className={hasAgents ? 'ac-main' : undefined}>
+      {/* Full-width page header — consistent with every other page (spans the
+          whole width, above the agent rail + chat dock). */}
       <AgentHeader
         breadcrumbs={[{ label: 'Home' }]}
         kicker={`HUB · ${formatCount(pendingDecisions)} AWAITING YOU · ${formatCount(kpis.active_role_count)} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
         title={greetingFor(user)}
         subtitle="Every decision the agent makes that needs you. Approve, override, or teach it — your calls become its training signal. The long-term goal is full automation; this is where you keep the loop honest."
       />
+      {/* The shell renders immediately (not gated on the async agents fetch),
+          so the page lays out once — no flash of the pre-rail layout. */}
+      <div className={`ac-shell ${dockCollapsed ? 'ac-dock-collapsed' : ''}`}>
+        <AgentSidebar agents={agents} activeRoleId={activeRoleId} onSelect={handleSelectAgent} />
+        <div className="ac-main">
 
       <div className="home-body">
         {/* One compact KPI row for the Decision Hub — decision-focused, no
@@ -417,7 +417,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           rolesBreakdown={rolesBreakdown}
           reload={reloadAll}
           onNavigate={onNavigate}
-          questionsInDock={hasAgents}
+          questionsInDock={true}
         />
 
         {/* One consolidated analytics surface — Activity / Outcomes / Quality
@@ -445,7 +445,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
         <HomePlatformUpdates />
       </div>
         </div>
-        {hasAgents && (dockCollapsed ? (
+        {dockCollapsed ? (
           <div className="ac-dock-handle">
             <button className="ac-reopen" onClick={() => setDockCollapsed(false)}>
               <MessageSquare size={15} /> Ask the agent
@@ -459,7 +459,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
             onReload={reloadAll}
             onCollapse={() => setDockCollapsed(true)}
           />
-        ))}
+        )}
       </div>
     </div>
   );
