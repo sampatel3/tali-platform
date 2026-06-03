@@ -221,7 +221,9 @@ def run_agent_turn(
             name = str(block.get("name") or "")
             args = block.get("input") or {}
             try:
-                result = dispatch_tool(name, args, db=db, role=role, user=user)
+                result = dispatch_tool(
+                    name, args, db=db, role=role, user=user, conversation=conversation
+                )
                 is_error = False
                 if isinstance(result, dict) and result.get("type") in CARD_TYPES:
                     collected_cards.append(result)

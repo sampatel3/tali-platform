@@ -29,16 +29,16 @@ export function AgentChatDock({ roleId, roleName, onReload, onCollapse }) {
     if (el) el.scrollTop = el.scrollHeight;
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts = {}) => {
     if (!roleId) return;
-    setLoading(true);
+    if (!opts.silent) setLoading(true);
     try {
       const { data } = await agentChat.getTimeline(roleId);
       setTimeline(data.timeline || []);
     } catch {
-      setTimeline([]);
+      if (!opts.silent) setTimeline([]);
     } finally {
-      setLoading(false);
+      if (!opts.silent) setLoading(false);
     }
   }, [roleId]);
 
@@ -111,6 +111,29 @@ export function AgentChatDock({ roleId, roleName, onReload, onCollapse }) {
   // Option C: show chat + questions only; decisions are in the feed.
   const items = timeline.filter((it) => it.kind === 'message' || it.kind === 'needs_input');
 
+  // A constraint edit's re-screen is "in flight" when the latest agent message
+  // is a constraint change that kicked a re-screen, with no follow-up message
+  // after it yet. While so, poll quietly so the proactive "re-screen complete"
+  // impact message lands without a manual refresh.
+  let lastAgentIdx = -1;
+  let lastRescreenIdx = -1;
+  items.forEach((it, i) => {
+    if (it.kind === 'message' && it.author === 'agent') {
+      lastAgentIdx = i;
+      if ((it.actions || []).some((c) => c.type === 'constraint_change' && (c.rescreening_count || 0) > 0)) {
+        lastRescreenIdx = i;
+      }
+    }
+  });
+  const rescreenPending = lastRescreenIdx >= 0 && lastRescreenIdx === lastAgentIdx;
+
+  useEffect(() => {
+    if (!rescreenPending) return undefined;
+    const poll = window.setInterval(() => { void load({ silent: true }); }, 5000);
+    const stop = window.setTimeout(() => window.clearInterval(poll), 6 * 60 * 1000);
+    return () => { window.clearInterval(poll); window.clearTimeout(stop); };
+  }, [rescreenPending, load]);
+
   return (
     <aside className="ac-dock">
       <div className="ac-dock-head">
@@ -149,6 +172,11 @@ export function AgentChatDock({ roleId, roleName, onReload, onCollapse }) {
           )
         )}
         {sending && <ThinkingBubble />}
+        {rescreenPending && !sending && (
+          <div className="ac-rescreen-live">
+            <span className="ac-pulse" /> Re-screening candidates… I’ll post the impact here when it lands.
+          </div>
+        )}
       </div>
 
       <div className="ac-composer">

@@ -386,6 +386,92 @@ def test_list_agent_conversations_counts_attention(db):
     assert item["attention"] == 3
 
 
+# ---------------------------------------------------------------------------
+# Re-screen impact report ("feels instant" completion message)
+# ---------------------------------------------------------------------------
+
+
+def test_post_rescreen_impact_reports_shrink_and_recommends(db):
+    from app.agent_chat.rescreen_report import post_rescreen_impact
+
+    org = _org(db)
+    role = _role(db, org, threshold=70, agentic=True)
+    _scored_app(db, org, role, score=80, name="Keep")
+    _scored_app(db, org, role, score=65, name="Near")
+    _scored_app(db, org, role, score=50, name="Far")
+    convo = service.ensure_conversation(db, organization_id=org.id, role=role)
+    db.commit()
+
+    # Pretend 3 cleared the cut-off before the re-screen; now only Keep (80) does.
+    msg = post_rescreen_impact(db, conversation=convo, role=role, baseline_qualified=3)
+    db.commit()
+    assert "from 3 to 1" in msg.text
+    assert "65" in msg.text  # the recommended lower cut-off
+    assert msg.actions and msg.actions[0]["type"] == "threshold_recommendation"
+    assert msg.kind == "action"
+
+
+def test_post_rescreen_impact_no_change_has_no_card(db):
+    from app.agent_chat.rescreen_report import post_rescreen_impact
+
+    org = _org(db)
+    role = _role(db, org, threshold=70, agentic=True)
+    _scored_app(db, org, role, score=80, name="Keep")
+    convo = service.ensure_conversation(db, organization_id=org.id, role=role)
+    db.commit()
+
+    msg = post_rescreen_impact(db, conversation=convo, role=role, baseline_qualified=1)
+    db.commit()
+    assert "No change" in msg.text
+    assert not msg.actions
+
+
+def test_count_inflight_score_jobs_uses_latest_job_per_app(db):
+    from datetime import datetime, timezone
+
+    from app.agent_chat.rescreen_report import count_inflight_score_jobs
+    from app.models.cv_score_job import CvScoreJob
+
+    org = _org(db)
+    role = _role(db, org, threshold=70, agentic=True)
+    a = _scored_app(db, org, role, score=80, name="A")
+    b = _scored_app(db, org, role, score=60, name="B")
+    # A: latest job is done (older stale superseded) → not in flight.
+    db.add(CvScoreJob(application_id=a.id, status="stale", queued_at=datetime(2026, 6, 3, 8, tzinfo=timezone.utc)))
+    db.add(CvScoreJob(application_id=a.id, status="done", queued_at=datetime(2026, 6, 3, 9, tzinfo=timezone.utc)))
+    # B: latest job still stale → in flight.
+    db.add(CvScoreJob(application_id=b.id, status="stale", queued_at=datetime(2026, 6, 3, 9, tzinfo=timezone.utc)))
+    db.commit()
+
+    assert count_inflight_score_jobs(db, role.id) == 1
+
+
+def test_report_task_posts_when_rescore_settled(db):
+    """No in-flight score jobs → the task posts the proactive impact message."""
+    from app.models.agent_conversation import AgentConversationMessage
+    from app.tasks.agent_chat_tasks import report_rescreen_impact
+
+    org = _org(db)
+    role = _role(db, org, threshold=70, agentic=True)
+    _scored_app(db, org, role, score=80, name="Keep")
+    _scored_app(db, org, role, score=65, name="Near")
+    convo = service.ensure_conversation(db, organization_id=org.id, role=role)
+    db.commit()  # the task opens its own session — needs committed rows
+
+    out = report_rescreen_impact(convo.id, role.id, baseline_qualified=5)
+    assert out["status"] == "posted"
+
+    posted = (
+        db.query(AgentConversationMessage)
+        .filter(
+            AgentConversationMessage.conversation_id == convo.id,
+            AgentConversationMessage.author_role == "assistant",
+        )
+        .all()
+    )
+    assert any("Re-screen complete" in (m.text or "") for m in posted)
+
+
 def test_mark_read_clears_unread(db):
     org = _org(db)
     user = _user(db, org)

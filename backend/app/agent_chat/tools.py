@@ -319,8 +319,48 @@ def _list_resolved(db: Session, role: Role, *, outcome: str, limit: int) -> dict
 # ---------------------------------------------------------------------------
 
 
+def _maybe_report_rescreen(db: Session, *, role: Role, conversation: Any, result: Any) -> None:
+    """When a constraint edit kicked a re-screen, schedule the proactive
+    "re-screen complete" impact message. Captures the qualified-pool baseline
+    now (scores are still the old, visible values until the re-score lands).
+
+    No-op without a conversation or when nothing was re-screened. In eager
+    (test) execution the conversation isn't committed yet, so the task no-ops —
+    the live path runs on the worker after the request commits (countdown)."""
+    if conversation is None or not isinstance(result, dict):
+        return
+    if int(result.get("rescreening_count") or 0) <= 0:
+        return
+    rows = _impact.load_open_candidates(db, role)
+    threshold = _impact.effective_threshold(db, role)
+    above, _below = _impact.split_by_threshold(rows, threshold)
+    try:
+        from ..tasks.agent_chat_tasks import report_rescreen_impact
+
+        report_rescreen_impact.apply_async(
+            kwargs={
+                "conversation_id": int(conversation.id),
+                "role_id": int(role.id),
+                "baseline_qualified": int(len(above)),
+            },
+            countdown=20,
+        )
+    except Exception:  # pragma: no cover — never fail the edit on dispatch
+        import logging
+
+        logging.getLogger("taali.agent_chat").exception(
+            "failed to enqueue rescreen impact report for role_id=%s", role.id
+        )
+
+
 def dispatch_tool(
-    name: str, arguments: dict[str, Any], *, db: Session, role: Role, user: Any
+    name: str,
+    arguments: dict[str, Any],
+    *,
+    db: Session,
+    role: Role,
+    user: Any,
+    conversation: Any = None,
 ) -> Any:
     """Run one tool against the conversation's role. Raises on unknown tool
     or bad arguments; the engine converts exceptions to a tool_result error."""
@@ -354,15 +394,19 @@ def dispatch_tool(
         )
     if name == "add_or_update_constraint":
         cid = args.get("criterion_id")
-        return _constraints.add_or_update_constraint(
+        result = _constraints.add_or_update_constraint(
             db,
             role,
             text=str(args.get("text") or ""),
             bucket=str(args.get("bucket") or "constraint"),
             criterion_id=int(cid) if cid is not None else None,
         )
+        _maybe_report_rescreen(db, role=role, conversation=conversation, result=result)
+        return result
     if name == "remove_constraint":
-        return _constraints.remove_constraint(db, role, int(args["criterion_id"]))
+        result = _constraints.remove_constraint(db, role, int(args["criterion_id"]))
+        _maybe_report_rescreen(db, role=role, conversation=conversation, result=result)
+        return result
 
     raise KeyError(f"unknown tool: {name}")
 

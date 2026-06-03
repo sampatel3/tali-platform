@@ -62,6 +62,11 @@ from .agent_tasks import (
     agent_expire_stuck_runs,
     agent_expire_stale_decisions,
 )
+# Eager-import agent_chat_tasks so the worker registers the post-re-screen
+# impact report. The constraint-edit chat tool enqueues it after the turn
+# commits; without this import the worker NotRegistered's it and the proactive
+# "re-screen complete" follow-up never posts.
+from .agent_chat_tasks import report_rescreen_impact
 # Eager-import decision_policy_tasks for the nightly retune beat. Same
 # trap as above — the beat schedule references this task name, but
 # without the import the worker drops the run.
@@ -120,6 +125,7 @@ __all__ = [
     "agent_cohort_tick_role",
     "agent_expire_stuck_runs",
     "agent_expire_stale_decisions",
+    "report_rescreen_impact",
     "nightly_retune_sweep",
     "score_terminal_for_calibration",
     "sample_prescreen_for_calibration",
