@@ -477,7 +477,7 @@ export const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, on
       <div className="rq-detail-identity" style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 14 }}>
         <Avatar initials={initialsFrom(decision.candidate_name)} size={48} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <h2 className="home-title-md" style={{ margin: 0, lineHeight: 1.2 }}>
+          <h2 className="home-title-md" style={{ margin: 0, lineHeight: 1.2, overflowWrap: 'anywhere' }}>
             <a
               href={pathForPage('candidate-report', { candidateApplicationId: decision.application_id, fromHome: true })}
               target="_blank"
@@ -492,18 +492,20 @@ export const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, on
           <div style={{ fontSize: '0.8125rem', color: 'var(--mute)', marginTop: 2 }}>
             {decision.candidate_email || ''}
           </div>
-        </div>
-        <div className="rq-detail-links" style={{ display: 'flex', gap: 8, flexShrink: 0, alignItems: 'center', marginRight: 16 }}>
-          <DeepLinkRow
-            Icon={FileText}
-            label="Open candidate report"
-            href={pathForPage('candidate-report', { candidateApplicationId: decision.application_id, fromHome: true })}
-          />
-          <DeepLinkRow
-            Icon={Eye}
-            label="Open job pipeline"
-            onClick={() => onNavigate?.('job-pipeline', { roleId: decision.role_id })}
-          />
+          {/* Deep-links sit on their own line below the email so a long name
+              can never collide with them. */}
+          <div className="rq-detail-links" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
+            <DeepLinkRow
+              Icon={FileText}
+              label="Open candidate report"
+              href={pathForPage('candidate-report', { candidateApplicationId: decision.application_id, fromHome: true })}
+            />
+            <DeepLinkRow
+              Icon={Eye}
+              label="Open job pipeline"
+              onClick={() => onNavigate?.('job-pipeline', { roleId: decision.role_id })}
+            />
+          </div>
         </div>
         {decision.taali_score != null ? (
           <ScoreRing score={decision.taali_score} size={72} label="TALI" />
