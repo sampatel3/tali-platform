@@ -181,11 +181,14 @@ export const DeepLinkRow = ({ Icon, label, value, onClick, href }) => {
   <Tag
     {...tagProps}
     style={{
+      // rem-based so it scales with the 80% density root (these were inline
+      // px and stayed full-size after the type-scale refactor — which is why
+      // the header deep-links read as oversized vs the rem-scaled text).
       display: 'grid',
-      gridTemplateColumns: '24px 1fr auto',
+      gridTemplateColumns: '1.05rem 1fr auto',
       alignItems: 'center',
-      gap: 10,
-      padding: '8px 10px',
+      gap: '0.45rem',
+      padding: value ? '0.45rem 0.6rem' : '0.3rem 0.55rem',
       width: value ? '100%' : 'auto',
       border: '1px solid var(--line)',
       background: 'var(--bg)',
@@ -198,23 +201,23 @@ export const DeepLinkRow = ({ Icon, label, value, onClick, href }) => {
     }}
   >
     <span style={{ display: 'inline-grid', placeItems: 'center', color: 'var(--purple)' }}>
-      <Icon size={14} strokeWidth={1.8} />
+      <Icon size={13} strokeWidth={1.8} />
     </span>
     {value ? (
       <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-        <span style={{ fontSize: 12, color: 'var(--mute)', fontFamily: 'var(--font-mono)', letterSpacing: '.04em' }}>
+        <span style={{ fontSize: '0.72rem', color: 'var(--mute)', fontFamily: 'var(--font-mono)', letterSpacing: '.04em' }}>
           {label}
         </span>
-        <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ fontSize: '0.8rem', color: 'var(--ink)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {value}
         </span>
       </span>
     ) : (
-      <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 500, whiteSpace: 'nowrap' }}>
+      <span style={{ fontSize: '0.78rem', color: 'var(--ink)', fontWeight: 500, whiteSpace: 'nowrap' }}>
         {label}
       </span>
     )}
-    <ArrowUpRight size={14} strokeWidth={1.8} aria-hidden="true" style={{ color: 'var(--mute)' }} />
+    <ArrowUpRight size={12} strokeWidth={1.8} aria-hidden="true" style={{ color: 'var(--mute)' }} />
   </Tag>
   );
 };
