@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from ..models.candidate_application import CandidateApplication
 from ..models.agent_decision import AgentDecision
 from ..models.role import Role
+from . import assessments as _assessments
 from . import constraints as _constraints
 from . import controls as _controls
 from . import impact as _impact
@@ -234,6 +235,22 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "ONLY once they explicitly say yes."
         ),
         "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_criterion_breakdown",
+        "description": (
+            "For ONE criterion (criterion_id from get_role_overview), how the scored "
+            "candidates currently split — met / missing / unknown / not_assessed — "
+            "WITH each one's stored reasoning. Read-only and free (reuses scores we "
+            "already have). Use this to reason about a criteria change before "
+            "spending: a widening only re-checks the previously-missing, a narrowing "
+            "only the previously-met; a typo/cosmetic reword is a no-op."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"criterion_id": {"type": "integer"}},
+            "required": ["criterion_id"],
+        },
     },
 ]
 
@@ -466,6 +483,8 @@ def dispatch_tool(
         result = _constraints.rescreen_role(db, role)
         _maybe_report_rescreen(db, role=role, conversation=conversation, result=result)
         return result
+    if name == "get_criterion_breakdown":
+        return _assessments.criterion_breakdown(db, role, int(args["criterion_id"]))
     if name == "set_agent_state":
         return _controls.set_agent_state(db, role, action=str(args.get("action") or ""))
     if name == "adjust_agent_settings":

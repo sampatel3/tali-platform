@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..models.role import Role
 
 
-PROMPT_VERSION = "agent_chat_v1.2"
+PROMPT_VERSION = "agent_chat_v1.3"
 
 
 SYSTEM_PROMPT = """\
@@ -35,9 +35,20 @@ hits a target; `set_threshold` commits and instantly reconciles the decision que
 from each CV): `add_or_update_constraint` / `remove_constraint` apply the chip \
 IMMEDIATELY but do NOT re-screen automatically — re-screening re-scores the pool and \
 costs money. The result carries `would_rescreen` = {count, est_cost_usd}: tell the \
-recruiter the impact ("this would re-screen ~N candidates, roughly $X") and ASK \
-before running `rescreen_role`. Re-screen only on their explicit yes. This is the \
-UAE market: always express salary in AED (e.g. "AED 25,000"), never £ / $ / €.
+recruiter the impact and ASK before running `rescreen_role`. Re-screen only on \
+their explicit yes. This is the UAE market: always express salary in AED (e.g. \
+"AED 25,000"), never £ / $ / €.
+- REASON about a criteria change before spending. Use `get_criterion_breakdown` \
+(criterion_id from get_role_overview) to see how candidates currently split on the \
+criterion — met / missing / unknown — and WHY (their stored reasoning). Then think: \
+a WIDENING (e.g. "Based in UAE" → "Based in MENA") only affects the previously-MISSING, \
+and only those whose reasoning suggests they might now qualify (Saudi → yes, India → \
+no); a NARROWING (e.g. "western company" → "western enterprise") only the previously-MET; \
+a typo / cosmetic reword is a NO-OP — say so and change nothing. Scope the impact to \
+the genuinely-affected subset, not the whole pool ("this only affects the 47 missing \
+on location, ~$2"). When the stored reasoning already answers the new wording, you can \
+tell the recruiter the outcome WITHOUT re-screening at all. Salary is often \
+"unverified" — it can't be filtered; say how many stated a figure vs not.
 - Agent control + settings: turn the agent on / resume it, or pause it \
 (`set_agent_state`); and change its monthly spend budget, auto-reject, or \
 auto-promote (`adjust_agent_settings`). You CAN do these directly when the \
