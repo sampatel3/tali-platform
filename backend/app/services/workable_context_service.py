@@ -34,6 +34,7 @@ from .workable_context_parsers import (
     _comment_fields,
     _format_activity,
     _format_comment,
+    _is_rating_note,
     _format_education,
     _format_experience,
     _format_answer,
@@ -245,18 +246,22 @@ def workable_questionnaire_answers(candidate: Candidate | None) -> list[dict[str
 
 
 def workable_recruiter_comments(candidate: Candidate | None) -> list[dict[str, str | None]]:
-    """Structured ``[{author, created_at, body}]`` recruiter comments synced
-    from Workable. Empty list when none."""
+    """Structured ``[{author, created_at, body}]`` recruiter notes synced from
+    Workable — true comments plus recruiter ratings that carry a written note.
+
+    Comments come from ``workable_comments``; ratings are pulled from
+    ``workable_activities`` (where the sync stores them) so a recruiter
+    evaluation added after the decision still shows on the profile. Ratings are
+    surfaced here only — they are deliberately kept out of ``workable_comments``
+    storage so they never enter the pre-screen scoring context. Newest first."""
     if candidate is None:
         return []
-    comments = candidate.workable_comments
-    if not isinstance(comments, list):
-        return []
     out: list[dict[str, str | None]] = []
-    for entry in comments[:_MAX_COMMENTS]:
+
+    def _append(entry: dict) -> None:
         fields = _comment_fields(entry)
         if fields is None:
-            continue
+            return
         author_name, created_at, body = fields
         out.append(
             {
@@ -265,7 +270,19 @@ def workable_recruiter_comments(candidate: Candidate | None) -> list[dict[str, s
                 "body": body,
             }
         )
-    return out
+
+    comments = candidate.workable_comments
+    if isinstance(comments, list):
+        for entry in comments:
+            _append(entry)
+    activities = candidate.workable_activities
+    if isinstance(activities, list):
+        for entry in activities:
+            if _is_rating_note(entry):
+                _append(entry)
+    # Newest first so a just-added note lands at the top of the card.
+    out.sort(key=lambda c: (c.get("created_at") or ""), reverse=True)
+    return out[:_MAX_COMMENTS]
 
 
 def workable_activity_log(candidate: Candidate | None) -> list[dict[str, str | None]]:
@@ -277,7 +294,14 @@ def workable_activity_log(candidate: Candidate | None) -> list[dict[str, str | N
     if not isinstance(activities, list):
         return []
     out: list[dict[str, str | None]] = []
-    for entry in activities[:_MAX_ACTIVITIES]:
+    for entry in activities:
+        if len(out) >= _MAX_ACTIVITIES:
+            break
+        # Recruiter ratings-with-a-note render as notes (see
+        # workable_recruiter_comments); keep them out of the timeline to
+        # avoid showing the same text in both columns.
+        if _is_rating_note(entry):
+            continue
         fields = _activity_fields(entry)
         if fields is None:
             continue

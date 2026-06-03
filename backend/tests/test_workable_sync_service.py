@@ -831,6 +831,97 @@ def test_resolved_candidate_is_frozen_except_workable_stage(db):
     assert app.pipeline_stage == "advanced"
 
 
+def test_resolved_candidate_activity_feed_still_refreshes(db, monkeypatch):
+    """A resolved (frozen) candidate must still pick up Workable notes added
+    AFTER the decision — recruiter comments/ratings posted post-handover. The
+    profile stays frozen (no re-enrichment) but the read-only activity feed
+    refreshes, debounced so it can't hammer Workable each cycle."""
+    from app.models.candidate import Candidate
+    from app.models.candidate_application import CandidateApplication
+    from app.services.workable_context_service import workable_recruiter_comments
+
+    monkeypatch.setattr(
+        "app.components.integrations.workable.sync_service.settings.ANTHROPIC_API_KEY", None
+    )
+    org = _make_org(db, "frozen-notes-refresh-org")
+
+    feed = [{"id": "a1", "action": "applied", "created_at": "2026-05-22T03:00:00Z"}]
+
+    class MockClient(WorkableService):
+        def __init__(self):
+            super().__init__(access_token="x", subdomain="test")
+            self.activity_calls = 0
+
+        def list_open_jobs(self):
+            return [{"id": "J1", "shortcode": "J1", "title": "AI Engineer"}]
+
+        def list_job_candidates(self, job_identifier, *, paginate=False, max_pages=None):
+            return [{"id": "cand_note", "email": "note@example.com",
+                     "name": "Original Name", "stage": "Interview"}]
+
+        def get_job_details(self, job_identifier):
+            return {}
+
+        def get_candidate(self, candidate_id):
+            # Upstream name changed — must be ignored while frozen.
+            return {"id": candidate_id, "email": "note@example.com",
+                    "name": "Changed Name", "stage": "Interview"}
+
+        def download_candidate_resume(self, candidate_payload):
+            return None  # no CV → keep the prefetch offline
+
+        def get_candidate_activities(self, candidate_id):
+            self.activity_calls += 1
+            return list(feed)
+
+        def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
+            return None, None, None
+
+    client = MockClient()
+    service = WorkableSyncService(client)
+
+    # First sync creates the application.
+    service.sync_org(db, org)
+    app = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org.id,
+        CandidateApplication.workable_candidate_id == "cand_note",
+    ).first()
+    assert app is not None
+
+    # Tali hands them back → advanced (resolved/frozen).
+    app.pipeline_stage = "advanced"
+    app.pipeline_stage_source = "recruiter"
+    db.commit()
+
+    # A recruiter posts a rating-with-note in Workable AFTER the decision.
+    feed.append({
+        "id": "a2", "action": "rating",
+        "body": "Interviewed very well; concern he's too senior.",
+        "member": {"name": "Saniul Islam"},
+        "created_at": "2026-06-03T04:43:00Z",
+    })
+
+    # Full sync: the frozen branch must still refresh the read-only feed.
+    service.sync_org(db, org, mode="full")
+
+    candidate = db.query(Candidate).filter(
+        Candidate.organization_id == org.id,
+        Candidate.workable_candidate_id == "cand_note",
+    ).first()
+    db.refresh(app)
+    # Profile still frozen…
+    assert candidate.full_name == "Original Name"
+    # …but the post-decision note landed in the stored feed and surfaces as a note.
+    assert "rating" in [a.get("action") for a in (candidate.workable_activities or [])]
+    assert any("too senior" in (n["body"] or "") for n in workable_recruiter_comments(candidate))
+    assert app.integration_sync_state.get("last_activities_fetch_at")
+    assert client.activity_calls == 1
+
+    # Immediate re-sync: debounce prevents another feed fetch.
+    service.sync_org(db, org, mode="full")
+    assert client.activity_calls == 1
+
+
 def test_brand_new_disqualified_candidate_is_not_imported(db):
     """A candidate first seen already disqualified has nothing to act on — we
     don't create an application for them."""
