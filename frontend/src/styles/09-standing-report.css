@@ -48,7 +48,7 @@
   background: color-mix(in oklab, var(--ink) 92%, transparent);
   color: var(--bg);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
 }
 
 .wt-tip .dot {
@@ -73,7 +73,7 @@
   background: transparent;
   color: var(--mute);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .wt-foot .nav {
@@ -90,7 +90,7 @@
   color: var(--bg);
   border-radius: 14px;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   letter-spacing: 0.04em;
   box-shadow: var(--shadow-md);
 }
@@ -138,7 +138,7 @@ button.eng-badge-button:focus-visible {
   border: 0;
   padding: 4px 0;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--muted, #666);
   cursor: pointer;
   margin-bottom: 16px;
@@ -154,7 +154,7 @@ button.eng-badge-button:focus-visible {
 
 .bespoke-hero .kicker {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   letter-spacing: 0.08em;
   color: var(--muted, #666);
   margin-bottom: 12px;
@@ -162,7 +162,7 @@ button.eng-badge-button:focus-visible {
 
 .bespoke-hero h1 {
   font-family: var(--font-display);
-  font-size: 36px;
+  font-size: 2.25rem;
   font-weight: 600;
   margin: 0 0 12px;
   line-height: 1.15;
@@ -192,7 +192,7 @@ button.eng-badge-button:focus-visible {
 
 .bespoke-label {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted, #666);
@@ -202,7 +202,7 @@ button.eng-badge-button:focus-visible {
   font-style: normal;
   color: var(--purple);
   margin-left: 6px;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
 }
 
 .bespoke-field input,
@@ -245,7 +245,7 @@ button.eng-badge-button:focus-visible {
 }
 
 .bespoke-actions-hint {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--muted, #666);
 }
 
@@ -266,7 +266,7 @@ button.eng-badge-button:focus-visible {
 .role-head h2 {
   margin: 0;
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: 1.375rem;
   font-weight: 600;
   letter-spacing: -0.02em;
 }
@@ -274,7 +274,7 @@ button.eng-badge-button:focus-visible {
 .role-meta {
   color: var(--mute);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   letter-spacing: 0.04em;
 }
 
@@ -316,14 +316,14 @@ button.eng-badge-button:focus-visible {
   margin-bottom: 6px;
   color: var(--mute);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   letter-spacing: 0.06em;
 }
 
 .tcard h3 {
   margin: 0;
   font-family: var(--font-display);
-  font-size: 19px;
+  font-size: 1.1875rem;
   font-weight: 600;
   letter-spacing: -0.015em;
 }
@@ -331,7 +331,7 @@ button.eng-badge-button:focus-visible {
 .tcard .desc {
   margin: 0;
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.5;
 }
 
@@ -360,14 +360,14 @@ button.eng-badge-button:focus-visible {
   margin-bottom: 4px;
   color: var(--mute);
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
 .tcard-stat .v {
   color: var(--ink);
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 500;
 }
 
@@ -383,7 +383,7 @@ button.eng-badge-button:focus-visible {
 .tcard-foot .meta {
   color: var(--mute);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   letter-spacing: 0.04em;
 }
 
@@ -396,7 +396,7 @@ button.eng-badge-button:focus-visible {
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 500;
 }
 
@@ -623,7 +623,7 @@ button.eng-badge-button:focus-visible {
   margin-right: auto;
   color: var(--mute);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -679,7 +679,7 @@ button.eng-badge-button:focus-visible {
   align-items: center;
   color: var(--mute-2);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -694,7 +694,7 @@ button.eng-badge-button:focus-visible {
 .cv-name {
   margin: 0 0 4px;
   color: var(--ink);
-  font-size: 32px;
+  font-size: 2rem;
   font-weight: 600;
   letter-spacing: -0.025em;
 }
@@ -702,7 +702,7 @@ button.eng-badge-button:focus-visible {
 .cv-tagline {
   margin: 0 0 6px;
   color: var(--ink-2);
-  font-size: 15px;
+  font-size: 0.9375rem;
   line-height: 1.5;
 }
 
@@ -715,7 +715,7 @@ button.eng-badge-button:focus-visible {
   color: var(--mute);
   border-bottom: 1px solid var(--line-2);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   letter-spacing: 0.02em;
 }
 
@@ -741,7 +741,7 @@ button.eng-badge-button:focus-visible {
   color: var(--purple);
   border-bottom: 1px solid var(--line-2);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -750,7 +750,7 @@ button.eng-badge-button:focus-visible {
 .cv-profile {
   margin: 0;
   color: var(--ink-2);
-  font-size: 14.5px;
+  font-size: 0.90625rem;
   line-height: 1.65;
 }
 
@@ -789,7 +789,7 @@ button.eng-badge-button:focus-visible {
 
 .cv-role-title {
   color: var(--ink);
-  font-size: 14.5px;
+  font-size: 0.90625rem;
   font-weight: 600;
 }
 
@@ -801,7 +801,7 @@ button.eng-badge-button:focus-visible {
 .cv-role-date {
   color: var(--mute-2);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   letter-spacing: 0.04em;
   white-space: nowrap;
 }
@@ -810,7 +810,7 @@ button.eng-badge-button:focus-visible {
   margin: 6px 0 0;
   padding-left: 18px;
   color: var(--ink-2);
-  font-size: 13.5px;
+  font-size: 0.84375rem;
   line-height: 1.6;
 }
 
@@ -830,7 +830,7 @@ button.eng-badge-button:focus-visible {
   background: var(--bg-3);
   border-radius: 8px;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
 }
 
 .cv-skills .sk.match {
@@ -844,7 +844,7 @@ button.eng-badge-button:focus-visible {
   position: relative;
   padding: 6px 0 6px 16px;
   color: var(--ink-2);
-  font-size: 13.5px;
+  font-size: 0.84375rem;
   line-height: 1.55;
 }
 
@@ -878,13 +878,13 @@ button.eng-badge-button:focus-visible {
 .cv-pub .d {
   color: var(--mute-2);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
 }
 
 .cv-edu p {
   margin: 4px 0 0;
   color: var(--mute);
-  font-size: 12.5px;
+  font-size: 0.78125rem;
 }
 
 .cv-viewer-frame {
@@ -913,7 +913,7 @@ button.eng-badge-button:focus-visible {
 .cv-doc-empty .sub {
   color: var(--mute);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -921,7 +921,7 @@ button.eng-badge-button:focus-visible {
 .cv-doc-empty .headline {
   margin-top: 6px;
   color: var(--ink);
-  font-size: 20px;
+  font-size: 1.25rem;
   font-weight: 600;
 }
 
@@ -930,7 +930,7 @@ button.eng-badge-button:focus-visible {
   max-width: 420px;
   margin-top: 10px;
   color: var(--mute);
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.5;
 }
 
@@ -949,7 +949,7 @@ button.eng-badge-button:focus-visible {
   background: color-mix(in oklab, var(--bg-2) 90%, transparent);
   border-top: 1px solid var(--line-2);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
 }
 
 .cv-doc.has-embed .cv-doc-filebar {
@@ -962,7 +962,7 @@ button.eng-badge-button:focus-visible {
   color: var(--taali-danger);
   background: var(--taali-danger-soft);
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .cv-rail {
@@ -996,7 +996,7 @@ button.eng-badge-button:focus-visible {
 
 .cv-summary-bar .cv-summary-text {
   color: var(--ink-2);
-  font-size: 13.5px;
+  font-size: 0.84375rem;
   line-height: 1.6;
   border-left: 1px solid var(--line-2);
   padding-left: 24px;
@@ -1034,7 +1034,7 @@ button.eng-badge-button:focus-visible {
 
 .cv-rail .rail-score .num {
   color: var(--green);
-  font-size: 38px;
+  font-size: 2.375rem;
   font-weight: 600;
   letter-spacing: -0.03em;
   line-height: 1;
@@ -1047,14 +1047,14 @@ button.eng-badge-button:focus-visible {
 
 .cv-rail .rail-score .num sup {
   color: var(--mute);
-  font-size: 16px;
+  font-size: 1rem;
   font-weight: 500;
 }
 
 .cv-rail .lbl {
   color: var(--mute);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -1065,7 +1065,7 @@ button.eng-badge-button:focus-visible {
 
 .cv-rail .meta {
   color: var(--ink-2);
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   line-height: 1.45;
 }
 
@@ -1078,7 +1078,7 @@ button.eng-badge-button:focus-visible {
 .cv-rail .rail-empty {
   color: var(--mute);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   letter-spacing: 0.04em;
   line-height: 1.5;
 }
@@ -1166,7 +1166,7 @@ button.eng-badge-button:focus-visible {
 }
 
 .cv-rail .rail-item .t {
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 500;
   line-height: 1.4;
 }
@@ -1175,7 +1175,7 @@ button.eng-badge-button:focus-visible {
   margin-top: 3px;
   color: var(--mute);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   line-height: 1.4;
 }
 
@@ -1188,7 +1188,7 @@ button.eng-badge-button:focus-visible {
   border: 0;
   border-top: 1px solid var(--line-2);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-weight: 500;
   letter-spacing: 0.04em;
   text-align: left;
@@ -1198,7 +1198,7 @@ button.eng-badge-button:focus-visible {
 /* ---- Refined CV match review (Overview tab): coverage strip + gaps-first list ---- */
 .cv-match-review .cvm-headline {
   font-family: var(--font-display);
-  font-size: 20px;
+  font-size: 1.25rem;
   font-weight: 600;
   letter-spacing: -0.015em;
   color: var(--ink);
@@ -1234,7 +1234,7 @@ button.eng-badge-button:focus-visible {
   flex-wrap: wrap;
   gap: 16px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   letter-spacing: 0.04em;
   color: var(--mute);
 }
@@ -1285,7 +1285,7 @@ button.eng-badge-button:focus-visible {
   padding: 4px 8px;
   border-radius: 8px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   letter-spacing: 0.02em;
 }
@@ -1324,7 +1324,7 @@ button.eng-badge-button:focus-visible {
 }
 
 .cvm-req-name {
-  font-size: 13.5px;
+  font-size: 0.84375rem;
   font-weight: 600;
   color: var(--ink);
   line-height: 1.4;
@@ -1332,7 +1332,7 @@ button.eng-badge-button:focus-visible {
 
 .cvm-tag {
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1346,7 +1346,7 @@ button.eng-badge-button:focus-visible {
   display: block;
   margin-top: 4px;
   color: var(--mute);
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.5;
 }
 
@@ -1465,13 +1465,13 @@ button.eng-badge-button:focus-visible {
   min-width: 0;
 }
 .bg-jobs-title {
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   color: var(--taali-text);
 }
 .bg-jobs-detail {
   margin-top: 2px;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--taali-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -1494,7 +1494,7 @@ button.eng-badge-button:focus-visible {
   border: 1px solid var(--taali-border);
   border-radius: 6px;
   padding: 4px 10px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--taali-muted);
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;

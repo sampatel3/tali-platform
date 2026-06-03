@@ -106,7 +106,7 @@
   gap: 8px;
   flex-wrap: wrap;
   font-weight: 600;
-  font-size: 15px;
+  font-size: 0.9375rem;
   line-height: 1.2;
 }
 
@@ -114,14 +114,14 @@
   background: rgba(255, 255, 255, 0.22);
   color: #fff;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 700;
   padding: 2px 8px;
   letter-spacing: 0.03em;
 }
 
 .mc-agent-tick {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   margin-top: 3px;
   color: rgba(255, 255, 255, 0.85);
   white-space: nowrap;
@@ -140,7 +140,7 @@
 .mc-agent-budget-row {
   display: flex;
   justify-content: space-between;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: rgba(255, 255, 255, 0.85);
 }
 
@@ -182,7 +182,7 @@
   border: 1px solid rgba(255, 255, 255, 0.30);
   border-radius: 8px;
   padding: 6px 12px;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 500;
   cursor: pointer;
   display: inline-flex;
@@ -251,7 +251,7 @@
 
 .mc-panel-kicker {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--mute);
@@ -260,14 +260,14 @@
 
 .mc-panel-title {
   font-family: var(--font-display);
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: 600;
   letter-spacing: -0.015em;
   color: var(--ink);
 }
 
 .mc-panel-help {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--mute);
   line-height: 1.5;
   margin-top: 8px;
@@ -310,7 +310,7 @@
   background: var(--purple-soft);
   border: 1px solid color-mix(in oklab, var(--purple) 25%, transparent);
   border-radius: 12px;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--ink-2);
   line-height: 1.55;
   display: flex;

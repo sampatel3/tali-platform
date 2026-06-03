@@ -71,10 +71,10 @@
   animation: mc-pulse-ring 1.6s ease-out infinite;
 }
 
-.mc-rail-title { font-weight: 600; font-size: 14px; color: var(--ink); line-height: 1.2; }
+.mc-rail-title { font-weight: 600; font-size: 0.875rem; color: var(--ink); line-height: 1.2; }
 
 .mc-rail-state {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--mute);
   display: inline-flex;
   align-items: center;
@@ -91,7 +91,7 @@
 }
 
 .mc-rail-tick {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--ink-2);
   background: var(--purple-soft);
   padding: 8px 10px;
@@ -134,13 +134,13 @@
 
 .mc-rail-pending-num {
   font-family: var(--font-display);
-  font-size: 30px;
+  font-size: 1.875rem;
   font-weight: 700;
   line-height: 1;
   color: var(--ink);
 }
 
-.mc-rail-pending-label { font-size: 12px; color: var(--ink-2); line-height: 1.3; }
+.mc-rail-pending-label { font-size: 0.75rem; color: var(--ink-2); line-height: 1.3; }
 
 .mc-rail-budget {
   border-top: 1px solid var(--line-2);
@@ -162,7 +162,7 @@
   padding: 2px 8px;
   cursor: pointer;
   font-family: inherit;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--ink-2);
 }
 
@@ -175,13 +175,13 @@
 
 .mc-rail-budget-spent {
   font-family: var(--font-display);
-  font-size: 24px;
+  font-size: 1.5rem;
   font-weight: 600;
   color: var(--ink);
   letter-spacing: -0.02em;
 }
 
-.mc-rail-budget-of { font-size: 12px; color: var(--mute); }
+.mc-rail-budget-of { font-size: 0.75rem; color: var(--mute); }
 
 .mc-rail-budget-meter {
   position: relative;
@@ -233,7 +233,7 @@
   top: -14px;
   left: -10px;
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 0.5625rem;
   letter-spacing: 0.05em;
   color: var(--mute);
 }
@@ -249,19 +249,19 @@
 
 .mc-rail-stat-num {
   font-family: var(--font-display);
-  font-size: 16px;
+  font-size: 1rem;
   font-weight: 600;
   color: var(--ink);
   letter-spacing: -0.01em;
 }
 
-.mc-rail-stat-lab { font-size: 10.5px; color: var(--mute); margin-top: 2px; }
+.mc-rail-stat-lab { font-size: 0.65625rem; color: var(--mute); margin-top: 2px; }
 
 .mc-rail-spark { width: 100%; height: 36px; margin-top: 12px; }
 
 .mc-rail-spark-cap {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--mute);
@@ -290,12 +290,12 @@
 .mc-rail-week-grid .num {
   font-family: var(--font-display);
   font-weight: 600;
-  font-size: 18px;
+  font-size: 1.125rem;
   color: var(--ink);
   letter-spacing: -0.01em;
 }
 
-.mc-rail-week-grid .lab { font-size: 11px; color: var(--mute); }
+.mc-rail-week-grid .lab { font-size: 0.6875rem; color: var(--mute); }
 
 .mc-rail-feed {
   width: 100%;
@@ -306,7 +306,7 @@
   padding: 8px 12px;
   cursor: pointer;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--ink-2);
   text-align: left;
 }

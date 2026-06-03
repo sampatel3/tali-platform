@@ -9,13 +9,13 @@
   padding: 8px 14px;
   border-radius: 12px;
   margin-bottom: 22px;
-  font-size: 13.5px;
+  font-size: 0.84375rem;
   position: relative;
 }
 
 .mc-cmd-prefix {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   background: rgba(255, 255, 255, 0.10);
   padding: 3px 7px;
   border-radius: 5px;
@@ -35,7 +35,7 @@
   border: 0;
   color: #fff;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   padding: 3px 8px;
   border-radius: 6px;
   cursor: pointer;
@@ -67,7 +67,7 @@
   padding: 7px 10px;
   border-radius: 6px;
   font: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--ink-2);
   cursor: pointer;
 }
@@ -82,14 +82,14 @@
   outline: none;
   color: #fff;
   font-family: inherit;
-  font-size: 13.5px;
+  font-size: 0.84375rem;
 }
 
 .mc-cmd-input::placeholder { color: rgba(255, 255, 255, 0.5); }
 
 .mc-cmd-ai {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   letter-spacing: 0.08em;
   background: var(--purple);
   color: #fff;

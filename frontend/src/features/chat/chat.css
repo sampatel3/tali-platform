@@ -65,7 +65,7 @@
 }
 .cp-side-title {
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   letter-spacing: .12em;
   color: var(--c-mute);
   text-transform: uppercase;
@@ -79,7 +79,7 @@
   border: 1px dashed var(--c-line);
   background: var(--c-bg-2);
   color: var(--c-ink-2);
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 500;
   cursor: pointer;
 }
@@ -92,7 +92,7 @@
   width: 18px; height: 18px; border-radius: 6px;
   background: var(--c-purple); color: #fff;
   display: grid; place-items: center;
-  font-weight: 600; font-size: 12px;
+  font-weight: 600; font-size: 0.75rem;
 }
 .cp-side-list {
   flex: 1;
@@ -103,7 +103,7 @@
 .cp-group-h {
   padding: 6px 10px;
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   letter-spacing: .12em;
   text-transform: uppercase;
   color: var(--c-mute);
@@ -111,7 +111,7 @@
 .cp-conv {
   padding: 8px 10px;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--c-ink-2);
   cursor: pointer;
   line-height: 1.35;
@@ -133,7 +133,7 @@
 }
 .cp-conv-meta {
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--c-mute);
   margin-top: 4px;
   letter-spacing: .04em;
@@ -162,12 +162,12 @@
   backdrop-filter: blur(10px);
   flex-shrink: 0;
 }
-.cp-head-ttl { font-weight: 600; font-size: 14.5px; }
+.cp-head-ttl { font-weight: 600; font-size: 0.90625rem; }
 .cp-head-ttl .sub {
   color: var(--c-mute);
   font-weight: 400;
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   margin-left: 8px;
 }
 .cp-head-grow { flex: 1; }
@@ -180,7 +180,7 @@
   background: var(--c-bg-2);
   border: 1px solid var(--c-line);
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--c-ink-2);
 }
 .cp-head-pill .cp-pill-glyph {
@@ -242,7 +242,7 @@
 .cp-empty-h1 {
   font-family: var(--font-display, var(--font-sans, "Geist", "Inter", system-ui, sans-serif));
   font-weight: 600;
-  font-size: 36px;
+  font-size: 2.25rem;
   letter-spacing: -.035em;
   line-height: 1.05;
   color: var(--c-ink);
@@ -254,7 +254,7 @@
 }
 .cp-empty-sub {
   color: var(--c-mute);
-  font-size: 14.5px;
+  font-size: 0.90625rem;
   line-height: 1.5;
   margin: 0 0 36px;
   max-width: 520px;
@@ -285,7 +285,7 @@
   display: block;
   margin-bottom: 6px;
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   letter-spacing: .14em;
   text-transform: uppercase;
   color: var(--c-mute);
@@ -295,7 +295,7 @@
 }
 .cp-suggest-q {
   display: block;
-  font-size: 13.5px;
+  font-size: 0.84375rem;
   line-height: 1.4;
   color: var(--c-ink);
 }
@@ -309,7 +309,7 @@
   border-radius: 14px;
   background: var(--c-ink);
   color: var(--c-bg);
-  font-size: 14.5px;
+  font-size: 0.90625rem;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -320,7 +320,7 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
-  font-size: 14.5px;
+  font-size: 0.90625rem;
   line-height: 1.6;
   color: var(--c-ink);
 }
@@ -341,7 +341,7 @@
   align-items: center;
   gap: 8px;
   color: var(--c-mute);
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-style: italic;
 }
 .cp-dots span {
@@ -392,13 +392,13 @@
 }
 .cp-tool-tname {
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--c-ink);
 }
 .cp-tool-args {
   flex: 1;
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--c-mute);
   white-space: nowrap;
   overflow: hidden;
@@ -410,7 +410,7 @@
 }
 .cp-tool-count {
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--c-mute);
   flex-shrink: 0;
 }
@@ -435,14 +435,14 @@
   grid-template-columns: 160px 1fr;
   gap: 6px 14px;
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   margin-bottom: 8px;
 }
 .cp-tool-kv .k { color: var(--c-mute); }
 .cp-tool-kv .v { color: var(--c-ink); }
 .cp-tool-raw {
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
   background: var(--c-bg-2);
   border: 1px solid var(--c-line);
   border-radius: 8px;
@@ -478,11 +478,11 @@
 }
 .cp-cand-name {
   font-weight: 600;
-  font-size: 14px;
+  font-size: 0.875rem;
   color: var(--c-ink);
 }
 .cp-cand-sub {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--c-mute);
 }
 .cp-cand-row {
@@ -491,7 +491,7 @@
   flex-wrap: wrap;
   margin-top: 6px;
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
 }
 .cp-score-pill {
   display: inline-flex;
@@ -513,7 +513,7 @@
   background: var(--c-bg-3);
   color: var(--c-ink-2);
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
 }
 
 /* ============ comparison table ============ */
@@ -529,11 +529,11 @@
   padding: 10px 12px;
   text-align: left;
   border-bottom: 1px solid var(--c-line-2);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 .cp-compare th {
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--c-mute);
   text-transform: uppercase;
   letter-spacing: .04em;
@@ -579,7 +579,7 @@
   border: 0;
   outline: 0;
   background: transparent;
-  font-size: 14.5px;
+  font-size: 0.90625rem;
   color: var(--c-ink);
   font-family: inherit;
   line-height: 1.45;
@@ -591,7 +591,7 @@
   align-items: center;
   justify-content: space-between;
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--c-mute);
   letter-spacing: .04em;
 }
@@ -613,7 +613,7 @@
   border-radius: 999px;
   background: var(--c-purple);
   color: #fff;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 500;
   border: 0;
   cursor: pointer;
@@ -629,7 +629,7 @@
   border-radius: 999px;
   background: var(--c-bg-3);
   color: var(--c-ink-2);
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   border: 1px solid var(--c-line);
   cursor: pointer;
 }
@@ -640,7 +640,7 @@
   background: color-mix(in oklab, var(--c-red) 10%, var(--c-bg-2));
   border: 1px solid color-mix(in oklab, var(--c-red) 40%, var(--c-line));
   color: var(--c-ink);
-  font-size: 13.5px;
+  font-size: 0.84375rem;
   line-height: 1.55;
   max-width: 100%;
 }
@@ -648,7 +648,7 @@
   font-weight: 600;
   color: var(--c-red);
   margin-bottom: 4px;
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 .cp-error-detail {
   color: var(--c-ink-2);
@@ -673,7 +673,7 @@
   padding: 8px 12px;
   border-bottom: 1px solid var(--c-line-2);
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--c-mute);
 }
 .cp-graph-legend {
@@ -721,13 +721,13 @@
 .cp-modal-title {
   font-family: var(--font-display, var(--font-sans, "Geist", "Inter", system-ui, sans-serif));
   font-weight: 600;
-  font-size: 16px;
+  font-size: 1rem;
   letter-spacing: -.01em;
   color: var(--c-ink);
   margin-bottom: 6px;
 }
 .cp-modal-detail {
-  font-size: 13.5px;
+  font-size: 0.84375rem;
   line-height: 1.5;
   color: var(--c-mute);
   margin-bottom: 18px;
@@ -743,7 +743,7 @@
   font-family: var(--font-sans, "Geist", "Inter", system-ui, sans-serif);
   padding: 8px 14px;
   border-radius: 999px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 500;
   cursor: pointer;
   border: 1px solid transparent;

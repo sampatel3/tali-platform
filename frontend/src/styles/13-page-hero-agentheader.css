@@ -36,7 +36,7 @@
 .mc-kicker {
   display: inline-block;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--purple);
@@ -66,7 +66,7 @@
 }
 
 .mc-subtitle {
-  font-size: 15px;
+  font-size: 0.9375rem;
   line-height: 1.55;
   color: var(--mute);
   max-width: 720px;
@@ -226,7 +226,7 @@
   width: fit-content;
   margin-bottom: 14px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   letter-spacing: .06em;
   text-transform: uppercase;
   text-decoration: none;
@@ -241,7 +241,7 @@
 .agent-header-left .ah-kicker {
   display: block;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.65);
@@ -267,7 +267,7 @@
   color: #fff;
 }
 
-.agent-header.compact .agent-header-left h1 { font-size: 48px; }
+.agent-header.compact .agent-header-left h1 { font-size: 3rem; }
 
 .agent-header-left h1 em,
 .agent-header-left h1 .ah-period {
@@ -301,7 +301,7 @@
 .agent-header-left p.ah-subtitle {
   margin: 10px 0 0;
   color: rgba(255, 255, 255, 0.78);
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1.55;
   max-width: 640px;
 }
@@ -410,14 +410,14 @@
 }
 
 .agent-mode {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: rgba(255, 255, 255, 0.78);
   font-weight: 500;
 }
 
 .agent-state-pill {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 700;
   letter-spacing: .08em;
   padding: 2px 8px;
@@ -431,7 +431,7 @@
 
 .agent-pending {
   margin-top: 4px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: #fff;
   font-weight: 600;
   background: rgba(196, 165, 253, 0.22);
@@ -442,7 +442,7 @@
 }
 
 .agent-tick {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: rgba(255, 255, 255, 0.78);
   line-height: 1.45;
   padding: 8px 10px;
@@ -461,12 +461,12 @@
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: rgba(255, 255, 255, 0.65);
 }
 .agent-budget-row .amt {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 0.75rem;
   color: #fff;
   font-weight: 600;
 }
@@ -499,7 +499,7 @@
    inline budget input + Activate button living inside the agent panel
    when the role has agent mode disabled. One click + one number → live. */
 .agent-off-copy {
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.4;
   color: rgba(255, 255, 255, 0.75);
 }
@@ -517,7 +517,7 @@
 .agent-off-budget-prefix,
 .agent-off-budget-suffix {
   color: rgba(255, 255, 255, 0.55);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-family: var(--font-mono);
 }
 
@@ -528,7 +528,7 @@
   border: 0;
   outline: 0;
   color: #fff;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 600;
   font-family: var(--font-mono);
   padding: 0;
@@ -540,7 +540,7 @@
 }
 
 .agent-off-error {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: rgba(251, 191, 36, 0.95);
   line-height: 1.35;
 }
@@ -553,7 +553,7 @@
   border: 1px solid rgba(255, 255, 255, 0.20);
   border-radius: 7px;
   padding: 0 10px;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 500;
   font-family: inherit;
   display: inline-flex;
@@ -593,7 +593,7 @@
 }
 .ah-pending-strip-label {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.55);
@@ -602,7 +602,7 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: rgba(255, 255, 255, 0.78);
   white-space: nowrap;
 }
@@ -634,7 +634,7 @@
   color: #fff;
   font-family: var(--font-display);
   font-weight: 600;
-  font-size: 22px;
+  font-size: 1.375rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -651,13 +651,13 @@
 .ah-facts .f { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .ah-facts .f .k {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   letter-spacing: .12em;
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.55);
 }
 .ah-facts .f .v {
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: #fff;
   font-weight: 500;
   overflow: hidden;
@@ -683,7 +683,7 @@
   .agent-header-inner { gap: 18px; }
   .agent-header-left .ah-title-row { gap: 10px; }
   .agent-header-left p.ah-subtitle {
-    font-size: 13px;
+    font-size: 0.8125rem;
     margin-top: 8px;
   }
 }
@@ -700,7 +700,7 @@
   border: 1px solid rgba(167, 139, 250, 0.36);
   color: var(--purple);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   cursor: pointer;

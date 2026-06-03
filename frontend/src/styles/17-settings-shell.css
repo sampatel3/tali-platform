@@ -35,7 +35,7 @@
   background: transparent;
   color: var(--mute);
   font: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 500;
   padding: 7px 14px;
   border-radius: 999px;
@@ -63,7 +63,7 @@
 
 .mc-settings-group {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--mute);
@@ -81,7 +81,7 @@
   background: transparent;
   color: var(--ink-2);
   font: inherit;
-  font-size: 13.5px;
+  font-size: 0.84375rem;
   cursor: pointer;
 }
 
@@ -109,14 +109,14 @@
 .mc-settings-section h2 {
   font-family: var(--font-display);
   font-weight: 600;
-  font-size: 22px;
+  font-size: 1.375rem;
   letter-spacing: -0.015em;
   color: var(--ink);
   margin: 0 0 6px;
 }
 
 .mc-settings-section .section-sub {
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--mute);
   margin-bottom: 20px;
 }

@@ -52,7 +52,7 @@
   align-items: center;
   gap: 8px;
   font-family: var(--font-display);
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: 600;
   letter-spacing: -0.02em;
   /* Render as a button — clears default UA chrome so the logo keeps
@@ -85,7 +85,7 @@
 
 .mc-auth-quote-kicker {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   letter-spacing: 0.12em;
   opacity: 0.7;
   margin-bottom: 18px;
@@ -93,7 +93,7 @@
 
 .mc-auth-quote p {
   font-family: var(--font-display);
-  font-size: 30px;
+  font-size: 1.875rem;
   line-height: 1.18;
   letter-spacing: -0.02em;
   font-weight: 500;
@@ -103,7 +103,7 @@
 .mc-auth-quote cite {
   display: block;
   margin-top: 24px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-style: normal;
   opacity: 0.75;
 }
@@ -111,7 +111,7 @@
 .mc-auth-compliance {
   position: relative;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   letter-spacing: 0.06em;
   opacity: 0.55;
   display: flex;
@@ -133,7 +133,7 @@
 
 .mc-auth-top-right {
   margin-left: auto;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--mute);
   min-height: 20px;
 }
@@ -151,7 +151,7 @@
 
 .mc-auth-title {
   font-family: var(--font-display);
-  font-size: 36px;
+  font-size: 2.25rem;
   letter-spacing: -0.025em;
   font-weight: 600;
   line-height: 1.1;
@@ -161,7 +161,7 @@
 
 .mc-auth-sub {
   color: var(--mute);
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1.55;
   margin: 0 0 28px;
 }
@@ -170,7 +170,7 @@
   margin: 28px auto 0;
   max-width: 420px;
   width: 100%;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--mute);
   text-align: center;
 }
@@ -181,7 +181,7 @@
 
 .mc-auth-field-label {
   display: block;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 500;
   color: var(--ink-2);
   margin-bottom: 6px;
@@ -195,7 +195,7 @@
   background: var(--bg-2);
   color: var(--ink);
   font: inherit;
-  font-size: 14px;
+  font-size: 0.875rem;
   outline: none;
 }
 
@@ -209,13 +209,13 @@
 }
 
 .mc-auth-field-helper {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--mute);
   margin-top: 4px;
 }
 
 .mc-auth-field-error {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--red);
   margin-top: 4px;
 }
@@ -226,7 +226,7 @@
   align-items: center;
   gap: 10px;
   color: var(--mute);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-family: var(--font-mono);
   letter-spacing: 0.12em;
 }
@@ -247,7 +247,7 @@
   background: var(--ink);
   color: var(--bg);
   font-family: inherit;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
   display: inline-flex;
@@ -286,14 +286,14 @@
 }
 
 .mc-auth-error-card .title {
-  font-size: 13.5px;
+  font-size: 0.84375rem;
   font-weight: 600;
   color: var(--red);
   margin-bottom: 4px;
 }
 
 .mc-auth-error-card .body {
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--ink-2);
   line-height: 1.5;
 }
@@ -307,14 +307,14 @@
 }
 
 .mc-auth-success-card .title {
-  font-size: 13.5px;
+  font-size: 0.84375rem;
   font-weight: 600;
   color: var(--green);
   margin-bottom: 4px;
 }
 
 .mc-auth-success-card .body {
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--ink-2);
   line-height: 1.5;
 }
