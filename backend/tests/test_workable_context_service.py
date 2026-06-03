@@ -393,3 +393,87 @@ def test_structured_surfaces_tolerate_malformed_input():
     assert workable_questionnaire_answers(cand) == []
     assert workable_recruiter_comments(cand) == []
     assert workable_activity_log(cand) == []
+
+
+def test_recruiter_comments_include_rating_notes_newest_first():
+    """Workable recruiter ratings carry a written note but live in the activity
+    feed (action == 'rating'), not the comments feed. They read as notes, so the
+    Notes surface must include them alongside comments, newest first. A bare
+    rating with no note is not a note."""
+    cand = _candidate(
+        workable_comments=[
+            {
+                "body": "Phone screen — asking for 70k.",
+                "member": {"name": "Alex Recruiter"},
+                "created_at": "2026-05-19T10:30:00Z",
+            },
+        ],
+        workable_activities=[
+            {
+                "action": "rating",
+                "body": "Interviewed very well; concern he's too senior.",
+                "member": {"name": "Saniul Islam"},
+                "created_at": "2026-06-03T04:43:00Z",
+            },
+            {"action": "rating", "member": {"name": "Bare Thumbs"}},  # no note → skip
+            {"action": "moved", "stage_name": "Applied", "to_stage": "Interview"},
+        ],
+    )
+    rows = workable_recruiter_comments(cand)
+    assert rows == [
+        {
+            "author": "Saniul Islam",
+            "created_at": "2026-06-03T04:43:00Z",
+            "body": "Interviewed very well; concern he's too senior.",
+        },
+        {
+            "author": "Alex Recruiter",
+            "created_at": "2026-05-19T10:30:00Z",
+            "body": "Phone screen — asking for 70k.",
+        },
+    ]
+
+
+def test_rating_notes_surface_even_without_comments():
+    """A resolved candidate may have only ratings (no plain comments); the note
+    must still surface."""
+    cand = _candidate(
+        workable_comments=None,
+        workable_activities=[
+            {
+                "action": "rating",
+                "body": "Strong — recommend offer.",
+                "member": {"name": "Jade"},
+                "created_at": "2026-06-02T09:00:00Z",
+            },
+        ],
+    )
+    assert workable_recruiter_comments(cand) == [
+        {"author": "Jade", "created_at": "2026-06-02T09:00:00Z", "body": "Strong — recommend offer."}
+    ]
+
+
+def test_activity_log_excludes_rating_notes_to_avoid_duplication():
+    """A rating-with-a-note renders as a note, so it must NOT also appear in the
+    activity-log timeline. Other activities (and bodiless ratings) remain."""
+    cand = _candidate(
+        workable_activities=[
+            {
+                "action": "rating",
+                "body": "Strong, hire.",
+                "member": {"name": "R"},
+                "created_at": "2026-06-01T00:00:00Z",
+            },
+            {
+                "action": "moved",
+                "stage_name": "Applied",
+                "to_stage": "Phone Screen",
+                "created_at": "2026-05-18T12:00:00Z",
+            },
+        ]
+    )
+    rows = workable_activity_log(cand)
+    assert [r["action"] for r in rows] == ["moved"]
+    assert all(not (r["action"] == "rating" and r["body"]) for r in rows)
+    # …and it shows up as a note instead.
+    assert any(n["body"] == "Strong, hire." for n in workable_recruiter_comments(cand))

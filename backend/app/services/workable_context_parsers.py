@@ -232,6 +232,27 @@ def _activity_fields(activity: dict) -> dict | None:
     }
 
 
+# Workable "rating" activities are recruiter evaluations that carry a written
+# note in ``body``. They arrive in the activity feed (Workable has no public
+# comments GET), not the comments feed, but they read as notes to a recruiter —
+# so the serializers surface them alongside comments. A bare rating with no
+# note (just a thumbs up/down) stays in the activity log.
+_RATING_NOTE_ACTIONS = {"rating", "evaluation"}
+
+
+def _is_rating_note(entry: dict) -> bool:
+    """True when an activity entry is a recruiter rating carrying a note."""
+    if not isinstance(entry, dict):
+        return False
+    action = str(
+        entry.get("action") or entry.get("type") or entry.get("kind") or ""
+    ).strip().lower()
+    if action not in _RATING_NOTE_ACTIONS:
+        return False
+    body = entry.get("body") or entry.get("comment") or entry.get("message") or ""
+    return bool(str(body).strip())
+
+
 def _format_activity(activity: dict) -> str | None:
     """Render one Workable activity-log entry as a single text line."""
     fields = _activity_fields(activity)

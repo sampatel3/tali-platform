@@ -1641,6 +1641,61 @@ class WorkableSyncService:
 
         return role, created
 
+    # Resolved (advanced/hired/rejected) candidates are frozen for
+    # scoring/enrichment, but we still refresh their read-only Workable
+    # activity feed so post-decision recruiter notes (comments + ratings)
+    # appear on the profile. Debounced to this interval so re-reading the
+    # feed for a growing pile of resolved candidates never reintroduces the
+    # per-candidate API pressure the freeze was built to avoid.
+    _RESOLVED_ACTIVITIES_REFRESH_INTERVAL = timedelta(hours=6)
+
+    def _refresh_candidate_activities(self, candidate: Candidate, candidate_id: str) -> None:
+        """Pull the Workable activity feed and store it on the candidate.
+
+        Workable's activities feed is the authoritative source for both
+        timeline entries (stage transitions, assessment events, …) AND
+        recruiter comments — there is no public ``GET`` on
+        ``/candidates/:id/comments``. We split the response: ``action ==
+        "comment"`` rows land in ``workable_comments`` (which also feeds the
+        pre-screen scoring context); everything else — including recruiter
+        ratings, which carry a written ``body`` — lands in
+        ``workable_activities``. Ratings are surfaced as notes at
+        serialization time (see ``workable_recruiter_comments``) so they show
+        in the UI without leaking recruiter opinion into scoring.
+
+        ``None`` from the client means the fetch failed; we only overwrite
+        stored rows on a successful response so a transient error never
+        clobbers good data. ``WorkableRateLimitError`` is re-raised for the
+        caller's rate-limit handling.
+        """
+        try:
+            activities = self.client.get_candidate_activities(candidate_id)
+            if activities is not None:
+                comment_entries = [a for a in activities if a.get("action") == "comment"]
+                other_entries = [a for a in activities if a.get("action") != "comment"]
+                candidate.workable_comments = sanitize_json_for_storage(comment_entries)
+                candidate.workable_activities = sanitize_json_for_storage(other_entries)
+        except WorkableRateLimitError:
+            raise
+        except Exception:
+            logger.debug("Workable activities fetch failed for candidate_id=%s", candidate_id)
+
+    def _activities_refresh_due(self, last_fetch_iso: str | None, now: datetime) -> bool:
+        """True when a frozen candidate's activity feed is due for a refresh.
+
+        Due when we have never fetched (no timestamp) or the last fetch is
+        older than ``_RESOLVED_ACTIVITIES_REFRESH_INTERVAL``.
+        """
+        if not last_fetch_iso:
+            return True
+        try:
+            last = datetime.fromisoformat(str(last_fetch_iso))
+        except (TypeError, ValueError):
+            return True
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        return (now - last) >= self._RESOLVED_ACTIVITIES_REFRESH_INTERVAL
+
     def _sync_candidate_for_role(
         self,
         *,
@@ -1808,6 +1863,28 @@ class WorkableSyncService:
                 existing.external_stage_raw = sanitize_text_for_storage(str(stage))
                 existing.external_stage_normalized = normalize_pipeline_key(str(stage))
             existing.last_synced_at = now
+
+            # Frozen for scoring, but still refresh the read-only activity feed
+            # so recruiter comments + ratings added AFTER the decision surface on
+            # the profile. Debounced via last_activities_fetch_at so a growing
+            # pile of resolved candidates can't re-introduce the per-candidate
+            # API pressure the freeze prevents.
+            prev_state = (
+                existing.integration_sync_state
+                if isinstance(existing.integration_sync_state, dict)
+                else {}
+            )
+            activities_fetched_at = prev_state.get("last_activities_fetch_at")
+            if mode == "full" and self._activities_refresh_due(activities_fetched_at, now):
+                frozen_candidate = (
+                    db.query(Candidate)
+                    .filter(Candidate.id == existing.candidate_id)
+                    .first()
+                )
+                if frozen_candidate is not None:
+                    self._refresh_candidate_activities(frozen_candidate, candidate_id)
+                    activities_fetched_at = now.isoformat()
+
             existing.integration_sync_state = sanitize_json_for_storage(
                 {
                     "last_sync_at": now.isoformat(),
@@ -1816,6 +1893,7 @@ class WorkableSyncService:
                     "source": "workable",
                     "mode": mode,
                     "frozen": True,
+                    "last_activities_fetch_at": activities_fetched_at,
                 }
             )
             counters["application_upserted"] += 1
@@ -1912,37 +1990,11 @@ class WorkableSyncService:
         # Keep the phone dedup key in sync with whatever phone we just stored.
         candidate.phone_normalized = _normalize_phone_for_match(candidate.phone)
 
-        # Fetch the activity log on full enrichment. Workable's
-        # activities feed is the authoritative source for both timeline
-        # entries (stage transitions, assessment events, etc.) AND
-        # recruiter comments — there is no public ``GET`` on
-        # ``/candidates/:id/comments``. We split the response so the
-        # formatter can render comments and other activity types in
-        # separate <WORKABLE_*> blocks.
-        #
-        # ``None`` from the client means the fetch failed (rate-limit
-        # handled separately by re-raising). Only overwrite stored rows
-        # on a successful response so transient errors don't clobber.
+        # Refresh the Workable activity feed (timeline + recruiter
+        # comments/ratings) on full enrichment. See
+        # ``_refresh_candidate_activities`` for the split and error policy.
         if mode == "full":
-            try:
-                activities = self.client.get_candidate_activities(candidate_id)
-                if activities is not None:
-                    comment_entries = [
-                        a for a in activities if a.get("action") == "comment"
-                    ]
-                    other_entries = [
-                        a for a in activities if a.get("action") != "comment"
-                    ]
-                    candidate.workable_comments = sanitize_json_for_storage(
-                        comment_entries
-                    )
-                    candidate.workable_activities = sanitize_json_for_storage(
-                        other_entries
-                    )
-            except WorkableRateLimitError:
-                raise
-            except Exception:
-                logger.debug("Workable activities fetch failed for candidate_id=%s", candidate_id)
+            self._refresh_candidate_activities(candidate, candidate_id)
 
         new_answers = (
             candidate.workable_data.get("answers")
