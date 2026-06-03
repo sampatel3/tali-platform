@@ -368,7 +368,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
         breadcrumbs={[{ label: 'Home' }]}
         kicker={`HUB · ${formatCount(pendingDecisions)} AWAITING YOU · ${formatCount(kpis.active_role_count)} ACTIVE ROLE${kpis.active_role_count === 1 ? '' : 'S'}`}
         title={greetingFor(user)}
-        subtitle="Every decision the agent makes that needs you. Approve, override, or teach it — your calls become its training signal. The long-term goal is full automation; this is where you keep the loop honest."
+        subtitle="Approve, override, or teach the agent's calls — this is where you keep the loop honest."
       />
       {/* The shell renders immediately (not gated on the async agents fetch),
           so the page lays out once — no flash of the pre-rail layout. */}

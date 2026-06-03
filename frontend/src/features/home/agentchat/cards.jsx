@@ -35,6 +35,36 @@ const fmtTime = (iso) => {
   }
 };
 
+// Lightweight markdown: the agent replies in light markdown, so render
+// **bold**, line breaks and simple bullets instead of showing raw asterisks.
+function renderInline(text, keyPrefix) {
+  return String(text)
+    .split(/(\*\*[^*]+\*\*)/g)
+    .filter((s) => s !== '')
+    .map((seg, i) => {
+      const m = /^\*\*([^*]+)\*\*$/.exec(seg);
+      return m ? <strong key={`${keyPrefix}-${i}`}>{m[1]}</strong> : <span key={`${keyPrefix}-${i}`}>{seg}</span>;
+    });
+}
+
+export function RichText({ text }) {
+  const lines = String(text || '').split('\n').map((l) => l.trim());
+  return (
+    <>
+      {lines.map((line, i) => {
+        if (!line) return null;
+        const bullet = /^[-*•]\s+/.test(line);
+        const content = bullet ? line.replace(/^[-*•]\s+/, '') : line;
+        return (
+          <div key={i} className={bullet ? 'ac-md-li' : 'ac-md-p'}>
+            {renderInline(content, i)}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 export function ChatBubble({ item, children }) {
   const isAgent = item.author === 'agent';
   return (
@@ -42,7 +72,9 @@ export function ChatBubble({ item, children }) {
       {isAgent && <Avatar kind="agent" size={28} />}
       <div className="ac-bubble-wrap">
         {item.text ? (
-          <div className={`ac-bubble ${isAgent ? 'ac-bubble-agent' : 'ac-bubble-user'}`}>{item.text}</div>
+          <div className={`ac-bubble ${isAgent ? 'ac-bubble-agent' : 'ac-bubble-user'}`}>
+            <RichText text={item.text} />
+          </div>
         ) : null}
         {children}
         <span className="ac-time">{fmtTime(item.created_at)}</span>
@@ -105,8 +137,13 @@ export function ImpactCard({ card, onApply, busy }) {
           <span className="ac-thresh-old">{numOrDash(card.current_threshold)}</span>
           <span className="ac-arrow">→</span>
           <span className="ac-thresh-new">{numOrDash(target)}</span>
-          {typeof gain === 'number' && gain > 0 && (
-            <span className="ac-thresh-gain">+{gain} candidates</span>
+          {typeof gain === 'number' && gain !== 0 && (
+            <span className={gain > 0 ? 'ac-thresh-gain' : 'ac-thresh-loss'}>
+              {gain > 0 ? `+${gain}` : gain} candidates
+            </span>
+          )}
+          {typeof gain === 'number' && gain === 0 && (
+            <span className="ac-thresh-flat">no change</span>
           )}
         </div>
         {Array.isArray(card.added_sample) && card.added_sample.length > 0 && (

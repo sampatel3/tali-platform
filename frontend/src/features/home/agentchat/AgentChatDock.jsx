@@ -184,7 +184,7 @@ export function AgentChatDock({ roleId, roleName, onReload, onCollapse }) {
           <textarea
             rows={1}
             value={input}
-            placeholder="Adjust this role…"
+            placeholder="Describe a task or ask a question"
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
             disabled={sending}
