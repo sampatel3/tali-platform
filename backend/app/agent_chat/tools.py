@@ -252,6 +252,27 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "required": ["criterion_id"],
         },
     },
+    {
+        "name": "rescreen_scoped",
+        "description": (
+            "Re-screen ONLY the candidates affected by a criteria change — far cheaper "
+            "than the whole pool. Pass criterion_id + which stored status-group to "
+            "re-check: a WIDENING re-checks ['missing'], a NARROWING ['met']. The "
+            "re-screen re-judges each correctly (Saudi flips to met, India stays "
+            "missing). Confirm the scope + cost with the recruiter before calling."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "criterion_id": {"type": "integer"},
+                "statuses": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["met", "missing", "unknown"]},
+                },
+            },
+            "required": ["criterion_id", "statuses"],
+        },
+    },
 ]
 
 
@@ -485,6 +506,20 @@ def dispatch_tool(
         return result
     if name == "get_criterion_breakdown":
         return _assessments.criterion_breakdown(db, role, int(args["criterion_id"]))
+    if name == "rescreen_scoped":
+        statuses = tuple(str(s) for s in (args.get("statuses") or []))
+        affected = _assessments.affected_applications(
+            db, role, int(args["criterion_id"]), statuses=statuses
+        )
+        ids = [a["application_id"] for a in affected]
+        if not ids:
+            return {"type": "rescreen_started", "rescreening_count": 0, "scoped": True}
+        result = _constraints.rescreen_role(
+            db, role, application_ids=ids,
+            reason=f"agent_chat:scoped_rescreen:crit_{args['criterion_id']}",
+        )
+        _maybe_report_rescreen(db, role=role, conversation=conversation, result=result)
+        return result
     if name == "set_agent_state":
         return _controls.set_agent_state(db, role, action=str(args.get("action") or ""))
     if name == "adjust_agent_settings":

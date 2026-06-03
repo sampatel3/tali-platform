@@ -904,8 +904,16 @@ def _enqueue_stale_job(
     return True
 
 
-def mark_role_scores_stale(db: Session, role_id: int, *, reason: str = "role_intent_changed") -> int:
+def mark_role_scores_stale(
+    db: Session, role_id: int, *, reason: str = "role_intent_changed",
+    application_ids: list[int] | None = None,
+) -> int:
     """Invalidate every scored application for a role.
+
+    ``application_ids`` (optional) scopes the invalidation to just those
+    applications — used by the agent's reasoned criteria change to re-screen
+    only the genuinely-affected subset instead of the whole pool. ``None``
+    (default) keeps the original role-wide behaviour unchanged.
 
     Called when the role's must-have / constraint criteria or its job
     spec change (preferred-criteria edits don't trigger because
@@ -917,7 +925,7 @@ def mark_role_scores_stale(db: Session, role_id: int, *, reason: str = "role_int
 
     Returns the number of applications invalidated.
     """
-    apps = (
+    apps_q = (
         db.query(CandidateApplication)
         .filter(
             CandidateApplication.role_id == role_id,
@@ -931,8 +939,10 @@ def mark_role_scores_stale(db: Session, role_id: int, *, reason: str = "role_int
                 CandidateApplication.cv_match_score.isnot(None),
             ),
         )
-        .all()
     )
+    if application_ids:
+        apps_q = apps_q.filter(CandidateApplication.id.in_(list(application_ids)))
+    apps = apps_q.all()
     # A6: resolved applications are frozen — invalidation hooks must
     # never touch them. The decision snapshot stays as the immutable
     # audit record. We do this filter inside the loop (rather than in

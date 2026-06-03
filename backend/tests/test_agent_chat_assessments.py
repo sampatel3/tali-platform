@@ -2,7 +2,9 @@
 cv_match_details — no LLM, no re-score. The basis for reasoning over a change."""
 from __future__ import annotations
 
-from app.agent_chat import assessments
+from unittest.mock import patch
+
+from app.agent_chat import assessments, tools
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
@@ -71,3 +73,25 @@ def test_affected_applications_scopes_by_status(db):
     assert [a["candidate_name"] for a in aff] == ["Bo"]
     assert aff[0]["application_id"] == bo.id
     assert "Saudi" in (aff[0]["reasoning"] or "")
+
+
+def test_rescreen_scoped_only_marks_the_affected_subset(db):
+    """P3: a scoped re-screen invalidates ONLY the affected candidates (the
+    missing, for a widening) — not the whole pool."""
+    org = _org(db)
+    role = _role(db, org)
+    _app(db, org, role, name="Ada", crit_id=42, status="met", reasoning="UK")
+    bo = _app(db, org, role, name="Bo", crit_id=42, status="missing", reasoning="Saudi")
+    cy = _app(db, org, role, name="Cy", crit_id=42, status="missing", reasoning="India")
+
+    with patch(
+        "app.services.cv_score_orchestrator.mark_role_scores_stale", return_value=2
+    ) as stale, patch("app.tasks.scoring_tasks.sweep_stale_scores"):
+        result = tools.dispatch_tool(
+            "rescreen_scoped", {"criterion_id": 42, "statuses": ["missing"]},
+            db=db, role=role, user=None,
+        )
+
+    assert result["type"] == "rescreen_started" and result["scoped"] is True
+    _, kwargs = stale.call_args
+    assert set(kwargs["application_ids"]) == {bo.id, cy.id}   # only the missing, not Ada

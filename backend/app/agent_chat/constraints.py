@@ -62,9 +62,13 @@ def _next_ordering(role: Role) -> int:
     return (max((c.ordering or 0) for c in existing) + 1) if existing else 0
 
 
-def _trigger_rescreen(db: Session, role: Role, *, reason: str) -> int:
+def _trigger_rescreen(
+    db: Session, role: Role, *, reason: str, application_ids: list[int] | None = None
+) -> int:
     """Mark the role's scores stale and kick an immediate stale-score sweep.
 
+    ``application_ids`` scopes the invalidation to the agent's reasoned subset
+    (re-screen only the genuinely-affected); ``None`` invalidates the whole pool.
     Returns the number of applications invalidated. The sweep is dispatched
     with a short countdown so the caller's outer commit lands before a worker
     reads the stale jobs (same guard ``mark_role_scores_stale`` uses for the
@@ -72,7 +76,9 @@ def _trigger_rescreen(db: Session, role: Role, *, reason: str) -> int:
     """
     from ..services.cv_score_orchestrator import mark_role_scores_stale
 
-    invalidated = mark_role_scores_stale(db, int(role.id), reason=reason)
+    invalidated = mark_role_scores_stale(
+        db, int(role.id), reason=reason, application_ids=application_ids
+    )
     try:
         from ..tasks.scoring_tasks import sweep_stale_scores
 
@@ -108,12 +114,18 @@ def estimate_rescreen(db: Session, role: Role) -> dict[str, Any]:
 
 
 def rescreen_role(
-    db: Session, role: Role, *, reason: str = "agent_chat:opt_in_rescreen"
+    db: Session, role: Role, *, reason: str = "agent_chat:opt_in_rescreen",
+    application_ids: list[int] | None = None,
 ) -> dict[str, Any]:
     """Run the re-screen the recruiter explicitly opted into (after a constraint
-    change). Separated from the edit so the spend is never automatic."""
-    count = _trigger_rescreen(db, role, reason=reason)
-    return {"type": "rescreen_started", "rescreening_count": int(count)}
+    change). Separated from the edit so the spend is never automatic.
+    ``application_ids`` scopes it to the agent's reasoned subset."""
+    count = _trigger_rescreen(db, role, reason=reason, application_ids=application_ids)
+    return {
+        "type": "rescreen_started",
+        "rescreening_count": int(count),
+        "scoped": application_ids is not None,
+    }
 
 
 def add_or_update_constraint(

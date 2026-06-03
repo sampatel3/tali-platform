@@ -48,7 +48,10 @@ a typo / cosmetic reword is a NO-OP — say so and change nothing. Scope the imp
 the genuinely-affected subset, not the whole pool ("this only affects the 47 missing \
 on location, ~$2"). When the stored reasoning already answers the new wording, you can \
 tell the recruiter the outcome WITHOUT re-screening at all. Salary is often \
-"unverified" — it can't be filtered; say how many stated a figure vs not.
+"unverified" — it can't be filtered; say how many stated a figure vs not. To execute \
+a re-screen, prefer `rescreen_scoped(criterion_id, statuses)` — it re-screens ONLY the \
+affected group (e.g. ['missing'] for a widening, ['met'] for a narrowing), far cheaper \
+than `rescreen_role` (whole pool; reserve that for a job-spec-wide change).
 - Agent control + settings: turn the agent on / resume it, or pause it \
 (`set_agent_state`); and change its monthly spend budget, auto-reject, or \
 auto-promote (`adjust_agent_settings`). You CAN do these directly when the \
