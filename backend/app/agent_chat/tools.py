@@ -23,6 +23,7 @@ from ..models.candidate_application import CandidateApplication
 from ..models.agent_decision import AgentDecision
 from ..models.role import Role
 from . import constraints as _constraints
+from . import controls as _controls
 from . import impact as _impact
 
 
@@ -183,6 +184,43 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {"criterion_id": {"type": "integer"}},
             "required": ["criterion_id"],
+        },
+    },
+    {
+        "name": "set_agent_state",
+        "description": (
+            "Activate (turn on / resume) or pause this role's agent. Use when the "
+            "recruiter asks to start, restart, resume, re-enable, or pause the agent. "
+            "Activating needs a monthly budget set — if none, ask for one."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["activate", "pause"],
+                    "description": "'activate' to turn on / resume, 'pause' to pause.",
+                },
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        "name": "adjust_agent_settings",
+        "description": (
+            "Adjust this role agent's settings. Only set the fields the recruiter "
+            "asks to change. monthly_budget_cents = monthly spend cap in cents "
+            "(e.g. 5000 = $50/mo). auto_reject = execute reject decisions without "
+            "review. auto_promote = send assessments without review. Raising the "
+            "budget can resume a budget-paused agent."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "monthly_budget_cents": {"type": ["integer", "null"]},
+                "auto_reject": {"type": ["boolean", "null"]},
+                "auto_promote": {"type": ["boolean", "null"]},
+            },
         },
     },
 ]
@@ -407,6 +445,17 @@ def dispatch_tool(
         result = _constraints.remove_constraint(db, role, int(args["criterion_id"]))
         _maybe_report_rescreen(db, role=role, conversation=conversation, result=result)
         return result
+    if name == "set_agent_state":
+        return _controls.set_agent_state(db, role, action=str(args.get("action") or ""))
+    if name == "adjust_agent_settings":
+        mbc = args.get("monthly_budget_cents")
+        return _controls.adjust_agent_settings(
+            db,
+            role,
+            monthly_budget_cents=int(mbc) if mbc is not None else None,
+            auto_reject=args.get("auto_reject"),
+            auto_promote=args.get("auto_promote"),
+        )
 
     raise KeyError(f"unknown tool: {name}")
 

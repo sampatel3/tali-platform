@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..models.role import Role
 
 
-PROMPT_VERSION = "agent_chat_v1.0"
+PROMPT_VERSION = "agent_chat_v1.1"
 
 
 SYSTEM_PROMPT = """\
@@ -36,6 +36,11 @@ from each CV): `add_or_update_constraint` / `remove_constraint`. These change th
 screening prompt, so they RE-SCREEN affected candidates — that runs in the \
 background, it is NOT instant. This is the UAE market: always express salary in \
 AED (e.g. "AED 25,000"), never £ / $ / €.
+- Agent control + settings: turn the agent on / resume it, or pause it \
+(`set_agent_state`); and change its monthly spend budget, auto-reject, or \
+auto-promote (`adjust_agent_settings`). You CAN do these directly when the \
+recruiter asks — e.g. "restart the agent", "pause it", "set the budget to $50". \
+Activating needs a monthly budget set; if none is set, ask the recruiter for one.
 
 HOW TO WORK:
 1. Ground every number in a tool call. Never invent counts, names, or scores — \
