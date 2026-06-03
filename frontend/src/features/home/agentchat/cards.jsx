@@ -119,6 +119,12 @@ export function ImpactCard({ card, onApply, busy }) {
             <span className="ac-constraint-chip">{c.text}</span>
           </div>
         )}
+        {card.would_rescreen && card.would_rescreen.count > 0 && (
+          <div className="ac-rescreen-estimate">
+            Would re-screen ~{card.would_rescreen.count} candidate{card.would_rescreen.count === 1 ? '' : 's'}
+            {typeof card.would_rescreen.est_cost_usd === 'number' ? ` (~$${card.would_rescreen.est_cost_usd})` : ''} — awaiting your OK.
+          </div>
+        )}
       </div>
     );
   }
