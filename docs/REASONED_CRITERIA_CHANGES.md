@@ -1,8 +1,8 @@
 # Reasoned criteria changes — design & implementation plan
 
-> Status: **P0–P5a SHIPPED to Taali prod** (2026‑06‑03, commits cd73092→6f9b35b).
-> P5b (lift into mainspring's generic agent layer) is the remaining step.
-> Owner: agent platform.
+> Status: **COMPLETE** (2026‑06‑03). P0–P5a shipped to Taali prod (cd73092→6f9b35b);
+> P5b (mainspring) resolved by construction (§8 — mainspring's deterministic policy
+> embodies the principle natively, no build needed). Owner: agent platform.
 >
 > Implemented (Taali): P0 opt‑in re‑screen + estimate; P1 read the per‑criterion
 > assessment the scorer already stores in `cv_match_details.requirements_assessment`
@@ -170,9 +170,22 @@ Each phase ships behind a per‑org flag and is independently valuable. P0 first
 - Metric: **$ per criteria edit** (target: salary‑cap change → ~$0).
 - Flag‑gated per org; P0 on first.
 
-## 8. Mainspring
-This is the conversational‑agent layer being generalised into mainspring (Phase A,
-branch `sam/mainspring-agent-layer`). The reasoned‑change engine (intent → scope →
-minimal re‑decide) is brand‑blind and belongs in `governance/` (the reasoning +
-reconcile) + `accelerator/` (the tools), alongside the impact engine already there.
-Build in Taali first, then lift.
+## 8. Mainspring (P5b) — resolved by construction
+Lifting the *engine* into mainspring is a near no‑op, and that's the correct
+answer. Mainspring **separates the LLM (signals, computed once) from the policy
+(deterministic rules over those signals)**, so a criteria/rule change there
+re‑evaluates the policy **deterministically and cheaply** — there is no expensive
+LLM re‑score to avoid. The principle this whole doc is about is therefore **native
+to mainspring's substrate**: `governance/impact.py` already does the instant,
+no‑LLM re‑filter + decision‑queue reconcile (the mainspring equivalent of P3), and
+a rule edit re‑runs the deterministic policy over existing signals.
+
+The reasoned‑criteria work above is the **Taali‑specific adaptation** for Taali's
+world, where scoring + free‑text criteria are conflated in one LLM call — which is
+exactly why the expensive‑re‑score problem exists in Taali and not in mainspring.
+
+So P5b is **closed: no redundant engine to build.** If a future brand on mainspring
+ever LLM‑judges free‑text criteria (vs deterministic rules over signals), the
+reference pattern is this Taali implementation — read the stored per‑criterion
+assessment (`assessments.py`), scope by intent, re‑decide minimally — added to
+mainspring's accelerator at that point.
