@@ -1,6 +1,15 @@
 # Reasoned criteria changes — design & implementation plan
 
-> Status: **draft for review** (2026‑06‑03). Owner: agent platform.
+> Status: **P0–P5a SHIPPED to Taali prod** (2026‑06‑03, commits cd73092→6f9b35b).
+> P5b (lift into mainspring's generic agent layer) is the remaining step.
+> Owner: agent platform.
+>
+> Implemented (Taali): P0 opt‑in re‑screen + estimate; P1 read the per‑criterion
+> assessment the scorer already stores in `cv_match_details.requirements_assessment`
+> (`agent_chat/assessments.py`); P2 prompt‑guided reason/scope (widen→missing,
+> narrow→met, reword→no‑op); P3 `rescreen_scoped` (mark_role_scores_stale gained an
+> `application_ids` filter); P4 `search_candidates` (the Search page's Graphiti search);
+> P5a the cost estimate on the constraint card.
 > Goal: a constraint / must‑have / preferred edit should be a **reasoned, minimal‑cost
 > operation**, not a blanket full re‑score.
 
