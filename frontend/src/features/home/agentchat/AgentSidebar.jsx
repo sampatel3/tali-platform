@@ -4,6 +4,7 @@
 import { MessageSquare } from 'lucide-react';
 
 const fmtCount = (n) => (n > 999 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
+const fmtUsd = (cents) => `$${((cents || 0) / 100).toFixed(2)}`;
 
 export function AgentSidebar({ agents = [], activeRoleId, onSelect }) {
   const activeCount = agents.filter((a) => a.agent_enabled).length;
@@ -41,6 +42,17 @@ export function AgentSidebar({ agents = [], activeRoleId, onSelect }) {
                       ? `Paused · ${a.agent_paused_reason || 'budget reached'}`
                       : a.last_message_preview || 'No messages yet'}
                   </span>
+                  {a.budget_cap_cents > 0 && (
+                    <span
+                      className="ac-budget"
+                      title={`Budget ${fmtUsd(a.budget_spent_cents)} of ${fmtUsd(a.budget_cap_cents)} this month`}
+                    >
+                      <span
+                        className="ac-budget-fill"
+                        style={{ width: `${Math.min(100, Math.round((a.budget_spent_cents / a.budget_cap_cents) * 100))}%` }}
+                      />
+                    </span>
+                  )}
                 </span>
                 <span className="ac-agent-meta">
                   {questions > 0 && (

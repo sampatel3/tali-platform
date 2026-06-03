@@ -298,6 +298,19 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     () => agents.reduce((sum, a) => sum + (a.unread_messages || 0) + (a.open_questions || 0), 0),
     [agents]
   );
+  // Enrich each sidebar agent with its monthly budget (spent / cap) from the
+  // roles-breakdown poll, so the rail can show a small budget bar per agent.
+  const agentsWithBudget = useMemo(() => {
+    const byRole = new Map((rolesBreakdown || []).map((r) => [r.role_id, r]));
+    return agents.map((a) => {
+      const r = byRole.get(a.role_id);
+      return {
+        ...a,
+        budget_spent_cents: r ? Number(r.budget_cents || 0) : null,
+        budget_cap_cents: r ? Number(r.cap_cents || 0) : null,
+      };
+    });
+  }, [agents, rolesBreakdown]);
 
   // KPIs come from org-status; while it's loading, fall back to derived
   // counts so the strip never shows blanks on first paint.
@@ -360,7 +373,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       {/* The shell renders immediately (not gated on the async agents fetch),
           so the page lays out once — no flash of the pre-rail layout. */}
       <div className={`ac-shell ${dockCollapsed ? 'ac-dock-collapsed' : ''}`}>
-        <AgentSidebar agents={agents} activeRoleId={activeRoleId} onSelect={handleSelectAgent} />
+        <AgentSidebar agents={agentsWithBudget} activeRoleId={activeRoleId} onSelect={handleSelectAgent} />
         <div className="ac-main">
 
       <div className="home-body">
