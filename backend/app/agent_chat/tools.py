@@ -223,6 +223,18 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "rescreen_role",
+        "description": (
+            "Run the re-screen the recruiter opted into AFTER a constraint change. "
+            "A constraint/must-have edit applies immediately but does NOT re-screen "
+            "automatically — re-screening re-scores the pool and costs money. First "
+            "report the `would_rescreen` count + `est_cost_usd` from the "
+            "constraint_change result and ask the recruiter to confirm; call this "
+            "ONLY once they explicitly say yes."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -438,11 +450,20 @@ def dispatch_tool(
             text=str(args.get("text") or ""),
             bucket=str(args.get("bucket") or "constraint"),
             criterion_id=int(cid) if cid is not None else None,
+            trigger_rescreen=False,  # P0: never auto-spend — the recruiter opts in
         )
-        _maybe_report_rescreen(db, role=role, conversation=conversation, result=result)
+        if result.get("invalidates_scores"):
+            result["would_rescreen"] = _constraints.estimate_rescreen(db, role)
         return result
     if name == "remove_constraint":
-        result = _constraints.remove_constraint(db, role, int(args["criterion_id"]))
+        result = _constraints.remove_constraint(
+            db, role, int(args["criterion_id"]), trigger_rescreen=False
+        )
+        if result.get("invalidates_scores"):
+            result["would_rescreen"] = _constraints.estimate_rescreen(db, role)
+        return result
+    if name == "rescreen_role":
+        result = _constraints.rescreen_role(db, role)
         _maybe_report_rescreen(db, role=role, conversation=conversation, result=result)
         return result
     if name == "set_agent_state":

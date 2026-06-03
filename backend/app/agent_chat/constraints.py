@@ -87,6 +87,35 @@ def _trigger_rescreen(db: Session, role: Role, *, reason: str) -> int:
     return int(invalidated)
 
 
+# Rough per-candidate cost of a re-screen (prescreen + full score), from
+# observed prod usage (~$0.045/candidate). For the opt-in heads-up only.
+_RESCREEN_COST_PER_CANDIDATE_USD = 0.05
+
+
+def estimate_rescreen(db: Session, role: Role) -> dict[str, Any]:
+    """How many candidates a re-screen would touch + a rough $ estimate, for the
+    opt-in heads-up — WITHOUT marking anything stale or spending anything."""
+    from .impact import load_open_candidates
+
+    try:
+        count = len(load_open_candidates(db, role))
+    except Exception:  # pragma: no cover — never block the edit on the estimate
+        count = 0
+    return {
+        "count": int(count),
+        "est_cost_usd": round(count * _RESCREEN_COST_PER_CANDIDATE_USD, 2),
+    }
+
+
+def rescreen_role(
+    db: Session, role: Role, *, reason: str = "agent_chat:opt_in_rescreen"
+) -> dict[str, Any]:
+    """Run the re-screen the recruiter explicitly opted into (after a constraint
+    change). Separated from the edit so the spend is never automatic."""
+    count = _trigger_rescreen(db, role, reason=reason)
+    return {"type": "rescreen_started", "rescreening_count": int(count)}
+
+
 def add_or_update_constraint(
     db: Session,
     role: Role,
@@ -194,6 +223,8 @@ __all__ = [
     "BUCKET_MUST",
     "BUCKET_PREFERRED",
     "add_or_update_constraint",
+    "estimate_rescreen",
     "list_constraints",
     "remove_constraint",
+    "rescreen_role",
 ]

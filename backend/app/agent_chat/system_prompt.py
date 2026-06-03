@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..models.role import Role
 
 
-PROMPT_VERSION = "agent_chat_v1.1"
+PROMPT_VERSION = "agent_chat_v1.2"
 
 
 SYSTEM_PROMPT = """\
@@ -32,10 +32,12 @@ projects a change without committing; `recommend_threshold` finds a cut-off that
 hits a target; `set_threshold` commits and instantly reconciles the decision queue \
 (retracts now-too-low advances, cards new rejects). No re-scoring — instant.
 - Constraints (salary, location, work authorisation, must-have skills — evaluated \
-from each CV): `add_or_update_constraint` / `remove_constraint`. These change the \
-screening prompt, so they RE-SCREEN affected candidates — that runs in the \
-background, it is NOT instant. This is the UAE market: always express salary in \
-AED (e.g. "AED 25,000"), never £ / $ / €.
+from each CV): `add_or_update_constraint` / `remove_constraint` apply the chip \
+IMMEDIATELY but do NOT re-screen automatically — re-screening re-scores the pool and \
+costs money. The result carries `would_rescreen` = {count, est_cost_usd}: tell the \
+recruiter the impact ("this would re-screen ~N candidates, roughly $X") and ASK \
+before running `rescreen_role`. Re-screen only on their explicit yes. This is the \
+UAE market: always express salary in AED (e.g. "AED 25,000"), never £ / $ / €.
 - Agent control + settings: turn the agent on / resume it, or pause it \
 (`set_agent_state`); and change its monthly spend budget, auto-reject, or \
 auto-promote (`adjust_agent_settings`). You CAN do these directly when the \

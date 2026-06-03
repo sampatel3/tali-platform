@@ -165,7 +165,10 @@ def test_send_message_runs_simulate_tool_and_returns_card(client, db):
     assert any(it["kind"] == "message" for it in data["timeline"])
 
 
-def test_send_message_caps_salary_constraint_and_rescreens(client, db):
+def test_constraint_change_is_opt_in_then_rescreens(client, db):
+    """P0: a constraint edit applies immediately but does NOT auto-re-screen —
+    it returns a would_rescreen estimate; the re-screen runs only on a
+    confirmed rescreen_role call."""
     headers, email = auth_headers(client, organization_name="SalaryOrg")
     org_id = _org_id(db, email)
     role = _role(db, org_id)
@@ -173,29 +176,39 @@ def test_send_message_caps_salary_constraint_and_rescreens(client, db):
     db.commit()
 
     scripted = [
+        # turn 1 — apply the constraint, report the estimate, ask (no spend)
         _resp(
             [_tool("t1", "add_or_update_constraint", {"text": "Salary expectation <= 25,000", "bucket": "constraint"})],
             "tool_use",
         ),
-        _resp([_text("Done — capped salary at 25k and re-screening the role now.")], "end_turn"),
+        _resp([_text("Capped salary at 25k. This would re-screen ~1 candidate (~$0.05) — run it?")], "end_turn"),
+        # turn 2 — recruiter confirms → re-screen
+        _resp([_tool("t2", "rescreen_role", {})], "tool_use"),
+        _resp([_text("Re-screening now.")], "end_turn"),
     ]
     with patch(
         "app.agent_chat.engine.get_client_for_org", return_value=_FakeClient(scripted)
     ), patch(
         "app.services.cv_score_orchestrator.mark_role_scores_stale", return_value=3
-    ), patch("app.tasks.scoring_tasks.sweep_stale_scores"):
-        resp = client.post(
+    ) as stale, patch("app.tasks.scoring_tasks.sweep_stale_scores"):
+        r1 = client.post(
             f"/api/v1/agent-chat/conversations/{role.id}/messages",
-            headers=headers,
-            json={"message": "cap salary at 25k on this role and re-screen"},
+            headers=headers, json={"message": "cap salary at 25k"},
         )
+        assert r1.status_code == 200, r1.text
+        card = next(c for c in r1.json()["messages"][-1]["actions"] if c["type"] == "constraint_change")
+        assert card["action"] == "added"
+        assert card["rescreening_count"] == 0                     # P0: not auto-re-screened
+        assert card["would_rescreen"]["count"] >= 1               # estimate surfaced
+        assert stale.call_count == 0                              # nothing spent yet
 
-    assert resp.status_code == 200, resp.text
-    data = resp.json()
-    card = next(c for c in data["messages"][-1]["actions"] if c["type"] == "constraint_change")
-    assert card["action"] == "added"
-    assert card["rescreening_count"] == 3
-    # The chip is persisted on the role.
+        r2 = client.post(
+            f"/api/v1/agent-chat/conversations/{role.id}/messages",
+            headers=headers, json={"message": "yes, re-screen"},
+        )
+        assert r2.status_code == 200, r2.text
+        assert stale.call_count == 1                              # opt-in → re-screen ran
+
     from app.models.role_criterion import RoleCriterion
 
     chip = (
