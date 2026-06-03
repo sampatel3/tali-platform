@@ -644,6 +644,52 @@ def test_offer_is_parked_advanced_outcome_open(db):
     assert (app.workable_stage or "").lower() == "offer"
 
 
+def test_advanced_frozen_candidate_later_rejected_flips_to_rejected(db):
+    """Freeze/reject guard regression: a candidate already parked in `advanced`
+    (frozen after Tali handed them off — ``is_resolved`` is True) who is LATER
+    rejected in Workable must still have their outcome flip to `rejected`. The
+    terminal branch runs (and returns) BEFORE the freeze guard, so the freeze
+    never blocks the realized-outcome capture. This is the "advances can still
+    be rejected downstream" case."""
+    from app.domains.assessments_runtime.role_support import is_resolved
+    from app.models.candidate_application import CandidateApplication
+
+    org = _make_org(db, "advanced-then-rejected-org")
+    MockClient, state = _client_returning([
+        # 1: in review → imported by the normal pipeline (not advanced yet).
+        [{"id": "cand_x", "email": "x@example.com", "name": "Ada Adv", "stage": "Review"}],
+        # 2: moved to Offer → parked `advanced`, outcome still open → FROZEN.
+        [{"id": "cand_x", "email": "x@example.com", "name": "Ada Adv", "stage": "Offer"}],
+        # 3: rejected downstream, after the handoff.
+        [{"id": "cand_x", "email": "x@example.com", "name": "Ada Adv", "stage": "Rejected"}],
+    ])
+    service = WorkableSyncService(MockClient())
+
+    def _app():
+        return db.query(CandidateApplication).filter(
+            CandidateApplication.organization_id == org.id,
+            CandidateApplication.workable_candidate_id == "cand_x",
+        ).first()
+
+    service.sync_org(db, org)  # run 0: Review → imported
+
+    # Advance + freeze.
+    state["calls"] = 1
+    service.sync_org(db, org)  # run 1: Offer
+    app = _app()
+    assert app is not None
+    assert app.pipeline_stage == "advanced"
+    assert app.application_outcome == "open"
+    assert is_resolved(app)  # genuinely frozen now
+
+    # Rejected after the handoff — the freeze must NOT block this flip.
+    state["calls"] = 2
+    service.sync_org(db, org)  # run 2: Rejected
+    db.refresh(app)
+    assert app.application_outcome == "rejected"
+    assert app.pipeline_stage == "advanced"
+
+
 def test_score_advanced_for_training_selects_unscored_advanced(db):
     """The calibration scorer targets ALL `advanced` candidates lacking a score
     (any stage/outcome incl. rejects), skips already-scored ones, and honors
