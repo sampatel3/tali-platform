@@ -362,6 +362,9 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="home" onNavigate={onNavigate} /> : null}
+      {/* App-shell: the hero + the 3-col shell fill the viewport below the nav so
+          the chat dock's composer is visible on load (columns scroll internally). */}
+      <div className="home-app">
       {/* Full-width page header — consistent with every other page (spans the
           whole width, above the agent rail + chat dock). */}
       <AgentHeader
@@ -473,6 +476,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
             onCollapse={() => setDockCollapsed(true)}
           />
         )}
+      </div>
       </div>
     </div>
   );

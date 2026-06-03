@@ -5,21 +5,30 @@
   display: grid;
   grid-template-columns: 248px minmax(0, 1fr) 404px;
   gap: 0;
-  align-items: start;
+  align-items: stretch;
 }
-/* When the dock is collapsed, drop the right column. */
-.ac-shell.ac-dock-collapsed { grid-template-columns: 248px minmax(0, 1fr) 0; }
-.ac-main { min-width: 0; }
-
-/* Rails stick within the scrolling page, below the fixed top nav. */
-.ac-sidebar,
-.ac-dock {
-  position: sticky;
-  top: 64px;
-  height: calc(100vh - 64px);
+/* App-shell: the hero + the 3 columns fill the viewport below the 64px nav, so
+   the chat dock's composer is visible on load. Each column scrolls internally —
+   no full-page scroll — which keeps the rails + dock pinned without sticky. */
+.home-app {
+  height: calc(100vh - var(--nav-h, 64px));
   display: flex;
   flex-direction: column;
   min-height: 0;
+}
+.home-app > .agent-header { flex-shrink: 0; }
+.home-app > .ac-shell { flex: 1 1 auto; min-height: 0; }
+/* When the dock is collapsed, drop the right column. */
+.ac-shell.ac-dock-collapsed { grid-template-columns: 248px minmax(0, 1fr) 0; }
+.ac-main { min-width: 0; height: 100%; min-height: 0; overflow-y: auto; }
+
+/* Rails fill the bounded app-shell column — no sticky needed. */
+.ac-sidebar,
+.ac-dock {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   background: var(--bg-2);
 }
 .ac-sidebar { border-right: 1px solid var(--line); }
