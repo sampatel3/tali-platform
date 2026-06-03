@@ -647,6 +647,9 @@ export const HomeNow = ({
   rolesBreakdown,
   reload,
   onNavigate,
+  // When the agent chat dock is present it owns the agent's questions, so the
+  // feed hides its own needs-input block to avoid duplicating them.
+  questionsInDock = false,
 }) => {
   const { showToast } = useToast() || { showToast: () => {} };
   const [busyId, setBusyId] = useState(null);
@@ -951,7 +954,7 @@ export const HomeNow = ({
           is empty so a clean state renders nothing. Centralised here so
           recruiters answer everything from one place rather than having
           to bounce into each role page. */}
-      <AgentNeedsInputCard roleId={filters.role_id || undefined} />
+      {!questionsInDock && <AgentNeedsInputCard roleId={filters.role_id || undefined} />}
 
       <div className="rq-hybrid-grid">
         <PendingSidebar

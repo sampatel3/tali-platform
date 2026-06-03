@@ -291,8 +291,11 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     () => agents.find((a) => a.role_id === activeRoleId) || null,
     [agents, activeRoleId]
   );
+  // "Awaiting you in the chat" — unread agent messages + open questions across
+  // agents. Deliberately excludes the bulk pending-decision queue (that's the
+  // feed's "Pending N"), so the dock badge reads as chat notifications.
   const totalAttention = useMemo(
-    () => agents.reduce((sum, a) => sum + (a.attention || 0), 0),
+    () => agents.reduce((sum, a) => sum + (a.unread_messages || 0) + (a.open_questions || 0), 0),
     [agents]
   );
 
@@ -414,6 +417,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           rolesBreakdown={rolesBreakdown}
           reload={reloadAll}
           onNavigate={onNavigate}
+          questionsInDock={hasAgents}
         />
 
         {/* One consolidated analytics surface — Activity / Outcomes / Quality

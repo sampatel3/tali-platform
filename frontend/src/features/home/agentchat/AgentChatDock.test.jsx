@@ -100,17 +100,22 @@ describe('AgentChatDock', () => {
 
 describe('AgentSidebar', () => {
   const AGENTS = [
-    { role_id: 1, role_name: 'Data Eng', agent_enabled: true, attention: 3, last_message_preview: 'cut-off is 64' },
-    { role_id: 2, role_name: 'GenAI Engineer', agent_enabled: true, attention: 0, last_message_preview: 'queue clear' },
+    // Badge = unread (2) + open questions (1) = 3, and must EXCLUDE the 50 pending
+    // decisions (those are the feed's queue, not a chat notification).
+    { role_id: 1, role_name: 'Data Eng', agent_enabled: true, unread_messages: 2, open_questions: 1, pending_decisions: 50, last_message_preview: 'cut-off is 64' },
+    { role_id: 2, role_name: 'GenAI Engineer', agent_enabled: true, unread_messages: 0, open_questions: 0, pending_decisions: 9, last_message_preview: 'queue clear' },
   ];
 
-  it('lists agents with badges and fires onSelect', () => {
+  it('badges chat attention (unread + questions), excluding the decision queue', () => {
     const onSelect = vi.fn();
     render(<AgentSidebar agents={AGENTS} activeRoleId={1} onSelect={onSelect} />);
 
     expect(screen.getByText('Data Eng')).toBeInTheDocument();
     expect(screen.getByText('GenAI Engineer')).toBeInTheDocument();
-    expect(screen.getByText('3')).toBeInTheDocument(); // attention badge
+    expect(screen.getByText('3')).toBeInTheDocument(); // 2 unread + 1 question
+    // The 50 pending decisions must NOT leak into the badge.
+    expect(screen.queryByText('53')).not.toBeInTheDocument();
+    expect(screen.queryByText('50')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByText('GenAI Engineer'));
     expect(onSelect).toHaveBeenCalledWith(2);

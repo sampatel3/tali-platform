@@ -16,7 +16,10 @@ export function AgentSidebar({ agents = [], activeRoleId, onSelect }) {
           <div className="ac-empty">No active agents yet. Turn an agent on for a role to chat with it.</div>
         ) : (
           agents.map((a) => {
-            const badge = a.attention ?? (a.unread_messages || 0) + (a.open_questions || 0) + (a.pending_decisions || 0);
+            // The badge is a CHAT notification: unread agent messages + open
+            // questions awaiting you. The bulk pending-decision queue is the
+            // feed's "Pending N", not a per-agent chat count.
+            const badge = (a.unread_messages || 0) + (a.open_questions || 0);
             const dotClass = a.agent_paused ? 'is-paused' : a.agent_enabled ? 'is-on' : '';
             return (
               <button
