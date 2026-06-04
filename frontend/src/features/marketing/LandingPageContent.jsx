@@ -398,27 +398,25 @@ export const LandingPage = ({ onNavigate }) => {
                 the panel toggle to replay the transition. */}
             <div
               className={`agent-header ${agentOn ? 'agent-running' : 'agent-quiet'}`}
-              /* Header + panel heights locked so OFF↔ON toggle never reflows
-                 the surrounding layout. Panel is min-height 215 (fits the
-                 OFF copy + budget input + button and the ON head-with-pending
-                 + tick + budget + button identically); header floor matches
-                 panel + 24+26 padding. min-height (not fixed height) so the
-                 mobile breakpoint that stacks the panel below the title
-                 still grows naturally. */
-              style={{ minHeight: 265, padding: '24px 24px 26px' }}
+              /* Mirrors the in-app light header (redesign 2026-06). The panel
+                 keeps a min-height so the OFF↔ON marketing toggle never
+                 reflows the surrounding layout (ON head-with-pending + tick +
+                 budget + button and OFF copy + input + button land within a
+                 px of each other); the header itself is content-driven. */
+              style={{ padding: '20px 24px' }}
             >
               <span className="ah-bright-overlay" aria-hidden="true" />
               <div className="agent-header-inner">
                 <div className="agent-header-left">
                   <div className="ah-kicker">JOBS · 5 ACTIVE ROLES</div>
                   <div className="ah-title-row">
-                    <h1 style={{ fontSize: 38 }}>5 active <em>roles</em></h1>
+                    <h1 style={{ fontSize: 26 }}>5 active <em>roles</em></h1>
                   </div>
                   <p className="ah-subtitle">You&apos;re hiring. Star a role to keep its candidates flowing in automatically.</p>
                 </div>
                 <aside
                   className={`agent-panel agent-${agentOn ? 'on' : 'off'}`}
-                  style={{ width: '100%', maxWidth: 300, minHeight: 215 }}
+                  style={{ width: '100%', maxWidth: 300, minHeight: 165 }}
                 >
                   <div className="agent-panel-head">
                     <div className="agent-pulse-wrap">
