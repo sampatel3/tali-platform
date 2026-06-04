@@ -147,7 +147,30 @@
 .ac-statrow b { color: var(--ink); font-weight: 700; }
 .ac-card-applied { border-color: color-mix(in oklab, var(--green) 35%, var(--line)); }
 .ac-card-applied .ac-card-head svg { color: var(--green); }
-.ac-card-actions { display: flex; gap: 7px; }
+.ac-card-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+
+/* ---- Draft-task review card -------------------------------------------- */
+.ac-card-draft { background: linear-gradient(180deg, var(--purple-soft), var(--bg-2)); border-color: var(--purple-soft); }
+.ac-draft { display: flex; flex-direction: column; gap: 7px; padding: 10px 11px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 11px; }
+.ac-draft + .ac-draft { margin-top: 2px; }
+.ac-draft-title { font-size: 0.8125rem; font-weight: 700; color: var(--ink); line-height: 1.3; }
+.ac-draft-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 12px; font-size: 0.65625rem; color: var(--ink-soft); }
+.ac-draft-tag { font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--purple-2); background: var(--purple-soft); padding: 2px 7px; border-radius: 5px; }
+.ac-draft-decisions { margin: 1px 0 2px; padding-left: 16px; display: flex; flex-direction: column; gap: 2px; }
+.ac-draft-decisions li { font-size: 0.71875rem; color: var(--ink-2); line-height: 1.4; }
+
+/* ---- Structured reject questionnaire ----------------------------------- */
+.ac-reject { display: flex; flex-direction: column; gap: 10px; padding: 11px; background: var(--bg-3); border: 1px solid var(--purple-soft); border-radius: 10px; }
+.ac-reject-q { display: flex; flex-direction: column; gap: 6px; }
+.ac-reject-prompt { font-size: 0.71875rem; font-weight: 700; color: var(--ink); }
+.ac-reject-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.ac-chip-toggle { font-size: 0.6875rem; font-weight: 600; color: var(--ink-2); background: var(--bg-2); border: 1px solid var(--line); padding: 5px 10px; border-radius: 999px; cursor: pointer; transition: all 0.12s ease; font-family: var(--font-sans); }
+.ac-chip-toggle:hover:not(:disabled) { border-color: var(--purple-soft); }
+.ac-chip-toggle.on { color: #fff; background: linear-gradient(135deg, var(--purple), var(--purple-2)); border-color: transparent; }
+.ac-chip-toggle:disabled { opacity: 0.6; cursor: default; }
+.ac-reject-note { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-2); padding: 7px 9px; font-family: var(--font-sans); font-size: 0.75rem; color: var(--ink); resize: none; outline: none; }
+.ac-reject-note:focus { border-color: var(--purple-soft); }
+.ac-reject-note::placeholder { color: var(--ink-soft); }
 
 /* ---- Needs-input cards ------------------------------------------------- */
 .ac-needs { border: 1px solid var(--purple); border-left-width: 3px; border-radius: var(--radius); background: linear-gradient(180deg, var(--purple-soft), var(--bg-2)); padding: 13px 14px; display: flex; flex-direction: column; gap: 9px; }

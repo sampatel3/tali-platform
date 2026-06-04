@@ -4,7 +4,7 @@
 // stays focused on the conversation.
 
 import { useState } from 'react';
-import { Bot, Check, CircleHelp, Sparkles, SlidersHorizontal, TrendingDown } from 'lucide-react';
+import { Bot, Check, CircleHelp, FileText, Sparkles, SlidersHorizontal, TrendingDown, X } from 'lucide-react';
 
 const initials = (name) =>
   String(name || '?')
@@ -192,6 +192,154 @@ export function ImpactCard({ card, onApply, busy }) {
   }
 
   return null;
+}
+
+// Claude-Code-style structured reject form: a set of questions (multi- or
+// single-select) + an optional free-text note, collected in ONE round and
+// submitted together — no chat back-and-forth. Driven entirely by the
+// `questions` the backend defines, so the two never drift.
+function RejectQuestionnaire({ questions = [], onSubmit, onCancel, busy }) {
+  const [answers, setAnswers] = useState({});
+  const [note, setNote] = useState('');
+
+  const toggle = (q, value) => {
+    setAnswers((prev) => {
+      if (q.multi) {
+        const cur = new Set(prev[q.key] || []);
+        cur.has(value) ? cur.delete(value) : cur.add(value);
+        return { ...prev, [q.key]: cur };
+      }
+      return { ...prev, [q.key]: prev[q.key] === value ? undefined : value };
+    });
+  };
+
+  const isOn = (q, value) =>
+    q.multi ? (answers[q.key] || new Set()).has(value) : answers[q.key] === value;
+
+  const hasAny =
+    note.trim() ||
+    questions.some((q) => {
+      const a = answers[q.key];
+      return q.multi ? a && a.size > 0 : Boolean(a);
+    });
+
+  const submit = () => {
+    const out = {};
+    questions.forEach((q) => {
+      const a = answers[q.key];
+      if (q.multi) {
+        if (a && a.size) out[q.key] = Array.from(a);
+      } else if (a) {
+        out[q.key] = a;
+      }
+    });
+    onSubmit?.({ answers: out, note: note.trim() });
+  };
+
+  return (
+    <div className="ac-reject">
+      {questions.map((q) => (
+        <div key={q.key} className="ac-reject-q">
+          <div className="ac-reject-prompt">{q.prompt}</div>
+          <div className="ac-reject-opts">
+            {(q.options || []).map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                className={`ac-chip-toggle ${isOn(q, o.value) ? 'on' : ''}`}
+                disabled={busy}
+                onClick={() => toggle(q, o.value)}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+      <textarea
+        className="ac-reject-note"
+        rows={2}
+        placeholder="Anything specific? (optional)"
+        value={note}
+        disabled={busy}
+        onChange={(e) => setNote(e.target.value)}
+      />
+      <div className="ac-card-actions">
+        <button className="ac-btn ac-btn-primary" disabled={busy || !hasAny} onClick={submit}>
+          <Check size={13} /> Revise draft
+        </button>
+        <button className="ac-btn ac-btn-ghost" disabled={busy} onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// The draft_task_review card — the agent surfaces this role's generated
+// assessment-task drafts. Approve activates one; Reject opens the structured
+// questionnaire that re-authors (not deletes) it.
+export function DraftTaskCard({ card, onApprove, onRevise, busy }) {
+  const [rejectingId, setRejectingId] = useState(null);
+  const drafts = card?.drafts || [];
+  if (!drafts.length) return null;
+
+  return (
+    <div className="ac-card ac-card-draft">
+      <div className="ac-card-head">
+        <FileText size={14} />
+        <span>
+          {drafts.length} task draft{drafts.length === 1 ? '' : 's'} awaiting review
+        </span>
+      </div>
+      {drafts.map((d) => (
+        <div key={d.task_id} className="ac-draft">
+          <div className="ac-draft-title">{d.name}</div>
+          <div className="ac-draft-meta">
+            {d.deliverable_kind && <span className="ac-draft-tag">{d.deliverable_kind}</span>}
+            <span>{(d.decisions || []).length} decisions</span>
+            <span>{(d.rubric || []).length} rubric dims</span>
+            <span>{d.repo_file_count || 0} files</span>
+          </div>
+          {(d.decisions || []).length > 0 && (
+            <ul className="ac-draft-decisions">
+              {d.decisions.slice(0, 3).map((dec, i) => (
+                <li key={i}>{dec.headline}</li>
+              ))}
+            </ul>
+          )}
+          {rejectingId === d.task_id ? (
+            <RejectQuestionnaire
+              questions={card.reject_questions}
+              busy={busy}
+              onCancel={() => setRejectingId(null)}
+              onSubmit={(fb) => {
+                setRejectingId(null);
+                onRevise?.(d.task_id, fb);
+              }}
+            />
+          ) : (
+            <div className="ac-card-actions">
+              <button
+                className="ac-btn ac-btn-primary"
+                disabled={busy}
+                onClick={() => onApprove?.(d.task_id)}
+              >
+                <Check size={13} /> Approve
+              </button>
+              <button
+                className="ac-btn ac-btn-soft"
+                disabled={busy}
+                onClick={() => setRejectingId(d.task_id)}
+              >
+                <X size={13} /> Reject &amp; revise
+              </button>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function NeedsInputCard({ item, onAnswer, onDismiss }) {

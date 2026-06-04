@@ -15,6 +15,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..models.agent_conversation import (
+    AUTHOR_ROLE_ASSISTANT,
     AgentConversation,
     AgentConversationMessage,
     AgentConversationRead,
@@ -27,6 +28,34 @@ from ..models.role import Role
 from ..models.user import User
 
 _VISIBLE_MESSAGE_KINDS = (MESSAGE_KIND_CHAT, MESSAGE_KIND_ACTION)
+
+
+def post_agent_message(
+    db: Session,
+    *,
+    conversation: AgentConversation,
+    text: str,
+    actions: list[dict[str, Any]] | None = None,
+) -> AgentConversationMessage:
+    """Append a plain agent (assistant) message to the conversation.
+
+    For non-LLM actions (draft-task approve/revise) that need to narrate an
+    outcome and optionally attach a card into the timeline without running a
+    full agent turn. Flushes so the id populates; the caller commits.
+    """
+    msg = AgentConversationMessage(
+        conversation_id=conversation.id,
+        organization_id=conversation.organization_id,
+        role_id=conversation.role_id,
+        author_role=AUTHOR_ROLE_ASSISTANT,
+        kind=MESSAGE_KIND_ACTION if actions else MESSAGE_KIND_CHAT,
+        content=[{"type": "text", "text": text}],
+        text=text,
+        actions=actions or None,
+    )
+    db.add(msg)
+    db.flush()
+    return msg
 
 
 def get_owned_role(db: Session, *, role_id: int, organization_id: int) -> Role | None:
@@ -236,4 +265,5 @@ __all__ = [
     "get_owned_role",
     "list_agent_conversations",
     "mark_read",
+    "post_agent_message",
 ]

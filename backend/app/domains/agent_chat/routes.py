@@ -17,18 +17,25 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ...agent_chat.draft_tasks import (
+    REJECT_QUESTIONS,
+    approve_draft,
+    revise_draft,
+)
 from ...agent_chat.engine import run_agent_turn
 from ...agent_chat.service import (
     ensure_conversation,
     get_owned_role,
     list_agent_conversations,
     mark_read,
+    post_agent_message,
 )
 from ...agent_chat.timeline import build_timeline, serialize_message
 from ...deps import get_current_user
 from ...models.organization import Organization
 from ...models.role import Role
 from ...models.user import User
+from ...platform.config import settings
 from ...platform.database import get_db
 
 router = APIRouter(prefix="/agent-chat", tags=["agent-chat"])
@@ -36,6 +43,14 @@ router = APIRouter(prefix="/agent-chat", tags=["agent-chat"])
 
 class SendMessageRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=8000)
+
+
+class ReviseDraftRequest(BaseModel):
+    # Structured reject answers keyed by question (e.g. {"issues": [...],
+    # "direction": "harder"}) + an optional free-text note. Interpreted by
+    # ``draft_tasks._build_feedback``.
+    answers: dict = Field(default_factory=dict)
+    note: str | None = Field(default=None, max_length=2000)
 
 
 def _require_org(current_user: User) -> int:
@@ -134,6 +149,87 @@ def send_message(
         "timeline": timeline,
         "agent": _agent_meta(role),
     }
+
+
+def _draft_review_card(role: Role, summary: dict) -> dict:
+    """A ``draft_task_review`` card focused on one (just-revised) draft."""
+    return {
+        "type": "draft_task_review",
+        "role_id": int(role.id),
+        "drafts": [summary],
+        "reject_questions": REJECT_QUESTIONS,
+    }
+
+
+@router.post("/conversations/{role_id}/draft-tasks/{task_id}/approve")
+def approve_draft_task(
+    role_id: int,
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Approve (activate) a generated draft from the chat. Narrates the outcome
+    into the timeline so the recruiter sees the confirmation in-thread."""
+    org_id = _require_org(current_user)
+    role = _require_role(db, role_id, org_id)
+    conversation = ensure_conversation(db, organization_id=org_id, role=role)
+    result = approve_draft(db, role, task_id, user_id=int(current_user.id))
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Approve failed")
+    summary = result["summary"]
+    post_agent_message(
+        db,
+        conversation=conversation,
+        text=f"Approved **{summary['name']}** — it's live and assignable now.",
+    )
+    timeline = build_timeline(db, conversation=conversation, role=role)
+    db.commit()
+    return {"ok": True, "role_id": role.id, "summary": summary, "timeline": timeline}
+
+
+@router.post("/conversations/{role_id}/draft-tasks/{task_id}/revise")
+def revise_draft_task(
+    role_id: int,
+    task_id: int,
+    body: ReviseDraftRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Structured-reject → revise: re-author the draft from the recruiter's
+    multiple-choice feedback (one metered call) instead of deleting it, then
+    re-present the revised draft as a fresh review card in the timeline."""
+    org_id = _require_org(current_user)
+    role = _require_role(db, role_id, org_id)
+    conversation = ensure_conversation(db, organization_id=org_id, role=role)
+    api_key = str(getattr(settings, "ANTHROPIC_API_KEY", "") or "").strip()
+    result = revise_draft(
+        db, role, task_id, answers=body.answers or {}, note=body.note, api_key=api_key
+    )
+    if not result.get("ok"):
+        post_agent_message(
+            db,
+            conversation=conversation,
+            text=f"I couldn't revise that draft — {result.get('error')} The original is unchanged.",
+        )
+        timeline = build_timeline(db, conversation=conversation, role=role)
+        db.commit()
+        return {
+            "ok": False,
+            "role_id": role.id,
+            "error": result.get("error"),
+            "errors": result.get("errors"),
+            "timeline": timeline,
+        }
+    summary = result["summary"]
+    post_agent_message(
+        db,
+        conversation=conversation,
+        text=f"Revised **{summary['name']}** from your feedback — take another look.",
+        actions=[_draft_review_card(role, summary)],
+    )
+    timeline = build_timeline(db, conversation=conversation, role=role)
+    db.commit()
+    return {"ok": True, "role_id": role.id, "summary": summary, "timeline": timeline}
 
 
 @router.post("/conversations/{role_id}/read")

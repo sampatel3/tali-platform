@@ -25,6 +25,7 @@ from ..models.role import Role
 from . import assessments as _assessments
 from . import constraints as _constraints
 from . import controls as _controls
+from . import draft_tasks as _draft_tasks
 from . import impact as _impact
 
 
@@ -35,6 +36,7 @@ CARD_TYPES = frozenset(
         "threshold_recommendation",
         "threshold_change",
         "constraint_change",
+        "draft_task_review",
     }
 )
 # Cards that represent a committed mutation (vs read-only analysis).
@@ -287,6 +289,17 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "properties": {"query": {"type": "string"}},
             "required": ["query"],
         },
+    },
+    {
+        "name": "list_draft_tasks",
+        "description": (
+            "List the auto-generated assessment-task DRAFTS awaiting review on "
+            "THIS role (the agent authored them from the JD; they're not live "
+            "until approved). Returns a review card the recruiter can approve or "
+            "reject-with-feedback in-chat. Call when the recruiter asks about "
+            "tasks/assessments, or proactively mention drafts when there are any."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
     },
 ]
 
@@ -558,6 +571,8 @@ def dispatch_tool(
             auto_reject=args.get("auto_reject"),
             auto_promote=args.get("auto_promote"),
         )
+    if name == "list_draft_tasks":
+        return _draft_tasks.draft_review_card(db, role)
 
     raise KeyError(f"unknown tool: {name}")
 

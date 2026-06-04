@@ -8,7 +8,7 @@ import { ArrowUp, MessageSquare, PanelRightClose } from 'lucide-react';
 
 import { agentChat } from '../../../shared/api';
 import { useToast } from '../../../context/ToastContext';
-import { Avatar, ChatBubble, ImpactCard, NeedsInputCard, ThinkingBubble } from './cards.jsx';
+import { Avatar, ChatBubble, DraftTaskCard, ImpactCard, NeedsInputCard, ThinkingBubble } from './cards.jsx';
 
 const HINTS = [
   'cap salary at AED 25k',
@@ -101,6 +101,43 @@ export function AgentChatDock({ roleId, roleName, onReload, onCollapse }) {
     [load, showToast]
   );
 
+  const approveDraft = useCallback(
+    async (taskId) => {
+      if (!roleId || sending) return;
+      setSending(true);
+      try {
+        const { data } = await agentChat.approveDraftTask(roleId, taskId);
+        setTimeline(data.timeline || []);
+        onReload?.();
+      } catch (err) {
+        showToast?.(err?.response?.data?.detail || 'Couldn’t approve that draft.', 'error');
+      } finally {
+        setSending(false);
+      }
+    },
+    [roleId, sending, onReload, showToast]
+  );
+
+  const reviseDraft = useCallback(
+    async (taskId, feedback) => {
+      if (!roleId || sending) return;
+      // Revising re-authors the task (one model call) — show the thinking
+      // bubble while it runs, then drop in the revised review card.
+      setSending(true);
+      try {
+        const { data } = await agentChat.reviseDraftTask(roleId, taskId, feedback);
+        setTimeline(data.timeline || []);
+        onReload?.();
+      } catch (err) {
+        showToast?.(err?.response?.data?.detail || 'Couldn’t revise that draft.', 'error');
+        load();
+      } finally {
+        setSending(false);
+      }
+    },
+    [roleId, sending, onReload, showToast, load]
+  );
+
   const onKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -164,9 +201,19 @@ export function AgentChatDock({ roleId, roleName, onReload, onCollapse }) {
               <NeedsInputCard key={it.id} item={it} onAnswer={answer} onDismiss={dismiss} />
             ) : (
               <ChatBubble key={it.id} item={it}>
-                {(it.actions || []).map((card, i) => (
-                  <ImpactCard key={i} card={card} onApply={(t) => send(`Set the score cut-off to ${t}.`)} busy={sending} />
-                ))}
+                {(it.actions || []).map((card, i) =>
+                  card.type === 'draft_task_review' ? (
+                    <DraftTaskCard
+                      key={i}
+                      card={card}
+                      onApprove={approveDraft}
+                      onRevise={reviseDraft}
+                      busy={sending}
+                    />
+                  ) : (
+                    <ImpactCard key={i} card={card} onApply={(t) => send(`Set the score cut-off to ${t}.`)} busy={sending} />
+                  )
+                )}
               </ChatBubble>
             )
           )

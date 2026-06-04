@@ -168,7 +168,7 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
       />
       <div className="mc-page">
 
-        <GeneratedDraftsPanel onChange={loadTasks} />
+        <GeneratedDraftsPanel onNavigate={onNavigate} />
 
         <div className="tasks-toolbar">
           <div className="seg">

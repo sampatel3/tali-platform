@@ -195,28 +195,21 @@ def _repair_prompt(errors: List[str]) -> str:
     )
 
 
-def generate_task_spec(
-    *,
-    role_name: str,
-    role_slug: str,
-    jd_text: str,
-    api_key: str,
-    organization_id: int,
-    deliverable_kind_hint: Optional[str] = None,
-    model: Optional[str] = None,
-    max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
-) -> GeneratedSpecResult:
-    """Generate a validated task spec from a role + JD.
+def _revision_prompt(prior_spec: Dict[str, Any], feedback: str) -> str:
+    """Seed message that hands the model the current draft + the recruiter's
+    structured feedback and asks for a complete, contract-valid re-author."""
+    return (
+        "A recruiter reviewed the draft task below and asked for changes.\n\n"
+        f"CURRENT DRAFT (JSON):\n{json.dumps(prior_spec)[:9000]}\n\n"
+        f"RECRUITER FEEDBACK:\n{feedback.strip()}\n\n"
+        "Re-author the COMPLETE task-spec JSON: keep everything the feedback "
+        "did NOT criticise, and change exactly what it asks for. Keep the same "
+        "task_id. Satisfy the full contract + every HARD RULE. JSON only, no prose."
+    )
 
-    Runs a bounded generation→validate→repair loop. Returns the validated
-    spec on success, or the best (still-invalid) attempt + its errors on
-    exhaustion so the caller can surface them for human authoring.
 
-    Never raises on a model/validation problem — only on a missing api_key.
-    """
-    if not api_key:
-        raise ValueError("api_key is required")
-    chosen_model = (model or "").strip() or _DEFAULT_MODEL
+def _make_client(api_key: str, organization_id: int, role_slug: str):
+    """Build the metered client + metering payload shared by generate/revise."""
     client = MeteredAnthropicClient(
         inner=Anthropic(api_key=api_key),
         organization_id=int(organization_id),
@@ -226,10 +219,24 @@ def generate_task_spec(
         "organization_id": int(organization_id),
         "metadata": {"sub_feature": "task_spec_generation", "role_slug": role_slug},
     }
+    return client, metering
 
-    messages: List[Dict[str, Any]] = [
-        {"role": "user", "content": _user_prompt(role_name, role_slug, jd_text, deliverable_kind_hint)}
-    ]
+
+def _run_generation_loop(
+    *,
+    client: MeteredAnthropicClient,
+    chosen_model: str,
+    metering: Dict[str, Any],
+    messages: List[Dict[str, Any]],
+    role_slug: str,
+    max_attempts: int,
+) -> GeneratedSpecResult:
+    """Bounded generate→validate→repair loop over seed ``messages``.
+
+    Shared by ``generate_task_spec`` (fresh authoring) and ``revise_task_spec``
+    (re-author from a prior spec + recruiter feedback). Mutates ``messages``
+    with repair turns. Never raises on a model/validation problem.
+    """
     best: Optional[Dict[str, Any]] = None
     best_errors: List[str] = ["generation did not produce parseable JSON"]
 
@@ -287,4 +294,73 @@ def generate_task_spec(
     )
 
 
-__all__ = ["GeneratedSpecResult", "generate_task_spec"]
+def generate_task_spec(
+    *,
+    role_name: str,
+    role_slug: str,
+    jd_text: str,
+    api_key: str,
+    organization_id: int,
+    deliverable_kind_hint: Optional[str] = None,
+    model: Optional[str] = None,
+    max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+) -> GeneratedSpecResult:
+    """Generate a validated task spec from a role + JD.
+
+    Runs a bounded generation→validate→repair loop. Returns the validated
+    spec on success, or the best (still-invalid) attempt + its errors on
+    exhaustion so the caller can surface them for human authoring.
+
+    Never raises on a model/validation problem — only on a missing api_key.
+    """
+    if not api_key:
+        raise ValueError("api_key is required")
+    chosen_model = (model or "").strip() or _DEFAULT_MODEL
+    client, metering = _make_client(api_key, organization_id, role_slug)
+    messages: List[Dict[str, Any]] = [
+        {"role": "user", "content": _user_prompt(role_name, role_slug, jd_text, deliverable_kind_hint)}
+    ]
+    return _run_generation_loop(
+        client=client, chosen_model=chosen_model, metering=metering,
+        messages=messages, role_slug=role_slug, max_attempts=max_attempts,
+    )
+
+
+def revise_task_spec(
+    *,
+    prior_spec: Dict[str, Any],
+    feedback: str,
+    role_name: str,
+    role_slug: str,
+    jd_text: str,
+    api_key: str,
+    organization_id: int,
+    model: Optional[str] = None,
+    max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+) -> GeneratedSpecResult:
+    """Re-author a draft spec from recruiter feedback.
+
+    Seeds the loop with the original authoring turn, the prior spec (as the
+    assistant's prior output), and a revision instruction carrying the
+    recruiter's structured feedback — so the model edits in place rather than
+    starting cold, then runs the same validate→repair loop. One metered call
+    per attempt (cheap, opt-in: the recruiter asked for the revision).
+
+    Never raises on a model/validation problem — only on a missing api_key.
+    """
+    if not api_key:
+        raise ValueError("api_key is required")
+    chosen_model = (model or "").strip() or _DEFAULT_MODEL
+    client, metering = _make_client(api_key, organization_id, role_slug)
+    messages: List[Dict[str, Any]] = [
+        {"role": "user", "content": _user_prompt(role_name, role_slug, jd_text, None)},
+        {"role": "assistant", "content": json.dumps(prior_spec)[:8000]},
+        {"role": "user", "content": _revision_prompt(prior_spec, feedback)},
+    ]
+    return _run_generation_loop(
+        client=client, chosen_model=chosen_model, metering=metering,
+        messages=messages, role_slug=role_slug, max_attempts=max_attempts,
+    )
+
+
+__all__ = ["GeneratedSpecResult", "generate_task_spec", "revise_task_spec"]

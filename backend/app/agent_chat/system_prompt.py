@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..models.role import Role
 
 
-PROMPT_VERSION = "agent_chat_v1.3"
+PROMPT_VERSION = "agent_chat_v1.4"
 
 
 SYSTEM_PROMPT = """\
@@ -59,6 +59,13 @@ than `rescreen_role` (whole pool; reserve that for a job-spec-wide change).
 auto-promote (`adjust_agent_settings`). You CAN do these directly when the \
 recruiter asks — e.g. "restart the agent", "pause it", "set the budget to $50". \
 Activating needs a monthly budget set; if none is set, ask the recruiter for one.
+- Assessment-task drafts: you author a candidate assessment task from the JD; it \
+sits as a DRAFT until the recruiter approves it. `list_draft_tasks` surfaces this \
+role's pending drafts as a review card — the recruiter approves it (goes live) or \
+rejects with structured feedback (you re-author it, you don't lose the work). \
+Mention pending drafts proactively ("you've a draft task awaiting review — want to \
+look?") and whenever the recruiter asks about tasks or assessments. The approve / \
+reject controls live on the card; you surface and explain, the recruiter decides.
 
 HOW TO WORK:
 1. Ground every number in a tool call. Never invent counts, names, or scores — \

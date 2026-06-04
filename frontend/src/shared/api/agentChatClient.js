@@ -23,4 +23,15 @@ export const agentChat = {
     api.post(`/agent-needs-input/${needsInputId}/answer`, { response }),
   dismissNeedsInput: (needsInputId) =>
     api.post(`/agent-needs-input/${needsInputId}/dismiss`),
+
+  // Draft-task review (the draft_task_review card). Approve activates the
+  // draft; revise re-authors it from structured reject feedback (no delete).
+  // Both return { ok, timeline } so the dock can refresh in place.
+  approveDraftTask: (roleId, taskId) =>
+    api.post(`/agent-chat/conversations/${roleId}/draft-tasks/${taskId}/approve`),
+  reviseDraftTask: (roleId, taskId, { answers, note } = {}) =>
+    api.post(`/agent-chat/conversations/${roleId}/draft-tasks/${taskId}/revise`, {
+      answers: answers || {},
+      note: note || null,
+    }),
 };
