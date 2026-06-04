@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, FileSearch, Wrench } from 'lucide-react';
+import { Activity, FileSearch, Loader2 } from 'lucide-react';
 
 import { assessments } from '../../shared/api';
 import { ChatComposer, ChatMarkdown } from '../../shared/chat';
@@ -162,6 +162,25 @@ export const AssessmentClaudeChat = ({
     return undefined;
   }, [tokensUsed]);
 
+  // Live "working" status line — mirrors Claude Code's indicator (elapsed time
+  // ticking + a token count) instead of a static "Claude is working". The
+  // seconds tick is the moment-to-moment "it's alive" signal while we wait on
+  // the turn; the token count is the session total (it jumps when the turn
+  // lands — the per-turn usage isn't streamed on this path).
+  const [elapsedSec, setElapsedSec] = useState(0);
+  useEffect(() => {
+    if (!pending) {
+      setElapsedSec(0);
+      return undefined;
+    }
+    const startedAt = Date.now();
+    setElapsedSec(0);
+    const id = setInterval(() => {
+      setElapsedSec(Math.max(0, Math.round((Date.now() - startedAt) / 1000)));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [pending]);
+
   const handlePaste = useCallback(() => {
     setPasteDetected(true);
   }, []);
@@ -312,9 +331,23 @@ export const AssessmentClaudeChat = ({
                 <span>working</span>
               </div>
               <div className="inline-block max-w-[94%] rounded-[12px] rounded-tl-[4px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-4 py-2.5 text-left">
-                <div className="inline-flex items-center gap-2 text-[var(--mute)]">
-                  <Wrench size={12} className="animate-pulse" />
-                  <span className="animate-pulse">Claude is working...</span>
+                <div className="inline-flex items-center gap-2 font-mono text-[0.8125rem] text-[var(--mute)]">
+                  <Loader2 size={13} className="animate-spin" />
+                  <span>Working</span>
+                  <span aria-hidden="true">·</span>
+                  <span
+                    data-testid="assessment-claude-chat-pending-elapsed"
+                    className="tabular-nums"
+                  >
+                    {elapsedSec}s
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span
+                    data-testid="assessment-claude-chat-pending-tokens"
+                    className="tabular-nums"
+                  >
+                    {formatTokenCount(tokensUsed)} tokens
+                  </span>
                 </div>
               </div>
             </div>

@@ -59,7 +59,13 @@ describe('AssessmentClaudeChat', () => {
     await typeAndSend('Why is this failing?');
 
     expect(screen.getByText('Why is this failing?')).toBeInTheDocument();
-    expect(screen.getByTestId('assessment-claude-chat-pending')).toBeInTheDocument();
+    const pendingRow = screen.getByTestId('assessment-claude-chat-pending');
+    expect(pendingRow).toBeInTheDocument();
+    // Working indicator is a live status line (elapsed + tokens), not a static
+    // "Claude is working" string — mirrors Claude Code.
+    expect(pendingRow).toHaveTextContent('Working');
+    expect(screen.getByTestId('assessment-claude-chat-pending-elapsed')).toHaveTextContent(/^\d+s$/);
+    expect(screen.getByTestId('assessment-claude-chat-pending-tokens')).toHaveTextContent(/tokens$/);
     expect(mockClaudeChat).toHaveBeenCalledTimes(1);
     const [assessmentId, payload, token] = mockClaudeChat.mock.calls[0];
     expect(assessmentId).toBe(42);
