@@ -46,7 +46,7 @@ from ...services.role_criteria_service import (
     sync_role_with_workspace,
 )
 from .role_support import get_role, role_to_response
-from .pipeline_service import role_pipeline_counts
+from .pipeline_service import role_pipeline_counts, role_pipeline_counts_bulk
 from ..agentic._hub_shared import role_pending_decisions_by_type
 
 router = APIRouter(tags=["Roles"])
@@ -208,12 +208,15 @@ def list_roles(
             .all()
         )
         last_activity_by_role = {int(role_id): ts for role_id, ts in last_activity_rows}
-        for role in roles:
-            stage_counts_by_role[role.id] = role_pipeline_counts(
-                db,
-                organization_id=current_user.organization_id,
-                role_id=role.id,
-            )
+        # Batched: two queries for the whole role list instead of the 2×N the
+        # per-role helper would issue. role_pipeline_counts_bulk mirrors
+        # role_pipeline_counts exactly (zero-filled, "rejected" included) and is
+        # locked to it by test_role_pipeline_counts_bulk.
+        stage_counts_by_role = role_pipeline_counts_bulk(
+            db,
+            organization_id=current_user.organization_id,
+            role_ids=role_ids,
+        )
 
     return [
         role_to_response(

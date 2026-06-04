@@ -238,25 +238,30 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       ]);
       setOrgKpis(orgStatusRes?.data || null);
       const nextRoles = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
-      let nextOrgData = orgRes?.data || null;
-      let nextSyncing = false;
-      let nextRunId = null;
+      const nextOrgData = orgRes?.data || null;
+      // Render the hub immediately from roles + org + org-status. The Workable
+      // sync badge ("Syncing now" / "Synced X ago") is secondary chrome — read
+      // it below WITHOUT awaiting so it can't gate the spinner. Previously the
+      // sync-status round-trip ran in series after this batch and held the
+      // whole page behind it.
+      setRoles(nextRoles);
+      setOrgData(nextOrgData);
+      setSyncing(false);
+      setSyncRunId(null);
+      setLoading(false);
       if (nextOrgData?.workable_connected) {
         try {
           const statusRes = await orgApi.getWorkableSyncStatus();
           const statusPayload = statusRes?.data || {};
-          nextOrgData = mergeSyncStatusIntoOrg(nextOrgData, statusPayload);
-          nextSyncing = Boolean(statusPayload.sync_in_progress);
-          nextRunId = statusPayload.run_id ?? null;
+          const inProgress = Boolean(statusPayload.sync_in_progress);
+          setOrgData((cur) => mergeSyncStatusIntoOrg(cur || nextOrgData, statusPayload));
+          setSyncing(inProgress);
+          setSyncRunId(inProgress ? (statusPayload.run_id ?? null) : null);
         } catch {
-          nextSyncing = false;
-          nextRunId = null;
+          setSyncing(false);
+          setSyncRunId(null);
         }
       }
-      setRoles(nextRoles);
-      setOrgData(nextOrgData);
-      setSyncing(nextSyncing);
-      setSyncRunId(nextSyncing ? nextRunId : null);
     } catch {
       setRoles([]);
       setOrgData(null);
