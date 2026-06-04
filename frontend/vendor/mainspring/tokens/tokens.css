@@ -22,6 +22,16 @@
    ============================================================ */
 @import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800&family=Geist+Mono:wght@400;500;600;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap');
 
+/* ── Global density: the 80% type-scale (Taali's production density).
+   Sets the rem base so every rem / Tailwind size renders at 0.8×, fitting
+   more content per screen. Viewport units (vh/vw) are unaffected, so
+   full-height layouts stay correct — this is rem scaling, NOT CSS zoom
+   (zoom breaks vh layouts; this doesn't). A brand can override the density
+   on its own [data-brand] selector. ── */
+html {
+  font-size: 0.8rem;
+}
+
 /* ── Brand-invariant structure + Mainspring (mint) default palette ── */
 :root {
   color-scheme: light;
@@ -39,6 +49,22 @@
   --taali-spacing: 8px;
   --workspace-grid: minmax(220px, 0.8fr) minmax(0, 1.6fr) minmax(280px, 0.9fr);
 
+  /* ── Brand-invariant layout structure (ported from Taali's shell/hero) ──
+     The 64px sticky tabbed nav, the 176px dark hero slab, page gutters and
+     the component radii. Identical across every brand — only the colours
+     swap per `data-brand`, so these live in :root and are never overridden. */
+  --nav-h: 64px;
+  --hero-min-h: 176px;
+  --hero-pad: 32px;
+  --page-pad-x: 32px;
+  --page-pad-y-top: 28px;
+  --page-pad-y-bottom: 48px;
+  --page-max: 1440px;
+  --kpi-min: 190px;
+  --radius-card: 22px;
+  --radius-panel: 28px;
+  --radius-control: 12px;
+
   /* Surfaces (Mainspring default — dark) */
   --ink: #0f172a;
   --ink-2: #1b2632;
@@ -50,6 +76,18 @@
   --bg: #0b1116;
   --bg-2: #ffffff;
   --bg-3: #f4f7fb;
+
+  /* ── Scheme-aware semantic layer ──────────────────────────────────
+     The shell chrome paints with these (via the `cloud`/`panel`/`line-d`
+     Tailwind utilities) instead of literal light/dark tokens, so a brand
+     renders coherently in EITHER polarity. Dark brands (this :root default,
+     mainspring) resolve --fg to the light --cloud + --surface to a dark
+     panel — i.e. the historical look, unchanged. LIGHT brands override
+     these to ink-on-light + light surfaces (see taali/cadence). */
+  --fg: var(--cloud);            /* primary on-background + on-surface text */
+  --surface: var(--ink-deep);    /* cards / panels / inputs */
+  --surface-2: var(--ink-deep-2);
+  --surface-line: var(--line-dark);
 
   /* Brand accent (generic + back-compat aliases) */
   --accent: #3ecf8e;
@@ -86,6 +124,23 @@
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
   --shadow-md: 0 8px 28px -12px rgba(15, 23, 42, 0.18);
   --shadow-lg: 0 28px 60px -28px rgba(15, 23, 42, 0.22);
+
+  /* ── Semantic component tokens (derived) ──────────────────────────────
+     color-mix() resolves its var() operands lazily against the cascade in
+     effect on the consuming element, so although these are declared once in
+     :root they re-derive per brand: on a [data-brand="cadence"] element
+     --accent/--green/etc. already resolve to the coral palette, so --ring,
+     the -soft fills and the table tints all pick up coral automatically.
+     (No need to duplicate them into each brand block.) */
+  --ring: color-mix(in oklab, var(--accent) 18%, transparent);
+  --surface-soft: color-mix(in oklab, var(--bg-2) 92%, transparent);
+  --border-soft: color-mix(in oklab, var(--line) 78%, transparent);
+  --success-soft: color-mix(in oklab, var(--green) 10%, var(--bg-2));
+  --warning-soft: color-mix(in oklab, var(--amber) 10%, var(--bg-2));
+  --danger-soft: color-mix(in oklab, var(--red) 10%, var(--bg-2));
+  --info-soft: color-mix(in oklab, var(--accent) 10%, var(--bg-2));
+  --table-header: color-mix(in oklab, var(--bg) 85%, var(--bg-2));
+  --row-hover: color-mix(in oklab, var(--accent) 4%, var(--bg-2));
 }
 
 /* ── Taali — purple + lime, light-first (brand #1, the reference) ── */
@@ -101,6 +156,12 @@
   --bg: #f7f4fb;
   --bg-2: #ffffff;
   --bg-3: #efe8f7;
+
+  /* Light scheme: on-bg/on-surface text is ink (dark); surfaces are light. */
+  --fg: var(--ink);
+  --surface: var(--bg-2);
+  --surface-2: var(--bg-3);
+  --surface-line: var(--line);
 
   --accent: #5e3aa8;
   --accent-deep: #4a2d80;
@@ -147,6 +208,12 @@
   --bg: #faf5ec;
   --bg-2: #fffcf6;
   --bg-3: #f3ecdc;
+
+  /* Light scheme: on-bg/on-surface text is ink (dark); surfaces are light. */
+  --fg: var(--ink);
+  --surface: var(--bg-2);
+  --surface-2: var(--bg-3);
+  --surface-line: var(--line);
 
   --accent: #e07a6e;
   --accent-deep: #b8554a;
@@ -198,6 +265,12 @@ html[data-theme="dark"][data-brand="taali"] {
   --bg: #0e0a18;
   --bg-2: #16102a;
   --bg-3: #1c1535;
+  /* Dark mode: --ink is light + --bg-2 is dark here, so the semantic layer
+     resolves to light-text-on-dark-surface (correct for this polarity). */
+  --fg: var(--ink);
+  --surface: var(--bg-2);
+  --surface-2: var(--bg-3);
+  --surface-line: var(--line);
   --accent: #8867c4;
   --accent-deep: #6e4ba8;
   --accent-soft: #2e1a4e;

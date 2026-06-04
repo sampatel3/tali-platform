@@ -10,28 +10,66 @@
   .eyebrow {
     @apply font-mono text-xs uppercase tracking-widest text-accent;
   }
+  /* Surfaces — Taali's card/panel look, token-driven so they re-skin per
+     brand. `.card` is the soft elevated surface; `.card-light` keeps the
+     legacy bright-paper variant; `.panel` is the larger blurred container. */
   .card {
-    @apply rounded-lg bg-panel border border-line-d p-5 shadow-card;
+    @apply rounded-card border p-5;
+    background: var(--surface-soft);
+    border-color: var(--border-soft);
+    box-shadow: var(--shadow-md);
   }
   .card-light {
-    @apply rounded-lg bg-paper border border-line-l p-5 shadow-card text-ink;
+    @apply rounded-card bg-paper border border-line-l p-5 shadow-card text-ink;
   }
+  .panel {
+    @apply rounded-panel border p-6;
+    background: color-mix(in oklab, var(--surface) 90%, transparent);
+    border-color: var(--border-soft);
+    box-shadow: var(--shadow-md);
+    backdrop-filter: blur(12px);
+  }
+  /* Buttons — Taali geometry (pill-ish radius, weight 600, soft transition,
+     3px focus ring from --ring). Primary is the accent gradient. */
   .btn {
-    @apply inline-flex items-center justify-center rounded font-semibold
-           px-3 py-1.5 text-sm transition-colors;
+    @apply inline-flex items-center justify-center gap-2 rounded-lg
+           px-4 py-2 text-sm font-semibold;
+    line-height: 1;
+    border: 1px solid transparent;
+    transition: transform 0.08s ease, background 0.18s ease,
+                color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--ring);
   }
   .btn-primary {
-    @apply btn bg-accent text-paper hover:bg-accent-deep;
+    @apply btn text-white;
+    background: linear-gradient(135deg, var(--accent), var(--accent-deep));
   }
+  .btn-primary:hover {
+    background: linear-gradient(135deg, var(--accent-deep), var(--accent-deep));
+  }
+  .btn-secondary {
+    @apply btn text-ink;
+    background: var(--surface-soft);
+    border-color: var(--border-soft);
+  }
+  .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
   .btn-ghost {
-    @apply btn border border-line-d text-cloud hover:bg-panel-2;
+    @apply btn text-ink-2;
+    background: transparent;
   }
+  .btn-ghost:hover { color: var(--accent); background: var(--surface-soft); }
   .btn-warn {
     @apply btn bg-warn text-ink hover:bg-[color-mix(in_oklab,var(--amber)_80%,transparent)];
   }
   .btn-danger {
-    @apply btn bg-danger text-paper hover:bg-[color-mix(in_oklab,var(--red)_80%,transparent)];
+    @apply btn text-white;
+    background: var(--red);
   }
+  .btn-danger:hover { background: var(--red-deep); }
   .pill {
     @apply inline-flex items-center px-2 py-0.5 rounded-full text-[11px]
            font-semibold tracking-wider uppercase;
@@ -96,7 +134,7 @@
   gap: 8px;
   height: 64px;
   font-family: var(--font-display);
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: 600;
   letter-spacing: -0.02em;
   background: transparent;
@@ -123,14 +161,14 @@
 }
 .mc-auth-quote-kicker {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   letter-spacing: 0.12em;
   opacity: 0.7;
   margin-bottom: 18px;
 }
 .mc-auth-quote p {
   font-family: var(--font-display);
-  font-size: 30px;
+  font-size: 1.875rem;
   line-height: 1.18;
   letter-spacing: -0.02em;
   font-weight: 500;
@@ -140,7 +178,7 @@
 .mc-auth-compliance {
   position: relative;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   letter-spacing: 0.06em;
   opacity: 0.55;
   display: flex;
@@ -161,7 +199,7 @@
 
 .mc-auth-top-right {
   margin-left: auto;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--mute);
   min-height: 20px;
 }
@@ -174,7 +212,7 @@
 }
 .mc-auth-title {
   font-family: var(--font-display);
-  font-size: 36px;
+  font-size: 2.25rem;
   letter-spacing: -0.025em;
   font-weight: 600;
   line-height: 1.1;
@@ -183,7 +221,7 @@
 }
 .mc-auth-sub {
   color: var(--mute);
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1.55;
   margin: 0 0 28px;
 }
@@ -199,7 +237,7 @@
 .mc-auth-field { margin-bottom: 14px; }
 .mc-auth-field-label {
   display: block;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 500;
   color: var(--ink-2);
   margin-bottom: 6px;
@@ -212,7 +250,7 @@
   background: var(--bg-2);
   color: var(--ink);
   font: inherit;
-  font-size: 14px;
+  font-size: 0.875rem;
   outline: none;
 }
 .mc-auth-input:focus {
@@ -249,7 +287,7 @@
   background: var(--ink);
   color: var(--bg);
   font-family: inherit;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
   display: inline-flex;
@@ -275,7 +313,7 @@
   margin-bottom: 18px;
 }
 .mc-auth-error-card .title { font-size: 13.5px; font-weight: 600; color: var(--red); margin-bottom: 4px; }
-.mc-auth-error-card .body { font-size: 13px; color: var(--ink-2); line-height: 1.5; }
+.mc-auth-error-card .body { font-size: 0.8125rem; color: var(--ink-2); line-height: 1.5; }
 
 .mc-auth-success-card {
   background: color-mix(in oklab, var(--green) 8%, var(--bg-2));
@@ -285,4 +323,396 @@
   margin-bottom: 18px;
 }
 .mc-auth-success-card .title { font-size: 13.5px; font-weight: 600; color: var(--green); margin-bottom: 4px; }
-.mc-auth-success-card .body { font-size: 13px; color: var(--ink-2); line-height: 1.5; }
+.mc-auth-success-card .body { font-size: 0.8125rem; color: var(--ink-2); line-height: 1.5; }
+
+/* ============================================================
+   CONSOLE CHROME + DATA SURFACES — ported from Taali's production
+   stylesheet (02-shell-nav, 13-page-hero-agentheader, KpiStrip,
+   22-tail-misc). Reads ONLY canonical @mainspring/tokens vars so it
+   re-skins per brand (purple for taali, coral for cadence). Plain CSS
+   (not @layer) so it always wins over Tailwind utilities — the same
+   precedent the auth block above uses.
+   ============================================================ */
+
+/* ── 64px sticky tabbed nav (port of .app-nav / .app-tabs) ──────────
+   The shared Shell renders mc-nav* so the universal IA gets Taali's
+   nav LOOK without importing its hiring-specific Shell.jsx. Active tab
+   is an UNDERLINE (ink + 2px accent border-bottom), not a filled pill. */
+.mc-nav {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  height: var(--nav-h);
+  background: color-mix(in oklab, var(--bg) 82%, transparent);
+  backdrop-filter: saturate(1.2) blur(14px);
+  border-bottom: 1px solid var(--line);
+}
+.mc-nav-inner {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  height: var(--nav-h);
+  max-width: var(--page-max);
+  margin: 0 auto;
+  padding: 0 var(--page-pad-x);
+}
+.mc-nav-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1;
+  color: var(--ink);
+}
+.mc-nav-logo em { font-style: normal; color: var(--accent); }
+.mc-nav-tabs {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 4px;
+  height: var(--nav-h);
+}
+.mc-nav-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--nav-h);
+  padding: 0 4px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--mute);
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  text-decoration: none;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.mc-nav-tab:hover { color: var(--ink); }
+.mc-nav-tab.active {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+.mc-nav-search {
+  width: 176px;
+  padding: 8px 12px 8px 32px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border-soft);
+  background: var(--surface-soft);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13.5px;
+  outline: none;
+  transition: width 0.18s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.mc-nav-search:focus {
+  width: 224px;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+.mc-nav-menu {
+  min-width: 200px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border-soft);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+}
+.mc-nav-menu a {
+  display: block;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 13.5px;
+  color: var(--ink-2);
+  text-decoration: none;
+}
+.mc-nav-menu a:hover { background: var(--surface-soft); color: var(--accent); }
+.mc-nav-menu a.active { color: var(--accent); }
+
+/* ── The signature dark hero slab (port of .agent-header / .mc-page) ── */
+.agent-header {
+  color: #fff;
+  position: relative;
+  overflow: hidden;
+  min-height: var(--hero-min-h);
+  padding: 22px var(--hero-pad) 24px;
+  display: flex;
+  align-items: flex-start;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--grad-dark-vert);
+}
+.agent-header-inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+/* Soft brand glow wash so the slab isn't flat — uses the brand glow token. */
+.agent-header::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(900px 420px at 80% -10%, var(--purple-glow), transparent 55%),
+    radial-gradient(700px 320px at 0% 110%, color-mix(in oklab, var(--purple-lav) 16%, transparent), transparent 60%);
+}
+
+.mc-page {
+  width: 100%;
+  max-width: var(--page-max);
+  margin: 0 auto;
+  padding: var(--page-pad-y-top) var(--page-pad-x) var(--page-pad-y-bottom);
+  box-sizing: border-box;
+}
+.mc-page-narrow { max-width: 1200px; }
+
+.mc-kicker {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 10px;
+}
+.mc-kicker.is-mute { color: var(--mute); }
+/* On the dark hero, kicker + subtitle read light, not ink. */
+.agent-header .mc-kicker { color: rgba(255, 255, 255, 0.65); }
+
+.mc-h-display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.02;
+  font-size: clamp(38px, 5.4vw, 60px);
+  color: var(--ink);
+  margin: 0 0 10px;
+}
+.mc-h-display em,
+.mc-h-display .mc-period {
+  font-style: normal;
+  color: var(--accent);
+  font-weight: inherit;
+}
+.agent-header .mc-h-display { color: #fff; }
+.agent-header .mc-h-display em,
+.agent-header .mc-h-display .mc-period { color: var(--purple-lav); }
+
+.mc-subtitle {
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: var(--mute);
+  max-width: 720px;
+  margin: 0;
+}
+.agent-header .mc-subtitle { color: rgba(255, 255, 255, 0.78); max-width: 640px; }
+
+.mc-hero-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 18px;
+  flex-wrap: wrap;
+}
+
+/* ── KPI strip (port of KpiStrip.css) ──────────────────────────────── */
+.kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--kpi-min), 1fr));
+  gap: 12px;
+}
+@media (min-width: 900px) {
+  .kpi-strip { grid-template-columns: repeat(var(--kpi-cols, 4), minmax(0, 1fr)); }
+}
+.kpi-tile {
+  background: var(--surface);
+  border: 1px solid var(--surface-line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-shadow: var(--shadow-sm);
+}
+.kpi-tile.is-emph {
+  background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 7%, var(--bg-2)), var(--bg-2));
+  border-color: color-mix(in oklab, var(--accent) 28%, var(--line));
+}
+.kpi-l {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+.kpi-v {
+  font-family: var(--font-display);
+  font-size: 1.5625rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  color: var(--ink);
+}
+.kpi-v .kpi-accent { color: var(--accent); }
+.kpi-v .kpi-unit { color: var(--mute); font-size: 0.9375rem; font-weight: 400; }
+.kpi-d { font-size: 0.75rem; color: var(--mute); }
+
+/* ── Data table (port of .ctable + score/stage pills) ──────────────── */
+.ctable-wrap {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  overflow: hidden;
+}
+.ctable { width: 100%; border-collapse: collapse; }
+.ctable thead th {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  color: var(--mute);
+  text-transform: uppercase;
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line-2);
+  background: var(--table-header);
+  font-weight: 500;
+}
+.ctable tbody tr {
+  border-bottom: 1px solid var(--line-2);
+  transition: background 0.12s ease;
+}
+.ctable tbody tr:last-child { border-bottom: 0; }
+.ctable tbody tr:hover { background: var(--row-hover); }
+.ctable tbody tr.agent-row {
+  background: color-mix(in oklab, var(--accent) 3%, var(--bg-2));
+}
+.ctable tbody td {
+  padding: 12px 14px;
+  vertical-align: middle;
+  font-size: 0.8125rem;
+  color: var(--ink);
+}
+.ctable td .name { font-size: 13.5px; font-weight: 500; color: var(--ink); }
+.ctable td .sub { font-size: 11.5px; color: var(--mute); margin-top: 1px; }
+.ctable-empty { padding: 28px 18px; text-align: center; color: var(--mute); font-size: 0.8125rem; }
+
+.score-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--bg-3);
+  color: var(--ink-2);
+}
+.score-pill.hi { background: var(--success-soft); color: var(--green); }
+.score-pill.mid { background: var(--warning-soft); color: var(--amber); }
+.score-pill.lo { background: var(--danger-soft); color: var(--red); }
+.score-pill.stale { background: var(--bg-3); color: var(--mute); font-weight: 500; }
+
+.stage-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.stage-pill.is-strong {
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+
+/* ── Badges (port of .taali-badge variants → token semantics) ──────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.badge-accent {
+  background: var(--info-soft);
+  color: var(--accent-deep);
+  border-color: color-mix(in oklab, var(--accent) 24%, transparent);
+}
+.badge-muted {
+  background: var(--surface-soft);
+  color: var(--mute);
+  border-color: var(--border-soft);
+}
+.badge-success {
+  background: var(--success-soft);
+  color: var(--green);
+  border-color: color-mix(in oklab, var(--green) 24%, transparent);
+}
+.badge-warning {
+  background: var(--warning-soft);
+  color: var(--amber);
+  border-color: color-mix(in oklab, var(--amber) 24%, transparent);
+}
+.badge-danger {
+  background: var(--danger-soft);
+  color: var(--red);
+  border-color: color-mix(in oklab, var(--red) 24%, transparent);
+}
+.badge-info {
+  background: var(--info-soft);
+  color: var(--cool);
+  border-color: color-mix(in oklab, var(--cool) 24%, transparent);
+}
+
+/* ── Form controls (@mainspring/ui ships none) — token-driven ──────── */
+.input,
+.select,
+.textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border-soft);
+  background: var(--surface-soft);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.875rem;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.textarea { min-height: 96px; resize: vertical; }
+.input:focus,
+.select:focus,
+.textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+.input::placeholder,
+.textarea::placeholder { color: var(--mute); }
+.input:disabled,
+.select:disabled,
+.textarea:disabled { opacity: 0.6; cursor: not-allowed; }
