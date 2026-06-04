@@ -18,6 +18,10 @@ from ...services.workable_actions_service import resolve_workable_actor_member_i
 from ...domains.integrations_notifications.invite_flow import dispatch_assessment_invite
 from ...models.assessment import Assessment
 from ...models.assessment_experiment import ASSIGNMENT_METHOD_FORCED
+from ...services.experiment_assignment import (
+    RoleTaskMisconfigured,
+    resolve_task_and_variant,
+)
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.organization import Organization
@@ -86,12 +90,15 @@ def create_assessment(
     org_feedback_enabled = True
 
     try:
+        # task_id is optional: when omitted we let an active A/B experiment on
+        # the role assign the arm (resolved once the role is known, below).
         task = db.query(Task).filter(
             Task.id == data.task_id,
             (Task.organization_id == current_user.organization_id) | (Task.organization_id == None),  # noqa: E711
-        ).first()
-        if not task:
+        ).first() if data.task_id is not None else None
+        if data.task_id is not None and not task:
             raise HTTPException(status_code=404, detail="Task not found")
+        arm_choice = None
         creation_gate = get_assessment_creation_gate(
             current_user.organization_id,
             db,
@@ -130,7 +137,7 @@ def create_assessment(
             )
             if not role:
                 raise HTTPException(status_code=404, detail="Role not found")
-            if not any(t.id == task.id for t in (role.tasks or [])):
+            if task is not None and not any(t.id == task.id for t in (role.tasks or [])):
                 raise HTTPException(status_code=400, detail="Task is not linked to the selected role")
             resolved_role = role
             candidate_email = candidate.email
@@ -162,11 +169,32 @@ def create_assessment(
                 )
                 if not role:
                     raise HTTPException(status_code=404, detail="Role not found")
-                if not any(t.id == task.id for t in (role.tasks or [])):
+                if task is not None and not any(t.id == task.id for t in (role.tasks or [])):
                     raise HTTPException(status_code=400, detail="Task is not linked to the selected role")
                 resolved_role = role
             candidate_email = candidate.email
             candidate_name = candidate.full_name or candidate.email
+
+        # No explicit task picked → route through the shared experiment
+        # chokepoint so an active A/B on the role assigns the arm
+        # (deterministic + stable per candidate). Mirrors the agent send path.
+        if task is None:
+            if resolved_role is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="task_id is required when the assessment is not tied to a role",
+                )
+            try:
+                arm_choice = resolve_task_and_variant(
+                    db,
+                    resolved_role,
+                    candidate_id=int(candidate.id),
+                    organization_id=current_user.organization_id,
+                    task_id=None,
+                )
+            except RoleTaskMisconfigured as exc:
+                raise HTTPException(status_code=422, detail=str(exc.detail))
+            task = arm_choice.task
 
         if resolved_role_id:
             existing = latest_valid_role_assessment(
@@ -202,7 +230,7 @@ def create_assessment(
         assessment = Assessment(
             organization_id=current_user.organization_id,
             candidate_id=candidate.id,
-            task_id=data.task_id,
+            task_id=task.id,
             role_id=resolved_role_id,
             application_id=(application.id if application else None),
             token=token,
@@ -213,9 +241,14 @@ def create_assessment(
             ),
             workable_job_id=(resolved_role.workable_job_id if resolved_role else None),
             candidate_feedback_enabled=org_feedback_enabled,
-            # Recruiter explicitly picked this task — a forced assignment,
-            # excluded from any active experiment's randomized analysis cohort.
-            assignment_method=ASSIGNMENT_METHOD_FORCED,
+            # task_id given → FORCED (excluded from the experiment's analysis
+            # cohort). task_id omitted → the shared resolver assigned the arm
+            # (random/stable) or a single-task default; carry its assignment
+            # metadata so the recruiter path and the agent path stay consistent.
+            assignment_method=(arm_choice.method if arm_choice else ASSIGNMENT_METHOD_FORCED),
+            experiment_id=(int(arm_choice.experiment.id) if arm_choice and arm_choice.experiment else None),
+            experiment_arm_id=(int(arm_choice.arm.id) if arm_choice and arm_choice.arm else None),
+            assignment_key=(arm_choice.assignment_key if arm_choice else None),
         )
         db.add(assessment)
         db.flush()

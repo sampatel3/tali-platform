@@ -6,7 +6,12 @@ from pydantic import BaseModel, EmailStr, Field, ConfigDict, model_validator
 class AssessmentCreate(BaseModel):
     candidate_email: Optional[EmailStr] = None
     candidate_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
-    task_id: int = Field(gt=0)
+    # Optional: omit to let an active A/B experiment on the role pick the arm
+    # (deterministic, stable per candidate). When provided, the chosen task is
+    # a FORCED assignment and is excluded from the experiment's analysis cohort.
+    # A role with multiple tasks and no experiment still requires an explicit
+    # task_id (the resolver raises a 422 telling the recruiter to pick).
+    task_id: Optional[int] = Field(default=None, gt=0)
     application_id: Optional[int] = Field(default=None, gt=0)
     role_id: Optional[int] = Field(default=None, gt=0)
     duration_minutes: int = Field(default=30, ge=15, le=180)

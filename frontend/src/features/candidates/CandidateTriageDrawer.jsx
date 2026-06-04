@@ -146,10 +146,14 @@ export function CandidateTriageDrawer({
     setShowDetails(false);
     if (roleTasks.length === 1) {
       setSelectedTaskId(String(roleTasks[0].id));
+    } else if (roleTasks.length > 1) {
+      // Multiple linked tasks ⇒ an A/B is in play. Default to Auto so an
+      // active experiment assigns the arm (50/50, stable per candidate)
+      // instead of silently forcing whichever task happens to be first —
+      // that default is exactly why role 26's A/B never split.
+      setSelectedTaskId('auto');
     } else {
-      setSelectedTaskId((current) => (
-        roleTasks.some((task) => String(task.id) === String(current)) ? current : ''
-      ));
+      setSelectedTaskId('');
     }
   }, [applicationId, roleTasks]);
 
@@ -325,21 +329,34 @@ export function CandidateTriageDrawer({
             {roleTasks.length === 0 ? (
               <div className="ctc-empty">No tasks linked to this role yet.</div>
             ) : (
-              roleTasks.map((task) => {
-                const isOn = String(selectedTaskId) === String(task.id);
-                return (
+              <>
+                {roleTasks.length > 1 ? (
                   <button
-                    key={task.id}
                     type="button"
-                    className={`ctc-card ${isOn ? 'on' : ''}`}
+                    className={`ctc-card ${selectedTaskId === 'auto' ? 'on' : ''}`}
                     disabled={!canAct}
-                    onClick={() => setSelectedTaskId(String(task.id))}
+                    onClick={() => setSelectedTaskId('auto')}
                   >
-                    <div className="ctc-card-title">{task.name}</div>
-                    <div className="ctc-card-sub">~60 min · in-browser IDE</div>
+                    <div className="ctc-card-title">Auto · A/B split</div>
+                    <div className="ctc-card-sub">Experiment assigns the task — 50/50, stable per candidate</div>
                   </button>
-                );
-              })
+                ) : null}
+                {roleTasks.map((task) => {
+                  const isOn = String(selectedTaskId) === String(task.id);
+                  return (
+                    <button
+                      key={task.id}
+                      type="button"
+                      className={`ctc-card ${isOn ? 'on' : ''}`}
+                      disabled={!canAct}
+                      onClick={() => setSelectedTaskId(String(task.id))}
+                    >
+                      <div className="ctc-card-title">{task.name}</div>
+                      <div className="ctc-card-sub">~60 min · in-browser IDE</div>
+                    </button>
+                  );
+                })}
+              </>
             )}
           </div>
           <div className="ctc-action-row">

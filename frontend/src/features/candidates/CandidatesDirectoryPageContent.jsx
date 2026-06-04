@@ -1350,9 +1350,12 @@ export const CandidatesDirectoryPage = ({
 
   const createOrRetakeAssessment = async (application, taskId, { retake = false, reason = '' } = {}) => {
     if (!application?.id || !taskId) return false;
+    // 'auto' ⇒ let the backend's A/B experiment assign the task (omit task_id).
+    // Auto only applies to fresh sends; a retake always re-runs a specific task.
+    const isAuto = String(taskId) === 'auto';
     setCreatingAssessmentId(application.id);
     try {
-      if (retake) {
+      if (retake && !isAuto) {
         await rolesApi.retakeAssessment(application.id, {
           task_id: Number(taskId),
           duration_minutes: 30,
@@ -1360,7 +1363,7 @@ export const CandidatesDirectoryPage = ({
         });
       } else {
         await rolesApi.createAssessment(application.id, {
-          task_id: Number(taskId),
+          ...(isAuto ? {} : { task_id: Number(taskId) }),
           duration_minutes: 30,
         });
       }
