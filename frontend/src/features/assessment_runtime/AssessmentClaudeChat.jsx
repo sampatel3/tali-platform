@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, FileSearch, MessageSquare, Wrench } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import { Activity, FileSearch, Wrench } from 'lucide-react';
 
 import { assessments } from '../../shared/api';
+import { ChatComposer, ChatMarkdown } from '../../shared/chat';
 
 const MESSAGE_BUFFER_LIMIT = 30;
 
@@ -20,89 +20,6 @@ const formatCostUsd = (usd) => {
   // Always two decimals so the pill width stays stable as the number
   // ticks up; <$0.01 still shows $0.00 (we don't want $0.005, etc.).
   return `$${safe.toFixed(2)}`;
-};
-
-// Claude Desktop / Codex / Cursor scale: compact and refined, NOT
-// big. Sam's "bolder" feedback was about visual weight, not size —
-// the previous push went 16px and looked oversized against the
-// 14px-scaled chrome. Returned to 14px body / 1.6 line-height
-// (matches Claude Desktop default). Bold reads through TYPE WEIGHT,
-// COLOR CONTRAST, and SPACING — never type size.
-const MARKDOWN_COMPONENTS = {
-  p: ({ children }) => (
-    <p className="whitespace-pre-line text-[0.875rem] leading-[1.6] text-[var(--ink)] [&:not(:first-child)]:mt-3">
-      {children}
-    </p>
-  ),
-  h1: ({ children }) => (
-    <h1 className="mt-4 text-[1rem] font-semibold leading-tight text-[var(--ink)] [&:first-child]:mt-0">
-      {children}
-    </h1>
-  ),
-  h2: ({ children }) => (
-    <h2 className="mt-3.5 text-[0.90625rem] font-semibold leading-tight text-[var(--ink)] [&:first-child]:mt-0">
-      {children}
-    </h2>
-  ),
-  h3: ({ children }) => (
-    <h3 className="mt-3 text-[0.84375rem] font-semibold leading-tight text-[var(--ink)] [&:first-child]:mt-0">
-      {children}
-    </h3>
-  ),
-  ul: ({ children }) => (
-    <ul className="mt-2.5 list-disc space-y-1 pl-5 text-[0.875rem] leading-[1.6] text-[var(--ink)] marker:text-[var(--purple)]">
-      {children}
-    </ul>
-  ),
-  ol: ({ children }) => (
-    <ol className="mt-2.5 list-decimal space-y-1 pl-5 text-[0.875rem] leading-[1.6] text-[var(--ink)] marker:text-[var(--purple)]">
-      {children}
-    </ol>
-  ),
-  li: ({ children }) => <li className="pl-1">{children}</li>,
-  strong: ({ children }) => (
-    <strong className="font-semibold text-[var(--ink)]">{children}</strong>
-  ),
-  em: ({ children }) => <em className="italic text-[var(--ink)]">{children}</em>,
-  blockquote: ({ children }) => (
-    <blockquote className="mt-3 border-l-[3px] border-[var(--purple)] bg-[var(--purple-soft)] px-3 py-2 text-[0.84375rem] leading-[1.55] text-[var(--ink-2)]">
-      {children}
-    </blockquote>
-  ),
-  hr: () => <hr className="my-4 border-t border-[var(--line-2)]" />,
-  code: ({ children, className, ...props }) => {
-    const isBlock = typeof className === 'string' && className.length > 0;
-    if (isBlock) {
-      return (
-        <code className={className} {...props}>
-          {children}
-        </code>
-      );
-    }
-    return (
-      <code
-        className="rounded-[5px] bg-[var(--purple-soft)] px-1.5 py-0.5 font-mono text-[0.9em] text-[var(--purple-2)]"
-        {...props}
-      >
-        {children}
-      </code>
-    );
-  },
-  pre: ({ children }) => (
-    <pre className="mt-3 overflow-x-auto rounded-[10px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-bg)] p-3 font-mono text-[0.78125rem] leading-[1.55] text-[var(--ink-2)]">
-      {children}
-    </pre>
-  ),
-  a: ({ href, children }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="font-medium text-[var(--purple-2)] underline decoration-[var(--purple)] decoration-dotted underline-offset-[3px] hover:decoration-solid"
-    >
-      {children}
-    </a>
-  ),
 };
 
 const generateRequestId = () => {
@@ -150,7 +67,7 @@ const MessageRow = ({ entry }) => {
         {isUser ? (
           <p className="whitespace-pre-wrap text-[0.875rem] leading-[1.55] text-inherit">{content}</p>
         ) : (
-          <ReactMarkdown components={MARKDOWN_COMPONENTS}>{content}</ReactMarkdown>
+          <ChatMarkdown>{content}</ChatMarkdown>
         )}
       </div>
     </div>
@@ -245,17 +162,6 @@ export const AssessmentClaudeChat = ({
     return undefined;
   }, [tokensUsed]);
 
-  const trimmedInput = inputValue.trim();
-  const canSend = trimmedInput.length > 0 && !pending && !disabled && !isBudgetExhausted && !locked && Boolean(assessmentId) && Boolean(token);
-
-  const handleInputChange = useCallback((event) => {
-    const next = event.target.value;
-    setInputValue(next);
-    if (!String(next || '').trim()) {
-      setPasteDetected(false);
-    }
-  }, []);
-
   const handlePaste = useCallback(() => {
     setPasteDetected(true);
   }, []);
@@ -328,14 +234,6 @@ export const AssessmentClaudeChat = ({
     token,
   ]);
 
-  const handleKeyDown = useCallback((event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-      event.preventDefault();
-      if (canSend) {
-        handleSubmit();
-      }
-    }
-  }, [canSend, handleSubmit]);
 
   const placeholder = useMemo(() => {
     if (locked) return 'Read-only demo — the transcript above is a real candidate session. Book a demo to drive Claude yourself.';
@@ -424,37 +322,22 @@ export const AssessmentClaudeChat = ({
         </div>
       </div>
 
-      {/* Input box — Claude Desktop / Codex / Cursor scale:
-          ~80px min-height, modest padding, 1px border with a soft
-          focus ring. Tight, refined, NOT oversized. */}
+      {/* Input box — the shared chat composer (⌘/Ctrl+Enter to send so a plain
+          Enter is a newline; candidates often write multi-line prompts). Paste
+          detection (the anti-cheat signal) is preserved via onPaste. */}
       <div className="border-t border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] px-3 py-3">
-        <div className="rounded-[12px] border-[1.5px] border-[color-mix(in_oklab,var(--mute-2)_50%,var(--line))] bg-[var(--bg-3)] px-3 py-2.5 transition-colors focus-within:border-[var(--purple)] focus-within:shadow-[0_0_0_2px_color-mix(in_oklab,var(--purple)_15%,transparent)]">
-          <textarea
-            value={inputValue}
-            onChange={handleInputChange}
-            onPaste={handlePaste}
-            onKeyDown={handleKeyDown}
-            placeholder={placeholder}
-            disabled={disabled || pending || isBudgetExhausted || locked}
-            aria-label="Message Claude"
-            className="min-h-[4.5rem] w-full resize-none border-0 bg-transparent text-[0.875rem] leading-[1.55] text-[var(--ink)] outline-none placeholder:text-[var(--mute)] disabled:opacity-60"
-          />
-          <div className="mt-2 flex items-center justify-between gap-3">
-            <div className="font-mono text-[0.625rem] uppercase tracking-[0.06em] text-[var(--mute)]">
-              Cmd/Ctrl + Enter to send
-            </div>
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={!canSend}
-              className="inline-flex items-center gap-1.5 rounded-full bg-[var(--ink)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--bg)] transition-colors hover:bg-[var(--purple)] disabled:opacity-50"
-              aria-label="Send message to Claude"
-            >
-              <MessageSquare size={12} />
-              Send
-            </button>
-          </div>
-        </div>
+        <ChatComposer
+          value={inputValue}
+          onChange={(v) => {
+            setInputValue(v);
+            if (!String(v || '').trim()) setPasteDetected(false);
+          }}
+          onSubmit={() => handleSubmit()}
+          onPaste={handlePaste}
+          placeholder={placeholder}
+          submitMode="cmd"
+          busy={disabled || pending || isBudgetExhausted || locked || !assessmentId || !token}
+        />
       </div>
     </div>
   );

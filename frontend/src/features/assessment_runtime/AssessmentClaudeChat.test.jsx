@@ -25,11 +25,11 @@ const renderChat = (overrides = {}) => render(
 );
 
 const typeAndSend = async (text) => {
-  const textarea = screen.getByRole('textbox', { name: /message claude/i });
+  const textarea = screen.getByRole('textbox');
   await act(async () => {
     fireEvent.change(textarea, { target: { value: text } });
   });
-  const sendBtn = screen.getByRole('button', { name: /send message to claude/i });
+  const sendBtn = screen.getByRole('button', { name: /send/i });
   await act(async () => {
     fireEvent.click(sendBtn);
   });
@@ -45,8 +45,8 @@ describe('AssessmentClaudeChat', () => {
     renderChat();
 
     expect(screen.getByText(/Claude is ready/i)).toBeInTheDocument();
-    expect(screen.getByRole('textbox', { name: /message claude/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /send message to claude/i })).toBeDisabled();
+    expect(screen.getByRole('textbox')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /send/i })).toBeDisabled();
   });
 
   it('shows optimistic user row and a pending row immediately after submit', async () => {

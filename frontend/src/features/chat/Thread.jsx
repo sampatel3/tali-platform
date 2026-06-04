@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import ReactMarkdown from 'react-markdown';
+import { ChatMessage, ChatMarkdown, ThinkingDots } from '../../shared/chat';
 import ToolCallCard from './ToolCallCard';
 import CandidateGrid from './CandidateGrid';
 import ComparisonTable from './ComparisonTable';
@@ -41,28 +41,17 @@ const ToolResultRender = ({ part }) => {
 const Message = ({ msg, isStreaming }) => {
   if (msg.role === 'user') {
     const text = msg.parts.find((p) => p.type === 'text')?.text || '';
-    return <div className="cp-msg-user">{text}</div>;
+    return <ChatMessage role="user" text={text} />;
   }
 
   const isEmpty = !msg.parts.length;
   return (
-    <div className="cp-msg-assistant">
-      {isEmpty && isStreaming ? (
-        <div className="cp-thinking">
-          <span className="cp-dots">
-            <span /><span /><span />
-          </span>
-          thinking…
-        </div>
-      ) : null}
+    <ChatMessage role="assistant">
+      {isEmpty && isStreaming ? <ThinkingDots label="thinking…" /> : null}
       {msg.parts.map((part, idx) => {
         if (part.type === 'text') {
           if (!part.text) return null;
-          return (
-            <div key={idx}>
-              <ReactMarkdown>{part.text}</ReactMarkdown>
-            </div>
-          );
+          return <ChatMarkdown key={idx}>{part.text}</ChatMarkdown>;
         }
         if (part.type === 'tool_call') {
           return (
@@ -74,7 +63,7 @@ const Message = ({ msg, isStreaming }) => {
         }
         return null;
       })}
-    </div>
+    </ChatMessage>
   );
 };
 

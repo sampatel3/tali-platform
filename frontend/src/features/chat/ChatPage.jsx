@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import './chat.css';
 import EmptyState from './EmptyState';
-import Composer from './Composer';
+import { ChatComposer } from '../../shared/chat';
 import Thread from './Thread';
 import Sidebar from './Sidebar';
 import ConfirmDialog from './ConfirmDialog';
@@ -253,11 +253,13 @@ const ChatPage = ({ onNavigate = null, NavComponent = null } = {}) => {
           )}
         </div>
         <div className="cp-composer-wrap">
-          <Composer
+          <ChatComposer
             value={composer}
             onChange={setComposer}
             onSubmit={submit}
-            isStreaming={isStreaming}
+            placeholder="Ask anything about your candidates…"
+            busy={isStreaming}
+            streaming={isStreaming}
             onStop={stop}
           />
         </div>

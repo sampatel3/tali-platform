@@ -80,8 +80,10 @@ describe('AgentChatDock', () => {
     // Empty state first.
     expect(await screen.findByText(/What should this agent do/)).toBeInTheDocument();
 
-    // Use a hint chip to send a canned message.
-    fireEvent.click(screen.getByText('what if I drop the cut-off to 60?'));
+    // Type into the shared composer and press Enter to send.
+    const ta = screen.getByPlaceholderText(/Ask about this role's pool/);
+    fireEvent.change(ta, { target: { value: 'what if I drop the cut-off to 60?' } });
+    fireEvent.keyDown(ta, { key: 'Enter' });
 
     await waitFor(() => expect(mocks.sendMessage).toHaveBeenCalledWith(1, 'what if I drop the cut-off to 60?'));
     expect(await screen.findByText('Cut-off is now 60.')).toBeInTheDocument();

@@ -4,16 +4,25 @@
 // the dock filters them out and stays focused on steering.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUp, MessageSquare, PanelRightClose, Users, X } from 'lucide-react';
+import { MessageSquare, PanelRightClose, Users, X } from 'lucide-react';
 
 import { agentChat } from '../../../shared/api';
 import { useToast } from '../../../context/ToastContext';
-import { ChatBubble, DraftTaskCard, ImpactCard, NeedsInputCard, ThinkingBubble } from './cards.jsx';
+import { ChatComposer, ChatEmptyState, ChatMessage, ThinkingDots } from '../../../shared/chat';
+import { DraftTaskCard, ImpactCard, NeedsInputCard } from './cards.jsx';
 
-const HINTS = [
-  'cap salary at AED 25k',
-  'what if I drop the cut-off to 60?',
-  'bring 5 more through',
+// Role-scoped empty-state prompts. Off roles get an activation suggestion that
+// drives the agent's set_agent_state tool, so you can light one up from Home.
+const ON_SUGGESTIONS = [
+  'Cap salary at AED 25k',
+  'Who in the pool is based in MENA?',
+  'Drop the score cut-off to 65',
+  'Show me the draft tasks',
+];
+const OFF_SUGGESTIONS = [
+  'Turn the agent on at $50/month',
+  'What would you screen for on this role?',
+  'Show me who is waiting on a decision',
 ];
 
 export function AgentChatDock({
@@ -166,13 +175,6 @@ export function AgentChatDock({
     [isBulk, onSendBulk, send]
   );
 
-  const onKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      submitComposer(input);
-    }
-  };
-
   // Option C: show chat + questions only; decisions are in the feed.
   const items = timeline.filter((it) => it.kind === 'message' || it.kind === 'needs_input');
 
@@ -242,13 +244,19 @@ export function AgentChatDock({
         ) : loading && items.length === 0 ? (
           <div className="ac-empty">Loading the conversation…</div>
         ) : items.length === 0 && !sending ? (
-          <DockEmptyState roleName={roleName} agentEnabled={agentEnabled} onPick={(t) => submitComposer(t)} />
+          <ChatEmptyState
+            compact
+            title={<>What should this agent do<em>?</em></>}
+            sub={<>Ask about <b>{roleName || 'this role'}</b>’s pool, or tell the agent to change something — it acts and shows the impact.</>}
+            suggestions={agentEnabled === false ? OFF_SUGGESTIONS : ON_SUGGESTIONS}
+            onPick={(t) => submitComposer(t)}
+          />
         ) : (
           items.map((it) =>
             it.kind === 'needs_input' ? (
               <NeedsInputCard key={it.id} item={it} onAnswer={answer} onDismiss={dismiss} />
             ) : (
-              <ChatBubble key={it.id} item={it}>
+              <ChatMessage key={it.id} role={it.author === 'agent' ? 'assistant' : 'user'} text={it.text}>
                 {(it.actions || []).map((card, i) =>
                   card.type === 'draft_task_review' ? (
                     <DraftTaskCard
@@ -262,11 +270,15 @@ export function AgentChatDock({
                     <ImpactCard key={i} card={card} onApply={(t) => send(`Set the score cut-off to ${t}.`)} busy={sending} />
                   )
                 )}
-              </ChatBubble>
+              </ChatMessage>
             )
           )
         )}
-        {sending && <ThinkingBubble />}
+        {sending && (
+          <ChatMessage role="assistant">
+            <ThinkingDots label="Working…" />
+          </ChatMessage>
+        )}
         {rescreenPending && !sending && (
           <div className="ac-rescreen-live">
             <span className="ac-pulse" /> Re-screening candidates… I’ll post the impact here when it lands.
@@ -274,76 +286,19 @@ export function AgentChatDock({
         )}
       </div>
 
-      <div className="ac-composer">
-        <div className="ac-composer-well">
-          <textarea
-            rows={1}
-            value={input}
-            placeholder={
-              isBulk
-                ? `Message ${bulkSelectedRoles.length} agents at once…`
-                : "Ask about this role's pool, or tell the agent to change something"
-            }
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={onKeyDown}
-            disabled={sending}
-          />
-          <button
-            className="ac-send"
-            disabled={sending || !input.trim()}
-            onClick={() => submitComposer(input)}
-          >
-            <ArrowUp size={15} />
-          </button>
-        </div>
-        {!isBulk && (
-          <div className="ac-hints">
-            {HINTS.map((h) => (
-              <button key={h} className="ac-hint-chip" disabled={sending} onClick={() => submitComposer(h)}>
-                {h}
-              </button>
-            ))}
-          </div>
-        )}
+      <div className="ac-dock-composer">
+        <ChatComposer
+          value={input}
+          onChange={setInput}
+          onSubmit={submitComposer}
+          placeholder={
+            isBulk
+              ? `Message ${bulkSelectedRoles.length} agents at once…`
+              : "Ask about this role's pool, or tell the agent to change something"
+          }
+          busy={sending}
+        />
       </div>
     </aside>
-  );
-}
-
-// Search-page-aligned empty state: a heading + role-scoped suggestion cards.
-// Off roles get an "activate" suggestion (the agent's set_agent_state tool
-// turns it on), so you can light up an agent straight from Home.
-function DockEmptyState({ roleName, agentEnabled, onPick }) {
-  const suggestions = agentEnabled === false
-    ? [
-        'Turn the agent on at $50/month',
-        'What would you screen for on this role?',
-        'Show me who is waiting on a decision',
-      ]
-    : [
-        'Cap salary at AED 25k',
-        'Who in the pool is based in MENA?',
-        'Drop the score cut-off to 65',
-        'Show me the draft tasks',
-      ];
-  return (
-    <div className="ac-dock-empty">
-      <div className="ac-dock-empty-glyph" aria-hidden="true">
-        <MessageSquare size={20} />
-      </div>
-      <h3 className="ac-dock-empty-h">
-        What should this agent do<em>?</em>
-      </h3>
-      <p className="ac-dock-empty-sub">
-        Ask about <b>{roleName || 'this role'}</b>’s pool, or tell the agent to change something — it acts and shows the impact.
-      </p>
-      <div className="ac-dock-suggest">
-        {suggestions.map((s) => (
-          <button key={s} type="button" className="ac-dock-sugg" onClick={() => onPick(s)}>
-            {s}
-          </button>
-        ))}
-      </div>
-    </div>
   );
 }
