@@ -341,6 +341,14 @@ from .domains.capabilities.routes import router as capability_flags_router  # no
 
 app.include_router(decision_policy_router, prefix="/api/v1")
 app.include_router(capability_flags_router, prefix="/api/v1")
+
+# Public API: per-org API-key management (Developers settings) + the curated
+# /public/v1 surface external services + the Workable provider consume.
+from .domains.identity_access.api_key_routes import router as api_keys_router  # noqa: E402
+from .domains.public_api import router as public_api_router  # noqa: E402
+
+app.include_router(api_keys_router, prefix="/api/v1")
+app.include_router(public_api_router)
 # HANDOFF v2 §3 — public share viewer is mounted at /share/:token
 # (no /api/v1 prefix) so the URL the recruiter copy-pastes works in
 # any browser without auth and without exposing the API surface.
