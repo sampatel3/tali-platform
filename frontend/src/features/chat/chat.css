@@ -44,8 +44,46 @@
 }
 
 @media (max-width: 800px) {
+  /* Single column on phones/tablets: the list collapses into a slide-in
+     drawer reachable from the header, so conversation + agent switching
+     still works (the old rule hid the sidebar outright). */
   .cp-root { grid-template-columns: 1fr; }
-  .cp-side { display: none; }
+  .cp-mobile-menu { display: inline-flex; }
+  .cp-side {
+    position: fixed;
+    top: var(--nav-h, 64px);
+    bottom: 0;
+    left: 0;
+    width: min(320px, 86vw);
+    z-index: 60;
+    transform: translateX(-100%);
+    transition: transform .22s ease;
+    box-shadow: 0 24px 48px rgba(15, 8, 30, 0.22);
+    border-right: 1px solid var(--c-line);
+  }
+  .cp-root.cp-nav-open .cp-side { transform: translateX(0); }
+  .cp-nav-scrim {
+    display: block;
+    position: fixed;
+    inset: var(--nav-h, 64px) 0 0 0;
+    z-index: 55;
+    border: 0;
+    padding: 0;
+    background: rgba(15, 8, 30, 0.4);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .22s ease;
+  }
+  .cp-root.cp-nav-open .cp-nav-scrim { opacity: 1; pointer-events: auto; }
+}
+
+@media (max-width: 640px) {
+  .cp-head { padding: 0 16px; gap: 10px; }
+  .cp-head-pill { display: none; }
+  .cp-scroll { padding: 18px 16px 168px; }
+  .cp-thread { gap: 22px; }
+  .cp-composer-wrap { padding: 10px 14px 16px; }
+  .cp-msg-user { max-width: 88%; }
 }
 
 /* ============ sidebar ============ */
@@ -57,8 +95,15 @@
   flex-direction: column;
   min-height: 0;
 }
+.cp-side-top {
+  padding: 14px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-bottom: 1px solid var(--c-line-2);
+}
 .cp-side-head {
-  padding: 18px 16px 12px;
+  padding: 12px 14px 8px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -70,6 +115,150 @@
   color: var(--c-mute);
   text-transform: uppercase;
 }
+
+/* ---- Ask / Agents segmented switch ---- */
+.cp-modeswitch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  padding: 3px;
+  background: var(--c-bg-3);
+  border-radius: 11px;
+}
+.cp-modeswitch-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--c-mute);
+  font-family: var(--font-sans);
+  font-size: 0.78125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .14s, color .14s, box-shadow .14s;
+}
+.cp-modeswitch-btn:hover { color: var(--c-ink-2); }
+.cp-modeswitch-btn.on {
+  background: var(--c-bg-2);
+  color: var(--c-ink);
+  box-shadow: 0 1px 0 rgba(29,23,48,.04), 0 4px 12px rgba(29,23,48,.08);
+}
+.cp-modeswitch-btn.on svg { color: var(--c-purple); }
+.cp-modeswitch-badge {
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--c-purple);
+  color: #fff;
+  font-size: 0.625rem;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+.cp-side-hint {
+  padding: 6px 10px;
+  font-size: 0.78125rem;
+  color: var(--c-mute);
+  line-height: 1.45;
+}
+.cp-conv-del {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  background: transparent;
+  color: var(--c-mute-2);
+  padding: 4px;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.cp-conv-del:hover { color: var(--c-red); background: var(--c-bg-2); }
+
+/* ---- Agent rows (Agents tab) ---- */
+.cp-agent {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 10px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+}
+.cp-agent:hover { background: var(--c-bg-2); }
+.cp-agent.cp-active { background: var(--c-bg-2); border-color: var(--c-line); }
+.cp-agent-stat {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.cp-agent-stat-on { background: linear-gradient(135deg, #3a1d6e, #241147); color: #fff; }
+.cp-agent-stat-paused { background: color-mix(in oklab, var(--c-amber) 16%, var(--c-bg-2)); color: var(--c-amber); }
+.cp-agent-stat-off { background: var(--c-bg-3); border: 1px solid var(--c-line); }
+.cp-agent-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-mute-2); }
+.cp-agent-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cp-agent-role {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--c-ink);
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cp-agent-preview {
+  font-size: 0.71875rem;
+  color: var(--c-mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cp-agent-badge {
+  flex-shrink: 0;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--c-purple);
+  color: #fff;
+  font-size: 0.65625rem;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+  margin-top: 2px;
+}
+
+/* Mobile-only button in the chat header that opens the list drawer. */
+.cp-mobile-menu {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin-left: -6px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--c-ink-2);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.cp-mobile-menu:hover { background: var(--c-bg-3); }
+/* Scrim behind the mobile list drawer (hidden until the drawer opens). */
+.cp-nav-scrim { display: none; }
 .cp-new-chat {
   display: flex;
   align-items: center;
@@ -188,6 +377,10 @@
   background: var(--c-purple-soft);
   color: var(--c-purple);
   display: grid; place-items: center;
+}
+.cp-head-pill.cp-head-pill-on {
+  border-color: color-mix(in oklab, var(--c-purple) 40%, var(--c-line));
+  color: var(--c-purple-2);
 }
 
 /* ============ scroll + thread ============ */

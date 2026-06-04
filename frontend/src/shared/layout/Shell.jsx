@@ -33,7 +33,7 @@ import { formatHeaderOrgLabel, normalizeHeaderOrgName } from './headerIdentity';
 const NAV_TABS = [
   { id: 'home',     label: 'Home',     Icon: Home },
   { id: 'jobs',     label: 'Jobs',     Icon: Briefcase },
-  { id: 'chat',     label: 'Search',   Icon: MessageSquare, badge: 'AI' },
+  { id: 'chat',     label: 'Chat',     Icon: MessageSquare, badge: 'AI' },
   { id: 'tasks',    label: 'Tasks',    Icon: CheckSquare },
   { id: 'settings', label: 'Settings', Icon: SettingsIcon },
 ];

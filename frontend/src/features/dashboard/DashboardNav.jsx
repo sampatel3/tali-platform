@@ -21,14 +21,14 @@ const pickOrganizationName = (user) => String(
   || ''
 ).trim();
 
-// "Search" is the canonical entry point for finding and reasoning about
-// candidates (formerly "Chat" / before that "Candidates"). The
+// "Chat" is the canonical entry point for finding and reasoning about
+// candidates and steering the per-role agents (Ask + Agents tabs). The
 // underlying NL-over-everything surface and the `/chat` route are
-// unchanged — only the user-facing label moved to "Search" + the AI
-// badge that lives on it elsewhere in the shell.
+// unchanged — only the user-facing label moved (it was briefly "Search")
+// alongside the AI badge that lives on it elsewhere in the shell.
 const NAV_ITEMS = [
   { id: 'jobs', label: 'Jobs' },
-  { id: 'chat', label: 'Search', badge: 'AI' },
+  { id: 'chat', label: 'Chat', badge: 'AI' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'reporting', label: 'Reporting' },
   { id: 'settings', label: 'Settings' },

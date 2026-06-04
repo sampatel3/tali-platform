@@ -560,7 +560,27 @@ function AppContent() {
       <Route path="/candidates" element={<Navigate to="/jobs" replace />} />
 
       {/* Taali Chat — agentic chat over the same MCP tools served at /mcp.
-          Backend at /api/v1/taali-chat/*. */}
+          Backend at /api/v1/taali-chat/*. The "Agents" sub-routes surface
+          the per-role agent threads (same backend as the Home dock, so the
+          two surfaces stay in sync) alongside the regular Ask chats. The
+          static ``/chat/agents*`` paths outrank ``/chat/:conversationId`` in
+          React-router's ranking, so order here doesn't matter. */}
+      <Route
+        path="/chat/agents"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <ChatPage mode="agents" onNavigate={navigateToPage} NavComponent={DashboardNavWithMode} />
+          </Suspense>
+        )}
+      />
+      <Route
+        path="/chat/agents/:roleId"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <ChatPage mode="agents" onNavigate={navigateToPage} NavComponent={DashboardNavWithMode} />
+          </Suspense>
+        )}
+      />
       <Route
         path="/chat"
         element={(
