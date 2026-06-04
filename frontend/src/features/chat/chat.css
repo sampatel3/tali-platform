@@ -207,99 +207,6 @@
   gap: 28px;
 }
 
-/* ============ empty state ============ */
-
-.cp-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 80px 20px 40px;
-  text-align: center;
-}
-.cp-empty-glyph {
-  width: 56px;
-  height: 56px;
-  border-radius: 16px;
-  background: var(--c-ink);
-  color: var(--c-bg);
-  display: grid;
-  place-items: center;
-  margin-bottom: 24px;
-  box-shadow: 0 1px 0 rgba(29, 23, 48, .04), 0 12px 32px rgba(29, 23, 48, .08);
-  position: relative;
-}
-.cp-empty-glyph::after {
-  content: "";
-  position: absolute;
-  bottom: -4px;
-  right: -4px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--c-purple);
-  border: 3px solid var(--c-bg);
-}
-.cp-empty-h1 {
-  font-family: var(--font-display, var(--font-sans, "Geist", "Inter", system-ui, sans-serif));
-  font-weight: 600;
-  font-size: 2.25rem;
-  letter-spacing: -.035em;
-  line-height: 1.05;
-  color: var(--c-ink);
-  margin: 0 0 8px;
-}
-.cp-empty-h1 em {
-  font-style: normal;
-  color: var(--c-purple);
-}
-.cp-empty-sub {
-  color: var(--c-mute);
-  font-size: 0.90625rem;
-  line-height: 1.5;
-  margin: 0 0 36px;
-  max-width: 520px;
-}
-.cp-suggest-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  max-width: 720px;
-  width: 100%;
-}
-@media (max-width: 600px) {
-  .cp-suggest-grid { grid-template-columns: 1fr; }
-}
-.cp-suggest {
-  position: relative;
-  text-align: left;
-  background: var(--c-bg-2);
-  border: 1px solid var(--c-line);
-  border-radius: 14px;
-  padding: 14px 16px;
-  cursor: pointer;
-  transition: border-color .15s, transform .08s;
-}
-.cp-suggest:hover { border-color: var(--c-purple); }
-.cp-suggest:active { transform: translateY(1px); }
-.cp-suggest-tag {
-  display: block;
-  margin-bottom: 6px;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
-  font-size: 0.59375rem;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-  color: var(--c-mute);
-  background: transparent;
-  padding: 0;
-  border-radius: 0;
-}
-.cp-suggest-q {
-  display: block;
-  font-size: 0.84375rem;
-  line-height: 1.4;
-  color: var(--c-ink);
-}
-
 /* ============ messages ============ */
 
 .cp-msg-user {
@@ -335,29 +242,6 @@
   font-size: 90%;
 }
 .cp-msg-assistant ul, .cp-msg-assistant ol { padding-left: 22px; margin: 0 0 .6em; }
-
-.cp-thinking {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--c-mute);
-  font-size: 0.8125rem;
-  font-style: italic;
-}
-.cp-dots span {
-  display: inline-block;
-  width: 4px; height: 4px;
-  border-radius: 50%;
-  background: currentColor;
-  margin-right: 3px;
-  animation: cp-dot 1.2s infinite ease-in-out;
-}
-.cp-dots span:nth-child(2) { animation-delay: .15s; }
-.cp-dots span:nth-child(3) { animation-delay: .3s; }
-@keyframes cp-dot {
-  0%, 80%, 100% { opacity: .25; transform: translateY(0); }
-  40% { opacity: 1; transform: translateY(-2px); }
-}
 
 /* ============ tool call card ============ */
 
@@ -622,16 +506,6 @@
   background: var(--c-line);
   color: var(--c-mute-2);
   cursor: not-allowed;
-}
-.cp-stop-btn {
-  display: inline-flex;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: var(--c-bg-3);
-  color: var(--c-ink-2);
-  font-size: 0.78125rem;
-  border: 1px solid var(--c-line);
-  cursor: pointer;
 }
 .cp-error {
   margin-top: 4px;

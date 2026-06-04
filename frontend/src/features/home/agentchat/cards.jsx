@@ -1,100 +1,11 @@
-// Live renderers for the agent chat dock: chat bubbles, impact cards, and
-// the agent's clarifying-question cards. Decision cards are intentionally NOT
-// rendered here in Option C — those live in the main decision feed; the dock
-// stays focused on the conversation.
+// Surface-specific cards the agent chat dock slots into a shared <ChatMessage>:
+// impact cards (threshold/constraint), the draft-task review card, and the
+// agent's clarifying-question card. The chat chrome (bubbles, composer, markdown,
+// empty state) now comes from the shared kit at shared/chat. Decision cards are
+// intentionally NOT rendered here in Option C — those live in the main feed.
 
 import { useState } from 'react';
-import { Bot, Check, CircleHelp, FileText, Sparkles, SlidersHorizontal, TrendingDown, X } from 'lucide-react';
-
-const initials = (name) =>
-  String(name || '?')
-    .split(' ')
-    .map((p) => p[0])
-    .slice(0, 2)
-    .join('')
-    .toUpperCase();
-
-export function Avatar({ name, kind = 'agent', size = 28 }) {
-  const isAgent = kind === 'agent';
-  return (
-    <div
-      className={`ac-avatar ${isAgent ? 'ac-avatar-agent' : 'ac-avatar-cand'}`}
-      style={{ width: size, height: size }}
-    >
-      {isAgent ? <Bot size={size * 0.52} /> : initials(name)}
-    </div>
-  );
-}
-
-const fmtTime = (iso) => {
-  if (!iso) return '';
-  try {
-    return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  } catch {
-    return '';
-  }
-};
-
-// Lightweight markdown: the agent replies in light markdown, so render
-// **bold**, line breaks and simple bullets instead of showing raw asterisks.
-function renderInline(text, keyPrefix) {
-  return String(text)
-    .split(/(\*\*[^*]+\*\*)/g)
-    .filter((s) => s !== '')
-    .map((seg, i) => {
-      const m = /^\*\*([^*]+)\*\*$/.exec(seg);
-      return m ? <strong key={`${keyPrefix}-${i}`}>{m[1]}</strong> : <span key={`${keyPrefix}-${i}`}>{seg}</span>;
-    });
-}
-
-export function RichText({ text }) {
-  const lines = String(text || '').split('\n').map((l) => l.trim());
-  return (
-    <>
-      {lines.map((line, i) => {
-        if (!line) return null;
-        const bullet = /^[-*•]\s+/.test(line);
-        const content = bullet ? line.replace(/^[-*•]\s+/, '') : line;
-        return (
-          <div key={i} className={bullet ? 'ac-md-li' : 'ac-md-p'}>
-            {renderInline(content, i)}
-          </div>
-        );
-      })}
-    </>
-  );
-}
-
-export function ChatBubble({ item, children }) {
-  const isAgent = item.author === 'agent';
-  return (
-    <div className={`ac-row ${isAgent ? 'ac-row-agent' : 'ac-row-user'}`}>
-      {isAgent && <Avatar kind="agent" size={28} />}
-      <div className="ac-bubble-wrap">
-        {item.text ? (
-          <div className={`ac-bubble ${isAgent ? 'ac-bubble-agent' : 'ac-bubble-user'}`}>
-            <RichText text={item.text} />
-          </div>
-        ) : null}
-        {children}
-        <span className="ac-time">{fmtTime(item.created_at)}</span>
-      </div>
-    </div>
-  );
-}
-
-export function ThinkingBubble() {
-  return (
-    <div className="ac-row ac-row-agent">
-      <Avatar kind="agent" size={28} />
-      <div className="ac-bubble-wrap">
-        <div className="ac-bubble ac-bubble-agent ac-thinking">
-          <span /> <span /> <span />
-        </div>
-      </div>
-    </div>
-  );
-}
+import { Check, CircleHelp, FileText, Sparkles, SlidersHorizontal, X } from 'lucide-react';
 
 const numOrDash = (v) => (typeof v === 'number' ? v : v == null ? '—' : v);
 
@@ -387,5 +298,3 @@ export function NeedsInputCard({ item, onAnswer, onDismiss }) {
     </div>
   );
 }
-
-export { TrendingDown };
