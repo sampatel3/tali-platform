@@ -165,6 +165,35 @@ def test_send_message_runs_simulate_tool_and_returns_card(client, db):
     assert any(it["kind"] == "message" for it in data["timeline"])
 
 
+def test_send_message_truncated_reply_gets_continue_note(client, db):
+    """A reply cut off at the length ceiling (stop_reason='max_tokens') keeps its
+    partial text + a graceful "say continue" note — never a bare mid-word stop."""
+    headers, email = auth_headers(client, organization_name="TruncOrg")
+    org_id = _org_id(db, email)
+    role = _role(db, org_id)
+    db.commit()
+
+    scripted = [
+        _resp(
+            [_text("1. Jojo — Final Interview ✅\n2. Praveena — NLP-based call schedulers (")],
+            "max_tokens",
+        ),
+    ]
+    with patch(
+        "app.agent_chat.engine.get_client_for_org", return_value=_FakeClient(scripted)
+    ):
+        resp = client.post(
+            f"/api/v1/agent-chat/conversations/{role.id}/messages",
+            headers=headers,
+            json={"message": "rank the final-interview candidates in full detail"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    text = resp.json()["messages"][-1]["text"]
+    assert "Praveena" in text  # partial answer preserved
+    assert "continue" in text.lower() and "length limit" in text.lower()
+
+
 def test_constraint_change_is_opt_in_then_rescreens(client, db):
     """P0: a constraint edit applies immediately but does NOT auto-re-screen —
     it returns a would_rescreen estimate; the re-screen runs only on a

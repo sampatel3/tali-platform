@@ -52,7 +52,12 @@ logger = logging.getLogger("taali.agent_chat")
 # Each round is one Anthropic call. 8 rounds covers "survey → simulate →
 # commit → confirm" comfortably; past it is almost certainly a loop.
 MAX_TOOL_ROUNDS = 8
-MAX_TOKENS_PER_ROUND = 2048
+# Per-call output ceiling. The model only generates what it needs, so this is a
+# cap not a target — but at 2048 a detailed multi-candidate ranking (Workable
+# stage + criteria breakdown per person) got truncated mid-word. 4096 gives the
+# analytical answers room; the terminal turn also appends a "say continue" note
+# if it still hits the ceiling, so the user never sees a bare mid-word cutoff.
+MAX_TOKENS_PER_ROUND = 4096
 
 
 def _extract_text(blocks: list[dict[str, Any]]) -> str:
@@ -198,6 +203,13 @@ def run_agent_turn(
         if stop_reason != "tool_use":
             # Terminal turn — this is the visible answer.
             final_text = _extract_text(blocks)
+            if stop_reason == "max_tokens":
+                # The model was cut off at the length ceiling. Don't leave a bare
+                # mid-word cutoff — flag it so the recruiter can pick it up.
+                final_text = (final_text or "").rstrip() + (
+                    "\n\n_(I hit my response length limit here — say “continue” "
+                    "and I'll pick up where I left off.)_"
+                )
             break
 
         # Tool round: persist the assistant tool_use turn (hidden), dispatch,
