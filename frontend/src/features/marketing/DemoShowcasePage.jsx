@@ -17,8 +17,24 @@ const REPORT_SHOWCASE_TOKEN = 'demo-token';
 
 const SHOWCASE_TABS = [
   {
-    k: 'agent',
+    k: 'workflow',
     n: '01',
+    label: 'The Hub',
+    sub: 'Steer the agent, keep it honest',
+    src: '/showcase/home',
+    urlLabel: 'taali.ai/home · your hiring Hub',
+    why: {
+      headline: 'Mission control: steer the agent in plain English, keep every call honest.',
+      outcomes: [
+        'Chat to each role’s agent in plain English — “cap salary at AED 25k”, “drop the cut-off to 65” — it reasons, shows the impact, and asks before it spends',
+        'Decision feed: every advance, escalate, and pre-screen reject — reviewable, reversible, and your overrides become its training signal',
+        'One rail for every agent: pending counts, budgets, bulk-message many roles at once, and approve the assessment tasks it drafts',
+      ],
+    },
+  },
+  {
+    k: 'agent',
+    n: '02',
     label: 'Agentic triage',
     sub: 'The agent that runs your top of funnel',
     src: '/jobs?demo=1&showcase=1',
@@ -34,7 +50,7 @@ const SHOWCASE_TABS = [
   },
   {
     k: 'assessment',
-    n: '02',
+    n: '03',
     label: 'AI assessment',
     sub: 'See how candidates pair with AI',
     src: '/assessment/live?demo=1&showcase=1',
@@ -50,7 +66,7 @@ const SHOWCASE_TABS = [
   },
   {
     k: 'scoring',
-    n: '03',
+    n: '04',
     label: 'Standing report',
     sub: 'Recruiter-readable, evidence-linked',
     src: `/c/demo?view=client&k=${REPORT_SHOWCASE_TOKEN}&showcase=1`,
@@ -66,7 +82,7 @@ const SHOWCASE_TABS = [
   },
   {
     k: 'chat',
-    n: '04',
+    n: '05',
     label: 'Plain-English search',
     sub: 'Query your pipeline in english',
     src: '/showcase/chat',
@@ -77,22 +93,6 @@ const SHOWCASE_TABS = [
         '"Top backend candidates above 8 on AI prompting" → 3 results in 0.4s',
         'Tool calls visible — see exactly what the agent queried',
         'Compare candidates side-by-side, pull shortlists for new briefs',
-      ],
-    },
-  },
-  {
-    k: 'workflow',
-    n: '05',
-    label: 'Hub · the agent narrator',
-    sub: 'Every decision the agent makes that needs you',
-    src: '/showcase/home',
-    urlLabel: 'taali.ai/home · agent narrator',
-    why: {
-      headline: 'The Hub is where you keep the agent honest.',
-      outcomes: [
-        'Decision feed: advanced, escalated, pre-screen rejected — all reviewable, all reversible',
-        'Pending sidebar surfaces where the agent paused for your judgment',
-        'Approve, override, or teach — your calls become its training signal',
       ],
     },
   },
@@ -148,7 +148,7 @@ const useFrameLoadGuard = () => {
 };
 
 export const DemoShowcasePage = ({ onNavigate }) => {
-  const [active, setActive] = useState('agent');
+  const [active, setActive] = useState('workflow');
   const guard = useFrameLoadGuard();
   const tab = SHOWCASE_TABS.find((t) => t.k === active) || SHOWCASE_TABS[0];
   const idx = SHOWCASE_TABS.findIndex((t) => t.k === active);
@@ -185,13 +185,13 @@ export const DemoShowcasePage = ({ onNavigate }) => {
         <div className="mc-show-kicker mc-show-mb-14">// THE WALKTHROUGH · 5 SURFACES · ~ 6 MIN</div>
         <div className="mc-show-hero">
           <h1 className="mc-show-hero-title">
-            Your hiring funnel,<br />now with an <em>agent</em><br />at the top of it.
+            Your hiring <em>Hub</em> —<br />one agent per role,<br />and you in command.
           </h1>
           <p className="mc-show-hero-sub">
-            The agent decides what to work on each cycle — fetch CVs, score, send assessments,
-            queue advances or rejects — paces it within the budget you set, and pauses to ask
-            you when it can&apos;t decide on its own. Every consequential call still goes through
-            you. Every tab below is a <b>real product surface</b>, not a mock.
+            Every role gets an agent that screens, scores, sends assessments, and queues advances
+            or rejects within the budget you set. You run it all from the <b>Hub</b>: steer each
+            agent in plain English, review every consequential call, and teach it when you override.
+            Every tab below is a <b>real product surface</b>, not a mock — starting with the Hub.
           </p>
         </div>
       </section>

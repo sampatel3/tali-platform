@@ -1,23 +1,25 @@
-// Public, auth-free snapshot of the /home Hub used by the demo
-// showcase ("Hub · the agent narrator" tab). Mirrors the pattern of
-// ChatShowcaseView: AgentHeader + KPI strip + FunnelBoard + the live
-// ActivityFeed and DecisionDetail components, all fed by fixture data.
-//
-// Unlike a static mock, this is INTERACTIVE: clicking a pending row in
-// the decision feed selects it into the real <DecisionDetail> panel,
-// where Approve / Override / Send-back-&-teach run against mock handlers
-// (local state + a toast) instead of the live API — so a visitor feels
-// the "agent recommends, you decide" loop end-to-end without a backend.
+// Public, auth-free snapshot of the /home Hub used by the demo showcase
+// ("The Hub" tab — tab 01). Mirrors the LIVE home layout: the AgentHeader slab
+// over the 3-column app-shell — agent rail (AgentSidebar) · decision feed +
+// detail (ActivityFeed/DecisionDetail) · the agent chat dock. The feed and the
+// dock run on fixture data + mock handlers (local state + a toast) instead of
+// the live API, so a visitor feels the whole "agent works, you steer + decide"
+// loop end-to-end without a backend.
 
 import React, { useMemo, useState } from 'react';
+import { MessageSquare } from 'lucide-react';
 
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { useToast } from '../../context/ToastContext';
+import { ChatMessage, ChatComposer } from '../../shared/chat';
 import { ActivityFeed } from './ActivityFeed';
 import { DecisionDetail } from './HomeNow';
+import { AgentSidebar } from './agentchat/AgentSidebar';
+import { ImpactCard, DraftTaskCard } from './agentchat/cards.jsx';
 import './home.css';
+import './agentchat/agentchat.css';
 
 const _NOW = Date.now();
 
@@ -153,10 +155,6 @@ const SHOWCASE_AGENT = {
   inFlight: false,
 };
 
-// One compact Decision-Hub KPI row — mirrors the real HomePage layout (shared
-// <KpiStrip>) so the demo matches the live surface. Awaiting you · Decisions
-// today · Org budget · Override; pipeline + active-role volume live in the
-// kicker / pipeline strip.
 const SHOWCASE_KPIS = [
   { key: 'awaiting', label: 'Awaiting you', value: '103', emph: true, sub: '85 decision pending' },
   { key: 'today', label: 'Decisions today', value: '14', sub: '11 auto-applied' },
@@ -164,11 +162,128 @@ const SHOWCASE_KPIS = [
   { key: 'override', label: 'Override rate · 7d', value: '8%', sub: '12% taught' },
 ];
 
+// The agent rail — every live role, so you can click one and steer (or activate)
+// its agent. Mix of on / paused / off so the dock's states are visible.
+const SHOWCASE_AGENTS = [
+  { role_id: 109, role_name: 'Senior Backend Engineer', agent_enabled: true, unread_messages: 0, open_questions: 1, pending_decisions: 85, last_message_preview: 'Capped salary at AED 25k · re-screened 4', budget_cap_cents: 5000, budget_spent_cents: 1820 },
+  { role_id: 110, role_name: 'Data Engineer', agent_enabled: true, unread_messages: 0, open_questions: 0, pending_decisions: 12, last_message_preview: 'Idle · waiting for new candidates', budget_cap_cents: 5000, budget_spent_cents: 640 },
+  { role_id: 111, role_name: 'AI Delivery Lead', agent_enabled: false, agent_paused: true, agent_paused_reason: 'paused by recruiter', pending_decisions: 3, last_message_preview: '' },
+  { role_id: 112, role_name: 'Platform Engineer', agent_enabled: false, pending_decisions: 0, last_message_preview: '' },
+];
+
+// Mock impact cards in the live shapes ImpactCard / DraftTaskCard render.
+const CONSTRAINT_CARD = {
+  type: 'constraint_change',
+  action: 'updated',
+  criterion: { text: 'Salary ≤ AED 25,000' },
+  would_rescreen: { count: 4, est_cost_usd: 0.2 },
+};
+const SIM_CARD = {
+  type: 'threshold_simulation',
+  current_threshold: 70,
+  simulated_threshold: 65,
+  delta_above: 6,
+  added_sample: ['Ada Okafor', 'Bo Zhang', 'Chen Wei'],
+};
+const REJECT_QUESTIONS = [
+  {
+    key: 'issues',
+    prompt: "What's off about this draft?",
+    multi: true,
+    options: [
+      { value: 'scenario', label: 'Scenario unrealistic / off-role' },
+      { value: 'difficulty', label: 'Wrong difficulty' },
+      { value: 'rubric', label: 'Rubric weights off' },
+      { value: 'decisions', label: 'Decisions weak or unclear' },
+    ],
+  },
+  {
+    key: 'direction',
+    prompt: 'What should the revision do?',
+    multi: false,
+    options: [
+      { value: 'targeted', label: 'Targeted fix — keep the structure' },
+      { value: 'harder', label: 'Make it harder' },
+      { value: 'reweight', label: 'Reweight toward decisions' },
+    ],
+  },
+];
+const DRAFT_CARD = {
+  type: 'draft_task_review',
+  role_id: 109,
+  drafts: [
+    {
+      task_id: 1,
+      name: 'Revenue-Recovery Incident Under Pressure',
+      deliverable_kind: 'code',
+      decisions: [
+        { headline: 'Stop the double-charge before the dedupe fix' },
+        { headline: 'Decide whether to replay or drop the stuck queue' },
+      ],
+      rubric: [
+        { name: 'design_decisions_articulated', weight: 0.35 },
+        { name: 'reasoning_under_pressure', weight: 0.25 },
+        { name: 'release_safety', weight: 0.2 },
+      ],
+      repo_file_count: 9,
+    },
+  ],
+  reject_questions: REJECT_QUESTIONS,
+};
+
+// The agent chat dock — the central new surface. Static-but-real: it renders the
+// shared <ChatMessage>/<ChatComposer> + the live impact / draft-task cards, fed
+// with fixture data, so it looks exactly like the product.
+const ShowcaseDock = ({ onAct }) => {
+  const [input, setInput] = useState('');
+  const submit = (text) => {
+    setInput('');
+    onAct(`“${text}” — in the live product this runs the agent and posts the impact here.`);
+  };
+  return (
+    <aside className="ac-dock">
+      <div className="ac-dock-head">
+        <MessageSquare size={15} />
+        <span>Ask the agent</span>
+        <span className="ac-dock-role">Senior Backend Engineer</span>
+      </div>
+      <div className="ac-stream">
+        <ChatMessage role="user" text="Cap salary at AED 25k on this role" />
+        <ChatMessage
+          role="assistant"
+          text={"Done — set the cap to **AED 25,000**. 22 of 278 candidates stated a figure; the cap drops 4 of them, the rest are unverified so I can't filter on them. Want me to re-screen just the 4 affected?"}
+        >
+          <ImpactCard card={CONSTRAINT_CARD} onApply={() => {}} busy={false} />
+        </ChatMessage>
+        <ChatMessage role="user" text="what if I drop the cut-off to 65?" />
+        <ChatMessage
+          role="assistant"
+          text={"Dropping the cut-off **70 → 65** brings 6 more into review — Ada, Bo and Chen lead them. Already-advanced and rejected candidates stay put."}
+        >
+          <ImpactCard card={SIM_CARD} onApply={() => {}} busy={false} />
+        </ChatMessage>
+        <ChatMessage
+          role="assistant"
+          text={"You've also got an assessment task I drafted for this role — approve it, or reject with a steer and I'll re-author it:"}
+        >
+          <DraftTaskCard card={DRAFT_CARD} onApprove={() => onAct('Approved — the task is now live and assignable.')} onRevise={() => onAct('On it — re-authoring the task from your feedback.')} busy={false} />
+        </ChatMessage>
+      </div>
+      <div className="ac-dock-composer">
+        <ChatComposer
+          value={input}
+          onChange={setInput}
+          onSubmit={submit}
+          placeholder="Ask about this role's pool, or tell the agent to change something"
+        />
+      </div>
+    </aside>
+  );
+};
+
 export const HomeShowcaseView = () => {
   const { showToast } = useToast() || { showToast: () => {} };
   const [rows, setRows] = useState(INITIAL_FEED_ROWS);
-  // Pre-select the freshest pending decision so the detail panel is populated
-  // on first paint — the visitor immediately sees what "acting on it" looks like.
   const [selectedId, setSelectedId] = useState(INITIAL_FEED_ROWS[0].id);
 
   const selected = useMemo(
@@ -180,22 +295,13 @@ export const HomeShowcaseView = () => {
     setRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
 
   const handleApprove = (decision) => {
-    patchRow(decision.id, {
-      status: 'approved',
-      human_disposition: 'approved',
-      resolved_at: new Date().toISOString(),
-    });
+    patchRow(decision.id, { status: 'approved', human_disposition: 'approved', resolved_at: new Date().toISOString() });
     const verb = decision.decision_type === 'reject' ? 'rejected' : 'advanced';
     showToast(`Approved — ${decision.candidate_name} ${verb}. In the live product this writes back to Workable.`, 'success');
   };
 
   const handleAlternative = (decision, alt) => {
-    patchRow(decision.id, {
-      status: 'overridden',
-      human_disposition: 'overridden',
-      resolution_note: `override → ${String(alt?.label || 'alternative').toLowerCase()}`,
-      resolved_at: new Date().toISOString(),
-    });
+    patchRow(decision.id, { status: 'overridden', human_disposition: 'overridden', resolution_note: `override → ${String(alt?.label || 'alternative').toLowerCase()}`, resolved_at: new Date().toISOString() });
     showToast(`Overridden — ${alt?.label || 'alternative'}. Your call becomes the agent's training signal.`, 'success');
   };
 
@@ -204,53 +310,55 @@ export const HomeShowcaseView = () => {
     showToast(`Sent back with feedback — the agent re-evaluates ${decision.candidate_name} with your correction.`, 'info');
   };
 
-  const handleSnooze = () => {
-    showToast('Snoozed 1h — it drops back into your queue later.', 'info');
-  };
+  const handleSnooze = () => showToast('Snoozed 1h — it drops back into your queue later.', 'info');
 
   return (
-    <div>
+    <div className="home-app" style={{ height: '100vh' }}>
       <AgentHeader
-        kicker="HUB · 103 AWAITING YOU · 5 ACTIVE ROLES"
+        kicker="HUB · 103 AWAITING YOU · 4 ACTIVE ROLES"
         title="Good morning"
-        subtitle="Every decision the agent makes that needs you. Approve, override, or teach it — your calls become its training signal. The long-term goal is full automation; this is where you keep the loop honest."
+        subtitle="Steer each role's agent in plain English, then approve, override, or teach its calls — this is where you keep the loop honest."
         agent={SHOWCASE_AGENT}
       />
 
-      <div className="home-body">
-        <KpiStrip columns={4} tiles={SHOWCASE_KPIS} />
+      <div className="ac-shell">
+        <AgentSidebar agents={SHOWCASE_AGENTS} activeRoleId={109} onSelect={() => {}} />
 
-        <FunnelBoard
-          scopeLabel="all roles"
-          stageCounts={{ applied: 312, scored: 184, invited: 9, completed: 4, advanced: 61, rejected: 1905 }}
-          decisionsByType={{ send_assessment: 20, reject: 80, advance_to_interview: 3, skip_assessment_reject: 0 }}
-        />
+        <div className="ac-main">
+          <div className="home-body">
+            <KpiStrip columns={4} tiles={SHOWCASE_KPIS} />
 
-        {/* Live split-view: the decision feed on the left, the real
-            DecisionDetail action panel on the right. Clicking a pending row
-            populates the panel; Approve / Override / Teach run on mock
-            handlers. Mirrors the Hub's pending hybrid view. */}
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:items-start">
-          <ActivityFeed
-            rows={rows}
-            selectedId={selectedId}
-            onSelect={setSelectedId}
-            onNavigate={() => {}}
-            subtitle="Click any pending decision to review it on the right — approve, override, or send it back to teach the agent."
-          />
-          <div className="lg:sticky lg:top-4">
-            <DecisionDetail
-              decision={selected}
-              onApprove={handleApprove}
-              onAlternative={handleAlternative}
-              onTeach={handleTeach}
-              onSnooze={handleSnooze}
-              onNavigate={() => {}}
-              onReEvaluate={() => {}}
-              busy={false}
+            <FunnelBoard
+              scopeLabel="all roles"
+              stageCounts={{ applied: 312, scored: 184, invited: 9, completed: 4, advanced: 61, rejected: 1905 }}
+              decisionsByType={{ send_assessment: 20, reject: 80, advance_to_interview: 3, skip_assessment_reject: 0 }}
             />
+
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:items-start">
+              <ActivityFeed
+                rows={rows}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                onNavigate={() => {}}
+                subtitle="Click any pending decision to review it on the right — approve, override, or send it back to teach the agent."
+              />
+              <div className="lg:sticky lg:top-4">
+                <DecisionDetail
+                  decision={selected}
+                  onApprove={handleApprove}
+                  onAlternative={handleAlternative}
+                  onTeach={handleTeach}
+                  onSnooze={handleSnooze}
+                  onNavigate={() => {}}
+                  onReEvaluate={() => {}}
+                  busy={false}
+                />
+              </div>
+            </div>
           </div>
         </div>
+
+        <ShowcaseDock onAct={(msg) => showToast(msg, 'info')} />
       </div>
     </div>
   );
