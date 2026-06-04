@@ -78,7 +78,7 @@ describe('AgentChatDock', () => {
     renderDock();
 
     // Empty state first.
-    expect(await screen.findByText(/Tell the agent what to change/)).toBeInTheDocument();
+    expect(await screen.findByText(/What should this agent do/)).toBeInTheDocument();
 
     // Use a hint chip to send a canned message.
     fireEvent.click(screen.getByText('what if I drop the cut-off to 60?'));
@@ -95,6 +95,28 @@ describe('AgentChatDock', () => {
     await waitFor(() =>
       expect(mocks.answerNeedsInput).toHaveBeenCalledWith(9, { value: 'marcus', label: 'Marcus' })
     );
+  });
+
+  it('bulk mode: composer fans out to onSendBulk, not the single-role send', async () => {
+    mocks.getTimeline.mockResolvedValue({ data: { timeline: [] } });
+    const onSendBulk = vi.fn();
+    renderDock({
+      bulkSelectedRoles: [
+        { role_id: 1, role_name: 'Data Eng' },
+        { role_id: 2, role_name: 'GenAI Engineer' },
+      ],
+      onSendBulk,
+    });
+
+    expect(await screen.findByText('Messaging 2 agents')).toBeInTheDocument();
+    expect(screen.getByText(/One message →/)).toBeInTheDocument();
+
+    const ta = screen.getByPlaceholderText(/Message 2 agents at once/);
+    fireEvent.change(ta, { target: { value: 'Salary is now AED 30k' } });
+    fireEvent.keyDown(ta, { key: 'Enter' });
+
+    expect(onSendBulk).toHaveBeenCalledWith('Salary is now AED 30k');
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 });
 
@@ -124,6 +146,42 @@ describe('AgentSidebar', () => {
 
   it('shows an empty state when there are no agents', () => {
     render(<AgentSidebar agents={[]} activeRoleId={null} onSelect={vi.fn()} />);
-    expect(screen.getByText(/No active agents yet/)).toBeInTheDocument();
+    expect(screen.getByText(/No live roles yet/)).toBeInTheDocument();
+  });
+
+  it('multi-select: toggle enters select mode and row clicks pick roles', () => {
+    const onToggleBulkMode = vi.fn();
+    const onToggleSelected = vi.fn();
+    const onSelect = vi.fn();
+    const { rerender } = render(
+      <AgentSidebar
+        agents={AGENTS}
+        activeRoleId={1}
+        onSelect={onSelect}
+        bulkMode={false}
+        bulkSelected={new Set()}
+        onToggleBulkMode={onToggleBulkMode}
+        onToggleSelected={onToggleSelected}
+      />
+    );
+    // The "Select" toggle is present and enters bulk mode.
+    fireEvent.click(screen.getByText(/Select/));
+    expect(onToggleBulkMode).toHaveBeenCalled();
+
+    // In bulk mode a row click picks the role instead of opening its chat.
+    rerender(
+      <AgentSidebar
+        agents={AGENTS}
+        activeRoleId={1}
+        onSelect={onSelect}
+        bulkMode
+        bulkSelected={new Set()}
+        onToggleBulkMode={onToggleBulkMode}
+        onToggleSelected={onToggleSelected}
+      />
+    );
+    fireEvent.click(screen.getByText('Data Eng'));
+    expect(onToggleSelected).toHaveBeenCalledWith(1);
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });

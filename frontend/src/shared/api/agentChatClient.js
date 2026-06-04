@@ -16,6 +16,12 @@ export const agentChat = {
   sendMessage: (roleId, message) =>
     api.post(`/agent-chat/conversations/${roleId}/messages`, { message }),
 
+  // Fan one message out to several roles' agents at once. Each runs in its own
+  // thread (separate audit); replies land per-thread as the background job drains.
+  // Returns { requested, accepted, skipped }.
+  bulkMessage: (roleIds, message) =>
+    api.post('/agent-chat/bulk-message', { role_ids: roleIds, message }),
+
   markRead: (roleId) => api.post(`/agent-chat/conversations/${roleId}/read`),
 
   // The agent's clarifying questions (kind === 'needs_input' in the timeline).

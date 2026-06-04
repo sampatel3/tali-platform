@@ -35,13 +35,21 @@
 .ac-dock { border-left: 1px solid var(--line); }
 
 /* ---- Sidebar ----------------------------------------------------------- */
-.ac-sidebar-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 9px; }
+.ac-sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 16px 16px 9px; }
+.ac-sidebar-head-l { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.ac-bulk-toggle { display: inline-flex; align-items: center; gap: 4px; font-size: 0.625rem; font-weight: 700; color: var(--ink-soft); background: var(--bg-3); border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; cursor: pointer; white-space: nowrap; flex-shrink: 0; font-family: var(--font-sans); }
+.ac-bulk-toggle:hover { border-color: var(--purple-soft); color: var(--purple-2); }
+.ac-bulk-toggle.on { background: var(--purple); color: #fff; border-color: transparent; }
 .ac-kicker { font-family: var(--font-mono); font-size: 0.65625rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); }
 .ac-sidebar-count { font-size: 0.6875rem; color: var(--purple-2); font-weight: 600; }
 .ac-agent-list { flex: 1; overflow-y: auto; padding: 2px 8px 12px; display: flex; flex-direction: column; gap: 3px; }
 .ac-agent { display: flex; align-items: flex-start; gap: 10px; padding: 10px 11px; border-radius: var(--radius); border: 1px solid transparent; background: transparent; cursor: pointer; text-align: left; width: 100%; transition: background 0.12s ease; }
 .ac-agent:hover { background: var(--bg-3); }
 .ac-agent.is-active { background: var(--purple-soft); border-color: var(--purple); }
+.ac-agent.is-selected { background: var(--purple-soft); border-color: var(--purple); }
+.ac-agent.is-off .ac-agent-role { color: var(--ink-soft); }
+.ac-check { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; border-radius: 5px; border: 1.5px solid var(--line); display: inline-flex; align-items: center; justify-content: center; color: #fff; }
+.ac-check.on { background: var(--purple); border-color: transparent; }
 .ac-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex-shrink: 0; margin-top: 5px; }
 .ac-dot.is-on { background: var(--green); box-shadow: 0 0 0 3px color-mix(in oklab, var(--green) 22%, transparent); }
 .ac-dot.is-paused { background: var(--amber); }
@@ -61,6 +69,23 @@
 /* ---- Dock -------------------------------------------------------------- */
 .ac-dock-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--line); font-size: 0.8125rem; font-weight: 700; }
 .ac-dock-head svg { color: var(--purple); }
+
+/* ---- Bulk-message panel (dock in bulk mode) ---------------------------- */
+.ac-bulk-panel { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.ac-bulk-title { font-size: 0.875rem; font-weight: 700; color: var(--ink); }
+.ac-bulk-note { font-size: 0.75rem; line-height: 1.5; color: var(--ink-soft); margin: 0; }
+.ac-bulk-roles { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.ac-bulk-role-chip { font-size: 0.6875rem; font-weight: 600; color: var(--purple-2); background: var(--purple-soft); border: 1px solid var(--purple-soft); padding: 4px 9px; border-radius: 999px; }
+
+/* ---- Dock empty state (aligned to the Search page) --------------------- */
+.ac-dock-empty { padding: 26px 18px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 7px; }
+.ac-dock-empty-glyph { width: 44px; height: 44px; border-radius: 12px; background: var(--bg-3); border: 1px solid var(--line); display: grid; place-items: center; color: var(--purple); margin-bottom: 4px; }
+.ac-dock-empty-h { font-family: var(--font-display); font-size: 1.125rem; font-weight: 600; color: var(--ink); margin: 0; letter-spacing: -0.01em; }
+.ac-dock-empty-h em { font-style: normal; color: var(--purple); }
+.ac-dock-empty-sub { font-size: 0.75rem; line-height: 1.5; color: var(--ink-soft); margin: 0 0 6px; max-width: 290px; }
+.ac-dock-suggest { display: flex; flex-direction: column; gap: 7px; width: 100%; }
+.ac-dock-sugg { font-size: 0.75rem; color: var(--ink-2); background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; cursor: pointer; text-align: left; transition: all 0.12s ease; font-family: var(--font-sans); }
+.ac-dock-sugg:hover { border-color: var(--purple-soft); background: var(--purple-soft); color: var(--purple-2); }
 .ac-dock-role { margin-left: auto; font-size: 0.6875rem; font-weight: 600; color: var(--purple-2); background: var(--purple-soft); padding: 4px 9px; border-radius: 999px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ac-dock-collapse { background: transparent; border: none; cursor: pointer; color: var(--ink-soft); padding: 4px; border-radius: 6px; display: grid; place-items: center; }
 .ac-dock-collapse:hover { background: var(--bg-3); color: var(--ink); }

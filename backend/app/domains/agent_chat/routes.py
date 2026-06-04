@@ -45,6 +45,13 @@ class SendMessageRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=8000)
 
 
+class BulkMessageRequest(BaseModel):
+    # Explicit role ids (the recruiter's multi-selection) — no implicit
+    # "all roles of type X", same deliberate choice as bulk-approve.
+    role_ids: list[int] = Field(..., min_length=1, max_length=100)
+    message: str = Field(..., min_length=1, max_length=8000)
+
+
 class ReviseDraftRequest(BaseModel):
     # Structured reject answers keyed by question (e.g. {"issues": [...],
     # "direction": "harder"}) + an optional free-text note. Interpreted by
@@ -83,6 +90,46 @@ def list_conversations(
 ):
     org_id = _require_org(current_user)
     return {"agents": list_agent_conversations(db, organization_id=org_id, user=current_user)}
+
+
+@router.post("/bulk-message")
+def bulk_message(
+    body: BulkMessageRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Fan one message out to several roles' agents at once.
+
+    Each selected role's agent runs the message in ITS OWN thread (separate
+    turn, separate audit) via a background job that paces the turns
+    sequentially per org. Validates org-ownership of every role up front and
+    reports any it dropped, then enqueues — returns immediately; the replies
+    land in each role's thread as the job drains.
+    """
+    org_id = _require_org(current_user)
+    role_ids = list(dict.fromkeys(int(x) for x in body.role_ids))  # de-dupe, keep order
+    owned = {
+        int(r.id)
+        for r in db.query(Role)
+        .filter(
+            Role.organization_id == org_id,
+            Role.id.in_(role_ids),
+            Role.deleted_at.is_(None),
+        )
+        .all()
+    }
+    accepted = [rid for rid in role_ids if rid in owned]
+    if not accepted:
+        raise HTTPException(status_code=400, detail="No valid roles selected")
+
+    from ...tasks.agent_chat_tasks import bulk_agent_message
+
+    bulk_agent_message.delay(org_id, int(current_user.id), accepted, body.message.strip())
+    return {
+        "requested": len(role_ids),
+        "accepted": len(accepted),
+        "skipped": [rid for rid in role_ids if rid not in owned],
+    }
 
 
 @router.get("/conversations/{role_id}/timeline")

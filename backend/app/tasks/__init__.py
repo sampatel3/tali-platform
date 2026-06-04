@@ -66,7 +66,7 @@ from .agent_tasks import (
 # impact report. The constraint-edit chat tool enqueues it after the turn
 # commits; without this import the worker NotRegistered's it and the proactive
 # "re-screen complete" follow-up never posts.
-from .agent_chat_tasks import report_rescreen_impact
+from .agent_chat_tasks import bulk_agent_message, report_rescreen_impact
 # Eager-import decision_policy_tasks for the nightly retune beat. Same
 # trap as above — the beat schedule references this task name, but
 # without the import the worker drops the run.

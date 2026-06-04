@@ -149,26 +149,43 @@ def _counts_by_role(db: Session, role_ids: list[int]) -> tuple[dict[int, int], d
     return pending, questions
 
 
+def _is_live_role(role: Role) -> bool:
+    """A role is 'live' when its Workable job is published (actively recruiting)
+    — mirrors the Jobs page's Live filter. `workable_job_state` isn't a column;
+    it's derived from the cached `workable_job_data` blob, so we read it here in
+    Python (the same JSON test the serializer uses)."""
+    data = getattr(role, "workable_job_data", None)
+    state = (data.get("state") if isinstance(data, dict) else None) or ""
+    return str(state).strip().lower() == "published"
+
+
 def list_agent_conversations(
     db: Session, *, organization_id: int, user: User
 ) -> list[dict[str, Any]]:
-    """Sidebar list: every active agent (+ any role with a started thread),
-    with attention counts and the last-message preview, most-active first."""
-    # Roles with the agent on, plus any role that already has a conversation.
-    roles = (
-        db.query(Role)
-        .filter(
-            Role.organization_id == int(organization_id),
-            Role.deleted_at.is_(None),
-            Role.id.in_(
-                db.query(AgentConversation.role_id).filter(
-                    AgentConversation.organization_id == int(organization_id)
-                )
-            )
-            | (Role.agentic_mode_enabled.is_(True)),
-        )
+    """Sidebar list: every LIVE role (so the recruiter can activate an agent on
+    any of them straight from Home), plus any agent-on role and any role with a
+    started thread — with attention counts + last-message preview, most-active
+    first."""
+    convo_role_ids = {
+        int(r[0])
+        for r in db.query(AgentConversation.role_id)
+        .filter(AgentConversation.organization_id == int(organization_id))
         .all()
-    )
+    }
+    # Liveness is a JSON-derived predicate (can't filter in SQL portably), so
+    # load the org's non-deleted roles and keep live / agent-on / has-thread.
+    roles = [
+        r
+        for r in (
+            db.query(Role)
+            .filter(
+                Role.organization_id == int(organization_id),
+                Role.deleted_at.is_(None),
+            )
+            .all()
+        )
+        if _is_live_role(r) or bool(r.agentic_mode_enabled) or int(r.id) in convo_role_ids
+    ]
     if not roles:
         return []
     role_by_id = {int(r.id): r for r in roles}

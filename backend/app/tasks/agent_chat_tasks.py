@@ -72,3 +72,58 @@ def report_rescreen_impact(
         return {"status": "error", "role_id": role_id}
     finally:
         db.close()
+
+
+@celery_app.task(name="app.tasks.agent_chat_tasks.bulk_agent_message")
+def bulk_agent_message(
+    organization_id: int,
+    user_id: int,
+    role_ids: list[int],
+    message: str,
+) -> dict:
+    """Fan one recruiter message out to each selected role's agent.
+
+    Runs each role's turn SEQUENTIALLY in its OWN conversation (so the audit
+    stays per-role) and COMMITS after each, so a later failure never rolls back
+    an earlier role's recorded turn. Sequential pacing also bounds concurrent
+    Anthropic spend — the same reason bulk-approve drains per-org. Re-screens a
+    turn might propose stay opt-in, so a bulk 'salary is now AED 30k' applies
+    the constraint per role and asks before spending, role by role.
+    """
+    from ..agent_chat.engine import run_agent_turn
+    from ..agent_chat.service import ensure_conversation, get_owned_role
+    from ..models.organization import Organization
+    from ..models.user import User
+    from ..platform.database import SessionLocal
+
+    db = SessionLocal()
+    ok: list[int] = []
+    failed: list[dict] = []
+    try:
+        org = db.query(Organization).filter(Organization.id == int(organization_id)).first()
+        user = db.query(User).filter(User.id == int(user_id)).first()
+        if org is None or user is None:
+            return {"status": "missing_org_or_user"}
+        text = (message or "").strip()
+        for rid in role_ids:
+            try:
+                role = get_owned_role(db, role_id=int(rid), organization_id=int(organization_id))
+                if role is None:
+                    failed.append({"role_id": int(rid), "error": "not_found"})
+                    continue
+                conversation = ensure_conversation(
+                    db, organization_id=int(organization_id), role=role
+                )
+                run_agent_turn(
+                    db=db, role=role, user=user, organization=org,
+                    conversation=conversation, user_message=text,
+                )
+                db.commit()
+                ok.append(int(rid))
+            except Exception as exc:  # noqa: BLE001 — one role's failure can't sink the batch
+                db.rollback()
+                logger.warning("bulk_agent_message failed for role %s: %s", rid, exc, exc_info=True)
+                failed.append({"role_id": int(rid), "error": type(exc).__name__})
+        return {"status": "done", "ok": len(ok), "failed": len(failed), "failures": failed}
+    finally:
+        db.close()

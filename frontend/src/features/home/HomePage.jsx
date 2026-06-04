@@ -128,6 +128,10 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   const [agents, setAgents] = useState([]);
   const [activeRoleId, setActiveRoleId] = useState(null);
   const [dockCollapsed, setDockCollapsed] = useState(false);
+  // Bulk messaging: select several roles, send one message that fans out to
+  // each role's own thread (separate audit). bulkSelected holds role_ids.
+  const [bulkMode, setBulkMode] = useState(false);
+  const [bulkSelected, setBulkSelected] = useState(() => new Set());
 
   // Track in-flight reloads so rapid clicks don't pile up requests.
   const reloadCounter = useRef(0);
@@ -291,6 +295,55 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     () => agents.find((a) => a.role_id === activeRoleId) || null,
     [agents, activeRoleId]
   );
+
+  // --- Bulk messaging ------------------------------------------------------
+  const toggleBulkMode = useCallback(() => {
+    setBulkMode((on) => {
+      if (on) setBulkSelected(new Set()); // leaving select-mode clears the picks
+      return !on;
+    });
+  }, []);
+
+  const toggleRoleSelected = useCallback((roleId) => {
+    setBulkSelected((prev) => {
+      const next = new Set(prev);
+      next.has(roleId) ? next.delete(roleId) : next.add(roleId);
+      return next;
+    });
+  }, []);
+
+  const clearBulk = useCallback(() => {
+    setBulkMode(false);
+    setBulkSelected(new Set());
+  }, []);
+
+  const sendBulk = useCallback(
+    async (message) => {
+      const ids = Array.from(bulkSelected);
+      const text = (message || '').trim();
+      if (!ids.length || !text) return;
+      try {
+        const { data } = await agentChat.bulkMessage(ids, text);
+        const n = data?.accepted ?? ids.length;
+        showToast?.(
+          `Sent to ${n} agent${n === 1 ? '' : 's'} — replies will appear in each role's thread.`,
+          'success'
+        );
+        clearBulk();
+        // Replies land async; nudge the rail to refresh its unread badges.
+        window.setTimeout(() => { void loadAgents(); }, 2000);
+      } catch (err) {
+        showToast?.(err?.response?.data?.detail || 'Couldn’t send to the selected agents.', 'error');
+      }
+    },
+    [bulkSelected, showToast, clearBulk, loadAgents]
+  );
+
+  // Selected roles with their names, for the dock's confirm strip.
+  const bulkSelectedRoles = useMemo(
+    () => agents.filter((a) => bulkSelected.has(a.role_id)).map((a) => ({ role_id: a.role_id, role_name: a.role_name })),
+    [agents, bulkSelected]
+  );
   // "Awaiting you in the chat" — unread agent messages + open questions across
   // agents. Deliberately excludes the bulk pending-decision queue (that's the
   // feed's "Pending N"), so the dock badge reads as chat notifications.
@@ -376,7 +429,15 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       {/* The shell renders immediately (not gated on the async agents fetch),
           so the page lays out once — no flash of the pre-rail layout. */}
       <div className={`ac-shell ${dockCollapsed ? 'ac-dock-collapsed' : ''}`}>
-        <AgentSidebar agents={agentsWithBudget} activeRoleId={activeRoleId} onSelect={handleSelectAgent} />
+        <AgentSidebar
+          agents={agentsWithBudget}
+          activeRoleId={activeRoleId}
+          onSelect={handleSelectAgent}
+          bulkMode={bulkMode}
+          bulkSelected={bulkSelected}
+          onToggleBulkMode={toggleBulkMode}
+          onToggleSelected={toggleRoleSelected}
+        />
         <div className="ac-main">
 
       <div className="home-body">
@@ -472,8 +533,12 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           <AgentChatDock
             roleId={activeRoleId}
             roleName={activeAgent?.role_name}
+            agentEnabled={activeAgent ? activeAgent.agent_enabled : true}
             onReload={reloadAll}
             onCollapse={() => setDockCollapsed(true)}
+            bulkSelectedRoles={bulkSelectedRoles}
+            onSendBulk={sendBulk}
+            onClearBulk={clearBulk}
           />
         )}
       </div>
