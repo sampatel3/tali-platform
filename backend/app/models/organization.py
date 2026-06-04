@@ -15,6 +15,10 @@ class Organization(Base):
     workable_refresh_token = Column(String)
     workable_connected = Column(Boolean, default=False)
     workable_config = Column(JSON)
+    # Workable Assessments-Provider (marketplace add-on) per-org settings, e.g.
+    # {"callback_auth_token": "...", "enabled": true}. Distinct from
+    # workable_config (the OAuth pull/write integration).
+    workable_provider_config = Column(JSON, nullable=True)
     workable_last_sync_at = Column(DateTime(timezone=True), nullable=True)
     workable_last_sync_status = Column(String, nullable=True)
     workable_last_sync_summary = Column(JSON, nullable=True)

@@ -97,6 +97,10 @@ from .graph_outbox_tasks import drain_graph_episode_outbox
 # never ships. Same trap as the imports above. The task itself is a no-op
 # unless MAINSPRING_BRAIN_FEED_ENABLED is set.
 from .brain_feed_tasks import flush_brain_feed
+# Eager-import workable_provider_tasks so the worker registers the result-push
+# flush. The beat schedule references this task name; without the import the
+# worker NotRegistered's it. No-op unless WORKABLE_PROVIDER_ENABLED is set.
+from .workable_provider_tasks import flush_workable_provider
 
 __all__ = [
     "celery_app",
@@ -133,4 +137,5 @@ __all__ = [
     "apply_decision_side_effects",
     "drain_graph_episode_outbox",
     "flush_brain_feed",
+    "flush_workable_provider",
 ]

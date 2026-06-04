@@ -154,6 +154,11 @@ from .api_key import (
     DEFAULT_API_KEY_SCOPES,
     ApiKey,
 )
+from .workable_webhook_outbox import (
+    WORKABLE_OUTBOX_KINDS,
+    WORKABLE_OUTBOX_STATUSES,
+    WorkableWebhookOutbox,
+)
 
 __all__ = [
     "User",
@@ -276,4 +281,7 @@ __all__ = [
     "ApiKey",
     "API_KEY_SCOPES",
     "DEFAULT_API_KEY_SCOPES",
+    "WorkableWebhookOutbox",
+    "WORKABLE_OUTBOX_KINDS",
+    "WORKABLE_OUTBOX_STATUSES",
 ]
