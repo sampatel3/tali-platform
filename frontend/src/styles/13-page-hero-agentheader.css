@@ -74,14 +74,12 @@
 }
 
 /* ================================================================
-   AGENT HEADER — light "executive" header (redesign 2026-06).
-   Replaces the former 232px dark-purple slab with a compact, LIGHT,
-   single-row header: a thin purple left-accent bar, kicker + title on the
-   left, an optional agent panel on the right (Jobs / Role detail). Height
-   is content-driven now (no 232px floor) so the working surface sits high
-   on the page — the title-only pages settle ~104px; Role detail (facts +
-   panel) grows naturally. Fully token-driven, so it re-skins per brand and
-   inverts cleanly under the dark theme.
+   AGENT HEADER — compact light header, one fixed height everywhere
+   (redesign 2026-06). The 96px band is identical on every recruiter
+   page so the headers line up; the optional horizontal "agent strip"
+   sits on the right and fits INSIDE the band (it never grows it).
+   Role-detail facts drop to a thin sub-strip below. Token-driven, so
+   it re-skins per brand and inverts under the dark theme.
    ================================================================ */
 
 .agent-header {
@@ -90,14 +88,15 @@
   border-bottom: 1px solid var(--line);
   position: relative;
   overflow: hidden;
-  /* +3px left pad clears the accent bar. */
-  padding: 18px 32px 18px 35px;
-  min-height: 0;
+  /* +3px left pad clears the accent bar; vertical padding is 0 because the
+     content is centred inside the fixed band. */
+  padding: 14px 32px 14px 35px;
+  min-height: 96px;
   display: flex;
   align-items: center;
 }
 
-/* Thin purple left-accent — the single brand cue on the light header. */
+/* Thin purple left-accent — the brand cue on the light header. */
 .agent-header::before {
   content: "";
   position: absolute;
@@ -113,22 +112,18 @@
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 28px;
-  /* Top-align the two columns and let each hug its own content (the header
-     height is content-driven now — no fixed slab to fill). */
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  align-items: center;
   width: 100%;
   max-width: 1280px;
   margin: 0 auto;
 }
 
-/* Compact variant deprecated — normalized to the default height. */
-.agent-header.compact { padding: 18px 32px 18px 35px; }
+.agent-header.compact { padding: 14px 32px 14px 35px; }
 
-/* Agent-running: a faint lavender wash on the light header (subtle — not the
-   old vivid slab), layered on a separate overlay so OFF->ON cross-fades the
-   opacity instead of snapping a background value. */
+/* Faint lavender wash when the agent is running — fades in on top of the
+   light base so OFF->ON cross-fades. */
 .ah-bright-overlay {
   position: absolute;
   inset: 0;
@@ -136,38 +131,27 @@
   opacity: 0;
   transition: opacity 600ms cubic-bezier(.4, 0, .2, 1);
   background:
-    radial-gradient(ellipse 55% 150% at 90% 0%,
+    radial-gradient(ellipse 55% 150% at 92% 0%,
       color-mix(in oklab, var(--purple) 9%, transparent) 0%, transparent 62%);
 }
-
 .agent-header.agent-running .ah-bright-overlay { opacity: 1; }
 
-/* Wrapper around the on/off/paused state body. Inherits the flex column
-   layout the parent `.agent-panel` used to host directly. The React
-   `key={status}` on this node re-mounts the body on a real state flip,
-   triggering the agentPanelEnter fade-in. */
-.agent-panel-body {
+/* ---- Left column: optional inline avatar + headings ---- */
+.agent-header-left {
   display: flex;
-  flex-direction: column;
-  gap: 9px;
-  min-height: 0;
-  animation: agentPanelEnter 380ms cubic-bezier(.4, 0, .2, 1) both;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
 }
-
-@keyframes agentPanelEnter {
-  0%   { opacity: 0; transform: translateY(4px); }
-  100% { opacity: 1; transform: translateY(0); }
-}
-
-/* ---- Left column -------------------------------------------------------- */
-.agent-header-left { min-width: 0; }
+.agent-header-left .ah-pre { flex-shrink: 0; }
+.ah-headings { min-width: 0; }
 
 .agent-header-left .back-link {
   color: var(--mute);
   display: block;
   text-align: left;
   width: fit-content;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   letter-spacing: .06em;
@@ -178,7 +162,6 @@
   padding: 0;
   cursor: pointer;
 }
-
 .agent-header-left .back-link:hover { color: var(--ink); }
 
 .agent-header-left .ah-kicker {
@@ -188,29 +171,29 @@
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--purple);
-  margin: 0 0 7px;
+  margin: 0 0 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.agent-header-left .ah-title-row {
-  display: flex;
-  align-items: baseline;
-  gap: 14px;
-  flex-wrap: wrap;
-}
+.agent-header-left .ah-title-row { min-width: 0; }
 
 .agent-header-left h1 {
   margin: 0;
   font-family: var(--font-display);
-  /* Fluid, but capped well below the old 48px so the slab no longer
-     dominates the viewport. */
-  font-size: clamp(22px, 2.6vw, 28px);
+  font-size: clamp(20px, 2.4vw, 26px);
   letter-spacing: -.02em;
   font-weight: 600;
-  line-height: 1.1;
+  line-height: 1.12;
   color: var(--ink);
+  /* Single line + ellipsis so the band stays a uniform height even with a
+     long role / candidate name (full text stays in the kicker + breadcrumb). */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
-
-.agent-header.compact .agent-header-left h1 { font-size: clamp(22px, 2.6vw, 28px); }
 
 .agent-header-left h1 em,
 .agent-header-left h1 .ah-period {
@@ -218,265 +201,87 @@
   color: var(--purple);
 }
 
-.agent-header-left .ah-title-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-/* Title-row action buttons (e.g. role "Share / Edit / Invite") now sit on a
-   light header, so they use the app's default light button styles — no
-   white-on-dark override needed. */
-
 .agent-header-left p.ah-subtitle {
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   color: var(--mute);
   font-size: 0.8125rem;
-  line-height: 1.5;
-  max-width: 640px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 620px;
 }
 
-/* ============== Right-side agent panel (Jobs / Role detail) ============== */
-.agent-panel {
-  width: 300px;
-  flex-shrink: 0;
-  min-height: 0;
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 12px 13px;
+/* ---- Right zone: page actions + the agent strip ---- */
+.agent-header-right {
   display: flex;
-  flex-direction: column;
-  gap: 9px;
-  box-shadow: 0 1px 2px rgba(20, 12, 30, 0.05);
-  transition:
-    background-color 400ms cubic-bezier(.4, 0, .2, 1),
-    border-color 400ms cubic-bezier(.4, 0, .2, 1),
-    box-shadow 400ms cubic-bezier(.4, 0, .2, 1);
-}
-
-/* ON state — subtle purple-tinted card. */
-.agent-panel:not(.agent-off):not(.agent-paused) {
-  border-color: var(--purple-soft);
-  background: color-mix(in oklab, var(--purple) 4%, var(--bg-2));
-}
-.agent-panel.agent-off {
-  border-color: var(--line);
-  background: var(--bg);
-}
-.agent-panel.agent-paused {
-  border-color: color-mix(in oklab, var(--amber) 45%, var(--line));
-  background: color-mix(in oklab, var(--amber) 5%, var(--bg-2));
-}
-
-/* Subtle breathing border on the live panel — signals live activity. */
-.agent-header.agent-running .agent-panel:not(.agent-off):not(.agent-paused) {
-  animation: agentPanelBreathe 3s ease-in-out infinite;
-}
-
-@keyframes agentPanelBreathe {
-  0%, 100% {
-    border-color: var(--purple-soft);
-    box-shadow: 0 0 0 0 transparent, 0 1px 2px rgba(20, 12, 30, 0.05);
-  }
-  50% {
-    border-color: var(--purple);
-    box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple) 12%, transparent), 0 1px 2px rgba(20, 12, 30, 0.05);
-  }
-}
-
-.agent-panel-head { display: flex; align-items: center; gap: 10px; }
-
-.agent-pulse-wrap {
-  width: 32px;
-  height: 32px;
+  align-items: center;
+  gap: 14px;
   flex-shrink: 0;
+}
+.ah-actions { display: flex; align-items: center; gap: 8px; }
+
+/* ============================================================
+   AGENT STRIP — the one ON / PAUSED / OFF language, reused on
+   the header, the chat agent-rail, and job cards.
+   ============================================================ */
+.abar {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  height: 52px;
+  border-radius: 13px;
+  padding: 0 8px 0 13px;
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.ab-spark {
+  width: 30px;
+  height: 30px;
   border-radius: 9px;
-  background: var(--accent-soft);
-  border: 1px solid var(--purple-soft);
-  color: var(--purple);
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   position: relative;
 }
-
-.agent-panel.agent-off .agent-pulse-wrap {
-  background: var(--bg-3);
-  border-color: var(--line);
-  color: var(--mute);
-}
-
-.agent-panel.agent-paused .agent-pulse-wrap {
-  background: color-mix(in oklab, var(--amber) 16%, var(--bg-2));
-  border-color: color-mix(in oklab, var(--amber) 40%, var(--line));
-  color: color-mix(in oklab, var(--amber) 65%, var(--ink));
-}
-
-.agent-pulse {
-  position: absolute;
-  inset: -3px;
-  border-radius: 12px;
-  border: 2px solid var(--purple-soft);
-  animation: agentPulse 1.6s ease-out infinite;
-  pointer-events: none;
-}
-
-@keyframes agentPulse {
-  0%   { transform: scale(1);    opacity: .7; }
-  100% { transform: scale(1.32); opacity: 0;  }
-}
-
-.agent-status { flex: 1; min-width: 0; }
-.agent-status-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.agent-mode {
-  font-size: 0.78125rem;
-  color: var(--ink-soft);
-  font-weight: 600;
-}
-
-.agent-state-pill {
+.ab-label {
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: 11px;
   font-weight: 700;
-  letter-spacing: .08em;
-  padding: 2px 8px;
-  border-radius: 999px;
+  letter-spacing: .09em;
   text-transform: uppercase;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
-
-.agent-state-pill.state-on     { background: var(--purple); color: #fff; }
-.agent-state-pill.state-off    { background: var(--bg-3); color: var(--ink-soft); border: 1px solid var(--line); }
-.agent-state-pill.state-paused { background: color-mix(in oklab, var(--amber) 82%, white); color: #3b2200; }
-
-.agent-pending {
-  margin-top: 4px;
-  font-size: 0.71875rem;
-  color: var(--purple-2);
-  font-weight: 600;
-  background: var(--accent-soft);
-  border: 1px solid var(--purple-soft);
-  border-radius: 6px;
-  padding: 3px 8px;
-  display: inline-block;
+.ab-pending {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 7px;
+  flex-shrink: 0;
 }
-
-.agent-tick {
-  font-size: 0.75rem;
-  color: var(--ink-soft);
-  line-height: 1.4;
-  padding: 7px 9px;
-  border-radius: 8px;
-  background: var(--bg-3);
-  border-left: 2px solid var(--purple);
-  /* Single line + ellipsis so a long tick can't resize the panel on toggle. */
+.ab-tick {
+  font-size: 12.5px;
+  min-width: 0;
+  max-width: 210px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
-.agent-budget { display: flex; flex-direction: column; gap: 5px; }
-.agent-budget-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  font-size: 0.6875rem;
-  color: var(--mute);
-}
-.agent-budget-row .amt {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--ink);
-  font-weight: 600;
-}
-.agent-budget-row .amt .of {
-  color: var(--mute);
-  font-weight: 400;
-}
-
-.agent-budget-bar {
-  height: 5px;
-  border-radius: 3px;
-  background: var(--line);
-  overflow: hidden;
-}
-
-.agent-budget-bar .fill {
-  height: 100%;
-  background: var(--purple);
-  border-radius: 3px;
-}
-
-.agent-actions {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  margin-top: 2px;
-}
-
-/* OFF-state activator: inline budget input + Activate button inside the
-   panel when the role has agent mode disabled. */
-.agent-off-copy {
-  font-size: 0.75rem;
-  line-height: 1.4;
-  color: var(--ink-soft);
-}
-
-.agent-off-budget {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--bg);
-  border: 1px solid var(--line);
+.ab-budget { display: flex; flex-direction: column; gap: 4px; width: 92px; flex-shrink: 0; }
+.ab-budget-amt { font-family: var(--font-mono); font-size: 11px; text-align: right; white-space: nowrap; }
+.ab-budget-amt .of { opacity: .7; }
+.ab-budget-bar { height: 4px; border-radius: 2px; overflow: hidden; }
+.ab-budget-bar i { display: block; height: 100%; border-radius: 2px; }
+.ab-actions, .ab-activate { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.ab-btn {
+  height: 32px;
   border-radius: 8px;
-  padding: 6px 10px;
-}
-
-.agent-off-budget-prefix,
-.agent-off-budget-suffix {
-  color: var(--mute);
-  font-size: 0.75rem;
-  font-family: var(--font-mono);
-}
-
-.agent-off-budget input {
-  flex: 1;
-  min-width: 0;
-  background: transparent;
-  border: 0;
-  outline: 0;
-  color: var(--ink);
-  font-size: 0.875rem;
-  font-weight: 600;
-  font-family: var(--font-mono);
-  padding: 0;
-}
-
-.agent-off-budget input:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.agent-off-error {
-  font-size: 0.71875rem;
-  color: color-mix(in oklab, var(--amber) 72%, var(--ink));
-  line-height: 1.35;
-}
-
-.agent-btn {
-  flex: 1;
-  height: 30px;
-  background: var(--bg-2);
-  color: var(--ink-soft);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 0 10px;
-  font-size: 0.75rem;
+  padding: 0 12px;
+  font-size: 12.5px;
   font-weight: 600;
   font-family: inherit;
   display: inline-flex;
@@ -484,70 +289,109 @@
   justify-content: center;
   gap: 6px;
   cursor: pointer;
-  transition: transform 130ms cubic-bezier(.4, 0, .2, 1), filter 130ms ease, background 130ms ease, border-color 130ms ease;
-}
-
-.agent-btn:hover { background: var(--bg-3); border-color: var(--purple-soft); }
-.agent-btn:disabled { opacity: 0.5; cursor: default; }
-.agent-btn.icon { flex: 0 0 30px; padding: 0; color: var(--mute); }
-.agent-btn.primary { background: var(--purple); border-color: transparent; color: #fff; }
-.agent-btn.primary:hover { background: color-mix(in oklab, var(--purple) 88%, white); }
-
-/* Simulated click — fired briefly when the landing-hero scroll trigger
-   "presses" the Turn on agent button before flipping the panel state. */
-.agent-btn.is-pressing {
-  transform: scale(0.94);
-  filter: brightness(0.92);
-}
-
-/* ============== Pre/Post-title slots ============== */
-.agent-header-left .ah-pre { margin-bottom: 10px; }
-.agent-header-left .ah-post { margin-top: 10px; }
-
-/* Compact pending-by-type strip (legacy — no current caller, kept light
-   so any future use renders correctly on the light header). */
-.ah-pending-strip {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 18px;
-}
-.ah-pending-strip-label {
-  font-family: var(--font-mono);
-  font-size: 0.65625rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--mute);
-}
-.ah-pending-strip-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 0.8125rem;
-  color: var(--ink-soft);
+  border: 1px solid transparent;
   white-space: nowrap;
+  transition: background .12s ease, border-color .12s ease, transform .12s ease, filter .12s ease;
 }
-.ah-pending-strip-item b {
-  font-family: var(--font-display);
-  font-weight: 600;
-  color: var(--ink);
-}
-.ah-pending-strip-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
+.ab-btn.ic { width: 32px; padding: 0; }
+.ab-btn:disabled { opacity: .55; cursor: default; }
+/* Simulated press — the landing scroll-trigger "presses" Turn-on before flipping. */
+.ab-btn.is-pressing { transform: scale(0.94); filter: brightness(0.9); }
+.ab-capbox {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 32px;
+  border-radius: 8px;
+  padding: 0 9px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
   flex-shrink: 0;
 }
+.ab-capbox input { width: 36px; background: transparent; border: 0; outline: 0; font: inherit; font-weight: 600; padding: 0; }
+.ab-capbox .pfx, .ab-capbox .sfx { opacity: .6; }
 
-/* Candidate detail avatar block lives in the preTitle slot. */
-.ah-cand-pre {
+/* ON — filled with the original dark-purple hero colour, glowing + pulsing
+   spark. The unmistakable "this agent is live" state. */
+.abar-on {
+  background: linear-gradient(135deg, #3a1d6e 0%, #241147 100%);
+  border: 1px solid rgba(196, 165, 253, .5);
+  color: #fff;
+  box-shadow: 0 6px 20px -8px rgba(58, 29, 110, .6);
+  animation: abarPulse 3.6s ease-in-out infinite;
+}
+@keyframes abarPulse {
+  0%, 100% { box-shadow: 0 6px 20px -8px rgba(58, 29, 110, .55), 0 0 0 0 rgba(196, 165, 253, 0); }
+  50%      { box-shadow: 0 6px 22px -8px rgba(58, 29, 110, .7),  0 0 0 4px rgba(196, 165, 253, .13); }
+}
+.abar-on .ab-spark { background: rgba(196, 165, 253, .24); border: 1px solid rgba(196, 165, 253, .5); color: #fff; }
+.abar-on .ab-spark .ab-pulse {
+  position: absolute; inset: -3px; border-radius: 11px;
+  border: 2px solid rgba(196, 165, 253, .6); animation: abarRing 1.8s ease-out infinite;
+}
+@keyframes abarRing { 0% { transform: scale(1); opacity: .8; } 100% { transform: scale(1.35); opacity: 0; } }
+.abar-on .ab-label { color: #fff; }
+.abar-on .ab-pending { background: rgba(196, 165, 253, .26); color: #fff; }
+.abar-on .ab-tick { color: rgba(255, 255, 255, .74); }
+.abar-on .ab-budget-amt { color: #fff; }
+.abar-on .ab-budget-bar { background: rgba(255, 255, 255, .2); }
+.abar-on .ab-budget-bar i { background: var(--purple-lav); }
+.abar-on .ab-btn { background: rgba(255, 255, 255, .12); border-color: rgba(255, 255, 255, .22); color: #fff; }
+.abar-on .ab-btn:hover { background: rgba(255, 255, 255, .2); }
+.abar-on .ab-btn.primary { background: #fff; color: var(--purple-2); border-color: transparent; }
+
+/* PAUSED — amber */
+.abar-paused {
+  background: color-mix(in oklab, var(--amber) 12%, var(--bg-2));
+  border: 1px solid color-mix(in oklab, var(--amber) 45%, var(--line));
+  color: color-mix(in oklab, var(--amber) 72%, var(--ink));
+}
+.abar-paused .ab-spark { background: var(--bg-2); border: 1px solid color-mix(in oklab, var(--amber) 45%, var(--line)); color: color-mix(in oklab, var(--amber) 70%, var(--ink)); }
+.abar-paused .ab-label { color: color-mix(in oklab, var(--amber) 72%, var(--ink)); }
+.abar-paused .ab-tick { color: color-mix(in oklab, var(--amber) 60%, var(--ink)); }
+.abar-paused .ab-btn.primary { background: var(--purple); color: #fff; }
+.abar-paused .ab-btn.ic { background: var(--bg-2); border-color: color-mix(in oklab, var(--amber) 45%, var(--line)); color: color-mix(in oklab, var(--amber) 70%, var(--ink)); }
+
+/* OFF — quiet light, with the inline activator */
+.abar-off { background: var(--bg); border: 1px solid var(--line); color: var(--ink-soft); }
+.abar-off .ab-spark { background: var(--bg-3); border: 1px solid var(--line); color: var(--mute); }
+.abar-off .ab-label { color: var(--ink-soft); }
+.abar-off .ab-tick { color: var(--mute); }
+.abar-off .ab-capbox { background: var(--bg-2); border: 1px solid var(--line); color: var(--ink); }
+.abar-off .ab-btn.primary { background: var(--purple); color: #fff; }
+.abar-off .ab-btn.primary:hover { background: color-mix(in oklab, var(--purple) 88%, white); }
+
+/* ============== Sub-strip (role-detail facts + actions) ============== */
+.agent-substrip {
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  position: relative;
+  padding: 0 32px 0 35px;
+}
+.agent-substrip::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--purple);
+  opacity: .5;
+}
+.agent-substrip-inner {
   display: flex;
   align-items: center;
-  gap: 13px;
+  gap: 20px;
+  min-height: 46px;
+  max-width: 1280px;
+  margin: 0 auto;
 }
+.ah-substrip-main { flex: 1; min-width: 0; }
+.ah-substrip-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+/* Candidate detail avatar (preTitle slot) — inline, left of the title. */
+.ah-cand-pre { display: flex; align-items: center; }
 .ah-cand-pre .ah-cand-avatar {
-  width: 48px;
-  height: 48px;
+  width: 46px;
+  height: 46px;
   flex-shrink: 0;
   border-radius: 12px;
   background: var(--accent-soft);
@@ -555,27 +399,27 @@
   color: var(--purple);
   font-family: var(--font-display);
   font-weight: 600;
-  font-size: 1.25rem;
+  font-size: 1.2rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 
-/* Role detail facts grid lives in the postTitle slot. */
+/* Role-detail facts — a horizontal row inside the sub-strip. */
 .ah-facts {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-  max-width: 720px;
-  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px 28px;
 }
-.ah-facts .f { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.ah-facts .f { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
 .ah-facts .f .k {
   font-family: var(--font-mono);
   font-size: 0.625rem;
-  letter-spacing: .12em;
+  letter-spacing: .1em;
   text-transform: uppercase;
   color: var(--mute);
+  flex-shrink: 0;
 }
 .ah-facts .f .v {
   font-size: 0.8125rem;
@@ -587,24 +431,25 @@
 }
 .ah-facts .f .v.purple { color: var(--purple); }
 
-@media (max-width: 880px) {
-  .agent-header-inner { grid-template-columns: 1fr; }
-  .agent-panel { width: 100%; }
-  .ah-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
+/* Legacy pending-by-type strip (no current caller; kept light for safety). */
+.ah-pending-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; }
+.ah-pending-strip-label { font-family: var(--font-mono); font-size: 0.65625rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--mute); }
+.ah-pending-strip-item { display: inline-flex; align-items: center; gap: 7px; font-size: 0.8125rem; color: var(--ink-soft); white-space: nowrap; }
+.ah-pending-strip-item b { font-family: var(--font-display); font-weight: 600; color: var(--ink); }
+.ah-pending-strip-dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
 
-/* Phone: tighten padding and let the header size to its content. */
+/* ---- Responsive: stack the agent strip under the title on narrow screens ---- */
+@media (max-width: 920px) {
+  .agent-header { min-height: 0; padding-top: 16px; padding-bottom: 16px; }
+  .agent-header-inner { grid-template-columns: 1fr; gap: 14px; }
+  .agent-header-right { flex-wrap: wrap; }
+  .abar { width: 100%; }
+  .ab-tick { max-width: none; flex: 1; }
+}
 @media (max-width: 600px) {
-  .agent-header {
-    padding: 16px 18px 16px 21px;
-    min-height: 0;
-  }
-  .agent-header-inner { gap: 16px; }
-  .agent-header-left .ah-title-row { gap: 10px; }
-  .agent-header-left p.ah-subtitle {
-    font-size: 0.8125rem;
-    margin-top: 6px;
-  }
+  .agent-header { padding: 16px 18px 16px 21px; }
+  .agent-substrip { padding: 0 18px 0 21px; }
+  .agent-header-left p.ah-subtitle { font-size: 0.8125rem; }
 }
 
 /* ============== Nav agent-running chip (Jobs / Role detail only) ============== */

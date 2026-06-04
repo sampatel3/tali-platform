@@ -4,16 +4,18 @@ import { Pause, Play, Settings as SettingsIcon, Sparkles } from 'lucide-react';
 import { useAgentStatus } from './AgentBar';
 import { BreadcrumbsRow } from '../ui/Breadcrumbs';
 
-// AgentHeader — the single dark-purple slab that sits at the top of every
-// recruiter page (HANDOFF unified-headers.md §2). Replaces the legacy
-// PageHero (light) + Shell-level AgentBar combo: one component, one
-// fixed-280px height, optional right-side agent panel for Jobs/Role detail.
+// AgentHeader — the single compact LIGHT header at the top of every recruiter
+// page (redesign 2026-06). One fixed height (96px) across every page so the
+// headers line up; an optional horizontal "agent strip" sits on the right for
+// pages with an agent (Jobs / Role detail). Heavier secondary content
+// (role-detail facts) drops to a thin sub-strip BELOW the header so the band
+// itself stays the same height everywhere.
 //
-// Visual states:
-//   - 'agent-running' — vivid purple wash + animated glows + breathing
-//      panel border (when `agent.on && !agent.paused`)
-//   - 'agent-quiet'   — same purple base, glows muted (when no agent or
-//      agent is off/paused). Used by every other page hero.
+// The agent strip carries ONE state language, reused on every agent surface
+// (header, the chat agent-rail, job cards):
+//   - ON      — filled with the original dark-purple hero colour + soft glow
+//   - PAUSED  — amber
+//   - OFF     — quiet light, with an inline "turn on" activator
 //
 // Pages pass `title` either as a string (a trailing purple period is
 // appended automatically) or as a React node — e.g. `<>5 active <em>roles</em></>` —
@@ -37,15 +39,11 @@ const formatUsd = (cents) => {
 
 const DEFAULT_BUDGET_USD = 50;
 
-// Inline activator shown inside the OFF-state panel: budget input + Activate
-// button. `onActivate(monthlyBudgetCents)` is fire-and-forget — the parent
-// optimistically flips the panel to ON, so we don't need a local
-// "Activating…" state; the activator simply unmounts on the next render.
-//
-// When no `onActivate` is wired (e.g. Jobs list panel where activation is
-// per-role, not org-wide), we render only the guidance copy so the panel
-// reads as informational, not an unusable input.
-const AgentOffActivator = ({ onActivate, disabledReason, currentBudgetCents }) => {
+// Inline activator shown inside the OFF-state agent strip: a compact budget
+// input + Turn-on button, laid out horizontally. `onActivate(cents)` is
+// fire-and-forget — the parent optimistically flips the strip to ON, so the
+// activator simply unmounts on the next render.
+const AgentOffActivator = ({ onActivate, currentBudgetCents }) => {
   // Seed from the role's already-saved cap so activating never silently
   // overwrites it with the $50 default; fall back to the default only when
   // the role has no cap yet.
@@ -56,19 +54,9 @@ const AgentOffActivator = ({ onActivate, disabledReason, currentBudgetCents }) =
   const [touched, setTouched] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
 
-  // Keep mirroring the saved cap (e.g. one edited in the settings tab while
-  // this panel is mounted) until the recruiter edits the field themselves.
   useEffect(() => {
     if (!touched) setBudget(seededDollars);
   }, [seededDollars, touched]);
-
-  if (!onActivate) {
-    return (
-      <div className="agent-off-copy" style={{ marginTop: 'auto' }}>
-        {disabledReason || 'Open a role to turn on agent mode there.'}
-      </div>
-    );
-  }
 
   const submit = () => {
     const dollars = Number(budget);
@@ -81,12 +69,9 @@ const AgentOffActivator = ({ onActivate, disabledReason, currentBudgetCents }) =
   };
 
   return (
-    <>
-      <div className="agent-off-copy">
-        {disabledReason || 'Set the monthly cap for this role — covers pre-screen, scoring, semantic search, assessments, and the agent — then turn on the agent.'}
-      </div>
-      <div className="agent-off-budget">
-        <span className="agent-off-budget-prefix">$</span>
+    <span className="ab-activate">
+      <span className="ab-capbox" title={errorMsg || undefined}>
+        <span className="pfx">$</span>
         <input
           type="number"
           min={1}
@@ -96,34 +81,28 @@ const AgentOffActivator = ({ onActivate, disabledReason, currentBudgetCents }) =
           aria-label="Role monthly budget in USD"
           inputMode="numeric"
         />
-        <span className="agent-off-budget-suffix">/ month</span>
-      </div>
-      {errorMsg ? <div className="agent-off-error">{errorMsg}</div> : null}
-      <div className="agent-actions">
-        <button type="button" className="agent-btn primary" onClick={submit}>
-          <Play size={11} strokeWidth={2} fill="currentColor" />
-          Turn on agent
-        </button>
-      </div>
-    </>
+        <span className="sfx">/mo</span>
+      </span>
+      <button type="button" className="ab-btn primary" onClick={submit}>
+        <Play size={11} strokeWidth={2} fill="currentColor" />
+        Turn on
+      </button>
+    </span>
   );
 };
 
-const AgentPanel = ({
+// AgentStrip — the horizontal agent bar that lives on the right of the header.
+// Renders the unified on/off/paused/bulk state language. The dark-purple ON
+// fill is driven by the `.abar.abar-on` class (see 13-page-hero-agentheader.css).
+const AgentStrip = ({
   agent,
   onActivate,
   onPause,
   onResume,
   onSettings,
   offStateMessage,
-  // Pause/Resume button copy. Defaults to the per-role wording; the Jobs
-  // list passes "Pause all" / "Resume all" because its panel acts org-wide.
   pauseLabel = 'Pause',
   resumeLabel = 'Resume',
-  // Org-wide bulk mode (Jobs list). When either is a number, the actions
-  // row is driven by counts instead of the single on/paused toggle: show
-  // "Pause all (N)" while N roles run AND "Resume all (M)" while M are
-  // paused — both at once in a mixed state. null → per-role toggle behaviour.
   pauseAllCount = null,
   resumeAllCount = null,
 }) => {
@@ -138,12 +117,7 @@ const AgentPanel = ({
     pausedReason = null,
   } = agent || {};
   const status = !on ? (paused ? 'paused' : 'off') : 'on';
-  // A deliberate org-wide "Pause all" stamps a recruiter reason; an auto
-  // budget-pause does not. Distinguish them so the pill/tick don't claim
-  // "AUTO-PAUSED" right after the user clicked Pause.
   const isManualPause = /recruiter|paused by/i.test(String(pausedReason || ''));
-  // Org bulk mode: drive the actions row off running/paused counts so a
-  // mixed org can both Pause all and Resume all in one panel.
   const hasBulkCounts = pauseAllCount != null || resumeAllCount != null;
   const pct = budgetCents > 0
     ? Math.min(100, Math.round((Number(spentCents) / Number(budgetCents)) * 100))
@@ -151,130 +125,97 @@ const AgentPanel = ({
   const spentLabel = formatUsd(spentCents);
   const budgetLabel = formatUsd(budgetCents);
 
+  const label = status === 'on'
+    ? 'Agent on'
+    : status === 'paused'
+      ? (isManualPause ? 'Paused' : 'Auto-paused')
+      : 'Agent off';
+
+  // The middle "tick" line — live activity (ON), humanized pause reason
+  // (PAUSED), or the activation hint (OFF, no activator).
+  let message = null;
+  if (status === 'on') {
+    message = tick;
+  } else if (status === 'paused') {
+    if (isManualPause) {
+      message = 'Resume to continue';
+    } else {
+      const r = String(pausedReason || '').toLowerCase();
+      let pretty = null;
+      if (r.startsWith('monthly usd cap')) pretty = 'monthly budget reached';
+      else if (r.includes('decision budget')) pretty = 'cycle limit reached';
+      else if (pausedReason) pretty = String(pausedReason).slice(0, 48);
+      message = pretty ? `${pretty} — resume to continue` : 'Resume to continue';
+    }
+  } else if (!onActivate) {
+    message = offStateMessage || 'Open a role to turn on agent mode there.';
+  }
+
+  const showBudget = (status === 'on' || status === 'paused') && budgetCents > 0;
+
   return (
-    <aside className={`agent-panel agent-${status}`}>
-      <div className="agent-panel-head">
-        <div className="agent-pulse-wrap">
-          <Sparkles size={16} strokeWidth={2} />
-          {inFlight && on && !paused ? <span className="agent-pulse" aria-hidden="true" /> : null}
-        </div>
-        <div className="agent-status">
-          <div className="agent-status-line">
-            <span className="agent-mode">Agent mode</span>
-            <span className={`agent-state-pill state-${status}`}>
-              {status === 'paused' ? (isManualPause ? 'PAUSED' : 'AUTO-PAUSED') : status.toUpperCase()}
-            </span>
-          </div>
-          {pending > 0 ? (
-            <div className="agent-pending">{pending} awaiting your review</div>
+    <div className={`abar abar-${status}`}>
+      <span className="ab-spark">
+        <Sparkles size={15} strokeWidth={2} />
+        {inFlight && on && !paused ? <span className="ab-pulse" aria-hidden="true" /> : null}
+      </span>
+      <span className="ab-label">{label}</span>
+      {pending > 0 ? (
+        <span className="ab-pending" title={`${pending} awaiting your review`}>{pending}</span>
+      ) : null}
+      {message ? <span className="ab-tick" title={typeof message === 'string' ? message : undefined}>{message}</span> : <span className="ab-tick" />}
+
+      {showBudget ? (
+        <span className="ab-budget" title="Covers pre-screen, scoring, semantic search, assessments, and the agent on this role.">
+          <span className="ab-budget-amt">{spentLabel}<span className="of"> / {budgetLabel}</span></span>
+          <span className="ab-budget-bar"><i style={{ width: `${pct}%` }} /></span>
+        </span>
+      ) : null}
+
+      {status === 'off' && onActivate ? (
+        <AgentOffActivator onActivate={onActivate} currentBudgetCents={budgetCents} />
+      ) : (
+        <span className="ab-actions">
+          {hasBulkCounts ? (
+            <>
+              {Number(pauseAllCount) > 0 ? (
+                <button type="button" className="ab-btn" onClick={onPause} disabled={!onPause}>
+                  <Pause size={11} strokeWidth={2} />
+                  {pauseLabel} ({pauseAllCount})
+                </button>
+              ) : null}
+              {Number(resumeAllCount) > 0 ? (
+                <button type="button" className="ab-btn primary" onClick={onResume} disabled={!onResume}>
+                  <Play size={11} strokeWidth={2} fill="currentColor" />
+                  {resumeLabel} ({resumeAllCount})
+                </button>
+              ) : null}
+            </>
+          ) : status === 'on' ? (
+            <button type="button" className="ab-btn" onClick={onPause} disabled={!onPause}>
+              <Pause size={11} strokeWidth={2} />
+              {pauseLabel}
+            </button>
+          ) : status === 'paused' ? (
+            <button type="button" className="ab-btn primary" onClick={onResume} disabled={!onResume}>
+              <Play size={11} strokeWidth={2} fill="currentColor" />
+              {resumeLabel}
+            </button>
           ) : null}
-        </div>
-      </div>
-
-      {/* `key={status}` re-mounts the body when on/off/paused flips so the new
-          state plays the agentPanelEnter fade-in animation, giving the swap
-          a soft transition instead of a hard cut. */}
-      <div className="agent-panel-body" key={status}>
-        {on && tick ? <div className="agent-tick">{tick}</div> : null}
-        {paused ? (
-          <div className="agent-tick">
-            {(() => {
-              // Mirror HomeRoles' humanization so the role detail page
-              // matches the home page label. Backend writes
-              // implementation-detail strings; recruiters see a clean phrase.
-              if (isManualPause) return 'Paused by you. Resume to continue.';
-              const r = String(pausedReason || '').toLowerCase();
-              let pretty = null;
-              if (r.startsWith('monthly usd cap')) pretty = 'monthly budget reached';
-              else if (r.includes('decision budget')) pretty = 'cycle limit reached';
-              else if (pausedReason) pretty = String(pausedReason).slice(0, 64);
-              return pretty
-                ? `Auto-paused — ${pretty}. Resume to continue.`
-                : 'Auto-paused. Resume to continue.';
-            })()}
-          </div>
-        ) : null}
-
-        {on || paused ? (
-          <div className="agent-budget">
-            <div className="agent-budget-row">
-              <span title="Covers pre-screen, scoring, semantic search, assessments, and the agent on this role.">Role budget · this month</span>
-              <span className="amt">{spentLabel} <span className="of">/ {budgetLabel}</span></span>
-            </div>
-            <div className="agent-budget-bar">
-              <i className="fill" style={{ width: `${pct}%` }} />
-            </div>
-          </div>
-        ) : null}
-
-        {!on && !paused ? (
-          <AgentOffActivator
-            onActivate={onActivate}
-            disabledReason={offStateMessage}
-            currentBudgetCents={budgetCents}
-          />
-        ) : (
-          <div className="agent-actions">
-            {hasBulkCounts ? (
-              <>
-                {Number(pauseAllCount) > 0 ? (
-                  <button
-                    type="button"
-                    className="agent-btn"
-                    onClick={onPause}
-                    disabled={!onPause}
-                  >
-                    <Pause size={11} strokeWidth={2} />
-                    {pauseLabel} ({pauseAllCount})
-                  </button>
-                ) : null}
-                {Number(resumeAllCount) > 0 ? (
-                  <button
-                    type="button"
-                    className="agent-btn primary"
-                    onClick={onResume}
-                    disabled={!onResume}
-                  >
-                    <Play size={11} strokeWidth={2} fill="currentColor" />
-                    {resumeLabel} ({resumeAllCount})
-                  </button>
-                ) : null}
-              </>
-            ) : on && !paused ? (
-              <button
-                type="button"
-                className="agent-btn"
-                onClick={onPause}
-                disabled={!onPause}
-              >
-                <Pause size={11} strokeWidth={2} />
-                {pauseLabel}
-              </button>
-            ) : paused ? (
-              <button
-                type="button"
-                className="agent-btn primary"
-                onClick={onResume}
-                disabled={!onResume}
-              >
-                <Play size={11} strokeWidth={2} fill="currentColor" />
-                {resumeLabel}
-              </button>
-            ) : null}
+          {onSettings ? (
             <button
               type="button"
-              className="agent-btn icon"
+              className="ab-btn ic"
               title="Configure agent"
               aria-label="Configure agent"
               onClick={onSettings}
-              disabled={!onSettings}
             >
               <SettingsIcon size={13} strokeWidth={1.7} />
             </button>
-          </div>
-        )}
-      </div>
-    </aside>
+          ) : null}
+        </span>
+      )}
+    </div>
   );
 };
 
@@ -283,38 +224,25 @@ export const AgentHeader = ({
   title,
   subtitle,
   actions = null,
-  // Breadcrumb trail rendered as a light strip ABOVE the purple slab.
-  // This is the single "where am I / where did I come from" affordance —
-  // it replaces the old in-header backLink. Every recruiter page passes
-  // it (top-level pages pass a single crumb, e.g. [{ label: 'Jobs' }]),
-  // so the strip is always present and the purple header never shifts
-  // vertically between pages. The strip is navigation only — no action
-  // buttons live in it.
+  // Breadcrumb trail rendered as a light strip ABOVE the header. Every
+  // recruiter page passes it so the header never shifts vertically between
+  // pages. Navigation only — no action buttons.
   breadcrumbs = null,
+  // Inline lead block to the LEFT of the title (e.g. the candidate avatar).
   preTitle = null,
+  // Secondary content (role-detail facts) — rendered in a thin sub-strip
+  // BELOW the header so the header band stays a uniform height everywhere.
+  // When present, `actions` move into the sub-strip alongside it.
   postTitle = null,
   period = true,
   agent = null,
-  // OFF state: called with monthly cap in cents. Page must hit
-  // PATCH /roles/{id} with { agentic_mode_enabled: true, monthly_usd_budget_cents }.
   onActivateAgent,
-  // ON state: called when user clicks Pause. Page hits PATCH /roles/{id}
-  // with { agentic_mode_enabled: false }.
   onPauseAgent,
-  // PAUSED state: called when user clicks Resume. Page hits PATCH /roles/{id}
-  // with { agentic_mode_enabled: true } (also clears paused_at server-side).
   onResumeAgent,
-  // Settings cog — opens the per-role agent settings drawer / tab.
   onAgentSettings,
-  // Optional copy shown in the OFF panel when activation isn't available
-  // (e.g. Jobs list, where activation is per-role).
   offStateMessage,
-  // Optional Pause/Resume button copy. The Jobs list passes "Pause all" /
-  // "Resume all" since its panel pauses/resumes every agent role at once.
   pauseLabel,
   resumeLabel,
-  // Org bulk mode: running / paused role counts. When set, the panel shows
-  // "Pause all (N)" and/or "Resume all (M)" so a mixed org can do either.
   pauseAllCount = null,
   resumeAllCount = null,
   className = '',
@@ -325,50 +253,63 @@ export const AgentHeader = ({
     showAgent && agent.on && !agent.paused ? 'agent-running' : 'agent-quiet';
 
   const hasBreadcrumbs = Array.isArray(breadcrumbs) && breadcrumbs.length > 0;
+  // A sub-strip exists only when a page supplies postTitle (today: role
+  // detail's facts). Its actions travel with it; otherwise actions sit in the
+  // header's right zone next to the agent strip.
+  const hasSubstrip = postTitle != null;
+  const headerActions = hasSubstrip ? null : actions;
+  const substripActions = hasSubstrip ? actions : null;
 
   return (
     <>
-      {/* Light breadcrumb strip — sits between the global nav and the purple
-          slab. Rendering it on every recruiter page keeps the slab's top at
-          the same y-coordinate everywhere (no jump on navigation). */}
       {hasBreadcrumbs ? (
         <BreadcrumbsRow items={breadcrumbs} />
       ) : null}
       <div
         className={`agent-header ${heroState} ${variant === 'compact' ? 'compact' : ''} ${className}`.trim()}
       >
-        {/* Bright running-state gradient layered as an opacity-faded overlay so
-            turning the agent on/off cross-fades the hero instead of snapping
-            (browsers can't transition `background` between gradient values). */}
+        {/* Faint lavender wash when the agent is running — fades in on top of
+            the light base so OFF->ON cross-fades cleanly. */}
         <span className="ah-bright-overlay" aria-hidden="true" />
         <div className="agent-header-inner">
           <div className="agent-header-left">
             {preTitle ? <div className="ah-pre">{preTitle}</div> : null}
-            {kicker ? <div className="ah-kicker">{kicker}</div> : null}
-            <div className="ah-title-row">
-              {renderTitleNode(title, period)}
-              {actions ? <div className="ah-title-actions">{actions}</div> : null}
+            <div className="ah-headings">
+              {kicker ? <div className="ah-kicker">{kicker}</div> : null}
+              <div className="ah-title-row">{renderTitleNode(title, period)}</div>
+              {subtitle ? <p className="ah-subtitle">{subtitle}</p> : null}
             </div>
-            {subtitle ? <p className="ah-subtitle">{subtitle}</p> : null}
-            {postTitle ? <div className="ah-post">{postTitle}</div> : null}
           </div>
 
-          {showAgent ? (
-            <AgentPanel
-              agent={agent}
-              onActivate={onActivateAgent}
-              onPause={onPauseAgent}
-              onResume={onResumeAgent}
-              onSettings={onAgentSettings}
-              offStateMessage={offStateMessage}
-              pauseLabel={pauseLabel}
-              resumeLabel={resumeLabel}
-              pauseAllCount={pauseAllCount}
-              resumeAllCount={resumeAllCount}
-            />
+          {(headerActions || showAgent) ? (
+            <div className="agent-header-right">
+              {headerActions ? <div className="ah-actions">{headerActions}</div> : null}
+              {showAgent ? (
+                <AgentStrip
+                  agent={agent}
+                  onActivate={onActivateAgent}
+                  onPause={onPauseAgent}
+                  onResume={onResumeAgent}
+                  onSettings={onAgentSettings}
+                  offStateMessage={offStateMessage}
+                  pauseLabel={pauseLabel}
+                  resumeLabel={resumeLabel}
+                  pauseAllCount={pauseAllCount}
+                  resumeAllCount={resumeAllCount}
+                />
+              ) : null}
+            </div>
           ) : null}
         </div>
       </div>
+      {hasSubstrip ? (
+        <div className={`agent-substrip ${heroState}`}>
+          <div className="agent-substrip-inner">
+            <div className="ah-substrip-main">{postTitle}</div>
+            {substripActions ? <div className="ah-substrip-actions">{substripActions}</div> : null}
+          </div>
+        </div>
+      ) : null}
     </>
   );
 };

@@ -85,12 +85,11 @@ describe('Demo flow redesign', () => {
     expect(screen.getByText(/AGENTIC-FIRST/i)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /^Book a demo$/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole('button', { name: /Try the live walkthrough/i }).length).toBeGreaterThan(0);
-    // Hero composition shows the unified AgentHeader's right-side panel
-    // ("Agent mode" label + state pill "OFF" initially). The auto-flip
-    // to ON is now driven by an IntersectionObserver scrolling past
-    // #how-it-works — JSDom doesn't fire intersection entries, so the
-    // panel stays OFF in tests. Assert the OFF copy ("Set a monthly cap…").
-    expect(screen.getByText(/^Agent mode$/i)).toBeInTheDocument();
+    // Hero composition shows the unified agent strip (label "Agent off"
+    // initially). The auto-flip to ON is driven by an IntersectionObserver
+    // scrolling past #how-it-works — JSDom doesn't fire intersection entries,
+    // so the strip stays OFF in tests. Assert the OFF copy ("Set a monthly cap…").
+    expect(screen.getByText(/^Agent off$/i)).toBeInTheDocument();
     expect(screen.getByText(/Set a monthly cap/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Maya Chen/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/CANDIDATES PROCESSED/i)).toBeInTheDocument();

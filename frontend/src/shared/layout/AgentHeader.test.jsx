@@ -31,7 +31,7 @@ describe('AgentHeader — Pause/Resume panel', () => {
     expect(screen.getByRole('button', { name: /pause all/i })).toBeDisabled();
   });
 
-  it('shows PAUSED (not AUTO-PAUSED) and the custom resumeLabel after a manual pause', () => {
+  it('shows Paused (not Auto-paused) and the custom resumeLabel after a manual pause', () => {
     const onResume = vi.fn();
     render(
       <AgentHeader
@@ -41,16 +41,16 @@ describe('AgentHeader — Pause/Resume panel', () => {
         resumeLabel="Resume all"
       />,
     );
-    expect(screen.getByText('PAUSED')).toBeInTheDocument();
-    expect(screen.queryByText('AUTO-PAUSED')).not.toBeInTheDocument();
-    expect(screen.getByText(/paused by you/i)).toBeInTheDocument();
+    expect(screen.getByText('Paused')).toBeInTheDocument();
+    expect(screen.queryByText('Auto-paused')).not.toBeInTheDocument();
+    expect(screen.getByText(/resume to continue/i)).toBeInTheDocument();
 
     const btn = screen.getByRole('button', { name: /resume all/i });
     fireEvent.click(btn);
     expect(onResume).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps AUTO-PAUSED wording for a budget-triggered pause', () => {
+  it('keeps Auto-paused wording for a budget-triggered pause', () => {
     render(
       <AgentHeader
         title="Jobs"
@@ -59,7 +59,7 @@ describe('AgentHeader — Pause/Resume panel', () => {
         resumeLabel="Resume all"
       />,
     );
-    expect(screen.getByText('AUTO-PAUSED')).toBeInTheDocument();
+    expect(screen.getByText('Auto-paused')).toBeInTheDocument();
     expect(screen.getByText(/monthly budget reached/i)).toBeInTheDocument();
   });
 
