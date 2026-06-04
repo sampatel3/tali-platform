@@ -644,8 +644,15 @@
   background: linear-gradient(to bottom, transparent 0, var(--c-bg) 30%);
   pointer-events: none;
 }
+/* The wrap is pointer-events:none so taps on the transparent gradient fall
+   through to the thread behind. The actual composer must re-enable them — it
+   renders as the shared `.tk-composer`, not the legacy `.cp-composer`, so we
+   bridge both class names here. Without this the textarea isn't focusable. */
+.cp-composer-wrap .tk-composer,
 .cp-composer {
   pointer-events: auto;
+}
+.cp-composer {
   max-width: 760px;
   margin: 0 auto;
   display: flex;
