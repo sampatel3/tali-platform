@@ -37,6 +37,10 @@
 .cp-root {
   display: grid;
   grid-template-columns: 240px minmax(640px, 1fr);
+  /* Bound the single row to the container height so neither column can grow
+     the page — each pane scrolls internally instead (Claude-desktop style:
+     fixed sidebar, the thread scrolls on its own). */
+  grid-template-rows: minmax(0, 1fr);
   height: calc(100vh - 64px);
   /* Mobile Safari's 100vh excludes the URL bar, so it's taller than the
      visible viewport — that made the whole page body scroll (carrying the
@@ -348,6 +352,11 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* Mirror .cp-side: a grid/flex child defaults to min-height:auto, which
+     refuses to shrink below its content — so a long thread overflowed the
+     bounded .cp-root and scrolled the whole page (carrying the sidebar).
+     min-height:0 lets the column shrink so .cp-scroll scrolls internally. */
+  min-height: 0;
   background: var(--c-bg);
   /* Anchor the absolute composer wrap to this column. Without it the
      wrap escapes to the viewport and slides under the sidebar — making
