@@ -173,8 +173,10 @@ describe('JobsPage Workable sync states', () => {
 
     render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
 
-    expect(await screen.findByText(/AGENT PAUSED/)).toBeInTheDocument();
-    expect(screen.queryByText(/AGENT ON/)).not.toBeInTheDocument();
+    // The role card now shows the unified agent pill — "PAUSED" (amber),
+    // not the dark-purple "ON" pill — for an enabled-but-paused role.
+    expect(await screen.findByText('PAUSED')).toBeInTheDocument();
+    expect(document.querySelector('.job-agent-pill.is-on')).toBeNull();
   });
 
   it('paints the first page, then swaps in the full role list in the background', async () => {

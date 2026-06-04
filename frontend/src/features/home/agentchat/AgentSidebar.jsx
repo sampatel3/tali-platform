@@ -4,7 +4,7 @@
 // ones) so you can click an off role and activate it from here; a multi-select
 // mode lets you message several agents at once.
 
-import { Check, CheckSquare, MessageSquare } from 'lucide-react';
+import { Check, CheckSquare, MessageSquare, Pause, Sparkles } from 'lucide-react';
 
 const fmtCount = (n) => (n > 999 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 const fmtUsd = (cents) => `$${((cents || 0) / 100).toFixed(2)}`;
@@ -54,7 +54,7 @@ export function AgentSidebar({
             //    the feed's "Pending N").
             const questions = (a.unread_messages || 0) + (a.open_questions || 0);
             const decisions = a.pending_decisions || 0;
-            const dotClass = a.agent_paused ? 'is-paused' : a.agent_enabled ? 'is-on' : '';
+            const rowStatus = a.agent_paused ? 'paused' : a.agent_enabled ? 'on' : 'off';
             const selected = bulkMode && bulkSelected?.has(a.role_id);
             const preview = a.agent_paused
               ? `Paused · ${a.agent_paused_reason || 'budget reached'}`
@@ -63,7 +63,7 @@ export function AgentSidebar({
             return (
               <button
                 key={a.role_id}
-                className={`ac-agent ${!bulkMode && a.role_id === activeRoleId ? 'is-active' : ''} ${selected ? 'is-selected' : ''} ${!a.agent_enabled && !a.agent_paused ? 'is-off' : ''}`}
+                className={`ac-agent ac-${rowStatus} ${!bulkMode && a.role_id === activeRoleId ? 'is-active' : ''} ${selected ? 'is-selected' : ''}`}
                 onClick={() => (bulkMode ? onToggleSelected?.(a.role_id) : onSelect?.(a.role_id))}
                 title={a.role_name}
               >
@@ -72,7 +72,11 @@ export function AgentSidebar({
                     {selected ? <Check size={11} strokeWidth={3} /> : null}
                   </span>
                 )}
-                <span className={`ac-dot ${dotClass}`} />
+                <span className={`ac-stat ac-stat-${rowStatus}`} aria-hidden="true">
+                  {rowStatus === 'on' ? <Sparkles size={13} strokeWidth={2} />
+                    : rowStatus === 'paused' ? <Pause size={11} strokeWidth={2} fill="currentColor" />
+                    : <span className="ac-stat-dot" />}
+                </span>
                 <span className="ac-agent-body">
                   <span className="ac-agent-role">{a.role_name}</span>
                   <span className="ac-agent-preview">{preview}</span>

@@ -43,16 +43,22 @@
 .ac-kicker { font-family: var(--font-mono); font-size: 0.65625rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); }
 .ac-sidebar-count { font-size: 0.6875rem; color: var(--purple-2); font-weight: 600; }
 .ac-agent-list { flex: 1; overflow-y: auto; padding: 2px 8px 12px; display: flex; flex-direction: column; gap: 3px; }
-.ac-agent { display: flex; align-items: flex-start; gap: 10px; padding: 10px 11px; border-radius: var(--radius); border: 1px solid transparent; background: transparent; cursor: pointer; text-align: left; width: 100%; transition: background 0.12s ease; }
+.ac-agent { display: flex; align-items: flex-start; gap: 10px; padding: 10px 11px; border-radius: var(--radius); border: 1px solid transparent; background: transparent; cursor: pointer; text-align: left; width: 100%; position: relative; transition: background 0.12s ease; }
 .ac-agent:hover { background: var(--bg-3); }
 .ac-agent.is-active { background: var(--purple-soft); border-color: var(--purple); }
 .ac-agent.is-selected { background: var(--purple-soft); border-color: var(--purple); }
-.ac-agent.is-off .ac-agent-role { color: var(--ink-soft); }
+.ac-agent.ac-off .ac-agent-role { color: var(--ink-soft); }
+/* ON rows carry the dark-purple agent language: faint tint + left accent. */
+.ac-agent.ac-on { background: linear-gradient(90deg, color-mix(in oklab, var(--purple) 5%, transparent), transparent); }
+.ac-agent.ac-on::before { content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 3px; border-radius: 2px; background: var(--purple); }
 .ac-check { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; border-radius: 5px; border: 1.5px solid var(--line); display: inline-flex; align-items: center; justify-content: center; color: #fff; }
 .ac-check.on { background: var(--purple); border-color: transparent; }
-.ac-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex-shrink: 0; margin-top: 5px; }
-.ac-dot.is-on { background: var(--green); box-shadow: 0 0 0 3px color-mix(in oklab, var(--green) 22%, transparent); }
-.ac-dot.is-paused { background: var(--amber); }
+/* Status indicator — same vocabulary as the header agent strip + job cards. */
+.ac-stat { width: 24px; height: 24px; border-radius: 7px; flex-shrink: 0; margin-top: 1px; display: inline-flex; align-items: center; justify-content: center; }
+.ac-stat-on { background: linear-gradient(135deg, #3a1d6e, #241147); color: #fff; box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple) 14%, transparent); }
+.ac-stat-paused { background: color-mix(in oklab, var(--amber) 16%, var(--bg-2)); border: 1px solid color-mix(in oklab, var(--amber) 45%, var(--line)); color: color-mix(in oklab, var(--amber) 70%, var(--ink)); }
+.ac-stat-off { background: var(--bg-3); border: 1px solid var(--line); }
+.ac-stat-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--mute); }
 .ac-agent-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .ac-agent-role { font-size: 0.8125rem; font-weight: 600; color: var(--ink); line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .ac-agent-preview { font-size: 0.71875rem; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }

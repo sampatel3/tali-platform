@@ -3,7 +3,9 @@ import { useSearchParams } from 'react-router-dom';
 import {
   ArrowRight,
   Filter,
+  Pause,
   RefreshCw,
+  Sparkles,
   Star,
 } from 'lucide-react';
 
@@ -921,23 +923,24 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                       </div>
                     </div>
                     {agentPaused ? (
-                      <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>
-                        {agentBudget > 0
-                          ? `AGENT PAUSED · cap $${Math.round(agentBudget)}`
-                          : 'AGENT PAUSED'}
-                      </div>
+                      <span className="job-agent-pill is-paused" title={agentBudget > 0 ? `Agent paused · cap $${Math.round(agentBudget)}` : 'Agent paused'}>
+                        <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
+                        PAUSED
+                      </span>
                     ) : agentEnabled ? (
-                      <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--purple)', whiteSpace: 'nowrap' }}>
+                      <span
+                        className="job-agent-pill is-on"
+                        title="Agent on for this role"
+                      >
+                        <span className="d"><Sparkles size={11} strokeWidth={2.2} /></span>
                         {agentSpent != null && agentBudget > 0
-                          ? `AGENT ON · $${Math.round(agentSpent)}/$${Math.round(agentBudget)}`
+                          ? `ON · $${Math.round(agentSpent)}/$${Math.round(agentBudget)}`
                           : agentBudget > 0
-                            ? `AGENT ON · cap $${Math.round(agentBudget)}`
-                            : 'AGENT ON'}
-                      </div>
+                            ? `ON · cap $${Math.round(agentBudget)}`
+                            : 'ON'}
+                      </span>
                     ) : (
-                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--mute)', whiteSpace: 'nowrap' }}>
-                        AGENT OFF
-                      </div>
+                      <span className="job-agent-pill is-off" title="Agent off">OFF</span>
                     )}
                   </div>
 
