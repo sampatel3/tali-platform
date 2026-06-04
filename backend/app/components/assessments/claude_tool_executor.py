@@ -30,17 +30,49 @@ Design contract
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import PurePosixPath
 from typing import Any, Dict, List
+
+from ...platform.config import settings
 
 
 logger = logging.getLogger(__name__)
 
 
-# 10s is tight on purpose: candidates' sandboxes run shoestring CPU and
-# a runaway command must surface to Claude quickly so it can choose a
-# different approach instead of stalling the chat turn.
-_RUN_COMMAND_TIMEOUT_SECONDS = 10
+# Per-command wall-clock cap. Sourced from settings (default 60s) so a real
+# pytest/build run has headroom — the previous hardcoded 10s killed anything
+# but a trivial test invocation.
+_RUN_COMMAND_TIMEOUT_SECONDS = max(1, int(getattr(settings, "CLAUDE_TOOL_TIMEOUT_SECONDS", 60) or 60))
+
+# Defense-in-depth command guardrail for the candidate sandbox. The sandbox is
+# isolated + ephemeral and (on the agentic path) holds no platform secret, so
+# this is not the primary control — the scoring rubric measures the candidate's
+# judgment, not the agent's raw capability. But we block raw network/exfil tools
+# and privilege escalation so the easy misuse paths (curl a solution, exfiltrate,
+# sudo) are closed. pip/pytest/python/grep/git are intentionally NOT blocked —
+# they're core to the task. (A full egress cut is the E2B_SANDBOX_ALLOW_INTERNET
+# switch once deps are pre-baked into the template.)
+_BLOCKED_COMMAND_PATTERNS = [
+    re.compile(p)
+    for p in (
+        r"(^|[\s;&|`(])(sudo|doas)([\s;&|`)]|$)",
+        r"(^|[\s;&|`(])(curl|wget|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|ftp)([\s;&|`)]|$)",
+    )
+]
+
+
+def _blocked_command_reason(command: str) -> str | None:
+    """Return a human reason if ``command`` hits the guardrail, else None."""
+    text = (command or "").lower()
+    for pattern in _BLOCKED_COMMAND_PATTERNS:
+        if pattern.search(text):
+            return (
+                "blocked_command: network/exfil and privilege-escalation commands "
+                "(curl, wget, nc, ssh, sudo, …) are disabled in the assessment "
+                "sandbox. Use the repository tools and pytest instead."
+            )
+    return None
 
 # Cap stdout/stderr in run_command results — a 50 MB log dump would
 # blow the Anthropic message token budget and the tool_result would be
@@ -304,6 +336,13 @@ class AssessmentToolExecutor:
         command = tool_input.get("command")
         if not isinstance(command, str) or not command.strip():
             return _err("invalid_input: 'command' is required")
+
+        blocked = _blocked_command_reason(command)
+        if blocked:
+            logger.warning(
+                "run_command blocked in assessment sandbox: %r", command.strip()[:120]
+            )
+            return _err(blocked)
 
         try:
             process = self._e2b.run_command(

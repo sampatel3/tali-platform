@@ -27,6 +27,14 @@ class E2BService:
         """
         self.api_key = api_key
         self.template = template or os.getenv("E2B_TEMPLATE")
+        # Egress switch for candidate sandboxes. Default True because the task
+        # bootstrap pip-installs deps from PyPI — a hard block additionally
+        # requires pre-baking deps into the E2B template. Flip the env to
+        # "false" once the template carries the deps to fully cut internet.
+        self.allow_internet_access = (
+            os.getenv("E2B_SANDBOX_ALLOW_INTERNET", "true").strip().lower()
+            not in {"0", "false", "no", "off"}
+        )
         try:
             requested_timeout = int(os.getenv("E2B_SANDBOX_TIMEOUT_SECONDS", "3600"))
             # E2B enforces maximum timeout of 1 hour.
@@ -71,11 +79,13 @@ class E2BService:
                         api_key=self.api_key,
                         template=self.template,
                         timeout=self.sandbox_timeout_seconds,
+                        allow_internet_access=self.allow_internet_access,
                     )
                 else:
                     sandbox = Sandbox(
                         api_key=self.api_key,
                         timeout=self.sandbox_timeout_seconds,
+                        allow_internet_access=self.allow_internet_access,
                     )
             except TypeError:
                 if self.template:

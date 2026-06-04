@@ -70,15 +70,20 @@ class Settings(BaseSettings):
     #    4 (#415): too low for "fix it" — model burned 4 reads before
     #              edits, hit cap with no text, soft-recovery fell
     #              through to generic retry (assessment 77, 2026-05-26)
-    #    8 (now): enough for a typical read-N + edit-N round-trip
-    #             while staying ~20s on Haiku 4.5. The empty-text soft
-    #             recovery path in error_recovery now also handles the
-    #             tool-heavy case when this IS hit (names the tools
-    #             used + asks for a tighter follow-up).
-    CLAUDE_TOOL_MAX_TURNS: int = 8
-    # Per-tool wall-clock cap inside the executor (leaf A enforces;
-    # surfaced here so the timeout is grep-able alongside the loop cap).
-    CLAUDE_TOOL_TIMEOUT_SECONDS: int = 10
+    #    8 (#…): enough for a read-N + edit-N round-trip but too tight for
+    #             a real "find → edit → run pytest → read output → fix"
+    #             loop — Claude burned its turns locating a module + writing
+    #             a doc and never reached the tests (it reported "hit the
+    #             call limit"). Candidates expect Cursor/Claude-Code-grade
+    #             autonomy: run the tests themselves and iterate.
+    #   25 (now): comfortable headroom for find+edit+test+fix in one turn.
+    #             The $ budget + assessment timer remain the hard ceilings;
+    #             the empty-text soft recovery still covers the rare hit.
+    CLAUDE_TOOL_MAX_TURNS: int = 25
+    # Per-command wall-clock cap inside the executor's run_command tool.
+    # Bumped 10→60: 10s killed anything but a trivial test run; a real
+    # pytest/build needs headroom. The executor reads this setting.
+    CLAUDE_TOOL_TIMEOUT_SECONDS: int = 60
 
     # Cost model defaults (all overridable via environment).
     # Rates match Claude Haiku 4.5 — the model the platform actually
