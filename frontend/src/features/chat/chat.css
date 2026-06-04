@@ -38,6 +38,13 @@
   display: grid;
   grid-template-columns: 240px minmax(640px, 1fr);
   height: calc(100vh - 64px);
+  /* Mobile Safari's 100vh excludes the URL bar, so it's taller than the
+     visible viewport — that made the whole page body scroll (carrying the
+     nav + chat header, and the drawer toggle in it, off-screen) instead of
+     the internal .cp-scroll. dvh tracks the *visible* height, so the header
+     stays pinned and only the thread scrolls. Plain vh stays as the fallback
+     for browsers without dvh. */
+  height: calc(100dvh - 64px);
   background: var(--c-bg);
   border-top: 1px solid var(--c-line);
   color: var(--c-ink);

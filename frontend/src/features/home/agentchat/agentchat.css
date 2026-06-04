@@ -12,6 +12,9 @@
    no full-page scroll — which keeps the rails + dock pinned without sticky. */
 .home-app {
   height: calc(100vh - var(--nav-h, 64px));
+  /* dvh tracks the visible viewport on mobile (100vh excludes the URL bar
+     there, overflowing the body). vh stays as the fallback. */
+  height: calc(100dvh - var(--nav-h, 64px));
   display: flex;
   flex-direction: column;
   min-height: 0;
