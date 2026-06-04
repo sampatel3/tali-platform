@@ -76,9 +76,12 @@
 /* ================================================================
    AGENT HEADER — unified V2 hero (HANDOFF unified-headers.md §2-§5)
    The single dark-purple slab at the top of every recruiter page.
-   Fixed 320px tall so every header lines up perfectly across the
-   platform. The right-side agent panel (Jobs / Role detail) reserves
-   208px so OFF and ON states have the same vertical footprint.
+   Unified 232px tall so every header lines up at the same y-coordinate
+   across the platform. The right-side agent panel (Jobs / Role detail)
+   renders ~184px in its busiest ON state (pending pill + tick + budget +
+   action row); with the 24+22px header padding that lands the panel
+   pages at ~230px, so the floor is set just above that and the no-panel
+   pages (Home / Tasks) rise to match instead of sitting ~55px short.
    ================================================================ */
 
 .agent-header {
@@ -87,14 +90,16 @@
   position: relative;
   overflow: hidden;
   padding: 22px 32px 24px;
-  /* Floor sized to absorb the tallest normal layout (Role-detail
-     back-link + kicker + h1 + actions + 4-fact grid + 4-row agent
-     panel on the right) so every recruiter-page header lines up at
-     the same y-coordinate in the 99% case. Kept as `min-height` (not
-     fixed `height`) so an unusually long role name — backend allows
-     up to 200 chars and we render it in both kicker and title — can
-     wrap without getting clipped by overflow: hidden. */
-  min-height: 176px;
+  /* Unified floor measured against the agent-panel pages (Jobs / Role
+     detail): the panel renders ~184px in its busiest ON state, +46px
+     header padding ≈ 230px. Floor sits just above so the no-panel pages
+     (Home / Tasks, which otherwise bottom out at ~176px) rise to the
+     same height and every recruiter-page slab lines up at the same
+     y-coordinate. Kept as `min-height` (not fixed `height`) so an
+     unusually long role name — backend allows up to 200 chars and we
+     render it in both kicker and title — can still wrap without getting
+     clipped by overflow: hidden. */
+  min-height: 232px;
   display: flex;
   /* Anchor inner content to the top so the title sits at the same y position
      on every page, with or without a right-side agent panel. (Centering left
