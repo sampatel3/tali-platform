@@ -87,9 +87,18 @@ export function useCandidateTriage({
     if (!application?.id || !taskId) return;
     setAssessmentBusy(true);
     try {
-      await rolesApi.createAssessment(application.id, { task_id: Number(taskId) });
+      // 'auto' ⇒ omit task_id so an active A/B experiment on the role assigns
+      // the arm (50/50, stable per candidate); otherwise force the picked task.
+      const isAuto = String(taskId) === 'auto';
+      await rolesApi.createAssessment(
+        application.id,
+        isAuto ? {} : { task_id: Number(taskId) },
+      );
       await loadRoleWorkspace();
-      showToast('Assessment invite sent.', 'success');
+      showToast(
+        isAuto ? 'Assessment invite sent (A/B-assigned task).' : 'Assessment invite sent.',
+        'success',
+      );
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to send invite.'), 'error');
     } finally {

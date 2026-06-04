@@ -5,6 +5,7 @@ import sys
 from types import SimpleNamespace
 
 from app.components.integrations.claude.model_fallback import (
+    CURRENT_HAIKU_MODEL,
     LEGACY_HAIKU_MODEL,
     PRIMARY_HAIKU_MODEL,
     SNAPSHOT_HAIKU_MODEL,
@@ -15,16 +16,37 @@ from app.services.fit_matching_service import calculate_cv_job_match_sync
 
 
 def test_candidate_models_for_known_haiku_aliases():
+    # The current, account-available Haiku is always offered as the first
+    # fallback so a request for a retired 3.x snapshot (all 404 for our
+    # account) still resolves to a working model instead of dead-ending.
     assert candidate_models_for(PRIMARY_HAIKU_MODEL) == [
         PRIMARY_HAIKU_MODEL,
+        CURRENT_HAIKU_MODEL,
         SNAPSHOT_HAIKU_MODEL,
         LEGACY_HAIKU_MODEL,
     ]
     assert candidate_models_for(SNAPSHOT_HAIKU_MODEL) == [
         SNAPSHOT_HAIKU_MODEL,
+        CURRENT_HAIKU_MODEL,
         PRIMARY_HAIKU_MODEL,
         LEGACY_HAIKU_MODEL,
     ]
+
+
+def test_candidate_models_for_always_includes_a_working_model():
+    # Every Haiku-family alias (incl. the dead 3.x ones and the default/empty
+    # case) must surface the current working Haiku somewhere in the chain.
+    for requested in (
+        None,
+        "",
+        CURRENT_HAIKU_MODEL,
+        PRIMARY_HAIKU_MODEL,
+        SNAPSHOT_HAIKU_MODEL,
+        LEGACY_HAIKU_MODEL,
+    ):
+        assert CURRENT_HAIKU_MODEL in candidate_models_for(requested)
+    # The empty/default case resolves straight to the working model.
+    assert candidate_models_for(None)[0] == CURRENT_HAIKU_MODEL
 
 
 def test_is_model_not_found_error_matches_provider_payloads():
@@ -72,13 +94,15 @@ def test_fit_matching_retries_when_primary_haiku_alias_is_unavailable(monkeypatc
     )
 
     assert calls[0] == PRIMARY_HAIKU_MODEL
-    assert calls[1] == SNAPSHOT_HAIKU_MODEL
+    # The current, account-available Haiku is now the first fallback, so the
+    # retry lands there instead of cascading to the (also-dead) 3.x snapshot.
+    assert calls[1] == CURRENT_HAIKU_MODEL
     assert result["cv_job_match_score"] == 73.6
     assert result["cv_job_match_score"] % 10 != 0
     assert result["match_details"]["skills_match_score_100"] == 68.7
     assert result["match_details"]["experience_relevance_score_100"] == 72.2
     assert len(result["match_details"]["score_rationale_bullets"]) >= 2
-    assert result["match_details"]["_claude_usage"]["model"] == SNAPSHOT_HAIKU_MODEL
+    assert result["match_details"]["_claude_usage"]["model"] == CURRENT_HAIKU_MODEL
 
 
 def test_fit_matching_enriches_requirement_evidence_when_model_output_is_sparse(monkeypatch):
