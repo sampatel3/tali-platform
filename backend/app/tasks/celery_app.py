@@ -113,6 +113,16 @@ celery_app.conf.update(
             "task": "app.tasks.assessment_tasks.send_assessment_expiry_reminders",
             "schedule": 86400.0,
         },
+        # Reap abandoned assessments: mark PENDING-past-expiry as EXPIRED and
+        # close IN_PROGRESS sessions left open > 2h. The task existed and was
+        # registered but was never on the beat schedule, so abandoned rows piled
+        # up indefinitely (e.g. role-26 assessments stuck IN_PROGRESS for 9 days)
+        # — polluting funnel counts and leaving sandboxes referenced. 30 min is
+        # well within the 2h staleness cutoff for our ≤60-min assessments.
+        "cleanup-expired-assessments-every-30-minutes": {
+            "task": "app.tasks.assessment_tasks.cleanup_expired_assessments",
+            "schedule": 1800.0,
+        },
         # Anthropic billing reconciliation. Pulls the last 48h so
         # late-arriving Anthropic data on the previous day gets re-checked.
         #
