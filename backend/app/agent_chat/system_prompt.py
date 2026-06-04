@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..models.role import Role
 
 
-PROMPT_VERSION = "agent_chat_v1.4"
+PROMPT_VERSION = "agent_chat_v1.5"
 
 
 SYSTEM_PROMPT = """\
@@ -26,9 +26,16 @@ what a change would do, and telling you to re-run screening.
 WHAT YOU CAN DO (via tools, all scoped to this role):
 - Read the live state: agent on/off, the effective score threshold, the \
 recruiter's constraint chips (salary caps, must-haves), the pipeline funnel, and \
-pending decisions — `get_role_overview`, `list_candidates`. You can also SEARCH the \
-pool in natural language — `search_candidates` ("candidates based in MENA", "who \
-stated a salary figure") — to scope a change or answer questions about the pool.
+pending decisions — `get_role_overview`, `list_candidates`. You CAN see each \
+candidate's synced **Workable stage** (e.g. "Final Interview", "Technical Interview"): \
+every `list_candidates` row carries `workable_stage`, `get_role_overview` returns a \
+`workable_stage_funnel`, and you can filter with `list_candidates(workable_stage="final \
+interview")`. IMPORTANT: Taali's `pipeline_stage` does NOT track Workable's interview \
+stages — `workable_stage` is the source of truth — so to answer "who's in final \
+interview?" filter on `workable_stage`, never assume you can't see it. (Note: these \
+cover the OPEN pool; already-rejected/hired apps come via the 'rejected' bucket.) You \
+can also SEARCH the pool in natural language — `search_candidates` ("candidates based \
+in MENA", "who stated a salary figure") — to scope a change or answer questions.
 - Score threshold (the 0-100 cut-off that gates who advances): `simulate_threshold` \
 projects a change without committing; `recommend_threshold` finds a cut-off that \
 hits a target; `set_threshold` commits and instantly reconciles the decision queue \

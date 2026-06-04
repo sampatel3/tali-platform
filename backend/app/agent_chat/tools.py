@@ -60,8 +60,12 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
         "description": (
             "List candidates on this role by bucket, best score first. bucket: "
             "'above'/'below' (the effective threshold), 'advanced', 'rejected', "
-            "'pending' (awaiting a decision), or 'all' (open apps). Returns name + "
-            "pre-screen score + stage. Use to name the specific people a change moves."
+            "'pending' (awaiting a decision), or 'all' (open apps). Each candidate "
+            "returns name, pre-screen score, Taali pipeline stage, AND its synced "
+            "`workable_stage` (e.g. 'Final Interview', 'Technical Interview'). Pass "
+            "`workable_stage` to filter to a specific Workable stage — that's how you "
+            "answer 'who's in final interview?' (Taali's pipeline_stage does NOT track "
+            "Workable's interview stages; workable_stage is the source of truth)."
         ),
         "input_schema": {
             "type": "object",
@@ -70,6 +74,10 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "enum": ["above", "below", "advanced", "rejected", "pending", "all"],
                     "default": "all",
+                },
+                "workable_stage": {
+                    "type": ["string", "null"],
+                    "description": "Filter to candidates whose synced Workable stage contains this (case-insensitive), e.g. 'final interview'. Applies to the open buckets (not 'rejected').",
                 },
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
             },
@@ -326,6 +334,14 @@ def _role_overview(db: Session, role: Role) -> dict[str, Any]:
     )
     funnel = {str(stage or "unknown"): int(n) for stage, n in stage_rows}
 
+    # Synced Workable-stage breakdown of the OPEN pool — Taali's pipeline_stage
+    # doesn't track Workable's internal interview stages, so this is how the agent
+    # answers "who's in final/technical interview". Counts the live (open) apps.
+    workable_funnel: dict[str, int] = {}
+    for r in rows:
+        key = r.workable_stage or "(unsynced)"
+        workable_funnel[key] = workable_funnel.get(key, 0) + 1
+
     pending_rows = (
         db.query(AgentDecision.decision_type, func.count(AgentDecision.id))
         .filter(
@@ -354,6 +370,7 @@ def _role_overview(db: Session, role: Role) -> dict[str, Any]:
         },
         "constraints": _constraints.list_constraints(role),
         "funnel": funnel,
+        "workable_stage_funnel": workable_funnel,
         "open_candidates": len(rows),
         "above_threshold": len(above),
         "below_threshold": len(below),
@@ -362,7 +379,9 @@ def _role_overview(db: Session, role: Role) -> dict[str, Any]:
     }
 
 
-def _list_candidates(db: Session, role: Role, *, bucket: str, limit: int) -> dict[str, Any]:
+def _list_candidates(
+    db: Session, role: Role, *, bucket: str, limit: int, workable_stage: str | None = None
+) -> dict[str, Any]:
     rows = _impact.load_open_candidates(db, role)
     effective = _impact.effective_threshold(db, role)
     above, below = _impact.split_by_threshold(rows, effective)
@@ -381,9 +400,18 @@ def _list_candidates(db: Session, role: Role, *, bucket: str, limit: int) -> dic
     else:
         chosen = rows
 
+    # Optional filter by the SYNCED Workable stage (e.g. "Final Interview",
+    # "Technical Interview"). Taali's pipeline_stage doesn't track Workable's
+    # internal interview stages — `workable_stage` is the source of truth — so
+    # this lets the agent answer "who's in final interview" directly.
+    wk_filter = (workable_stage or "").strip().lower()
+    if wk_filter:
+        chosen = [r for r in chosen if wk_filter in (r.workable_stage or "").lower()]
+
     chosen = sorted(chosen, key=lambda r: (r.score if r.score is not None else -1), reverse=True)
     return {
         "bucket": bucket,
+        "workable_stage_filter": workable_stage or None,
         "count": len(chosen),
         "effective_threshold": effective,
         "candidates": [
@@ -392,6 +420,7 @@ def _list_candidates(db: Session, role: Role, *, bucket: str, limit: int) -> dic
                 "name": r.candidate_name,
                 "score": r.score,
                 "stage": r.pipeline_stage,
+                "workable_stage": r.workable_stage,
                 "pending_decision": r.pending_decision_type,
             }
             for r in chosen[: int(limit)]
@@ -487,7 +516,11 @@ def dispatch_tool(
         return _role_overview(db, role)
     if name == "list_candidates":
         return _list_candidates(
-            db, role, bucket=str(args.get("bucket") or "all"), limit=int(args.get("limit") or 20)
+            db,
+            role,
+            bucket=str(args.get("bucket") or "all"),
+            limit=int(args.get("limit") or 20),
+            workable_stage=args.get("workable_stage"),
         )
     if name == "simulate_threshold":
         return _impact.simulate_threshold(db, role, float(args["threshold"]))
