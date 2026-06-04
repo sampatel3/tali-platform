@@ -176,4 +176,42 @@ describe('JobsPage Workable sync states', () => {
     expect(await screen.findByText(/AGENT PAUSED/)).toBeInTheDocument();
     expect(screen.queryByText(/AGENT ON/)).not.toBeInTheDocument();
   });
+
+  it('paints the first page, then swaps in the full role list in the background', async () => {
+    // A full first page (== the limit) signals there may be more roles, so the
+    // hub follows up with an unlimited fetch and replaces the list. A small org
+    // (first page not full) must NOT trigger the background fetch.
+    const firstPage = Array.from({ length: 24 }, (_, i) => ({
+      ...baseRoles[0], id: 200 + i, name: `Role ${200 + i}`,
+    }));
+    const fullList = [...firstPage, { ...baseRoles[0], id: 999, name: 'Tail Role Zeta' }];
+    apiClient.roles.list.mockImplementation((params) =>
+      Promise.resolve({ data: params && params.limit ? firstPage : fullList }),
+    );
+    apiClient.organizations.getWorkableSyncStatus.mockResolvedValue({
+      data: { run_id: null, sync_in_progress: false, workable_last_sync_at: '2026-04-25T13:00:00Z', workable_last_sync_status: 'success', workable_last_sync_summary: {} },
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    // First page paints from the limited fetch...
+    await screen.findByText('Role 200');
+    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, limit: 24 });
+    // ...then the background unlimited fetch lands and the tail role appears.
+    expect(await screen.findByText('Tail Role Zeta')).toBeInTheDocument();
+    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true });
+  });
+
+  it('does not background-fetch when the first page is not full', async () => {
+    // baseRoles has a single role (< limit) → only the limited call fires.
+    apiClient.organizations.getWorkableSyncStatus.mockResolvedValue({
+      data: { run_id: null, sync_in_progress: false, workable_last_sync_at: '2026-04-25T13:00:00Z', workable_last_sync_status: 'success', workable_last_sync_summary: {} },
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    await screen.findByText('Backend Engineer');
+    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, limit: 24 });
+    expect(apiClient.roles.list).not.toHaveBeenCalledWith({ include_pipeline_stats: true });
+  });
 });

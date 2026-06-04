@@ -40,6 +40,13 @@ import {
 // "Pipeline" strip and the job-detail funnel via src/shared/metrics.
 const STAGES = PIPELINE_FUNNEL_STAGES;
 
+// Progressive load: paint this many roles first (the active / starred /
+// recently-synced head of the list, per the backend's sort), then fetch the
+// full list in the background. Sized to comfortably cover a recruiter's live +
+// recently-touched roles on first paint without waiting on the long tail of
+// old / filled postings.
+const JOBS_FIRST_PAGE = 24;
+
 const SOURCE_FILTERS = [
   { key: 'all', label: 'All roles' },
   { key: 'live', label: 'Live' },
@@ -193,6 +200,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   const onNavigate = isShowcase ? () => {} : rawOnNavigate;
 
   const [roles, setRoles] = useState([]);
+  // True while the first page is shown and the full role list is still
+  // loading in the background (drives the subtle "loading all roles" hint).
+  const [rolesPartial, setRolesPartial] = useState(false);
   const [orgData, setOrgData] = useState(null);
   const [allTasks, setAllTasks] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -231,24 +241,45 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     setLoading(true);
     setError('');
     try {
+      // Phase 1 — paint fast. Fetch only the first page of roles (the active /
+      // recently-synced head) alongside org + org-status. On a large org the
+      // full /roles pass aggregates over tens of thousands of applications and
+      // serialises ~100 roles; scoping to a page makes first paint cheap.
       const [rolesRes, orgRes, orgStatusRes] = await Promise.all([
-        rolesApi.list({ include_pipeline_stats: true }),
+        rolesApi.list({ include_pipeline_stats: true, limit: JOBS_FIRST_PAGE }),
         orgApi.get(),
         apiClient.agent.orgStatus().catch(() => null),
       ]);
       setOrgKpis(orgStatusRes?.data || null);
-      const nextRoles = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
+      const firstRoles = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
       const nextOrgData = orgRes?.data || null;
-      // Render the hub immediately from roles + org + org-status. The Workable
-      // sync badge ("Syncing now" / "Synced X ago") is secondary chrome — read
-      // it below WITHOUT awaiting so it can't gate the spinner. Previously the
-      // sync-status round-trip ran in series after this batch and held the
-      // whole page behind it.
-      setRoles(nextRoles);
+      // Render the hub immediately from the first page + org + org-status. The
+      // Workable sync badge ("Syncing now" / "Synced X ago") is secondary
+      // chrome — read it below WITHOUT awaiting so it can't gate the spinner.
+      setRoles(firstRoles);
       setOrgData(nextOrgData);
       setSyncing(false);
       setSyncRunId(null);
       setLoading(false);
+
+      // Phase 2 — fill in the long tail. If the first page came back full there
+      // are likely more roles; fetch the COMPLETE list in the background and
+      // swap it in. The page is already interactive, so the recruiter never
+      // waits on the full aggregate pass. Role keys (role.id) keep the first
+      // page stable as the rest append.
+      if (firstRoles.length >= JOBS_FIRST_PAGE) {
+        setRolesPartial(true);
+        rolesApi
+          .list({ include_pipeline_stats: true })
+          .then((fullRes) => {
+            const allRoles = Array.isArray(fullRes?.data) ? fullRes.data : null;
+            if (allRoles && allRoles.length) setRoles(allRoles);
+          })
+          .catch(() => { /* keep the first page if the full fetch fails */ })
+          .finally(() => setRolesPartial(false));
+      } else {
+        setRolesPartial(false);
+      }
       if (nextOrgData?.workable_connected) {
         try {
           const statusRes = await orgApi.getWorkableSyncStatus();
@@ -264,6 +295,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       }
     } catch {
       setRoles([]);
+      setRolesPartial(false);
       setOrgData(null);
       setOrgKpis(null);
       setSyncing(false);
@@ -742,6 +774,14 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           <button type="button" className="f-chip" disabled title="Additional recruiter filters are coming next.">
             + Add filter
           </button>
+          {rolesPartial ? (
+            <span
+              className="flex items-center gap-1 text-xs text-[var(--mute)]"
+              aria-live="polite"
+            >
+              <Spinner size={11} /> Loading all roles…
+            </span>
+          ) : null}
         </div>
 
         {loading ? (
