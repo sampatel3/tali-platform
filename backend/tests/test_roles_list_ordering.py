@@ -52,3 +52,40 @@ def test_list_roles_orders_starred_first_then_by_updated_at(db, client):
         "epsilon-mid-unstarred",
         "alpha-old-unstarred",
     ]
+
+
+def test_list_roles_limit_returns_first_page_in_sort_order(db, client):
+    """``?limit=N`` returns the first N roles in the SAME sort order as the
+    full list — the Jobs hub paints this page first, then re-fetches the full
+    list in the background. Without ``limit`` the response stays unbounded."""
+    headers, _ = auth_headers(client, organization_name="Page Org")
+    me = db.query(User).order_by(User.id.desc()).first()
+    org_id = me.organization_id
+
+    now = datetime.now(timezone.utc)
+    rows = [
+        ("alpha-old-unstarred", False, now - timedelta(days=10)),
+        ("beta-new-unstarred", False, now - timedelta(hours=1)),
+        ("gamma-starred-old", True, now - timedelta(days=30)),
+        ("delta-starred-new", True, now - timedelta(minutes=5)),
+        ("epsilon-mid-unstarred", False, now - timedelta(days=2)),
+    ]
+    for name, starred, updated_at in rows:
+        db.add(Role(
+            organization_id=org_id,
+            name=name,
+            source="manual",
+            starred_for_auto_sync=starred,
+            updated_at=updated_at,
+        ))
+    db.commit()
+
+    # First page: the two starred-then-newest roles, in full-list order.
+    paged = client.get("/api/v1/roles?limit=2", headers=headers)
+    assert paged.status_code == 200, paged.text
+    assert [r["name"] for r in paged.json()] == ["delta-starred-new", "gamma-starred-old"]
+
+    # No limit → all five (the background full fetch).
+    full = client.get("/api/v1/roles", headers=headers)
+    assert full.status_code == 200, full.text
+    assert len(full.json()) == 5

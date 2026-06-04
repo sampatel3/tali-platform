@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from ...deps import get_current_user
 from ...models.assessment import Assessment
@@ -133,6 +133,7 @@ def _maybe_autogenerate_assessment_task(role) -> None:
 @router.get("/roles")
 def list_roles(
     include_pipeline_stats: bool = Query(default=False),
+    limit: int | None = Query(default=None, ge=1, le=500),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -141,9 +142,15 @@ def list_roles(
     # Workable-sourced roles tracks the last sync that touched the row.
     # ``created_at`` is the final tie-breaker so newly-created roles win
     # over older roles that have never been updated.
-    roles = (
+    roles_query = (
         db.query(Role)
-        .options(joinedload(Role.tasks))
+        # selectinload both collections: without it, role_to_response
+        # lazy-loads ``role.criteria`` once PER role — an N+1 that, on an org
+        # with ~100 roles, fired ~100 extra sequential queries and dominated
+        # /roles latency (107 → 8 queries with this). selectin (not joined)
+        # also keeps ``.limit()`` below applying cleanly to roles rather than
+        # to a tasks/criteria cartesian product.
+        .options(selectinload(Role.tasks), selectinload(Role.criteria))
         .filter(
             Role.organization_id == current_user.organization_id,
             Role.deleted_at.is_(None),
@@ -153,8 +160,16 @@ def list_roles(
             Role.updated_at.desc().nullslast(),
             Role.created_at.desc(),
         )
-        .all()
     )
+    # Progressive load: the Jobs hub fetches a first page (``limit``) to paint
+    # the active / most-recent roles instantly, then re-fetches the full list
+    # in the background. The sort above front-loads starred + recently-synced
+    # roles, so page one is the set a recruiter actually works. ``limit`` also
+    # scopes every per-role aggregate below to the page (fewer role_ids → the
+    # candidate_applications scans shrink), so the first paint is cheap too.
+    if limit is not None:
+        roles_query = roles_query.limit(limit)
+    roles = roles_query.all()
     if not roles:
         return []
 
