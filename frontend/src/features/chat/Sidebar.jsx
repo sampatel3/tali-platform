@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { MessageSquare, Plus, Sparkles, Trash2 } from 'lucide-react';
 
 const groupByRecency = (rows) => {
   const groups = { today: [], yesterday: [], week: [], older: [] };
@@ -28,13 +28,36 @@ const formatTime = (iso) => {
   });
 };
 
-const Sidebar = ({
-  conversations,
-  activeId,
-  onSelect,
-  onNew,
-  onDelete,
-}) => {
+const fmtCount = (n) => (n > 999 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
+
+// The Ask ↔ Agents switch. "Ask" is the regular Taali (search-AI) chats;
+// "Agents" surfaces each role's autonomous-agent thread, the same one the
+// Home dock drives.
+const ModeToggle = ({ mode, onModeChange, agentAttention = 0 }) => (
+  <div className="cp-modeswitch" role="tablist" aria-label="Chat mode">
+    <button
+      type="button"
+      role="tab"
+      aria-selected={mode === 'ask'}
+      className={`cp-modeswitch-btn ${mode === 'ask' ? 'on' : ''}`}
+      onClick={() => onModeChange('ask')}
+    >
+      <MessageSquare size={13} /> Ask
+    </button>
+    <button
+      type="button"
+      role="tab"
+      aria-selected={mode === 'agents'}
+      className={`cp-modeswitch-btn ${mode === 'agents' ? 'on' : ''}`}
+      onClick={() => onModeChange('agents')}
+    >
+      <Sparkles size={13} /> Agents
+      {agentAttention > 0 ? <span className="cp-modeswitch-badge">{fmtCount(agentAttention)}</span> : null}
+    </button>
+  </div>
+);
+
+const AskList = ({ conversations, activeId, onSelect, onNew, onDelete }) => {
   const groups = groupByRecency(conversations);
   const Group = ({ label, rows }) => {
     if (!rows.length) return null;
@@ -56,18 +79,10 @@ const Sidebar = ({
             <button
               type="button"
               title="Delete conversation"
+              className="cp-conv-del"
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete(r.id);
-              }}
-              style={{
-                position: 'absolute',
-                right: 8,
-                top: 8,
-                background: 'transparent',
-                color: 'var(--c-mute-2)',
-                padding: 4,
-                borderRadius: 6,
               }}
             >
               <Trash2 size={13} />
@@ -79,9 +94,8 @@ const Sidebar = ({
   };
 
   return (
-    <aside className="cp-side">
+    <>
       <div className="cp-side-head">
-        <span className="cp-side-title">Conversations</span>
         <button type="button" className="cp-new-chat" onClick={onNew}>
           <span className="cp-plus">
             <Plus size={11} strokeWidth={3} />
@@ -97,14 +111,93 @@ const Sidebar = ({
         {!conversations?.length ? (
           <div className="cp-group">
             <div className="cp-group-h">Get started</div>
-            <div style={{ padding: '6px 10px', fontSize: 12.5, color: 'var(--c-mute)' }}>
-              Your conversations will show up here.
-            </div>
+            <div className="cp-side-hint">Your conversations will show up here.</div>
           </div>
         ) : null}
       </div>
-    </aside>
+    </>
   );
 };
+
+const AgentList = ({ agents, activeRoleId, onSelectAgent }) => (
+  <div className="cp-side-list">
+    {!agents?.length ? (
+      <div className="cp-group">
+        <div className="cp-group-h">Your agents</div>
+        <div className="cp-side-hint">
+          No live roles yet. Publish a role to chat with (or activate) its agent.
+        </div>
+      </div>
+    ) : (
+      <div className="cp-group">
+        <div className="cp-group-h">Your agents</div>
+        {agents.map((a) => {
+          const questions = (a.unread_messages || 0) + (a.open_questions || 0);
+          const status = a.agent_paused ? 'paused' : a.agent_enabled ? 'on' : 'off';
+          const preview = a.agent_paused
+            ? `Paused · ${a.agent_paused_reason || 'budget reached'}`
+            : a.last_message_preview
+              || (a.agent_enabled ? 'No messages yet' : 'Agent off — tap to set up');
+          return (
+            <button
+              key={a.role_id}
+              type="button"
+              className={`cp-agent ${a.role_id === activeRoleId ? 'cp-active' : ''}`}
+              onClick={() => onSelectAgent(a.role_id)}
+              title={a.role_name}
+            >
+              <span className={`cp-agent-stat cp-agent-stat-${status}`} aria-hidden="true">
+                {status === 'on' ? <Sparkles size={12} strokeWidth={2} /> : <span className="cp-agent-dot" />}
+              </span>
+              <span className="cp-agent-body">
+                <span className="cp-agent-role">{a.role_name}</span>
+                <span className="cp-agent-preview">{preview}</span>
+              </span>
+              {questions > 0 ? (
+                <span className="cp-agent-badge" title={`${questions} awaiting your reply`}>
+                  {fmtCount(questions)}
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
+    )}
+  </div>
+);
+
+const Sidebar = ({
+  mode = 'ask',
+  onModeChange,
+  // Ask mode
+  conversations,
+  activeId,
+  onSelect,
+  onNew,
+  onDelete,
+  // Agents mode
+  agents = [],
+  activeRoleId,
+  onSelectAgent,
+  agentAttention = 0,
+}) => (
+  <aside className="cp-side">
+    <div className="cp-side-top">
+      <span className="cp-side-title">Chat</span>
+      <ModeToggle mode={mode} onModeChange={onModeChange} agentAttention={agentAttention} />
+    </div>
+    {mode === 'agents' ? (
+      <AgentList agents={agents} activeRoleId={activeRoleId} onSelectAgent={onSelectAgent} />
+    ) : (
+      <AskList
+        conversations={conversations}
+        activeId={activeId}
+        onSelect={onSelect}
+        onNew={onNew}
+        onDelete={onDelete}
+      />
+    )}
+  </aside>
+);
 
 export default Sidebar;

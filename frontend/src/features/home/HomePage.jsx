@@ -543,6 +543,17 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
         )}
       </div>
       </div>
+      {/* Mobile only: the side rail + dock don't fit a phone, so we route to
+          the Chat page's Agents tab (the same threads, kept in sync) instead
+          of cramming a floating dock over the feed. Hidden on desktop via CSS. */}
+      <button
+        type="button"
+        className="ac-mobile-cta"
+        onClick={() => onNavigate?.('chat-agents', { roleId: activeRoleId || undefined })}
+      >
+        <MessageSquare size={16} /> Chat with your agents
+        {totalAttention > 0 && <span className="ac-badge-count">{totalAttention}</span>}
+      </button>
     </div>
   );
 };

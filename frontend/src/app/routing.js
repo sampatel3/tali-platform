@@ -29,6 +29,13 @@ export const pathForPage = (page, options = {}) => {
       const q = options.chatInitialQuery ? String(options.chatInitialQuery).trim() : '';
       return q ? `${base}?q=${encodeURIComponent(q)}` : base;
     }
+    case 'chat-agents':
+      // The Search page's "Agents" tab — chat with each role's autonomous
+      // agent (same threads as the Home dock, kept in sync server-side).
+      // Optionally deep-links straight to one role's agent thread.
+      return options.roleId
+        ? `/chat/agents/${encodeURIComponent(options.roleId)}`
+        : '/chat/agents';
     case 'job-pipeline':
       return options.roleId
         ? `/jobs/${encodeURIComponent(options.roleId)}`

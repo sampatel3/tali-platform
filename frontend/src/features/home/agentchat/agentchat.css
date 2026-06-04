@@ -236,9 +236,38 @@
 .ac-stream::-webkit-scrollbar, .ac-agent-list::-webkit-scrollbar { width: 8px; }
 .ac-stream::-webkit-scrollbar-thumb, .ac-agent-list::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
 
-/* Narrow screens: drop the rails to keep the feed usable. */
+/* Floating CTA (mobile only) — routes to the Chat page's Agents tab, which is
+   the touch-friendly home for agent chat. Hidden on desktop, where the inline
+   rail + dock do the job. */
+.ac-mobile-cta {
+  display: none;
+  position: fixed;
+  right: 16px;
+  bottom: max(16px, env(safe-area-inset-bottom, 16px));
+  z-index: 46;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--purple), var(--purple-2));
+  color: #fff;
+  font-family: var(--font-sans);
+  font-size: 0.84375rem;
+  font-weight: 600;
+  box-shadow: 0 10px 30px -8px color-mix(in oklab, var(--purple) 60%, transparent), var(--shadow-lg);
+  cursor: pointer;
+}
+.ac-mobile-cta .ac-badge-count { background: rgba(255, 255, 255, 0.24); color: #fff; }
+
+/* Narrow screens: drop the inline rails entirely (they don't fit a phone) and
+   let the decision feed go full-width. Agent chat moves to the floating CTA
+   above → the Chat page's Agents tab (same threads, kept in sync). */
 @media (max-width: 1180px) {
   .ac-shell, .ac-shell.ac-dock-collapsed { grid-template-columns: 1fr; }
-  .ac-sidebar { display: none; }
-  .ac-dock { position: fixed; right: 0; top: 64px; width: min(404px, 92vw); z-index: 40; box-shadow: var(--shadow-lg); }
+  .ac-sidebar,
+  .ac-dock,
+  .ac-dock-handle,
+  .ac-reopen { display: none; }
+  .ac-mobile-cta { display: inline-flex; }
 }

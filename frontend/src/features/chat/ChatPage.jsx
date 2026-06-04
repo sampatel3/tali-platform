@@ -1,13 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { PanelLeft } from 'lucide-react';
 import './chat.css';
 import EmptyState from './EmptyState';
 import { ChatComposer } from '../../shared/chat';
 import Thread from './Thread';
 import Sidebar from './Sidebar';
 import ConfirmDialog from './ConfirmDialog';
+import AgentConversation from './AgentConversation';
 import useChatStream from './useChatStream';
 import { conversationsApi } from './api';
+import { agentChat } from '../../shared/api';
 
 // Backend persists messages with Anthropic-shaped content blocks. The
 // chat hook works with a slightly flatter shape (parts: text/tool_call).
@@ -74,15 +77,78 @@ const stitchToolResults = (rows) => {
     .map(({ _isToolResultEcho, _toolResults, ...rest }) => rest);
 };
 
-const ChatPage = ({ onNavigate = null, NavComponent = null } = {}) => {
+const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {}) => {
   const navigate = useNavigate();
-  const { conversationId: routeId } = useParams();
-  const conversationId = routeId ? Number(routeId) : null;
+  const params = useParams();
+  const isAgents = mode === 'agents';
+  const conversationId = !isAgents && params.conversationId ? Number(params.conversationId) : null;
+  const agentRoleId = isAgents && params.roleId ? Number(params.roleId) : null;
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [conversations, setConversations] = useState([]);
   const [composer, setComposer] = useState('');
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
+
+  // Agents tab: the per-role agent list (same source the Home dock polls).
+  // Kept here so the sidebar can list them and the center can resolve the
+  // active agent's name/state from the route's role id.
+  const [agents, setAgents] = useState([]);
+  // Mobile: the conversation/agent list is an off-canvas drawer.
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  const refreshAgents = useCallback(async () => {
+    try {
+      const { data } = await agentChat.listConversations();
+      setAgents(Array.isArray(data?.agents) ? data.agents : []);
+    } catch {
+      setAgents([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isAgents) return undefined;
+    void refreshAgents();
+    const id = window.setInterval(() => { void refreshAgents(); }, 30_000);
+    return () => window.clearInterval(id);
+  }, [isAgents, refreshAgents]);
+
+  // Land on the highest-attention agent when the Agents tab opens with no
+  // role selected, so the surface is never an empty two-pane shell.
+  useEffect(() => {
+    if (!isAgents || agentRoleId || !agents.length) return;
+    const ranked = [...agents].sort(
+      (a, b) =>
+        ((b.unread_messages || 0) + (b.open_questions || 0)) -
+        ((a.unread_messages || 0) + (a.open_questions || 0)),
+    );
+    navigate(`/chat/agents/${ranked[0].role_id}`, { replace: true });
+  }, [isAgents, agentRoleId, agents, navigate]);
+
+  const activeAgent = useMemo(
+    () => agents.find((a) => a.role_id === agentRoleId) || null,
+    [agents, agentRoleId],
+  );
+
+  const agentAttention = useMemo(
+    () => agents.reduce((sum, a) => sum + (a.unread_messages || 0) + (a.open_questions || 0), 0),
+    [agents],
+  );
+
+  const onModeChange = useCallback(
+    (nextMode) => {
+      setMobileNavOpen(false);
+      navigate(nextMode === 'agents' ? '/chat/agents' : '/chat');
+    },
+    [navigate],
+  );
+
+  const onSelectAgent = useCallback(
+    (roleId) => {
+      setMobileNavOpen(false);
+      navigate(`/chat/agents/${roleId}`);
+    },
+    [navigate],
+  );
 
   // The global search bar hands off to /chat with ?q=<query>. Seed the
   // composer once so the user lands on the chat with their phrase already
@@ -167,12 +233,14 @@ const ChatPage = ({ onNavigate = null, NavComponent = null } = {}) => {
   }, [isStreaming]);
 
   const onNew = useCallback(() => {
+    setMobileNavOpen(false);
     navigate('/chat');
     setComposer('');
   }, [navigate]);
 
   const onSelect = useCallback(
     (id) => {
+      setMobileNavOpen(false);
       navigate(`/chat/${id}`);
     },
     [navigate],
@@ -221,16 +289,48 @@ const ChatPage = ({ onNavigate = null, NavComponent = null } = {}) => {
   return (
     <>
       {NavComponent ? <NavComponent currentPage="chat" onNavigate={onNavigate} /> : null}
-      <div className="cp-root">
+      <div className={`cp-root ${mobileNavOpen ? 'cp-nav-open' : ''}`}>
       <Sidebar
+        mode={isAgents ? 'agents' : 'ask'}
+        onModeChange={onModeChange}
         conversations={conversations}
         activeId={conversationId}
         onNew={onNew}
         onSelect={onSelect}
         onDelete={onDelete}
+        agents={agents}
+        activeRoleId={agentRoleId}
+        onSelectAgent={onSelectAgent}
+        agentAttention={agentAttention}
       />
+      {/* Mobile: tapping the scrim closes the list drawer. */}
+      <button
+        type="button"
+        className="cp-nav-scrim"
+        aria-label="Close list"
+        tabIndex={mobileNavOpen ? 0 : -1}
+        onClick={() => setMobileNavOpen(false)}
+      />
+      {isAgents ? (
+        <AgentConversation
+          key={agentRoleId || 'none'}
+          roleId={agentRoleId}
+          roleName={activeAgent?.role_name}
+          agentEnabled={activeAgent ? activeAgent.agent_enabled : true}
+          onAfterSend={refreshAgents}
+          onOpenList={() => setMobileNavOpen(true)}
+        />
+      ) : (
       <div className="cp-center">
         <header className="cp-head">
+          <button
+            type="button"
+            className="cp-mobile-menu"
+            onClick={() => setMobileNavOpen(true)}
+            aria-label="Show conversations"
+          >
+            <PanelLeft size={18} />
+          </button>
           <div className="cp-head-ttl">
             {heading}
             <span className="sub">Taali</span>
@@ -264,6 +364,7 @@ const ChatPage = ({ onNavigate = null, NavComponent = null } = {}) => {
           />
         </div>
       </div>
+      )}
       <ConfirmDialog
         open={pendingDeleteId != null}
         title="Delete conversation?"
