@@ -407,8 +407,8 @@ export const LandingPage = ({ onNavigate }) => {
                   </div>
                 </div>
                 <div className="agent-header-right">
-                  {/* Live agent strip — the same `.abar` ON/OFF language as the
-                      product. Auto-flips ON shortly after mount; click to replay. */}
+                  {/* Live agent strip — the same persistent `.abar` box as the
+                      product; the ON/OFF look crossfades in place (no remount). */}
                   <div className={`abar abar-${agentOn ? 'on' : 'off'}`}>
                     <span className="ab-spark">
                       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
