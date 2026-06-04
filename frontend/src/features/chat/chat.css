@@ -43,13 +43,20 @@
   color: var(--c-ink);
 }
 
-@media (max-width: 800px) {
+/* Mobile drawer. NOTE: every rule here is scoped under .cp-root on purpose —
+   the base `.cp-mobile-menu { display: none }` / `.cp-nav-scrim { display:
+   none }` declarations live LATER in this file, so a bare single-class rule
+   here would lose the source-order tie and the menu button would stay hidden
+   on mobile. The extra `.cp-root` raises specificity so these win regardless
+   of order. Breakpoint is 900px so we switch to one column before the
+   two-column grid (240px + a 640px-min centre) starts to overflow. */
+@media (max-width: 900px) {
   /* Single column on phones/tablets: the list collapses into a slide-in
      drawer reachable from the header, so conversation + agent switching
      still works (the old rule hid the sidebar outright). */
   .cp-root { grid-template-columns: 1fr; }
-  .cp-mobile-menu { display: inline-flex; }
-  .cp-side {
+  .cp-root .cp-mobile-menu { display: inline-flex; }
+  .cp-root .cp-side {
     position: fixed;
     top: var(--nav-h, 64px);
     bottom: 0;
@@ -62,7 +69,7 @@
     border-right: 1px solid var(--c-line);
   }
   .cp-root.cp-nav-open .cp-side { transform: translateX(0); }
-  .cp-nav-scrim {
+  .cp-root .cp-nav-scrim {
     display: block;
     position: fixed;
     inset: var(--nav-h, 64px) 0 0 0;
@@ -78,12 +85,12 @@
 }
 
 @media (max-width: 640px) {
-  .cp-head { padding: 0 16px; gap: 10px; }
-  .cp-head-pill { display: none; }
-  .cp-scroll { padding: 18px 16px 168px; }
-  .cp-thread { gap: 22px; }
-  .cp-composer-wrap { padding: 10px 14px 16px; }
-  .cp-msg-user { max-width: 88%; }
+  .cp-root .cp-head { padding: 0 16px; gap: 10px; }
+  .cp-root .cp-head-pill { display: none; }
+  .cp-root .cp-scroll { padding: 18px 16px 168px; }
+  .cp-root .cp-thread { gap: 22px; }
+  .cp-root .cp-composer-wrap { padding: 10px 14px 16px; }
+  .cp-root .cp-msg-user { max-width: 88%; }
 }
 
 /* ============ sidebar ============ */
