@@ -196,6 +196,10 @@
 .ac-card-applied .ac-card-head svg { color: var(--green); }
 .ac-card-actions { display: flex; gap: 7px; flex-wrap: wrap; }
 
+/* ---- Manual batch (fetch / pre-screen / score) run card ---------------- */
+.ac-card-batch { background: linear-gradient(180deg, var(--purple-soft), var(--bg-2)); border-color: var(--purple-soft); }
+.ac-batch-steps { font-size: 0.6875rem; color: var(--ink-soft, var(--ink)); opacity: 0.8; margin-top: 4px; }
+
 /* ---- Draft-task review card -------------------------------------------- */
 .ac-card-draft { background: linear-gradient(180deg, var(--purple-soft), var(--bg-2)); border-color: var(--purple-soft); }
 .ac-draft { display: flex; flex-direction: column; gap: 7px; padding: 10px 11px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 11px; }
