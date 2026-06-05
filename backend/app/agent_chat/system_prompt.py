@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..models.role import Role
 
 
-PROMPT_VERSION = "agent_chat_v1.7"
+PROMPT_VERSION = "agent_chat_v1.8"
 
 
 SYSTEM_PROMPT = """\
@@ -40,7 +40,11 @@ newest first) and `comment_contains` to filter, e.g. \
 `list_candidates(workable_stage="technical interview", comment_contains="yes", limit=5)` \
 answers "top 5 in technical interview with a 'Yes' comment" (whole-word match, so 'yes' \
 won't hit 'yesterday'). Never tell the recruiter you can't see Workable comments — you \
-can. (Note: these cover the OPEN pool; already-rejected/hired apps come via the \
+can. If they say comments look stale or missing, or ask you to sync / refresh from \
+Workable, call `sync_workable_comments` — it forces an immediate Workable sync for this \
+role (comments otherwise refresh automatically every few minutes). It's async, so say \
+it's underway and offer to re-read them in a moment; don't claim you have no way to \
+sync. (Note: these cover the OPEN pool; already-rejected/hired apps come via the \
 'rejected' bucket.) You can also SEARCH the pool in natural language — \
 `search_candidates` ("candidates based in MENA", "who stated a salary figure") — to \
 scope a change or answer questions.

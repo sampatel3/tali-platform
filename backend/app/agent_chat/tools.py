@@ -102,6 +102,19 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "sync_workable_comments",
+        "description": (
+            "Force an immediate Workable sync for THIS role, pulling the latest "
+            "recruiter comments / ratings (and stages) for all its candidates. Use "
+            "when the recruiter says comments look stale or missing, or asks you to "
+            "sync / refresh Workable comments. Comments normally sync automatically "
+            "every few minutes; this forces a refresh now. It's ASYNCHRONOUS — tell "
+            "the recruiter it's underway and to ask again in a moment so you can "
+            "re-read the freshly-synced comments with list_candidates."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "simulate_threshold",
         "description": (
             "Project the effect of moving the score threshold to a value WITHOUT "
@@ -698,6 +711,8 @@ def dispatch_tool(
         )
     if name == "list_draft_tasks":
         return _draft_tasks.draft_review_card(db, role)
+    if name == "sync_workable_comments":
+        return _controls.sync_workable_comments(db, role, user=user)
 
     raise KeyError(f"unknown tool: {name}")
 
