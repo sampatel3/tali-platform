@@ -36,6 +36,24 @@ export const useAgentStatus = (roleId) => {
   const [error, setError] = useState(null);
   const cancelledRef = useRef(false);
 
+  // Imperative refetch so callers can reconcile right after a mutation
+  // (pause/resume/activate) instead of waiting up to POLL_INTERVAL_MS for the
+  // next poll. Stable per roleId.
+  const refetch = useCallback(async () => {
+    if (!roleId) return;
+    try {
+      const res = await agentApi.status(roleId);
+      if (!cancelledRef.current) {
+        setStatus(res?.data || null);
+        setError(null);
+      }
+    } catch (err) {
+      if (!cancelledRef.current) {
+        setError(err);
+      }
+    }
+  }, [roleId]);
+
   useEffect(() => {
     if (!roleId) {
       setStatus(null);
@@ -43,28 +61,14 @@ export const useAgentStatus = (roleId) => {
     }
     cancelledRef.current = false;
 
-    const fetchOnce = async () => {
-      try {
-        const res = await agentApi.status(roleId);
-        if (!cancelledRef.current) {
-          setStatus(res?.data || null);
-          setError(null);
-        }
-      } catch (err) {
-        if (!cancelledRef.current) {
-          setError(err);
-        }
-      }
-    };
-
-    fetchOnce();
+    refetch();
     let timer = setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return;
-      fetchOnce();
+      refetch();
     }, POLL_INTERVAL_MS);
 
     const onVisibility = () => {
-      if (typeof document !== 'undefined' && !document.hidden) fetchOnce();
+      if (typeof document !== 'undefined' && !document.hidden) refetch();
     };
     document.addEventListener('visibilitychange', onVisibility);
 
@@ -74,9 +78,13 @@ export const useAgentStatus = (roleId) => {
       timer = null;
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [roleId]);
+  }, [roleId, refetch]);
 
-  return { status, error };
+  // `setStatus` is exposed so callers can optimistically patch the polled
+  // payload (e.g. clear `paused_at` the instant the user clicks Resume) — the
+  // strip derives on/paused from `paused_at`, so without this the box stays
+  // PAUSED until the next poll even though the PATCH already fired.
+  return { status, error, setStatus, refetch };
 };
 
 // Fan out across /roles client-side and aggregate into a single status
