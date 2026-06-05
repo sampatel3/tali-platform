@@ -33,8 +33,20 @@ export function AgentSidebar({
   const activeCount = agents.filter((a) => a.agent_enabled).length;
   const selectedCount = bulkSelected ? bulkSelected.size : 0;
 
+  // Within the "on / paused" section, float the agents that are actually
+  // running above the paused ones. Stable sort, so the backend's within-group
+  // order (pending count / recency) is preserved inside each subgroup.
+  const activeFirst = (rows) =>
+    [...rows].sort((a, b) => {
+      const rank = (x) => (x.agent_enabled && !x.agent_paused ? 0 : 1);
+      return rank(a) - rank(b);
+    });
+
   const sections = GROUP_ORDER
-    .map((key) => ({ key, label: GROUP_LABELS[key], rows: agents.filter((a) => (a.group || 'active') === key) }))
+    .map((key) => {
+      const rows = agents.filter((a) => (a.group || 'active') === key);
+      return { key, label: GROUP_LABELS[key], rows: key === 'on_paused' ? activeFirst(rows) : rows };
+    })
     .filter((s) => s.rows.length > 0);
 
   const renderRow = (a) => {
