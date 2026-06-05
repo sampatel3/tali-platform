@@ -157,20 +157,24 @@ const AgentConversation = ({
     [timeline]
   );
 
-  // Mirror the dock's "re-screen in flight" affordance so a constraint edit's
-  // follow-up impact lands without a manual refresh.
+  // Mirror the dock's "run in flight" affordance so a constraint edit's
+  // re-screen OR a manual fetch/pre-screen/score run's completion message
+  // lands without a manual refresh.
   const rescreenPending = useMemo(() => {
     let lastAgentIdx = -1;
-    let lastRescreenIdx = -1;
+    let lastPendingIdx = -1;
     items.forEach((it, i) => {
       if (it.kind === 'message' && it.author === 'agent') {
         lastAgentIdx = i;
-        if ((it.actions || []).some((c) => c.type === 'constraint_change' && (c.rescreening_count || 0) > 0)) {
-          lastRescreenIdx = i;
-        }
+        const kicked = (it.actions || []).some(
+          (c) =>
+            (c.type === 'constraint_change' && (c.rescreening_count || 0) > 0) ||
+            (c.type === 'batch_process' && !c.already_running)
+        );
+        if (kicked) lastPendingIdx = i;
       }
     });
-    return lastRescreenIdx >= 0 && lastRescreenIdx === lastAgentIdx;
+    return lastPendingIdx >= 0 && lastPendingIdx === lastAgentIdx;
   }, [items]);
 
   useEffect(() => {

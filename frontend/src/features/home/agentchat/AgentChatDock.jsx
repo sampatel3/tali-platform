@@ -178,28 +178,31 @@ export function AgentChatDock({
   // Option C: show chat + questions only; decisions are in the feed.
   const items = timeline.filter((it) => it.kind === 'message' || it.kind === 'needs_input');
 
-  // A constraint edit's re-screen is "in flight" when the latest agent message
-  // is a constraint change that kicked a re-screen, with no follow-up message
-  // after it yet. While so, poll quietly so the proactive "re-screen complete"
-  // impact message lands without a manual refresh.
+  // A background run is "in flight" when the latest agent message kicked one
+  // and no follow-up has landed yet — either a constraint edit's re-screen, or
+  // a manual fetch/pre-screen/score (batch_process). While so, poll quietly so
+  // the proactive completion message lands without a manual refresh.
   let lastAgentIdx = -1;
-  let lastRescreenIdx = -1;
+  let lastPendingIdx = -1;
   items.forEach((it, i) => {
     if (it.kind === 'message' && it.author === 'agent') {
       lastAgentIdx = i;
-      if ((it.actions || []).some((c) => c.type === 'constraint_change' && (c.rescreening_count || 0) > 0)) {
-        lastRescreenIdx = i;
-      }
+      const kicked = (it.actions || []).some(
+        (c) =>
+          (c.type === 'constraint_change' && (c.rescreening_count || 0) > 0) ||
+          (c.type === 'batch_process' && !c.already_running)
+      );
+      if (kicked) lastPendingIdx = i;
     }
   });
-  const rescreenPending = lastRescreenIdx >= 0 && lastRescreenIdx === lastAgentIdx;
+  const runPending = lastPendingIdx >= 0 && lastPendingIdx === lastAgentIdx;
 
   useEffect(() => {
-    if (!rescreenPending) return undefined;
+    if (!runPending) return undefined;
     const poll = window.setInterval(() => { void load({ silent: true }); }, 5000);
     const stop = window.setTimeout(() => window.clearInterval(poll), 6 * 60 * 1000);
     return () => { window.clearInterval(poll); window.clearTimeout(stop); };
-  }, [rescreenPending, load]);
+  }, [runPending, load]);
 
   return (
     <aside className="ac-dock">

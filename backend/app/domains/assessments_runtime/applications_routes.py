@@ -2379,8 +2379,21 @@ def _clear_cancel_flag(prefix: str, role_id: int) -> None:
         pass
 
 
-def _write_batch_meta(role_id: int, *, total: int, started_at: datetime, include_scored: bool) -> None:
-    """Persist batch start state to Redis so API process restarts don't lose it."""
+def _write_batch_meta(
+    role_id: int,
+    *,
+    total: int,
+    started_at: datetime,
+    include_scored: bool,
+    conversation_id: int | None = None,
+    token: str | None = None,
+) -> None:
+    """Persist batch start state to Redis so API process restarts don't lose it.
+
+    ``conversation_id`` + ``token`` let the status poll (which may land on a
+    different uvicorn worker than the one that started the batch) post the
+    role-chat completion message for this run.
+    """
     import json as _json
     client = _redis_client()
     if client is None:
@@ -2392,6 +2405,8 @@ def _write_batch_meta(role_id: int, *, total: int, started_at: datetime, include
                 "total": total,
                 "started_at": started_at.isoformat(),
                 "include_scored": bool(include_scored),
+                "conversation_id": conversation_id,
+                "token": token or started_at.isoformat(),
             }),
             ex=_BATCH_META_TTL_SECONDS,
         )
@@ -2618,6 +2633,26 @@ def batch_score_role(
         counters={"total": target_count, "scored": 0, "errors": 0, "pre_screened_out": 0, "include_scored": bool(include_scored)},
         status="running",
     )
+
+    # Drop a "started" note into the role chat (paper trail + sidebar badge).
+    from ...agent_chat import batch_report
+
+    token = batch_started_at.isoformat()
+    steps = (["fetch CVs", "score"] if include_scored else ["score"])
+    conversation_id = _post_batch_started(
+        db,
+        role=role,
+        organization_id=current_user.organization_id,
+        kind=batch_report.KIND_BATCH_SCORE,
+        total=target_count,
+        steps=steps,
+        token=token,
+    )
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+
     _batch_score_progress[role_id] = {
         "total": target_count,
         "scored": 0,
@@ -2628,14 +2663,43 @@ def batch_score_role(
         "organization_id": current_user.organization_id,
         "role_name": str(getattr(role, "name", "") or ""),
         "run_id": run_id,
+        "token": token,
+        "conversation_id": conversation_id,
     }
     # Mirror to Redis so the status endpoint survives an API process
     # restart mid-batch (in-process dict is wiped on restart).
-    _write_batch_meta(role_id, total=target_count, started_at=batch_started_at, include_scored=bool(include_scored))
+    _write_batch_meta(
+        role_id,
+        total=target_count,
+        started_at=batch_started_at,
+        include_scored=bool(include_scored),
+        conversation_id=conversation_id,
+        token=token,
+    )
 
     from ...tasks.scoring_tasks import batch_score_role as _celery_batch_score_role
 
     _celery_batch_score_role.delay(role_id, include_scored=include_scored, applied_after=applied_after)
+
+    # Backstop: a poll-based reporter so the chat completion fires even if the
+    # recruiter closes the tab (nobody hitting the status endpoint). Idempotent
+    # with the status-poll path via the Redis claim in batch_report.
+    try:
+        from ...tasks.agent_chat_tasks import report_batch_score_complete
+
+        report_batch_score_complete.apply_async(
+            kwargs={
+                "role_id": int(role_id),
+                "organization_id": int(current_user.organization_id),
+                "conversation_id": conversation_id,
+                "token": token,
+                "started_at_iso": token,
+                "total": int(target_count),
+            },
+            countdown=60,
+        )
+    except Exception:
+        logger.exception("batch-score: failed to schedule completion backstop for role_id=%s", role_id)
 
     return {
         "status": "started",
@@ -2980,6 +3044,11 @@ def batch_score_status(
             .count()
         )
         status = "running" if active_jobs > 0 else "completed"
+    # Conversation + token for the role-chat completion message. Recover from
+    # the Redis meta when this worker doesn't own the in-process progress dict.
+    _meta = _read_batch_meta(role_id) or {}
+    _convo_id = progress.get("conversation_id") or _meta.get("conversation_id")
+    _token = progress.get("token") or _meta.get("token")
     if total > 0 and (scored + errors + pre_screened_out) >= total:
         if status == "running":
             status = "completed"
@@ -2997,6 +3066,12 @@ def batch_score_status(
                     "include_scored": bool(progress.get("include_scored")),
                 },
                 finished=True,
+            )
+            _report_batch_score_chat(
+                role_id=role_id, organization_id=current_user.organization_id,
+                conversation_id=_convo_id, token=_token,
+                counts={"total": total, "scored": scored, "errors": errors, "pre_screened_out": pre_screened_out},
+                status="completed",
             )
         elif status == "cancelling":
             # All jobs are terminal — transition from cancelling to cancelled.
@@ -3016,6 +3091,12 @@ def batch_score_status(
                     "include_scored": bool(progress.get("include_scored")),
                 },
                 finished=True,
+            )
+            _report_batch_score_chat(
+                role_id=role_id, organization_id=current_user.organization_id,
+                conversation_id=_convo_id, token=_token,
+                counts={"total": total, "scored": scored, "errors": errors, "pre_screened_out": pre_screened_out},
+                status="cancelled",
             )
 
     # If the active batch just completed/cancelled, auto-start the queued one.
@@ -3793,6 +3874,21 @@ def _run_batch_pre_screen(role_id: int, org_id: int, *, refresh: bool = False) -
         _batch_pre_screen_progress[role_id] = progress
     finally:
         db.close()
+        try:
+            from ...agent_chat import batch_report
+
+            final = _batch_pre_screen_progress.get(role_id, {})
+            _post_batch_completion(
+                role_id=role_id,
+                organization_id=org_id,
+                conversation_id=final.get("conversation_id"),
+                kind=batch_report.KIND_BATCH_PRE_SCREEN,
+                counts=final,
+                token=str(final.get("token") or ""),
+                status=str(final.get("status") or "completed"),
+            )
+        except Exception:
+            logger.exception("Batch pre-screen: completion chat post failed for role_id=%s", role_id)
 
 
 @router.post("/roles/{role_id}/batch-pre-screen")
@@ -3855,6 +3951,22 @@ def batch_pre_screen_role(
     if target_count == 0:
         return {"status": "nothing_to_pre_screen", "total": 0, "refresh": bool(refresh)}
 
+    from ...agent_chat import batch_report
+
+    token = datetime.now(timezone.utc).isoformat()
+    conversation_id = _post_batch_started(
+        db,
+        role=role,
+        organization_id=current_user.organization_id,
+        kind=batch_report.KIND_BATCH_PRE_SCREEN,
+        total=target_count,
+        steps=["pre-screen"],
+        token=token,
+    )
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
     _batch_pre_screen_progress[role_id] = {
         "total": target_count,
         "processed": 0,
@@ -3862,6 +3974,8 @@ def batch_pre_screen_role(
         "status": "running",
         "refresh": bool(refresh),
         "started_at": datetime.now(timezone.utc),
+        "token": token,
+        "conversation_id": conversation_id,
     }
     thread = threading.Thread(
         target=_run_batch_pre_screen,
@@ -4292,6 +4406,115 @@ def _empty_process_progress() -> dict:
         "score": {"total": 0, "scored": 0, "filtered": 0, "errors": 0, "mode": "none"},
         "graph_sync": {"total": 0, "synced": 0, "errors": 0},
     }
+
+
+# ---------------------------------------------------------------------------
+# Manual batch → role-chat status + completion messages.
+#
+# Every manual batch (Process cascade, batch pre-screen, full re-score) drops a
+# "started" note into the role's agent chat and a "what completed" summary when
+# it settles, so a recruiter who navigated away still has a record + the
+# sidebar unread badge fires. See ``app.agent_chat.batch_report``.
+# ---------------------------------------------------------------------------
+
+
+def _post_batch_started(
+    db: Session,
+    *,
+    role: Role,
+    organization_id: int,
+    kind: str,
+    total: int,
+    steps: list[str],
+    token: str,
+) -> int | None:
+    """Post the "started" message into the role chat. Flushes; caller commits.
+
+    Returns the conversation id (so the worker can post the matching
+    completion) or None if posting failed — never raises into the kick path.
+    """
+    try:
+        from ...agent_chat import batch_report
+        from ...agent_chat.service import ensure_conversation
+
+        convo = ensure_conversation(db, organization_id=int(organization_id), role=role)
+        batch_report.post_started(
+            db, conversation=convo, role=role, kind=kind, total=int(total), steps=steps, token=token
+        )
+        return int(convo.id)
+    except Exception:
+        logger.exception("batch chat: failed to post started message for role_id=%s", role.id)
+        return None
+
+
+def _post_batch_completion(
+    *,
+    role_id: int,
+    organization_id: int,
+    conversation_id: int | None,
+    kind: str,
+    counts: dict,
+    token: str,
+    status: str = "completed",
+) -> None:
+    """Post the "completed" summary into the role chat, idempotently.
+
+    Opens its own session (the caller's may be mid-teardown), so it's safe to
+    call from a daemon thread's ``finally`` or a Celery backstop. No-ops
+    quietly when there's no conversation/token or another path already
+    reported this run.
+    """
+    if not conversation_id or not token:
+        return
+    from ...agent_chat import batch_report
+    from ...models.agent_conversation import AgentConversation
+
+    db = SessionLocal()
+    try:
+        role = db.query(Role).filter(Role.id == int(role_id)).first()
+        convo = (
+            db.query(AgentConversation)
+            .filter(AgentConversation.id == int(conversation_id))
+            .first()
+        )
+        if role is None or convo is None:
+            return
+        msg = batch_report.post_completion(
+            db, conversation=convo, role=role, kind=kind, counts=counts, token=token, status=status
+        )
+        if msg is not None:
+            db.commit()
+    except Exception:
+        logger.exception("batch chat: failed to post completion for role_id=%s", role_id)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+def _report_batch_score_chat(
+    *,
+    role_id: int,
+    organization_id: int,
+    conversation_id: int | None,
+    token: str | None,
+    counts: dict,
+    status: str = "completed",
+) -> None:
+    """Post the batch-score completion summary into the role chat (idempotent)."""
+    from ...agent_chat import batch_report
+
+    _post_batch_completion(
+        role_id=role_id,
+        organization_id=organization_id,
+        conversation_id=conversation_id,
+        kind=batch_report.KIND_BATCH_SCORE,
+        counts=counts,
+        token=str(token or ""),
+        status=status,
+    )
 
 
 _PIPELINE_STAGE_VALUES = {"applied", "invited", "in_assessment", "review", "advanced"}
@@ -4878,6 +5101,141 @@ def _run_process(
         _set_process_progress(role_id, progress)
     finally:
         db.close()
+        # Post the "what completed" summary into the role chat — covers every
+        # exit (done / cancelled / failed) since it's in the finally. Uses its
+        # own session; idempotent if a status poll already reported this run.
+        try:
+            from ...agent_chat import batch_report
+
+            final = _process_progress.get(role_id) or progress
+            _post_batch_completion(
+                role_id=role_id,
+                organization_id=org_id,
+                conversation_id=final.get("conversation_id"),
+                kind=batch_report.KIND_PROCESS,
+                counts=final,
+                token=str(final.get("token") or ""),
+                status=str(final.get("status") or "completed"),
+            )
+        except Exception:
+            logger.exception("Process cascade: completion chat post failed for role_id=%s", role_id)
+
+
+def _start_process_cascade(
+    db: Session,
+    *,
+    role: Role,
+    organization_id: int,
+    user_id: int | None,
+    fetch_cvs: bool,
+    refresh_cvs: bool,
+    pre_screen: bool,
+    refresh_pre_screen: bool,
+    score_mode: str,
+    sync_graph: bool = False,
+    refresh_graph: bool = False,
+    stage_filter: str | None = None,
+    application_ids: list[int] | None = None,
+    conversation: "Any | None" = None,
+) -> dict:
+    """Kick the Process cascade in a background thread + post a "started" note
+    into the role chat. Shared by the HTTP endpoint and the agent-chat tool so
+    both surface the same paper trail. Flushes the chat message; the caller
+    commits. Returns the status payload (``already_running`` when one is live).
+
+    When ``conversation`` is provided (agent-chat tool path), the caller's
+    assistant turn already carries the ``batch_process`` card, so we skip the
+    standalone "started" message and just track that conversation for the
+    completion summary.
+    """
+    from ...agent_chat import batch_report
+
+    role_id = int(role.id)
+    existing = _process_progress.get(role_id, {})
+    if existing.get("status") in {"running", "cancelling"}:
+        return {"status": "already_running", **existing}
+
+    token = datetime.now(timezone.utc).isoformat()
+    progress = _empty_process_progress()
+    progress.update({
+        "status": "running",
+        "role_name": role.name,
+        "started_at": token,
+        "token": token,
+        "score": {**progress["score"], "mode": score_mode},
+    })
+
+    # Count what's in scope for the "started" headline (cheap COUNT).
+    tq = (
+        db.query(func.count(CandidateApplication.id))
+        .filter(
+            CandidateApplication.role_id == role_id,
+            CandidateApplication.organization_id == int(organization_id),
+            CandidateApplication.deleted_at.is_(None),
+        )
+    )
+    if application_ids:
+        tq = tq.filter(CandidateApplication.id.in_(application_ids))
+    elif stage_filter:
+        tq = _apply_stage_filter(tq, stage_filter)
+    total = int(tq.scalar() or 0)
+
+    steps: list[str] = []
+    if fetch_cvs:
+        steps.append("fetch CVs")
+    if pre_screen or refresh_pre_screen:
+        steps.append("pre-screen")
+    if score_mode != "none":
+        steps.append("score")
+    if sync_graph:
+        steps.append("sync graph")
+
+    if conversation is not None:
+        # Agent-chat path: the assistant turn carries the batch_process card,
+        # so don't post a duplicate standalone "started" message — just track
+        # the conversation so the worker posts the completion there.
+        conversation_id: int | None = int(conversation.id)
+    else:
+        conversation_id = _post_batch_started(
+            db,
+            role=role,
+            organization_id=int(organization_id),
+            kind=batch_report.KIND_PROCESS,
+            total=total,
+            steps=steps,
+            token=token,
+        )
+    if conversation_id is not None:
+        progress["conversation_id"] = conversation_id
+    _set_process_progress(role_id, progress)
+    _clear_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
+
+    thread = threading.Thread(
+        target=_run_process,
+        args=(role_id, int(organization_id)),
+        kwargs={
+            "fetch_cvs": fetch_cvs,
+            "refresh_cvs": refresh_cvs,
+            "pre_screen": pre_screen,
+            "refresh_pre_screen": refresh_pre_screen,
+            "score_mode": score_mode,
+            "sync_graph": sync_graph,
+            "refresh_graph": refresh_graph,
+            "stage_filter": stage_filter,
+            "application_ids": application_ids,
+            "user_id": user_id,
+        },
+        daemon=True,
+    )
+    thread.start()
+    return {
+        "status": "started",
+        "role_name": role.name,
+        "stage": stage_filter,
+        "selected_count": len(application_ids) if application_ids else 0,
+        "total": total,
+        **progress,
+    }
 
 
 @router.post("/roles/{role_id}/process")
@@ -4993,45 +5351,27 @@ def process_role(
 
     # Already running for this role? Return the current state — UI can decide
     # whether to surface "already running" or queue a follow-up.
-    existing = _process_progress.get(role_id, {})
-    if existing.get("status") in {"running", "cancelling"}:
-        return {"status": "already_running", **existing}
-
-    progress = _empty_process_progress()
-    progress.update({
-        "status": "running",
-        "role_name": role.name,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "score": {**progress["score"], "mode": score_mode},
-    })
-    _set_process_progress(role_id, progress)
-    _clear_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
-
-    thread = threading.Thread(
-        target=_run_process,
-        args=(role_id, current_user.organization_id),
-        kwargs={
-            "fetch_cvs": fetch_cvs,
-            "refresh_cvs": refresh_cvs,
-            "pre_screen": pre_screen,
-            "refresh_pre_screen": refresh_pre_screen,
-            "score_mode": score_mode,
-            "sync_graph": sync_graph,
-            "refresh_graph": refresh_graph,
-            "stage_filter": stage_filter,
-            "application_ids": application_ids,
-            "user_id": current_user.id,
-        },
-        daemon=True,
+    result = _start_process_cascade(
+        db,
+        role=role,
+        organization_id=current_user.organization_id,
+        user_id=current_user.id,
+        fetch_cvs=fetch_cvs,
+        refresh_cvs=refresh_cvs,
+        pre_screen=pre_screen,
+        refresh_pre_screen=refresh_pre_screen,
+        score_mode=score_mode,
+        sync_graph=sync_graph,
+        refresh_graph=refresh_graph,
+        stage_filter=stage_filter,
+        application_ids=application_ids,
     )
-    thread.start()
-    return {
-        "status": "started",
-        "role_name": role.name,
-        "stage": stage_filter,
-        "selected_count": len(application_ids) if application_ids else 0,
-        **progress,
-    }
+    # Persist the "started" chat message posted by the kick helper.
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+    return result
 
 
 @router.get("/roles/{role_id}/process/status")

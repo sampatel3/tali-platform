@@ -140,6 +140,40 @@ export function ImpactCard({ card, onApply, busy }) {
     );
   }
 
+  // A manual fetch/pre-screen/score run kicked from chat. The "running" card
+  // pulses while in flight (the dock polls the timeline for the completion
+  // summary); the terminal card just confirms the outcome. Live counts live in
+  // the global jobs panel — this is the chat paper trail.
+  if (card.type === 'batch_process') {
+    const steps = (card.steps || []).join(' → ');
+    const already = card.already_running;
+    return (
+      <div className="ac-card ac-card-batch">
+        <div className="ac-card-head">
+          <SlidersHorizontal size={14} />
+          <span>{already ? 'Already processing' : 'Processing candidates'}</span>
+          <span className="ac-card-live">
+            <span className="ac-pulse" /> running
+          </span>
+        </div>
+        {steps && <div className="ac-batch-steps">{steps}</div>}
+      </div>
+    );
+  }
+
+  if (card.type === 'batch_complete') {
+    const failed = card.status === 'failed';
+    const cancelled = card.status === 'cancelled';
+    return (
+      <div className="ac-card ac-card-applied">
+        <div className="ac-card-head">
+          {failed ? <X size={14} /> : <Check size={14} />}
+          <span>{failed ? 'Processing stopped' : cancelled ? 'Processing cancelled' : 'Processing complete'}</span>
+        </div>
+      </div>
+    );
+  }
+
   return null;
 }
 

@@ -39,6 +39,9 @@ CARD_TYPES = frozenset(
         "constraint_change",
         "job_spec_change",
         "draft_task_review",
+        # A manual fetch/pre-screen/score run the agent kicked. The running
+        # card makes the chat dock poll the timeline for the completion summary.
+        "batch_process",
     }
 )
 # Cards that represent a committed mutation (vs read-only analysis).
@@ -346,6 +349,40 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {"query": {"type": "string"}},
             "required": ["query"],
+        },
+    },
+    {
+        "name": "process_candidates",
+        "description": (
+            "Fetch any missing CVs (from Workable), run the pre-screen, and score "
+            "THIS role's candidates — the same 'fetch CVs and score' cascade the "
+            "Process button runs, but kicked from chat. Use when the recruiter asks "
+            "you to fetch CVs, pre-screen, or score the pool. It runs in the "
+            "background and is NOT instant: tell the recruiter it's underway and "
+            "that you'll post the result here when it's done (they can also watch "
+            "live progress in the jobs panel). "
+            "force=false (default) only does the work that's missing — it skips "
+            "candidates already scored on their current CV (cached, so a plain "
+            "re-run is a cheap no-op). Set force=true to RE-fetch and RE-score "
+            "everyone from scratch — use this when scores look stale or the "
+            "recruiter says a previous run didn't refresh them. score=false runs "
+            "fetch + pre-screen only (no full CV-match scoring)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "force": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Re-fetch CVs and re-score every candidate, bypassing cached/stale results.",
+                },
+                "score": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Run full CV-match scoring after pre-screen. false = fetch + pre-screen only.",
+                },
+            },
+            "required": [],
         },
     },
     {
@@ -709,6 +746,40 @@ def dispatch_tool(
             auto_reject=args.get("auto_reject"),
             auto_promote=args.get("auto_promote"),
         )
+    if name == "process_candidates":
+        force = bool(args.get("force") or False)
+        do_score = args.get("score")
+        do_score = True if do_score is None else bool(do_score)
+        score_mode = "all" if force else ("new" if do_score else "none")
+        # Kick the same cascade the Process button runs. Lazy import: the routes
+        # module is heavy and would cycle if imported at module load.
+        from ..domains.assessments_runtime.applications_routes import (
+            _start_process_cascade,
+        )
+
+        result = _start_process_cascade(
+            db,
+            role=role,
+            organization_id=org_id,
+            user_id=int(user.id) if user is not None else None,
+            fetch_cvs=True,
+            refresh_cvs=force,
+            pre_screen=True,
+            refresh_pre_screen=force,
+            score_mode=score_mode,
+            conversation=conversation,
+        )
+        steps = ["fetch CVs", "pre-screen"] + (["score"] if score_mode != "none" else [])
+        return {
+            "type": "batch_process",
+            "status": result.get("status", "started"),
+            "kind": "process",
+            "role_id": int(role.id),
+            "force": force,
+            "steps": steps,
+            "already_running": result.get("status") == "already_running",
+            "total": int(result.get("total") or 0),
+        }
     if name == "list_draft_tasks":
         return _draft_tasks.draft_review_card(db, role)
     if name == "sync_workable_comments":
