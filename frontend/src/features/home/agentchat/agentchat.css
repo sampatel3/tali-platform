@@ -46,6 +46,11 @@
 .ac-kicker { font-family: var(--font-mono); font-size: 0.65625rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); }
 .ac-sidebar-count { font-size: 0.6875rem; color: var(--purple-2); font-weight: 600; }
 .ac-agent-list { flex: 1; overflow-y: auto; padding: 2px 8px 12px; display: flex; flex-direction: column; gap: 3px; }
+/* Agent-first sections (on/paused · previously-on · starred · active). */
+.ac-agent-group { display: flex; flex-direction: column; gap: 3px; }
+.ac-agent-group + .ac-agent-group { margin-top: 8px; }
+.ac-group-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 11px 3px; font-family: var(--font-mono); font-size: 0.59375rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-soft); position: sticky; top: 0; background: var(--bg-2); z-index: 1; }
+.ac-group-count { font-weight: 600; color: var(--mute); }
 .ac-agent { display: flex; align-items: flex-start; gap: 10px; padding: 10px 11px; border-radius: var(--radius); border: 1px solid transparent; background: transparent; cursor: pointer; text-align: left; width: 100%; position: relative; transition: background 0.12s ease; }
 .ac-agent:hover { background: var(--bg-3); }
 .ac-agent.is-active { background: var(--purple-soft); border-color: var(--purple); }
