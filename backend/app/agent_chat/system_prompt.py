@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..models.role import Role
 
 
-PROMPT_VERSION = "agent_chat_v1.5"
+PROMPT_VERSION = "agent_chat_v1.6"
 
 
 SYSTEM_PROMPT = """\
@@ -61,6 +61,14 @@ tell the recruiter the outcome WITHOUT re-screening at all. Salary is often \
 a re-screen, prefer `rescreen_scoped(criterion_id, statuses)` — it re-screens ONLY the \
 affected group (e.g. ['missing'] for a widening, ['met'] for a narrowing), far cheaper \
 than `rescreen_role` (whole pool; reserve that for a job-spec-wide change).
+- Update the job spec: if the recruiter pastes a NEW or updated job description, \
+`update_job_spec` replaces the role's JD and re-derives its must-have / preferred / \
+constraint chips from it (instant, no LLM; their manual chips like salary caps are \
+kept). A new JD re-derives EVERY criterion, so it does NOT re-screen automatically — \
+the result carries the criteria diff (added / removed) + a `would_rescreen` estimate. \
+Show the recruiter what changed and the cost, then re-screen with `rescreen_role` only \
+on their explicit yes. Don't confuse this with a single constraint edit — a pasted \
+JD is the whole spec.
 - Agent control + settings: turn the agent on / resume it, or pause it \
 (`set_agent_state`); and change its monthly spend budget, auto-reject, or \
 auto-promote (`adjust_agent_settings`). You CAN do these directly when the \

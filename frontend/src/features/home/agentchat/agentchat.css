@@ -175,6 +175,12 @@
 .ac-rescreen-estimate { font-size: 0.71875rem; color: var(--ink-soft); background: var(--bg-3); border: 1px dashed var(--line); border-radius: 8px; padding: 6px 9px; line-height: 1.4; }
 .ac-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .ac-constraint-chip { font-size: 0.75rem; font-weight: 600; color: var(--purple-2); background: var(--bg-2); border: 1px solid var(--purple-soft); padding: 5px 10px; border-radius: 999px; }
+/* Job-spec re-derive diff — added = standard purple chip, removed = struck-through. */
+.ac-spec-diff { display: flex; flex-direction: column; gap: 4px; }
+.ac-spec-diff-label { font-family: var(--font-mono); font-size: 0.59375rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.ac-spec-diff-label.add { color: var(--purple-2); }
+.ac-spec-diff-label.remove { color: var(--ink-soft); }
+.ac-chip-remove { color: var(--ink-soft); border-color: var(--line); text-decoration: line-through; text-decoration-color: var(--mute); opacity: 0.8; }
 .ac-name-chip { font-size: 0.6875rem; font-weight: 600; color: var(--ink-2); background: var(--bg-3); padding: 4px 9px; border-radius: 999px; }
 .ac-thresh-line { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
 .ac-arrow { color: var(--ink-soft); font-size: 1rem; }

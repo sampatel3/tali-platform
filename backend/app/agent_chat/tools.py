@@ -36,11 +36,12 @@ CARD_TYPES = frozenset(
         "threshold_recommendation",
         "threshold_change",
         "constraint_change",
+        "job_spec_change",
         "draft_task_review",
     }
 )
 # Cards that represent a committed mutation (vs read-only analysis).
-MUTATION_CARD_TYPES = frozenset({"threshold_change", "constraint_change"})
+MUTATION_CARD_TYPES = frozenset({"threshold_change", "constraint_change", "job_spec_change"})
 
 
 AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
@@ -195,6 +196,26 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {"criterion_id": {"type": "integer"}},
             "required": ["criterion_id"],
+        },
+    },
+    {
+        "name": "update_job_spec",
+        "description": (
+            "Replace THIS role's job description with a new one the recruiter "
+            "pasted, and re-derive its must-have / preferred / constraint criteria "
+            "from it. Use when the recruiter sends a new or updated JD in chat. A new "
+            "JD re-derives EVERY criterion (the biggest change there is), so it does "
+            "NOT re-screen automatically: it applies the spec + re-derives the chips "
+            "instantly (no LLM) and returns the criteria diff + a re-screen cost "
+            "estimate. Recruiter-added chips (salary caps, etc.) are kept. Show what "
+            "changed + the cost and ASK before running rescreen_role."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_spec_text": {"type": "string", "description": "The full new job description text the recruiter pasted."},
+            },
+            "required": ["job_spec_text"],
         },
     },
     {
@@ -561,6 +582,10 @@ def dispatch_tool(
         if result.get("invalidates_scores"):
             result["would_rescreen"] = _constraints.estimate_rescreen(db, role)
         return result
+    if name == "update_job_spec":
+        return _constraints.update_job_spec(
+            db, role, job_spec_text=str(args.get("job_spec_text") or "")
+        )
     if name == "rescreen_role":
         result = _constraints.rescreen_role(db, role)
         _maybe_report_rescreen(db, role=role, conversation=conversation, result=result)
