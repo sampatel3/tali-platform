@@ -1045,7 +1045,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // Live agent status for THIS role — backend serves /roles/{id}/agent/status
   // with monthly_spent_cents + monthly_budget_cents + pending_decisions +
   // last_activity. Polled every 30s, paused when the tab is hidden.
-  const { status: agentStatus } = useAgentStatus(Number.isFinite(numericRoleId) ? numericRoleId : null);
+  const { status: agentStatus, setStatus: setAgentStatus, refetch: refetchAgentStatus } = useAgentStatus(Number.isFinite(numericRoleId) ? numericRoleId : null);
   // Per-feature spend breakdown for the role budget panel. Refetched
   // whenever the role's monthly spend ticks (a coarse proxy for "new
   // usage events landed"); cheap enough to call inline.
@@ -1950,20 +1950,20 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   };
 
-  // OFF → ON / ON → OFF / AUTO-PAUSED → ON.
-  // All three flows are optimistic + fire-and-forget: we flip the local
-  // role state synchronously so the panel + hero swap in one frame, and
-  // the PATCH runs in the background. On failure we revert the state and
-  // surface an error toast — the success path is silent because the panel
-  // itself communicates the new state.
-  const patchAgentMode = (nextRoleFields, errorFallback) => {
+  // OFF→ON / ON→OFF / PAUSED→ON. Optimistic + fire-and-forget: flip local role
+  // state in one frame; PATCH in the background. `statusPatch` mirrors the change
+  // into the polled /agent/status too — the strip derives on/paused from
+  // `paused_at`, so Resume MUST clear it or the box stays PAUSED until the next
+  // 30s poll. On settle we refetch authoritative status; on failure, revert + toast.
+  const patchAgentMode = (nextRoleFields, errorFallback, statusPatch = null) => {
     if (!Number.isFinite(numericRoleId)) return;
     setRole((cur) => (cur ? { ...cur, ...nextRoleFields } : cur));
+    if (statusPatch && setAgentStatus) setAgentStatus((cur) => (cur ? { ...cur, ...statusPatch } : cur));
     rolesApi
       .update(numericRoleId, nextRoleFields)
-      .then(() => { void loadRoleWorkspace(); })
+      .then(() => { void refetchAgentStatus?.(); void loadRoleWorkspace(); })
       .catch((error) => {
-        // Refetch authoritative state so overlapping toggles can't clobber.
+        void refetchAgentStatus?.();
         void loadRoleWorkspace();
         showToast(getErrorMessage(error, errorFallback), 'error');
       });
@@ -1977,6 +1977,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     patchAgentMode(
       { agentic_mode_enabled: true, monthly_usd_budget_cents: monthlyBudgetCents },
       'Failed to turn on agent mode.',
+      { paused_at: null, paused: false, paused_reason: null },
     );
   };
 
@@ -1984,11 +1985,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     patchAgentMode({ agentic_mode_enabled: false }, 'Failed to pause agent mode.');
   };
 
-  // AUTO-PAUSED → ON. The role is still agentic_mode_enabled=true but
-  // paused_at was set when the budget cap was reached. Re-PATCHing
-  // agentic_mode_enabled=true clears paused_at server-side.
+  // PAUSED → ON. paused_at was set (budget cap or a "paused by you" hold);
+  // re-enabling clears it server-side — we clear it locally too for instant flip.
   const handleResumeAgent = () => {
-    patchAgentMode({ agentic_mode_enabled: true }, 'Failed to resume agent mode.');
+    patchAgentMode(
+      { agentic_mode_enabled: true },
+      'Failed to resume agent mode.',
+      { paused_at: null, paused: false, paused_reason: null },
+    );
   };
 
   return (
