@@ -59,6 +59,7 @@ from .agent_tasks import (
     agent_daily_review_role,
     agent_cohort_tick_sweep,
     agent_cohort_tick_role,
+    pre_screen_reject_sweep,
     agent_expire_stuck_runs,
     agent_expire_stale_decisions,
 )
@@ -123,6 +124,7 @@ __all__ = [
     "agent_daily_review_role",
     "agent_cohort_tick_sweep",
     "agent_cohort_tick_role",
+    "pre_screen_reject_sweep",
     "agent_expire_stuck_runs",
     "agent_expire_stale_decisions",
     "report_rescreen_impact",
