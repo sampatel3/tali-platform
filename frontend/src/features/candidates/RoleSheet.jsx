@@ -210,6 +210,11 @@ export const RoleSheet = ({
             <p className="text-sm font-semibold text-[var(--taali-text)]">Link tasks</p>
             <p className="text-xs text-[var(--taali-muted)]">{selectedTaskIds.length} selected</p>
           </div>
+          {selectedTaskIds.length > 1 ? (
+            <Card className="border-[var(--taali-purple)] bg-[var(--taali-purple-soft)] px-3 py-2 text-xs text-[var(--taali-text)]">
+              <span className="font-semibold text-[var(--taali-purple)]">A/B test</span> — with more than one task linked, each candidate is automatically assigned one (split evenly, stable per candidate). You don&apos;t pick per candidate.
+            </Card>
+          ) : null}
           {allTasks.length === 0 ? (
             <EmptyState
               title="No tasks available"
