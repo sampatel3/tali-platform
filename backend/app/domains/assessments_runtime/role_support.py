@@ -17,6 +17,7 @@ from ...services.interview_support_service import (
     refresh_application_interview_support,
 )
 from ...services.pre_screening_service import pre_screen_snapshot, refresh_pre_screening_fields
+from ...services.workable_actions_service import workable_job_syncable
 from ...services.taali_scoring import (
     ROLE_FIT_WEIGHTS,
     TAALI_SCORING_RUBRIC_VERSION,
@@ -233,6 +234,7 @@ def role_to_response(
             if isinstance(getattr(role, "workable_job_data", None), dict)
             else None
         ),
+        workable_job_live=workable_job_syncable(role),
         job_spec_filename=role.job_spec_filename,
         job_spec_text=role.job_spec_text,
         job_spec_uploaded_at=role.job_spec_uploaded_at,

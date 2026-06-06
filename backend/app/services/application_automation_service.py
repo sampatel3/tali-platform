@@ -17,7 +17,11 @@ from .pre_screening_service import (
     mark_auto_reject_state,
     refresh_pre_screening_fields,
 )
-from .workable_actions_service import disqualify_candidate_in_workable
+from .workable_actions_service import (
+    disqualify_candidate_in_workable,
+    workable_job_state,
+    workable_job_syncable,
+)
 
 
 def _candidate_label(app: CandidateApplication) -> str:
@@ -252,6 +256,48 @@ def run_auto_reject_if_needed(
                 "auto-reject write-back."
             ),
         )
+
+    # Archived/closed/draft Workable req: Workable 403s any disqualify there, so
+    # don't attempt the sync (and don't strand the candidate as a card). Reject
+    # locally instead — same decision, just not synced to Workable — so the
+    # candidate resolves to 'rejected' rather than waiting forever.
+    if role is not None and not workable_job_syncable(role):
+        ensure_pipeline_fields(app)
+        transition_outcome(
+            db,
+            app=app,
+            to_outcome="rejected",
+            actor_type=actor_type,
+            actor_id=actor_id,
+            reason="Auto-rejected from pre-screen — Workable req not live (Taali-only)",
+        )
+        append_application_event(
+            db,
+            app=app,
+            event_type="auto_rejected",
+            actor_type=actor_type,
+            actor_id=actor_id,
+            reason=decision.get("reason"),
+            metadata={
+                "pre_screen_score": decision.get("snapshot", {}).get("pre_screen_score"),
+                "threshold_100": (decision.get("config") or {}).get("threshold_100"),
+                "workable_synced": False,
+                "workable_job_state": workable_job_state(role),
+                "skip_reason": "workable_req_not_live",
+            },
+        )
+        mark_auto_reject_state(
+            app,
+            state="rejected",
+            reason="Below pre-screen threshold; Workable req not live — rejected in Taali only.",
+            triggered=True,
+        )
+        return {
+            **decision,
+            "performed": True,
+            "state": "rejected",
+            "workable_synced": False,
+        }
 
     if not org or not org.workable_connected or not org.workable_access_token or not org.workable_subdomain:
         reason = "Workable is not connected for auto reject write-back"
