@@ -138,6 +138,11 @@
     ],
     "jd_to_signal_map": [
       {
+        "job_requirement": "Diagnose why ingestion is slow/expensive (full scans, tiny files, full extracts) under time pressure.",
+        "task_artifact": "Chat transcript + diagnostics \u2014 candidate identifies the unpartitioned table + full-extract + small-file failures themselves.",
+        "rubric_dimension": "situational_assessment"
+      },
+      {
         "job_requirement": "Ingest large datasets from on-prem into the lakehouse Bronze layer.",
         "task_artifact": "Chat transcript + plan_extraction \u2014 candidate owns the extraction strategy.",
         "rubric_dimension": "design_decisions_articulated"

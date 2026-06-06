@@ -137,6 +137,11 @@
     ],
     "jd_to_signal_map": [
       {
+        "job_requirement": "Diagnose a failed orchestration run under deadline (bad publish, doubled partition, no retry policy).",
+        "task_artifact": "Chat transcript + diagnostics \u2014 candidate identifies the ungated publish + non-idempotent load + empty backfill themselves.",
+        "rubric_dimension": "situational_assessment"
+      },
+      {
         "job_requirement": "Diagnose + recover pipeline failures under time pressure.",
         "task_artifact": "Chat transcript \u2014 candidate owns the catchup + reload decisions.",
         "rubric_dimension": "design_decisions_articulated"
