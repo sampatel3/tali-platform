@@ -96,10 +96,11 @@ def _patch_stack():
                 connect_sandbox=MagicMock(return_value=MagicMock()),
             ),
         ),
-        # API key lookup — return something non-empty.
+        # API key lookup — server-side accessor (agentic-only: the key never
+        # enters the sandbox). Return something non-empty.
         patch(
-            "app.domains.assessments_runtime.candidate_claude_chat_routes.terminal_env",
-            return_value={"ANTHROPIC_API_KEY": "sk-test"},
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.resolve_backend_anthropic_key",
+            return_value="sk-test",
         ),
         # Role budget gate — allow spend.
         patch(

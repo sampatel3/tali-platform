@@ -59,20 +59,22 @@ def workspace_repo_root(task: Task) -> str:
     return canonical_workspace_repo_root(task)
 
 
+def resolve_backend_anthropic_key() -> str:
+    """The platform Anthropic key, for BACKEND use only (agentic chat / scoring
+    call Anthropic server-side). This key is NEVER injected into a candidate
+    sandbox — see ``terminal_env``."""
+    return (settings.ANTHROPIC_API_KEY or "").strip()
+
+
 def terminal_env(org: Organization | None) -> dict[str, str]:
-    # Taali pays Anthropic for all Claude usage on the platform; customers do
-    # not bring their own key. The org parameter is retained for future
-    # per-org policy hooks (e.g. budgets, model overrides) but is not used to
-    # source the key.
+    # Agentic-only posture (2026-06): the candidate sandbox NEVER receives the
+    # platform Anthropic key. The AI runs server-side via the agentic chat; the
+    # in-sandbox terminal is a plain shell for running tests. This closes the
+    # only real "break into Taali" path (a candidate could otherwise
+    # ``echo $ANTHROPIC_API_KEY`` from the shell). A scoped, revocable
+    # per-session key could be reintroduced here later WITHOUT changing callers.
     del org
-    key = (settings.ANTHROPIC_API_KEY or "").strip() if settings.ASSESSMENT_TERMINAL_ALLOW_GLOBAL_KEY_FALLBACK else ""
-    envs: dict[str, str] = {}
-    # Never allow interactive login prompts in candidate sessions.
-    envs["CLAUDE_CODE_SKIP_AUTH_LOGIN"] = "1"
-    if key:
-        # Keep both env names for CLI compatibility across Claude Code versions.
-        envs["ANTHROPIC_API_KEY"] = key
-        envs["CLAUDE_API_KEY"] = key
+    envs: dict[str, str] = {"CLAUDE_CODE_SKIP_AUTH_LOGIN": "1"}
     model = (settings.resolved_claude_model or "").strip()
     if model:
         envs["ANTHROPIC_MODEL"] = model
@@ -361,30 +363,6 @@ def ensure_terminal_session(
 
     repo_root = workspace_repo_root(task)
     envs = terminal_env(org)
-    if not (envs.get("ANTHROPIC_API_KEY") or "").strip():
-        _mark_terminal_session(assessment, pid=None, state="error")
-        append_assessment_timeline_event(
-            assessment,
-            "terminal_error",
-            {"reason": "missing_claude_api_key"},
-        )
-        append_cli_transcript(
-            assessment,
-            "terminal_error",
-            {"reason": "missing_claude_api_key"},
-        )
-        db.commit()
-        return TerminalSession(
-            sandbox=sandbox,
-            handle=None,
-            pid=0,
-            is_new=True,
-            cli_available=False,
-            error_message=(
-                "Claude CLI authentication is not configured for this workspace. "
-                "Set an organization Claude API key before starting terminal mode."
-            ),
-        )
 
     handle = e2b_service.create_pty(
         sandbox,
@@ -407,33 +385,45 @@ def ensure_terminal_session(
         {"pid": pid, "cwd": repo_root},
     )
 
-    cli_available = True
+    # Agentic-only: the sandbox carries no Anthropic key, so the in-sandbox
+    # Claude CLI is intentionally NOT started — the terminal is a plain shell
+    # for running tests and the AI is the agentic chat. (If a scoped per-session
+    # key is ever injected via terminal_env, the guarded CLI wrapper is set up
+    # instead.)
+    has_sandbox_key = bool((envs.get("ANTHROPIC_API_KEY") or "").strip())
+    cli_available = False
     error_message = None
-    try:
-        e2b_service.run_command(
-            sandbox,
-            f"{settings.CLAUDE_CLI_COMMAND} --version",
-            cwd=repo_root,
-            envs=envs,
-            timeout=12,
-        )
-    except Exception:
-        cli_available = False
-        error_message = (
-            f"Claude CLI is not available in this coding environment. "
-            f"Install `{settings.CLAUDE_CLI_COMMAND}` in the sandbox template."
-        )
-
-    if cli_available:
-        cli_cmd = _build_claude_cli_command(repo_root=repo_root)
-        bootstrap_script = _build_terminal_bootstrap_script(repo_root=repo_root, cli_cmd=cli_cmd)
-        # Keep candidates at an interactive shell prompt and provide a guarded Claude wrapper.
-        # Auto-exec into Claude can leave sessions looking frozen if the CLI is waiting silently.
-        e2b_service.send_pty_input(sandbox, pid, bootstrap_script)
+    if has_sandbox_key:
+        try:
+            e2b_service.run_command(
+                sandbox,
+                f"{settings.CLAUDE_CLI_COMMAND} --version",
+                cwd=repo_root,
+                envs=envs,
+                timeout=12,
+            )
+            cli_available = True
+        except Exception:
+            error_message = (
+                f"Claude CLI is not available in this coding environment. "
+                f"Install `{settings.CLAUDE_CLI_COMMAND}` in the sandbox template."
+            )
+        if cli_available:
+            cli_cmd = _build_claude_cli_command(repo_root=repo_root)
+            bootstrap_script = _build_terminal_bootstrap_script(repo_root=repo_root, cli_cmd=cli_cmd)
+            e2b_service.send_pty_input(sandbox, pid, bootstrap_script)
+            append_cli_transcript(
+                assessment,
+                "terminal_bootstrap",
+                {"pid": pid, "version": 2},
+            )
+    else:
+        # Plain shell — drop the candidate into the repo directory.
+        e2b_service.send_pty_input(sandbox, pid, f"cd {shlex.quote(repo_root)}\n")
         append_cli_transcript(
             assessment,
-            "terminal_bootstrap",
-            {"pid": pid, "version": 2},
+            "terminal_shell",
+            {"pid": pid, "mode": "agentic_only_plain_shell"},
         )
 
     db.commit()

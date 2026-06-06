@@ -18,9 +18,11 @@ from ...components.assessments.claude_budget import (
     build_claude_budget_snapshot,
     resolve_effective_budget_limit_usd,
 )
-from ...components.assessments.terminal_runtime import terminal_capabilities, terminal_env
+from ...components.assessments.terminal_runtime import (
+    resolve_backend_anthropic_key,
+    terminal_capabilities,
+)
 from ...components.integrations.claude.service import ClaudeService
-from ...models.organization import Organization
 from ...models.role import Role
 from ...models.task import Task
 from ...platform.database import get_db
@@ -204,12 +206,11 @@ def chat_with_claude(
     task = db.query(Task).filter(Task.id == assessment.task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    org = db.query(Organization).filter(Organization.id == assessment.organization_id).first()
     effective_budget_limit = resolve_effective_budget_limit_usd(
         is_demo=bool(getattr(assessment, "is_demo", False)),
         task_budget_limit_usd=getattr(task, "claude_budget_limit_usd", None),
     )
-    api_key = str(terminal_env(org).get("ANTHROPIC_API_KEY") or "").strip()
+    api_key = resolve_backend_anthropic_key()
     if not api_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
