@@ -650,6 +650,12 @@ const RoleAgentSettingsTab = ({
   // actions immediately and audit-log the result.
   const autoReject = Boolean(role?.auto_reject);
   const autoPromote = Boolean(role?.auto_promote);
+  // When the linked Workable req is archived/closed/draft, Workable refuses
+  // candidate write-backs (disqualify/move) with a 403 — so Taali acts locally
+  // instead (rejects still complete here, just not synced upstream). The agent
+  // toggles stay functional; this only surfaces the no-sync reality.
+  const workableJobLive = role?.workable_job_live !== false;
+  const workableJobState = String(role?.workable_job_state || '').toLowerCase();
   const handleAutonomyToggle = (key, value) => {
     if (typeof onAutonomyChange === 'function') onAutonomyChange(key, value);
   };
@@ -839,6 +845,28 @@ const RoleAgentSettingsTab = ({
           <p className="mc-agent-settings-card-help" style={{ marginBottom: 14 }}>
             By default every candidate-affecting decision the agent makes goes to your Decision Hub for approval. Flip these on to let the agent act without asking.
           </p>
+          {!workableJobLive && (
+            <div
+              role="status"
+              style={{
+                marginBottom: 14,
+                padding: '10px 12px',
+                borderRadius: 8,
+                background: 'var(--purple-50, #f4f1fb)',
+                border: '1px solid var(--purple-200, #d8ccf3)',
+                color: 'var(--ink, #2c2640)',
+                fontSize: 13,
+                lineHeight: 1.45,
+              }}
+            >
+              <strong>
+                Workable req {workableJobState || 'not live'} — no Workable sync.
+              </strong>{' '}
+              Rejects still complete in Taali, but they (and stage moves) won’t be
+              written back to Workable. Re-publish this req in Workable to restore
+              two-way sync.
+            </div>
+          )}
           {[
             {
               key: 'auto_reject',
