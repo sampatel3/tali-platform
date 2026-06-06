@@ -2054,7 +2054,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             <div className="f"><span className="k">Location</span><span className="v">{roleFactValues.location}</span></div>
             <div className="f"><span className="k">Department</span><span className="v">{roleFactValues.department}</span></div>
             <div className="f"><span className="k">Employment</span><span className="v">{roleFactValues.employment}</span></div>
-            <div className="f"><span className="k">Linked task</span><span className="v purple">{roleTasks[0]?.name || 'Task not linked'}</span></div>
+            <div className="f"><span className="k">{roleTasks.length > 1 ? 'Tasks · A/B' : 'Linked task'}</span><span className="v purple">{roleTasks.length ? roleTasks.map((t) => t.name).join(' · ') : 'Task not linked'}</span></div>
           </div>
         )}
         agent={roleAgent}
