@@ -29,6 +29,17 @@ from ...components.assessments.claude_budget import (
     resolve_effective_budget_limit_usd,
 )
 from ...components.assessments.claude_tool_executor import AssessmentToolExecutor
+from ...components.assessments.integrity import (
+    BOUNDARY_DIRECTIVE,
+    OFF_TASK,
+    REFUSAL_MESSAGE,
+    VOID_MESSAGE,
+    WARN_MESSAGE,
+    classify_turn,
+    count_misuse,
+    decide_action,
+    strip_refusal_marker,
+)
 from ...components.assessments.interrogation import (
     all_resolved,
     build_interrogation_directive,
@@ -88,6 +99,8 @@ def _build_agentic_system_prompt(task: Task, interrogation_directive: str) -> st
         "- Be concise. One short paragraph or a tight bullet list — no preamble, no 'let me check this for you'.",
         "- Answer the EXACT question asked. Don't pre-emptively explore the repo or suggest unrelated changes.",
         "- When proposing a fix, point to the file and line, don't paraphrase the whole module.",
+        "",
+        BOUNDARY_DIRECTIVE,
     ]
     if interrogation_directive:
         base.extend(["", interrogation_directive])
@@ -294,10 +307,56 @@ async def chat_with_claude_agentic(
         ) from exc
     latency_ms = int((time.perf_counter() - started_at) * 1000)
 
+    # --- Central integrity guard (components.assessments.integrity): ONE
+    # contract for every task. Detect off-task / injection / system-probe,
+    # flag in real time, warn at the threshold, hard-void past it. ---
+    misuse_category = classify_turn(new_message, chat_turn.content)
+    integrity_action = "none"
+    voided = False
+    if misuse_category == OFF_TASK:
+        # The agent already made the semantic refusal — surface it, minus the
+        # internal marker.
+        response_content = strip_refusal_marker(chat_turn.content)
+    elif misuse_category:
+        # injection / system-probe tripped on the candidate's message — override
+        # the model's reply defensively (never echo a possible leak).
+        response_content = REFUSAL_MESSAGE
+    else:
+        response_content = chat_turn.content
+
+    if misuse_category:
+        misuse_count = count_misuse(prompts) + 1
+        integrity_action = decide_action(misuse_count)
+        flags = list(getattr(assessment, "prompt_fraud_flags", None) or [])
+        flags.append({
+            "type": f"misuse_{misuse_category}",
+            "prompt_index": len(prompts),
+            "confidence": 1.0,
+            "evidence": misuse_category,
+        })
+        assessment.prompt_fraud_flags = flags
+        append_assessment_timeline_event(
+            assessment,
+            "integrity_flag",
+            {"category": misuse_category, "count": misuse_count, "action": integrity_action},
+        )
+        if integrity_action == "warn":
+            response_content = f"{response_content}{WARN_MESSAGE}"
+        elif integrity_action == "void":
+            response_content = VOID_MESSAGE
+            voided = True
+            assessment.is_voided = True
+            assessment.voided_at = utcnow()
+            assessment.void_reason = (
+                f"Auto-voided: repeated assessment misuse ({misuse_category}); "
+                f"{misuse_count} flagged attempts."
+            )
+
     is_first_prompt = len(prompts) == 0
     record = {
         "message": new_message,
-        "response": chat_turn.content,
+        "response": response_content,
+        "misuse": misuse_category,
         "code_context": str(data.code_context or "")[:_MAX_CONTEXT_CHARS],
         "paste_detected": bool(data.paste_detected),
         "browser_focused": bool(data.browser_focused),
@@ -368,11 +427,12 @@ async def chat_with_claude_agentic(
     db.commit()
 
     return {
-        "content": chat_turn.content,
+        "content": response_content,
         "tool_calls_made": list(getattr(chat_turn, "tool_calls_made", []) or []),
         "input_tokens": int(getattr(chat_turn, "input_tokens", 0) or 0),
         "output_tokens": int(getattr(chat_turn, "output_tokens", 0) or 0),
         "latency_ms": latency_ms,
         "claude_budget": claude_budget,
+        "assessment_voided": voided,
         "request_id": data.request_id,
     }
