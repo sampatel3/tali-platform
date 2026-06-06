@@ -257,6 +257,98 @@ def agent_cohort_tick_sweep(self) -> dict:
     return {"status": "ok", "enqueued_count": len(enqueued), "role_ids": enqueued}
 
 
+# Bounded per-run cap so a large stranded backlog drains over several ticks
+# instead of bursting thousands of auto-reject tasks into the worker pool.
+PRE_SCREEN_REJECT_SWEEP_CAP = 500
+
+
+@celery_app.task(
+    name="app.tasks.agent_tasks.pre_screen_reject_sweep",
+    bind=True,
+    max_retries=0,
+)
+def pre_screen_reject_sweep(self, cap: int = PRE_SCREEN_REJECT_SWEEP_CAP) -> dict:
+    """Cull already-pre-screened, below-threshold candidates — INCLUDING on
+    budget-paused roles.
+
+    The pre-screen reject is deterministic and free (no Anthropic spend), so
+    it must keep running when the role auto-pauses for monthly budget. The
+    only other automated caller — the agent cohort tick — skips paused roles
+    (``agent_paused_at`` filter), which stranded the below-threshold backlog
+    'open' with no reject. This sweep is the catch-up net: it does NOT score
+    or run the LLM; it only re-dispatches ``run_application_auto_reject`` for
+    open, below-threshold, not-yet-fully-scored candidates that have no
+    pending decision yet. That task is idempotent and honours
+    ``role.auto_reject`` (direct Workable disqualify vs a Decision Hub card),
+    so re-running is safe.
+
+    Selection mirrors ``backfill_existing_below_threshold``: a numeric
+    ``pre_screen_score_100`` under the role's cutoff, OR a 'Below threshold'
+    recommendation (covers must-have misses / invalidated scores). Fully
+    cv_match-scored candidates are excluded — the agent owns those.
+    """
+    from sqlalchemy import and_, func, or_, exists
+
+    from ..models.agent_decision import AgentDecision
+    from ..models.candidate_application import CandidateApplication
+    from ..models.role import Role
+    from ..platform.database import SessionLocal
+    from ..tasks.automation_tasks import run_application_auto_reject
+
+    _DEFAULT_CUTOFF = 50
+    effective_cutoff = func.coalesce(Role.score_threshold, _DEFAULT_CUTOFF)
+    dispatched: list[int] = []
+    db = SessionLocal()
+    try:
+        has_pending = (
+            db.query(AgentDecision.id)
+            .filter(
+                AgentDecision.application_id == CandidateApplication.id,
+                AgentDecision.status == "pending",
+            )
+            .exists()
+        )
+        rows = (
+            db.query(CandidateApplication.id)
+            .join(Role, Role.id == CandidateApplication.role_id)
+            .filter(
+                Role.agentic_mode_enabled.is_(True),
+                Role.deleted_at.is_(None),
+                CandidateApplication.application_outcome == "open",
+                # Pre-screen-only: once a full cv_match score exists the agent
+                # owns the verdict (matches evaluate_auto_reject_decision).
+                CandidateApplication.cv_match_score.is_(None),
+                or_(
+                    and_(
+                        CandidateApplication.pre_screen_score_100.isnot(None),
+                        CandidateApplication.pre_screen_score_100 < effective_cutoff,
+                    ),
+                    CandidateApplication.pre_screen_recommendation == "Below threshold",
+                ),
+                ~has_pending,
+            )
+            .order_by(CandidateApplication.id.asc())
+            .limit(int(cap))
+            .all()
+        )
+        for (application_id,) in rows:
+            try:
+                run_application_auto_reject.delay(int(application_id))
+                dispatched.append(int(application_id))
+            except Exception:  # pragma: no cover — defensive
+                logger.exception(
+                    "pre_screen_reject_sweep dispatch failed application_id=%s",
+                    application_id,
+                )
+    except Exception:
+        logger.exception("pre_screen_reject_sweep failed")
+        return {"status": "error", "dispatched": len(dispatched)}
+    finally:
+        db.close()
+    logger.info("pre_screen_reject_sweep dispatched %d auto-reject task(s)", len(dispatched))
+    return {"status": "ok", "dispatched_count": len(dispatched), "application_ids": dispatched}
+
+
 @celery_app.task(
     name="app.tasks.agent_tasks.agent_cohort_tick_role",
     bind=True,

@@ -118,11 +118,32 @@ def score_application_job(
                     "application_id": application_id,
                     "role_id": int(application.role_id),
                 }
+            cache_hit = str(job.cache_hit or "")
             db.commit()
+            # "Pre-screen reject goes first, before CV-match scoring." When the
+            # pre-screen gate filtered this candidate out (below threshold or
+            # fraud), the orchestrator short-circuited BEFORE the expensive v3
+            # call but did NOT itself queue the reject. Fire it now — the
+            # below-threshold verdict is persisted, so run_application_auto_reject
+            # (which honours role.auto_reject: direct Workable disqualify vs a
+            # Decision Hub card, and is idempotent) finally has a score to act on.
+            # Without this the reject only ever landed via the agent cohort tick,
+            # which is skipped on budget-paused roles — stranding the backlog
+            # 'open'. Dispatched post-commit so the worker reads the saved verdict.
+            if cache_hit in {"pre_screen_filtered", "fraud_filtered"}:
+                try:
+                    from .automation_tasks import run_application_auto_reject
+
+                    run_application_auto_reject.delay(application_id)
+                except Exception:  # pragma: no cover — defensive, never block scoring
+                    logger.exception(
+                        "post-pre-screen auto-reject dispatch failed application_id=%s",
+                        application_id,
+                    )
             return {
                 "status": job.status,
                 "application_id": application_id,
-                "cache_hit": job.cache_hit,
+                "cache_hit": cache_hit,
             }
         except Exception as exc:
             logger.exception("score_application_job failed for application_id=%s", application_id)
