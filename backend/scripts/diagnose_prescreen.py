@@ -110,6 +110,27 @@ def _report_role(db, role_id: int) -> None:
     for t, n in pend.most_common():
         print(f"      {t:<28} {n}")
 
+    # Per-candidate sample of below-cutoff applications. The two timestamps are
+    # the crux: if cv_match_scored_at is set and pre_screen_run_at is NULL (or
+    # later), the candidate was full-scored without/ before a pre-screen reject
+    # — the ordering flip that defers the reject to the agent's full-score path.
+    sample = below[:10]
+    if sample:
+        print("  SAMPLE below-cutoff candidates (ordering = the crux):")
+        print(f"      {'app_id':>7} {'genuine':>7} {'ps_col':>7} {'cv':>6} "
+              f"{'recommendation':<22} {'state':<24} {'pre_screen_run_at':<26} {'cv_match_scored_at'}")
+        for a in sample:
+            print(
+                f"      {a.id:>7} "
+                f"{('' if a.genuine_pre_screen_score_100 is None else round(float(a.genuine_pre_screen_score_100),1)):>7} "
+                f"{('' if a.pre_screen_score_100 is None else round(float(a.pre_screen_score_100),1)):>7} "
+                f"{('' if a.cv_match_score is None else round(float(a.cv_match_score),1)):>6} "
+                f"{str(a.pre_screen_recommendation or '—'):<22} "
+                f"{str(a.auto_reject_state or '—'):<24} "
+                f"{str(a.pre_screen_run_at or '—'):<26} "
+                f"{str(a.cv_match_scored_at or '—')}"
+            )
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
