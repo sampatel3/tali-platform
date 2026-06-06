@@ -846,25 +846,33 @@ const RoleAgentSettingsTab = ({
             By default every candidate-affecting decision the agent makes goes to your Decision Hub for approval. Flip these on to let the agent act without asking.
           </p>
           {!workableJobLive && (
-            <div
-              role="status"
-              style={{
-                marginBottom: 14,
-                padding: '10px 12px',
-                borderRadius: 8,
-                background: 'var(--purple-50, #f4f1fb)',
-                border: '1px solid var(--purple-200, #d8ccf3)',
-                color: 'var(--ink, #2c2640)',
-                fontSize: 13,
-                lineHeight: 1.45,
-              }}
-            >
-              <strong>
-                Workable req {workableJobState || 'not live'} — no Workable sync.
-              </strong>{' '}
-              Rejects still complete in Taali, but they (and stage moves) won’t be
-              written back to Workable. Re-publish this req in Workable to restore
-              two-way sync.
+            <div className="mc-agent-warn" role="alert">
+              <svg
+                className="mc-agent-warn-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z M12 9v4 M12 17h.01"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <div>
+                <div className="mc-agent-warn-title">
+                  Changes won’t sync to Workable — this job is {workableJobState || 'not live'}
+                </div>
+                <div className="mc-agent-warn-body">
+                  Workable doesn’t accept updates on a job in this state, so Taali
+                  can’t write rejections or stage changes (such as moving a candidate
+                  to interview) back to it. Taali still applies them here — candidates
+                  are rejected, scored, and tracked as normal. Re-publish this job in
+                  Workable to restore two-way sync.
+                </div>
+              </div>
             </div>
           )}
           {[
