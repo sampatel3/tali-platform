@@ -4,7 +4,7 @@
   "role": "data_engineer",
   "duration_minutes": 30,
   "calibration_prompt": "You have 2 minutes. Ask Claude to help you specify ONE Iceberg partition transform for an orders table queried by date and by customer_id. State the column(s), the transform, the resulting S3 folder for one example row, and what query pattern it optimises \u2014 unambiguously enough to implement.",
-  "scenario": "A finance query on yesterday's orders scanned 2.1 TB of S3 and fired a cost\nalert at 08:05. The nightly on-prem -> Bronze ingestion is the cause.\n\nThree things are wrong at once, and `diagnostics/audit_findings.md` lists the\nstubbed primitives:\n\n* it full-extracts ~2 TB every night and hammers the on-prem OLTP source,\n* it writes the Bronze Iceberg table **unpartitioned**, so every downstream\n  query full-scans it,\n* it fans the write out to millions of tiny S3 objects.\n\nThe mechanical fix \u2014 implementing the five `ingestion/` primitives \u2014 is what\nthe model can help with. The judgment is what your team is hiring you for:\n\n**The partition design is yours.** Day-partitioning `created_at` makes the\nfinance-by-date queries prune nicely, but the data also gets filtered by\n`customer_id` (very high cardinality). Partition too finely (e.g. by hour, or\ndirectly by customer_id) and you get millions of tiny partitions + slow\nplanning; too coarsely and queries don't prune. You choose the transforms and\nthe target file size, and you name which query pattern you optimised for and\nwhich one pays. Justify it in `INGESTION_DESIGN.md`.\n\n**The extraction strategy is yours.** The on-prem OLTP source can't take a\nfull 2 TB pull during business hours without locking up. Incremental watermark\nextraction is cheap but risks missing late-arriving / back-dated updates; a\nfull extract in a maintenance window is complete but tight against the morning\nSLA; CDC is cleanest but the source's binlog retention is short. Pick one,\nstate the failure mode you accept, and say whether you'd confirm anything with\nthe source-system owners before shipping.\n\n**What the rubric grades:**\n1. Did you implement the five primitives correctly? (you ship working code)\n2. Did you choose a coherent partition + file-size design and name the query\n   pattern you sub-optimised? (you're paid for THIS)\n3. Did you pick an extraction strategy and own its failure mode? (THIS too)\n\n`INGESTION_DESIGN.md` is required. All tests passing with an empty or vague\ndesign doc scores in the *good* band, not *excellent* \u2014 the doc is 40% of the\ngrade (the design decisions).\n\nTools: `Read`, `Write`, `Edit`, `Bash` against the live repo. 30 minutes.",
+  "scenario": "A finance query on yesterday's orders scanned 2.1 TB of S3 and fired a cost\nalert at 08:05. The nightly on-prem -> Bronze ingestion is the cause.\n\nThree things are wrong at once, and `diagnostics/audit_findings.md` lists the\nstubbed primitives:\n\n* it full-extracts ~2 TB every night and hammers the on-prem OLTP source,\n* it writes the Bronze Iceberg table **unpartitioned**, so every downstream\n  query full-scans it,\n* it fans the write out to millions of tiny S3 objects.\n\nThe mechanical fix \u2014 implementing the five `ingestion/` primitives \u2014 is what\nthe model can help with. The judgment is what your team is hiring you for:\n\n**The partition design is yours.** Day-partitioning `created_at` makes the\nfinance-by-date queries prune nicely, but the data also gets filtered by\n`customer_id` (very high cardinality). Partition too finely (e.g. by hour, or\ndirectly by customer_id) and you get millions of tiny partitions + slow\nplanning; too coarsely and queries don't prune. You choose the transforms and\nthe target file size, and you name which query pattern you optimised for and\nwhich one pays. Justify it in `INGESTION_DESIGN.md`.\n\n**The extraction strategy is yours.** The on-prem OLTP source can't take a\nfull 2 TB pull during business hours without locking up. Incremental watermark\nextraction is cheap but risks missing late-arriving / back-dated updates; a\nfull extract in a maintenance window is complete but tight against the morning\nSLA; CDC is cleanest but the source's binlog retention is short. Pick one,\nstate the failure mode you accept, and say whether you'd confirm anything with\nthe source-system owners before shipping.\n\n**What the rubric grades:**\n1. Did you implement the five primitives correctly? (you ship working code)\n2. Did you choose a coherent partition + file-size design and name the query\n   pattern you sub-optimised? (you're paid for THIS)\n3. Did you pick an extraction strategy and own its failure mode? (THIS too)\n\n`INGESTION_DESIGN.md` is required. All tests passing with an empty or vague\ndesign doc scores in the *good* band, not *excellent* \u2014 the doc is 40% of the\ngrade (the design decisions).\n\n\n**How this is leveled \u2014 climb as far as you can; the report shows the highest level you reach, and the judgment (L3) is weighted most:**\n- **L1 \u2014 basics:** target_file_count + s3_partition_path right \u2014 the basics any data engineer ships in minutes.\n- **L2 \u2014 core:** partition spec, extraction mode, and the Spark write plan \u2014 most of the pipeline working.\n- **L3 \u2014 judgment:** own the partition-granularity and extraction-strategy decisions in INGESTION_DESIGN.md; name what's left (compaction, late-row reconciliation).\n\nTools: `Read`, `Write`, `Edit`, `Bash` against the live repo. 30 minutes.",
   "repo_structure": {
     "name": "bronze-ingestion-pipeline",
     "files": {
@@ -228,5 +228,28 @@
         "ignores the source-owner conversation"
       ]
     }
-  ]
+  ],
+  "tiers": {
+    "L1": {
+      "label": "Competency baseline \u2014 the primitives",
+      "min_tests_ratio": 0.35,
+      "assesses": [
+        "python",
+        "s3/iceberg path layout",
+        "output file sizing"
+      ],
+      "summary": "target_file_count + s3_partition_path right \u2014 the basics any data engineer ships in minutes."
+    },
+    "L2": {
+      "label": "Core mechanical + the partition trade-off",
+      "min_tests_ratio": 0.85,
+      "summary": "partition spec, extraction mode, and the Spark write plan \u2014 most of the pipeline working."
+    },
+    "L3": {
+      "label": "Judgment + stretch",
+      "min_tests_ratio": 0.95,
+      "requires_design": true,
+      "summary": "own the partition-granularity and extraction-strategy decisions in INGESTION_DESIGN.md; name what's left (compaction, late-row reconciliation)."
+    }
+  }
 }

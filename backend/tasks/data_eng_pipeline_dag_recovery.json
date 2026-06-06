@@ -4,7 +4,7 @@
   "role": "data_engineer",
   "duration_minutes": 30,
   "calibration_prompt": "You have 2 minutes. Ask Claude to help you specify the Airflow dependency between two tasks so a 'publish' task can never run when an upstream 'quality_check' task has failed. State the two tasks, the dependency direction, and what happens to publish when quality_check fails.",
-  "scenario": "It's 09:00. The daily orders pipeline (an Airflow DAG on MWAA:\nextract -> transform -> load -> quality_check -> publish) failed mid-run on\n2026-02-25 and has been paused for two days. While it was broken it also\n*published a batch that failed quality_check*, and a manual re-run doubled a\npartition. `diagnostics/audit_findings.md` lists the stubbed/wrong pieces in\n`dag/`.\n\nThe mechanical fix \u2014 wiring the DAG, the backfill window, the retry policy,\nthe idempotent load and the publish gate \u2014 is what the model can help with.\nThe judgment is what your team is hiring you for:\n\n**The catchup decision is yours.** The DAG is paused with `catchup=True`.\nUn-pausing it backfills all the missed days at once \u2014 a resource spike on MWAA\nand the downstream warehouse, and it will re-run days that partially loaded.\n`catchup=False` skips the gap entirely and leaves a hole in the data. You\ndecide, and you name the cost you accept. Justify in `RECOVERY_DECISION.md`.\n\n**The reload decision is yours.** The failed run *partially* loaded the\n2026-02-25 partition before it died. On recovery you can overwrite the whole\nday's partition (idempotent, safe, but reprocesses good data and costs\ncompute) or surgically delete-and-reload only the bad slice (faster, but you\nhave to know exactly what landed, and getting it wrong leaves corruption).\nPick one and name the failure mode you accept.\n\n**What the rubric grades:**\n1. Did you fix the DAG primitives? (dependencies, backfill, retries,\n   idempotent load, publish gate)\n2. Did you make the catchup call and name the cost? (you're paid for THIS)\n3. Did you make the reload call and own its failure mode? (THIS too)\n\n`RECOVERY_DECISION.md` is required. All tests passing with an empty or vague\ndecision doc scores in the *good* band, not *excellent* \u2014 the doc is 40% of\nthe grade.\n\nTools: `Read`, `Write`, `Edit`, `Bash` against the live repo. 30 minutes.",
+  "scenario": "It's 09:00. The daily orders pipeline (an Airflow DAG on MWAA:\nextract -> transform -> load -> quality_check -> publish) failed mid-run on\n2026-02-25 and has been paused for two days. While it was broken it also\n*published a batch that failed quality_check*, and a manual re-run doubled a\npartition. `diagnostics/audit_findings.md` lists the stubbed/wrong pieces in\n`dag/`.\n\nThe mechanical fix \u2014 wiring the DAG, the backfill window, the retry policy,\nthe idempotent load and the publish gate \u2014 is what the model can help with.\nThe judgment is what your team is hiring you for:\n\n**The catchup decision is yours.** The DAG is paused with `catchup=True`.\nUn-pausing it backfills all the missed days at once \u2014 a resource spike on MWAA\nand the downstream warehouse, and it will re-run days that partially loaded.\n`catchup=False` skips the gap entirely and leaves a hole in the data. You\ndecide, and you name the cost you accept. Justify in `RECOVERY_DECISION.md`.\n\n**The reload decision is yours.** The failed run *partially* loaded the\n2026-02-25 partition before it died. On recovery you can overwrite the whole\nday's partition (idempotent, safe, but reprocesses good data and costs\ncompute) or surgically delete-and-reload only the bad slice (faster, but you\nhave to know exactly what landed, and getting it wrong leaves corruption).\nPick one and name the failure mode you accept.\n\n**What the rubric grades:**\n1. Did you fix the DAG primitives? (dependencies, backfill, retries,\n   idempotent load, publish gate)\n2. Did you make the catchup call and name the cost? (you're paid for THIS)\n3. Did you make the reload call and own its failure mode? (THIS too)\n\n`RECOVERY_DECISION.md` is required. All tests passing with an empty or vague\ndecision doc scores in the *good* band, not *excellent* \u2014 the doc is 40% of\nthe grade.\n\n\n**How this is leveled \u2014 climb as far as you can; the report shows the highest level you reach, and the judgment (L3) is weighted most:**\n- **L1 \u2014 basics:** wire build_dependencies + set retries/SLA \u2014 the Airflow basics.\n- **L2 \u2014 core:** backfill window, idempotent load, and the publish gate \u2014 the pipeline recovers safely.\n- **L3 \u2014 judgment:** own the catchup and partial-reload decisions in RECOVERY_DECISION.md; name what's left (transactional writes, surgical reload tooling).\n\nTools: `Read`, `Write`, `Edit`, `Bash` against the live repo. 30 minutes.",
   "repo_structure": {
     "name": "pipeline-dag-recovery",
     "files": {
@@ -227,5 +227,28 @@
         "ignores that a partial load already happened"
       ]
     }
-  ]
+  ],
+  "tiers": {
+    "L1": {
+      "label": "Competency baseline \u2014 the DAG basics",
+      "min_tests_ratio": 0.35,
+      "assesses": [
+        "python",
+        "airflow dag dependencies",
+        "retry/SLA policy"
+      ],
+      "summary": "wire build_dependencies + set retries/SLA \u2014 the Airflow basics."
+    },
+    "L2": {
+      "label": "Core recovery + safe re-runs",
+      "min_tests_ratio": 0.85,
+      "summary": "backfill window, idempotent load, and the publish gate \u2014 the pipeline recovers safely."
+    },
+    "L3": {
+      "label": "Judgment + stretch",
+      "min_tests_ratio": 0.95,
+      "requires_design": true,
+      "summary": "own the catchup and partial-reload decisions in RECOVERY_DECISION.md; name what's left (transactional writes, surgical reload tooling)."
+    }
+  }
 }
