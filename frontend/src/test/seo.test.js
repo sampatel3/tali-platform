@@ -159,6 +159,10 @@ describe('keyword content pages', () => {
         // The real TaaliTile logo mark path.
         expect(html).toContain('M6 4.5v15M10 4.5v15M14 4.5v15M18 4.5v15M4 18.5L20 5.5');
       });
+
+      it('surfaces a product snapshot so the guide shows the product', () => {
+        expect(html).toContain('class="product"');
+      });
     });
   }
 
@@ -167,6 +171,11 @@ describe('keyword content pages', () => {
     expect(contentCss).toContain('.btn-primary');
     expect(contentCss).toContain('--purple');
     expect(contentCss).toContain('data-theme="dark"');
+    // Matches the app's 80% density (root 0.8rem) so the guides don't look zoomed.
+    expect(contentCss).toContain('font-size: 0.8rem');
+    // The static product-UI kit (KPIs, score chips, six-axis report).
+    expect(contentCss).toContain('.score-chip');
+    expect(contentCss).toContain('.axis');
   });
 });
 
