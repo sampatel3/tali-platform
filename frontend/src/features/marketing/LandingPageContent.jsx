@@ -208,12 +208,12 @@ const footerColumns = [
     ],
   },
   {
-    title: 'Resources',
+    title: 'Guides',
     items: [
-      { label: 'Sample walkthrough', page: 'showcase' },
-      { label: 'Rubric library', section: 'platform' },
-      { label: 'Docs', page: 'demo-lead' },
-      { label: 'Security', page: 'demo-lead' },
+      { label: 'What is agentic hiring?', href: '/agentic-hiring' },
+      { label: 'AI-native hiring', href: '/ai-native-hiring' },
+      { label: 'AI-native assessments', href: '/ai-native-assessments' },
+      { label: 'Product walkthrough', page: 'showcase' },
     ],
   },
 ];
