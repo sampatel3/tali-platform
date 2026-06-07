@@ -104,3 +104,85 @@ describe('llms.txt', () => {
     expect(llms).toMatch(/^>\s+/m);
   });
 });
+
+// --- Keyword content pages (static, crawlable guide pages) ---
+
+const repoRoot = path.resolve(frontendRoot, '..');
+const rootVercel = JSON.parse(fs.readFileSync(path.join(repoRoot, 'vercel.json'), 'utf8'));
+const contentCss = read('public/styles/content.css');
+
+const CONTENT_PAGES = [
+  { file: 'public/agentic-hiring.html', slug: '/agentic-hiring', topic: 'agentic hiring' },
+  { file: 'public/ai-native-hiring.html', slug: '/ai-native-hiring', topic: 'ai-native hiring' },
+  { file: 'public/ai-native-assessments.html', slug: '/ai-native-assessments', topic: 'ai-native assessment' },
+];
+
+describe('keyword content pages', () => {
+  for (const page of CONTENT_PAGES) {
+    describe(page.file, () => {
+      const html = read(page.file);
+
+      it('has a self-referential canonical to its clean URL', () => {
+        expect(html).toContain(`<link rel="canonical" href="https://www.taali.ai${page.slug}" />`);
+      });
+
+      it('is indexable', () => {
+        expect(html).toMatch(/name="robots"[^>]*content="index, follow/);
+      });
+
+      it('embeds valid Article + FAQ + breadcrumb structured data', () => {
+        const m = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+        expect(m).not.toBeNull();
+        const data = JSON.parse(m[1]);
+        const types = (data['@graph'] || [data]).map((n) => n['@type']);
+        expect(types).toContain('Article');
+        expect(types).toContain('FAQPage');
+        expect(types).toContain('BreadcrumbList');
+      });
+
+      it('covers its target topic in the body', () => {
+        expect(html.toLowerCase()).toContain(page.topic);
+      });
+
+      it('uses the shared content stylesheet and links to home + the other guides', () => {
+        expect(html).toContain('/styles/content.css');
+        expect(html).toContain('href="/"');
+        for (const other of CONTENT_PAGES.filter((p) => p !== page)) {
+          expect(html).toContain(`href="${other.slug}"`);
+        }
+      });
+    });
+  }
+
+  it('ships the shared content stylesheet', () => {
+    expect(contentCss).toContain('.site-header');
+  });
+});
+
+describe('vercel rewrites', () => {
+  it('serves each clean URL from its static file before the SPA catch-all', () => {
+    const sources = rootVercel.rewrites.map((r) => r.source);
+    const catchAllIdx = sources.indexOf('/(.*)');
+    expect(catchAllIdx).toBeGreaterThanOrEqual(0);
+    for (const slug of ['/agentic-hiring', '/ai-native-hiring', '/ai-native-assessments']) {
+      const idx = sources.indexOf(slug);
+      expect(idx).toBeGreaterThanOrEqual(0);
+      expect(idx).toBeLessThan(catchAllIdx);
+      expect(rootVercel.rewrites.find((r) => r.source === slug).destination).toBe(`${slug}.html`);
+    }
+  });
+});
+
+describe('sitemap + internal linking', () => {
+  it('lists the three guide pages', () => {
+    for (const slug of ['agentic-hiring', 'ai-native-hiring', 'ai-native-assessments']) {
+      expect(sitemap).toContain(`<loc>https://www.taali.ai/${slug}</loc>`);
+    }
+  });
+
+  it('links the guides from the home-page crawlable fallback', () => {
+    for (const slug of ['/agentic-hiring', '/ai-native-hiring', '/ai-native-assessments']) {
+      expect(indexHtml).toContain(`href="${slug}"`);
+    }
+  });
+});
