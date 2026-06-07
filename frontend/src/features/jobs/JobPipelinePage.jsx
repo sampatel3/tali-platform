@@ -2281,8 +2281,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 // reload; revalidate the rest in the background.
                 const updated = res?.data || { monthly_usd_budget_cents: cents };
                 setRole((cur) => (cur ? { ...cur, ...updated } : cur));
+                // The top agent strip reads the cap from the polled
+                // /agent/status payload, not the role record — mirror the new
+                // cap in at once (as patchAgentMode does for on/off) so the
+                // strip syncs instantly instead of lagging until the next 30s
+                // poll, then refetch the authoritative status in the background.
+                if (setAgentStatus) setAgentStatus((cur) => (cur ? { ...cur, monthly_budget_cents: cents } : cur));
                 showToast('Monthly budget updated.', 'success');
                 void loadRoleWorkspace();
+                void refetchAgentStatus?.();
               } catch (error) {
                 showToast(getErrorMessage(error, 'Failed to update budget.'), 'error');
                 throw error;
