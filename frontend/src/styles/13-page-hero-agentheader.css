@@ -398,6 +398,22 @@
 .abar-off .ab-btn.primary { background: var(--purple); color: #fff; }
 .abar-off .ab-btn.primary:hover { background: color-mix(in oklab, var(--purple) 88%, white); }
 
+/* BLOCK — the agent strip reused full-width as a section header (e.g. the
+   "Agent assessed" band over the candidate report's scored dimensions). Same
+   ON treatment, just unclamped + carrying a trailing score instead of buttons. */
+.abar.abar-block { width: 100%; padding-right: 16px; margin-bottom: 16px; }
+.abar-block .ab-assess {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  flex-shrink: 0;
+  padding-left: 13px;
+  border-left: 1px solid rgba(255, 255, 255, .18);
+  font-family: var(--font-mono);
+}
+.abar-block .ab-assess b { font-size: 18px; font-weight: 700; color: #fff; line-height: 1; }
+.abar-block .ab-assess span { font-size: 11px; color: rgba(255, 255, 255, .6); }
+
 /* ============== Sub-strip (role-detail facts + actions) ============== */
 .agent-substrip {
   background: var(--bg);
