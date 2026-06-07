@@ -690,18 +690,32 @@ export const HomeNow = ({
   const actedRef = useRef(acted);
   useEffect(() => { actedRef.current = acted; }, [acted]);
 
+  // Client-side role-scope guard. The parent fetches role-scoped data, but
+  // while a role switch is mid-flight it keeps the *previous* scope's rows on
+  // screen (stale-while-revalidate — see HomePage.loadDecisions) to avoid a
+  // blank flash. Without this guard that means the queue briefly shows another
+  // role's candidates under the newly-selected role's funnel — the
+  // "I selected a role but the list still shows everyone" confusion. Scoping
+  // the displayed rows to filters.role_id makes the queue + feed match the
+  // funnel the instant you select, regardless of fetch latency; the server
+  // fetch is still the source of truth and fills in the complete set.
+  const inRoleScope = useCallback(
+    (d) => !filters.role_id || String(d?.role_id) === String(filters.role_id),
+    [filters.role_id],
+  );
+
   // Overlays applied to the server data: approved-in-flight rows leave the
   // pending sidebar entirely (the queue visibly shrinks) and show as
   // ``processing`` in the activity feed (greyed, not gone).
   const effPending = useMemo(
-    () => (acted.size ? pendingOrdered.filter((d) => !acted.has(d.id)) : pendingOrdered),
-    [pendingOrdered, acted],
+    () => pendingOrdered.filter((d) => inRoleScope(d) && !acted.has(d.id)),
+    [pendingOrdered, acted, inRoleScope],
   );
   const effDecisions = useMemo(
-    () => (acted.size
-      ? decisions.map((d) => (acted.has(d.id) ? { ...d, status: 'processing' } : d))
-      : decisions),
-    [decisions, acted],
+    () => decisions
+      .filter(inRoleScope)
+      .map((d) => (acted.has(d.id) ? { ...d, status: 'processing' } : d)),
+    [decisions, acted, inRoleScope],
   );
 
   const selected = useMemo(
