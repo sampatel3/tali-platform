@@ -63,3 +63,113 @@ def test_sync_interview_attributes_explicit_org():
         sync_module.sync_interview(iv, db="DB", bill_organization_id=55)
     assert captured["bill_organization_id"] == 55
     assert captured["db"] == "DB"
+
+
+# ---------------------------------------------------------------------------
+# Unchanged-content skip (2026-06-07 cost guard): sync_candidate must not
+# re-run the Graphiti extraction when the candidate's episode set is identical
+# to the last fully-synced fingerprint — the listeners fire on every
+# Candidate AND CandidateApplication update, but a stage change doesn't touch
+# the profile episodes.
+# ---------------------------------------------------------------------------
+
+
+def _make_candidate(db):
+    from app.models.candidate import Candidate
+    from app.models.organization import Organization
+
+    org = Organization(name="Graph Org", slug=f"graph-{id(db)}")
+    db.add(org)
+    db.flush()
+    cand = Candidate(
+        organization_id=org.id, email=f"g-{id(db)}@x.test", full_name="Graph Cand"
+    )
+    db.add(cand)
+    db.flush()
+    return cand
+
+
+def _counting_dispatch(counter):
+    def _fake(episodes, **kwargs):
+        counter["n"] += 1
+        return len(list(episodes))
+
+    return _fake
+
+
+def test_sync_candidate_skips_unchanged_content(db):
+    from types import SimpleNamespace
+
+    cand = _make_candidate(db)
+    eps = [SimpleNamespace(name="candidate-x-profile", body="hello world")]
+    counter = {"n": 0}
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "build_candidate_profile_episodes", return_value=eps
+    ), patch.object(
+        episode_module, "build_cv_text_episode", return_value=None
+    ), patch.object(
+        episode_module, "dispatch", side_effect=_counting_dispatch(counter)
+    ):
+        sent1 = sync_module.sync_candidate(
+            cand, db=db, bill_organization_id=cand.organization_id
+        )
+        sent2 = sync_module.sync_candidate(
+            cand, db=db, bill_organization_id=cand.organization_id
+        )
+
+    assert sent1 == 1
+    assert sent2 == 0  # identical content -> skipped
+    assert counter["n"] == 1  # dispatch ran exactly once
+
+
+def test_sync_candidate_resyncs_when_content_changes(db):
+    from types import SimpleNamespace
+
+    cand = _make_candidate(db)
+    state = {"body": "v1"}
+    counter = {"n": 0}
+
+    def _build(_c, **_k):
+        return [SimpleNamespace(name="candidate-x-profile", body=state["body"])]
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "build_candidate_profile_episodes", side_effect=_build
+    ), patch.object(
+        episode_module, "build_cv_text_episode", return_value=None
+    ), patch.object(
+        episode_module, "dispatch", side_effect=_counting_dispatch(counter)
+    ):
+        sync_module.sync_candidate(
+            cand, db=db, bill_organization_id=cand.organization_id
+        )
+        state["body"] = "v2-changed"
+        sent = sync_module.sync_candidate(
+            cand, db=db, bill_organization_id=cand.organization_id
+        )
+
+    assert sent == 1
+    assert counter["n"] == 2  # changed content -> re-dispatched
+
+
+def test_sync_candidate_force_resync_bypasses_skip(db):
+    from types import SimpleNamespace
+
+    cand = _make_candidate(db)
+    eps = [SimpleNamespace(name="candidate-x-profile", body="same")]
+    counter = {"n": 0}
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "build_candidate_profile_episodes", return_value=eps
+    ), patch.object(
+        episode_module, "build_cv_text_episode", return_value=None
+    ), patch.object(
+        episode_module, "dispatch", side_effect=_counting_dispatch(counter)
+    ):
+        sync_module.sync_candidate(
+            cand, db=db, bill_organization_id=cand.organization_id
+        )
+        sent = sync_module.sync_candidate(
+            cand, db=db, bill_organization_id=cand.organization_id, force_resync=True
+        )
+
+    assert sent == 1
+    assert counter["n"] == 2  # force_resync bypasses the unchanged-skip

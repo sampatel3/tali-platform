@@ -54,6 +54,22 @@ from . import calibration as calibration_mod
 logger = logging.getLogger("taali.agent_runtime.outcome_learning")
 
 
+# Only POSITIVE / advance outcomes are projected into Graphiti. Every graph
+# prior query (candidate_graph.graphrag_queries) keys on outcome_type='hired'
+# as the numerator and counts the *candidate* population (Candidate nodes,
+# always synced) as the denominator — so a rejected / withdrawn candidate is
+# already represented as "a candidate with no positive outcome". Their
+# negative signal is free (inferred by absence); materialising a negative
+# HiringOutcome episode buys nothing the priors read while costing ~30
+# Graphiti entity/edge dedup calls per episode — the dominant graph_sync
+# spend (rejected_late was 95% of it on 2026-06-07). Negatives still land in
+# the Postgres calibration FIFO + agent_decisions (the source of truth for
+# policy learning); only the graph projection is skipped.
+_GRAPH_WORTHY_OUTCOME_TYPES = frozenset(
+    {"hired", "received_offer", "reached_interview"}
+)
+
+
 def _latest_approved_decision(
     db: Session,
     *,
@@ -136,6 +152,11 @@ def _enqueue_outcome_episode(
         "rejected_confirmed": "rejected_late",
     }
     outcome_type = outcome_type_map.get(outcome, outcome)
+    # Cost gate (2026-06-07): only project positive/advance outcomes into the
+    # graph. Rejects/withdrawals are inferred by absence among the candidate
+    # population the priors already count — see _GRAPH_WORTHY_OUTCOME_TYPES.
+    if outcome_type not in _GRAPH_WORTHY_OUTCOME_TYPES:
+        return
     app = (
         db.query(CandidateApplication)
         .filter(CandidateApplication.id == application_id)
