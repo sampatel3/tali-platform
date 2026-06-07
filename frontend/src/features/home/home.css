@@ -682,19 +682,6 @@
 .rq-stream-item.is-processing {
   opacity: 0.55;
 }
-.rq-stream-procpill {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: 6px;
-  background: var(--bg-3);
-  color: var(--mute);
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  letter-spacing: 0.08em;
-  font-weight: 600;
-  text-transform: uppercase;
-}
 
 .rq-stream-rail {
   display: flex;
