@@ -676,10 +676,51 @@ export const HomeNow = ({
   // side-effect inside a setState updater (updaters must stay pure).
   const stagesStatusRef = useRef({});
 
-  const selected = useMemo(
-    () => decisions.find((d) => d.id === selectedId) || pendingOrdered[0] || null,
-    [decisions, selectedId, pendingOrdered],
+  // Optimistic approvals. Approving a decision is async server-side: the
+  // backend just flips it to ``processing`` and hands the heavy work (GitHub
+  // branch + invite dispatch, serialized per org) to a worker. So there's no
+  // reason to block the recruiter's click on the round-trip — we reflect the
+  // action instantly here: the row drops out of the queue, selection advances
+  // to the next, and we reconcile when fresh data lands. ``acted`` holds the
+  // ids approved-but-not-yet-confirmed; each handler removes its own ids in a
+  // finally so a *failed* send returns the card to the queue.
+  const [acted, setActed] = useState(() => new Set());
+  // Ref mirror so synchronous helpers (advanceFrom) can read the latest set
+  // without waiting for the state update to flush.
+  const actedRef = useRef(acted);
+  useEffect(() => { actedRef.current = acted; }, [acted]);
+
+  // Overlays applied to the server data: approved-in-flight rows leave the
+  // pending sidebar entirely (the queue visibly shrinks) and show as
+  // ``processing`` in the activity feed (greyed, not gone).
+  const effPending = useMemo(
+    () => (acted.size ? pendingOrdered.filter((d) => !acted.has(d.id)) : pendingOrdered),
+    [pendingOrdered, acted],
   );
+  const effDecisions = useMemo(
+    () => (acted.size
+      ? decisions.map((d) => (acted.has(d.id) ? { ...d, status: 'processing' } : d))
+      : decisions),
+    [decisions, acted],
+  );
+
+  const selected = useMemo(
+    () => effDecisions.find((d) => d.id === selectedId)
+      || effPending.find((d) => d.id === selectedId)
+      || effPending[0]
+      || null,
+    [effDecisions, effPending, selectedId],
+  );
+
+  // After approving ``id``, focus the next still-pending decision so the
+  // recruiter can keep moving (send, send, send) without re-clicking the list.
+  const advanceFrom = useCallback((id) => {
+    const skip = (d) => d.id === id || actedRef.current.has(d.id);
+    const idx = pendingOrdered.findIndex((d) => d.id === id);
+    const after = idx >= 0 ? pendingOrdered.slice(idx + 1).find((d) => !skip(d)) : null;
+    const next = after || pendingOrdered.find((d) => !skip(d)) || null;
+    setSelectedId(next ? next.id : null);
+  }, [pendingOrdered, setSelectedId]);
 
   // Lazy-load a role's Workable stages, keyed by shortcode. Drives both the
   // single-decision modal and the per-role pickers in the bulk-approve modal.
@@ -714,29 +755,42 @@ export const HomeNow = ({
   const handleApprove = async (decision) => {
     // ``advance_to_interview`` opens the same confirmation modal as the
     // overrides — the recruiter picks the Workable target stage there.
-    // Every other decision_type still fires immediately on click.
     const spec = DECISION_ACTIONS[decision.decision_type];
     if (spec?.primary) {
       setAlternativeFor({ decision, alternative: spec.primary });
       return;
     }
-    setBusyId(decision.id);
+    // Optimistic + async. The backend only flips the decision to ``processing``
+    // and runs the heavy send (GitHub branch + invite) in a background worker,
+    // so reflect the action instantly: drop the card from the queue and advance
+    // to the next. The click feels instant regardless of GitHub/Workable latency.
+    setActed((prev) => new Set(prev).add(decision.id));
+    advanceFrom(decision.id);
+    showToast?.(
+      decision.decision_type === 'send_assessment' ? 'Sending assessment…'
+        : decision.decision_type === 'resend_assessment_invite' ? 'Resending invite…'
+          : (decision.decision_type === 'reject' || decision.decision_type === 'skip_assessment_reject') ? 'Rejecting…'
+            : 'Approved.',
+      'success',
+    );
     try {
       await agentApi.approveDecision(decision.id, {});
-      showToast?.('Approved.', 'success');
       await reload?.();
     } catch (err) {
+      // The send didn't take — return the card to the queue and refocus it so
+      // the recruiter sees why. We never silently drop a failed send.
+      setSelectedId(decision.id);
       if (isDecisionStaleError(err)) {
-        // Inputs changed since this decision was queued — don't crash; nudge
-        // the recruiter to re-evaluate (the CTA is rendered inline) and pull
-        // fresh data so the stale badge appears.
         showToast?.("This decision's inputs changed — re-evaluate to refresh it.", 'warning');
-        await reload?.();
       } else {
-        showToast?.(apiErrorMessage(err, 'Approve failed'), 'error');
+        showToast?.(apiErrorMessage(err, "Couldn't send — returned to your queue."), 'error');
       }
+      await reload?.();
     } finally {
-      setBusyId(null);
+      // Drop the optimistic mark: on success the server now reports the row as
+      // processing (already gone from the pending list); on failure it's still
+      // pending, so clearing the mark makes the card reappear in the queue.
+      setActed((prev) => { const next = new Set(prev); next.delete(decision.id); return next; });
     }
   };
 
@@ -777,7 +831,7 @@ export const HomeNow = ({
   // Pending decisions matching the current filter scope. Used by the
   // bulk-approve action: we only ever approve what's visible, so the
   // recruiter's confirmation matches the rows they see on screen.
-  const visiblePending = useMemo(() => decisions.filter((d) => d.status === 'pending'), [decisions]);
+  const visiblePending = useMemo(() => effDecisions.filter((d) => d.status === 'pending'), [effDecisions]);
 
   const [bulkBusy, setBulkBusy] = useState(false);
   // Bulk-approve confirmation target. null = modal closed. We snapshot the
@@ -835,6 +889,10 @@ export const HomeNow = ({
     const stages = { ...bulkStages };
     setBulkConfirm(null);
     setBulkBusy(true);
+    // Optimistic: clear the whole batch from the queue immediately so the click
+    // feels instant. Rows that fail (partial failure / network error) reappear
+    // when fresh data lands in the finally below.
+    setActed((prev) => { const next = new Set(prev); ids.forEach((id) => next.add(id)); return next; });
     try {
       const res = await agentApi.bulkApproveDecisions(
         ids,
@@ -852,7 +910,11 @@ export const HomeNow = ({
       await reload?.();
     } catch (err) {
       showToast?.(apiErrorMessage(err, 'Bulk approve failed'), 'error');
+      await reload?.();
     } finally {
+      // Reconcile against the server: approved rows are now processing (gone
+      // from the pending list), any that failed are still pending and reappear.
+      setActed((prev) => { const next = new Set(prev); ids.forEach((id) => next.delete(id)); return next; });
       setBulkBusy(false);
       setBulkStages({});
     }
@@ -960,7 +1022,7 @@ export const HomeNow = ({
 
       <div className="rq-hybrid-grid">
         <PendingSidebar
-          pending={pendingOrdered}
+          pending={effPending}
           selectedId={selected?.id}
           onSelect={setSelectedId}
           loading={loading}
@@ -981,7 +1043,7 @@ export const HomeNow = ({
       </div>
 
       <ActivityFeed
-        rows={decisions}
+        rows={effDecisions}
         selectedId={selected?.id}
         onSelect={setSelectedId}
         onNavigate={onNavigate}

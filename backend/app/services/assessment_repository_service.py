@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -315,14 +317,52 @@ class AssessmentRepositoryService:
             return message
         return str(payload)
 
-    def create_template_repo(self, task: Any) -> str:
+    # Digest stamped into the repo *description* after each sync, so a later send
+    # can tell "main already holds these files" with one GET instead of a full
+    # clone+rewrite+push (the dominant, per-org-serialized cost of a send).
+    _TEMPLATE_HASH_PREFIX = "taali-template-sha1:"
+
+    @staticmethod
+    def _files_digest(files: Dict[str, str]) -> str:
+        norm = {str(k): ("" if v is None else str(v)) for k, v in (files or {}).items()}
+        blob = json.dumps(norm, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        return hashlib.sha1(blob.encode("utf-8")).hexdigest()  # noqa: S324 - cache key
+
+    def _template_is_current(self, repo_name: str, files: Dict[str, str]) -> bool:
+        """True when the repo's description stamps this digest (main already holds
+        these files). Any uncertainty -> False, so we fall back to a full sync."""
+        try:
+            resp = self._request("GET", f"/repos/{self.github_org}/{repo_name}", expected_statuses=(200, 404))
+            desc = (resp.json() or {}).get("description") if resp.status_code == 200 else None
+        except (AssessmentRepositoryError, ValueError):
+            return False
+        return str(desc or "").strip() == f"{self._TEMPLATE_HASH_PREFIX}{self._files_digest(files)}"
+
+    def _stamp_template_hash(self, repo_name: str, files: Dict[str, str]) -> None:
+        """Stamp the synced digest so the next send can skip the clone+push. Best-effort."""
+        try:
+            self._request(
+                "PATCH", f"/repos/{self.github_org}/{repo_name}",
+                json_payload={"description": f"{self._TEMPLATE_HASH_PREFIX}{self._files_digest(files)}"},
+                expected_statuses=(200, 422),
+            )
+        except AssessmentRepositoryError:
+            pass
+
+    def create_template_repo(self, task: Any, *, force: bool = False) -> str:
         repo_name = self._repo_name(task)
         files = self._repo_files(task)
         if self.mock_mode:
             self._ensure_mock_repo(repo_name, files)
             return self.get_template_repo_url(task)
+        # Fast path: main is identical across every assessment of a task, so skip
+        # the clone+rewrite+push when it already holds these files. force=True
+        # (admin resync) always re-pushes; the first send (no stamp) still syncs.
+        if not force and self._template_is_current(repo_name, files):
+            return self.get_template_repo_url(task)
         self._ensure_repo_exists(repo_name)
         self._sync_repo_main_branch(repo_name, files)
+        self._stamp_template_hash(repo_name, files)
         return self.get_template_repo_url(task)
 
     def get_template_repo_url(self, task: Any) -> str:
