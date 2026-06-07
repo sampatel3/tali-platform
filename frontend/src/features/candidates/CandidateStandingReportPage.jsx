@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { Copy, Download, ExternalLink, Eye } from 'lucide-react';
+import { Copy, Download, ExternalLink, Eye, Sparkles } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
 import { viewShareLink } from '../../shared/api';
@@ -1662,8 +1662,27 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               </button>
             </div>
           ) : null}
+          {(reportModel?.dimensionEntries || []).length > 0 ? (() => {
+            const dimCount = (reportModel?.dimensionEntries || []).length;
+            const firstName = String(application?.candidate_name || '').trim().split(/\s+/)[0];
+            const score = reportModel?.summaryModel?.assessmentScore;
+            return (
+              <div className="abar abar-on abar-block" data-internal-only>
+                <span className="ab-spark"><Sparkles size={15} strokeWidth={2} /></span>
+                <span className="ab-label">Agent assessed</span>
+                <span className="ab-tick">
+                  {firstName
+                    ? `Scored ${dimCount} dimensions from ${firstName}’s work sample`
+                    : `Scored ${dimCount} dimensions from the work sample`}
+                </span>
+                <span className="ab-assess">
+                  <b>{score != null ? Math.round(score) : '—'}</b><span>/100</span>
+                </span>
+              </div>
+            );
+          })() : null}
           <div className="two-col">
-            <div className="panel">
+            <div className={`panel${(reportModel?.dimensionEntries || []).length > 0 ? ' agent-scored' : ''}`}>
               <h2>Scored <em>dimensions</em></h2>
               <p className="sub">The assessment read separates delivery from how the candidate worked with AI.</p>
               {(reportModel?.dimensionEntries || []).map((item) => (
