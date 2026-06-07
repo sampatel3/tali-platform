@@ -2,6 +2,9 @@
 <html lang="en" data-brand="taali">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      (function(){try{var t=localStorage.getItem('taali-theme'),l=localStorage.getItem('taali_dark_mode');if(t==='dark'||(t==null&&l==='1'))document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI-Native Assessments: Measure How Candidates Use AI | Taali</title>
     <meta
@@ -85,16 +88,30 @@
     <link rel="stylesheet" href="/styles/content.css" />
   </head>
   <body>
-    <header class="site-header">
-      <div class="wrap-wide">
-        <a class="brand" href="/">taali<span>.</span></a>
-        <nav class="site-nav">
-          <a class="hide-sm" href="/agentic-hiring">Agentic hiring</a>
-          <a class="hide-sm" href="/demo">Walkthrough</a>
-          <a class="btn" href="/demo-lead">Book a demo</a>
+    <div class="app-nav">
+      <div class="app-nav-inner">
+        <a class="logo" href="/" aria-label="Taali home">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect class="tile" x="1.25" y="1.25" width="21.5" height="21.5" rx="5.35" />
+            <g transform="translate(2.4 2.4) scale(0.8)">
+              <path class="lines" d="M6 4.5v15M10 4.5v15M14 4.5v15M18 4.5v15M4 18.5L20 5.5" stroke-width="2.4" stroke-linecap="round" vector-effect="non-scaling-stroke" />
+            </g>
+          </svg>
+          <span class="logo-word">taali<em>.</em></span>
+        </a>
+        <nav class="nav-mid">
+          <a class="btn btn-ghost btn-sm" href="/#platform">Product</a>
+          <a class="btn btn-ghost btn-sm" href="/#how-it-works">How it works</a>
         </nav>
+        <div class="nav-right">
+          <a class="btn btn-ghost btn-sm nav-signin" href="/login">Sign in</a>
+          <a class="btn btn-primary btn-sm" href="/demo-lead">Book a demo <span class="arrow">→</span></a>
+          <button type="button" class="icon-btn" id="theme-toggle" aria-label="Toggle theme">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          </button>
+        </div>
       </div>
-    </header>
+    </div>
 
     <main>
       <div class="wrap">
@@ -222,42 +239,60 @@
       </div>
 
       <section class="cta-band">
-        <div class="wrap">
+        <div class="cta-inner">
           <h2>See an AI-native assessment</h2>
           <p>
             Take the interactive product walkthrough — watch a real assessment
             session and its scoring, no signup — or book a 20-minute demo.
           </p>
           <div class="cta-actions">
-            <a class="btn btn-lg btn-ghost" href="/demo">Open the walkthrough</a>
-            <a class="btn btn-lg" href="/demo-lead" style="background:#fff;color:var(--purple);border-color:#fff;">Book a demo</a>
+            <a class="btn btn-lg btn-ghost-dark" href="/demo">Open the walkthrough</a>
+            <a class="btn btn-lg btn-on-dark" href="/demo-lead">Book a demo</a>
           </div>
         </div>
       </section>
     </main>
 
     <footer class="site-footer">
-      <div class="wrap-wide">
-        <div class="cols">
-          <div>
-            <a class="brand" href="/">taali<span>.</span></a>
-            <p class="blurb">The agentic hiring platform for AI-native teams.</p>
+      <div class="footer-wrap">
+        <div class="footer-cols">
+          <div class="footer-brand">
+            <a class="logo" href="/" aria-label="Taali home">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <rect class="tile" x="1.25" y="1.25" width="21.5" height="21.5" rx="5.35" />
+                <g transform="translate(2.4 2.4) scale(0.8)">
+                  <path class="lines" d="M6 4.5v15M10 4.5v15M14 4.5v15M18 4.5v15M4 18.5L20 5.5" stroke-width="2.4" stroke-linecap="round" vector-effect="non-scaling-stroke" />
+                </g>
+              </svg>
+              <span class="logo-word">taali<em>.</em></span>
+            </a>
+            <p class="footer-blurb">AI-native technical assessments that <span class="tally">tally</span> real skill.</p>
           </div>
-          <div>
+          <div class="footer-col">
             <h4>Guides</h4>
             <a href="/agentic-hiring">What is agentic hiring?</a>
             <a href="/ai-native-hiring">AI-native hiring</a>
             <a href="/ai-native-assessments">AI-native assessments</a>
           </div>
-          <div>
+          <div class="footer-col">
             <h4>Product</h4>
-            <a href="/">Home</a>
             <a href="/demo">Product walkthrough</a>
             <a href="/demo-lead">Book a demo</a>
+            <a href="/#platform">AI collaboration score</a>
+          </div>
+          <div class="footer-col">
+            <h4>Company</h4>
+            <a href="/#how-it-works">How it works</a>
+            <a href="mailto:hello@taali.ai">Contact</a>
           </div>
         </div>
-        <p class="legal">© 2026 Taali, Inc. · San Francisco · hello@taali.ai</p>
+        <div class="footer-watermark" aria-hidden="true">taali<em>.</em></div>
+        <div class="footer-legal">
+          <span>© 2026 Taali, Inc. · San Francisco</span>
+          <a href="mailto:hello@taali.ai">hello@taali.ai</a>
+        </div>
       </div>
     </footer>
+    <script src="/theme.js" defer></script>
   </body>
 </html>
