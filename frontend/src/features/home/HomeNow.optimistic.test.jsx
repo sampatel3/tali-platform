@@ -23,15 +23,15 @@ vi.mock('../../shared/api', () => ({
   },
 }));
 
-const mkDecision = (id, name) => ({
+const mkDecision = (id, name, { role_id = 53, role_name = 'Data Engineer' } = {}) => ({
   id,
   decision_type: 'send_assessment',
   status: 'pending',
   candidate_name: name,
   candidate_email: `${name.split(' ')[0].toLowerCase()}@example.com`,
   application_id: id * 10,
-  role_id: 53,
-  role_name: 'Data Engineer',
+  role_id,
+  role_name,
   created_at: '2026-06-07T10:00:00Z',
   reasoning: 'Strong fit.',
   taali_score: 80,
@@ -114,5 +114,53 @@ describe('HomeNow — optimistic Send assessment', () => {
       expect(within(sidebar).getByText('Miguel Parracho')).toBeInTheDocument();
     });
     expect(setSelectedId).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('HomeNow — role-scope guard', () => {
+  // The parent fetches role-scoped data, but stale-while-revalidate keeps the
+  // previous scope's rows on screen while a role switch is in flight. Without a
+  // client-side guard the queue shows other roles' candidates under the newly
+  // selected role's funnel — what a recruiter sees as "I selected AI Engineer
+  // but the list still shows everyone." This pins that the displayed queue +
+  // feed only ever contain rows for the selected role.
+  it('shows only the selected role’s candidates even when the parent still holds another role’s rows', () => {
+    // Simulates the in-flight window: pendingOrdered/decisions still carry the
+    // previous (all-roles) result while filters.role_id has already moved to 31.
+    const mixed = [
+      mkDecision(1, 'Ada AiEngineer', { role_id: 31, role_name: 'AI Engineer' }),
+      mkDecision(2, 'Glen Glue', { role_id: 53, role_name: 'AWS Glue Data Engineer' }),
+      mkDecision(3, 'Cleo Cloud', { role_id: 77, role_name: 'Senior Cloud Solutions Architect' }),
+    ];
+    const { container } = renderHome({
+      decisions: mixed,
+      pendingOrdered: mixed,
+      selectedId: 1,
+      filters: { status: 'pending', role_id: 31, type: null, q: null },
+    });
+    const sidebar = sidebarOf(container);
+
+    expect(within(sidebar).getByText('Ada AiEngineer')).toBeInTheDocument();
+    expect(within(sidebar).queryByText('Glen Glue')).not.toBeInTheDocument();
+    expect(within(sidebar).queryByText('Cleo Cloud')).not.toBeInTheDocument();
+    // The queue count reflects the scoped set, not the stale all-roles list.
+    expect(within(sidebar).getByText('1')).toBeInTheDocument();
+  });
+
+  it('shows every role’s candidates when no role filter is set', () => {
+    const mixed = [
+      mkDecision(1, 'Ada AiEngineer', { role_id: 31, role_name: 'AI Engineer' }),
+      mkDecision(2, 'Glen Glue', { role_id: 53, role_name: 'AWS Glue Data Engineer' }),
+    ];
+    const { container } = renderHome({
+      decisions: mixed,
+      pendingOrdered: mixed,
+      selectedId: 1,
+      filters: { status: 'pending', role_id: null, type: null, q: null },
+    });
+    const sidebar = sidebarOf(container);
+
+    expect(within(sidebar).getByText('Ada AiEngineer')).toBeInTheDocument();
+    expect(within(sidebar).getByText('Glen Glue')).toBeInTheDocument();
   });
 });
