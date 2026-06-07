@@ -270,7 +270,17 @@ def build_interview_episodes(interview: ApplicationInterview) -> list[Episode]:
 # ``_emit_decision_episode_safe`` in the same path — letting this
 # generic event also flow to Graphiti would double extraction + billing
 # for every queued decision.
-_NOISE_EVENT_TYPES = {"pipeline_initialized", "cv_scored", "agent_decision_queued"}
+_NOISE_EVENT_TYPES = {
+    "pipeline_initialized",
+    "cv_scored",
+    "agent_decision_queued",
+    # Workable write-back mechanics — operational events about ATS sync
+    # success/failure, not candidate facts. They carry a reason string so
+    # they'd otherwise pass the note gate below and cost one Graphiti
+    # extraction each (242 such episodes on 2026-06-07) for zero graph value.
+    "workable_writeback_failed",
+    "workable_writeback_skipped",
+}
 
 
 def build_event_episode(event: CandidateApplicationEvent) -> Episode | None:

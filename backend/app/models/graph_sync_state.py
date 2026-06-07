@@ -7,7 +7,7 @@ trigger reconciliation. ``sync_version`` increments on every successful
 sync — useful when investigating staleness.
 """
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import backref, relationship
 from sqlalchemy.sql import func
 
@@ -24,6 +24,12 @@ class GraphSyncState(Base):
     )
     last_synced_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     sync_version = Column(Integer, nullable=False, default=0)
+    # sha256 fingerprint of the last FULLY-synced episode set (name + body of
+    # every profile/CV episode). Lets sync_candidate skip re-extracting a
+    # candidate whose graph content is unchanged — the listeners fire on every
+    # Candidate AND CandidateApplication update, but an application stage change
+    # doesn't alter the profile episodes. NULL = fingerprint unknown (re-sync).
+    content_hash = Column(String(64), nullable=True)
 
     # Backref so application_to_response can read the state without a
     # separate query: ``candidate.graph_sync_state``. uselist=False because
