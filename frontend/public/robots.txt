@@ -1,10 +1,70 @@
-# Tali — robots.txt
-# Internal / dev / investor pages. These routes are token-gated in the app
-# (see features/_dev/TokenGate.jsx) and additionally emit a noindex meta
-# tag at runtime, but listing them here keeps well-behaved crawlers off
-# them entirely.
+# Taali — robots.txt
+# Public marketing pages (/, /demo, /demo-lead) are open to everyone.
+# We explicitly welcome AI search / answer-engine crawlers — Taali wants to
+# be discoverable in AI search for agentic hiring and AI-native assessments.
+# The signed-in app, auth flows, and candidate share links carry no useful
+# (or PII-sensitive) crawlable content and are kept out to save crawl budget.
 
+# --- AI search & answer-engine crawlers (explicitly allowed) ---
+User-agent: GPTBot
+Allow: /
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Claude-Web
+Allow: /
+
+User-agent: anthropic-ai
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Perplexity-User
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: Applebot-Extended
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
+# --- Everyone else ---
 User-agent: *
+Allow: /
+Disallow: /login
+Disallow: /register
+Disallow: /forgot-password
+Disallow: /reset-password
+Disallow: /verify-email
+Disallow: /dashboard
+Disallow: /home
+Disallow: /jobs
+Disallow: /assessments
+Disallow: /candidates
+Disallow: /candidate-detail
+Disallow: /c/
+Disallow: /share/
+Disallow: /assess
+Disallow: /assessment
+Disallow: /chat
+Disallow: /tasks
+Disallow: /settings
+Disallow: /analytics
+Disallow: /reporting
+Disallow: /admin
 Disallow: /deck
 Disallow: /_deck/
 Disallow: /dev/
+
+Sitemap: https://www.taali.ai/sitemap.xml
