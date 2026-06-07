@@ -151,11 +151,22 @@ describe('keyword content pages', () => {
           expect(html).toContain(`href="${other.slug}"`);
         }
       });
+
+      it('uses the real Taali design chrome (app-nav, logo mark, primary button)', () => {
+        expect(html).toContain('class="app-nav"');
+        expect(html).toContain('class="logo"');
+        expect(html).toContain('btn-primary');
+        // The real TaaliTile logo mark path.
+        expect(html).toContain('M6 4.5v15M10 4.5v15M14 4.5v15M18 4.5v15M4 18.5L20 5.5');
+      });
     });
   }
 
-  it('ships the shared content stylesheet', () => {
-    expect(contentCss).toContain('.site-header');
+  it('ships the shared content stylesheet built on the real design tokens', () => {
+    expect(contentCss).toContain('.app-nav');
+    expect(contentCss).toContain('.btn-primary');
+    expect(contentCss).toContain('--purple');
+    expect(contentCss).toContain('data-theme="dark"');
   });
 });
 

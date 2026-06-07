@@ -1,37 +1,76 @@
 /*
  * Styling for Taali's static content / guide pages (e.g. /agentic-hiring).
- * These pages are intentionally framework-free static HTML so that every
- * crawler — including AI answer engines that don't run JavaScript — sees the
- * full content. This stylesheet keeps them visually on-brand with the React
- * marketing site (purple accent, Geist type) without depending on the app's
- * token system or Tailwind build.
+ *
+ * These pages are framework-free static HTML so every crawler — including AI
+ * answer engines that don't run JavaScript — sees the full content. To stay
+ * faithful to the real product they reproduce Taali's actual design system:
+ * the token values, the .app-nav / .logo / .btn chrome, and the dark footer
+ * are lifted from src/styles/{00-tokens,02-shell-nav}.css and the marketing
+ * footer. Dark mode keys off the same `data-theme="dark"` + `taali-theme`
+ * localStorage contract as the app (see public/theme.js + lib/themePreference).
+ *
+ * NOTE: this is a hand-mirrored subset, not the compiled app CSS — if the
+ * design tokens or nav/footer change materially, refresh this file.
  */
 
+/* ── Tokens (Taali brand, light — from 00-tokens.css [data-brand="taali"]) ── */
 :root {
-  --purple: #5b2ca8;
-  --purple-deep: #3d1a7a;
-  --purple-lav: #8867c4;
-  --purple-soft: #efe9fb;
-  --ink: #1a1430;
-  --ink-2: #3a3357;
-  --mute: #6b6486;
-  --bg: #ffffff;
-  --bg-2: #faf8fe;
-  --line: #e7e2f2;
+  color-scheme: light;
+  --font-display: "Geist", system-ui, -apple-system, sans-serif;
+  --font-sans: "Geist", "IBM Plex Sans Arabic", system-ui, -apple-system, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
   --radius: 14px;
-  --maxw: 56rem;
-  --font: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif;
-  --mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --radius-lg: 22px;
+  --pad-x: clamp(20px, 4vw, 48px);
+
+  --ink: #15121a;
+  --ink-2: #3a3343;
+  --ink-soft: #6b6478;
+  --mute: #8b8595;
+  --line: #e8e2ee;
+  --line-2: #f1edf5;
+  --bg: #f7f4fb;
+  --bg-2: #ffffff;
+  --bg-3: #efe8f7;
+
+  --accent: #5e3aa8;
+  --accent-deep: #4a2d80;
+  --purple: var(--accent);
+  --purple-2: var(--accent-deep);
+  --purple-soft: #ede5f8;
+  --purple-lav: #c4a5fd;
+
+  --shadow-sm: 0 1px 2px rgba(21, 18, 26, 0.06);
+  --shadow-md: 0 8px 28px -12px rgba(21, 18, 26, 0.18);
+  --shadow-lg: 0 28px 60px -28px rgba(21, 18, 26, 0.22);
+}
+
+/* ── Dark mode (opt-in, mirrors html[data-theme="dark"][data-brand="taali"]) ── */
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --ink: #f3effb;
+  --ink-2: #d9d2e8;
+  --ink-soft: #b9b1cc;
+  --mute: #a79cbe;
+  --line: #2a2340;
+  --line-2: #201a34;
+  --bg: #0e0a18;
+  --bg-2: #16102a;
+  --bg-3: #1c1535;
+  --accent: #8867c4;
+  --accent-deep: #6e4ba8;
+  --purple-soft: #2e1a4e;
+  --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.3), 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 1px 0 rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 2px 0 rgba(0, 0, 0, 0.3), 0 30px 60px -20px rgba(0, 0, 0, 0.7);
 }
 
 * { box-sizing: border-box; }
-
 html { -webkit-text-size-adjust: 100%; }
 
 body {
   margin: 0;
-  font-family: var(--font);
+  font-family: var(--font-sans);
   color: var(--ink);
   background: var(--bg);
   line-height: 1.65;
@@ -39,169 +78,147 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-.wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 1.5rem; }
-.wrap-wide { max-width: 72rem; margin: 0 auto; padding: 0 1.5rem; }
-
 a { color: var(--purple); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-/* ---- Header ---- */
-.site-header {
+.wrap { max-width: 52rem; margin: 0 auto; padding: 0 var(--pad-x); }
+
+/* ── Nav (from 02-shell-nav.css .app-nav) ── */
+.app-nav {
   position: sticky;
   top: 0;
-  z-index: 10;
-  background: rgba(255, 255, 255, 0.86);
-  backdrop-filter: saturate(140%) blur(10px);
+  z-index: 40;
+  background: color-mix(in oklab, var(--bg) 82%, transparent);
+  backdrop-filter: saturate(1.2) blur(14px);
   border-bottom: 1px solid var(--line);
 }
-.site-header .wrap-wide {
+.app-nav-inner {
   display: flex;
   align-items: center;
   justify-content: space-between;
   height: 64px;
+  gap: 24px;
+  padding: 0 var(--pad-x);
 }
-.brand {
-  font-weight: 700;
-  font-size: 1.5rem;
-  letter-spacing: -0.03em;
-  color: var(--ink);
-}
-.brand span { color: var(--purple); }
-.brand:hover { text-decoration: none; }
-.site-nav { display: flex; align-items: center; gap: 1.25rem; }
-.site-nav a { color: var(--ink-2); font-size: 0.9375rem; font-weight: 500; }
-.site-nav a:hover { color: var(--purple); text-decoration: none; }
-@media (max-width: 640px) {
-  .site-nav .hide-sm { display: none; }
-}
+.logo { display: inline-flex; align-items: center; gap: 10px; border: 0; background: transparent; padding: 0; color: inherit; cursor: pointer; }
+.logo:hover { text-decoration: none; }
+.logo svg { flex-shrink: 0; }
+.logo .tile { fill: var(--purple); }
+.logo .lines { stroke: #fff; }
+.logo-word { font-family: var(--font-display); font-size: 1.125rem; font-weight: 600; letter-spacing: -0.025em; text-transform: lowercase; line-height: 1; color: var(--ink); }
+.logo-word em { font-style: normal; color: var(--purple); }
 
-/* ---- Buttons ---- */
+.nav-mid { display: inline-flex; gap: 22px; }
+.nav-right { display: inline-flex; align-items: center; gap: 10px; }
+
+/* ── Buttons (from 02-shell-nav.css) ── */
 .btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  height: 44px;
-  padding: 0 1.25rem;
-  border-radius: 999px;
-  background: var(--purple);
-  color: #fff;
-  font-weight: 600;
-  font-size: 0.9375rem;
-  border: 1px solid var(--purple);
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  border: 1px solid transparent; border-radius: 999px; padding: 10px 18px;
+  background: transparent; font-family: var(--font-sans); font-size: 0.875rem; font-weight: 500;
+  white-space: nowrap; cursor: pointer;
+  transition: transform 0.08s ease, background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
-.btn:hover { background: var(--purple-deep); text-decoration: none; }
-.btn-ghost { background: transparent; color: #fff; border-color: rgba(255, 255, 255, 0.55); }
-.btn-ghost:hover { background: rgba(255, 255, 255, 0.12); }
-.btn-lg { height: 50px; padding: 0 1.6rem; font-size: 1rem; }
+.btn:hover { text-decoration: none; }
+.btn:active { transform: translateY(1px); }
+.btn .arrow { transition: transform 0.2s; }
+.btn:hover .arrow { transform: translateX(3px); }
+.btn-primary { background: var(--ink); color: var(--bg); }
+.btn-primary:hover { background: var(--purple); color: #fff; }
+.btn-purple { background: var(--purple); color: #fff; }
+.btn-purple:hover { background: var(--purple-2); color: #fff; }
+.btn-outline { background: var(--bg-2); border-color: var(--line); color: var(--ink-2); }
+.btn-outline:hover { border-color: var(--ink); color: var(--ink); }
+.btn-ghost { color: var(--ink-2); }
+.btn-ghost:hover { color: var(--purple); }
+.btn-sm { padding: 7px 14px; font-size: 0.8125rem; }
+.btn-lg { padding: 14px 24px; font-size: 0.96875rem; }
 
-/* ---- Article ---- */
-main { padding: 0 0 2rem; }
-.kicker {
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--purple);
+.icon-btn {
+  width: 36px; height: 36px; flex: 0 0 36px; border-radius: 50%;
+  display: grid; place-items: center; padding: 0;
+  border: 1px solid var(--line); background: var(--bg-2); color: var(--ink-2); cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
 }
-.breadcrumb {
-  font-size: 0.85rem;
-  color: var(--mute);
-  padding: 1.5rem 0 0;
-}
+.icon-btn:hover { color: var(--purple); border-color: var(--purple); }
+.icon-btn svg { display: block; }
+
+/* ── Article ── */
+main { padding: 0 0 1rem; }
+.kicker { font-family: var(--font-mono); font-size: 0.6875rem; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; color: var(--purple); }
+.breadcrumb { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em; color: var(--mute); padding: 1.75rem 0 0; text-transform: uppercase; }
 .breadcrumb a { color: var(--mute); }
 .article-head { padding: 1rem 0 1.5rem; }
 h1 {
-  font-size: clamp(2.1rem, 5vw, 3.2rem);
-  line-height: 1.05;
-  letter-spacing: -0.035em;
-  margin: 0.6rem 0 0.75rem;
+  font-family: var(--font-display); font-weight: 600;
+  font-size: clamp(2.2rem, 5.4vw, 3.4rem); line-height: 1.02; letter-spacing: -0.04em;
+  margin: 0.7rem 0 0.85rem; color: var(--ink);
 }
-.lead { font-size: 1.2rem; color: var(--ink-2); margin: 0; }
-article h2 {
-  font-size: 1.6rem;
-  letter-spacing: -0.02em;
-  margin: 2.5rem 0 0.75rem;
-  line-height: 1.15;
-}
-article h3 { font-size: 1.15rem; margin: 1.75rem 0 0.4rem; }
+.lead { font-size: 1.2rem; line-height: 1.5; color: var(--ink-2); margin: 0; }
+article h2 { font-family: var(--font-display); font-weight: 600; font-size: clamp(1.5rem, 3vw, 1.9rem); letter-spacing: -0.03em; margin: 2.75rem 0 0.75rem; line-height: 1.1; color: var(--ink); }
+article h3 { font-family: var(--font-display); font-weight: 600; font-size: 1.15rem; letter-spacing: -0.015em; margin: 1.75rem 0 0.4rem; color: var(--ink); }
 article p { margin: 0.85rem 0; color: var(--ink-2); }
-article strong { color: var(--ink); }
+article strong { color: var(--ink); font-weight: 600; }
 article ul, article ol { margin: 0.85rem 0; padding-left: 1.25rem; }
-article li { margin: 0.45rem 0; color: var(--ink-2); }
+article li { margin: 0.5rem 0; color: var(--ink-2); }
 
-/* Definition callout — the quotable answer for AI engines */
 .definition {
   border-left: 4px solid var(--purple);
-  background: var(--bg-2);
-  padding: 1rem 1.25rem;
-  border-radius: 0 var(--radius) var(--radius) 0;
-  margin: 1.5rem 0;
+  background: var(--purple-soft);
+  padding: 1.1rem 1.4rem; border-radius: 0 var(--radius) var(--radius) 0; margin: 1.75rem 0;
 }
-.definition p { margin: 0; color: var(--ink); font-size: 1.08rem; }
+.definition p { margin: 0; color: var(--ink); font-size: 1.1rem; line-height: 1.55; }
 
-/* Comparison / feature grid */
-.grid2 {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-  margin: 1.25rem 0;
-}
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.5rem 0; }
 @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
-.card {
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 1.1rem 1.25rem;
-  background: #fff;
-}
+.card { border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 1.2rem 1.35rem; background: var(--bg-2); box-shadow: var(--shadow-sm); }
 .card h3 { margin: 0 0 0.35rem; font-size: 1.05rem; }
 .card p { margin: 0; font-size: 0.95rem; }
 
-/* FAQ */
 .faq { margin-top: 1rem; }
-.faq details {
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 0.4rem 1.1rem;
-  margin: 0.6rem 0;
-  background: #fff;
-}
-.faq summary {
-  cursor: pointer;
-  font-weight: 600;
-  color: var(--ink);
-  padding: 0.6rem 0;
-  list-style: none;
-}
+.faq details { border: 1px solid var(--line); border-radius: var(--radius); padding: 0.4rem 1.2rem; margin: 0.65rem 0; background: var(--bg-2); box-shadow: var(--shadow-sm); }
+.faq summary { cursor: pointer; font-weight: 600; color: var(--ink); padding: 0.7rem 0; list-style: none; }
 .faq summary::-webkit-details-marker { display: none; }
-.faq summary::after { content: "+"; float: right; color: var(--purple); font-weight: 700; }
+.faq summary::after { content: "+"; float: right; color: var(--purple); font-weight: 700; font-size: 1.1rem; line-height: 1; }
 .faq details[open] summary::after { content: "–"; }
-.faq details p { margin: 0 0 0.8rem; }
+.faq details p { margin: 0 0 0.85rem; color: var(--ink-2); }
 
-/* Related links */
-.related { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.25rem 0; }
+.related { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.4rem 0; }
 @media (max-width: 640px) { .related { grid-template-columns: 1fr; } }
-.related a.card { display: block; color: inherit; }
-.related a.card:hover { border-color: var(--purple); text-decoration: none; }
+.related a.card { display: block; color: inherit; transition: border-color 0.15s, box-shadow 0.15s; }
+.related a.card:hover { border-color: var(--purple); box-shadow: var(--shadow-md); text-decoration: none; }
 .related .card .kicker { display: block; margin-bottom: 0.3rem; }
 
-/* CTA band */
-.cta-band {
-  margin: 3rem 0 0;
-  background: linear-gradient(135deg, var(--purple-deep) 0%, var(--purple) 60%, var(--purple-lav) 100%);
-  color: #fff;
+/* ── CTA band (mirrors the landing's bottom CTA gradient) ── */
+.cta-band { margin: 3.5rem 0 0; color: #fff; }
+.cta-inner {
+  max-width: 85rem; margin: 0 auto;
+  background: linear-gradient(135deg, color-mix(in oklab, var(--purple) 75%, #000) 0%, var(--purple) 60%, var(--purple-lav) 100%);
+  border-radius: 18px; padding: 3rem clamp(1.5rem, 4vw, 3.5rem); margin-bottom: 1rem;
 }
-.cta-band .wrap { padding-top: 3rem; padding-bottom: 3rem; }
-.cta-band h2 { margin: 0 0 0.5rem; font-size: clamp(1.6rem, 3.5vw, 2.25rem); letter-spacing: -0.02em; }
-.cta-band p { margin: 0 0 1.5rem; opacity: 0.9; max-width: 34rem; }
+.cta-band h2 { margin: 0 0 0.5rem; font-family: var(--font-display); font-weight: 600; font-size: clamp(1.7rem, 3.6vw, 2.4rem); letter-spacing: -0.025em; }
+.cta-band p { margin: 0 0 1.5rem; opacity: 0.88; max-width: 35rem; }
 .cta-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+.cta-actions .btn-on-dark { background: #fff; color: var(--purple); border-color: #fff; }
+.cta-actions .btn-on-dark:hover { background: #fff; color: var(--purple-2); }
+.cta-actions .btn-ghost-dark { background: transparent; color: #fff; border-color: rgba(255, 255, 255, 0.55); }
+.cta-actions .btn-ghost-dark:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
 
-/* Footer */
-.site-footer { border-top: 1px solid var(--line); background: var(--bg-2); padding: 2.5rem 0; margin-top: 0; }
-.site-footer .cols { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 2rem; }
-@media (max-width: 640px) { .site-footer .cols { grid-template-columns: 1fr; gap: 1.5rem; } }
-.site-footer h4 { font-size: 0.95rem; margin: 0 0 0.6rem; color: var(--ink); }
-.site-footer a { display: block; color: var(--mute); font-size: 0.9rem; margin: 0.3rem 0; }
-.site-footer a:hover { color: var(--purple); }
-.site-footer .blurb { color: var(--mute); font-size: 0.9rem; max-width: 18rem; margin: 0.5rem 0 0; }
-.site-footer .legal { color: var(--mute); font-size: 0.82rem; margin: 1.75rem 0 0; border-top: 1px solid var(--line); padding-top: 1.25rem; }
+/* ── Footer (dark — mirrors the marketing footer) ── */
+.site-footer { border-top: 1px solid var(--line); background: var(--ink); color: var(--bg); }
+.footer-wrap { max-width: 85rem; margin: 0 auto; padding: 3.5rem var(--pad-x) 3rem; }
+.footer-cols { display: grid; grid-template-columns: 1.1fr 0.9fr 0.9fr 0.9fr; gap: 2.5rem; }
+@media (max-width: 760px) { .footer-cols { grid-template-columns: 1fr 1fr; gap: 2rem; } }
+@media (max-width: 460px) { .footer-cols { grid-template-columns: 1fr; } }
+.footer-brand .logo-word { color: var(--bg); }
+.footer-blurb { margin: 1.25rem 0 0; max-width: 17.5rem; font-size: 0.9375rem; line-height: 1.7; color: var(--bg); opacity: 0.7; }
+.footer-blurb .tally { font-family: var(--font-display); color: var(--purple-lav); }
+.footer-col h4 { font-family: var(--font-display); font-size: 1.25rem; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 1rem; color: var(--bg); }
+.footer-col a { display: block; color: var(--bg); opacity: 0.7; font-size: 0.875rem; margin: 0.55rem 0; transition: opacity 0.15s; }
+.footer-col a:hover { opacity: 1; text-decoration: none; }
+.footer-watermark { margin-top: 2.5rem; font-family: var(--font-display); font-weight: 600; font-size: clamp(72px, 12vw, 164px); line-height: 0.8; letter-spacing: -0.08em; color: var(--bg); opacity: 0.08; user-select: none; }
+.footer-watermark em { font-style: normal; color: var(--purple-lav); }
+.footer-legal { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid color-mix(in oklab, var(--bg) 14%, transparent); display: flex; flex-wrap: wrap; gap: 0.75rem; justify-content: space-between; font-size: 0.8125rem; color: var(--bg); opacity: 0.55; }
+.footer-legal a { color: var(--bg); opacity: 0.85; }
+
+@media (max-width: 640px) { .nav-mid, .nav-signin { display: none; } }
