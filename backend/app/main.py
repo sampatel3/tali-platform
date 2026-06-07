@@ -57,16 +57,17 @@ async def _lifespan(_app: FastAPI):
         register_listeners()
     except Exception:  # pragma: no cover — listener install must never block boot
         logger.exception("Failed to register candidate_graph listeners")
-    # Kick off Graphiti init in a background thread so Neo4j async resources
-    # are created on the shared background event loop before the first real
-    # request arrives. The healthcheck returns "initializing" until ready.
-    try:
-        from .candidate_graph import client as _gc
-        if _gc.is_configured():
-            import threading as _t
-            _t.Thread(target=_gc.get_graphiti, name="graphiti-init", daemon=True).start()
-    except Exception:
-        logger.exception("Failed to start Graphiti background init")
+    # Graphiti (Neo4j async driver + Voyage embedder + graph client) initialises
+    # LAZILY on the first candidate-search request — NOT eagerly at boot. The old
+    # boot warmup loaded ~60MB into EVERY uvicorn worker the instant it started;
+    # with 2 workers (TALI_WEB_WORKERS) that tipped the container past its memory
+    # ceiling at boot → OOM kill → restart loop (~every 3 min), which queued every
+    # request seconds behind the constant restarts. get_graphiti() is
+    # double-checked-locked + cached and healthcheck() reports "initializing"
+    # while it's None, so deferring is safe — the only cost is a one-time ~1-2s
+    # init on the first graph search after a boot. (Graph *ingestion* no longer
+    # runs in this process at all — see candidate_graph.listeners, which now
+    # enqueue Celery tasks — so nothing here needs Graphiti warm up front.)
     # FastAPI's custom-lifespan path skips Starlette's auto-propagation to
     # mounted sub-apps, so the MCP server's StreamableHTTPSessionManager
     # task group has to be started explicitly here.
