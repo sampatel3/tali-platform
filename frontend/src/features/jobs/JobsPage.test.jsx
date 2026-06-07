@@ -154,7 +154,7 @@ describe('JobsPage Workable sync states', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '+ New role' }));
 
-    expect(await screen.findByText('Set up a role in three quick steps.')).toBeInTheDocument();
+    expect(await screen.findByText('Name the role, attach a job spec, and link the task(s) candidates take.')).toBeInTheDocument();
   });
 
   it('shows AGENT PAUSED (not AGENT ON) for an enabled-but-paused role', async () => {
