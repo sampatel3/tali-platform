@@ -20,6 +20,7 @@ vi.mock('../../shared/api', () => ({
   },
   agent: {
     status: vi.fn(),
+    rolesBreakdown: vi.fn(),
     orgStatus: vi.fn(),
     pauseAll: vi.fn(),
     resumeAll: vi.fn(),
@@ -59,6 +60,7 @@ describe('JobsPage Workable sync states', () => {
     apiClient.organizations.get.mockResolvedValue({ data: baseOrg });
     apiClient.tasks.list.mockResolvedValue({ data: [] });
     apiClient.agent.status.mockResolvedValue({ data: {} });
+    apiClient.agent.rolesBreakdown.mockResolvedValue({ data: [] });
     apiClient.agent.orgStatus.mockResolvedValue({
       data: { org_budget_spent_cents: 4200, org_budget_cap_cents: 9000 },
     });

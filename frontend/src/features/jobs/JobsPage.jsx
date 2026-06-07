@@ -312,36 +312,37 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     void loadJobsHub();
   }, [loadJobsHub]);
 
-  // Fan-out /roles/{id}/agent/status across agent-enabled roles for the
-  // BUDGET USED tile. Bounded to ROLE_FANOUT_LIMIT to keep the request
-  // count predictable for orgs with many agentic roles. Polls every 60s
-  // and pauses on hidden tabs.
+  // Per-role agent spend for the BUDGET USED tile. This used to fan out one
+  // /roles/{id}/agent/status call per agent-enabled role — up to 20 requests
+  // on every Jobs load, each ~190ms, a burst that piled onto the web service.
+  // /agent/roles/breakdown returns the same per-role spend / cap / pending in
+  // a single batched query, so collapse the fan-out to one call. Polls every
+  // 60s and pauses on hidden tabs.
   useEffect(() => {
     if (isShowcase) return undefined;
-    const ROLE_FANOUT_LIMIT = 20;
     const POLL_MS = 60_000;
-    const targets = roles
-      .filter((role) => role && role.id != null && role.agentic_mode_enabled)
-      .slice(0, ROLE_FANOUT_LIMIT);
-    if (targets.length === 0) {
+    const hasAgentRoles = roles.some(
+      (role) => role && role.id != null && role.agentic_mode_enabled,
+    );
+    if (!hasAgentRoles) {
       setAgentSpendByRole({});
       return undefined;
     }
     let cancelled = false;
     const fetchSpend = async () => {
       try {
-        const settled = await Promise.allSettled(
-          targets.map((role) => apiClient.agent.status(role.id)),
-        );
+        const res = await apiClient.agent.rolesBreakdown();
         if (cancelled) return;
         const next = {};
-        settled.forEach((entry, idx) => {
-          if (entry.status !== 'fulfilled') return;
-          const data = entry.value?.data || {};
-          next[targets[idx].id] = {
-            monthly_spent_cents: Number(data.monthly_spent_cents || 0),
-            monthly_budget_cents: Number(data.monthly_budget_cents || 0),
-            pending_decisions: Number(data.pending_decisions || 0),
+        (res?.data || []).forEach((row) => {
+          if (!row || row.role_id == null || !row.agentic_mode_enabled) return;
+          // breakdown's budget_cents == /agent/status monthly_spent_cents
+          // (both the canonical per-role MTD spend); cap_cents == the budget
+          // cap; pending == pending decisions for the role.
+          next[row.role_id] = {
+            monthly_spent_cents: Number(row.budget_cents || 0),
+            monthly_budget_cents: Number(row.cap_cents || 0),
+            pending_decisions: Number(row.pending || 0),
           };
         });
         setAgentSpendByRole(next);
