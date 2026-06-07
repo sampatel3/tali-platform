@@ -1,0 +1,32 @@
+# Taali
+
+> Taali is the agentic hiring platform for AI-native engineering teams. An autonomous recruiting agent runs your hiring pipeline 24/7 within a budget you set, and AI-native assessments score how candidates actually use AI on the job — with a human approving every consequential decision.
+
+Taali combines two things no other hiring tool puts together:
+
+- **Agentic hiring** — an autonomous AI agent triages, pre-screens, scores, and queues advances or rejects across your open roles continuously. It paces itself within a monthly budget and pauses to ask you whenever a decision needs human judgment. The agent recommends; you decide.
+- **AI-native assessments** — instead of banning AI, Taali puts candidates in a real, browser-based workspace with AI tools (such as Claude) in hand, the way engineers ship today. It captures every prompt, paste, edit, and test run, and scores AI collaboration and AI fluency as a first-class dimension alongside code craft.
+
+## Key facts
+
+- Taali is an agentic hiring platform — recruiting run by an autonomous, budget-bounded AI agent with a human in the loop on every consequential call.
+- Taali is an AI-native assessment platform — it measures how well candidates use AI on the job, not whether they can code without it.
+- AI fluency is scored across six axes: prompt quality, error recovery, context utilization, independence, design thinking, and debugging strategy.
+- Every assessment produces a prompt-by-prompt session replay and a six-axis candidate standing report.
+- Candidates work on real, role-relevant tasks in a live IDE with a terminal and real AI tools.
+
+## Definitions
+
+- **Agentic hiring**: recruiting performed by an autonomous AI agent that works the pipeline continuously within a set budget and defers to a human for consequential decisions.
+- **AI-native assessment**: a technical assessment that gives candidates AI tools in a real workspace and scores how effectively they use them, rather than prohibiting AI.
+- **AI-native hiring**: hiring designed for the AI era — the recruiting workflow is run by an AI agent and candidates are evaluated on how well they work with AI.
+
+## Pages
+
+- [Home](https://www.taali.ai/): overview of agentic hiring and AI-native assessments.
+- [Product walkthrough](https://www.taali.ai/demo): an interactive, no-signup walkthrough of the agent and the assessment runtime.
+- [Book a demo](https://www.taali.ai/demo-lead): request a 20-minute demo run on a role of yours.
+
+## Contact
+
+- Email: hello@taali.ai
