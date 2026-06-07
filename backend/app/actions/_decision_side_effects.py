@@ -1,18 +1,31 @@
 """Best-effort side effects after a recruiter resolves an ``AgentDecision``.
 
-Centralizes the three slow, best-effort effects that fire *after* the
-decision's actual state change (advance / reject / send) has committed:
+Centralizes the three slow effects that fire *after* the decision's actual
+state change (advance / reject / send) has committed:
 
-1. Workable stage move (advance) or disqualify (reject).
+1. Workable stage move (advance) or disqualify (reject) — the GATED /
+   *critical* writeback. Under ``strict_workable_writes`` (the decision-batch
+   path) a failure here raises ``WorkableWritebackError`` so the batch can
+   re-queue the decision rather than commit a Tali-only change.
 2. The Workable activity-feed summary note + 30-day report share link.
-3. The recruiter-action graph episode (Graphiti — an LLM indexing call).
+3. The recruiter-action graph episode (Graphiti — an LLM indexing call,
+   the slowest of the three).
+
+Steps 2 and 3 are *best-effort*: a failure in either only logs / records an
+event, never raises and never re-queues.
 
 These ran inline on the approve / override request and added 20-30s to
 every click. The synchronous path (agent runs, tests) and the deferred
 Celery task (``app.tasks.decision_tasks.apply_decision_side_effects``)
 both call ``apply_decision_side_effects`` so the logic stays identical no
-matter where it runs. Every step is wrapped: a failure in one never
-aborts the others or raises to the caller.
+matter where it runs.
+
+``steps`` lets a caller run only part of the work: the bulk-approve batch
+keeps the GATED step 1 INLINE (under ``strict_workable_writes`` so a failed
+critical write still re-queues) while deferring the best-effort steps 2+3 to
+the Celery task — so a 100-row batch drains fast and releases the per-org
+Workable mutex instead of doing a Graphiti/Voyage LLM call per decision while
+holding it. ``"all"`` (the default) preserves the original behavior.
 """
 
 from __future__ import annotations
@@ -34,6 +47,15 @@ from ._workable_decision_summary import (
 from .types import Actor
 
 logger = logging.getLogger("taali.actions.decision_side_effects")
+
+
+# Which subset of the three side effects to run. The batch path splits them:
+# the GATED Workable writeback (step 1) runs inline + strict so a failure
+# re-queues, while the best-effort note + graph episode (steps 2+3) defer to
+# the Celery task off the serialized per-org mutex.
+SIDE_EFFECTS_ALL = "all"
+SIDE_EFFECTS_CRITICAL = "critical"  # step 1 only (gated Workable writeback)
+SIDE_EFFECTS_BEST_EFFORT = "best_effort"  # steps 2 + 3 only
 
 
 # Plain-English verdict for the resolved decision — drives which Workable
@@ -78,8 +100,9 @@ def apply_decision_side_effects(
     note: Optional[str] = None,
     workable_target_stage: Optional[str] = None,
     reject_notify: bool = True,
+    steps: str = SIDE_EFFECTS_ALL,
 ) -> None:
-    """Run all best-effort side effects for a resolved decision.
+    """Run the side effects for a resolved decision.
 
     Best-effort and never raises EXCEPT under ``strict_workable_writes`` (the
     decision-batch path), where a failed critical Workable writeback (stage
@@ -93,6 +116,13 @@ def apply_decision_side_effects(
     signal — guards against re-disqualifying / re-emailing a candidate who
     was already rejected by another path (mirrors the inline freshness check
     that used to live in ``reject_application.run``).
+
+    ``steps`` selects which effects run: ``"all"`` (default) runs everything;
+    ``"critical"`` runs only the gated Workable writeback (step 1); and
+    ``"best_effort"`` runs only the summary note + graph episode (steps 2+3).
+    The bulk-approve batch uses the split — critical inline (re-queues on
+    failure), best-effort deferred to Celery — so it isn't blocked on a
+    per-decision Graphiti/Voyage call while holding the per-org mutex.
     """
     verdict = verdict_for(
         disposition=disposition,
@@ -100,42 +130,106 @@ def apply_decision_side_effects(
         override_action=override_action,
     )
 
-    # 1. Workable stage move (advance) or disqualify (reject).
-    if app is not None:
-        if verdict in ("advanced", "skip_advanced"):
-            try:
-                try_workable_advance(
-                    db,
-                    actor,
-                    app=app,
-                    org=org,
-                    role=role,
-                    target_stage=workable_target_stage,
-                    reason=(note or "").strip()
-                    or "Advanced by recruiter (decision resolution)",
-                )
-            except WorkableWritebackError:
-                # strict (batch) path — propagate so the batch can re-queue.
-                raise
-            except Exception:  # pragma: no cover — defensive
-                logger.warning(
-                    "workable advance raised for decision_id=%s",
-                    getattr(decision, "id", None),
-                )
-        elif verdict == "rejected" and reject_notify:
-            try:
-                from .reject_application import notify_rejection
+    if steps in (SIDE_EFFECTS_ALL, SIDE_EFFECTS_CRITICAL):
+        _apply_critical_workable_writeback(
+            db,
+            actor,
+            decision=decision,
+            app=app,
+            org=org,
+            role=role,
+            verdict=verdict,
+            note=note,
+            workable_target_stage=workable_target_stage,
+            reject_notify=reject_notify,
+        )
 
-                notify_rejection(db, app=app, actor=actor, reason=note)
-            except WorkableWritebackError:
-                # strict (batch) path — propagate so the batch can re-queue.
-                raise
-            except Exception:  # pragma: no cover — defensive
-                logger.warning(
-                    "rejection notify raised for decision_id=%s",
-                    getattr(decision, "id", None),
-                )
+    if steps in (SIDE_EFFECTS_ALL, SIDE_EFFECTS_BEST_EFFORT):
+        _apply_best_effort_side_effects(
+            db,
+            actor,
+            decision=decision,
+            app=app,
+            org=org,
+            verdict=verdict,
+            disposition=disposition,
+            override_action=override_action,
+            note=note,
+        )
 
+
+def _apply_critical_workable_writeback(
+    db: Session,
+    actor: Actor,
+    *,
+    decision: AgentDecision,
+    app: Optional[CandidateApplication],
+    org: Optional[Organization],
+    role: Optional[Role],
+    verdict: Optional[str],
+    note: Optional[str],
+    workable_target_stage: Optional[str],
+    reject_notify: bool,
+) -> None:
+    """Step 1: the gated Workable stage move (advance) or disqualify (reject).
+
+    The only side effect that may raise: under ``strict_workable_writes`` a
+    failed move / disqualify propagates ``WorkableWritebackError`` so the
+    decision-batch path re-queues instead of committing a Tali-only change.
+    """
+    if app is None:
+        return
+    if verdict in ("advanced", "skip_advanced"):
+        try:
+            try_workable_advance(
+                db,
+                actor,
+                app=app,
+                org=org,
+                role=role,
+                target_stage=workable_target_stage,
+                reason=(note or "").strip()
+                or "Advanced by recruiter (decision resolution)",
+            )
+        except WorkableWritebackError:
+            # strict (batch) path — propagate so the batch can re-queue.
+            raise
+        except Exception:  # pragma: no cover — defensive
+            logger.warning(
+                "workable advance raised for decision_id=%s",
+                getattr(decision, "id", None),
+            )
+    elif verdict == "rejected" and reject_notify:
+        try:
+            from .reject_application import notify_rejection
+
+            notify_rejection(db, app=app, actor=actor, reason=note)
+        except WorkableWritebackError:
+            # strict (batch) path — propagate so the batch can re-queue.
+            raise
+        except Exception:  # pragma: no cover — defensive
+            logger.warning(
+                "rejection notify raised for decision_id=%s",
+                getattr(decision, "id", None),
+            )
+
+
+def _apply_best_effort_side_effects(
+    db: Session,
+    actor: Actor,
+    *,
+    decision: AgentDecision,
+    app: Optional[CandidateApplication],
+    org: Optional[Organization],
+    verdict: Optional[str],
+    disposition: str,
+    override_action: Optional[str],
+    note: Optional[str],
+) -> None:
+    """Steps 2 + 3: the Workable summary note and the recruiter-action graph
+    episode. Both best-effort — a failure only logs / records an event, never
+    raises and never re-queues. Deferred to Celery for the bulk-approve batch.
+    """
     # 2. Workable activity-feed summary note (+ 30-day report share link).
     if app is not None and verdict:
         try:

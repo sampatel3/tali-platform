@@ -11,6 +11,11 @@ Everything the task needs is re-read from the committed decision row; only
 ``workable_target_stage`` (the recruiter's Workable stage pick, not stored)
 and ``reject_notify`` (the "this resolution freshly rejected the candidate"
 freshness signal) are passed through from the route.
+
+``steps`` selects which effects run (see ``_decision_side_effects``). The
+bulk-approve batch passes ``steps="best_effort"`` — it has already run the
+gated Workable writeback inline + strict, so this task only needs the
+summary note + graph episode. The default ``"all"`` runs everything.
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ def apply_decision_side_effects(
     *,
     workable_target_stage: str | None = None,
     reject_notify: bool = True,
+    steps: str = "all",
 ) -> dict:
     from ..actions._decision_side_effects import apply_decision_side_effects as _apply
     from ..actions.types import ACTOR_RECRUITER, Actor
@@ -79,6 +85,7 @@ def apply_decision_side_effects(
             note=decision.resolution_note,
             workable_target_stage=workable_target_stage,
             reject_notify=reject_notify,
+            steps=steps,
         )
 
         try:

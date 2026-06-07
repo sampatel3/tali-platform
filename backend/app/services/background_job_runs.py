@@ -58,6 +58,38 @@ def create_run(
         db.close()
 
 
+def mark_run_running(run_id: int | None, *, running_at: datetime | None = None) -> None:
+    """Flip a run to ``running`` and stamp when it entered that state.
+
+    The running-transition time is recorded in ``counters['running_at']`` (ISO,
+    merged so existing counters like ``decision_ids`` survive) because
+    ``started_at`` is the *enqueue* time — a batch can sit ``queued`` in the
+    lock-wait re-enqueue loop for minutes before it ever runs. The stuck-batch
+    watchdog reaps a dead ``running`` batch off this timestamp so it can use a
+    short, prompt timeout without false-failing a batch that merely waited a
+    long time for the per-org mutex. Silent no-op when run_id is None.
+    """
+    if not run_id:
+        return
+    db = SessionLocal()
+    try:
+        row = db.query(BackgroundJobRun).filter(BackgroundJobRun.id == run_id).first()
+        if row is None:
+            return
+        row.status = "running"
+        ts = (running_at or datetime.now(timezone.utc)).isoformat()
+        row.counters = {**(row.counters or {}), "running_at": ts}
+        db.commit()
+    except Exception:
+        logger.exception("background_job_runs: mark_running failed for id=%s", run_id)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
 def update_run(
     run_id: int | None,
     *,
@@ -99,6 +131,7 @@ def update_run(
 
 __all__ = [
     "create_run",
+    "mark_run_running",
     "update_run",
     "SCOPE_KIND_ROLE",
     "SCOPE_KIND_ORG",
