@@ -382,6 +382,11 @@
 .abar-paused .ab-spark { background: var(--bg-2); border: 1px solid color-mix(in oklab, var(--amber) 45%, var(--line)); color: color-mix(in oklab, var(--amber) 70%, var(--ink)); }
 .abar-paused .ab-label { color: color-mix(in oklab, var(--amber) 72%, var(--ink)); }
 .abar-paused .ab-tick { color: color-mix(in oklab, var(--amber) 60%, var(--ink)); }
+/* PAUSED shows the budget figure but not a live meter — the bar carries no
+   fill in this state, so its (invisible) 4px row would otherwise lift the
+   amount off the strip's baseline, above PAUSED / the pending pill / the tick.
+   Drop it so the amount sits centred in line with the rest of the text. */
+.abar-paused .ab-budget-bar { display: none; }
 .abar-paused .ab-btn.primary { background: var(--purple); color: #fff; }
 .abar-paused .ab-btn.ic { background: var(--bg-2); border-color: color-mix(in oklab, var(--amber) 45%, var(--line)); color: color-mix(in oklab, var(--amber) 70%, var(--ink)); }
 
