@@ -40,6 +40,12 @@
   --purple-soft: #ede5f8;
   --purple-lav: #c4a5fd;
 
+  /* semantic (from 00-tokens.css [data-brand="taali"]) — used by the
+     decision badges + score chips in the product snapshots */
+  --green: #15a36a;
+  --amber: #d88a1c;
+  --red: #e64a4a;
+
   --shadow-sm: 0 1px 2px rgba(21, 18, 26, 0.06);
   --shadow-md: 0 8px 28px -12px rgba(21, 18, 26, 0.18);
   --shadow-lg: 0 28px 60px -28px rgba(21, 18, 26, 0.22);
@@ -66,15 +72,21 @@ html[data-theme="dark"] {
 }
 
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+html {
+  -webkit-text-size-adjust: 100%;
+  /* Match the app's global 80% density: src/styles/01-base.css sets the root
+     font-size to 0.8rem so every rem-based size renders at 80% scale. Without
+     this the guides render ~30% larger and look "zoomed in" next to the app. */
+  font-size: 0.8rem;
+}
 
 body {
   margin: 0;
   font-family: var(--font-sans);
   color: var(--ink);
   background: var(--bg);
-  line-height: 1.65;
-  font-size: 17px;
+  line-height: 1.6;
+  font-size: 1.0625rem;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -222,3 +234,61 @@ article li { margin: 0.5rem 0; color: var(--ink-2); }
 .footer-legal a { color: var(--bg); opacity: 0.85; }
 
 @media (max-width: 640px) { .nav-mid, .nav-signin { display: none; } }
+
+/* ── Product snapshots — static reproductions of live Taali UI, so the
+      guides show the product, not just prose. Mirrors the marketing mocks
+      (agent strip, jobs KPIs, decision feed, six-axis candidate report). ── */
+.product { border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-2); box-shadow: var(--shadow-md); overflow: hidden; margin: 1.75rem 0; }
+.product-bar { display: flex; align-items: center; gap: 0.4rem; padding: 0.7rem 1rem; border-bottom: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.72rem; color: var(--mute); }
+.product-bar .dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; display: inline-block; }
+.product-bar .url { margin-left: 0.6rem; }
+.product-bar .tag { margin-left: auto; background: var(--bg); border-radius: 999px; padding: 0.15rem 0.6rem; font-size: 0.64rem; font-weight: 600; }
+.product-body { padding: 1.1rem 1.2rem; }
+.product-cap { margin: 1.75rem 0 0.5rem; font-size: 0.95rem; color: var(--ink-2); }
+.product-cap strong { color: var(--ink); }
+
+/* agent status strip (the "Agent on" bar) */
+.agent-strip { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; padding: 0.7rem 0.95rem; border-radius: 12px; color: #fff; background: linear-gradient(135deg, color-mix(in oklab, var(--purple) 82%, #000), var(--purple)); margin-bottom: 1rem; font-size: 0.85rem; }
+.agent-strip .spark { display: inline-flex; align-items: center; }
+.agent-strip .lbl { font-weight: 600; }
+.agent-strip .pend { background: rgba(255,255,255,0.22); border-radius: 999px; padding: 0.05rem 0.5rem; font-size: 0.72rem; font-weight: 700; }
+.agent-strip .tick { opacity: 0.82; font-size: 0.8rem; }
+.agent-strip .budget { margin-left: auto; display: inline-flex; align-items: center; gap: 0.5rem; font-variant-numeric: tabular-nums; font-size: 0.8rem; }
+.agent-strip .budget .bar { width: 90px; height: 6px; border-radius: 999px; background: rgba(255,255,255,0.25); overflow: hidden; }
+.agent-strip .budget .bar i { display: block; height: 100%; width: 62%; background: #fff; }
+
+/* jobs KPI tiles (from .mc-jobs-kpi) */
+.kpis { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.75rem; }
+@media (min-width: 600px) { .kpis { grid-template-columns: repeat(4, 1fr); } }
+.kpi { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 0.85rem 1rem; box-shadow: var(--shadow-sm); }
+.kpi .k { font-family: var(--font-mono); font-size: 0.6rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--mute); margin-bottom: 0.35rem; }
+.kpi .v { font-family: var(--font-display); font-size: 1.875rem; font-weight: 600; letter-spacing: -0.025em; line-height: 1; color: var(--ink); }
+.kpi .d { font-size: 0.72rem; color: var(--mute); margin-top: 0.3rem; }
+
+/* decision feed */
+.feed-row { display: grid; grid-template-columns: auto 1fr auto; gap: 0.85rem; align-items: start; padding: 0.9rem 0.25rem; border-top: 1px solid var(--line-2); }
+.feed-row:first-child { border-top: 0; }
+.feed-row .who { min-width: 0; }
+.feed-row .nm { font-weight: 600; color: var(--ink); font-size: 0.92rem; }
+.feed-row .rsn { color: var(--ink-2); font-size: 0.82rem; line-height: 1.45; margin-top: 0.2rem; }
+.pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 0.12rem 0.55rem; font-size: 0.66rem; font-weight: 600; }
+.role-pill { background: var(--bg-3); color: var(--ink-2); font-family: var(--font-mono); letter-spacing: 0.02em; }
+.meta { text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 0.35rem; white-space: nowrap; }
+.score-chip { font-family: var(--font-mono); font-weight: 700; border-radius: 8px; padding: 0.28rem 0.5rem; font-size: 0.8rem; min-width: 2.4rem; text-align: center; }
+.score-chip.hi { background: color-mix(in oklab, var(--green) 14%, var(--bg-2)); color: var(--green); }
+.score-chip.mid { background: color-mix(in oklab, var(--amber) 18%, var(--bg-2)); color: var(--amber); }
+.score-chip.none { background: var(--bg-3); color: var(--mute); }
+.decision { font-family: var(--font-mono); font-size: 0.62rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; padding: 0.2rem 0.5rem; border-radius: 6px; }
+.decision.advance { background: color-mix(in oklab, var(--green) 14%, var(--bg-2)); color: var(--green); }
+.decision.escalate { background: color-mix(in oklab, var(--amber) 18%, var(--bg-2)); color: var(--amber); }
+.decision.reject { background: color-mix(in oklab, var(--red) 12%, var(--bg-2)); color: var(--red); }
+
+/* six-axis candidate report */
+.report-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.85rem 1.15rem; border-bottom: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.72rem; color: var(--mute); text-transform: uppercase; letter-spacing: 0.04em; }
+.report-head .verdict { color: var(--purple); font-weight: 700; }
+.report-body { padding: 1.2rem; display: flex; flex-direction: column; gap: 0.9rem; }
+.axis { display: grid; grid-template-columns: 11rem 1fr; gap: 0.85rem; align-items: center; }
+@media (max-width: 520px) { .axis { grid-template-columns: 1fr; gap: 0.25rem; } }
+.axis .lab { font-size: 0.86rem; color: var(--ink); }
+.axis .track { height: 0.5rem; border-radius: 999px; background: var(--line); overflow: hidden; }
+.axis .fill { height: 100%; border-radius: 999px; background: var(--purple); }
