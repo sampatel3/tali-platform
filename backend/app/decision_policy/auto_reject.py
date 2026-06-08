@@ -105,6 +105,20 @@ def evaluate_auto_reject_decision(
             "config": config,
             "snapshot": snapshot,
         }
+    # Require a GENUINE pre-screen run. The recommendation / score columns can be
+    # populated by a cv_match snapshot refresh without any pre-screen running
+    # (e.g. a cv_match 'no' whose score was later invalidated), which would
+    # otherwise fire a "pre-screen reject" for a never-pre-screened candidate.
+    # ``pre_screen_run_at`` is set ONLY by the pre-screen engine, never by the
+    # snapshot — so it cleanly separates a real reject from a stale label.
+    if getattr(app, "pre_screen_run_at", None) is None:
+        return {
+            "should_trigger": False,
+            "state": "not_pre_screened",
+            "reason": "No pre-screen has run for this candidate",
+            "config": config,
+            "snapshot": snapshot,
+        }
     # ``recommendation`` already encodes the pre-screen verdict — when it
     # says "Below threshold" we have a deterministic reject signal even if
     # the numeric score was nulled by cache invalidation (#209) or the

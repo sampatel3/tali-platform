@@ -8,6 +8,8 @@ suite locks the dedup in.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy import event
 
 from app.actions import queue_decision
@@ -62,6 +64,7 @@ def _seed(db):
         application_outcome="open",
         source="manual",
         cv_text="some cv",
+        pre_screen_run_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
     db.add(app); db.flush()
     return org, role, app

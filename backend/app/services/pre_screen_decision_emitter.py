@@ -172,6 +172,16 @@ def queue_pre_screen_reject(
     # the same rule here — never card a reject for someone a human advanced.
     if is_post_handover_workable_stage(getattr(application, "workable_stage", None)):
         return None
+    # Require a GENUINE pre-screen run. ``pre_screen_recommendation`` /
+    # ``pre_screen_score_100`` can be stamped by a cv_match snapshot refresh
+    # without any pre-screen ever running (e.g. a cv_match 'no' whose numeric
+    # score was later invalidated), which would surface a "pre-screen reject"
+    # card for a candidate that was never pre-screened. ``pre_screen_run_at`` is
+    # set ONLY by the pre-screen engine (execute_pre_screen_only / fraud gate),
+    # never by the snapshot — so it cleanly separates a real reject from a stale
+    # label.
+    if getattr(application, "pre_screen_run_at", None) is None:
+        return None
     try:
         key = _idempotency_key(int(application.id))
         # Skip if THIS app already has any pending decision — not just one
@@ -507,6 +517,9 @@ def backfill_existing_below_threshold(
             ),
             CandidateApplication.application_outcome == "open",
             Role.deleted_at.is_(None),
+            # GENUINE pre-screen only: a stale 'Below threshold' label can be set
+            # by a cv_match snapshot refresh with no pre-screen ever run.
+            CandidateApplication.pre_screen_run_at.isnot(None),
             # Surface deterministic pre-screen rejects for EVERY role, agent on
             # or off — a below-threshold verdict is policy, not an agent action.
         )

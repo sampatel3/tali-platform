@@ -5,6 +5,8 @@ Codex #84 + #107.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from app.models.role import Role
 from app.models.user import User
 
@@ -93,6 +95,7 @@ def test_patch_role_threshold_change_reconciles_reject_queue(db, client):
         application_outcome="open",
         source="manual",
         pre_screen_score_100=40.0,
+        pre_screen_run_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
     db.add(app); db.flush()
     card = queue_pre_screen_reject(

@@ -11,6 +11,7 @@ failing write, turning an endless per-tick 403 retry storm into one attempt.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app.models.agent_decision import AgentDecision
@@ -70,6 +71,7 @@ def _seed_app(db, org, role, *, workable_id="wk-1") -> CandidateApplication:
         workable_candidate_id=workable_id,
         pre_screen_score_100=10,
         pre_screen_recommendation="Below threshold",
+        pre_screen_run_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
     db.add(app)
     db.flush()
