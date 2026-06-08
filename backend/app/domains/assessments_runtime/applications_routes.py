@@ -2666,6 +2666,10 @@ def score_selected_applications(
     payload = payload or {}
     raw_ids = payload.get("application_ids") or []
     force = bool(payload.get("force"))
+    # Recruiter override: run the full v3 cv_match score even when the cheap
+    # pre-screen gate would filter the candidate (the "Run full evaluation"
+    # button on a pre-screened-out candidate). Does NOT auto-disqualify.
+    bypass_pre_screen = bool(payload.get("bypass_pre_screen"))
     if not isinstance(raw_ids, list) or not raw_ids:
         raise HTTPException(status_code=400, detail="application_ids is required")
     try:
@@ -2712,7 +2716,7 @@ def score_selected_applications(
             needs_cv_fetch.append(app.id)
             continue
 
-        job = enqueue_score(db, app, force=force)
+        job = enqueue_score(db, app, force=force, bypass_pre_screen=bypass_pre_screen)
         if job is None:
             not_eligible += 1
         else:
@@ -2728,7 +2732,7 @@ def score_selected_applications(
         threading.Thread(
             target=_run_fetch_then_score,
             args=(needs_cv_fetch, current_user.organization_id),
-            kwargs={"force": force},
+            kwargs={"force": force, "bypass_pre_screen": bypass_pre_screen},
             daemon=True,
         ).start()
 
@@ -3419,6 +3423,7 @@ def _run_fetch_then_score(
     *,
     score_after: bool = True,
     force: bool = False,
+    bypass_pre_screen: bool = False,
 ) -> None:
     """Background worker: fetch CVs for a specific application list, then
     optionally enqueue scoring for each.
@@ -3459,7 +3464,7 @@ def _run_fetch_then_score(
                     elif (app.source or "") == "workable":
                         _try_fetch_cv_from_workable(app, app.candidate, db, org)
                 if score_after and (app.cv_text or "").strip():
-                    enqueue_score(db, app, force=force)
+                    enqueue_score(db, app, force=force, bypass_pre_screen=bypass_pre_screen)
             except Exception:
                 logger.exception(
                     "Background fetch+score failed for application_id=%s", app.id

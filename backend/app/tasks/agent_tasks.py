@@ -269,13 +269,16 @@ PRE_SCREEN_REJECT_SWEEP_CAP = 500
 )
 def pre_screen_reject_sweep(self, cap: int = PRE_SCREEN_REJECT_SWEEP_CAP) -> dict:
     """Cull already-pre-screened, below-threshold candidates — INCLUDING on
-    budget-paused roles.
+    budget-paused roles AND agent-off roles.
 
-    The pre-screen reject is deterministic and free (no Anthropic spend), so
-    it must keep running when the role auto-pauses for monthly budget. The
-    only other automated caller — the agent cohort tick — skips paused roles
-    (``agent_paused_at`` filter), which stranded the below-threshold backlog
-    'open' with no reject. This sweep is the catch-up net: it does NOT score
+    The pre-screen reject is deterministic and free (no Anthropic spend), so it
+    must surface regardless of the agent toggle or a budget auto-pause — the
+    agent governs autonomous execution, not whether a deterministic reject is
+    queued for human review. The agent cohort tick only manages agent-on roles
+    (and skips paused ones), which stranded the below-threshold backlog 'open'
+    with no reject on agent-off roles. This sweep is the catch-up net for all
+    roles; it honours ``role.auto_reject`` downstream (Workable disqualify only
+    when eligible, else a Decision Hub card). It does NOT score
     or run the LLM; it only re-dispatches ``run_application_auto_reject`` for
     open, below-threshold, not-yet-fully-scored candidates that have no
     pending decision yet. That task is idempotent and honours
@@ -312,7 +315,8 @@ def pre_screen_reject_sweep(self, cap: int = PRE_SCREEN_REJECT_SWEEP_CAP) -> dic
             db.query(CandidateApplication.id)
             .join(Role, Role.id == CandidateApplication.role_id)
             .filter(
-                Role.agentic_mode_enabled.is_(True),
+                # Agent on OR off — a deterministic pre-screen reject is surfaced
+                # for every role (the card path needs no agent reasoning).
                 Role.deleted_at.is_(None),
                 CandidateApplication.application_outcome == "open",
                 # Pre-screen-only: once a full cv_match score exists the agent

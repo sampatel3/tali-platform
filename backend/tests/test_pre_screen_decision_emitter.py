@@ -301,11 +301,10 @@ def test_backfill_rewrites_stale_numeric_reasoning(db):
     assert result2 == {"updated": 0, "scanned": 1}
 
 
-def test_queue_pre_screen_reject_skips_agent_off_roles(db):
-    """Agent-off roles aren't under agent management. Emitting a Decision
-    Hub card for them would surprise the recruiter — they'd see decisions
-    appearing for roles they never enabled the agent on. Return None
-    without creating a row.
+def test_queue_pre_screen_reject_cards_agent_off_roles(db):
+    """A pre-screen reject is DETERMINISTIC policy, so the Decision Hub card is
+    created even when the agent is OFF for the role — the agent toggle governs
+    autonomous execution, not whether a deterministic reject is surfaced.
     """
     org, role, app = _seed(db, score=35.0)
     role.agentic_mode_enabled = False
@@ -318,14 +317,15 @@ def test_queue_pre_screen_reject_skips_agent_off_roles(db):
         pre_screen_score=35.0,
         threshold=50.0,
     )
-    assert result is None
+    assert result is not None and result.status == "pending"
     n = db.query(AgentDecision).filter(AgentDecision.application_id == app.id).count()
-    assert n == 0
+    assert n == 1
 
 
-def test_backfill_only_processes_agent_on_roles(db):
-    """The backfill must not surface decisions for agent-off roles."""
-    # One agent-on role with a below-threshold app — should get a decision.
+def test_backfill_processes_agent_off_roles_too(db):
+    """The backfill surfaces deterministic pre-screen rejects for EVERY role —
+    agent on or off — since a below-threshold verdict is policy, not an agent
+    action."""
     org = Organization(name="Mixed", slug=f"mx-{id(db)}")
     db.add(org); db.flush()
     role_on = Role(organization_id=org.id, name="On", source="manual", auto_reject=False, agentic_mode_enabled=True)
@@ -350,11 +350,11 @@ def test_backfill_only_processes_agent_on_roles(db):
     db.commit()
 
     summary = backfill_existing_below_threshold(db, organization_id=int(org.id))
-    assert summary["created"] == 1  # only the agent-on role's app
+    assert summary["created"] == 2  # both roles — agent on AND off
     on_rows = db.query(AgentDecision).filter(AgentDecision.role_id == role_on.id).count()
     off_rows = db.query(AgentDecision).filter(AgentDecision.role_id == role_off.id).count()
     assert on_rows == 1
-    assert off_rows == 0
+    assert off_rows == 1
 
 
 def test_queue_pre_screen_reject_is_idempotent(db):
@@ -503,6 +503,40 @@ def test_evaluate_auto_reject_triggers_on_agentic_mode_without_org_workable_flag
     verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
     assert verdict["should_trigger"] is True, verdict
     assert verdict["state"] == "eligible"
+
+
+def test_evaluate_auto_reject_triggers_on_agent_off_role_as_card_only(db):
+    """A below-threshold candidate on an agent-OFF role with no org Workable
+    config still TRIGGERS (deterministic policy → Decision Hub card), but is
+    NOT eligible for the irreversible Workable auto-disqualify write-back
+    (``auto_disqualify_eligible`` is False).
+    """
+    from app.decision_policy.auto_reject import evaluate_auto_reject_decision
+
+    org = Organization(name="Agent Off", slug=f"ao-{id(db)}")
+    org.workable_config = {}  # legacy auto_reject switch absent
+    db.add(org); db.flush()
+    role = Role(
+        organization_id=org.id, name="R", source="manual",
+        auto_reject=False, agentic_mode_enabled=False, score_threshold=50,
+    )
+    db.add(role); db.flush()
+    cand = Candidate(organization_id=org.id, email="ao@x.test", full_name="AO", workable_candidate_id="wid-ao")
+    db.add(cand); db.flush()
+    app = CandidateApplication(
+        organization_id=org.id, candidate_id=cand.id, role_id=role.id,
+        status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
+        application_outcome="open", source="manual",
+        pre_screen_score_100=20.0, cv_match_score=None,
+        cv_match_details={"pre_screen_score_100": 20.0},
+        pre_screen_recommendation="Below threshold",
+    )
+    db.add(app); db.commit()
+
+    verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
+    assert verdict["should_trigger"] is True, verdict
+    assert verdict["state"] == "eligible"
+    assert verdict["auto_disqualify_eligible"] is False  # card only — no Workable write-back
 
 
 def test_evaluate_auto_reject_defers_when_fully_scored(db):
@@ -1269,44 +1303,67 @@ def test_repair_passed_prescreen_contamination(db):
 # ---------------------------------------------------------------------------
 
 
-def test_discard_pending_decisions_for_role(db):
+def _agent_card(db, org, role, app, decision_type="advance_to_interview"):
+    """A pending AGENT-SUBJECTIVE decision (not a deterministic pre-screen
+    reject) — these are the ones agent-off cleanup should discard."""
+    d = AgentDecision(
+        organization_id=int(org.id), role_id=int(role.id), application_id=int(app.id),
+        agent_run_id=None, decision_type=decision_type, recommendation=decision_type,
+        status="pending", reasoning="x", evidence={}, confidence=None,
+        model_version="m", prompt_version="p",
+        idempotency_key=f"{decision_type}:{int(app.id)}",
+        active_capabilities={}, token_spend={},
+    )
+    db.add(d); db.flush()
+    return d
+
+
+def test_discard_pending_decisions_for_role_keeps_pre_screen_rejects(db):
+    """Turning the agent off clears agent-subjective cards (advance / send /
+    full-score reject) but LEAVES deterministic ``skip_assessment_reject``
+    (pre-screen) cards — those are policy, not agent decisions."""
     org, role, app = _seed(db, score=15.0, threshold=30.0)
-    d = _direct_card(db, org, role, app, 30.0)
-    # resolved_by_user_id left None here (a real user FK is required to set it;
-    # the toggle-off route passes current_user.id in prod).
+    pre_screen = _direct_card(db, org, role, app, 30.0)  # skip_assessment_reject
+    agent_card = _agent_card(db, org, role, app)         # advance_to_interview
+
     n = discard_pending_decisions_for_role(
         db, role_id=int(role.id), reason="agent disabled"
     )
-    assert n == 1
-    db.flush(); db.refresh(d)
-    assert d.status == "discarded"
+    assert n == 1  # only the agent-subjective card
+    db.flush(); db.refresh(pre_screen); db.refresh(agent_card)
+    assert pre_screen.status == "pending"     # deterministic reject survives
+    assert agent_card.status == "discarded"   # agent card cleared
 
 
 def test_backfill_discard_decisions_on_agent_off_roles(db):
+    """The agent-off cleanup discards agent-subjective cards but LEAVES
+    deterministic ``skip_assessment_reject`` (pre-screen) cards."""
     org = Organization(name="O", slug=f"o-{id(db)}ao"); db.add(org); db.flush()
     role_on = Role(organization_id=org.id, name="On", source="manual", auto_reject=False, agentic_mode_enabled=True)
     role_off = Role(organization_id=org.id, name="Off", source="manual", auto_reject=False, agentic_mode_enabled=False)
     db.add_all([role_on, role_off]); db.flush()
 
-    def mkcard(role):
-        c = Candidate(organization_id=org.id, email=f"c{role.id}@x.test", full_name="C"); db.add(c); db.flush()
+    def mkapp(role, email):
+        c = Candidate(organization_id=org.id, email=email, full_name="C"); db.add(c); db.flush()
         a = CandidateApplication(
             organization_id=org.id, candidate_id=c.id, role_id=role.id,
             status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
             application_outcome="open", source="manual", pre_screen_score_100=15.0,
         )
         db.add(a); db.flush()
-        return _direct_card(db, org, role, a, 30.0)
+        return a
 
-    d_on = mkcard(role_on)
-    d_off = mkcard(role_off)
+    d_on = _agent_card(db, org, role_on, mkapp(role_on, "on@x.test"))        # agent-on — untouched
+    d_off_agent = _agent_card(db, org, role_off, mkapp(role_off, "off@x.test"))  # agent-off agent card — discarded
+    d_off_reject = _direct_card(db, org, role_off, mkapp(role_off, "off2@x.test"), 30.0)  # pre-screen — survives
 
     res = backfill_discard_decisions_on_agent_off_roles(db, organization_id=int(org.id))
     assert res["discarded"] == 1
     assert res["scanned"] == 1
-    db.refresh(d_on); db.refresh(d_off)
-    assert d_on.status == "pending"      # agent-on role untouched
-    assert d_off.status == "discarded"   # agent-off role's card cleared
+    db.refresh(d_on); db.refresh(d_off_agent); db.refresh(d_off_reject)
+    assert d_on.status == "pending"           # agent-on role untouched
+    assert d_off_agent.status == "discarded"  # agent-off agent card cleared
+    assert d_off_reject.status == "pending"   # deterministic reject survives
 
 
 # ---------------------------------------------------------------------------

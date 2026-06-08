@@ -134,9 +134,10 @@ def test_workable_403_falls_back_to_decision_hub_card(db):
     assert result["workable_result"]["code"] == "api_error"
 
 
-def test_workable_403_without_agent_stays_failed(db):
-    """A non-agent role can't surface a card (the queue is agent-gated), so it
-    keeps the honest 'failed' terminal state — no silent state change."""
+def test_workable_403_without_agent_now_cards(db):
+    """A pre-screen reject is deterministic and agent-independent, so even on a
+    non-agent role a failed Workable disqualify (403) falls back to a Decision
+    Hub card instead of stranding in state='failed'."""
     org = _seed_org(db, workable=True)
     role = _seed_role(db, org, auto_reject=True, agentic=False)
     app = _seed_app(db, org, role)
@@ -148,9 +149,9 @@ def test_workable_403_without_agent_stays_failed(db):
         )
 
     assert result["performed"] is False
-    assert result["state"] == "failed"
-    assert app.auto_reject_state == "failed"
-    assert _pending_card(db, app) is None
+    assert result["state"] == "awaiting_recruiter_approval"
+    assert app.auto_reject_state == "awaiting_recruiter_approval"
+    assert _pending_card(db, app) is not None
 
 
 def test_workable_success_still_disqualifies(db):
