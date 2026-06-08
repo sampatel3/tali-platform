@@ -17,7 +17,8 @@ _N = [0]
 
 
 def _seed(db, *, pre_score=18.0, recommendation="Below threshold", cv_score=None,
-          outcome="open", agentic=True, paused=True):
+          outcome="open", agentic=True, paused=True,
+          pre_screen_run_at=datetime(2026, 1, 1, tzinfo=timezone.utc)):
     _N[0] += 1
     org = Organization(name="O", slug=f"o-sweep-{_N[0]}")
     db.add(org); db.flush()
@@ -35,7 +36,7 @@ def _seed(db, *, pre_score=18.0, recommendation="Below threshold", cv_score=None
         status="applied", pipeline_stage="applied", pipeline_stage_source="recruiter",
         application_outcome=outcome, source="workable",
         pre_screen_score_100=pre_score, pre_screen_recommendation=recommendation,
-        cv_match_score=cv_score,
+        cv_match_score=cv_score, pre_screen_run_at=pre_screen_run_at,
     )
     db.add(app); db.flush()
     return org, role, app
@@ -182,6 +183,26 @@ def test_sweep_skips_apps_with_pending_decision(db, monkeypatch):
         idempotency_key=f"pre_screen_reject:{int(app.id)}",
         active_capabilities={}, token_spend={},
     ))
+    db.commit()
+
+    agent_tasks.pre_screen_reject_sweep.run()
+
+    assert app.id not in sent
+
+
+def test_sweep_skips_never_pre_screened(db, monkeypatch):
+    """A stale 'Below threshold' label with no genuine pre-screen run (no
+    ``pre_screen_run_at``) must NOT be swept into a reject — that label can be
+    stamped by a cv_match snapshot refresh with no pre-screen ever run."""
+    from app.tasks import agent_tasks
+
+    sent: list[int] = []
+    import app.tasks.automation_tasks as auto
+    monkeypatch.setattr(
+        auto.run_application_auto_reject, "delay",
+        lambda app_id: sent.append(int(app_id)),
+    )
+    _, _, app = _seed(db, pre_screen_run_at=None)
     db.commit()
 
     agent_tasks.pre_screen_reject_sweep.run()

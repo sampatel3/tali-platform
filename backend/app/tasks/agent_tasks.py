@@ -322,6 +322,10 @@ def pre_screen_reject_sweep(self, cap: int = PRE_SCREEN_REJECT_SWEEP_CAP) -> dic
                 # Pre-screen-only: once a full cv_match score exists the agent
                 # owns the verdict (matches evaluate_auto_reject_decision).
                 CandidateApplication.cv_match_score.is_(None),
+                # GENUINE pre-screen only: the recommendation/score columns can
+                # be stamped by a cv_match snapshot refresh without a pre-screen
+                # ever running; pre_screen_run_at is set only by the engine.
+                CandidateApplication.pre_screen_run_at.isnot(None),
                 or_(
                     and_(
                         CandidateApplication.pre_screen_score_100.isnot(None),

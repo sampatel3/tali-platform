@@ -4,6 +4,8 @@ backfill that catches up historical stranded apps.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
@@ -33,7 +35,15 @@ from app.services.pre_screen_decision_emitter import (
 # no longer needs a local listener and tests work regardless of import order.
 
 
-def _seed(db, *, score: float | None = 35.0, threshold: float | None = 50.0, outcome: str = "open"):
+# A candidate that was genuinely pre-screened carries ``pre_screen_run_at``
+# (set only by the pre-screen engine). The emitter/sweep/evaluate now require
+# it, so a "below threshold" label alone (which a cv_match snapshot refresh can
+# stamp) is no longer enough to surface a reject card.
+_PRESCREENED_AT = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+def _seed(db, *, score: float | None = 35.0, threshold: float | None = 50.0, outcome: str = "open",
+          pre_screen_run_at=_PRESCREENED_AT):
     org = Organization(name="O", slug=f"o-{id(db)}")
     db.add(org); db.flush()
     role = Role(organization_id=org.id, name="R", source="manual", auto_reject=False, agentic_mode_enabled=True)
@@ -50,6 +60,7 @@ def _seed(db, *, score: float | None = 35.0, threshold: float | None = 50.0, out
         application_outcome=outcome,
         source="manual",
         pre_screen_score_100=score,
+        pre_screen_run_at=pre_screen_run_at,
     )
     db.add(app); db.flush()
     return org, role, app
@@ -345,6 +356,7 @@ def test_backfill_processes_agent_off_roles_too(db):
                 application_outcome="open",
                 source="manual",
                 pre_screen_score_100=25.0,
+                pre_screen_run_at=_PRESCREENED_AT,
             )
         )
     db.commit()
@@ -388,6 +400,7 @@ def test_backfill_creates_decisions_for_existing_below_threshold(db):
                 application_outcome="open",
                 source="manual",
                 pre_screen_score_100=20.0 + i,  # all < 50
+                pre_screen_run_at=_PRESCREENED_AT,
             )
         )
     # One control: score above threshold should NOT get a decision.
@@ -449,6 +462,9 @@ def test_backfill_picks_up_null_score_below_threshold_recommendation(db):
                 source="manual",
                 pre_screen_score_100=None,
                 pre_screen_recommendation=rec,
+                # #209: a genuine pre-screen ran, then the numeric score was
+                # invalidated — run_at still proves the pre-screen happened.
+                pre_screen_run_at=_PRESCREENED_AT,
             )
         )
     db.commit()
@@ -497,6 +513,7 @@ def test_evaluate_auto_reject_triggers_on_agentic_mode_without_org_workable_flag
         cv_match_score=None,
         cv_match_details={"pre_screen_score_100": 20.0},
         pre_screen_recommendation="Below threshold",
+        pre_screen_run_at=_PRESCREENED_AT,
     )
     db.add(app); db.commit()
 
@@ -530,6 +547,7 @@ def test_evaluate_auto_reject_triggers_on_agent_off_role_as_card_only(db):
         pre_screen_score_100=20.0, cv_match_score=None,
         cv_match_details={"pre_screen_score_100": 20.0},
         pre_screen_recommendation="Below threshold",
+        pre_screen_run_at=_PRESCREENED_AT,
     )
     db.add(app); db.commit()
 
@@ -597,6 +615,7 @@ def test_evaluate_auto_reject_triggers_on_null_score_with_below_threshold_rec(db
         source="manual",
         pre_screen_score_100=None,
         pre_screen_recommendation="Below threshold",
+        pre_screen_run_at=_PRESCREENED_AT,
     )
     db.add(app); db.commit()
 
@@ -640,6 +659,7 @@ def test_evaluate_auto_reject_does_not_trigger_when_score_above_threshold(db):
         cv_match_score=None,
         cv_match_details={"pre_screen_score_100": 75.0},
         pre_screen_recommendation="Proceed to screening",
+        pre_screen_run_at=_PRESCREENED_AT,
     )
     db.add(app); db.commit()
 
@@ -654,7 +674,8 @@ def test_evaluate_auto_reject_does_not_trigger_when_score_above_threshold(db):
 # ---------------------------------------------------------------------------
 
 
-def _add_app(db, org, role, *, score, email, rec=None, outcome="open"):
+def _add_app(db, org, role, *, score, email, rec=None, outcome="open",
+             pre_screen_run_at=_PRESCREENED_AT):
     cand = Candidate(organization_id=org.id, email=email, full_name=email[:1].upper())
     db.add(cand); db.flush()
     app = CandidateApplication(
@@ -668,6 +689,7 @@ def _add_app(db, org, role, *, score, email, rec=None, outcome="open"):
         source="manual",
         pre_screen_score_100=score,
         pre_screen_recommendation=rec,
+        pre_screen_run_at=pre_screen_run_at,
     )
     db.add(app); db.flush()
     return app
@@ -1404,3 +1426,51 @@ def test_backfill_normalize_raw_recommendation_labels(db):
     assert a_no.pre_screen_recommendation == "Below threshold"
     assert a_lean.pre_screen_recommendation == "Manual review recommended"
     assert a_ok.pre_screen_recommendation == "Strong match"
+
+
+# ---------------------------------------------------------------------------
+# Require a GENUINE pre-screen run — never card off a stale cv_match-derived
+# label (the bug that surfaced ~423 spurious "pre-screen reject" cards).
+# ---------------------------------------------------------------------------
+
+
+def test_queue_pre_screen_reject_skips_never_pre_screened(db):
+    """A candidate that was never genuinely pre-screened (no ``pre_screen_run_at``)
+    must NOT get a card, even with a stale ``pre_screen_recommendation='Below
+    threshold'`` label that a cv_match snapshot refresh can stamp."""
+    org, role, app = _seed(db, score=20.0, pre_screen_run_at=None)
+    app.pre_screen_recommendation = "Below threshold"
+    db.flush()
+    result = queue_pre_screen_reject(
+        db, organization_id=int(org.id), role=role, application=app,
+        pre_screen_score=20.0, threshold=50.0,
+    )
+    assert result is None
+    assert db.query(AgentDecision).filter(AgentDecision.application_id == app.id).count() == 0
+
+
+def test_evaluate_auto_reject_skips_never_pre_screened(db):
+    """No ``pre_screen_run_at`` → the candidate was never pre-screened → don't
+    fire a reject off a stale cv_match-derived label."""
+    from app.decision_policy.auto_reject import evaluate_auto_reject_decision
+
+    org = Organization(name="NPS", slug=f"nps-{id(db)}")
+    db.add(org); db.flush()
+    role = Role(organization_id=org.id, name="R", source="manual",
+                auto_reject=False, agentic_mode_enabled=True, score_threshold=50)
+    db.add(role); db.flush()
+    cand = Candidate(organization_id=org.id, email="nps@x.test", full_name="N", workable_candidate_id="wid-nps")
+    db.add(cand); db.flush()
+    app = CandidateApplication(
+        organization_id=org.id, candidate_id=cand.id, role_id=role.id,
+        status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
+        application_outcome="open", source="manual",
+        pre_screen_score_100=20.0, cv_match_score=None,
+        cv_match_details={"pre_screen_score_100": 20.0},
+        pre_screen_recommendation="Below threshold",
+        pre_screen_run_at=None,  # never genuinely pre-screened
+    )
+    db.add(app); db.commit()
+    verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
+    assert verdict["should_trigger"] is False, verdict
+    assert verdict["state"] == "not_pre_screened"
