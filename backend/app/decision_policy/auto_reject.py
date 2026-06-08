@@ -53,20 +53,19 @@ def evaluate_auto_reject_decision(
     score = snapshot["pre_screen_score"]
     recommendation = snapshot.get("pre_screen_recommendation")
     threshold = config["threshold_100"]
-    # Two independent enabling paths:
-    #   1. Legacy Workable auto-disqualify — org-level workable_config
-    #      switch (``config['enabled']``). When on, the decider can route
-    #      to the Workable write-back path (caller gates on
-    #      ``role.auto_reject``).
-    #   2. Agent-driven HITL queueing — role-level ``agentic_mode_enabled``.
-    #      Even without org Workable config, the agent should surface
-    #      below-threshold candidates as Decision Hub cards. Without this,
-    #      orgs that haven't wired up the legacy Workable integration get
-    #      *zero* reject decisions queued — the exact failure mode we hit
-    #      in prod for DeepLight AI / role 31 (311 candidates stuck in
-    #      ``auto_reject_state='disabled'``).
+    # A pre-screen reject is DETERMINISTIC policy (score vs the role's cutoff),
+    # so the decision is always produced and surfaced as a Decision Hub card —
+    # independent of the agent toggle. The agent governs autonomous *execution*,
+    # not whether a deterministic reject exists for human review.
+    #
+    # ``auto_disqualify_eligible`` gates ONLY the irreversible Workable
+    # auto-disqualify write-back (still opt-in), via either:
+    #   1. the legacy org-level Workable switch (``config['enabled']``), OR
+    #   2. role-level ``agentic_mode_enabled`` (agent-managed roles).
+    # The caller additionally requires ``role.auto_reject``; when neither path
+    # is eligible the reject is carded for manual review instead of written back.
     agentic_eligible = bool(getattr(role, "agentic_mode_enabled", False)) if role is not None else False
-    enabled = bool(config["enabled"]) or agentic_eligible
+    auto_disqualify_eligible = bool(config["enabled"]) or agentic_eligible
 
     if app.application_outcome != "open":
         return {
@@ -106,14 +105,6 @@ def evaluate_auto_reject_decision(
             "config": config,
             "snapshot": snapshot,
         }
-    if not enabled:
-        return {
-            "should_trigger": False,
-            "state": "disabled",
-            "reason": "Auto reject is disabled",
-            "config": config,
-            "snapshot": snapshot,
-        }
     # ``recommendation`` already encodes the pre-screen verdict — when it
     # says "Below threshold" we have a deterministic reject signal even if
     # the numeric score was nulled by cache invalidation (#209) or the
@@ -135,18 +126,11 @@ def evaluate_auto_reject_decision(
             "config": config,
             "snapshot": snapshot,
         }
-    # Workable link is only required for the legacy disqualify path. For
-    # the agent HITL queue, ``queue_pre_screen_reject`` writes a Decision
-    # Hub card; no Workable round-trip needed. Skip only when the org
-    # legacy path is the only enabling reason (= caller will try Workable).
-    if not getattr(app, "workable_candidate_id", None) and not agentic_eligible:
-        return {
-            "should_trigger": False,
-            "state": "skipped",
-            "reason": "Candidate is not linked to Workable",
-            "config": config,
-            "snapshot": snapshot,
-        }
+    # Workable linkage is NOT required: the decision is surfaced as a Decision
+    # Hub card (``queue_pre_screen_reject``), which needs no Workable round-trip.
+    # An unlinked candidate is carded by the caller; only an
+    # ``auto_disqualify_eligible`` + ``auto_reject`` role with a linked
+    # candidate takes the irreversible Workable write-back path.
 
     if score is not None and threshold is not None and score >= threshold:
         return {
@@ -173,6 +157,7 @@ def evaluate_auto_reject_decision(
             "reason": legacy_reason,
             "config": config,
             "snapshot": snapshot,
+            "auto_disqualify_eligible": auto_disqualify_eligible,
         }
 
     try:
@@ -202,6 +187,7 @@ def evaluate_auto_reject_decision(
             "config": config,
             "snapshot": snapshot,
             "policy_revision_id": verdict.policy_revision_id,
+            "auto_disqualify_eligible": auto_disqualify_eligible,
         }
     # Engine returned no_action/skip — likely the active policy hasn't
     # been migrated to include the new rule. Fall through to the legacy
@@ -212,4 +198,5 @@ def evaluate_auto_reject_decision(
         "reason": legacy_reason,
         "config": config,
         "snapshot": snapshot,
+        "auto_disqualify_eligible": auto_disqualify_eligible,
     }

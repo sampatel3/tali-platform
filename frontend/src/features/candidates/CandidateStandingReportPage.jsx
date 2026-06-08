@@ -965,14 +965,50 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     completedAssessment,
     fallback: reportModel?.roleFitModel,
   });
-  const preScreenDecision = String(cvMatchDetails?.pre_screen_decision || '').toLowerCase();
-  const isPreScreenedOut = preScreenDecision === 'no';
-  const preScreenReason = String(cvMatchDetails?.pre_screen_reason || '').trim();
+  // A pre-screen reject is deterministic and is recorded on the application
+  // (``pre_screen_recommendation`` / ``pre_screen_evidence``) the moment the
+  // cheap Stage-1 gate runs — independent of the agent, and of whether the
+  // expensive full cv_match score ever ran. Surface it here even when
+  // ``cv_match_details`` is empty (the Stage-1-only path deliberately never
+  // writes cv_match_*), so a screened-out candidate shows the verdict + reason
+  // instead of a blank "No Hire / 0.0".
+  const preScreenEvidence = (application?.pre_screen_evidence && typeof application.pre_screen_evidence === 'object')
+    ? application.pre_screen_evidence
+    : {};
+  const hasFullScore = application?.cv_match_score != null;
+  const preScreenDecision = String(
+    cvMatchDetails?.pre_screen_decision
+    || preScreenEvidence.decision
+    || ''
+  ).toLowerCase();
+  const isPreScreenedOut = !hasFullScore && (
+    preScreenDecision === 'no'
+    || String(application?.pre_screen_recommendation || '').trim().toLowerCase() === 'below threshold'
+  );
+  // Field names that the API actually serializes (ApplicationResponse):
+  // top-level ``pre_screen_score`` (populated for fully/filtered-scored rows),
+  // else the genuine LLM score carried in ``pre_screen_evidence.llm_score_100``
+  // (the Stage-1-only path — where cv_match_* is empty), else the cv_match copy.
+  const preScreenScore = (
+    application?.pre_screen_score
+    ?? preScreenEvidence.llm_score_100
+    ?? cvMatchDetails?.pre_screen_score_100
+    ?? null
+  );
+  const preScreenReason = String(
+    cvMatchDetails?.pre_screen_reason
+    || preScreenEvidence.summary
+    || ''
+  ).trim();
   const handleRunFullEvaluation = useCallback(async () => {
     if (!application?.id || !rolesApi?.scoreSelected || !application?.role_id) return;
     setBusyAction('rescore');
     try {
-      await rolesApi.scoreSelected(application.role_id, [application.id], { force: true });
+      // ``bypassPreScreen`` is the whole point of this button: the candidate
+      // is sitting here *because* the cheap pre-screen filtered them, so a
+      // plain rescore would just re-filter on the same evidence. Force the
+      // full v3 cv_match score past the gate.
+      await rolesApi.scoreSelected(application.role_id, [application.id], { force: true, bypassPreScreen: true });
       showToast('Full CV evaluation queued. Refresh in a few seconds.', 'success');
       void loadStandingReport();
     } catch (err) {
@@ -1414,7 +1450,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             }}
           >
             <div style={{ fontSize: '13.5px', color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 600 }}>
-              <strong>Filtered out by pre-screen.</strong>{' '}
+              <strong>Filtered out by pre-screen{preScreenScore != null ? ` · ${Math.round(preScreenScore)}/100` : ''}.</strong>{' '}
               {preScreenReason || 'A cheap pre-screen decided this CV did not plausibly meet the role must-haves.'}
             </div>
             <button

@@ -74,15 +74,31 @@ def test_sweep_skips_fully_scored_and_non_open(db, monkeypatch):
     _, _, scored = _seed(db, cv_score=18.0)
     # Already rejected → not open.
     _, _, closed = _seed(db, outcome="rejected")
-    # Agent off → not under management.
-    _, _, agentless = _seed(db, agentic=False)
     db.commit()
 
     agent_tasks.pre_screen_reject_sweep.run()
 
     assert scored.id not in sent
     assert closed.id not in sent
-    assert agentless.id not in sent
+
+
+def test_sweep_now_includes_agent_off_roles(db, monkeypatch):
+    """A pre-screen reject is deterministic policy, so the sweep surfaces
+    below-threshold candidates even when the role's agent is OFF."""
+    from app.tasks import agent_tasks
+
+    sent: list[int] = []
+    import app.tasks.automation_tasks as auto
+    monkeypatch.setattr(
+        auto.run_application_auto_reject, "delay",
+        lambda app_id: sent.append(int(app_id)),
+    )
+    _, _, agentless = _seed(db, agentic=False)
+    db.commit()
+
+    agent_tasks.pre_screen_reject_sweep.run()
+
+    assert agentless.id in sent  # surfaced even with the agent off
 
 
 def test_scoring_task_fires_reject_on_prescreen_filter(db, monkeypatch):
