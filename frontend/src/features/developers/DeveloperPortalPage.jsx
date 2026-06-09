@@ -9,44 +9,63 @@ import {
   SECTIONS,
 } from './apiReference';
 
-// Self-contained, public (no auth/app context). Scoped `.devx-` styles live in
-// a single <style> block so there's no CSS-import wiring — the portal renders
-// anywhere the /developers route mounts.
+// Self-contained, public (no auth/app context), and DARK by default — the
+// developer surface deliberately reads differently from the light product app.
+// The palette is fixed (not pulled from the app's light tokens) so it stays
+// dark regardless of the surrounding theme. Scoped `.devx-` styles live in one
+// <style> block so there's no CSS-import wiring.
 const PORTAL_CSS = `
-.devx { --x-purple: var(--purple, #6d28d9); --x-mute: var(--mute, #6b7280); --x-line: var(--line, #e8e8ef); --x-fg: var(--fg, #16161d); --x-bg: var(--bg, #ffffff); color: var(--x-fg); background: var(--x-bg); min-height: 100vh; }
+.devx {
+  --x-purple: #a78bfa;
+  --x-purple-strong: #7c3aed;
+  --x-purple-soft: rgba(167,139,250,0.14);
+  --x-mute: #9a9ab4;
+  --x-line: rgba(255,255,255,0.10);
+  --x-fg: #e9e9f4;
+  --x-strong: #f4f4fb;
+  --x-bg: #0a0a11;
+  --x-surface: #14141f;
+  color: var(--x-fg);
+  background: var(--x-bg);
+  min-height: 100vh;
+}
 .devx, .devx * { box-sizing: border-box; }
-.devx-bar { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; background: color-mix(in srgb, var(--x-bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--x-line); }
+html { scroll-behavior: smooth; }
+body { background: #0a0a11; }
+.devx ::selection { background: rgba(167,139,250,0.30); color: #fff; }
+.devx-bar { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; background: color-mix(in srgb, var(--x-bg) 82%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--x-line); }
 .devx-brand { font-weight: 700; font-size: 18px; letter-spacing: -0.01em; color: var(--x-purple); text-decoration: none; }
 .devx-bar-right { display: flex; align-items: center; gap: 16px; }
 .devx-bar-link { font-size: 14px; color: var(--x-mute); text-decoration: none; }
 .devx-bar-link:hover { color: var(--x-fg); }
-.devx-cta { padding: 8px 16px; border-radius: 10px; background: var(--x-purple); color: #fff; text-decoration: none; font-weight: 600; font-size: 13px; }
+.devx-cta { padding: 8px 16px; border-radius: 10px; background: var(--x-purple-strong); color: #fff; text-decoration: none; font-weight: 600; font-size: 13px; }
+.devx-cta:hover { background: #8b5cf6; }
 .devx-body { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 48px; max-width: 1080px; margin: 0 auto; padding: 28px 24px 120px; }
 .devx-nav { position: sticky; top: 78px; align-self: start; display: flex; flex-direction: column; gap: 1px; }
 .devx-nav a { padding: 6px 12px; border-radius: 8px; color: var(--x-mute); text-decoration: none; font-size: 14px; border-left: 2px solid transparent; transition: color .12s; }
 .devx-nav a:hover { color: var(--x-fg); }
 .devx-nav a.on { color: var(--x-purple); border-left-color: var(--x-purple); font-weight: 600; }
 .devx-main { min-width: 0; }
-.devx-kicker { display: inline-block; font-family: var(--font-mono, monospace); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--x-purple); background: var(--purple-soft, rgba(109,40,217,0.08)); padding: 3px 10px; border-radius: 999px; }
-.devx-h1 { font-size: clamp(30px, 4vw, 40px); line-height: 1.04; letter-spacing: -0.02em; margin: 12px 0 10px; }
+.devx-kicker { display: inline-block; font-family: var(--font-mono, monospace); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--x-purple); background: var(--x-purple-soft); padding: 3px 10px; border-radius: 999px; }
+.devx-h1 { font-size: clamp(30px, 4vw, 40px); line-height: 1.04; letter-spacing: -0.02em; margin: 12px 0 10px; color: var(--x-strong); }
 .devx-lede { font-size: 17px; line-height: 1.55; color: var(--x-mute); max-width: 640px; }
 .devx section { scroll-margin-top: 80px; padding-top: 36px; }
-.devx h2 { font-size: 23px; letter-spacing: -0.01em; margin: 0 0 12px; }
+.devx h2 { font-size: 23px; letter-spacing: -0.01em; margin: 0 0 12px; color: var(--x-strong); }
 .devx h3 { font-size: 12px; font-family: var(--font-mono, monospace); text-transform: uppercase; letter-spacing: 0.05em; color: var(--x-mute); margin: 22px 0 6px; }
 .devx p { font-size: 15px; line-height: 1.65; margin: 8px 0; }
 .devx a.inline { color: var(--x-purple); }
-.devx code { font-family: var(--font-mono, monospace); font-size: 13px; background: var(--purple-soft, rgba(109,40,217,0.08)); color: var(--x-purple); padding: 1px 6px; border-radius: 6px; }
+.devx code { font-family: var(--font-mono, monospace); font-size: 13px; background: var(--x-purple-soft); color: var(--x-purple); padding: 1px 6px; border-radius: 6px; }
 .devx-codewrap { position: relative; margin: 12px 0; }
-.devx-pre { background: #0c0c14; color: #e9e9f5; border-radius: 12px; padding: 16px; overflow-x: auto; font-family: var(--font-mono, monospace); font-size: 13px; line-height: 1.6; margin: 0; }
-.devx-copy { position: absolute; top: 10px; right: 10px; background: rgba(255,255,255,0.10); color: #fff; border: 0; border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
-.devx-copy:hover { background: rgba(255,255,255,0.22); }
+.devx-pre { background: var(--x-surface); color: #e9e9f5; border: 1px solid var(--x-line); border-radius: 12px; padding: 16px; overflow-x: auto; font-family: var(--font-mono, monospace); font-size: 13px; line-height: 1.6; margin: 0; }
+.devx-copy { position: absolute; top: 10px; right: 10px; background: rgba(255,255,255,0.08); color: #fff; border: 1px solid var(--x-line); border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.devx-copy:hover { background: rgba(255,255,255,0.16); }
 .devx-grp { margin-top: 20px; }
-.devx-grp-title { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
+.devx-grp-title { font-weight: 700; font-size: 13px; margin-bottom: 4px; color: var(--x-fg); }
 .devx-ep { display: grid; grid-template-columns: 56px minmax(0,1fr); gap: 12px; padding: 12px 0; border-top: 1px solid var(--x-line); }
 .devx-verb { font-family: var(--font-mono, monospace); font-weight: 700; font-size: 12px; color: var(--x-purple); padding-top: 1px; }
-.devx-path { font-family: var(--font-mono, monospace); font-size: 14px; word-break: break-word; }
+.devx-path { font-family: var(--font-mono, monospace); font-size: 14px; word-break: break-word; color: var(--x-fg); }
 .devx-epdesc { color: var(--x-mute); font-size: 13px; margin-top: 3px; }
-.devx-scope { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--x-purple); background: var(--purple-soft, rgba(109,40,217,0.08)); padding: 1px 6px; border-radius: 6px; }
+.devx-scope { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--x-purple); background: var(--x-purple-soft); padding: 1px 6px; border-radius: 6px; }
 .devx-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .devx-table th { text-align: left; padding: 8px 10px; border-bottom: 2px solid var(--x-line); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--x-mute); }
 .devx-table td { padding: 8px 10px; border-bottom: 1px solid var(--x-line); vertical-align: top; }
