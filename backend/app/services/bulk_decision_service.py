@@ -77,24 +77,10 @@ def _role_fit_score(app: CandidateApplication) -> float | None:
 
 def _recruiter_reasoning(app: CandidateApplication) -> str | None:
     """Recruiter-facing decision narrative, sourced from the CV-match
-    ``summary`` — the same field that drives the candidate report's
-    recommendation hero text and is quoted into the Workable note. Falls
-    back to the first score-rationale bullet. Returns None when no
-    qualitative narrative exists; the caller then substitutes the
-    audit-oriented policy basis so the reasoning is never blank."""
-    details = getattr(app, "cv_match_details", None)
-    if not isinstance(details, dict):
-        return None
-    summary = str(details.get("summary") or "").strip()
-    if summary:
-        return summary
-    bullets = details.get("score_rationale_bullets")
-    if isinstance(bullets, list):
-        for bullet in bullets:
-            text = str(bullet or "").strip()
-            if text:
-                return text
-    return None
+    ``summary``. Single source of truth shared with the LLM-agent path (via
+    ``queue_decision``) so a card reads the same regardless of producer."""
+    from .decision_reasoning import recruiter_decision_reasoning
+    return recruiter_decision_reasoning(app)
 
 
 def _inputs_for(app, *, role_id, org_id, eff, has_task):
