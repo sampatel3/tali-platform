@@ -71,8 +71,11 @@ def _enable_workable(db, org) -> None:
 
 
 def test_compose_note_includes_score_confidence_reasoning_and_share_url(db):
-    org, role, _, app = make_world(db, pre_screen=85.0)
+    # The note's score is ALWAYS the canonical Taali score, never the
+    # pre-screen display value — seed them differently to prove it.
+    org, role, _, app = make_world(db, pre_screen=50.0)
     decision = _make_decision(db, org, role, app)
+    app.taali_score_cache_100 = 85.0
 
     body = wds.compose_decision_summary_note(
         decision,
@@ -84,6 +87,7 @@ def test_compose_note_includes_score_confidence_reasoning_and_share_url(db):
 
     assert body.startswith("TAALI ▸ Advanced by recruiter")
     assert "Score: 85/100" in body
+    assert "Score: 50" not in body
     assert "Tali confidence: 85%" in body
     assert "Strong AWS Glue match" in body
     assert "Recruiter note: Strong referral" in body
@@ -190,6 +194,7 @@ def test_post_summary_posts_note_with_share_link(db, monkeypatch):
     """Happy path: Workable connected + candidate linked → mints a 30d
     recruiter ShareLink + posts an activity containing the URL."""
     org, role, _, app = make_world(db, pre_screen=85.0)
+    app.taali_score_cache_100 = 85.0  # the note surfaces the canonical Taali score
     decision = _make_decision(db, org, role, app)
     user = _make_user(db, org)
     _enable_workable(db, org)
