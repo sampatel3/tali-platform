@@ -45,6 +45,13 @@ export const ENDPOINT_GROUPS = [
       { method: 'POST', path: '/applications/{id}/share-links', scope: 'share-links:write', desc: 'Mint a shareable report link (a results_url).' },
     ],
   },
+  {
+    name: 'Job applications & metrics',
+    endpoints: [
+      { method: 'GET', path: '/roles/{id}/applications', scope: 'applications:read', desc: "A role's candidate applications — Taali's signal plus the synced Workable stage. Filter by workable_stage or pipeline_stage." },
+      { method: 'GET', path: '/roles/{id}/metrics', scope: 'applications:read', desc: 'Job metrics: totals, the Taali funnel, decision outcomes, and Workable-stage counts.' },
+    ],
+  },
 ];
 
 export const ERRORS = [
@@ -60,6 +67,8 @@ export const CHANGELOG = [
   {
     date: '2026-06-09',
     items: [
+      'Job metrics + applications list: GET /roles/{id}/applications and /roles/{id}/metrics.',
+      'Applications now expose the synced Workable hiring-stage (workable_stage).',
       'v1 launch: API keys (Settings → Developers) + the curated /public/v1 surface.',
       'Read endpoints: tests, roles, applications, assessments.',
       'Write endpoint: share-links (mint a results_url).',

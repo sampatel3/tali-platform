@@ -65,7 +65,29 @@ class PublicApplication(BaseModel):
     taali_score_100: Optional[float] = None
     # Live-derived label (see pre_screen_snapshot), not a stored value.
     recommendation: Optional[str] = None
+    # Workable hiring-funnel position, synced from Workable (null when the org
+    # isn't connected). Taali's own pipeline_stage is intentionally coarse
+    # (applied/advanced); this is the real ATS funnel stage.
+    workable_stage: Optional[str] = None
+    workable_disqualified: Optional[bool] = None
+    workable_score: Optional[float] = None
     created_at: Optional[datetime] = None
+
+
+class PublicApplicationList(BaseModel):
+    applications: list[PublicApplication]
+    total: int
+
+
+class RoleMetrics(BaseModel):
+    role_id: int
+    total_applications: int
+    # Canonical Taali funnel: applied / scored / invited / completed / advanced / rejected.
+    taali_funnel: dict[str, int] = Field(default_factory=dict)
+    # Decision outcomes: open / rejected / withdrawn / hired.
+    by_application_outcome: dict[str, int] = Field(default_factory=dict)
+    # Workable hiring-funnel stage distribution (synced; empty if not connected).
+    by_workable_stage: dict[str, int] = Field(default_factory=dict)
 
 
 class PublicAssessment(BaseModel):
