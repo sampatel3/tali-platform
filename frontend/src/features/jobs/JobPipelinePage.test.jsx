@@ -422,4 +422,35 @@ Banking transformation experience
     fireEvent.click(lastUpdatedHeader);
     await waitFor(() => expect(firstRowName()).toBe('Priya Anand'));
   });
+
+  it('flips the agent strip to ON the instant Resume is clicked (optimistic, no poll wait)', async () => {
+    // A role whose agent is enabled but paused — the strip shows PAUSED.
+    apiClient.roles.get.mockResolvedValue({ data: { ...baseRole, agentic_mode_enabled: true } });
+    apiClient.agent.status.mockResolvedValue({
+      data: {
+        paused_at: '2026-06-01T00:00:00Z',
+        paused_reason: 'paused by you',
+        monthly_spent_cents: 507,
+        monthly_budget_cents: 10000,
+        pending_decisions: 0,
+      },
+    });
+    // Keep the PATCH in-flight for the whole assertion: if the flip waited on
+    // the server round-trip (the bug Sam hit), the strip would stay PAUSED here.
+    let resolveUpdate;
+    apiClient.roles.update.mockReturnValue(new Promise((res) => { resolveUpdate = res; }));
+
+    renderPipeline();
+
+    const resumeBtn = await screen.findByRole('button', { name: /^resume$/i });
+    expect(screen.getByText('Paused')).toBeInTheDocument();
+
+    fireEvent.click(resumeBtn);
+
+    // Optimistic: ON immediately, before the (still-pending) PATCH resolves.
+    expect(await screen.findByText('Agent on')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^resume$/i })).not.toBeInTheDocument();
+    expect(apiClient.roles.update).toHaveBeenCalledWith(101, { agentic_mode_enabled: true });
+    expect(resolveUpdate).toBeTypeOf('function'); // PATCH was fired, not awaited
+  });
 });

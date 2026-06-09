@@ -1248,6 +1248,27 @@ body.interview-view .page {
   color: var(--purple);
 }
 
+/* ── Agent-scored surface ──────────────────────────────────────────────
+   "Agent mode on" alignment: when the agent has produced a dimension read,
+   the Scored-dimensions panel adopts the dark-purple agent-ON treatment
+   (matching .abar-on), so the agent visibly owns the scoring. Same fill +
+   lavender accents as the agent strip; lavender bars on a translucent track. */
+.panel.agent-scored {
+  background: linear-gradient(160deg, #3a1d6e 0%, #241147 100%);
+  border-color: rgba(196, 165, 253, .28);
+  box-shadow: 0 18px 44px -26px rgba(58, 29, 110, .85);
+  color: #fff;
+}
+.panel.agent-scored h2 { color: #fff; }
+.panel.agent-scored h2 em { color: var(--purple-lav); }
+.panel.agent-scored .sub { color: rgba(255, 255, 255, .6); }
+.panel.agent-scored .dim { border-bottom-color: rgba(255, 255, 255, .1); }
+.panel.agent-scored .dim-name { color: rgba(255, 255, 255, .94); }
+.panel.agent-scored .dim-score { color: #fff; }
+.panel.agent-scored .dim-note { color: rgba(255, 255, 255, .58); }
+.panel.agent-scored .bar { background: rgba(255, 255, 255, .14); }
+.panel.agent-scored .bar > i { background: var(--purple-lav); }
+
 .wk-push {
   display: grid;
   grid-template-columns: auto 1fr auto;

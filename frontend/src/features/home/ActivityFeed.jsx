@@ -69,8 +69,10 @@ export const ActivityFeed = ({
                   <div className="rq-stream-meta">
                     <TypeBadge type={row.decision_type} size="sm" />
                     <ScoreChip score={row.taali_score} size="sm" />
+                    {/* Processing has no pill — the card is already dimmed
+                        (.is-processing opacity) which reads as in-flight. */}
                     {isProcessing
-                      ? <span className="rq-stream-procpill">Processing</span>
+                      ? null
                       : row.status === 'pending'
                         ? <span className="rq-stream-pendpill">NEEDS YOU</span>
                         : <span className="rq-stream-teachpill">+ FEEDBACK</span>}

@@ -80,7 +80,13 @@ export const roles = {
   refreshInterviewSupport: (applicationId) => api.post(`/applications/${applicationId}/refresh-interview-support`),
   scoreSelected: (roleId, applicationIds, options = {}) => api.post(
     `/roles/${roleId}/applications/score-selected`,
-    { application_ids: applicationIds, force: options.force === true },
+    {
+      application_ids: applicationIds,
+      force: options.force === true,
+      // Opt-out of the cheap pre-screen gate so a below-threshold candidate
+      // still gets a full v3 cv_match score (the "Run full evaluation" override).
+      bypass_pre_screen: options.bypassPreScreen === true,
+    },
   ),
   fetchCvsSelected: (roleId, applicationIds) => api.post(
     `/roles/${roleId}/applications/fetch-cvs-selected`,

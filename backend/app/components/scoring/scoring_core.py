@@ -12,6 +12,7 @@ from typing import Any, Dict, List
 from .rules import (
     VAGUE_PATTERNS,
     INJECTION_PATTERNS,
+    SYSTEM_PROBE_PATTERNS,
 )
 
 # ---------------------------------------------------------------------------
@@ -838,6 +839,13 @@ def _detect_fraud(
         any(re.search(pat, (p.get("message", "") or "").lower()) for pat in INJECTION_PATTERNS)
         for p in prompts
     )
+    system_probe = any(
+        any(re.search(pat, (p.get("message", "") or "").lower()) for pat in SYSTEM_PROBE_PATTERNS)
+        for p in prompts
+    )
+    # The live runtime guard stamps record["misuse"] when a turn refused an
+    # off-task request; reflect it post-hoc so the score is capped too.
+    off_task = any(isinstance(p, dict) and p.get("misuse") == "off_task" for p in prompts)
     suspiciously_fast = (total_duration_seconds < 300 and tests_passed > 0)
     first_sec = ((prompts[0].get("time_since_assessment_start_ms") or 0) / 1000.0) if prompts else 999
 
@@ -853,6 +861,10 @@ def _detect_fraud(
         flags.append("solution_dump_detected")
     if injection:
         flags.append("injection_attempt")
+    if system_probe:
+        flags.append("system_probe_attempt")
+    if off_task:
+        flags.append("off_task_attempt")
     if suspiciously_fast:
         flags.append("suspiciously_fast")
     if first_sec < 30:
@@ -868,6 +880,8 @@ def _detect_fraud(
         "external_paste_detected": external_paste,
         "solution_dump_detected": solution_dump,
         "injection_attempt": injection,
+        "system_probe_attempt": system_probe,
+        "off_task_attempt": off_task,
         "suspiciously_fast": suspiciously_fast,
     }
 

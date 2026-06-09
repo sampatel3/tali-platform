@@ -140,13 +140,13 @@ def queue_pre_screen_reject(
     Idempotent on ``application_id`` — re-running pre-screen against the
     same application produces at most one row.
 
-    Gated on ``role.agentic_mode_enabled``: agent-OFF roles aren't under
-    agent management, so we shouldn't auto-create Decision Hub cards on
-    their behalf. The recruiter would see decisions appearing for roles
-    they didn't enable the agent on — surprising and unwelcome.
+    A pre-screen reject is DETERMINISTIC policy, so the card is created
+    regardless of ``role.agentic_mode_enabled`` — the agent toggle governs
+    autonomous *execution* (advancing, sending assessments, Workable
+    disqualify), not whether a deterministic reject is queued for human
+    review. The irreversible Workable auto-disqualify stays gated upstream
+    (``run_auto_reject_if_needed`` → ``auto_disqualify_eligible``).
     """
-    if not bool(getattr(role, "agentic_mode_enabled", False)):
-        return None
     # Defer to full scoring. The pre-screen reject is a CHEAP gate whose only
     # job is to reject before paying for full cv_match scoring. Once a
     # candidate has a cv_match score, that score is authoritative and the
@@ -171,6 +171,16 @@ def queue_pre_screen_reject(
     # cheap pre-screen reject path runs without that prompt, so it must enforce
     # the same rule here — never card a reject for someone a human advanced.
     if is_post_handover_workable_stage(getattr(application, "workable_stage", None)):
+        return None
+    # Require a GENUINE pre-screen run. ``pre_screen_recommendation`` /
+    # ``pre_screen_score_100`` can be stamped by a cv_match snapshot refresh
+    # without any pre-screen ever running (e.g. a cv_match 'no' whose numeric
+    # score was later invalidated), which would surface a "pre-screen reject"
+    # card for a candidate that was never pre-screened. ``pre_screen_run_at`` is
+    # set ONLY by the pre-screen engine (execute_pre_screen_only / fraud gate),
+    # never by the snapshot — so it cleanly separates a real reject from a stale
+    # label.
+    if getattr(application, "pre_screen_run_at", None) is None:
         return None
     try:
         key = _idempotency_key(int(application.id))
@@ -507,11 +517,11 @@ def backfill_existing_below_threshold(
             ),
             CandidateApplication.application_outcome == "open",
             Role.deleted_at.is_(None),
-            # Only agent-on roles. Agent-off roles aren't under agent
-            # management; surfacing decisions for them would surprise the
-            # recruiter ("why are these candidates in my queue when I
-            # never enabled the agent here?").
-            Role.agentic_mode_enabled.is_(True),
+            # GENUINE pre-screen only: a stale 'Below threshold' label can be set
+            # by a cv_match snapshot refresh with no pre-screen ever run.
+            CandidateApplication.pre_screen_run_at.isnot(None),
+            # Surface deterministic pre-screen rejects for EVERY role, agent on
+            # or off — a below-threshold verdict is policy, not an agent action.
         )
     )
     if organization_id is not None:
@@ -921,10 +931,14 @@ def discard_pending_decisions_for_role(
     reason: str,
     resolved_by_user_id: int | None = None,
 ) -> int:
-    """Discard every pending agent decision for a role — used when the agent
-    is turned OFF for that role. With the agent disabled the queue should
-    carry no agent cards for it; orphaned cards otherwise linger in the
-    recruiter's Review queue.
+    """Discard pending AGENT-SUBJECTIVE decisions for a role — used when the
+    agent is turned OFF. With the agent disabled, advance / send-assessment /
+    full-score-reject cards it raised should clear from the Review queue.
+
+    EXCEPTION: ``skip_assessment_reject`` (pre-screen reject) cards are
+    DETERMINISTIC policy and agent-independent — they survive turning the agent
+    off, so the recruiter keeps a complete below-threshold reject queue either
+    way.
 
     ``resolved_by_user_id`` attributes the discard to the recruiter who
     toggled the agent off (a deliberate human resolution, so the emitter's
@@ -937,6 +951,7 @@ def discard_pending_decisions_for_role(
             AgentDecision.role_id == int(role_id),
             AgentDecision.status == "pending",
             AgentDecision.resolved_by_user_id.is_(None),
+            AgentDecision.decision_type != "skip_assessment_reject",
         )
         .all()
     )
@@ -955,9 +970,11 @@ def discard_pending_decisions_for_role(
 def backfill_discard_decisions_on_agent_off_roles(
     db: Session, *, organization_id: int | None = None, dry_run: bool = False
 ) -> dict:
-    """Discard pending agent decisions on roles whose agent is OFF
-    (``agentic_mode_enabled`` not true). These are orphaned cards a
-    toggle-off should have cleared. Returns ``{"discarded": int, "scanned": int}``.
+    """Discard pending AGENT-SUBJECTIVE decisions on roles whose agent is OFF
+    (``agentic_mode_enabled`` not true). These are orphaned agent cards a
+    toggle-off should have cleared. Deterministic ``skip_assessment_reject``
+    (pre-screen reject) cards are agent-independent and are left intact.
+    Returns ``{"discarded": int, "scanned": int}``.
     """
     q = (
         db.query(AgentDecision)
@@ -966,6 +983,7 @@ def backfill_discard_decisions_on_agent_off_roles(
             AgentDecision.status == "pending",
             AgentDecision.resolved_by_user_id.is_(None),
             Role.agentic_mode_enabled.isnot(True),
+            AgentDecision.decision_type != "skip_assessment_reject",
         )
     )
     if organization_id is not None:

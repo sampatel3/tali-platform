@@ -130,4 +130,58 @@ def adjust_agent_settings(
     }
 
 
-__all__ = ["set_agent_state", "adjust_agent_settings"]
+def sync_workable_comments(db: Session, role: Role, *, user: Any = None) -> dict[str, Any]:
+    """Force an immediate Workable sync for THIS role so its candidates' recruiter
+    comments / ratings (and stages) refresh now, instead of waiting for the next
+    scheduled sweep. Reuses the existing ``kick_off_filtered_sync`` (same path the
+    star-role flow uses) — full mode, scoped to this one job. Asynchronous: the
+    fresh comments land as the run completes (seconds, rate-limited)."""
+    from ..models.organization import Organization
+
+    org = db.query(Organization).filter(Organization.id == role.organization_id).first()
+    shortcode = (role.workable_job_id or "").strip() or None
+    if not shortcode and isinstance(role.workable_job_data, dict):
+        shortcode = (str(role.workable_job_data.get("shortcode") or "").strip()) or None
+    if org is None or not shortcode:
+        return {
+            "type": "workable_sync", "ok": False, "reason": "not_workable",
+            "message": (
+                "This role isn't synced from Workable, so there are no Workable "
+                "comments to refresh."
+            ),
+        }
+
+    try:
+        # Lazy import — the sync route module pulls heavy Workable deps.
+        from ..domains.workable_sync.routes import kick_off_filtered_sync
+
+        run_id = kick_off_filtered_sync(
+            db, org=org, job_shortcodes=[shortcode],
+            requested_by_user_id=int(user.id) if user is not None else None,
+            mode="full",
+        )
+    except Exception:  # pragma: no cover — never sink the chat turn on a sync hiccup
+        logger.exception("sync_workable_comments failed for role_id=%s", role.id)
+        return {
+            "type": "workable_sync", "ok": False, "reason": "error",
+            "message": "I couldn't start the Workable sync just now — try again in a moment.",
+        }
+
+    if run_id is None:
+        return {
+            "type": "workable_sync", "ok": True, "status": "already_running",
+            "message": (
+                "A Workable sync is already in progress — the latest recruiter "
+                "comments will land shortly."
+            ),
+        }
+    return {
+        "type": "workable_sync", "ok": True, "status": "started", "run_id": run_id,
+        "message": (
+            "Started a fresh Workable sync for this role — recruiter comments "
+            "refresh in a moment; ask me again shortly and I'll re-read them."
+        ),
+    }
+
+
+__all__ = ["set_agent_state", "adjust_agent_settings", "sync_workable_comments"]

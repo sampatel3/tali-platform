@@ -50,3 +50,30 @@ COPYPASTE_PATTERNS = [
 
 # Fraud score cap: if any fraud flag fires, final_score is capped to this value
 FRAUD_SCORE_CAP = 50.0
+
+# --- Assessment-integrity rules (shared by the live runtime guard in
+# components.assessments.integrity AND the post-hoc scorer). Central on
+# purpose: every task inherits the SAME integrity contract — task specs never
+# define their own. ---
+
+# Candidate attempts to extract platform internals / secrets / escape the
+# sandbox. Matched case-insensitively against the candidate's message.
+SYSTEM_PROBE_PATTERNS = [
+    r"(system|developer)\s+prompt",
+    r"(reveal|show|print|repeat|leak|tell me)\b.*\b(prompt|instructions|system message|rules|guardrails)",
+    r"what (are|were) your (instructions|rules|guidelines)",
+    r"anthropic[_\s-]?api[_\s-]?key|claude[_\s-]?api[_\s-]?key|\bapi[_\s-]?key\b",
+    r"printenv|os\.environ|\benv\b\s*(\||$)|cat\s+\.env|echo\s+\$[A-Z_]+",
+    r"/etc/passwd|/proc/self|~/\.aws|\.aws/credentials|id_rsa|\.ssh/",
+    r"ignore (the )?(task|assessment|scenario)\b",
+]
+
+# The marker the in-assessment agent prefixes when it refuses an off-task /
+# misuse request. The runtime detects it (the agent did the semantic call),
+# strips it from what the candidate sees, and counts it as a misuse attempt.
+OFF_TASK_REFUSAL_MARKER = "[OFF_TASK_REFUSED]"
+
+# Auto-void policy on repeated misuse/injection/probe attempts: warn the
+# candidate at WARN_AT, hard-void (no score) at VOID_AT.
+MISUSE_WARN_AT = 2
+MISUSE_VOID_AT = 3

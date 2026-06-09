@@ -75,6 +75,14 @@ describe('AssessmentPage tracking metadata', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // This suite exercises the legacy terminal-backed runtime (manual Run/Save,
+    // terminal websocket, prompt-based Claude transport, run-output dock). PR
+    // #394 made the agentic Claude chat the default (useAgenticClaudeChat()
+    // returns true unless window.__TAALI_AGENTIC_CHAT__ === false), which hides
+    // that legacy surface. The legacy runtime still ships behind the documented
+    // escape-hatch flag, so pin it off here to keep exercising the path these
+    // tests were written for. (Agentic-chat coverage is tracked separately.)
+    window.__TAALI_AGENTIC_CHAT__ = false;
     mockExecute.mockResolvedValue({ data: { success: true, stdout: '', stderr: '', error: null, results: [] } });
     mockSaveRepoFile.mockResolvedValue({ data: { success: true } });
     mockTerminalStatus.mockResolvedValue({ data: { state: 'running' } });
@@ -94,6 +102,7 @@ describe('AssessmentPage tracking metadata', () => {
   afterEach(() => {
     global.WebSocket = originalWebSocket;
     vi.useRealTimers();
+    delete window.__TAALI_AGENTIC_CHAT__;
   });
 
   it('sends submit tab_switch_count metadata', async () => {
@@ -346,8 +355,14 @@ describe('AssessmentPage tracking metadata', () => {
       ai_mode: 'claude_cli_terminal',
       task: {
         name: 'Run output task',
-        starter_code: 'answer = 42',
         duration_minutes: 30,
+        // The editor (and Run) now reveal only after a repo file is selected
+        // (chat-centred workspace), so seed a single-file repo and open it.
+        repo_structure: {
+          files: {
+            'src/main.py': 'answer = 42',
+          },
+        },
       },
     };
 
@@ -364,14 +379,18 @@ describe('AssessmentPage tracking metadata', () => {
     render(<AssessmentPage token="tok-run-output" startData={startData} />);
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /^Run$/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /^main\.py$/i }));
+    });
+    const runButton = await screen.findByRole('button', { name: /^Run$/i });
+    await act(async () => {
+      fireEvent.click(runButton);
     });
 
     await waitFor(() => expect(mockExecute).toHaveBeenCalledTimes(1));
     expect(mockExecute.mock.calls[0][1]).toMatchObject({
       code: 'answer = 42',
-      selected_file_path: null,
-      repo_files: [],
+      selected_file_path: 'src/main.py',
+      repo_files: [{ path: 'src/main.py', content: 'answer = 42' }],
     });
     expect(await screen.findByText(/Code executed successfully\. No stdout\/stderr was produced\./i)).toBeInTheDocument();
   });
@@ -398,6 +417,17 @@ describe('AssessmentPage tracking metadata', () => {
     };
 
     render(<AssessmentPage token="tok-claude-repo" startData={startData} />);
+
+    // The claude_prompt only goes over the wire once the terminal websocket is
+    // open, so wait for the init handshake before sending.
+    await waitFor(() => {
+      expect(sentMessages.some((message) => message.type === 'init')).toBe(true);
+    });
+
+    // Select src/main.py so it is the file Claude receives as the active file.
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: /^main\.py$/i }));
+    });
 
     const promptInput = screen.getByPlaceholderText(/Ask Claude, attach files with @, run a tool with \//i);
     fireEvent.change(promptInput, { target: { value: 'What files matter?' } });
@@ -433,7 +463,11 @@ describe('AssessmentPage tracking metadata', () => {
     });
 
     expect(await screen.findByText(/Start with/i)).toBeInTheDocument();
-    expect(screen.getByText('src/main.py')).toBeInTheDocument();
+    // `src/main.py` now appears both in the editor header (the file is open) and
+    // as inline code in Claude's reply — assert the reply's code reference.
+    expect(
+      screen.getAllByText('src/main.py').some((node) => node.tagName === 'CODE'),
+    ).toBe(true);
   }, 15000);
 
   it('surfaces a clear error if terminal-backed Claude stalls too long', async () => {
@@ -477,9 +511,9 @@ describe('AssessmentPage tracking metadata', () => {
     expect(screen.getByText(/Still working in the live repo session/i)).toBeInTheDocument();
 
     await act(async () => {
-      vi.advanceTimersByTime(35000);
+      vi.advanceTimersByTime(110000);
     });
-    expect(screen.getByText(/taking longer than expected in the live repo session/i)).toBeInTheDocument();
+    expect(screen.getByText(/Claude is still working on this/i)).toBeInTheDocument();
   });
 
   it('creates a new repo file and saves it into the live workspace', async () => {
@@ -512,8 +546,9 @@ describe('AssessmentPage tracking metadata', () => {
 
     expect(screen.getByText('new_file.py')).toBeInTheDocument();
 
+    const saveButton = await screen.findByRole('button', { name: /^Save$/i });
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+      fireEvent.click(saveButton);
     });
 
     await waitFor(() => expect(mockSaveRepoFile).toHaveBeenCalledTimes(1));
@@ -531,8 +566,14 @@ describe('AssessmentPage tracking metadata', () => {
       ai_mode: 'claude_cli_terminal',
       task: {
         name: 'Run error task',
-        starter_code: 'broken(',
         duration_minutes: 30,
+        // Editor + Run reveal only after a repo file is opened (chat-centred
+        // workspace), so seed a single-file repo and select it below.
+        repo_structure: {
+          files: {
+            'src/main.py': 'broken(',
+          },
+        },
       },
     };
 
@@ -549,7 +590,11 @@ describe('AssessmentPage tracking metadata', () => {
     render(<AssessmentPage token="tok-run-error" startData={startData} />);
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /^Run$/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /^main\.py$/i }));
+    });
+    const runButton = await screen.findByRole('button', { name: /^Run$/i });
+    await act(async () => {
+      fireEvent.click(runButton);
     });
 
     await waitFor(() => expect(mockExecute).toHaveBeenCalledTimes(1));

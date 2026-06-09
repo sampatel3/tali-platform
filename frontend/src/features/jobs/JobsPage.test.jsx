@@ -20,6 +20,7 @@ vi.mock('../../shared/api', () => ({
   },
   agent: {
     status: vi.fn(),
+    rolesBreakdown: vi.fn(),
     orgStatus: vi.fn(),
     pauseAll: vi.fn(),
     resumeAll: vi.fn(),
@@ -59,6 +60,7 @@ describe('JobsPage Workable sync states', () => {
     apiClient.organizations.get.mockResolvedValue({ data: baseOrg });
     apiClient.tasks.list.mockResolvedValue({ data: [] });
     apiClient.agent.status.mockResolvedValue({ data: {} });
+    apiClient.agent.rolesBreakdown.mockResolvedValue({ data: [] });
     apiClient.agent.orgStatus.mockResolvedValue({
       data: { org_budget_spent_cents: 4200, org_budget_cap_cents: 9000 },
     });
@@ -154,7 +156,7 @@ describe('JobsPage Workable sync states', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '+ New role' }));
 
-    expect(await screen.findByText('Set up a role in three quick steps.')).toBeInTheDocument();
+    expect(await screen.findByText('Name the role, attach a job spec, and link the task(s) candidates take.')).toBeInTheDocument();
   });
 
   it('shows AGENT PAUSED (not AGENT ON) for an enabled-but-paused role', async () => {

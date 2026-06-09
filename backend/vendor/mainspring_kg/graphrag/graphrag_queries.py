@@ -317,8 +317,13 @@ def skill_to_outcome_paths(
               -[:APPLIED_FOR]->(role:Role)
         WHERE coalesce(role.role_family, role.role_id) =
               coalesce(target.role_family, target.role_id)
-        MATCH (other)-[:RESULTED_IN]->(o:HiringOutcome {group_id: $group_id})
-        WHERE (o.observed_at IS NULL OR o.observed_at <= $t)
+        // OPTIONAL so the denominator is ALL applicants with the skill in the
+        // role family, not only those carrying a materialised outcome node.
+        // Under positive-only outcome sync (2026-06-07) a non-hired candidate
+        // has no HiringOutcome node; counting them as non-hired here yields
+        // the true base hire rate instead of ~100%.
+        OPTIONAL MATCH (other)-[:RESULTED_IN]->(o:HiringOutcome {group_id: $group_id})
+              WHERE (o.observed_at IS NULL OR o.observed_at <= $t)
         RETURN s.name AS skill,
                count(DISTINCT other) AS candidates_with_skill,
                avg(CASE WHEN o.outcome_type = 'hired' THEN 1.0 ELSE 0.0 END) AS hire_rate,

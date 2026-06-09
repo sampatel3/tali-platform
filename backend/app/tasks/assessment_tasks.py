@@ -775,6 +775,11 @@ def sync_workable_daily_candidates():
 # ``already_running`` — the user is silently locked out until someone
 # runs a manual SQL UPDATE.
 _STUCK_RUN_TIMEOUT_HOURS = 6
+# A dead worker stops bumping the run's heartbeat (``updated_at``, written as the
+# runner persists progress) long before the 6h absolute ceiling. Reaping on a
+# stale heartbeat clears a zombie within ~30m instead of locking the org out for
+# hours; a healthy run writes progress far more often than this.
+_STUCK_RUN_HEARTBEAT_MINUTES = 30
 
 
 @celery_app.task
@@ -801,18 +806,32 @@ def reap_stuck_workable_sync_runs():
 
     db: Session = SessionLocal()
     try:
-        threshold = datetime.now(timezone.utc) - timedelta(hours=_STUCK_RUN_TIMEOUT_HOURS)
-        stuck = (
+        now = datetime.now(timezone.utc)
+        threshold = now - timedelta(hours=_STUCK_RUN_TIMEOUT_HOURS)
+        heartbeat_cutoff = now - timedelta(minutes=_STUCK_RUN_HEARTBEAT_MINUTES)
+        # A run is dead if it's blown the absolute 6h ceiling OR its heartbeat
+        # (updated_at) has gone stale — the latter catches a worker that died
+        # minutes in, instead of holding the org's sync lock for hours.
+        running_runs = (
             db.query(WorkableSyncRun)
             .filter(
                 WorkableSyncRun.status == "running",
                 WorkableSyncRun.finished_at.is_(None),
-                WorkableSyncRun.started_at < threshold,
             )
             .all()
         )
-
-        now = datetime.now(timezone.utc)
+        stuck = []
+        for run in running_runs:
+            beat = run.updated_at or run.started_at
+            if beat is not None and beat.tzinfo is None:
+                beat = beat.replace(tzinfo=timezone.utc)
+            started = run.started_at
+            if started is not None and started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            if (started is not None and started < threshold) or (
+                beat is None or beat < heartbeat_cutoff
+            ):
+                stuck.append(run)
         org_ids_from_runs: set[int] = set()
         for run in stuck:
             run.status = "failed"

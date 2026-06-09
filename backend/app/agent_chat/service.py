@@ -159,6 +159,27 @@ def _is_live_role(role: Role) -> bool:
     return str(state).strip().lower() == "published"
 
 
+# Agent-first grouping of the sidebar list — each role lands in the FIRST section
+# it matches, so the agents you're actively running sit at the top.
+_GROUP_ORDER = {"on_paused": 0, "previously_on": 1, "starred": 2, "active": 3}
+
+
+def _agent_group(role: Role) -> str:
+    """Which section this role belongs in (first match wins):
+      on_paused     — agent on or paused (you're actively running it)
+      previously_on — the agent RAN before but is off now (agent_last_run_at set)
+      starred       — a starred role with no current/past agent
+      active        — any other (live) role in the list
+    """
+    if bool(role.agentic_mode_enabled) or role.agent_paused_at is not None:
+        return "on_paused"
+    if role.agent_last_run_at is not None:
+        return "previously_on"
+    if bool(getattr(role, "starred_for_auto_sync", False)):
+        return "starred"
+    return "active"
+
+
 def list_agent_conversations(
     db: Session, *, organization_id: int, user: User
 ) -> list[dict[str, Any]]:
@@ -184,7 +205,14 @@ def list_agent_conversations(
             )
             .all()
         )
-        if _is_live_role(r) or bool(r.agentic_mode_enabled) or int(r.id) in convo_role_ids
+        if (
+            _is_live_role(r)
+            or bool(r.agentic_mode_enabled)
+            or r.agent_paused_at is not None
+            or r.agent_last_run_at is not None
+            or bool(getattr(r, "starred_for_auto_sync", False))
+            or int(r.id) in convo_role_ids
+        )
     ]
     if not roles:
         return []
@@ -259,6 +287,11 @@ def list_agent_conversations(
                 "agent_enabled": bool(role.agentic_mode_enabled),
                 "agent_paused": role.agent_paused_at is not None,
                 "agent_paused_reason": role.agent_paused_reason,
+                # Grouping signals (agent-first sections, computed once here).
+                "group": _agent_group(role),
+                "starred": bool(getattr(role, "starred_for_auto_sync", False)),
+                "is_live": _is_live_role(role),
+                "ever_ran": role.agent_last_run_at is not None,
                 "unread_messages": unread_n,
                 "open_questions": open_q,
                 "pending_decisions": pending_d,
@@ -269,11 +302,11 @@ def list_agent_conversations(
             }
         )
 
-    # Most-active first: recent activity, then attention count.
-    items.sort(
-        key=lambda it: (it["last_message_at"] or "", it["attention"]),
-        reverse=True,
-    )
+    # Within a group: most-active first (recent activity, then attention). Then a
+    # stable sort by group order puts the agents you're running on top while
+    # preserving that within-group recency.
+    items.sort(key=lambda it: (it["last_message_at"] or "", it["attention"]), reverse=True)
+    items.sort(key=lambda it: _GROUP_ORDER.get(it["group"], 9))
     return items
 
 
