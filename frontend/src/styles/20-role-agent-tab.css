@@ -592,3 +592,37 @@
   line-height: 1.55;
 }
 
+/* Warning: the role's linked Workable job is archived/closed/draft, so Taali
+   acts locally only (no upstream sync). Amber = caution (design-system token);
+   a true alert, distinct from the purple informational surfaces. */
+.mc-agent-warn {
+  display: flex;
+  gap: 0.7rem;
+  align-items: flex-start;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--amber) 12%, var(--bg-2));
+  border: 1px solid color-mix(in oklab, var(--amber) 40%, var(--line));
+  border-left: 3px solid var(--amber);
+}
+.mc-agent-warn-icon {
+  flex-shrink: 0;
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-top: 0.1rem;
+  color: var(--amber);
+}
+.mc-agent-warn-title {
+  font-weight: 700;
+  font-size: 0.875rem;
+  color: var(--ink);
+  margin-bottom: 0.2rem;
+  letter-spacing: -0.01em;
+}
+.mc-agent-warn-body {
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+

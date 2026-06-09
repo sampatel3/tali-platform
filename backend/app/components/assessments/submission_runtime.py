@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from ...components.scoring.analytics import compute_all_heuristics
 from ...components.scoring.service import calculate_mvp_score, generate_heuristic_summary
+from ...components.scoring.tiers import compute_tier_reached, cv_claim_consistency
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
@@ -805,6 +806,26 @@ def submit_assessment_impl(
             )
             rubric_breakdown = {"error": "rubric_scoring_failed"}
 
+    # --- 3c. Difficulty tier reached + CV-claim-consistency tell (central
+    # tiers model). Computed from the test pass-ratio + the judgment dimension.
+    # The soft cv_claim_consistency signal surfaces for recruiter review and
+    # NEVER gates the score. ---
+    _design_score_10 = next(
+        (d.get("score") for d in (rubric_breakdown.get("dimensions") or [])
+         if "design_decisions" in str(d.get("id", ""))),
+        None,
+    )
+    tier_reached = compute_tier_reached(
+        (task.extra_data or {}).get("tiers") if isinstance(task.extra_data, dict) else None,
+        tests_passed=passed,
+        tests_total=total,
+        design_score_10=_design_score_10,
+    )
+    _role_for_tier = locals().get("role_row")
+    cv_consistency = cv_claim_consistency(
+        tier_reached, role_name=getattr(_role_for_tier, "name", None)
+    )
+
     # --- 4. Persist ---
     completion_ts = datetime.now(timezone.utc)
     assessment.status = AssessmentStatus.COMPLETED
@@ -899,6 +920,8 @@ def submit_assessment_impl(
         "detailed_scores": detailed_scores,
         "explanations": explanations,
         "rubric_grading": rubric_breakdown,
+        "tier_reached": tier_reached,
+        "cv_claim_consistency": cv_consistency,
         "score_formula_version": TAALI_SCORING_RUBRIC_VERSION,
         "score_mode": score_mode,
         "score_components": {

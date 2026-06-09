@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
@@ -178,6 +178,57 @@ def _latest_running_run_for_org(db: Session, org_id: int) -> WorkableSyncRun | N
     )
 
 
+# A worker that dies mid-sync (OOM, SIGKILL, container restart) leaves its run
+# row ``status='running'`` with ``finished_at=NULL`` forever, and the in-progress
+# guard then locks the org out of all syncs until the 6h ``reap_stuck_workable_sync_runs``
+# backstop fires. Keying recovery off the heartbeat (``updated_at`` — bumped as the
+# runner writes progress) instead clears a zombie within minutes. A healthy run
+# writes progress far more often than this, so it's a safe "is it dead" signal.
+_STALE_HEARTBEAT_MINUTES = 30
+
+
+def _finalize_stale_running_runs(db: Session, org_id: int) -> list[int]:
+    """Mark this org's ``running`` runs whose heartbeat has gone stale as failed,
+    and clear the org's progress flags, so a fresh sync request recovers from a
+    dead worker immediately instead of waiting for the 6h reaper. Returns the
+    finalized run ids. Flushes (does not commit) — the caller owns the txn."""
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=_STALE_HEARTBEAT_MINUTES)
+    running = (
+        db.query(WorkableSyncRun)
+        .filter(
+            WorkableSyncRun.organization_id == org_id,
+            WorkableSyncRun.status == "running",
+            WorkableSyncRun.finished_at.is_(None),
+        )
+        .all()
+    )
+    cleared: list[int] = []
+    for run in running:
+        beat = run.updated_at or run.started_at
+        if beat is not None and beat.tzinfo is None:
+            beat = beat.replace(tzinfo=timezone.utc)
+        if beat is not None and beat >= cutoff:
+            continue  # still heartbeating — leave it alone
+        run.status = "failed"
+        run.finished_at = now
+        run.phase = run.phase or "aborted"
+        errors = list(run.errors or [])
+        errors.append(
+            f"stale-heartbeat reaper: no progress update for >{_STALE_HEARTBEAT_MINUTES}m"
+        )
+        run.errors = errors
+        cleared.append(int(run.id))
+    if cleared:
+        org = db.query(Organization).filter(Organization.id == org_id).first()
+        if org is not None:
+            org.workable_sync_started_at = None
+            org.workable_sync_progress = None
+            org.workable_sync_cancel_requested_at = None
+        db.flush()
+    return cleared
+
+
 def _db_snapshot_for_org(db: Session, org_id: int) -> dict:
     return {
         "roles_active": (
@@ -303,7 +354,13 @@ def kick_off_filtered_sync(
         return None
     if not job_shortcodes:
         return None
+    # Recover instantly from a worker that died mid-sync: finalize any
+    # stale-heartbeat zombie run so it doesn't block this request until the 6h
+    # reaper. A genuinely in-flight run is left alone and still short-circuits.
+    cleared = _finalize_stale_running_runs(db, org.id)
     if _latest_running_run_for_org(db, org.id) is not None:
+        if cleared:
+            db.commit()  # persist the reap even though we won't start a new run
         return None
 
     requested_mode = (mode or "full").strip().lower()

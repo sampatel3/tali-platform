@@ -144,6 +144,34 @@ def resolve_workable_actor_member_id(org: Organization | None, role: Role | None
     return resolved_workable_action_config(org, role=role).get("actor_member_id")
 
 
+# Workable refuses candidate write-backs (disqualify, stage move) on reqs that
+# aren't live: archived/closed jobs return 403, drafts aren't actionable. When a
+# role's linked job is in one of these states we skip the Workable round-trip and
+# act locally (e.g. reject in Taali only) instead of 403-looping forever.
+WORKABLE_NON_LIVE_JOB_STATES = frozenset({"archived", "closed", "draft"})
+
+
+def workable_job_state(role: Role | None) -> str | None:
+    """The cached Workable job ``state`` for a role's linked job, lowercased.
+
+    ``None`` for manual/Taali-created roles or when the job hasn't been synced.
+    """
+    data = getattr(role, "workable_job_data", None) if role is not None else None
+    if isinstance(data, dict):
+        return str(data.get("state") or "").strip().lower() or None
+    return None
+
+
+def workable_job_syncable(role: Role | None) -> bool:
+    """False when the role's linked Workable job is archived/closed/draft.
+
+    Those reqs reject candidate write-backs (disqualify/move) with a 403, so
+    callers should skip the Workable round-trip and act locally instead. A role
+    with no linked job, or a published job, is syncable.
+    """
+    return workable_job_state(role) not in WORKABLE_NON_LIVE_JOB_STATES
+
+
 def render_workable_note_template(template: str | None, **mapping: Any) -> str | None:
     raw_template = sanitize_text_for_storage(str(template or "").strip())
     if not raw_template:

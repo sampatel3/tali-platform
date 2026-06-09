@@ -11,16 +11,19 @@ const PAGE_FILE_PATTERN = /Page\.(js|jsx|ts|tsx)$/;
 // Hard cap on `*Page.jsx` line counts. The v3 Mission Control redesign
 // pushed several pages well past the original 500-line gate because the
 // canvas hero / dimension grids / evidence cards live inline. The cap
-// here accommodates the redesign reality (JobPipelinePage + Recruiter-
-// SettingsPage + CandidateStandingReportPage all sit in the 2k–2.5k
-// range). Long-term cleanup (extracting subcomponents) is tracked
-// separately; for now the gate's job is to catch *new* bloat past the
-// post-redesign baseline, not to demand a refactor of pages that
-// shipped intentionally large per HANDOFF. Nudged 2625→2650 for the
-// agent-settings save/toggle race fixes (load-token guard + optimistic
-// budget apply) in JobPipelinePage; 2650→2660 to track the post-#278
-// baseline (global interview anchor / dynamic threshold UX), which left
-// JobPipelinePage at 2656 on main on its own.
+// here accommodates the redesign reality (RecruiterSettingsPage +
+// CandidateStandingReportPage still sit in the 2k–2.5k range). The gate's
+// job is to catch *new* bloat past the post-redesign baseline.
+//
+// History: nudged 2625→2650 for the agent-settings save/toggle race fixes
+// in JobPipelinePage; 2650→2660 for the post-#278 baseline (global
+// interview anchor / dynamic threshold UX); then bumped 2660→2700 when
+// PRs #538 + #541 (archived-Workable-job handling) both edited
+// JobPipelinePage off the same parent and landed it at 2691 — the bump
+// instead of a split left main CI red. JobPipelinePage has now been split
+// (the job-spec parser/formatter → jobSpecFormatting.jsx and the Agent
+// settings tab → RoleAgentSettingsTab.jsx), dropping it to ~1.7k, so the
+// cap is restored to 2660 to keep the gate meaningful.
 const MAX_PAGE_LINES = 2660;
 const DISALLOWED_IMPORT_PATTERNS = [
   /from\s+['"][^'"]*lib\/api(?:\.js)?['"]/g,

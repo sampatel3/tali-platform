@@ -40,6 +40,44 @@ export function ImpactCard({ card, onApply, busy }) {
     );
   }
 
+  if (card.type === 'job_spec_change') {
+    const added = card.added || [];
+    const removed = card.removed || [];
+    return (
+      <div className="ac-card ac-card-constraint">
+        <div className="ac-card-head">
+          <FileText size={14} />
+          <span>Job spec updated</span>
+        </div>
+        {added.length > 0 && (
+          <div className="ac-spec-diff">
+            <span className="ac-spec-diff-label add">+ Added</span>
+            <div className="ac-chip-row">
+              {added.map((t, i) => <span key={`a${i}`} className="ac-constraint-chip ac-chip-add">{t}</span>)}
+            </div>
+          </div>
+        )}
+        {removed.length > 0 && (
+          <div className="ac-spec-diff">
+            <span className="ac-spec-diff-label remove">− Removed</span>
+            <div className="ac-chip-row">
+              {removed.map((t, i) => <span key={`r${i}`} className="ac-constraint-chip ac-chip-remove">{t}</span>)}
+            </div>
+          </div>
+        )}
+        {added.length === 0 && removed.length === 0 && (
+          <div className="ac-rescreen-estimate">Same criteria re-derived from the new wording — no chip changes.</div>
+        )}
+        {card.would_rescreen && card.would_rescreen.count > 0 && (
+          <div className="ac-rescreen-estimate">
+            New spec re-derives every criterion — would re-screen ~{card.would_rescreen.count} candidate{card.would_rescreen.count === 1 ? '' : 's'}
+            {typeof card.would_rescreen.est_cost_usd === 'number' ? ` (~$${card.would_rescreen.est_cost_usd})` : ''} — awaiting your OK.
+          </div>
+        )}
+      </div>
+    );
+  }
+
   if (card.type === 'threshold_recommendation' || card.type === 'threshold_simulation') {
     const sim = card.type === 'threshold_simulation';
     const target = sim ? card.simulated_threshold : card.recommended_threshold;

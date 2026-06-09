@@ -141,3 +141,31 @@ def test_bulk_endpoint_enqueues_owned_only(client, db):
     assert mock_delay.called
     enqueued_ids = mock_delay.call_args.args[2]
     assert sorted(enqueued_ids) == sorted([r1.id, r2.id])
+
+
+# --- agent-first grouping ---------------------------------------------------
+def test_sidebar_groups_agent_first(db):
+    """Each role lands in the first matching section: on/paused, then previously-on
+    (agent_last_run_at), then starred, then other active (live)."""
+    from datetime import datetime, timezone
+
+    org = _org(db)
+    user = _user(db, org)
+    r_on = _role(db, org, name="On", agentic=True, live=False)
+    r_prev = _role(db, org, name="Prev", agentic=False, live=False)
+    r_prev.agent_last_run_at = datetime.now(timezone.utc)
+    r_star = _role(db, org, name="Star", agentic=False, live=False)
+    r_star.starred_for_auto_sync = True
+    r_active = _role(db, org, name="Active", agentic=False, live=True)
+    db.flush()
+
+    items = list_agent_conversations(db, organization_id=org.id, user=user)
+    by_role = {it["role_id"]: it for it in items}
+    assert by_role[r_on.id]["group"] == "on_paused"
+    assert by_role[r_prev.id]["group"] == "previously_on"
+    assert by_role[r_star.id]["group"] == "starred"
+    assert by_role[r_active.id]["group"] == "active"
+
+    # Sections come out in agent-first order.
+    order = [it["group"] for it in items]
+    assert order.index("on_paused") < order.index("previously_on") < order.index("starred") < order.index("active")

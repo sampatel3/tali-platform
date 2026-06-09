@@ -3,5 +3,10 @@
   "buildCommand": "cd frontend && npm run build",
   "outputDirectory": "frontend/dist",
   "installCommand": "cd frontend && npm install",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "rewrites": [
+    { "source": "/agentic-hiring", "destination": "/agentic-hiring.html" },
+    { "source": "/ai-native-hiring", "destination": "/ai-native-hiring.html" },
+    { "source": "/ai-native-assessments", "destination": "/ai-native-assessments.html" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
 }

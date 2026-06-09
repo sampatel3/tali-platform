@@ -122,7 +122,29 @@ def _try_workable_disqualify(
     from ..services.workable_actions_service import (
         WorkableWritebackError,
         disqualify_candidate_in_workable,
+        workable_job_state,
+        workable_job_syncable,
     )
+
+    if not workable_job_syncable(getattr(app, "role", None)):
+        # Archived/closed/draft Workable req — Workable 403s any disqualify
+        # there. Skip the sync entirely; the local reject (transition_outcome in
+        # run()) stands and the Taali fallback email notifies the candidate, so
+        # the candidate still resolves to 'rejected' instead of waiting forever.
+        append_application_event(
+            db,
+            app=app,
+            event_type="workable_writeback_skipped",
+            actor_type=actor.type,
+            actor_id=actor.event_actor_id,
+            reason="Workable req not live (archived/closed) — rejected in Taali only",
+            metadata={
+                "action": "disqualify",
+                "source": "reject_application",
+                "workable_job_state": workable_job_state(getattr(app, "role", None)),
+            },
+        )
+        return "fallback"
 
     try:
         result = disqualify_candidate_in_workable(

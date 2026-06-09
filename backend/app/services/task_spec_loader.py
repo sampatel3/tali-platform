@@ -417,6 +417,41 @@ def _validate_human_testing_checklist(spec: Dict[str, Any]) -> List[str]:
     return errors
 
 
+def _validate_tiers(spec: Dict[str, Any]) -> List[str]:
+    """Optional ``tiers`` block — the L1/L2/L3 difficulty ladder. When present it
+    MUST declare L1, L2, L3, each with a non-empty label and a numeric
+    ``min_tests_ratio`` in [0, 1] that is non-decreasing across tiers, and L3
+    must be the design-gated (judgment) tier."""
+    errors: List[str] = []
+    tiers = spec.get("tiers")
+    if tiers is None:
+        return errors  # tiers are opt-in per task
+    if not isinstance(tiers, dict):
+        return ["tiers must be an object"]
+    expected = ["L1", "L2", "L3"]
+    if set(tiers.keys()) != set(expected):
+        errors.append(f"tiers must declare exactly {expected}; got {sorted(tiers.keys())}")
+    prev = -1.0
+    for tier in expected:
+        cfg = tiers.get(tier)
+        if not isinstance(cfg, dict):
+            errors.append(f"tiers.{tier} must be an object")
+            continue
+        if not str(cfg.get("label") or "").strip():
+            errors.append(f"tiers.{tier}.label is required")
+        ratio = cfg.get("min_tests_ratio")
+        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not (0.0 <= float(ratio) <= 1.0):
+            errors.append(f"tiers.{tier}.min_tests_ratio must be a number in [0, 1]")
+        else:
+            if float(ratio) < prev:
+                errors.append(f"tiers.{tier}.min_tests_ratio ({ratio}) must be >= the previous tier's")
+            prev = float(ratio)
+    l3 = tiers.get("L3")
+    if isinstance(l3, dict) and not l3.get("requires_design"):
+        errors.append("tiers.L3 must set requires_design=true (it is the judgment tier)")
+    return errors
+
+
 def validate_task_spec(spec: Dict[str, Any]) -> TaskSpecValidationResult:
     task_id = spec.get("task_id") or "unknown"
     errors: List[str] = []
@@ -456,6 +491,7 @@ def validate_task_spec(spec: Dict[str, Any]) -> TaskSpecValidationResult:
     errors.extend(_validate_workspace_bootstrap(spec))
     errors.extend(_validate_role_alignment(spec, rubric_dimensions))
     errors.extend(_validate_human_testing_checklist(spec))
+    errors.extend(_validate_tiers(spec))
 
     repo_name = str(((spec.get("repo_structure") or {}).get("name")) or "").strip()
     bootstrap_working_dir = str(((spec.get("workspace_bootstrap") or {}).get("working_dir")) or "").strip()

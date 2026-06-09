@@ -159,6 +159,11 @@ class RoleResponse(BaseModel):
     # Workable job lifecycle state: published | draft | archived | closed.
     # None for manual/Taali-created roles. ``published`` == live/recruiting.
     workable_job_state: Optional[str] = None
+    # False when the linked Workable job is archived/closed/draft — Workable
+    # rejects candidate write-backs (disqualify/move) there, so Taali acts
+    # locally only (no sync). True for published jobs and manual roles. The UI
+    # uses this to grey out the role + disable Workable-write toggles.
+    workable_job_live: bool = True
     job_spec_filename: Optional[str] = None
     job_spec_text: Optional[str] = None
     job_spec_uploaded_at: Optional[datetime] = None

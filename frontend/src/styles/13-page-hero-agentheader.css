@@ -230,12 +230,42 @@
   align-items: center;
   gap: 11px;
   height: 52px;
+  /* Fixed width (per viewport) so toggling on/off/paused never resizes the
+     box — it's ONE persistent box whose look morphs in place. Wide enough
+     that the activity/tick line stays visible in every state. */
+  width: clamp(460px, 36vw, 540px);
   border-radius: 13px;
   padding: 0 8px 0 13px;
   position: relative;
+  isolation: isolate;
   overflow: hidden;
   flex-shrink: 0;
+  /* OFF is the resting look; ON / PAUSED crossfade in via the ::before /
+     ::after overlays below (a gradient<->solid background can't be tweened,
+     but overlay opacity can). The border / text / glow tween directly. */
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  transition: border-color 360ms ease, color 360ms ease, box-shadow 360ms ease;
 }
+/* Status fills as opacity-crossfaded overlays. ::before = ON (dark purple),
+   ::after = PAUSED (amber). z-index:-1 sits above the box background but below
+   the content (the box is its own stacking context via isolation). */
+.abar::before,
+.abar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 360ms ease;
+}
+.abar::before { background: linear-gradient(135deg, #3a1d6e 0%, #241147 100%); }
+.abar::after  { background: color-mix(in oklab, var(--amber) 13%, var(--bg-2)); }
+.abar-on::before    { opacity: 1; }
+.abar-paused::after { opacity: 1; }
 .ab-spark {
   width: 30px;
   height: 30px;
@@ -245,6 +275,7 @@
   align-items: center;
   justify-content: center;
   position: relative;
+  transition: background 360ms ease, border-color 360ms ease, color 360ms ease;
 }
 .ab-label {
   font-family: var(--font-mono);
@@ -254,6 +285,7 @@
   text-transform: uppercase;
   white-space: nowrap;
   flex-shrink: 0;
+  transition: color 360ms ease;
 }
 .ab-pending {
   font-family: var(--font-mono);
@@ -265,11 +297,13 @@
 }
 .ab-tick {
   font-size: 12.5px;
+  /* Absorb the slack so the fixed-width box stays put across states. */
+  flex: 1;
   min-width: 0;
-  max-width: 210px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: color 360ms ease;
 }
 .ab-budget { display: flex; flex-direction: column; gap: 4px; width: 92px; flex-shrink: 0; }
 .ab-budget-amt { font-family: var(--font-mono); font-size: 11px; text-align: right; white-space: nowrap; }
@@ -314,8 +348,8 @@
 /* ON — filled with the original dark-purple hero colour, glowing + pulsing
    spark. The unmistakable "this agent is live" state. */
 .abar-on {
-  background: linear-gradient(135deg, #3a1d6e 0%, #241147 100%);
-  border: 1px solid rgba(196, 165, 253, .5);
+  /* background lives on .abar::before (crossfaded); just the chrome here. */
+  border-color: rgba(196, 165, 253, .5);
   color: #fff;
   box-shadow: 0 6px 20px -8px rgba(58, 29, 110, .6);
   animation: abarPulse 3.6s ease-in-out infinite;
@@ -340,26 +374,45 @@
 .abar-on .ab-btn:hover { background: rgba(255, 255, 255, .2); }
 .abar-on .ab-btn.primary { background: #fff; color: var(--purple-2); border-color: transparent; }
 
-/* PAUSED — amber */
+/* PAUSED — amber (fill on .abar::after) */
 .abar-paused {
-  background: color-mix(in oklab, var(--amber) 12%, var(--bg-2));
-  border: 1px solid color-mix(in oklab, var(--amber) 45%, var(--line));
+  border-color: color-mix(in oklab, var(--amber) 45%, var(--line));
   color: color-mix(in oklab, var(--amber) 72%, var(--ink));
 }
 .abar-paused .ab-spark { background: var(--bg-2); border: 1px solid color-mix(in oklab, var(--amber) 45%, var(--line)); color: color-mix(in oklab, var(--amber) 70%, var(--ink)); }
 .abar-paused .ab-label { color: color-mix(in oklab, var(--amber) 72%, var(--ink)); }
 .abar-paused .ab-tick { color: color-mix(in oklab, var(--amber) 60%, var(--ink)); }
+/* PAUSED shows the budget figure but not a live meter — the bar carries no
+   fill in this state, so its (invisible) 4px row would otherwise lift the
+   amount off the strip's baseline, above PAUSED / the pending pill / the tick.
+   Drop it so the amount sits centred in line with the rest of the text. */
+.abar-paused .ab-budget-bar { display: none; }
 .abar-paused .ab-btn.primary { background: var(--purple); color: #fff; }
 .abar-paused .ab-btn.ic { background: var(--bg-2); border-color: color-mix(in oklab, var(--amber) 45%, var(--line)); color: color-mix(in oklab, var(--amber) 70%, var(--ink)); }
 
-/* OFF — quiet light, with the inline activator */
-.abar-off { background: var(--bg); border: 1px solid var(--line); color: var(--ink-soft); }
+/* OFF — quiet light (the .abar base IS the off look); just the inner bits. */
 .abar-off .ab-spark { background: var(--bg-3); border: 1px solid var(--line); color: var(--mute); }
 .abar-off .ab-label { color: var(--ink-soft); }
 .abar-off .ab-tick { color: var(--mute); }
 .abar-off .ab-capbox { background: var(--bg-2); border: 1px solid var(--line); color: var(--ink); }
 .abar-off .ab-btn.primary { background: var(--purple); color: #fff; }
 .abar-off .ab-btn.primary:hover { background: color-mix(in oklab, var(--purple) 88%, white); }
+
+/* BLOCK — the agent strip reused full-width as a section header (e.g. the
+   "Agent assessed" band over the candidate report's scored dimensions). Same
+   ON treatment, just unclamped + carrying a trailing score instead of buttons. */
+.abar.abar-block { width: 100%; padding-right: 16px; margin-bottom: 16px; }
+.abar-block .ab-assess {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  flex-shrink: 0;
+  padding-left: 13px;
+  border-left: 1px solid rgba(255, 255, 255, .18);
+  font-family: var(--font-mono);
+}
+.abar-block .ab-assess b { font-size: 18px; font-weight: 700; color: #fff; line-height: 1; }
+.abar-block .ab-assess span { font-size: 11px; color: rgba(255, 255, 255, .6); }
 
 /* ============== Sub-strip (role-detail facts + actions) ============== */
 .agent-substrip {
@@ -446,10 +499,58 @@
   .abar { width: 100%; }
   .ab-tick { max-width: none; flex: 1; }
 }
+
+/* Tablet / large phone: the role-detail sub-strip can't fit its facts AND the
+   row of action buttons (e.g. "237 pending → Home · Share · Edit role · Invite
+   candidate") on one line — the facts get squeezed to zero width so their
+   values disappear and the buttons spill past the viewport. Stack the actions
+   under the facts so the Location / Department / Employment / Linked-task
+   values stay readable and the buttons wrap instead of colliding. */
+@media (max-width: 720px) {
+  .agent-substrip { padding-top: 10px; padding-bottom: 10px; }
+  .agent-substrip-inner {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    min-height: 0;
+  }
+  .ah-substrip-actions { flex-wrap: wrap; }
+  .ah-facts { gap: 8px 22px; }
+}
+
 @media (max-width: 600px) {
   .agent-header { padding: 16px 18px 16px 21px; }
-  .agent-substrip { padding: 0 18px 0 21px; }
+  .agent-substrip { padding: 10px 18px 10px 21px; }
   .agent-header-left p.ah-subtitle { font-size: 0.8125rem; }
+
+  /* Phone agent strip: keep it a self-contained card that never spills past
+     the viewport. The activity line ("Monthly budget reached", "Scoring a
+     candidate"…) drops to its own row so the status label + the
+     Pause / Resume / settings buttons on row 1 are ALWAYS visible — they were
+     previously clipped by `overflow: hidden`, which hid the Resume button on an
+     auto-paused role. The in-bar budget meter is redundant on phones (the role
+     budget tile and KPI tiles already show spend) and is the first thing to
+     overflow, so it's dropped to make room. */
+  .abar {
+    height: auto;
+    min-height: 48px;
+    flex-wrap: wrap;
+    padding: 9px 11px;
+    row-gap: 8px;
+  }
+  .abar .ab-tick {
+    order: 6;
+    flex: 1 0 100%;
+    white-space: normal;
+    line-height: 1.3;
+  }
+  .abar .ab-tick:empty { display: none; }
+  .abar .ab-budget { display: none; }
+  .abar .ab-actions,
+  .abar .ab-activate {
+    order: 4;
+    margin-left: auto;
+  }
 }
 
 /* ============== Nav agent-running chip (Jobs / Role detail only) ============== */

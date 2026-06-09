@@ -119,52 +119,72 @@ const AskList = ({ conversations, activeId, onSelect, onNew, onDelete }) => {
   );
 };
 
-const AgentList = ({ agents, activeRoleId, onSelectAgent }) => (
-  <div className="cp-side-list">
-    {!agents?.length ? (
-      <div className="cp-group">
-        <div className="cp-group-h">Your agents</div>
-        <div className="cp-side-hint">
-          No live roles yet. Publish a role to chat with (or activate) its agent.
+// Agent-first sections — each role appears once in the first that fits. Same
+// `group` the backend computes + the Home rail uses.
+const AGENT_GROUP_ORDER = ['on_paused', 'previously_on', 'starred', 'active'];
+const AGENT_GROUP_LABELS = {
+  on_paused: 'Agent on / paused',
+  previously_on: 'Previously on',
+  starred: 'Starred',
+  active: 'Active roles',
+};
+
+const AgentList = ({ agents, activeRoleId, onSelectAgent }) => {
+  const sections = AGENT_GROUP_ORDER
+    .map((key) => ({ key, label: AGENT_GROUP_LABELS[key], rows: (agents || []).filter((a) => (a.group || 'active') === key) }))
+    .filter((s) => s.rows.length > 0);
+
+  const renderAgent = (a) => {
+    const questions = (a.unread_messages || 0) + (a.open_questions || 0);
+    const status = a.agent_paused ? 'paused' : a.agent_enabled ? 'on' : 'off';
+    const preview = a.agent_paused
+      ? `Paused · ${a.agent_paused_reason || 'budget reached'}`
+      : a.last_message_preview
+        || (a.agent_enabled ? 'No messages yet' : 'Agent off — tap to set up');
+    return (
+      <button
+        key={a.role_id}
+        type="button"
+        className={`cp-agent ${a.role_id === activeRoleId ? 'cp-active' : ''}`}
+        onClick={() => onSelectAgent(a.role_id)}
+        title={a.role_name}
+      >
+        <span className={`cp-agent-stat cp-agent-stat-${status}`} aria-hidden="true">
+          {status === 'on' ? <Sparkles size={12} strokeWidth={2} /> : <span className="cp-agent-dot" />}
+        </span>
+        <span className="cp-agent-body">
+          <span className="cp-agent-role">{a.role_name}</span>
+          <span className="cp-agent-preview">{preview}</span>
+        </span>
+        {questions > 0 ? (
+          <span className="cp-agent-badge" title={`${questions} awaiting your reply`}>
+            {fmtCount(questions)}
+          </span>
+        ) : null}
+      </button>
+    );
+  };
+
+  return (
+    <div className="cp-side-list">
+      {!agents?.length ? (
+        <div className="cp-group">
+          <div className="cp-group-h">Your agents</div>
+          <div className="cp-side-hint">
+            No live roles yet. Publish a role to chat with (or activate) its agent.
+          </div>
         </div>
-      </div>
-    ) : (
-      <div className="cp-group">
-        <div className="cp-group-h">Your agents</div>
-        {agents.map((a) => {
-          const questions = (a.unread_messages || 0) + (a.open_questions || 0);
-          const status = a.agent_paused ? 'paused' : a.agent_enabled ? 'on' : 'off';
-          const preview = a.agent_paused
-            ? `Paused · ${a.agent_paused_reason || 'budget reached'}`
-            : a.last_message_preview
-              || (a.agent_enabled ? 'No messages yet' : 'Agent off — tap to set up');
-          return (
-            <button
-              key={a.role_id}
-              type="button"
-              className={`cp-agent ${a.role_id === activeRoleId ? 'cp-active' : ''}`}
-              onClick={() => onSelectAgent(a.role_id)}
-              title={a.role_name}
-            >
-              <span className={`cp-agent-stat cp-agent-stat-${status}`} aria-hidden="true">
-                {status === 'on' ? <Sparkles size={12} strokeWidth={2} /> : <span className="cp-agent-dot" />}
-              </span>
-              <span className="cp-agent-body">
-                <span className="cp-agent-role">{a.role_name}</span>
-                <span className="cp-agent-preview">{preview}</span>
-              </span>
-              {questions > 0 ? (
-                <span className="cp-agent-badge" title={`${questions} awaiting your reply`}>
-                  {fmtCount(questions)}
-                </span>
-              ) : null}
-            </button>
-          );
-        })}
-      </div>
-    )}
-  </div>
-);
+      ) : (
+        sections.map((sec) => (
+          <div key={sec.key} className="cp-group">
+            <div className="cp-group-h">{sec.label}</div>
+            {sec.rows.map(renderAgent)}
+          </div>
+        ))
+      )}
+    </div>
+  );
+};
 
 const Sidebar = ({
   mode = 'ask',

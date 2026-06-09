@@ -12,6 +12,7 @@ behind ``client.run_async``.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import datetime, timezone
 from typing import Iterable
@@ -81,6 +82,7 @@ def sync_candidate(
     bill_organization_id: int | None = None,
     bill_role_id: int | None = None,
     bill_user_id: int | None = None,
+    force_resync: bool = False,
 ) -> int:
     """Ingest one candidate's profile (+ optional raw CV text) into Graphiti.
 
@@ -91,6 +93,14 @@ def sync_candidate(
     When ``bill_organization_id`` is set (typically by the per-role Process
     cascade), each successful episode is also recorded as a graph_sync
     UsageEvent against the org/role so the cost flows into the role budget.
+
+    **Unchanged-content skip.** The listeners fire on every Candidate AND
+    CandidateApplication update, but an application stage change doesn't touch
+    the profile episodes. To avoid re-running the full per-candidate Graphiti
+    extraction (several Haiku calls per episode) for zero graph delta, we
+    fingerprint the episode set and skip the dispatch when it matches the last
+    fully-synced fingerprint. ``force_resync=True`` bypasses the skip (e.g. a
+    backfill after a Graphiti schema bump that must re-extract every candidate).
     """
     if not graph_client.is_configured():
         return 0
@@ -105,6 +115,18 @@ def sync_candidate(
     )
     cv_ep = episode_module.build_cv_text_episode(candidate) if include_cv_text else None
     episodes = profile_eps + ([cv_ep] if cv_ep else [])
+    if not episodes:
+        return 0
+
+    content_hash = _episodes_content_hash(episodes)
+    if (
+        db is not None
+        and not force_resync
+        and _content_hash_unchanged(db, int(candidate.id), content_hash)
+    ):
+        # Graph content identical to the last full sync — skip the extraction.
+        return 0
+
     sent = episode_module.dispatch(
         episodes,
         db=db,
@@ -115,7 +137,13 @@ def sync_candidate(
     )
 
     if db is not None and sent > 0:
-        _record_sync_state(db, int(candidate.id))
+        # Only record the fingerprint when EVERY episode landed; a partial
+        # failure leaves content_hash as-is so the next firing retries
+        # instead of being skipped as "unchanged".
+        full = sent == len(episodes)
+        _record_sync_state(
+            db, int(candidate.id), content_hash=content_hash if full else None
+        )
     return sent
 
 
@@ -322,8 +350,51 @@ def sync_all_organizations(
     return aggregate
 
 
-def _record_sync_state(db: Session, candidate_id: int) -> None:
-    """Stamp graph_sync_state.last_synced_at = now() for this candidate."""
+def _episodes_content_hash(episodes: list) -> str:
+    """sha256 over the (name, body) of every episode in dispatch order.
+
+    Stable for identical content; changes when any episode's text changes or
+    an episode is added/removed. Cheap relative to one Graphiti extraction.
+    """
+    h = hashlib.sha256()
+    for ep in episodes:
+        h.update((ep.name or "").encode("utf-8"))
+        h.update(b"\x00")
+        h.update((ep.body or "").encode("utf-8"))
+        h.update(b"\x00")
+    return h.hexdigest()
+
+
+def _content_hash_unchanged(db: Session, candidate_id: int, content_hash: str) -> bool:
+    """True iff this candidate's last FULL sync recorded the same fingerprint.
+
+    Read-only; never raises — a lookup failure returns False so we fall back
+    to re-syncing (correctness over the cost optimisation).
+    """
+    try:
+        from ..models.graph_sync_state import GraphSyncState
+
+        row = (
+            db.query(GraphSyncState.content_hash)
+            .filter(GraphSyncState.candidate_id == candidate_id)
+            .one_or_none()
+        )
+        return row is not None and row[0] is not None and row[0] == content_hash
+    except Exception as exc:
+        logger.debug("graph_sync_state hash read skipped: %s", exc)
+        return False
+
+
+def _record_sync_state(
+    db: Session, candidate_id: int, *, content_hash: str | None = None
+) -> None:
+    """Stamp graph_sync_state.last_synced_at = now() for this candidate.
+
+    When ``content_hash`` is provided (a fully-successful sync) it's also
+    stored so the next unchanged re-sync can be skipped. A None content_hash
+    (partial send) leaves any prior fingerprint untouched so the candidate is
+    re-synced next time rather than skipped.
+    """
     try:
         from ..models.graph_sync_state import GraphSyncState
 
@@ -339,11 +410,14 @@ def _record_sync_state(db: Session, candidate_id: int) -> None:
                     candidate_id=candidate_id,
                     last_synced_at=now_utc,
                     sync_version=1,
+                    content_hash=content_hash,
                 )
             )
         else:
             existing.last_synced_at = now_utc
             existing.sync_version = (existing.sync_version or 0) + 1
+            if content_hash is not None:
+                existing.content_hash = content_hash
         db.commit()
     except Exception as exc:
         logger.debug("graph_sync_state write skipped: %s", exc)

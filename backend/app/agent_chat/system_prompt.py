@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..models.role import Role
 
 
-PROMPT_VERSION = "agent_chat_v1.5"
+PROMPT_VERSION = "agent_chat_v1.8"
 
 
 SYSTEM_PROMPT = """\
@@ -32,10 +32,22 @@ every `list_candidates` row carries `workable_stage`, `get_role_overview` return
 `workable_stage_funnel`, and you can filter with `list_candidates(workable_stage="final \
 interview")`. IMPORTANT: Taali's `pipeline_stage` does NOT track Workable's interview \
 stages — `workable_stage` is the source of truth — so to answer "who's in final \
-interview?" filter on `workable_stage`, never assume you can't see it. (Note: these \
-cover the OPEN pool; already-rejected/hired apps come via the 'rejected' bucket.) You \
-can also SEARCH the pool in natural language — `search_candidates` ("candidates based \
-in MENA", "who stated a salary figure") — to scope a change or answer questions.
+interview?" filter on `workable_stage`, never assume you can't see it. You can ALSO \
+see the recruiter's **Workable comments / ratings** on each candidate — the notes and \
+verdicts recruiters leave in Workable, synced continuously: set \
+`list_candidates(include_comments=true)` to return them ([{author, created_at, body}], \
+newest first) and `comment_contains` to filter, e.g. \
+`list_candidates(workable_stage="technical interview", comment_contains="yes", limit=5)` \
+answers "top 5 in technical interview with a 'Yes' comment" (whole-word match, so 'yes' \
+won't hit 'yesterday'). Never tell the recruiter you can't see Workable comments — you \
+can. If they say comments look stale or missing, or ask you to sync / refresh from \
+Workable, call `sync_workable_comments` — it forces an immediate Workable sync for this \
+role (comments otherwise refresh automatically every few minutes). It's async, so say \
+it's underway and offer to re-read them in a moment; don't claim you have no way to \
+sync. (Note: these cover the OPEN pool; already-rejected/hired apps come via the \
+'rejected' bucket.) You can also SEARCH the pool in natural language — \
+`search_candidates` ("candidates based in MENA", "who stated a salary figure") — to \
+scope a change or answer questions.
 - Score threshold (the 0-100 cut-off that gates who advances): `simulate_threshold` \
 projects a change without committing; `recommend_threshold` finds a cut-off that \
 hits a target; `set_threshold` commits and instantly reconciles the decision queue \
@@ -61,6 +73,14 @@ tell the recruiter the outcome WITHOUT re-screening at all. Salary is often \
 a re-screen, prefer `rescreen_scoped(criterion_id, statuses)` — it re-screens ONLY the \
 affected group (e.g. ['missing'] for a widening, ['met'] for a narrowing), far cheaper \
 than `rescreen_role` (whole pool; reserve that for a job-spec-wide change).
+- Update the job spec: if the recruiter pastes a NEW or updated job description, \
+`update_job_spec` replaces the role's JD and re-derives its must-have / preferred / \
+constraint chips from it (instant, no LLM; their manual chips like salary caps are \
+kept). A new JD re-derives EVERY criterion, so it does NOT re-screen automatically — \
+the result carries the criteria diff (added / removed) + a `would_rescreen` estimate. \
+Show the recruiter what changed and the cost, then re-screen with `rescreen_role` only \
+on their explicit yes. Don't confuse this with a single constraint edit — a pasted \
+JD is the whole spec.
 - Agent control + settings: turn the agent on / resume it, or pause it \
 (`set_agent_state`); and change its monthly spend budget, auto-reject, or \
 auto-promote (`adjust_agent_settings`). You CAN do these directly when the \
