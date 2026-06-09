@@ -394,12 +394,6 @@
 .rq-split-row.is-processing.on {
   opacity: 0.72;
 }
-.rq-proc-tag {
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  letter-spacing: 0.04em;
-  color: var(--mute);
-}
 
 .rq-hybrid-right {
   display: flex;
