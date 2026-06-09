@@ -67,8 +67,8 @@ const DemoLeadPage = lazy(() =>
 const DemoShowcasePage = lazy(() =>
   import('./features/marketing/DemoShowcasePage').then((m) => ({ default: m.DemoShowcasePage }))
 );
-const DeveloperDocsPage = lazy(() =>
-  import('./features/marketing/DeveloperDocsPage').then((m) => ({ default: m.DeveloperDocsPage }))
+const DeveloperPortalPage = lazy(() =>
+  import('./features/developers/DeveloperPortalPage').then((m) => ({ default: m.DeveloperPortalPage }))
 );
 const AssessmentsPage = lazy(() =>
   import('./features/assessments/AssessmentsPage').then((m) => ({ default: m.AssessmentsPage }))
@@ -498,7 +498,7 @@ function AppContent() {
         path="/developers"
         element={(
           <Suspense fallback={lazyFallback}>
-            <DeveloperDocsPage />
+            <DeveloperPortalPage />
           </Suspense>
         )}
       />
