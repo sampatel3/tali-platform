@@ -302,7 +302,11 @@ def compose_decision_summary_note(
         lines.append(f"TAALI ▸ {headline}")
 
     score_bits: list[str] = []
-    score = _format_score(getattr(app, "pre_screen_score_100", None))
+    # ALWAYS the canonical Taali score (assessment + role-fit blend, cached on
+    # the application) — the same number the directory, candidate report,
+    # public API, MCP and decision feed all surface. NOT pre_screen_score_100,
+    # which the model flags as a mutable role-fit *display* value, not durable.
+    score = _format_score(getattr(app, "taali_score_cache_100", None))
     if score:
         score_bits.append(f"Score: {score}")
     confidence = _format_confidence(getattr(decision, "confidence", None))
