@@ -834,6 +834,26 @@ class BulkApproveResult(BaseModel):
     failures: list[BulkApproveFailure] = Field(default_factory=list)
 
 
+# Override actions the bulk endpoint supports. ``send_assessment`` is excluded —
+# that's what bulk *approve* does (run the recommended action); a bulk override
+# is for taking a DIFFERENT action across the screen (the Hub's "Skip & advance"
+# on send_assessment cards, or bulk reject / advance).
+_BULK_OVERRIDE_ACTIONS = {"skip_assessment_advance", "advance", "reject"}
+
+
+class BulkOverrideBody(BaseModel):
+    """Explicit IDs — caller sends only the visible / selected rows (same
+    contract as bulk approve; no implicit "all of type X")."""
+
+    decision_ids: list[int] = Field(min_length=1, max_length=500)
+    override_action: str
+    note: Optional[str] = None
+    # Per-role Workable advance stage keyed by ``role_id`` (string) — same shape
+    # and source as bulk approve, used for the advance / skip_assessment_advance
+    # actions. Roles absent from the map advance on Tali's internal stage only.
+    workable_target_stages: Optional[dict[str, str]] = None
+
+
 @router.post("/agent-decisions/bulk-approve", response_model=BulkApproveResult)
 def bulk_approve(
     body: BulkApproveBody,
@@ -868,6 +888,76 @@ def bulk_approve(
         requested=len(requested),
         accepted=len(result["accepted"]),
         job_run_id=result["job_run_id"],
+        failures=failures,
+    )
+
+
+@router.post("/agent-decisions/bulk-override", response_model=BulkApproveResult)
+def bulk_override(
+    body: BulkOverrideBody,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Apply ONE override action to a list of pending decisions — e.g. bulk
+    "Skip & advance" over a screen of send_assessment cards.
+
+    Each valid decision is flipped to ``processing`` and its override is enqueued
+    on the serialized per-org Workable runner (so a 100-row bulk can't breach the
+    rate limit); a decision whose writeback fails is returned to the queue by the
+    runner. Invalid rows (already-resolved, missing) are reported in ``failures``
+    without halting the batch. Advance-type actions resolve their Workable stage
+    from ``workable_target_stages`` by the decision's ``role_id`` (the same map
+    bulk approve uses); roles absent advance on Tali's internal stage only.
+    """
+    action = (body.override_action or "").strip()
+    if action not in _BULK_OVERRIDE_ACTIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported bulk override_action={action!r}; expected one of {sorted(_BULK_OVERRIDE_ACTIONS)}",
+        )
+    requested = list(dict.fromkeys(int(x) for x in body.decision_ids))  # de-dupe, preserve order
+    note = (body.note or "").strip() or None
+    stages = body.workable_target_stages or {}
+
+    rows = {
+        d.id: d
+        for d in db.query(AgentDecision)
+        .filter(
+            AgentDecision.id.in_(requested),
+            AgentDecision.organization_id == current_user.organization_id,
+        )
+        .all()
+    }
+    accepted: list[int] = []
+    failures: list[BulkApproveFailure] = []
+    for decision_id in requested:
+        decision = rows.get(decision_id)
+        if decision is None:
+            failures.append(BulkApproveFailure(decision_id=decision_id, error="not found"))
+            continue
+        stage = stages.get(str(decision.role_id)) if decision.role_id is not None else None
+        try:
+            override_decision_action.enqueue(
+                db,
+                Actor.recruiter(current_user),
+                organization_id=current_user.organization_id,
+                decision_id=decision_id,
+                override_action=action,
+                note=note,
+                workable_target_stage=stage,
+            )
+            accepted.append(decision_id)
+        except HTTPException as exc:
+            failures.append(
+                BulkApproveFailure(
+                    decision_id=decision_id,
+                    error=str(exc.detail) if exc.detail else f"HTTP {exc.status_code}",
+                )
+            )
+    return BulkApproveResult(
+        requested=len(requested),
+        accepted=len(accepted),
+        job_run_id=None,
         failures=failures,
     )
 

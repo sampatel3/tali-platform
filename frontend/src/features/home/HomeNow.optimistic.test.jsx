@@ -10,11 +10,13 @@ import { HomeNow } from './HomeNow';
 
 const approveDecision = vi.fn();
 const bulkApproveDecisions = vi.fn();
+const bulkOverrideDecisions = vi.fn();
 
 vi.mock('../../shared/api', () => ({
   agent: {
     approveDecision: (...a) => approveDecision(...a),
     bulkApproveDecisions: (...a) => bulkApproveDecisions(...a),
+    bulkOverrideDecisions: (...a) => bulkOverrideDecisions(...a),
     snoozeDecision: vi.fn().mockResolvedValue({ data: {} }),
     reEvaluateDecision: vi.fn().mockResolvedValue({ data: {} }),
   },
@@ -66,6 +68,7 @@ describe('HomeNow — optimistic Send assessment', () => {
   beforeEach(() => {
     approveDecision.mockReset();
     bulkApproveDecisions.mockReset();
+    bulkOverrideDecisions.mockReset();
   });
 
   it('drops the card from the queue and advances selection the instant you click — before the network resolves', async () => {
@@ -114,6 +117,31 @@ describe('HomeNow — optimistic Send assessment', () => {
       expect(within(sidebar).getByText('Miguel Parracho')).toBeInTheDocument();
     });
     expect(setSelectedId).toHaveBeenCalledWith(1);
+  });
+
+  it('bulk "Skip & advance" overrides every visible card optimistically', async () => {
+    let resolveBulk;
+    bulkOverrideDecisions.mockImplementation(() => new Promise((r) => { resolveBulk = r; }));
+
+    const { container, reload } = renderHome();
+    const sidebar = sidebarOf(container);
+    expect(within(sidebar).getByText('Miguel Parracho')).toBeInTheDocument();
+    expect(within(sidebar).getByText('Ada Lovelace')).toBeInTheDocument();
+
+    const skipBtn = within(container).getByRole('button', { name: /skip & advance 2 visible/i });
+    await act(async () => { fireEvent.click(skipBtn); });
+
+    // One bulk request with both visible ids + the skip-and-advance action.
+    expect(bulkOverrideDecisions).toHaveBeenCalledTimes(1);
+    expect(bulkOverrideDecisions).toHaveBeenCalledWith([1, 2], 'skip_assessment_advance');
+    // Optimistic: both cards left the queue immediately (promise still pending,
+    // reload not yet awaited).
+    expect(within(sidebar).queryByText('Miguel Parracho')).not.toBeInTheDocument();
+    expect(within(sidebar).queryByText('Ada Lovelace')).not.toBeInTheDocument();
+    expect(reload).not.toHaveBeenCalled();
+
+    await act(async () => { resolveBulk({ data: { requested: 2, accepted: 2, failures: [] } }); });
+    await waitFor(() => expect(reload).toHaveBeenCalled());
   });
 });
 
