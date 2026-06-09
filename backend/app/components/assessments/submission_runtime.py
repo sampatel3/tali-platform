@@ -1103,8 +1103,19 @@ def submit_assessment_impl(
             assessment_id=assessment.id,
         )
 
+    # Assessments are Taali-native: only mirror the result back into Workable
+    # when the org has explicitly opted into Workable assessment side-effects
+    # (email_mode == "workable_preferred_fallback_manual"). Default / manual_taali
+    # orgs keep the whole assessment lifecycle inside Taali — the same switch that
+    # already governs the invite-send handoff (invite_flow._workable_handoff_eligible),
+    # so manual_taali now genuinely suppresses *every* assessment Workable write.
+    workable_cfg = org.workable_config if (org and isinstance(org.workable_config, dict)) else {}
+    assessment_workable_optin = (
+        str(workable_cfg.get("email_mode") or "manual_taali") == "workable_preferred_fallback_manual"
+    )
     if (
         not settings_obj.MVP_DISABLE_WORKABLE
+        and assessment_workable_optin
         and org
         and org.workable_connected
         and org.workable_access_token
