@@ -56,7 +56,6 @@ export const assessments = {
     ),
   remove: (id) => api.delete(`/assessments/${id}`),
   resend: (id) => api.post(`/assessments/${id}/resend`),
-  postToWorkable: (id) => api.post(`/assessments/${id}/post-to-workable`),
   downloadReport: (id) => api.get(`/assessments/${id}/report.pdf`, { responseType: 'blob' }),
   finalizeCandidateFeedback: (id, data = {}) => api.post(`/assessments/${id}/finalize-candidate-feedback`, data),
   getCandidateFeedback: (token) => api.get(`/assessments/${encodeURIComponent(token)}/feedback`),
