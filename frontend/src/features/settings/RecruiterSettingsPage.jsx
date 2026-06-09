@@ -24,6 +24,7 @@ import {
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import BackgroundJobsPanel from './BackgroundJobsPanel';
 import UsagePanel from './UsagePanel';
+import ApiKeysPanel from './ApiKeysPanel';
 import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 
 const WORKABLE_SCOPE_OPTIONS = [
@@ -86,6 +87,9 @@ const SECTION_ALIASES = {
   notifications: 'notifications',
   jobs: 'jobs',
   'background-jobs': 'jobs',
+  developers: 'developers',
+  'api-keys': 'developers',
+  apikeys: 'developers',
 };
 const buildWorkableScopeSelection = (scopes = []) => {
   const granted = new Set(
@@ -1365,6 +1369,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 { k: 'billing', l: 'Billing' },
                 { k: 'usage', l: 'Usage' },
                 { k: 'security', l: 'Security' },
+                { k: 'developers', l: 'Developers' },
                 { k: 'jobs', l: 'Background jobs' },
               ].map((tab) => (
                 <button
@@ -1423,6 +1428,16 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       {workspaceSaving ? 'Saving...' : 'Save organization'}
                     </button>
                   </div>
+                </SectionPanel>
+              </div>
+
+              <div ref={(node) => { sectionRefs.current.developers = node; }} hidden={activeSection !== "developers"}>
+                <SectionPanel
+                  id="developers"
+                  title="Developers"
+                  subtitle="API keys for the Taali public API. Keys are scoped to this workspace; the secret is shown once on creation."
+                >
+                  <ApiKeysPanel />
                 </SectionPanel>
               </div>
 
