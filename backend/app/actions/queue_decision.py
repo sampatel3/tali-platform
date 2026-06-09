@@ -318,13 +318,28 @@ def run(
             status_code=422,
             detail=f"unknown decision_type={decision_type!r}",
         )
-    if not (reasoning or "").strip():
-        raise HTTPException(status_code=422, detail="reasoning is required")
     if actor.agent_run_id is None:
         raise HTTPException(status_code=422, detail="agent actor missing agent_run_id")
 
     # Validate the application belongs to the org+role.
     app = get_application(application_id, organization_id, db)
+
+    # One summary, one shape — regardless of producer. queue_decision is the
+    # single funnel BOTH the LLM agent and the deterministic bulk pass call, so
+    # this is the one place that guarantees every card carries a real,
+    # recruiter-facing reasoning. When the producer didn't supply one (the LLM
+    # agent frequently omits it on send_assessment, leaving a generic
+    # placeholder), derive it from the candidate's cv_match analysis — the same
+    # source the bulk pass uses — and only fall back to the audit-oriented
+    # policy basis if that is empty too.
+    if not (reasoning or "").strip():
+        from ..services.decision_reasoning import recruiter_decision_reasoning
+        reasoning = (recruiter_decision_reasoning(app) or "").strip()
+    if not (reasoning or "").strip():
+        reasoning = (
+            "Recommended by the decision policy from the candidate's "
+            "role-fit score and stage."
+        )
     if int(app.role_id) != int(role_id):
         raise HTTPException(
             status_code=422,

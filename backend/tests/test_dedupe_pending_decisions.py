@@ -179,3 +179,43 @@ def test_backfill_skips_apps_with_existing_pending_decision(db):
         AgentDecision.status == "pending",
     ).count()
     assert n == 1
+
+
+def test_queue_decision_derives_reasoning_from_cv_match_when_empty(db):
+    """One card shape for every producer: when a producer (e.g. the LLM agent)
+    omits a per-candidate reasoning, queue_decision derives it from the
+    candidate's cv_match analysis — the same source the deterministic bulk pass
+    uses — instead of leaving a generic placeholder."""
+    org, role, app = _seed(db)
+    app.cv_match_details = {"summary": "Strong AWS Glue + PySpark fit; gaps in CDC evidence."}
+    app.cv_match_score = 72.0
+    db.flush()
+    run = _agent_run(db, role)
+    db.commit()
+
+    d = queue_decision.run(
+        db, Actor.agent(int(run.id)),
+        organization_id=int(org.id), role_id=int(role.id), application_id=int(app.id),
+        decision_type="send_assessment",
+        reasoning="",  # producer left it blank
+        confidence=0.85, model_version="m", prompt_version="p",
+    )
+    assert d.reasoning == "Strong AWS Glue + PySpark fit; gaps in CDC evidence."
+
+
+def test_queue_decision_keeps_explicit_reasoning(db):
+    """A producer that DID write a rationale keeps it verbatim."""
+    org, role, app = _seed(db)
+    app.cv_match_details = {"summary": "cv summary"}
+    db.flush()
+    run = _agent_run(db, role)
+    db.commit()
+
+    d = queue_decision.run(
+        db, Actor.agent(int(run.id)),
+        organization_id=int(org.id), role_id=int(role.id), application_id=int(app.id),
+        decision_type="send_assessment",
+        reasoning="Hand-written agent rationale.",
+        confidence=0.9, model_version="m", prompt_version="p",
+    )
+    assert d.reasoning == "Hand-written agent rationale."

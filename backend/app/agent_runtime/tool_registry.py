@@ -1033,10 +1033,10 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
 
         queue_args = {
             "application_id": application_id,
-            "reasoning": str(
-                args.get("reasoning")
-                or "Agent recommends sending the assessment based on the candidate's score and stage."
-            ),
+            # No generic placeholder: pass the agent's rationale when it wrote
+            # one, else leave it empty so queue_decision derives the canonical
+            # cv_match summary — one consistent card shape for every producer.
+            "reasoning": str(args.get("reasoning") or ""),
             "evidence": evidence or None,
             "confidence": float(args.get("confidence") or 0.85),
         }
