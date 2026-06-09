@@ -4,8 +4,8 @@ Backs the public API + Workable provider auth (docs/PUBLIC_API_BUILD_PLAN.md).
 Only the SHA-256 hash of each secret is stored; the plaintext is shown once at
 creation and never persisted.
 
-Revision ID: 110_add_api_keys
-Revises: 109_add_agent_conversations
+Revision ID: 111_add_api_keys
+Revises: 110_add_graph_sync_content_hash
 Create Date: 2026-06-04
 """
 from __future__ import annotations
@@ -13,8 +13,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "110_add_api_keys"
-down_revision = "109_add_agent_conversations"
+revision = "111_add_api_keys"
+down_revision = "110_add_graph_sync_content_hash"
 branch_labels = None
 depends_on = None
 
