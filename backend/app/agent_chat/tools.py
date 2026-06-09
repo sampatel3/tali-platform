@@ -14,6 +14,7 @@ the assistant turn as an ``action``.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from sqlalchemy import func
@@ -36,11 +37,12 @@ CARD_TYPES = frozenset(
         "threshold_recommendation",
         "threshold_change",
         "constraint_change",
+        "job_spec_change",
         "draft_task_review",
     }
 )
 # Cards that represent a committed mutation (vs read-only analysis).
-MUTATION_CARD_TYPES = frozenset({"threshold_change", "constraint_change"})
+MUTATION_CARD_TYPES = frozenset({"threshold_change", "constraint_change", "job_spec_change"})
 
 
 AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
@@ -65,7 +67,13 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "`workable_stage` (e.g. 'Final Interview', 'Technical Interview'). Pass "
             "`workable_stage` to filter to a specific Workable stage — that's how you "
             "answer 'who's in final interview?' (Taali's pipeline_stage does NOT track "
-            "Workable's interview stages; workable_stage is the source of truth)."
+            "Workable's interview stages; workable_stage is the source of truth). You can "
+            "ALSO see the recruiter's **Workable comments / ratings** on each candidate: "
+            "set `include_comments=true` to return them ([{author, created_at, body}], "
+            "newest first), and `comment_contains` to filter to candidates a recruiter "
+            "commented on (e.g. comment_contains='yes'). So 'top 5 in technical interview "
+            "with a Yes comment' = workable_stage='technical interview', "
+            "comment_contains='yes', limit=5."
         ),
         "input_schema": {
             "type": "object",
@@ -79,10 +87,32 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
                     "type": ["string", "null"],
                     "description": "Filter to candidates whose synced Workable stage contains this (case-insensitive), e.g. 'final interview'. Applies to the open buckets (not 'rejected').",
                 },
+                "comment_contains": {
+                    "type": ["string", "null"],
+                    "description": "Filter to candidates who have a synced Workable recruiter comment/rating whose text matches this — whole-word for a single word (comment_contains='yes' matches a 'Yes' comment but not 'yesterday'), substring for a phrase ('strong hire'). Implies include_comments. Open buckets only (not 'rejected').",
+                },
+                "include_comments": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Include each candidate's synced Workable recruiter comments [{author, created_at, body}] (newest first, capped) in the result, so you can read/cite them. Set true even without a filter to show what recruiters wrote.",
+                },
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
             },
             "required": [],
         },
+    },
+    {
+        "name": "sync_workable_comments",
+        "description": (
+            "Force an immediate Workable sync for THIS role, pulling the latest "
+            "recruiter comments / ratings (and stages) for all its candidates. Use "
+            "when the recruiter says comments look stale or missing, or asks you to "
+            "sync / refresh Workable comments. Comments normally sync automatically "
+            "every few minutes; this forces a refresh now. It's ASYNCHRONOUS — tell "
+            "the recruiter it's underway and to ask again in a moment so you can "
+            "re-read the freshly-synced comments with list_candidates."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "simulate_threshold",
@@ -195,6 +225,26 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {"criterion_id": {"type": "integer"}},
             "required": ["criterion_id"],
+        },
+    },
+    {
+        "name": "update_job_spec",
+        "description": (
+            "Replace THIS role's job description with a new one the recruiter "
+            "pasted, and re-derive its must-have / preferred / constraint criteria "
+            "from it. Use when the recruiter sends a new or updated JD in chat. A new "
+            "JD re-derives EVERY criterion (the biggest change there is), so it does "
+            "NOT re-screen automatically: it applies the spec + re-derives the chips "
+            "instantly (no LLM) and returns the criteria diff + a re-screen cost "
+            "estimate. Recruiter-added chips (salary caps, etc.) are kept. Show what "
+            "changed + the cost and ASK before running rescreen_role."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_spec_text": {"type": "string", "description": "The full new job description text the recruiter pasted."},
+            },
+            "required": ["job_spec_text"],
         },
     },
     {
@@ -379,10 +429,51 @@ def _role_overview(db: Session, role: Role) -> dict[str, Any]:
     }
 
 
+def _comment_match(comments: list[dict[str, Any]] | None, term: str) -> bool:
+    """True when any of the candidate's Workable comment bodies matches ``term``.
+
+    A single word matches whole-word (so 'yes' hits a "Yes" comment but not
+    "yesterday"); a phrase matches as a case-insensitive substring.
+    """
+    t = (term or "").strip().lower()
+    if not t:
+        return False
+    bodies = [str((c or {}).get("body") or "") for c in (comments or [])]
+    if " " not in t and t.isalnum():
+        pat = re.compile(rf"\b{re.escape(t)}\b", re.IGNORECASE)
+        return any(pat.search(b) for b in bodies)
+    return any(t in b.lower() for b in bodies)
+
+
+def _compact_comments(
+    comments: list[dict[str, Any]] | None, *, max_items: int = 3, max_len: int = 240
+) -> list[dict[str, Any]]:
+    """Trim a candidate's comments for the tool result — a few, newest first,
+    bodies bounded so a chatty Workable thread can't blow up the turn."""
+    out: list[dict[str, Any]] = []
+    for c in (comments or [])[:max_items]:
+        body = str((c or {}).get("body") or "").strip()
+        if len(body) > max_len:
+            body = body[:max_len].rstrip() + "…"
+        out.append({"author": (c or {}).get("author"), "created_at": (c or {}).get("created_at"), "body": body})
+    return out
+
+
 def _list_candidates(
-    db: Session, role: Role, *, bucket: str, limit: int, workable_stage: str | None = None
+    db: Session,
+    role: Role,
+    *,
+    bucket: str,
+    limit: int,
+    workable_stage: str | None = None,
+    comment_contains: str | None = None,
+    include_comments: bool = False,
 ) -> dict[str, Any]:
-    rows = _impact.load_open_candidates(db, role)
+    # Only pay for the comment JSON read when the recruiter is filtering or asking
+    # to see comments; a comment filter implies returning the matched comments.
+    cc = (comment_contains or "").strip()
+    want_comments = bool(cc) or bool(include_comments)
+    rows = _impact.load_open_candidates(db, role, with_comments=want_comments)
     effective = _impact.effective_threshold(db, role)
     above, below = _impact.split_by_threshold(rows, effective)
 
@@ -408,10 +499,17 @@ def _list_candidates(
     if wk_filter:
         chosen = [r for r in chosen if wk_filter in (r.workable_stage or "").lower()]
 
+    # Optional filter by a recruiter's synced Workable comment (e.g. a "Yes"
+    # verdict). The data is always synced onto the candidate — this just lets the
+    # agent reach it.
+    if cc:
+        chosen = [r for r in chosen if _comment_match(r.comments, cc)]
+
     chosen = sorted(chosen, key=lambda r: (r.score if r.score is not None else -1), reverse=True)
     return {
         "bucket": bucket,
         "workable_stage_filter": workable_stage or None,
+        "comment_filter": cc or None,
         "count": len(chosen),
         "effective_threshold": effective,
         "candidates": [
@@ -422,6 +520,7 @@ def _list_candidates(
                 "stage": r.pipeline_stage,
                 "workable_stage": r.workable_stage,
                 "pending_decision": r.pending_decision_type,
+                **({"comments": _compact_comments(r.comments)} if want_comments else {}),
             }
             for r in chosen[: int(limit)]
         ],
@@ -521,6 +620,8 @@ def dispatch_tool(
             bucket=str(args.get("bucket") or "all"),
             limit=int(args.get("limit") or 20),
             workable_stage=args.get("workable_stage"),
+            comment_contains=args.get("comment_contains"),
+            include_comments=bool(args.get("include_comments") or False),
         )
     if name == "simulate_threshold":
         return _impact.simulate_threshold(db, role, float(args["threshold"]))
@@ -561,6 +662,10 @@ def dispatch_tool(
         if result.get("invalidates_scores"):
             result["would_rescreen"] = _constraints.estimate_rescreen(db, role)
         return result
+    if name == "update_job_spec":
+        return _constraints.update_job_spec(
+            db, role, job_spec_text=str(args.get("job_spec_text") or "")
+        )
     if name == "rescreen_role":
         result = _constraints.rescreen_role(db, role)
         _maybe_report_rescreen(db, role=role, conversation=conversation, result=result)
@@ -606,6 +711,8 @@ def dispatch_tool(
         )
     if name == "list_draft_tasks":
         return _draft_tasks.draft_review_card(db, role)
+    if name == "sync_workable_comments":
+        return _controls.sync_workable_comments(db, role, user=user)
 
     raise KeyError(f"unknown tool: {name}")
 

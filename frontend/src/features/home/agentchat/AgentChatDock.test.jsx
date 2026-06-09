@@ -146,6 +146,21 @@ describe('AgentSidebar', () => {
     expect(onSelect).toHaveBeenCalledWith(2);
   });
 
+  it('orders running agents above paused ones in the on/paused section', () => {
+    // Backend hands them back interleaved (here: pending-count desc). Running
+    // agents must float to the top; within running and within paused the
+    // original relative order is preserved (stable sort).
+    const agents = [
+      { role_id: 1, role_name: 'Paused A', group: 'on_paused', agent_enabled: true, agent_paused: true, pending_decisions: 147 },
+      { role_id: 2, role_name: 'Running A', group: 'on_paused', agent_enabled: true, agent_paused: false, pending_decisions: 130 },
+      { role_id: 3, role_name: 'Paused B', group: 'on_paused', agent_enabled: true, agent_paused: true, pending_decisions: 107 },
+      { role_id: 4, role_name: 'Running B', group: 'on_paused', agent_enabled: true, agent_paused: false, pending_decisions: 39 },
+    ];
+    render(<AgentSidebar agents={agents} activeRoleId={null} onSelect={vi.fn()} />);
+    const names = Array.from(document.querySelectorAll('.ac-agent-role')).map((el) => el.textContent);
+    expect(names).toEqual(['Running A', 'Running B', 'Paused A', 'Paused B']);
+  });
+
   it('shows an empty state when there are no agents', () => {
     render(<AgentSidebar agents={[]} activeRoleId={null} onSelect={vi.fn()} />);
     expect(screen.getByText(/No live roles yet/)).toBeInTheDocument();

@@ -128,6 +128,65 @@ def rescreen_role(
     }
 
 
+def _criteria_text_map(db: Session, role: Role) -> dict[str, str]:
+    """Every live criterion on the role keyed by lower-cased text — for diffing the
+    chip set before vs after a job-spec re-derive. Queried fresh so the soft-delete
+    + re-add `sync_derived_criteria` performs is reflected."""
+    rows = (
+        db.query(RoleCriterion)
+        .filter(RoleCriterion.role_id == int(role.id), RoleCriterion.deleted_at.is_(None))
+        .all()
+    )
+    return {
+        (c.text or "").strip().lower(): (c.text or "").strip()
+        for c in rows
+        if (c.text or "").strip()
+    }
+
+
+def update_job_spec(db: Session, role: Role, *, job_spec_text: str) -> dict[str, Any]:
+    """Replace THIS role's job description + re-derive its spec criteria.
+
+    A new JD re-derives the must / preferred / constraint chips from the spec's
+    Requirements section (``sync_derived_criteria``) — the biggest criteria change
+    there is — so it invalidates the whole pool's scores. We apply the spec +
+    re-derive IMMEDIATELY (cheap, no LLM) but do NOT re-screen: return the criteria
+    diff + a cost estimate and leave the spend to an explicit ``rescreen_role``
+    (same opt-in guard as a constraint edit). Recruiter-added chips (salary caps
+    etc.) are untouched — only the spec-derived ones change.
+    """
+    text = (job_spec_text or "").strip()
+    if len(text) < 60:
+        return {"ok": False, "error": "That doesn't look like a full job spec — paste the whole description and I'll apply it."}
+
+    before = _criteria_text_map(db, role)
+    role.job_spec_text = text
+    if hasattr(role, "job_spec_uploaded_at"):
+        role.job_spec_uploaded_at = datetime.now(timezone.utc)
+    try:
+        from ..services.role_criteria_service import sync_derived_criteria
+
+        sync_derived_criteria(db, role)
+        db.flush()
+    except Exception as exc:  # noqa: BLE001 — surface, don't crash the turn
+        db.rollback()
+        return {"ok": False, "error": f"I couldn't parse that spec into criteria ({type(exc).__name__}); the role is unchanged."}
+
+    after = _criteria_text_map(db, role)
+    added = [after[k] for k in after if k not in before]
+    removed = [before[k] for k in before if k not in after]
+    return {
+        "type": "job_spec_change",
+        "applied": True,
+        "added": added[:12],
+        "removed": removed[:12],
+        "criteria_count": len(after),
+        # A new JD re-derives every criterion → the whole pool needs re-scoring.
+        # Opt-in: show the cost, run rescreen_role only on the recruiter's yes.
+        "would_rescreen": estimate_rescreen(db, role),
+    }
+
+
 def add_or_update_constraint(
     db: Session,
     role: Role,

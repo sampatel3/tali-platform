@@ -119,6 +119,10 @@ const AgentStrip = ({
   const status = !on ? (paused ? 'paused' : 'off') : 'on';
   const isManualPause = /recruiter|paused by/i.test(String(pausedReason || ''));
   const hasBulkCounts = pauseAllCount != null || resumeAllCount != null;
+  // Mixed org — some roles running AND some paused. Pause and Resume are BOTH
+  // live buttons. The split moves into the tick (so the buttons stay short),
+  // and the budget bar yields its width so everything fits the fixed-size box.
+  const isMixed = Number(pauseAllCount) > 0 && Number(resumeAllCount) > 0;
   const pct = budgetCents > 0
     ? Math.min(100, Math.round((Number(spentCents) / Number(budgetCents)) * 100))
     : 0;
@@ -137,23 +141,31 @@ const AgentStrip = ({
   if (status === 'on') {
     message = tick;
   } else if (status === 'paused') {
+    // Short — the Resume button already conveys "resume to continue".
     if (isManualPause) {
-      message = 'Resume to continue';
+      message = 'Paused by you';
     } else {
       const r = String(pausedReason || '').toLowerCase();
-      let pretty = null;
-      if (r.startsWith('monthly usd cap')) pretty = 'monthly budget reached';
-      else if (r.includes('decision budget')) pretty = 'cycle limit reached';
-      else if (pausedReason) pretty = String(pausedReason).slice(0, 48);
-      message = pretty ? `${pretty} — resume to continue` : 'Resume to continue';
+      if (r.startsWith('monthly usd cap')) message = 'Monthly budget reached';
+      else if (r.includes('decision budget')) message = 'Cycle limit reached';
+      else if (pausedReason) message = String(pausedReason).slice(0, 36);
+      else message = 'Auto-paused';
     }
   } else if (!onActivate) {
     message = offStateMessage || 'Open a role to turn on agent mode there.';
   }
+  // In a mixed org the per-role activity tick is ambiguous — state the split
+  // instead, which is also what the two buttons act on.
+  if (isMixed) {
+    message = `${pauseAllCount} running · ${resumeAllCount} paused`;
+  }
 
-  const showBudget = (status === 'on' || status === 'paused') && budgetCents > 0;
+  const showBudget = (status === 'on' || status === 'paused') && budgetCents > 0 && !isMixed;
 
   return (
+    // ONE persistent box (no key/remount) — the abar-{status} class morphs it
+    // in place: the dark-purple / amber fills crossfade via .abar::before /
+    // ::after, and the border / text / glow tween (see 13-page-hero CSS).
     <div className={`abar abar-${status}`}>
       <span className="ab-spark">
         <Sparkles size={15} strokeWidth={2} />
@@ -181,13 +193,13 @@ const AgentStrip = ({
               {Number(pauseAllCount) > 0 ? (
                 <button type="button" className="ab-btn" onClick={onPause} disabled={!onPause}>
                   <Pause size={11} strokeWidth={2} />
-                  {pauseLabel} ({pauseAllCount})
+                  {pauseLabel}
                 </button>
               ) : null}
               {Number(resumeAllCount) > 0 ? (
                 <button type="button" className="ab-btn primary" onClick={onResume} disabled={!onResume}>
                   <Play size={11} strokeWidth={2} fill="currentColor" />
-                  {resumeLabel} ({resumeAllCount})
+                  {resumeLabel}
                 </button>
               ) : null}
             </>

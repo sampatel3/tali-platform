@@ -23,6 +23,12 @@ import { AgentChatDock } from './agentchat/AgentChatDock';
 import './agentchat/agentchat.css';
 
 const ORG_STATUS_POLL_MS = 30_000;
+// Keep the decision cards live. The org-status poll above refreshes the badges
+// but NOT the list, so a decision that resolves in the background (processing →
+// approved/sent, or a brand-new agent decision) used to linger as stale until
+// the recruiter manually acted or switched filters. A short, silent,
+// visibility-gated refetch keeps the queue honest without a spinner flash.
+const DECISIONS_POLL_MS = 15_000;
 
 // Map a HomeNow filter shape -> the params the existing /agent-decisions
 // endpoint expects. Status='pending' is special: the backend hides
@@ -135,9 +141,29 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
 
   // Track in-flight reloads so rapid clicks don't pile up requests.
   const reloadCounter = useRef(0);
+  // Stale-while-revalidate cache of the last rows seen per filter, so flipping
+  // between filters you've already opened paints instantly instead of blanking
+  // to a spinner while the (authenticated) refetch round-trips. Search queries
+  // aren't cached (ad-hoc, unbounded keys); the map is capped to recent views.
+  const decisionsCacheRef = useRef(new Map());
 
-  const loadDecisions = useCallback(async () => {
-    setLoadingDecisions(true);
+  // ``silent`` (background poll / focus refresh) skips the loading spinner so
+  // the live list updates in place without a flash — the cards just reconcile
+  // when fresh data lands.
+  const loadDecisions = useCallback(async ({ silent = false } = {}) => {
+    const cacheKey = filters.q ? null : JSON.stringify({
+      role: filters.role_id || null,
+      type: filters.type || null,
+      status: filters.status || 'pending',
+    });
+    const cached = cacheKey ? decisionsCacheRef.current.get(cacheKey) : null;
+    // Paint cached rows for this filter immediately (stale-while-revalidate);
+    // only show the spinner when there's nothing cached to show yet.
+    if (!silent && cached) {
+      setPendingOrdered(cached.pending);
+      setDecisions(cached.feed);
+    }
+    if (!silent && !cached) setLoadingDecisions(true);
     const ticket = ++reloadCounter.current;
     try {
       // Pending sidebar always shows status=pending but honors the same
@@ -176,6 +202,12 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       });
       setPendingOrdered(pending);
       setDecisions(feedRows);
+      if (cacheKey) {
+        const cache = decisionsCacheRef.current;
+        cache.set(cacheKey, { pending, feed: feedRows });
+        // Keep only the most recent handful of filter views in memory.
+        if (cache.size > 10) cache.delete(cache.keys().next().value);
+      }
     } catch (err) {
       // 401/403 here means the AuthContext is about to redirect to
       // /login — no need to flash a "Failed to load" toast in the
@@ -250,6 +282,29 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
 
   useEffect(() => { void loadDecisions(); }, [loadDecisions]);
   useEffect(() => { void loadSignal(); }, [loadSignal]);
+
+  // Silent background refresh of the decision list so in-flight rows resolve
+  // on their own. A ref holds the latest loader so the interval isn't torn
+  // down and rebuilt every time the filters change. Gated on tab visibility
+  // (no point polling a backgrounded tab) and also fired the moment the tab
+  // regains focus, so tabbing back shows current data immediately.
+  const loadDecisionsRef = useRef(loadDecisions);
+  useEffect(() => { loadDecisionsRef.current = loadDecisions; }, [loadDecisions]);
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === 'visible') {
+        void loadDecisionsRef.current({ silent: true });
+      }
+    };
+    const id = window.setInterval(refresh, DECISIONS_POLL_MS);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, []);
 
   const reloadAll = useCallback(async () => {
     await Promise.all([loadDecisions(), loadRoles(), loadSignal()]);

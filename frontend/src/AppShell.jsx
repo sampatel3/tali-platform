@@ -22,6 +22,7 @@ import { pathForPage } from './app/routing';
 import { mapAssessmentToCandidateView } from './features/candidates/assessmentViewModels';
 import { ErrorBoundary } from './shared/ui/ErrorBoundary';
 import { ScrollToTop } from './shared/ui/ScrollToTop';
+import { RouteMeta } from './shared/seo/RouteMeta';
 import { KeyboardShortcutsModal } from './shared/ui/KeyboardShortcutsModal';
 import { useKeyboardShortcut } from './shared/hooks/useKeyboardShortcut';
 
@@ -448,6 +449,7 @@ function AppContent() {
   return (
     <>
       <ScrollToTop />
+      <RouteMeta />
       <KeyboardShortcutsModal
         open={shortcutsModalOpen}
         onClose={() => setShortcutsModalOpen(false)}

@@ -660,7 +660,11 @@
 
 .rq-stream-item {
   display: grid;
-  grid-template-columns: 44px 1fr;
+  /* minmax(0, 1fr) — a bare 1fr won't shrink below its content's min-width, so
+     the meta row (badges + Processing pill + the nowrap "D-id · age") forced
+     the column wider than the card and overflowed on the narrow Pending list.
+     minmax(0,…) lets the track shrink so the meta row wraps instead. */
+  grid-template-columns: 44px minmax(0, 1fr);
   gap: 10px;
   padding: 12px 16px;
   border-top: 1px solid var(--line-2);
@@ -677,19 +681,6 @@
 /* In-flight decision in the feed — greyed to match the queue row. */
 .rq-stream-item.is-processing {
   opacity: 0.55;
-}
-.rq-stream-procpill {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: 6px;
-  background: var(--bg-3);
-  color: var(--mute);
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  letter-spacing: 0.08em;
-  font-weight: 600;
-  text-transform: uppercase;
 }
 
 .rq-stream-rail {

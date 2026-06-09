@@ -59,6 +59,7 @@ from .agent_tasks import (
     agent_daily_review_role,
     agent_cohort_tick_sweep,
     agent_cohort_tick_role,
+    pre_screen_reject_sweep,
     agent_expire_stuck_runs,
     agent_expire_stale_decisions,
 )
@@ -97,6 +98,16 @@ from .graph_outbox_tasks import drain_graph_episode_outbox
 # never ships. Same trap as the imports above. The task itself is a no-op
 # unless MAINSPRING_BRAIN_FEED_ENABLED is set.
 from .brain_feed_tasks import flush_brain_feed
+# Eager-import graph_ingest_tasks so the worker registers the candidate-graph
+# ingestion tasks. The candidate_graph SQLAlchemy listeners enqueue these on
+# every Candidate / Interview / Event write; without this import the worker
+# NotRegistered's them and candidate/interview/pipeline episodes silently
+# never reach Graphiti. Same trap as the imports above.
+from .graph_ingest_tasks import (
+    sync_candidate_to_graph,
+    sync_event_to_graph,
+    sync_interview_to_graph,
+)
 # Eager-import workable_provider_tasks so the worker registers the result-push
 # flush. The beat schedule references this task name; without the import the
 # worker NotRegistered's it. No-op unless WORKABLE_PROVIDER_ENABLED is set.
@@ -127,6 +138,7 @@ __all__ = [
     "agent_daily_review_role",
     "agent_cohort_tick_sweep",
     "agent_cohort_tick_role",
+    "pre_screen_reject_sweep",
     "agent_expire_stuck_runs",
     "agent_expire_stale_decisions",
     "report_rescreen_impact",
@@ -137,5 +149,8 @@ __all__ = [
     "apply_decision_side_effects",
     "drain_graph_episode_outbox",
     "flush_brain_feed",
+    "sync_candidate_to_graph",
+    "sync_interview_to_graph",
+    "sync_event_to_graph",
     "flush_workable_provider",
 ]

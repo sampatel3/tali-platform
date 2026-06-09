@@ -238,6 +238,18 @@ def test_event_episode_skips_noise_event_types():
         assert ep is None, f"expected {noisy} to be skipped"
 
 
+def test_event_episode_skips_workable_writeback_mechanics():
+    # Workable write-back success/failure events are ATS-sync mechanics, not
+    # candidate facts. They carry a reason string (so they'd otherwise pass
+    # the note gate and cost an LLM extraction each — 242 on 2026-06-07), so
+    # they must be filtered as noise.
+    for noisy in ("workable_writeback_failed", "workable_writeback_skipped"):
+        ep = episode_module.build_event_episode(
+            _event(event_type=noisy, reason="Workable 403: job archived")
+        )
+        assert ep is None, f"expected {noisy} to be skipped"
+
+
 def test_event_episode_suppresses_no_op_stage_transition():
     # Outcome-only events often have from_stage == to_stage (e.g. an
     # 'applied → applied' stage with outcome going open → rejected).

@@ -408,6 +408,89 @@ def test_approve_reject_records_rejected_confirmed_outcome(db):
 
 
 # ---------------------------------------------------------------------------
+# Positive-only graph projection (2026-06-07 cost gate)
+#
+# Only positive/advance outcomes are projected into Graphiti. Rejects /
+# withdrawals are inferred by absence among the candidate population the
+# priors already count, so they are NOT enqueued (each would cost ~30
+# Graphiti dedup calls). They still land in the Postgres calibration FIFO.
+# ---------------------------------------------------------------------------
+
+
+def _outbox_outcome_rows(db):
+    from app.models.graph_episode_outbox import (
+        EPISODE_KIND_HIRING_OUTCOME,
+        GraphEpisodeOutbox,
+    )
+
+    return (
+        db.query(GraphEpisodeOutbox)
+        .filter(GraphEpisodeOutbox.episode_kind == EPISODE_KIND_HIRING_OUTCOME)
+        .all()
+    )
+
+
+def test_hired_outcome_is_projected_to_graph(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(db, org=org, role=role, stage="advanced")
+    _approved_decision(
+        db, org=org, role=role, application=app, decision_type="advance_to_interview"
+    )
+
+    transition_outcome(
+        db, app=app, to_outcome="hired", actor_type="recruiter", actor_id=1
+    )
+    db.commit()
+
+    rows = _outbox_outcome_rows(db)
+    assert len(rows) == 1
+    assert rows[0].payload["outcome_type"] == "hired"
+
+
+def test_interviewed_outcome_is_projected_to_graph(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(db, org=org, role=role, stage="review")
+    _approved_decision(
+        db, org=org, role=role, application=app, decision_type="advance_to_interview"
+    )
+
+    transition_stage(
+        db, app=app, to_stage="advanced", source="recruiter",
+        actor_type="recruiter", actor_id=1,
+    )
+    db.commit()
+
+    rows = _outbox_outcome_rows(db)
+    assert len(rows) == 1
+    # "interviewed" maps to the v2 outcome_type "reached_interview".
+    assert rows[0].payload["outcome_type"] == "reached_interview"
+
+
+def test_reject_outcome_is_not_projected_to_graph(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(db, org=org, role=role, stage="review")
+    _approved_decision(
+        db, org=org, role=role, application=app, decision_type="reject"
+    )
+
+    transition_outcome(
+        db, app=app, to_outcome="rejected", actor_type="recruiter", actor_id=1
+    )
+    db.commit()
+
+    # rejected_late is inferred by absence — no graph episode enqueued ...
+    assert _outbox_outcome_rows(db) == []
+    # ... but the Postgres calibration FIFO (source of truth) still records it.
+    db.refresh(role)
+    outcomes = (role.agent_calibration or {}).get("outcomes") or []
+    assert len(outcomes) == 1
+    assert outcomes[0]["outcome"] == "rejected_confirmed"
+
+
+# ---------------------------------------------------------------------------
 # Backfill script
 # ---------------------------------------------------------------------------
 

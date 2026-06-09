@@ -155,6 +155,16 @@ celery_app.conf.update(
             "task": "app.tasks.agent_tasks.agent_cohort_tick_sweep",
             "schedule": 1800.0,
         },
+        # Deterministic, free pre-screen reject catch-up. Unlike the cohort
+        # tick above (which skips budget-paused roles), this culls already
+        # pre-screened, below-threshold candidates on EVERY agent-managed
+        # role — paused included — so the obvious-no backlog never strands
+        # 'open' when a role auto-pauses at its monthly cap. No LLM spend;
+        # just re-dispatches the idempotent auto-reject task. Bounded per run.
+        "pre-screen-reject-sweep-every-30-minutes": {
+            "task": "app.tasks.agent_tasks.pre_screen_reject_sweep",
+            "schedule": 1800.0,
+        },
         # Agent daily review (legacy): kept for the proactive once-a-day
         # sweep that surfaces idle candidates / stale scores / etc. The
         # cohort-tick task above handles the bulk of work; daily review

@@ -46,6 +46,10 @@ class CandidateRow:
     pipeline_stage: str | None
     workable_stage: str | None
     pending_decision_type: str | None  # None ⇒ no pending decision
+    # Synced Workable recruiter comments/ratings [{author, created_at, body}],
+    # newest first — only populated when load_open_candidates(with_comments=True);
+    # None elsewhere so the threshold hot-path never pays for the JSON read.
+    comments: list[dict[str, Any]] | None = None
 
     @property
     def has_pending_decision(self) -> bool:
@@ -79,15 +83,25 @@ def effective_threshold(db: Session, role: Role) -> float | None:
     return resolved_auto_reject_config(None, role, db=db)["threshold_100"]
 
 
-def load_open_candidates(db: Session, role: Role) -> list[CandidateRow]:
+def load_open_candidates(
+    db: Session, role: Role, *, with_comments: bool = False
+) -> list[CandidateRow]:
     """Every open application on the role + its pending-decision type.
 
     One indexed query for the apps (joined to candidate for the display
     name) and one for the role's pending decisions, zipped in memory — no
     N+1.
+
+    ``with_comments`` additionally selects the full Candidate so each row
+    carries its synced Workable recruiter comments/ratings (via the canonical
+    ``workable_recruiter_comments`` serializer). Off by default — the threshold
+    math never needs comment text, so it keeps reading just the display name.
     """
+    # Only pull the full Candidate (and its JSON comment/activity blobs) when the
+    # caller actually wants comments; otherwise select just the display name.
+    name_or_candidate = Candidate if with_comments else Candidate.full_name
     rows = (
-        db.query(CandidateApplication, Candidate.full_name)
+        db.query(CandidateApplication, name_or_candidate)
         .join(Candidate, Candidate.id == CandidateApplication.candidate_id)
         .filter(
             CandidateApplication.role_id == int(role.id),
@@ -110,8 +124,20 @@ def load_open_candidates(db: Session, role: Role) -> list[CandidateRow]:
         # pending decision by the emitter's one-pending-per-app invariant.
         pending_by_app.setdefault(int(app_id), str(dtype))
 
+    # Lazy import — keeps the Workable serializer (and its deps) off impact.py's
+    # import path for the common, comment-free callers.
+    if with_comments:
+        from ..services.workable_context_service import workable_recruiter_comments
+
     out: list[CandidateRow] = []
-    for app, full_name in rows:
+    for app, name_or_cand in rows:
+        if with_comments:
+            candidate = name_or_cand
+            full_name = candidate.full_name
+            comments: list[dict[str, Any]] | None = workable_recruiter_comments(candidate)
+        else:
+            full_name = name_or_cand
+            comments = None
         out.append(
             CandidateRow(
                 application_id=int(app.id),
@@ -124,6 +150,7 @@ def load_open_candidates(db: Session, role: Role) -> list[CandidateRow]:
                 pipeline_stage=app.pipeline_stage,
                 workable_stage=app.workable_stage,
                 pending_decision_type=pending_by_app.get(int(app.id)),
+                comments=comments,
             )
         )
     return out

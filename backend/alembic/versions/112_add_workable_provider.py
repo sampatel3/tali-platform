@@ -7,8 +7,8 @@ Backs the marketplace add-on (docs/WORKABLE_ASSESSMENTS_PROVIDER_SPEC.md):
 - ``organizations.workable_provider_config``  — per-org provider settings (callback auth token, …)
 - ``workable_webhook_outbox``                 — durable queue for result callbacks to Workable
 
-Revision ID: 111_add_workable_provider
-Revises: 110_add_api_keys
+Revision ID: 112_add_workable_provider
+Revises: 111_add_api_keys
 Create Date: 2026-06-04
 """
 from __future__ import annotations
@@ -16,8 +16,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "111_add_workable_provider"
-down_revision = "110_add_api_keys"
+revision = "112_add_workable_provider"
+down_revision = "111_add_api_keys"
 branch_labels = None
 depends_on = None
 
