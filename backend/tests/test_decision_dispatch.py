@@ -446,3 +446,57 @@ def test_lock_contention_requeues_instead_of_failing(monkeypatch):
     assert captured["kwargs"]["op_type"] == "approve_decisions"
     assert captured["kwargs"]["payload"] == {"decision_ids": [1, 2, 3]}
     assert 5 <= captured["countdown"] <= 15
+
+
+# --- bulk override (e.g. bulk "Skip & advance") -----------------------------
+
+
+def test_bulk_override_dispatches_per_decision_with_resolved_stage(db, monkeypatch):
+    """bulk-override flips each pending decision and dispatches its override,
+    resolving the Workable advance stage per role (same map as bulk approve);
+    missing ids are reported as failures, not fatal."""
+    from app.domains.agentic import routes as agentic_routes
+
+    org, role, user = _seed(db)
+    _, d1 = _add_decision(db, org, role, status="pending", decision_type="send_assessment")
+    _, d2 = _add_decision(db, org, role, status="pending", decision_type="send_assessment")
+    db.commit()
+
+    calls = []
+
+    def _fake_enqueue(db_, actor, *, organization_id, decision_id, override_action, note, workable_target_stage):
+        calls.append((decision_id, override_action, workable_target_stage))
+
+    monkeypatch.setattr(agentic_routes.override_decision_action, "enqueue", _fake_enqueue)
+
+    result = agentic_routes.bulk_override(
+        agentic_routes.BulkOverrideBody(
+            decision_ids=[d1.id, d2.id, 999_999],
+            override_action="skip_assessment_advance",
+            workable_target_stages={str(role.id): "Phone Screen"},
+        ),
+        db=db,
+        current_user=user,
+    )
+    assert result.requested == 3
+    assert result.accepted == 2
+    assert [f.decision_id for f in result.failures] == [999_999]
+    assert sorted(c[0] for c in calls) == sorted([d1.id, d2.id])
+    assert all(c[1] == "skip_assessment_advance" and c[2] == "Phone Screen" for c in calls)
+
+
+def test_bulk_override_rejects_unsupported_action(db):
+    """``send_assessment`` is not a bulk override — that's what bulk approve is."""
+    from fastapi import HTTPException
+    from app.domains.agentic import routes as agentic_routes
+
+    org, role, user = _seed(db)
+    _, d1 = _add_decision(db, org, role, status="pending", decision_type="send_assessment")
+    db.commit()
+    with pytest.raises(HTTPException) as ei:
+        agentic_routes.bulk_override(
+            agentic_routes.BulkOverrideBody(decision_ids=[d1.id], override_action="send_assessment"),
+            db=db,
+            current_user=user,
+        )
+    assert ei.value.status_code == 422

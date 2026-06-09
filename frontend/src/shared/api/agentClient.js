@@ -20,6 +20,18 @@ export const agent = {
       note,
       workable_target_stages: workableTargetStages,
     }),
+  // Apply ONE override action (e.g. 'skip_assessment_advance') to a batch of
+  // pending decisions — the bulk counterpart of overrideDecision. Each is
+  // dispatched independently server-side (serialized per org); the response
+  // carries a per-failure summary. ``workableTargetStages`` is the per-role
+  // advance-stage map (role_id → Workable stage) for advance-type actions.
+  bulkOverrideDecisions: (decisionIds, overrideAction, note = null, workableTargetStages = null) =>
+    api.post('/agent-decisions/bulk-override', {
+      decision_ids: decisionIds,
+      override_action: overrideAction,
+      note,
+      workable_target_stages: workableTargetStages,
+    }),
   // Hide a pending decision for 1h. Body intentionally empty — duration is
   // server-fixed; if we ever need 4h/24h we change it there, not per call.
   snoozeDecision: (decisionId) => api.post(`/agent-decisions/${decisionId}/snooze`, {}),

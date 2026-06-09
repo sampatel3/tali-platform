@@ -931,6 +931,38 @@ export const HomeNow = ({
     }
   };
 
+  // Bulk counterpart of the per-card "Skip & advance" override: advance every
+  // visible candidate WITHOUT sending the assessment. Direct action (no stage
+  // picker in v1) — candidates advance on Tali's internal stage; the per-role
+  // Workable target-stage map the backend accepts is a follow-up. Serialized
+  // per org server-side, so a big batch can't breach the Workable rate limit.
+  const handleBulkSkipAdvance = async () => {
+    const ids = visiblePending.map((d) => d.id);
+    if (!ids.length || bulkBusy) return;
+    setBulkBusy(true);
+    // Optimistic: clear the batch immediately; failures reappear on reload.
+    setActed((prev) => { const next = new Set(prev); ids.forEach((id) => next.add(id)); return next; });
+    try {
+      const res = await agentApi.bulkOverrideDecisions(ids, 'skip_assessment_advance');
+      const payload = res?.data || {};
+      const accepted = Number(payload.accepted || 0);
+      const failed = Array.isArray(payload.failures) ? payload.failures.length : 0;
+      showToast?.(
+        failed === 0
+          ? `Skipped & advanced ${accepted} / ${ids.length}.`
+          : `Skipped & advanced ${accepted} / ${ids.length} — ${failed} failed.`,
+        failed === 0 ? 'success' : 'warning',
+      );
+      await reload?.();
+    } catch (err) {
+      showToast?.(apiErrorMessage(err, 'Bulk skip & advance failed'), 'error');
+      await reload?.();
+    } finally {
+      setActed((prev) => { const next = new Set(prev); ids.forEach((id) => next.delete(id)); return next; });
+      setBulkBusy(false);
+    }
+  };
+
   // When the bulk-confirm modal opens, prefetch the Workable stages for every
   // advancing role so each role's picker is ready.
   useEffect(() => {
@@ -956,15 +988,27 @@ export const HomeNow = ({
   // otherwise so we don't promise to approve overridden / approved
   // history the user is just browsing.
   const bulkActionEl = filters.status === 'pending' && visiblePending.length > 0 ? (
-    <button
-      type="button"
-      className="btn btn-purple btn-sm"
-      onClick={handleBulkApprove}
-      disabled={bulkBusy}
-    >
-      <Check size={13} strokeWidth={2} aria-hidden="true" style={{ marginRight: 6, verticalAlign: '-2px' }} />
-      {bulkBusy ? 'Approving…' : `Approve ${visiblePending.length} visible`}
-    </button>
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <button
+        type="button"
+        className="btn btn-purple btn-sm"
+        onClick={handleBulkApprove}
+        disabled={bulkBusy}
+      >
+        <Check size={13} strokeWidth={2} aria-hidden="true" style={{ marginRight: 6, verticalAlign: '-2px' }} />
+        {bulkBusy ? 'Approving…' : `Approve ${visiblePending.length} visible`}
+      </button>
+      <button
+        type="button"
+        className="btn btn-outline btn-sm"
+        onClick={handleBulkSkipAdvance}
+        disabled={bulkBusy}
+        title="Advance every visible candidate without sending the assessment"
+      >
+        <ArrowRight size={13} strokeWidth={2} aria-hidden="true" style={{ marginRight: 6, verticalAlign: '-2px' }} />
+        {bulkBusy ? 'Working…' : `Skip & advance ${visiblePending.length} visible`}
+      </button>
+    </div>
   ) : null;
 
   // Keyboard shortcuts on the action bar — only fire when no modal is
