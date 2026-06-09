@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
+from ...domains.assessments_runtime.pipeline_service import role_pipeline_counts
 from ...domains.assessments_runtime.role_support import get_application
 from ...domains.identity_access.api_key_auth import get_api_principal, require_scope
 from ...models.api_key import (
@@ -33,6 +36,7 @@ from ...services.pre_screening_snapshot import pre_screen_snapshot
 from .schemas import (
     CreatePublicShareLink,
     PublicApplication,
+    PublicApplicationList,
     PublicAssessment,
     PublicCandidate,
     PublicRole,
@@ -41,6 +45,7 @@ from .schemas import (
     PublicTaskSummary,
     PublicTest,
     PublicTestList,
+    RoleMetrics,
 )
 
 router = APIRouter(prefix="/public/v1", tags=["Public API"])
@@ -153,6 +158,109 @@ def get_role(
     return _role_to_public(role)
 
 
+# ---- Role applications + metrics ------------------------------------------
+def _role_or_404(db: Session, role_id: int, organization_id: int) -> Role:
+    role = (
+        db.query(Role)
+        .filter(Role.id == role_id, Role.organization_id == organization_id)
+        .first()
+    )
+    if role is None:
+        raise HTTPException(status_code=404, detail="Role not found")
+    return role
+
+
+@router.get("/roles/{role_id}/applications", response_model=PublicApplicationList)
+def list_role_applications(
+    role_id: int,
+    principal: ApiKey = Depends(require_scope(SCOPE_APPLICATIONS_READ)),
+    db: Session = Depends(get_db),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    workable_stage: Optional[str] = Query(default=None),
+    pipeline_stage: Optional[str] = Query(default=None),
+):
+    """A role's candidate applications — each with Taali's signal + the synced
+    Workable stage. Optional filters: ``workable_stage``, ``pipeline_stage``."""
+    _role_or_404(db, role_id, principal.organization_id)
+    q = (
+        db.query(CandidateApplication)
+        .options(
+            joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.role),
+        )
+        .filter(
+            CandidateApplication.organization_id == principal.organization_id,
+            CandidateApplication.role_id == role_id,
+            CandidateApplication.deleted_at.is_(None),
+        )
+    )
+    if workable_stage:
+        q = q.filter(CandidateApplication.workable_stage == workable_stage)
+    if pipeline_stage:
+        q = q.filter(CandidateApplication.pipeline_stage == pipeline_stage)
+    total = q.count()
+    apps = (
+        q.order_by(CandidateApplication.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return PublicApplicationList(
+        applications=[_application_to_public(a) for a in apps],
+        total=int(total or 0),
+    )
+
+
+@router.get("/roles/{role_id}/metrics", response_model=RoleMetrics)
+def role_metrics(
+    role_id: int,
+    principal: ApiKey = Depends(require_scope(SCOPE_APPLICATIONS_READ)),
+    db: Session = Depends(get_db),
+):
+    """Job metrics: total applications, the canonical Taali funnel
+    (applied/scored/invited/completed/advanced/rejected), decision outcomes,
+    and the Workable hiring-funnel stage distribution (synced from Workable)."""
+    _role_or_404(db, role_id, principal.organization_id)
+    org_id = principal.organization_id
+    base_filters = (
+        CandidateApplication.organization_id == org_id,
+        CandidateApplication.role_id == role_id,
+        CandidateApplication.deleted_at.is_(None),
+    )
+    total = (
+        db.query(func.count(CandidateApplication.id)).filter(*base_filters).scalar()
+        or 0
+    )
+    outcome_rows = (
+        db.query(
+            CandidateApplication.application_outcome,
+            func.count(CandidateApplication.id),
+        )
+        .filter(*base_filters)
+        .group_by(CandidateApplication.application_outcome)
+        .all()
+    )
+    by_outcome = {str(k or "unknown"): int(v or 0) for k, v in outcome_rows}
+    workable_rows = (
+        db.query(
+            CandidateApplication.workable_stage,
+            func.count(CandidateApplication.id),
+        )
+        .filter(*base_filters, CandidateApplication.workable_stage.isnot(None))
+        .group_by(CandidateApplication.workable_stage)
+        .all()
+    )
+    by_workable = {str(k): int(v or 0) for k, v in workable_rows if k}
+    return RoleMetrics(
+        role_id=role_id,
+        total_applications=int(total),
+        taali_funnel=role_pipeline_counts(db, organization_id=org_id, role_id=role_id),
+        by_application_outcome=by_outcome,
+        by_workable_stage=by_workable,
+    )
+
+
 # ---- Applications ---------------------------------------------------------
 def _application_to_public(app: CandidateApplication) -> PublicApplication:
     try:
@@ -182,6 +290,9 @@ def _application_to_public(app: CandidateApplication) -> PublicApplication:
         taali_score_100=app.taali_score_cache_100,
         recommendation=snap.get("pre_screen_recommendation")
         or app.pre_screen_recommendation,
+        workable_stage=app.workable_stage,
+        workable_disqualified=app.workable_disqualified,
+        workable_score=app.workable_score,
         created_at=app.created_at,
     )
 

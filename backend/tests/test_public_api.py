@@ -148,3 +148,78 @@ def test_api_key_list_is_org_scoped(client):
     headers_b, _ = auth_headers(client, organization_name="OrgB-keys")
     listed_b = client.get("/api/v1/api-keys", headers=headers_b).json()
     assert all(k["id"] != key_a["id"] for k in listed_b["keys"])
+
+
+# ---- Workable stage + job metrics ----------------------------------------
+def test_role_applications_expose_workable_stage_and_metrics(client, db):
+    from app.models.candidate import Candidate
+    from app.models.candidate_application import CandidateApplication
+    from app.models.role import Role
+    from app.models.user import User
+
+    headers, email = auth_headers(client, organization_name="OrgMetrics")
+    org_id = db.query(User).filter(User.email == email).first().organization_id
+
+    role = Role(organization_id=org_id, name="Backend Eng", source="manual")
+    db.add(role)
+    db.flush()
+
+    # (email, pipeline_stage, workable_stage, application_outcome)
+    specs = [
+        ("a@ex.com", "applied", "Applied", "open"),
+        ("b@ex.com", "advanced", "Technical Interview", "open"),
+        ("c@ex.com", "applied", "Applied", "rejected"),
+    ]
+    for em, pstage, wstage, outcome in specs:
+        cand = Candidate(organization_id=org_id, email=em, full_name=em.split("@")[0])
+        db.add(cand)
+        db.flush()
+        db.add(
+            CandidateApplication(
+                organization_id=org_id,
+                candidate_id=cand.id,
+                role_id=role.id,
+                pipeline_stage=pstage,
+                application_outcome=outcome,
+                workable_stage=wstage,
+            )
+        )
+    db.commit()
+
+    secret = _mint_key(client, headers, scopes=["applications:read"])["secret"]
+    kh = _key_headers(secret)
+
+    # List exposes the Workable stage alongside Taali's pipeline_stage.
+    listed = client.get(f"/public/v1/roles/{role.id}/applications", headers=kh)
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    assert body["total"] == 3
+    assert len(body["applications"]) == 3
+    assert {a["workable_stage"] for a in body["applications"]} == {"Applied", "Technical Interview"}
+    assert all("pipeline_stage" in a and "workable_stage" in a for a in body["applications"])
+
+    # Filter by Workable stage.
+    filtered = client.get(
+        f"/public/v1/roles/{role.id}/applications?workable_stage=Applied", headers=kh
+    ).json()
+    assert filtered["total"] == 2
+
+    # Metrics: totals + Workable-stage + outcome + the canonical Taali funnel.
+    metrics = client.get(f"/public/v1/roles/{role.id}/metrics", headers=kh).json()
+    assert metrics["total_applications"] == 3
+    assert metrics["by_workable_stage"]["Applied"] == 2
+    assert metrics["by_workable_stage"]["Technical Interview"] == 1
+    assert metrics["by_application_outcome"]["rejected"] == 1
+    assert metrics["by_application_outcome"]["open"] == 2
+    assert isinstance(metrics["taali_funnel"], dict)
+
+
+def test_role_metrics_scope_and_org(client):
+    headers, _ = auth_headers(client, organization_name="OrgMetricsScope")
+    # roles:read only — the applications/metrics endpoints need applications:read.
+    secret = _mint_key(client, headers, scopes=["roles:read"])["secret"]
+    assert client.get("/public/v1/roles/999/applications", headers=_key_headers(secret)).status_code == 403
+    assert client.get("/public/v1/roles/999/metrics", headers=_key_headers(secret)).status_code == 403
+    # With the scope, a missing role is a clean 404.
+    secret2 = _mint_key(client, headers, scopes=["applications:read"])["secret"]
+    assert client.get("/public/v1/roles/999/metrics", headers=_key_headers(secret2)).status_code == 404
