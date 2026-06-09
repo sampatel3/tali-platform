@@ -149,6 +149,11 @@ from .share_link import (
     SHARE_LINK_MODES,
     ShareLink,
 )
+from .api_key import (
+    API_KEY_SCOPES,
+    DEFAULT_API_KEY_SCOPES,
+    ApiKey,
+)
 
 __all__ = [
     "User",
@@ -268,4 +273,7 @@ __all__ = [
     "SHARE_LINK_MODE_CLIENT",
     "SHARE_LINK_MODE_SINGLE_VIEW",
     "SHARE_LINK_MODES",
+    "ApiKey",
+    "API_KEY_SCOPES",
+    "DEFAULT_API_KEY_SCOPES",
 ]
