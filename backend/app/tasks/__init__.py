@@ -108,6 +108,10 @@ from .graph_ingest_tasks import (
     sync_event_to_graph,
     sync_interview_to_graph,
 )
+# Eager-import workable_provider_tasks so the worker registers the result-push
+# flush. The beat schedule references this task name; without the import the
+# worker NotRegistered's it. No-op unless WORKABLE_PROVIDER_ENABLED is set.
+from .workable_provider_tasks import flush_workable_provider
 
 __all__ = [
     "celery_app",
@@ -148,4 +152,5 @@ __all__ = [
     "sync_candidate_to_graph",
     "sync_interview_to_graph",
     "sync_event_to_graph",
+    "flush_workable_provider",
 ]

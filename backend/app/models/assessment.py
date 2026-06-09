@@ -82,6 +82,12 @@ class Assessment(Base):
     workable_job_id = Column(String)
     posted_to_workable = Column(Boolean, default=False)
     posted_to_workable_at = Column(DateTime(timezone=True))
+    # Workable Assessments-Provider (marketplace add-on): the per-assessment
+    # results callback Workable supplies on POST /assessments, and the marker
+    # set once the completed result has been enqueued for push-back. Distinct
+    # from posted_to_workable above (the OAuth-integration comment writeback).
+    workable_callback_url = Column(String, nullable=True)
+    workable_provider_pushed_at = Column(DateTime(timezone=True), nullable=True)
     invite_channel = Column(String, default="manual", nullable=False)
     invite_sent_at = Column(DateTime(timezone=True), nullable=True)
     credit_consumed_at = Column(DateTime(timezone=True), nullable=True)

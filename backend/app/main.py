@@ -349,6 +349,12 @@ from .domains.public_api import router as public_api_router  # noqa: E402
 
 app.include_router(api_keys_router, prefix="/api/v1")
 app.include_router(public_api_router)
+
+# Workable Assessments-Provider marketplace add-on (Workable calls these,
+# authed with the org's Taali API key). Inert until WORKABLE_PROVIDER_ENABLED.
+from .domains.workable_provider.router import router as workable_provider_router  # noqa: E402
+
+app.include_router(workable_provider_router)
 # HANDOFF v2 §3 — public share viewer is mounted at /share/:token
 # (no /api/v1 prefix) so the URL the recruiter copy-pastes works in
 # any browser without auth and without exposing the API surface.

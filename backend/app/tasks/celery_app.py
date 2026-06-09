@@ -254,6 +254,15 @@ celery_app.conf.update(
             "task": "app.tasks.brain_feed_tasks.flush_brain_feed",
             "schedule": 900.0,
         },
+        # Push scored Workable-marketplace assessment results back to Workable.
+        # No-op unless WORKABLE_PROVIDER_ENABLED is on (default off), so this is
+        # inert on the live platform until the add-on is deliberately enabled.
+        # Every 2 min surfaces a completed result on the candidate's Workable
+        # timeline promptly.
+        "flush-workable-provider-every-2-minutes": {
+            "task": "app.tasks.workable_provider_tasks.flush_workable_provider",
+            "schedule": 120.0,
+        },
     },
 )
 

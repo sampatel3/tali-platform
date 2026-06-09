@@ -230,6 +230,10 @@ class Settings(BaseSettings):
     WORKABLE_CLIENT_ID: str = ""
     WORKABLE_CLIENT_SECRET: str = ""
     WORKABLE_WEBHOOK_SECRET: str = ""
+    # Workable Assessments-Provider marketplace add-on. Off by default: the
+    # result-callback sweep/drain is a no-op until deliberately enabled, so the
+    # live platform is unaffected.
+    WORKABLE_PROVIDER_ENABLED: bool = False
 
     # Stripe
     STRIPE_API_KEY: str = ""
