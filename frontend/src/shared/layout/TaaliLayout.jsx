@@ -222,6 +222,13 @@ export const MarketingNav = ({ onNavigate }) => {
               {tab.label}
             </button>
           ))}
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => { window.location.href = '/developers'; }}
+          >
+            Developers
+          </button>
         </div>
         <div className="row" style={{ gap: 10 }}>
           <PageLink page="login" className="btn btn-ghost btn-sm !hidden sm:!inline-flex">
@@ -265,6 +272,13 @@ export const MarketingNav = ({ onNavigate }) => {
                 {tab.label}
               </button>
             ))}
+            <button
+              type="button"
+              className="w-full rounded-[10px] px-3 py-3 text-left text-[0.9375rem] font-medium text-[var(--ink)] transition hover:bg-[var(--bg-3)]"
+              onClick={() => { closeMenu(); window.location.href = '/developers'; }}
+            >
+              Developers
+            </button>
           </div>
           <div className="mt-3 flex items-center gap-3 border-t border-[var(--line)] pt-4">
             <PageLink
