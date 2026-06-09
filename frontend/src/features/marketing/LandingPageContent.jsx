@@ -195,6 +195,7 @@ const footerColumns = [
       { label: 'AI collab score', section: 'platform' },
       { label: 'Question bank', section: 'platform' },
       { label: 'Integrations', section: 'platform' },
+      { label: 'Developers / API', href: '/developers' },
       { label: 'Product walkthrough', page: 'showcase' },
     ],
   },
