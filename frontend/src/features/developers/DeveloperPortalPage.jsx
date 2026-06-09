@@ -57,8 +57,8 @@ body { background: #0a0a11; }
 .devx code { font-family: var(--font-mono, monospace); font-size: 13px; background: var(--x-purple-soft); color: var(--x-purple); padding: 1px 6px; border-radius: 6px; }
 .devx-codewrap { position: relative; margin: 12px 0; }
 .devx-pre { background: var(--x-surface); color: #e9e9f5; border: 1px solid var(--x-line); border-radius: 12px; padding: 16px; overflow-x: auto; font-family: var(--font-mono, monospace); font-size: 13px; line-height: 1.6; margin: 0; }
-.devx-copy { position: absolute; top: 10px; right: 10px; background: rgba(255,255,255,0.08); color: #fff; border: 1px solid var(--x-line); border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
-.devx-copy:hover { background: rgba(255,255,255,0.16); }
+.devx-copy { position: absolute; top: 10px; right: 10px; background: #2a2a3a; color: #fff; border: 1px solid var(--x-line); border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.devx-copy:hover { background: #38384e; }
 .devx-grp { margin-top: 20px; }
 .devx-grp-title { font-weight: 700; font-size: 13px; margin-bottom: 4px; color: var(--x-fg); }
 .devx-ep { display: grid; grid-template-columns: 56px minmax(0,1fr); gap: 12px; padding: 12px 0; border-top: 1px solid var(--x-line); }
