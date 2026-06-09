@@ -953,8 +953,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const evaluationRubric = (completedAssessment?.evaluation_rubric && typeof completedAssessment.evaluation_rubric === 'object')
     ? completedAssessment.evaluation_rubric
     : EMPTY_RUBRIC;
-  const workableConnected = Boolean(orgData?.workable_connected);
-  const workableSource = Boolean(application?.workable_sourced || application?.workable_score_raw != null || application?.workable_profile_url);
   // Strengths and risks are now derived from the same
   // requirements_assessment data that drives the Matched / Missing
   // cards on the CV & match tab — so what shows on Overview matches
@@ -1186,28 +1184,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       setSavingNote(false);
     }
   }, [assessmentId, assessmentsApi, noteDraft, showToast]);
-
-  const handlePostToWorkable = useCallback(async () => {
-    if (!assessmentId || !assessmentsApi?.postToWorkable) {
-      showToast('Workable posting is unavailable for this report.', 'error');
-      return;
-    }
-    setBusyAction('workable');
-    try {
-      const res = await assessmentsApi.postToWorkable(assessmentId);
-      const postedAt = res?.data?.posted_to_workable_at || new Date().toISOString();
-      setCompletedAssessment((prev) => ({
-        ...(prev || {}),
-        posted_to_workable: true,
-        posted_to_workable_at: postedAt,
-      }));
-      showToast(res?.data?.already_posted ? 'Already posted to Workable' : 'Posted to Workable', 'success');
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to post to Workable.'), 'error');
-    } finally {
-      setBusyAction('');
-    }
-  }, [assessmentId, assessmentsApi, showToast]);
 
   // One-click share: mint a fresh 7-day share-link of the requested mode
   // and copy the URL to the clipboard. Replaces the previous ShareModal
@@ -1688,11 +1664,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   {busyAction === 'request-cv' ? 'Sending…' : 'Request CV upload'}
                 </button>
               ) : null}
-              {workableConnected && workableSource && !completedAssessment?.posted_to_workable ? (
-                <button type="button" className="btn btn-outline btn-sm" onClick={handlePostToWorkable} disabled={busyAction !== ''}>
-                  {busyAction === 'workable' ? 'Posting…' : 'Post to Workable'}
-                </button>
-              ) : null}
               <button type="button" className="btn btn-outline btn-sm" onClick={handleDeleteAssessment} disabled={busyAction !== ''}>
                 {busyAction === 'delete' ? 'Deleting…' : 'Delete assessment'}
               </button>
@@ -1755,25 +1726,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   </div>
                 ))}
               </div>
-              {workableConnected && workableSource && assessmentId ? (
-                <div className="wk-push" data-internal-only>
-                  <div className="lg">W</div>
-                  <div>
-                    <h4>{completedAssessment?.posted_to_workable ? 'Posted to Workable' : 'Push final report to Workable'}</h4>
-                    <div className="meta">
-                      <span>Taali {reportModel?.summaryModel?.taaliScore != null ? Math.round(reportModel.summaryModel.taaliScore) : '—'}</span>
-                      <span>Workable {application?.workable_score_raw != null ? Math.round(application.workable_score_raw) : '—'}</span>
-                    </div>
-                  </div>
-                  {completedAssessment?.posted_to_workable ? (
-                    <span className="chip green">Posted</span>
-                  ) : (
-                    <button type="button" className="btn btn-outline btn-sm" onClick={handlePostToWorkable} disabled={busyAction === 'workable'}>
-                      {busyAction === 'workable' ? 'Posting…' : 'Post'}
-                    </button>
-                  )}
-                </div>
-              ) : null}
             </div>
           </div>
 

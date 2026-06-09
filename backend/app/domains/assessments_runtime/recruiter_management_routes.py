@@ -13,8 +13,6 @@ from sqlalchemy.orm import Session, joinedload
 from ...components.assessments.repository import assessment_to_response, utcnow
 from ...components.assessments.service import get_assessment_creation_gate
 from ...deps import get_current_user
-from ...domains.integrations_notifications.adapters import build_workable_adapter
-from ...services.workable_actions_service import resolve_workable_actor_member_id
 from ...domains.integrations_notifications.invite_flow import dispatch_assessment_invite
 from ...models.assessment import Assessment
 from ...models.assessment_experiment import ASSIGNMENT_METHOD_FORCED
@@ -427,70 +425,3 @@ def resend_assessment_invite(
         raise HTTPException(status_code=400, detail=result.detail)
     db.commit()
     return {"success": True}
-
-
-@router.post("/{assessment_id}/post-to-workable")
-def post_assessment_to_workable(
-    assessment_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    if settings.MVP_DISABLE_WORKABLE:
-        raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
-    assessment = (
-        db.query(Assessment)
-        .options(joinedload(Assessment.candidate), joinedload(Assessment.task))
-        .filter(
-            Assessment.id == assessment_id,
-            Assessment.organization_id == current_user.organization_id,
-        )
-        .first()
-    )
-    if not assessment:
-        raise HTTPException(status_code=404, detail="Assessment not found")
-    if bool(getattr(assessment, "is_voided", False)):
-        raise HTTPException(status_code=400, detail="Voided assessments cannot be posted to Workable")
-    if assessment.posted_to_workable:
-        return {
-            "success": True,
-            "already_posted": True,
-            "posted_to_workable": True,
-            "posted_to_workable_at": assessment.posted_to_workable_at,
-        }
-
-    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
-    if not org or not org.workable_connected or not org.workable_access_token or not org.workable_subdomain:
-        raise HTTPException(status_code=400, detail="Workable is not connected")
-    if not assessment.workable_candidate_id:
-        raise HTTPException(status_code=400, detail="Assessment is not linked to a Workable candidate")
-
-    member_id = resolve_workable_actor_member_id(org, getattr(assessment, "role", None))
-    if not member_id:
-        raise HTTPException(status_code=400, detail="Workable actor member is not configured")
-
-    svc = build_workable_adapter(
-        access_token=org.workable_access_token,
-        subdomain=org.workable_subdomain,
-    )
-    result = svc.post_assessment_result(
-        candidate_id=assessment.workable_candidate_id,
-        member_id=member_id,
-        assessment_data={
-            "score": assessment.score or 0,
-            "tests_passed": assessment.tests_passed or 0,
-            "tests_total": assessment.tests_total or 0,
-            "time_taken": assessment.duration_minutes,
-            "results_url": f"{settings.FRONTEND_URL}/assessments/{assessment.id}",
-        },
-    )
-    if not result.get("success"):
-        raise HTTPException(status_code=502, detail="Failed to post to Workable")
-
-    assessment.posted_to_workable = True
-    assessment.posted_to_workable_at = utcnow()
-    db.commit()
-    return {
-        "success": True,
-        "posted_to_workable": True,
-        "posted_to_workable_at": assessment.posted_to_workable_at,
-    }
