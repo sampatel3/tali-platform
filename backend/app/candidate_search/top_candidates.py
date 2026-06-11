@@ -270,6 +270,10 @@ def find_top_candidates(
         rerank_enabled=False,
         include_subgraph=False,
         parser_client=parser_client,
+        # Keep the prefilter purely structural — qualitative criteria are
+        # grounded against the CV below, NOT ILIKE-matched into the pool
+        # (a phrase like "banking domain experience" matches ~zero CVs).
+        defer_qualitative=True,
     )
     parsed = result.parsed_filter
     criteria = _collect_criteria(parsed)

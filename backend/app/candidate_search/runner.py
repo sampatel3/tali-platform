@@ -63,6 +63,7 @@ def run_search(
     include_subgraph: bool = False,
     parser_client=None,
     rerank_client=None,
+    defer_qualitative: bool = False,
 ) -> SearchOutput:
     """Execute one NL search pass.
 
@@ -98,12 +99,23 @@ def run_search(
         if parsed and not parsed.is_empty():
             cache_module.set(cache_key, parsed)
 
-    # Apply hard SQL filters. soft_criteria_as_keywords=False when rerank
-    # is enabled — we rely on Claude to evaluate qualitative criteria
-    # rather than ILIKE-prefilter and risk false negatives.
-    soft_as_keywords = not (rerank_enabled and parsed.soft_criteria)
+    # Apply hard SQL filters. ``defer_qualitative`` (the grounded top-N path,
+    # which grounds qualitative criteria itself via CV citations) keeps the
+    # SQL prefilter PURELY STRUCTURAL — it must not ILIKE-prefilter
+    # soft_criteria or keywords, which phrase-match the pool to near-zero
+    # (e.g. no CV literally contains "banking domain experience"). Otherwise
+    # soft_criteria_as_keywords=False when rerank will evaluate them, and the
+    # keyword ILIKE remains the residual fallback.
+    soft_as_keywords = (not defer_qualitative) and not (
+        rerank_enabled and parsed.soft_criteria
+    )
+    parsed_for_sql = parsed
+    if defer_qualitative and parsed.keywords:
+        # Strip the residual keyword ILIKE for the SQL pass only; the caller
+        # grounds these against the CV. The returned parsed_filter keeps them.
+        parsed_for_sql = parsed.model_copy(update={"keywords": []})
     sql_query = apply_parsed_filter(
-        base_query, parsed, soft_criteria_as_keywords=soft_as_keywords
+        base_query, parsed_for_sql, soft_criteria_as_keywords=soft_as_keywords
     )
 
     # Execute graph predicates: AND-narrow by candidate id set.
