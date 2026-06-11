@@ -101,9 +101,10 @@ _SYSTEM_PROMPT = (
     "Rules:\n"
     "- MET: the CV clearly satisfies the criterion. PARTIAL: related but "
     "incomplete evidence. MISSING: no supporting evidence.\n"
-    "- For MET or PARTIAL, your sentence MUST restate the specific CV fact "
-    "(employer, title, project, dates, or exact phrase) that supports it, so "
-    "it is cited against the document.\n"
+    "- For MET or PARTIAL, restate the SINGLE most specific CV line or phrase "
+    "(employer, title, project, dates, or the exact phrase) that proves it, so "
+    "it is cited. Keep it tight — cite the one decisive line, NOT contact "
+    "details, full skills lists, or surrounding boilerplate.\n"
     "- For MISSING, say no evidence was found and cite nothing.\n"
     "- NEVER claim evidence that is not in the document. Absence of evidence "
     "is MISSING — never inferred from adjacent or similar facts.\n"
@@ -202,6 +203,44 @@ def parse_citation_response(
     return verdicts
 
 
+# Citation granularity. Plain-text documents are auto-chunked "by sentence",
+# which yields a single giant block for separator-laden CV headers (no real
+# sentence boundaries) — so the model can only cite the whole blob. We instead
+# send the CV as a CUSTOM-CONTENT document of small pre-split blocks, so a
+# citation lands on one tight, relevant line.
+CV_CHUNK_MAX_LEN = 220
+MAX_CV_CHUNKS = 400
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_SEPARATOR_SPLIT_RE = re.compile(r"\s*[·•|;]\s*")
+
+
+def _chunk_cv(text: str) -> list[str]:
+    """Split a CV into small citable blocks: by line, then sentence, then
+    separators (· | ;), with a hard length cap as the last resort."""
+    chunks: list[str] = []
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        for sentence in _SENTENCE_SPLIT_RE.split(line):
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            if len(sentence) <= CV_CHUNK_MAX_LEN:
+                chunks.append(sentence)
+            else:
+                for seg in _SEPARATOR_SPLIT_RE.split(sentence):
+                    seg = seg.strip()
+                    while len(seg) > CV_CHUNK_MAX_LEN:
+                        chunks.append(seg[:CV_CHUNK_MAX_LEN].strip())
+                        seg = seg[CV_CHUNK_MAX_LEN:].strip()
+                    if seg:
+                        chunks.append(seg)
+            if len(chunks) >= MAX_CV_CHUNKS:
+                return chunks[:MAX_CV_CHUNKS]
+    return chunks[:MAX_CV_CHUNKS]
+
+
 def extract_cv_evidence(
     *,
     cv_text: str | None,
@@ -226,6 +265,12 @@ def extract_cv_evidence(
             for c in criteria
         ]
     cv = cv[:CV_TEXT_CHAR_CAP]
+    chunks = _chunk_cv(cv)
+    if not chunks:
+        return [
+            CriterionVerdict(criterion=c, status="missing", note="CV text unavailable.")
+            for c in criteria
+        ]
 
     messages = [
         {
@@ -234,9 +279,8 @@ def extract_cv_evidence(
                 {
                     "type": "document",
                     "source": {
-                        "type": "text",
-                        "media_type": "text/plain",
-                        "data": cv,
+                        "type": "content",
+                        "content": [{"type": "text", "text": ch} for ch in chunks],
                     },
                     "title": "Candidate CV",
                     "citations": {"enabled": True},

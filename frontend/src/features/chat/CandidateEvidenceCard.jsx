@@ -1,5 +1,26 @@
-import React from 'react';
+import React, { useState } from 'react';
 import './CandidateEvidenceCard.css';
+
+const QUOTE_CAP = 180;
+
+// Verbatim CV quote: collapse the CV's ragged whitespace, and cap the length
+// with an inline "more" toggle so a long citation doesn't dominate the card.
+function Quote({ text }) {
+  const [open, setOpen] = useState(false);
+  const clean = (text || '').replace(/\s+/g, ' ').trim();
+  const long = clean.length > QUOTE_CAP;
+  const shown = open || !long ? clean : `${clean.slice(0, QUOTE_CAP).trimEnd()}…`;
+  return (
+    <blockquote className="ev-quote">
+      “{shown}”
+      {long ? (
+        <button type="button" className="ev-more" onClick={() => setOpen((o) => !o)}>
+          {open ? 'less' : 'more'}
+        </button>
+      ) : null}
+    </blockquote>
+  );
+}
 
 // Renders the grounded "top N with X and Y" result from find_top_candidates.
 // One component for both chat surfaces: taali-chat passes the tool result as
@@ -47,9 +68,7 @@ function CriterionRow({ c }) {
       {grounded && quotes.length ? (
         <div className="ev-quotes">
           {quotes.map((e, i) => (
-            <blockquote key={i} className="ev-quote">
-              “{e.quote}”
-            </blockquote>
+            <Quote key={i} text={e.quote} />
           ))}
         </div>
       ) : (
