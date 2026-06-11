@@ -4,6 +4,7 @@ import ToolCallCard from './ToolCallCard';
 import CandidateGrid from './CandidateGrid';
 import ComparisonTable from './ComparisonTable';
 import GraphView from './GraphView';
+import CandidateEvidenceCard from './CandidateEvidenceCard';
 
 const ToolResultRender = ({ part }) => {
   // Decide which custom renderer(s) to show for this tool's payload. A
@@ -11,6 +12,9 @@ const ToolResultRender = ({ part }) => {
   // hydrated applications) and an inline graph (the underlying nodes +
   // edges from Graphiti) — they're complementary views of the same hit.
   if (!part.result) return null;
+  if (part.toolName === 'find_top_candidates') {
+    return <CandidateEvidenceCard data={part.result} />;
+  }
   if (part.toolName === 'compare_applications') {
     return <ComparisonTable payload={part.result} />;
   }

@@ -12,6 +12,7 @@ import { agentChat } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import { ChatComposer, ChatEmptyState, ChatMessage, ThinkingDots } from '../../shared/chat';
 import { DraftTaskCard, ImpactCard, NeedsInputCard } from '../home/agentchat/cards.jsx';
+import CandidateEvidenceCard from './CandidateEvidenceCard';
 
 const ON_SUGGESTIONS = [
   'Who in the pool is based in MENA?',
@@ -250,7 +251,9 @@ const AgentConversation = ({
                   text={it.text}
                 >
                   {(it.actions || []).map((card, i) =>
-                    card.type === 'draft_task_review' ? (
+                    card.type === 'candidate_evidence' ? (
+                      <CandidateEvidenceCard key={i} data={card} />
+                    ) : card.type === 'draft_task_review' ? (
                       <DraftTaskCard
                         key={i}
                         card={card}

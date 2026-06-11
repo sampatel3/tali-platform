@@ -10,6 +10,7 @@ import { agentChat } from '../../../shared/api';
 import { useToast } from '../../../context/ToastContext';
 import { ChatComposer, ChatEmptyState, ChatMessage, ThinkingDots } from '../../../shared/chat';
 import { DraftTaskCard, ImpactCard, NeedsInputCard } from './cards.jsx';
+import CandidateEvidenceCard from '../../chat/CandidateEvidenceCard';
 
 // Role-scoped empty-state prompts. Off roles get an activation suggestion that
 // drives the agent's set_agent_state tool, so you can light one up from Home.
@@ -258,7 +259,9 @@ export function AgentChatDock({
             ) : (
               <ChatMessage key={it.id} role={it.author === 'agent' ? 'assistant' : 'user'} text={it.text}>
                 {(it.actions || []).map((card, i) =>
-                  card.type === 'draft_task_review' ? (
+                  card.type === 'candidate_evidence' ? (
+                    <CandidateEvidenceCard key={i} data={card} />
+                  ) : card.type === 'draft_task_review' ? (
                     <DraftTaskCard
                       key={i}
                       card={card}

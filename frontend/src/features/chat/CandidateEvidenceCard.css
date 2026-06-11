@@ -1,0 +1,182 @@
+/* Grounded candidate-evidence card. Purple family only (no red/amber/green),
+   styled against global design tokens so it renders identically in the
+   taali-chat thread and the per-role agent-chat dock. */
+
+.ev-card {
+  border: 1px solid var(--line, #e6e3ef);
+  border-radius: 14px;
+  background: var(--bg-2, #faf9fe);
+  padding: 14px 14px 10px;
+  margin: 8px 0;
+  font-size: 13px;
+  color: var(--ink, #1c1830);
+}
+
+.ev-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+.ev-title {
+  font-weight: 650;
+  font-size: 14px;
+}
+.ev-echo {
+  font-weight: 400;
+  color: var(--muted, #6b6480);
+}
+.ev-meta {
+  font-size: 11.5px;
+  color: var(--muted, #6b6480);
+}
+
+.ev-warn {
+  font-size: 11.5px;
+  color: var(--purple, #6d28d9);
+  background: var(--purple-soft, #ece7fb);
+  border-radius: 8px;
+  padding: 4px 8px;
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ev-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ev-cand {
+  border-top: 1px solid var(--line, #ece9f4);
+  padding-top: 10px;
+}
+.ev-cand:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.ev-cand-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ev-rank {
+  font-weight: 700;
+  color: var(--purple, #6d28d9);
+  font-size: 12px;
+  min-width: 22px;
+}
+.ev-name {
+  font-weight: 600;
+  color: var(--ink, #1c1830);
+  text-decoration: none;
+}
+.ev-name:hover {
+  text-decoration: underline;
+}
+.ev-sub {
+  font-size: 11.5px;
+  color: var(--muted, #6b6480);
+  margin: 2px 0 6px 22px;
+}
+
+.ev-pill {
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.ev-score-high {
+  background: var(--purple, #6d28d9);
+  color: #fff;
+}
+.ev-score-mid {
+  background: var(--purple-soft, #ece7fb);
+  color: var(--purple, #6d28d9);
+}
+.ev-score-low {
+  background: #f0eef5;
+  color: #6b6480;
+}
+.ev-score-none {
+  background: #f0eef5;
+  color: #9a93ad;
+}
+.ev-allmet {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--purple, #6d28d9);
+  border: 1px solid var(--purple-soft, #d9cffb);
+  border-radius: 999px;
+  padding: 0 7px;
+}
+
+.ev-crits {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-left: 22px;
+}
+.ev-crit-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.ev-chip {
+  font-size: 10.5px;
+  font-weight: 700;
+  border-radius: 6px;
+  padding: 1px 7px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.ev-chip-met {
+  background: var(--purple, #6d28d9);
+  color: #fff;
+}
+.ev-chip-partial {
+  background: var(--purple-soft, #ece7fb);
+  color: var(--purple, #6d28d9);
+}
+.ev-chip-missing {
+  background: transparent;
+  color: #9a93ad;
+  border: 1px solid var(--line, #e0dcec);
+}
+.ev-crit-text {
+  font-size: 12.5px;
+}
+.ev-src {
+  font-size: 10px;
+  color: #9a93ad;
+  border: 1px solid var(--line, #ece9f4);
+  border-radius: 5px;
+  padding: 0 5px;
+}
+.ev-quotes {
+  margin: 3px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ev-quote {
+  margin: 0;
+  padding: 3px 0 3px 9px;
+  border-left: 2px solid var(--purple, #6d28d9);
+  color: #3a3450;
+  font-style: italic;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.ev-noquote {
+  font-size: 11.5px;
+  color: #9a93ad;
+  margin-top: 2px;
+  font-style: italic;
+}

@@ -157,6 +157,39 @@ TAALI_CHAT_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "find_top_candidates",
+        "description": (
+            "GROUNDED top-N ranking. Use this whenever the recruiter asks for "
+            "the 'best' or 'top N' candidates with one or more qualities "
+            "(e.g. 'top 5 data engineers with banking domain experience'). It "
+            "(1) ranks the structured-match set by score, then (2) attaches "
+            "to each shortlisted candidate a per-criterion verdict backed by "
+            "VERBATIM CV evidence (a real quote with char offsets, via "
+            "citations or a stored requirement assessment). Returns a `spec` "
+            "echo of how the query was read, `total_matched`, and grounded "
+            "`candidates` (each with `criteria[].status` + `evidence[].quote`). "
+            "Prefer this over nl_search_candidates for ranked 'top/best with "
+            "<quality>' asks — it does the ranking and grounding for you. When "
+            "you answer, cite the quotes; never add a fact that isn't in the "
+            "evidence."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 10},
+                "rank_by": {
+                    "type": "string",
+                    "enum": ["taali", "pre_screen", "rank", "cv_match"],
+                    "default": "taali",
+                    "description": "Score to rank by. Default 'taali' (merged fit).",
+                },
+                "role_id": {"type": ["integer", "null"]},
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "nl_search_candidates",
         "description": (
             "Semantic / natural-language candidate search. Parses the query "
@@ -292,6 +325,7 @@ _HANDLER_BY_NAME: dict[str, Callable[..., Any]] = {
     "get_application": handlers.get_application,
     "get_candidate": handlers.get_candidate,
     "compare_applications": handlers.compare_applications,
+    "find_top_candidates": handlers.find_top_candidates,
     "nl_search_candidates": handlers.nl_search_candidates,
     "graph_search_candidates": handlers.graph_search_candidates,
     "get_candidate_cv": handlers.get_candidate_cv,

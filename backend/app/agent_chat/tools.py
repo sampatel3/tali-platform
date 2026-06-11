@@ -39,6 +39,7 @@ CARD_TYPES = frozenset(
         "constraint_change",
         "job_spec_change",
         "draft_task_review",
+        "candidate_evidence",
     }
 )
 # Cards that represent a committed mutation (vs read-only analysis).
@@ -345,6 +346,32 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "find_top_candidates",
+        "description": (
+            "GROUNDED top-N ranking on THIS role. Use when the recruiter asks "
+            "for the 'best' or 'top N' candidates with a quality (e.g. 'top 5 "
+            "with banking domain experience', 'best candidates who've led a "
+            "team'). Ranks by score, then attaches to each shortlisted "
+            "candidate a per-criterion verdict backed by a VERBATIM CV quote "
+            "(via citations or a stored requirement assessment). Renders an "
+            "evidence card; cite the quotes in your reply and never add a fact "
+            "that isn't in the evidence."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 10},
+                "rank_by": {
+                    "type": "string",
+                    "enum": ["taali", "pre_screen", "rank", "cv_match"],
+                    "default": "taali",
+                },
+            },
             "required": ["query"],
         },
     },
@@ -698,6 +725,21 @@ def dispatch_tool(
             )
         except Exception as exc:  # noqa: BLE001 — surface, don't crash the turn
             return {"available": False, "error": f"search unavailable: {type(exc).__name__}"}
+    if name == "find_top_candidates":
+        # Grounded top-N for this role. Tagged as a card so the engine lifts
+        # it into message.actions for the evidence-card UI (and the model
+        # still narrates the verbatim quotes in the result).
+        from ..mcp import handlers as _mcp_handlers
+
+        payload = _mcp_handlers.find_top_candidates(
+            db,
+            user,
+            query=str(args.get("query") or ""),
+            limit=int(args.get("limit") or 10),
+            rank_by=str(args.get("rank_by") or "taali"),
+            role_id=int(role.id),
+        )
+        return {"type": "candidate_evidence", **payload}
     if name == "set_agent_state":
         return _controls.set_agent_state(db, role, action=str(args.get("action") or ""))
     if name == "adjust_agent_settings":

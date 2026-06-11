@@ -407,6 +407,49 @@ def nl_search_candidates(
     }
 
 
+def find_top_candidates(
+    db: Session,
+    user: User,
+    *,
+    query: str,
+    limit: int = 10,
+    rank_by: str = "taali",
+    role_id: int | None = None,
+) -> dict[str, Any]:
+    """Grounded "top N candidates with X and Y".
+
+    Ranks the structured-match set by ``rank_by`` (taali by default) and
+    returns the top ``limit`` candidates, each carrying per-criterion
+    verdicts backed by *verbatim CV evidence* (Anthropic Citations, or a
+    reused stored requirement assessment). Use for "best/top N <role/skill>
+    with <qualities>" requests — it does the ranking and the grounding so
+    the answer is defensible rather than free-form. Returns a ``spec`` echo
+    of how the query was interpreted, ``total_matched``, the grounded
+    ``candidates``, and any ``warnings``.
+    """
+    from ..candidate_search.top_candidates import find_top_candidates as _engine
+
+    text = (query or "").strip()
+    if not text:
+        raise ValueError("query must be non-empty")
+
+    base = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == user.organization_id,
+        CandidateApplication.deleted_at.is_(None),
+    )
+    if role_id is not None:
+        base = base.filter(CandidateApplication.role_id == int(role_id))
+
+    return _engine(
+        db=db,
+        organization_id=int(user.organization_id),
+        query=text,
+        base_query=base,
+        limit=int(limit),
+        rank_by=str(rank_by or "taali"),
+    )
+
+
 def graph_search_candidates(
     db: Session,
     user: User,
