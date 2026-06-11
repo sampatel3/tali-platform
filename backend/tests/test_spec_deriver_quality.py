@@ -107,6 +107,7 @@ _JUNK_SPEC = (
     "- Lakehouse architecture and Medallion design\n"
     "As an AI consultancy, our greatest asset is the expertise of our people and their drive.\n"
     "While technical mastery is the foundation of what we do, the ability to communicate matters.\n"
+    "If you thrive on the challenge of presenting cutting-edge solutions as much as building them.\n"
 )
 
 
@@ -118,9 +119,10 @@ def test_markdown_headers_connectives_and_prose_are_dropped():
     assert not any("you should also have knowledge" in t for t in lowered)
     # A bare connective left by a naive line split is dropped.
     assert "and" not in lowered
-    # Culture/mission boilerplate prose is dropped.
+    # Culture/mission boilerplate prose is dropped (various sentence openers).
     assert not any("ai consultancy" in t for t in lowered)
     assert not any("technical mastery" in t for t in lowered)
+    assert not any("if you thrive" in t for t in lowered)
     # The real skill lines survive, with markdown stripped.
     assert any("aws glue" in t for t in lowered)
     assert any("lakehouse" in t for t in lowered)
@@ -133,3 +135,28 @@ def test_short_requirement_starting_with_opener_word_survives():
     # dropped as prose — the prose filter also requires real sentence length.
     items = derive_criteria_texts("Requirements\n- We use Python and AWS daily")
     assert any("python" in t.lower() for t in items)
+
+
+def test_soft_language_does_not_auto_promote_to_must():
+    # "minimum", "at least", "proven", "demonstrated" are boilerplate JD phrasing
+    # ("minimum 5 years", "proven track record"), NOT decisive must-have wording.
+    # They stay preferred so a bulk re-derive doesn't plant tenure/soft hard-bars.
+    items = derive_criteria(
+        "Requirements\n"
+        "- A minimum of 6 years in cybersecurity\n"
+        "- Proven track record of delivering platforms at scale\n"
+        "- Demonstrated ability to mentor junior engineers\n"
+    )
+    assert items
+    assert all(c.bucket == "preferred" and c.must_have is False for c in items)
+
+
+def test_decisive_language_still_promotes_to_must():
+    # Explicit "required" / "essential" / "must" / "mandatory" => must-have.
+    items = derive_criteria(
+        "Requirements\n"
+        "- Professional certification is required\n"
+        "- Essential experience with Kubernetes in production\n"
+    )
+    assert items
+    assert all(c.bucket == "must" and c.must_have is True for c in items)

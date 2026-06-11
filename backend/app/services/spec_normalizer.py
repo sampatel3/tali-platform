@@ -133,8 +133,12 @@ _JUNK_HEADER = re.compile(
 
 # Per-line bucket signals.
 _MUST_HINT = re.compile(
-    r"\b(?:must|required|require[sd]?|essential|mandatory|minimum|at\s+least|proven"
-    r"|demonstrated)\b",
+    # Only DECISIVE wording auto-promotes to must-have. Soft signals — "minimum",
+    # "at least", "proven", "demonstrated" — are deliberately excluded: they're
+    # boilerplate JD phrasing ("minimum 5 years", "proven track record") that
+    # over-promotes tenure/soft criteria into hard rejects. Recruiters promote
+    # those deliberately.
+    r"\b(?:must|require[sd]?|essential|mandatory)\b",
     re.IGNORECASE,
 )
 _PREFERRED_HINT = re.compile(
@@ -180,7 +184,7 @@ _CONNECTIVE_ONLY = re.compile(
 # the foundation…"). Dropped only when it BOTH opens like a sentence AND runs
 # long, so terse real requirements never trip it.
 _PROSE_OPENER = re.compile(
-    r"^(?:as|while|whilst|our|we|at|it|this|that|these|those|here|there|whether"
+    r"^(?:as|while|whilst|if|our|we|at|it|this|that|these|those|here|there|whether"
     r"|because|since|although|though|you\s+will|you'?ll|we'?re|we\s+are)\b",
     re.IGNORECASE,
 )
