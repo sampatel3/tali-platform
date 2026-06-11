@@ -436,6 +436,11 @@ def find_top_candidates(
     base = db.query(CandidateApplication).filter(
         CandidateApplication.organization_id == user.organization_id,
         CandidateApplication.deleted_at.is_(None),
+        # Only rank candidates still actionable in the pool. Don't recommend
+        # ones a decision was already made on: exclude rejected/withdrawn/hired
+        # (outcome != open) and ones already advanced out of the funnel.
+        CandidateApplication.application_outcome == "open",
+        func.lower(func.coalesce(CandidateApplication.pipeline_stage, "")) != "advanced",
     )
     if role_id is not None:
         base = base.filter(CandidateApplication.role_id == int(role_id))

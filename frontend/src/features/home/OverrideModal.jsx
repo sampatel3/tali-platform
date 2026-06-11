@@ -96,7 +96,9 @@ export const OverrideModal = ({
       }
       let res;
       if (mode === 'approve') {
-        res = await agentApi.approveDecision(decision.id, payload);
+        res = await agentApi.approveDecision(decision.id, payload, {
+          force: Boolean(decision.is_stale),
+        });
       } else {
         res = await agentApi.overrideDecision(decision.id, {
           ...payload,
