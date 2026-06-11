@@ -132,7 +132,6 @@ _JUNK_HEADER = re.compile(
 )
 
 # Per-line bucket signals.
-_YEARS_RE = re.compile(r"\b\d+\+?\s*(?:years?|yrs?)\b", re.IGNORECASE)
 _MUST_HINT = re.compile(
     r"\b(?:must|required|require[sd]?|essential|mandatory|minimum|at\s+least|proven"
     r"|demonstrated)\b",
@@ -159,6 +158,41 @@ _BENEFIT_NOISE = re.compile(
     re.IGNORECASE,
 )
 
+# Inline markdown to strip from a candidate line before classifying it, so a
+# bolded lead-in ("**You will have experience in:**") is seen as the bare
+# header it is (then dropped on its trailing colon), and a bolded real bullet
+# ("**AWS Glue**") is stored as clean text. Internal single _/* are preserved
+# so identifiers like "spark_sql" survive.
+_LEADING_MD_HEADING = re.compile(r"^\s*#{1,6}\s*")
+_BOLD_MARKERS = re.compile(r"\*\*|__")
+_EDGE_EMPHASIS = re.compile(r"^[\*_\s]+|[\*_\s]+$")
+
+# A bare connective / filler left behind by a naive line split ("and", "or",
+# a lone "etc."). Never a selection criterion on its own.
+_CONNECTIVE_ONLY = re.compile(
+    r"^(?:and|or|but|nor|so|yet|plus|also|including|as\s+well\s+as|and\s*/\s*or"
+    r"|etc\.?|i\.?\s*e\.?|e\.?\s*g\.?)$",
+    re.IGNORECASE,
+)
+
+# Narrative/boilerplate prose that bleeds in from culture/mission paragraphs
+# ("As an AI consultancy, our greatest asset…", "While technical mastery is
+# the foundation…"). Dropped only when it BOTH opens like a sentence AND runs
+# long, so terse real requirements never trip it.
+_PROSE_OPENER = re.compile(
+    r"^(?:as|while|whilst|our|we|at|it|this|that|these|those|here|there|whether"
+    r"|because|since|although|though|you\s+will|you'?ll|we'?re|we\s+are)\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_inline_md(text: str) -> str:
+    """Strip markdown emphasis/heading markers from a single candidate line."""
+    s = _LEADING_MD_HEADING.sub("", text)
+    s = _BOLD_MARKERS.sub("", s)
+    s = _EDGE_EMPHASIS.sub("", s)
+    return re.sub(r"\s+", " ", s).strip()
+
 
 @dataclass(frozen=True)
 class DerivedCriterion:
@@ -181,12 +215,16 @@ def _classify_bucket(line: str, *, section_mode: str) -> str:
         return _BUCKET_CONSTRAINT
     if _PREFERRED_HINT.search(line):
         return _BUCKET_PREFERRED
-    if _MUST_HINT.search(line) or _YEARS_RE.search(line):
+    if _MUST_HINT.search(line):
         return _BUCKET_MUST
     if section_mode in (_BUCKET_MUST, _BUCKET_PREFERRED, _BUCKET_CONSTRAINT):
         return section_mode
     # Default conservatively to preferred — never auto-promote an ambiguous
-    # line to a must-have (a spurious must-have causes hard rejects).
+    # line to a must-have (a spurious must-have causes hard rejects). A bare
+    # "N years experience" line is deliberately NOT auto-promoted: years alone
+    # is an ambiguous signal, and silently turning it into a hard bar triggers
+    # reject waves on a bulk re-derive. Must-haves stay an explicit call —
+    # either "must/required" wording in the spec, or a recruiter promotion.
     return _BUCKET_PREFERRED
 
 
@@ -196,12 +234,15 @@ def derive_criteria(
     """Parse the Requirements section into bucketed criteria.
 
     Improvements over the raw text split:
-      - drops leaked sub-heading lines ("Requirements", "Nice to have:") and
-        uses them to set the bucket of the lines that follow;
-      - drops perks/benefits noise that bled into the section;
-      - classifies each line into must / preferred / constraint via keyword
-        + years-of-experience heuristics (default preferred — we never
-        auto-promote an ambiguous line to a must-have).
+      - strips inline markdown, then drops markdown/header lead-ins (anything
+        ending in a colon), leaked sub-headings ("Requirements",
+        "Nice to have:"), bare connectives ("and"), perks/benefits, and
+        culture/mission boilerplate prose;
+      - uses explicit "Must have:" / "Nice to have:" sub-headings to set the
+        bucket of the lines that follow;
+      - classifies each surviving line into must / preferred / constraint via
+        keyword heuristics (default preferred — we never auto-promote an
+        ambiguous line, including a bare "N years" line, to a must-have).
     """
     if not requirements_section:
         return []
@@ -215,6 +256,12 @@ def derive_criteria(
         if not cleaned:
             continue
         compact = re.sub(r"\s+", " ", cleaned)
+        # Strip inline markdown so a bolded lead-in ("**You will have
+        # experience in:**") is seen as the bare header it is, and a bolded
+        # real bullet ("**AWS Glue**") is stored clean.
+        compact = _strip_inline_md(compact)
+        if not compact:
+            continue
 
         # Mode-setting sub-heading: set the bucket for following lines, drop it.
         if _SUBHEAD_MUST.match(compact):
@@ -233,11 +280,21 @@ def derive_criteria(
         # Perks/benefits that bled into Requirements — not a selection signal.
         if _BENEFIT_NOISE.search(compact):
             continue
-        # A bare label with no real content ("Responsibilities:", "Skills:").
-        if compact.endswith(":") and len(compact.split()) <= 3:
+        # A lead-in label that introduces a list — the trailing colon marks it
+        # as a header, not a requirement ("You will have experience in:",
+        # "You should also have knowledge of:", "Skills:"). Drop it.
+        if compact.endswith(":"):
+            continue
+        # A bare connective left over from a naive line split ("and", "or").
+        if _CONNECTIVE_ONLY.match(compact):
             continue
         # Must contain at least one letter (drop stray "5+", "—", etc.).
         if not re.search(r"[A-Za-z]", compact):
+            continue
+        # Culture/mission boilerplate prose ("As an AI consultancy, our
+        # greatest asset…"): a sentence opener with real length. A terse
+        # requirement never trips both conditions.
+        if _PROSE_OPENER.match(compact) and len(compact.split()) >= 12:
             continue
 
         lowered = compact.lower()

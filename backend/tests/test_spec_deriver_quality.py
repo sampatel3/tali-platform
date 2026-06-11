@@ -2,9 +2,12 @@
 
 The Workable spec deriver used to emit every Requirements line as a
 ``preferred`` criterion, including leaked section headers ("Requirements",
-"Benefits") and perks. These lock in: headers/perks are dropped, and the
-bucket reflects the language (years-of-experience / "must" => must,
-"nice to have" => preferred, location/visa => constraint).
+"Benefits"), markdown lead-ins, bare connectives ("and") and boilerplate
+prose. These lock in: that junk is dropped, and the bucket reflects the
+language (explicit "must"/"required" => must, "nice to have" => preferred,
+location/visa => constraint). A bare "N years" line is NOT auto-promoted to
+must — years alone is ambiguous and auto-musts cause reject waves on a bulk
+re-derive.
 """
 from __future__ import annotations
 
@@ -48,15 +51,23 @@ def test_section_headers_and_benefits_are_filtered():
     assert any("postgres" in t for t in lowered)
 
 
-def test_must_have_classification():
+def test_explicit_must_language_is_must_have():
     spec = normalize_spec(_SPEC)
     by_text = {c.text.lower(): c for c in derive_criteria(spec.requirements)}
 
-    # Years-of-experience + explicit "must" => must-have.
-    py = next(c for t, c in by_text.items() if "python" in t)
-    assert py.bucket == "must" and py.must_have is True
+    # Explicit "Must have ..." wording => must-have.
     pg = next(c for t, c in by_text.items() if "postgres" in t)
     assert pg.bucket == "must" and pg.must_have is True
+
+
+def test_bare_years_of_experience_is_not_auto_must():
+    # "5+ years of Python experience" carries no explicit must-language, so it
+    # is NOT auto-promoted. Years alone is ambiguous, and auto-musts on a bulk
+    # re-derive cause reject waves; recruiters promote must-haves explicitly.
+    spec = normalize_spec(_SPEC)
+    by_text = {c.text.lower(): c for c in derive_criteria(spec.requirements)}
+    py = next(c for t, c in by_text.items() if "python" in t)
+    assert py.bucket == "preferred" and py.must_have is False
 
 
 def test_nice_to_have_is_preferred_not_must():
@@ -83,3 +94,42 @@ def test_ambiguous_line_defaults_to_preferred():
     assert items, "should derive the line"
     assert all(c.bucket == "preferred" for c in items)
     assert all(c.must_have is False for c in items)
+
+
+# The exact pollution pattern seen on a real Workable-synced role: bold prose
+# lead-ins, a bare "and" left by a wrapped line, and culture/mission prose.
+_JUNK_SPEC = (
+    "Requirements\n"
+    "**You will have experience in:**\n"
+    "- AWS Glue, PySpark, and ETL pipeline development\n"
+    "and\n"
+    "**You should also have knowledge of:**\n"
+    "- Lakehouse architecture and Medallion design\n"
+    "As an AI consultancy, our greatest asset is the expertise of our people and their drive.\n"
+    "While technical mastery is the foundation of what we do, the ability to communicate matters.\n"
+)
+
+
+def test_markdown_headers_connectives_and_prose_are_dropped():
+    items = derive_criteria_texts(_JUNK_SPEC)
+    lowered = [t.lower() for t in items]
+    # Bold lead-in headers (they end in a colon) are not requirements.
+    assert not any("you will have experience in" in t for t in lowered)
+    assert not any("you should also have knowledge" in t for t in lowered)
+    # A bare connective left by a naive line split is dropped.
+    assert "and" not in lowered
+    # Culture/mission boilerplate prose is dropped.
+    assert not any("ai consultancy" in t for t in lowered)
+    assert not any("technical mastery" in t for t in lowered)
+    # The real skill lines survive, with markdown stripped.
+    assert any("aws glue" in t for t in lowered)
+    assert any("lakehouse" in t for t in lowered)
+    # No stored criterion keeps markdown bold markers.
+    assert not any("**" in t for t in items)
+
+
+def test_short_requirement_starting_with_opener_word_survives():
+    # A terse requirement that merely starts with an opener word must NOT be
+    # dropped as prose — the prose filter also requires real sentence length.
+    items = derive_criteria_texts("Requirements\n- We use Python and AWS daily")
+    assert any("python" in t.lower() for t in items)
