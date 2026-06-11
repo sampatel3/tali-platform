@@ -100,6 +100,31 @@ def test_extract_no_cv_text_returns_missing():
     assert out[0].grounded is False
 
 
+def test_chunk_cv_breaks_runon_header_into_small_blocks():
+    # A separator-laden CV header with no sentence punctuation — the plain-text
+    # chunker would treat this as one giant citable blob. _chunk_cv breaks it up.
+    cv = (
+        "JANE DOE Senior Data Engineer | (306) 450-6919 | jane.doe.engineer@example.com | "
+        "linkedin.com/in/janedoe | github.com/janedoe | Open to Abu Dhabi UAE and Riyadh KSA | "
+        "PROFILE Senior data engineer with 12+ years of ETL and financial data delivery "
+        "experience in a regulated financial institution including AWS Glue and PySpark"
+    )
+    chunks = ge._chunk_cv(cv)
+    assert len(chunks) > 1
+    assert all(len(c) <= ge.CV_CHUNK_MAX_LEN for c in chunks)
+    assert any("financial institution" in c for c in chunks)
+    # contact noise is separated out into its own block
+    assert any("jane.doe.engineer@example.com" in c for c in chunks)
+
+
+def test_chunk_cv_splits_on_lines_and_sentences():
+    cv = "Line one.\n\nSkills: A · B · C\nWorked at Bank X. Built ETL pipelines."
+    chunks = ge._chunk_cv(cv)
+    assert "Line one." in chunks
+    assert "Worked at Bank X." in chunks
+    assert "Built ETL pipelines." in chunks
+
+
 def test_extract_happy_path_through_fake_client():
     class _FakeClient:
         def __init__(self):
