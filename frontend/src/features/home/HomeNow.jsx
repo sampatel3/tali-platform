@@ -590,8 +590,12 @@ export const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, on
                   type="button"
                   className={`rq-btn ${spec.primaryClass || 'rq-approve'}`}
                   onClick={() => onApprove(decision)}
-                  disabled={busy || isStale}
-                  title={isStale ? 'Inputs changed — re-evaluate before approving' : undefined}
+                  disabled={busy}
+                  title={
+                    isStale
+                      ? 'Inputs changed since this was decided — this acts on them anyway. Re-evaluate first to refresh.'
+                      : undefined
+                  }
                 >
                   <PrimaryIcon size={14} strokeWidth={2.4} aria-hidden="true" />
                   {spec.primaryLabel}
@@ -785,7 +789,7 @@ export const HomeNow = ({
       'success',
     );
     try {
-      await agentApi.approveDecision(decision.id, {});
+      await agentApi.approveDecision(decision.id, {}, { force: Boolean(decision.is_stale) });
       await reload?.();
     } catch (err) {
       // The send didn't take — return the card to the queue and refocus it so

@@ -3,7 +3,11 @@ import api from './httpClient';
 export const agent = {
   // Decisions queue
   listDecisions: (params = {}) => api.get('/agent-decisions', { params }),
-  approveDecision: (decisionId, body = {}) => api.post(`/agent-decisions/${decisionId}/approve`, body),
+  // ``opts.force`` approves even when the decision's inputs are stale — the
+  // recruiter deliberately taking the recommended action (parity with the
+  // always-available Reject / Skip & advance overrides).
+  approveDecision: (decisionId, body = {}, opts = {}) =>
+    api.post(`/agent-decisions/${decisionId}/approve${opts.force ? '?force=true' : ''}`, body),
   overrideDecision: (decisionId, body = {}) => api.post(`/agent-decisions/${decisionId}/override`, body),
   // A4: discard a stale decision and re-run the agent on fresh inputs.
   // Surfaced by the "Re-evaluate" button when a decision is_stale.

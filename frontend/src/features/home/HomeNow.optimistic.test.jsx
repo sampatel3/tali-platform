@@ -86,9 +86,9 @@ describe('HomeNow — optimistic Send assessment', () => {
     const sendBtn = within(detail).getByRole('button', { name: /send assessment/i });
     await act(async () => { fireEvent.click(sendBtn); });
 
-    // The request fired with the focused decision...
+    // The request fired with the focused decision (not stale → force:false)...
     expect(approveDecision).toHaveBeenCalledTimes(1);
-    expect(approveDecision).toHaveBeenCalledWith(1, {});
+    expect(approveDecision).toHaveBeenCalledWith(1, {}, { force: false });
     // ...and the UI already moved on though the promise is still pending:
     // the approved card left the queue and selection advanced to the next.
     expect(within(sidebar).queryByText('Miguel Parracho')).not.toBeInTheDocument();
