@@ -451,6 +451,10 @@ def sync_starred_roles():
                     mode="full",
                     selected_job_shortcodes=shortcodes,
                     should_yield=lambda oid=org_id_int: is_workable_op_pending(oid),
+                    # Ride the mutex these scoped candidate syncs reliably hold to
+                    # discover brand-new Workable jobs — the 15-min jobs_only sweep
+                    # gets starved of the lock on busy orgs (see _discover_new_jobs).
+                    discover_new_jobs=True,
                 )
                 synced += 1
             except Exception:
@@ -648,6 +652,10 @@ def sync_agent_mode_roles():
                     mode="full",
                     selected_job_shortcodes=shortcodes,
                     should_yield=lambda oid=org_id_int: is_workable_op_pending(oid),
+                    # Ride the mutex these scoped candidate syncs reliably hold to
+                    # discover brand-new Workable jobs — the 15-min jobs_only sweep
+                    # gets starved of the lock on busy orgs (see _discover_new_jobs).
+                    discover_new_jobs=True,
                 )
                 synced += 1
             except Exception:
@@ -751,6 +759,10 @@ def sync_workable_daily_candidates():
                     mode="full",
                     selected_job_shortcodes=shortcodes,
                     should_yield=lambda oid=org_id_int: is_workable_op_pending(oid),
+                    # Ride the mutex these scoped candidate syncs reliably hold to
+                    # discover brand-new Workable jobs — the 15-min jobs_only sweep
+                    # gets starved of the lock on busy orgs (see _discover_new_jobs).
+                    discover_new_jobs=True,
                 )
                 synced += 1
             except Exception:
