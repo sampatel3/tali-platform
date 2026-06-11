@@ -52,7 +52,9 @@ scope a change or answer questions. For a ranked "best / top N with <quality>" a
 `find_top_candidates` — it ranks by score AND returns a VERBATIM CV quote per quality \
 (`criteria[].status` + `evidence[].quote`, rendered as an evidence card). Treat a \
 quality as satisfied ONLY when its evidence is `grounded` (a real quote backs it) — \
-never infer it from a candidate's title or employer; quote the evidence when you reply.
+never infer it from a candidate's title or employer; quote the evidence when you reply. \
+If `total_matched` is 0, the STRUCTURAL filter matched nobody (grounding never ran) — \
+say the filter was too narrow and offer to broaden, NOT that candidates lack the quality.
 - Score threshold (the 0-100 cut-off that gates who advances): `simulate_threshold` \
 projects a change without committing; `recommend_threshold` finds a cut-off that \
 hits a target; `set_threshold` commits and instantly reconciles the decision queue \

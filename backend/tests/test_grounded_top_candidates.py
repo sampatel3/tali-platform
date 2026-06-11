@@ -229,15 +229,17 @@ def test_find_top_candidates_ranks_then_truncates(monkeypatch):
     # run_search returns ids in arbitrary order (as the real prefilter does).
     from app.candidate_search import runner as runner_mod
 
-    monkeypatch.setattr(
-        runner_mod,
-        "run_search",
-        lambda **kw: SearchOutput(
+    seen_kwargs = {}
+
+    def _fake_run_search(**kw):
+        seen_kwargs.update(kw)
+        return SearchOutput(
             application_ids=[1, 2, 3],
             parsed_filter=ParsedFilter(skills_all=["data engineer"]),  # no soft criteria
             warnings=[],
-        ),
-    )
+        )
+
+    monkeypatch.setattr(runner_mod, "run_search", _fake_run_search)
 
     apps = [_fake_app(1, taali=50), _fake_app(2, taali=90), _fake_app(3, taali=70)]
     db = MagicMock()
@@ -252,6 +254,54 @@ def test_find_top_candidates_ranks_then_truncates(monkeypatch):
     ranked_ids = [c["application_id"] for c in out["candidates"]]
     assert ranked_ids == [2, 3]  # 90, 70 — NOT DB order [1,2]
     assert out["candidates"][0]["rank"] == 1
+    # the prefilter MUST be structural-only — qualitative criteria are grounded,
+    # not ILIKE-matched into the pool (the "0 matched" bug).
+    assert seen_kwargs.get("defer_qualitative") is True
+    assert seen_kwargs.get("rerank_enabled") is False
     # no qualitative criteria → no grounding spend, no evidence model
     assert out["evidence_model"] is None
     assert out["candidates"][0]["criteria"] == []
+
+
+def test_run_search_defer_qualitative_keeps_prefilter_structural(monkeypatch):
+    """Regression for the "0 matched" bug: a qualitative phrase like "banking
+    domain experience" must NOT be applied as a literal cv_text ILIKE in the
+    prefilter (it phrase-matches ~zero CVs) — it is grounded downstream."""
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(runner_mod.cache_module, "get", lambda *a, **k: None)
+    monkeypatch.setattr(runner_mod.cache_module, "set", lambda *a, **k: None)
+    monkeypatch.setattr(
+        runner_mod,
+        "parse_nl_query",
+        lambda *a, **k: ParsedFilter(
+            soft_criteria=["banking domain experience"], keywords=["fintech"]
+        ),
+    )
+
+    captured = {}
+
+    def _fake_apply(base, parsed, *, soft_criteria_as_keywords):
+        captured["soft_as_keywords"] = soft_criteria_as_keywords
+        captured["sql_keywords"] = list(parsed.keywords)
+        q = MagicMock()
+        q.with_entities.return_value.all.return_value = []
+        return q
+
+    monkeypatch.setattr(runner_mod, "apply_parsed_filter", _fake_apply)
+
+    out = runner_mod.run_search(
+        db=MagicMock(),
+        organization_id=1,
+        nl_query="top with banking domain experience",
+        base_query=MagicMock(),
+        rerank_enabled=False,
+        defer_qualitative=True,
+    )
+
+    # Neither soft criteria nor keywords hard-filter the pool in the SQL pass.
+    assert captured["soft_as_keywords"] is False
+    assert captured["sql_keywords"] == []
+    # But the returned filter still carries them for the grounding step.
+    assert out.parsed_filter.soft_criteria == ["banking domain experience"]
+    assert out.parsed_filter.keywords == ["fintech"]
