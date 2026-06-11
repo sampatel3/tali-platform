@@ -1006,3 +1006,101 @@ def test_sync_org_yields_to_pending_op_at_job_boundary(db):
     result3 = service.sync_org(db, org, mode="full", should_yield=lambda: False)
     assert result3["jobs_processed"] == 2
     assert result3["candidates_seen"] == 2
+
+
+def _two_published_jobs_client():
+    class MockClient(WorkableService):
+        def __init__(self):
+            super().__init__(access_token="x", subdomain="test")
+
+        def list_open_jobs(self):
+            return [
+                {"id": "J1", "shortcode": "J1", "title": "Existing Role", "state": "published"},
+                {"id": "J2", "shortcode": "J2", "title": "Brand New Role", "state": "published"},
+            ]
+
+        def list_job_candidates(self, job_identifier, *, paginate=False, max_pages=None):
+            return [{"id": f"cand_{job_identifier}", "email": f"{job_identifier}@example.com",
+                     "name": "C", "stage": "Screening"}]
+
+        def get_job_details(self, job_identifier):
+            return {}
+
+        def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
+            return None, None, None
+
+    return MockClient
+
+
+def test_discover_new_jobs_creates_role_for_unselected_new_posting(db):
+    """A scoped candidate sync (selected_job_shortcodes) with discover_new_jobs=True
+    creates a role for a brand-new Workable posting it isn't scoped to — WITHOUT
+    fetching that job's candidates. This is the fix for newly-published jobs being
+    starved by the 15-min jobs_only sweep losing the per-org mutex race; discovery
+    rides the candidate syncs that reliably hold the lock."""
+    from app.models.role import Role
+    from app.models.candidate_application import CandidateApplication
+
+    org = _make_org(db, "discover-new-jobs-org")
+    service = WorkableSyncService(_two_published_jobs_client()())
+
+    # Steady state: J1 already a role from a prior scoped sync; J2 not yet seen.
+    service.sync_org(db, org, mode="full", selected_job_shortcodes=["J1"])
+    assert db.query(Role).filter(Role.organization_id == org.id, Role.workable_job_id == "J2").first() is None
+
+    # Scoped candidate sync with discovery on: J2 appears as a role, no J2 candidates.
+    summary = service.sync_org(
+        db, org, mode="full", selected_job_shortcodes=["J1"], discover_new_jobs=True,
+    )
+
+    j2 = db.query(Role).filter(Role.organization_id == org.id, Role.workable_job_id == "J2").first()
+    assert j2 is not None
+    assert "J2" in (summary.get("discovered_new_jobs") or [])
+    # Published new job auto-stars so the NEXT candidate tick pulls its applicants.
+    assert j2.starred_for_auto_sync is True
+    # …but discovery did NOT fetch J2's candidates this run.
+    assert db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org.id,
+        CandidateApplication.workable_candidate_id == "cand_J2",
+    ).first() is None
+    # The scoped job J1 still synced its candidate normally.
+    assert db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org.id,
+        CandidateApplication.workable_candidate_id == "cand_J1",
+    ).first() is not None
+
+
+def test_discovery_off_by_default_leaves_unselected_jobs_untouched(db):
+    """The user-facing selective sync (discover_new_jobs defaults to False) must stay
+    scoped — it must NOT create roles for jobs the user didn't pick."""
+    from app.models.role import Role
+
+    org = _make_org(db, "discovery-off-default-org")
+    service = WorkableSyncService(_two_published_jobs_client()())
+    service.sync_org(db, org, mode="full", selected_job_shortcodes=["J1"])  # discover defaults False
+
+    assert db.query(Role).filter(Role.organization_id == org.id, Role.workable_job_id == "J1").first() is not None
+    assert db.query(Role).filter(Role.organization_id == org.id, Role.workable_job_id == "J2").first() is None
+
+
+def test_discovery_is_create_only_never_resurrects_deleted_role(db):
+    """Discovery must not resurrect a role a recruiter soft-deleted: a Workable job
+    that already has a (soft-deleted) role row is left alone — only the jobs_only
+    sweep / manual full sync restore those."""
+    from datetime import datetime, timezone
+
+    from app.models.role import Role
+
+    org = _make_org(db, "discovery-create-only-org")
+    service = WorkableSyncService(_two_published_jobs_client()())
+    # Create J2 as a role, then soft-delete it (recruiter removed it from Tali).
+    service.sync_org(db, org, mode="full", selected_job_shortcodes=["J2"])
+    j2 = db.query(Role).filter(Role.organization_id == org.id, Role.workable_job_id == "J2").first()
+    assert j2 is not None
+    j2.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    # A scoped J1 sync with discovery on must NOT un-delete J2.
+    service.sync_org(db, org, mode="full", selected_job_shortcodes=["J1"], discover_new_jobs=True)
+    db.refresh(j2)
+    assert j2.deleted_at is not None  # still soft-deleted; discovery is create-only

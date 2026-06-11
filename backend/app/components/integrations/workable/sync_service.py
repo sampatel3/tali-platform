@@ -983,6 +983,88 @@ class WorkableSyncService:
         db.refresh(org)
         return org.workable_sync_cancel_requested_at is not None
 
+    def _discover_new_jobs(
+        self,
+        db: Session,
+        org: Organization,
+        all_jobs: list[dict],
+        summary: dict,
+        should_yield: Callable[[], bool] | None = None,
+    ) -> None:
+        """Create role rows for newly-listed Workable jobs that have none yet.
+
+        Called from the scoped candidate syncs (starred / agent-mode / nightly),
+        which reliably hold the per-org Workable mutex, so newly-published jobs
+        are discovered on their 5-min cadence instead of waiting on the 15-min
+        ``jobs_only`` sweep that loses the lock race and gets starved on busy
+        orgs. Create-only: a job whose role was soft-deleted is left alone (the
+        jobs_only sweep / manual full sync still restore those). No candidate
+        fetch here — a freshly-created published role auto-stars in
+        ``_upsert_role``, so its candidates flow on the next tick. Best-effort:
+        never let discovery break the candidate sync it rides on.
+        """
+        try:
+            existing: set[str] = {
+                str(code).strip()
+                for (code,) in db.query(Role.workable_job_id)
+                .filter(
+                    Role.organization_id == org.id,
+                    Role.workable_job_id.isnot(None),
+                )
+                .all()
+                if code and str(code).strip()
+            }
+        except Exception:
+            logger.exception(
+                "discover_new_jobs: failed to load existing role codes org_id=%s",
+                org.id,
+            )
+            return
+        for job in all_jobs:
+            if not isinstance(job, dict):
+                continue
+            code = sanitize_text_for_storage(
+                str(job.get("shortcode") or job.get("id") or "").strip()
+            )
+            if not code or code in existing:
+                continue
+            # Yield the mutex to a waiting user-facing write, exactly as the main
+            # job loop does; the remaining new jobs are picked up on the next tick.
+            if should_yield is not None and should_yield():
+                summary.setdefault("errors", []).append(
+                    "Paused job discovery for a pending Workable write; "
+                    "remaining new jobs sync on the next sync."
+                )
+                break
+            try:
+                _role, created_new = self._upsert_role(db, org, job)
+            except WorkableRateLimitError:
+                # A 429 during discovery must not abort the candidate sync this
+                # rides on — stop discovering and let the primary sync proceed.
+                logger.warning(
+                    "discover_new_jobs: rate limited, stopping discovery org_id=%s",
+                    org.id,
+                )
+                break
+            except Exception:
+                logger.exception(
+                    "discover_new_jobs: upsert failed org_id=%s code=%s",
+                    org.id,
+                    code,
+                )
+                continue
+            existing.add(code)
+            if created_new:
+                summary["jobs_upserted"] = int(summary.get("jobs_upserted") or 0) + 1
+                summary.setdefault("discovered_new_jobs", []).append(code)
+                logger.info(
+                    "discover_new_jobs: created role for new Workable job "
+                    "org_id=%s code=%s title=%r",
+                    org.id,
+                    code,
+                    (job.get("title") or job.get("name") or "")[:80],
+                )
+
     def sync_org(
         self,
         db: Session,
@@ -993,6 +1075,7 @@ class WorkableSyncService:
         mode: str = "metadata",
         selected_job_shortcodes: list[str] | None = None,
         should_yield: Callable[[], bool] | None = None,
+        discover_new_jobs: bool = False,
     ) -> dict:
         run = self._get_sync_run(db, run_id)
         requested_mode = (mode or "metadata").strip().lower()
@@ -1071,6 +1154,17 @@ class WorkableSyncService:
                         f"{len(missing)} selected roles were not found in Workable jobs."
                     )
                     final_status = "partial"
+                # Piggyback discovery: a scoped candidate sync (starred / agent /
+                # nightly) holds the per-org Workable mutex far more reliably than
+                # the 15-min jobs_only sweep, which loses the lock race and gets
+                # starved on busy orgs — so brand-new postings never became roles
+                # until a manual full sync ran. Create a role for any just-listed
+                # job that has no role row yet (create-only — never resurrect a
+                # soft-deleted one) without fetching candidates. Newly-published
+                # jobs auto-star in _upsert_role, so the next candidate tick pulls
+                # their applicants. Normally there are 0 new jobs, so no added cost.
+                if discover_new_jobs:
+                    self._discover_new_jobs(db, org, all_jobs, summary, should_yield)
             summary["selected_jobs_applied"] = len(jobs)
             summary["jobs_total"] = len(jobs)
             summary["phase"] = "syncing_candidates" if jobs else "completed"
