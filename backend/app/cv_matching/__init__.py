@@ -10,7 +10,13 @@ and (when relevant) ``MODEL_VERSION``.
 
 from ..llm.models import FAST_MODEL
 
-PROMPT_VERSION = "cv_match_v17"
+# v18: graded per-requirement scoring. The main call is unchanged; a focused
+# second pass (``cv_matching.graded``) grades each requirement 0-100 and the
+# aggregation uses that continuous score instead of the binary status × tier
+# weighting (which double-penalised strong substitutes and discarded evidence
+# the coarse model abstained on). Bumping the version invalidates the score
+# cache so live scores pick up the graded layer.
+PROMPT_VERSION = "cv_match_v18"
 MODEL_VERSION = FAST_MODEL
 
 

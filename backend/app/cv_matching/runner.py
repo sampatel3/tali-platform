@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -30,6 +31,7 @@ from ..services.fraud_detection import (
     detect_timeline_inconsistencies,
 )
 from . import MODEL_VERSION, PROMPT_VERSION
+from .graded import grade_requirements
 from . import cache as cache_module
 from . import telemetry as telemetry_module
 from .aggregation import aggregate
@@ -321,6 +323,37 @@ def run_cv_match(
         return out
 
     parsed = result.value
+
+    # 6b. Graded requirement pass — a focused second Haiku call grades every
+    # requirement 0-100 (see ``cv_matching.graded``). Best-effort: on any
+    # failure the match_scores stay -1 and aggregation falls back to the coarse
+    # status × tier weighting. We set match_score/assessable on EVERY assessment
+    # so a value the main model may have guessed for the new schema fields is
+    # never trusted — only the focused graded pass populates them.
+    graded_enabled = os.getenv("CV_MATCH_GRADED", "on").strip().lower() not in {
+        "0", "off", "false", "no",
+    }
+    graded_scores = (
+        grade_requirements(
+            cv_text=cv_text,
+            jd_text=jd_text,
+            requirements=parsed.requirements_assessment,
+            archetype=archetype,
+            client=client,
+            workable_context=workable_context,
+            metering_context=metering_context,
+            trace_id=ctx.trace_id,
+        )
+        if graded_enabled
+        else {}
+    )
+    for assessment in parsed.requirements_assessment:
+        graded = graded_scores.get(assessment.requirement_id)
+        if graded is not None:
+            assessment.match_score = graded.match_score
+            assessment.assessable = graded.assessable
+        else:
+            assessment.match_score = -1  # ungraded → status × tier fallback
 
     # 7. Aggregate
     (
