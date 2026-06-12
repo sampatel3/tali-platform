@@ -419,6 +419,25 @@ def test_build_spec_echo_mentions_population_criteria_and_ranking():
     assert spec["ranking_key"] == "taali"
 
 
+def test_short_label_truncates_long_criterion_on_word_boundary():
+    long = ("preference for experience working at a company in Germany or UK or "
+            "United States or France or Europe")
+    out = tc._short_label(long)
+    assert out.endswith("…")
+    assert len(out) <= tc._ECHO_CRITERION_MAX + 1
+    assert not out[:-1].endswith(" ")  # broke at a word boundary, no trailing space
+    # short criteria are left untouched
+    assert tc._short_label("salary expectation <= 30000 AED") == "salary expectation <= 30000 AED"
+
+
+def test_build_spec_echo_shortens_but_keeps_full_criterion_text():
+    longc = ("preference for experience working at a company in Germany or UK or "
+             "United States or France or Europe")
+    spec = tc._build_spec(ParsedFilter(), query="q", rank_by="taali", criteria=[longc])
+    assert "…" in spec["echo"]                     # echo is tightened for scanning
+    assert spec["criteria"][0]["text"] == longc    # full text preserved for the rows
+
+
 # --------------------------------------------------------------------------
 # rank-before-truncate (the "top isn't actually top" fix)
 # --------------------------------------------------------------------------

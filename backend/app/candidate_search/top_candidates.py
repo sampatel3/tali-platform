@@ -426,6 +426,21 @@ def _collect_criteria(parsed) -> list[str]:
     return kept[:MAX_CRITERIA]
 
 
+# Max length of a single criterion in the one-line spec ECHO (the scan header).
+# The full criterion text is kept in spec.criteria[].text and shown verbatim on
+# every candidate row — this only keeps the header from sprawling. Generic
+# truncation, not per-phrase relabelling (which would be brittle).
+_ECHO_CRITERION_MAX = 44
+
+
+def _short_label(text: str) -> str:
+    t = (text or "").strip()
+    if len(t) <= _ECHO_CRITERION_MAX:
+        return t
+    cut = t[:_ECHO_CRITERION_MAX].rsplit(" ", 1)[0].rstrip(" ,;·—-")
+    return f"{cut or t[:_ECHO_CRITERION_MAX].rstrip()}…"
+
+
 def _build_spec(parsed, *, query: str, rank_by: str, criteria: list[str]) -> dict[str, Any]:
     locations = list(parsed.locations_country) + list(parsed.locations_region)
     population = {
@@ -439,7 +454,7 @@ def _build_spec(parsed, *, query: str, rank_by: str, criteria: list[str]) -> dic
     if pop_bits:
         parts.append(", ".join(pop_bits[:4]))
     if criteria:
-        parts.append(" · ".join(criteria))
+        parts.append(" · ".join(_short_label(c) for c in criteria))
     if locations:
         parts.append("in " + ", ".join(locations[:3]))
     if parsed.min_years_experience:
