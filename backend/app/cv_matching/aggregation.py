@@ -6,6 +6,7 @@ Everything else is derived here.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable
 
 from .schemas import (
@@ -44,6 +45,27 @@ _TIER_WEIGHTS: dict[str, float] = {
 # weighs as much as ~1.5 LLM-extracted must_haves.
 _RECRUITER_WEIGHT_MULTIPLIER = 1.5
 
+# --- requirements_match v2 (coverage-blended, must-have-normalised) ---------
+# Fixed must-have share of the assessed score, INDEPENDENT of how many
+# must-haves vs preferences a role has — so a single must-have can't be
+# drowned by a long tail of preferences. Redistributes to preferences when a
+# role has no must-haves (and vice-versa).
+_MUST_SHARE = 0.65
+# A candidate whose requirements are mostly UNKNOWN (unassessable from the CV)
+# is blended toward this neutral prior in proportion to how little we could
+# assess — so "unknown" never penalises (it's not 0), but a candidate we can
+# barely assess also can't score high off one met requirement.
+_REQ_MATCH_NEUTRAL_PRIOR = 50.0
+
+
+def _req_match_v2_enabled() -> bool:
+    """Env-gated rollout. Read per-call so a deploy toggle takes effect
+    without a code change; the harness calls the v1/v2 helpers directly."""
+    return os.getenv("CV_MATCH_REQ_MATCH_V2", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 _STRONG_YES_THRESHOLD = 85.0
 _YES_THRESHOLD = 70.0
 _LEAN_NO_THRESHOLD = 50.0
@@ -81,21 +103,29 @@ def _recruiter_weight_multiplier(assessment) -> float:
 def compute_requirements_match_score(
     assessments: Iterable[RequirementAssessment],
 ) -> float:
-    """Weighted average across requirements.
+    """Requirements-match score (0–100). Dispatches to v2 (coverage-blended,
+    must-have-normalised) when ``CV_MATCH_REQ_MATCH_V2`` is enabled, else the
+    original flat weighted average."""
+    assessments_list = list(assessments)
+    if _req_match_v2_enabled():
+        return compute_requirements_match_score_v2(assessments_list)
+    return compute_requirements_match_score_v1(assessments_list)
+
+
+def compute_requirements_match_score_v1(
+    assessments: Iterable[RequirementAssessment],
+) -> float:
+    """Original flat weighted average across requirements.
 
     Per-requirement weight = priority × status × tier × recruiter_bump.
-
-    No floors, no caps — pure weighted average. A candidate with all
-    must-haves missing simply ends up with a low requirements_match
-    naturally.
-
-    Edge: if no non-constraint requirements (or total_weight == 0), return 50.0.
+    Known weakness: every requirement (including unassessable "unknown" ones)
+    keeps its full priority weight in the denominator, so a long tail of
+    strong-preference items — and the scorer's own uncertainty — drag down a
+    candidate who meets the actual must-haves. v2 fixes this.
     """
-    assessments_list = list(assessments)
-
     total_weight = 0.0
     earned_weight = 0.0
-    for a in assessments_list:
+    for a in assessments:
         if a.priority == Priority.CONSTRAINT:
             continue
         priority_weight = _PRIORITY_WEIGHTS.get(a.priority, 0.0)
@@ -110,6 +140,77 @@ def compute_requirements_match_score(
         return 50.0
 
     return round((earned_weight / total_weight) * 100.0, 2)
+
+
+def _fulfilment(a: RequirementAssessment) -> float:
+    """Graded 0..1 met-ness for an ASSESSED requirement (status × tier).
+    `met·exact`=1.0, `partially_met`≈0.5, `missing`/`unrelated`=0.0 — so a
+    candidate *close* to a requirement earns partial credit rather than a
+    binary pass/fail."""
+    return _STATUS_WEIGHTS.get(a.status, 0.0) * _tier_multiplier(a)
+
+
+def compute_requirements_match_score_v2(
+    assessments: Iterable[RequirementAssessment],
+) -> float:
+    """Coverage-blended, must-have-normalised requirements match.
+
+    Three changes from v1, targeting the calibration gap where candidates who
+    meet every must-have still score low:
+
+    1. **Two tiers, count-normalised.** Must-haves and preferences are scored
+       separately, then combined with a FIXED must-have share (``_MUST_SHARE``)
+       regardless of how many of each the role has — so 1 must-have can't be
+       drowned by 50 preferences. (Redistributes when a tier is absent.)
+    2. **Must-have as a graded soft-constraint.** Each requirement contributes
+       a 0..1 fulfilment; a candidate close to a must-have earns partial credit,
+       a candidate missing it is dragged down hard (0 × 0.65 share) but not
+       hard-gated.
+    3. **Unknown is neutral, not a penalty — with a coverage guard.** Unknown
+       (unassessable) requirements are excluded from the tier averages, then the
+       whole score is blended toward a neutral 50 in proportion to how little of
+       the requirement set could be assessed. So unknowns never count as 0, but
+       a candidate we can barely assess (e.g. 1 must-have met, everything else
+       unknown) lands near 50 rather than scoring high.
+    """
+    must_num = must_den = 0.0
+    pref_num = pref_den = 0.0
+    assessed_weight = total_weight = 0.0
+    for a in assessments:
+        if a.priority == Priority.CONSTRAINT:
+            continue
+        weight = _PRIORITY_WEIGHTS.get(a.priority, 0.0) * _recruiter_weight_multiplier(a)
+        if weight <= 0:
+            continue
+        total_weight += weight
+        if a.status == Status.UNKNOWN:
+            continue  # unassessable → affects coverage only, never penalised
+        assessed_weight += weight
+        earned = weight * _fulfilment(a)
+        if a.priority == Priority.MUST_HAVE:
+            must_num += earned
+            must_den += weight
+        else:
+            pref_num += earned
+            pref_den += weight
+
+    if total_weight <= 0:
+        return 50.0
+
+    must_f = (must_num / must_den) if must_den > 0 else None
+    pref_f = (pref_num / pref_den) if pref_den > 0 else None
+    if must_f is None and pref_f is None:
+        assessed_score = _REQ_MATCH_NEUTRAL_PRIOR / 100.0  # nothing assessed
+    elif must_f is None:
+        assessed_score = pref_f
+    elif pref_f is None:
+        assessed_score = must_f
+    else:
+        assessed_score = _MUST_SHARE * must_f + (1.0 - _MUST_SHARE) * pref_f
+
+    coverage = assessed_weight / total_weight  # 0..1
+    blended = coverage * (assessed_score * 100.0) + (1.0 - coverage) * _REQ_MATCH_NEUTRAL_PRIOR
+    return round(blended, 2)
 
 
 def compute_cv_fit(
