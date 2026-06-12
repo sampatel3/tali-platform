@@ -357,7 +357,7 @@ def test_find_top_candidates_ranks_then_truncates(monkeypatch):
     )
 
     assert out["total_matched"] == 3
-    assert out["shortlist_size"] == 2
+    assert out["shown"] == 2
     ranked_ids = [c["application_id"] for c in out["candidates"]]
     assert ranked_ids == [2, 3]  # 90, 70 — NOT DB order [1,2]
     assert out["candidates"][0]["rank"] == 1
@@ -365,9 +365,62 @@ def test_find_top_candidates_ranks_then_truncates(monkeypatch):
     # not ILIKE-matched into the pool (the "0 matched" bug).
     assert seen_kwargs.get("defer_qualitative") is True
     assert seen_kwargs.get("rerank_enabled") is False
-    # no qualitative criteria → no grounding spend, no evidence model
+    # no qualitative criteria → no grounding spend, no evidence model, no filter
     assert out["evidence_model"] is None
+    assert out["excluded"]["not_met_total"] == 0
     assert out["candidates"][0]["criteria"] == []
+
+
+def test_find_top_candidates_hides_not_met(monkeypatch):
+    """A candidate who clearly FAILS a requirement (salary over cap → not_met)
+    is hidden, not shown with a 'not met' label — the recruiter asked for a
+    filter, not a list of failures."""
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(
+        runner_mod,
+        "run_search",
+        lambda **kw: SearchOutput(
+            application_ids=[1, 2, 3],
+            parsed_filter=ParsedFilter(soft_criteria=["salary under 30k AED"]),
+            warnings=[],
+        ),
+    )
+    monkeypatch.setattr(tc, "_notes_text", lambda app: None)
+
+    a1 = _fake_app(1, taali=80, name="A"); a1.cv_text = "ok under cap"
+    a2 = _fake_app(2, taali=95, name="B"); a2.cv_text = "OVERCAP salary 40k"
+    a3 = _fake_app(3, taali=70, name="C"); a3.cv_text = "ok under cap"
+    db = MagicMock()
+    db.query.return_value.options.return_value.filter.return_value.all.return_value = [a1, a2, a3]
+
+    class _FakeClient:
+        class _M:
+            def create(self, **kw):
+                docs = [b for b in kw["messages"][0]["content"] if b.get("type") == "document"]
+                cvtext = " ".join(ch["text"] for d in docs for ch in d["source"]["content"])
+                if "OVERCAP" in cvtext:
+                    return SimpleNamespace(content=[
+                        _text_block("[[C1]] NOT_MET — states 40k, above the cap"),
+                        _text_block("40k", citations=[_cite("salary 40k", document_index=0)]),
+                    ])
+                return SimpleNamespace(content=[
+                    _text_block("[[C1]] MET — under cap"),
+                    _text_block("ok", citations=[_cite("ok under cap", document_index=0)]),
+                ])
+
+        messages = _M()
+
+    out = tc.find_top_candidates(
+        db=db, organization_id=1, query="top under 30k", base_query=MagicMock(),
+        limit=2, evidence_client=_FakeClient(),
+    )
+    ids = [c["application_id"] for c in out["candidates"]]
+    assert 2 not in ids  # B (over cap) is hidden
+    assert ids == [1, 3]  # A (80) then C (70), ranked by fit among those who pass
+    assert out["shown"] == 2
+    assert out["excluded"]["not_met_total"] == 1
+    assert out["excluded"]["by_criterion"][0]["count"] == 1
 
 
 def test_run_search_defer_qualitative_keeps_prefilter_structural(monkeypatch):
