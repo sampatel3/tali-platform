@@ -316,6 +316,24 @@ def test_collect_criteria_keeps_genuinely_distinct_criteria():
     assert tc._collect_criteria(parsed) == ["banking domain", "real-time data"]
 
 
+def test_collect_criteria_drops_count_and_filler_fragments():
+    # "top 5" / "candidates" leak from the query text and must never become a
+    # criterion everyone is judged MISSING on.
+    parsed = ParsedFilter(
+        soft_criteria=["banking domain"], keywords=["top 5", "candidates"]
+    )
+    assert tc._collect_criteria(parsed) == ["banking domain"]
+
+
+def test_is_junk_criterion():
+    for junk in ["top 5", "best 3", "candidates", "5 candidates", "first 5",
+                 "show me 10 candidates", "the top 3 profiles"]:
+        assert tc._is_junk_criterion(junk), junk
+    for real in ["data engineer", "salary expectation <= 30000 AED",
+                 "Western company", "5 years", "react", "led a team"]:
+        assert not tc._is_junk_criterion(real), real
+
+
 def test_collect_criteria_reassembles_split_salary_constraint():
     # The parser fragmented "salary less than 30000 AED" into a bare label and
     # a bare value, dropping the operator. We rebuild one clean cap line.
