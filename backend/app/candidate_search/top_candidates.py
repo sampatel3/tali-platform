@@ -54,8 +54,12 @@ MAX_CRITERIA = 5
 # because requirements act as a filter — some of the top-by-fit will fail
 # (e.g. salary above the cap) and get hidden, so we need a window deep enough
 # to still surface `limit` who qualify. Bounds cost + latency.
-GROUND_WINDOW_CAP = 24
+GROUND_WINDOW_CAP = 15
 GROUND_CONCURRENCY = 8
+# Hard wall-clock deadline for the whole grounding batch behind a chat turn.
+# Any candidate not grounded by then degrades to "unknown" (missing) rather
+# than stalling the response — strangler calls are abandoned, not awaited.
+GROUND_BATCH_DEADLINE_S = 45.0
 
 _RANKING_LABELS = {
     "taali": "Taali fit",
@@ -229,7 +233,7 @@ def _ground_window(
     Evidence is collected in this (main) thread; only the pure ``_ground`` runs
     in workers, so the DB session is never touched off-thread. Order preserved.
     """
-    from concurrent.futures import ThreadPoolExecutor
+    import concurrent.futures as cf
 
     if not apps:
         return []
@@ -249,10 +253,32 @@ def _ground_window(
             logger.warning("ground app=%s failed: %s", getattr(app, "id", "?"), exc)
             return [CriterionVerdict(criterion=c, status="missing") for c in criteria]
 
+    def _timed_out(c: str) -> CriterionVerdict:
+        return CriterionVerdict(criterion=c, status="missing", note="Evidence check timed out.")
+
     workers = max(1, min(GROUND_CONCURRENCY, len(jobs)))
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        verdicts_list = list(ex.map(_one, jobs))
-    return [(jobs[i][0], verdicts_list[i]) for i in range(len(jobs))]
+    results: dict[int, list[CriterionVerdict]] = {}
+    ex = cf.ThreadPoolExecutor(max_workers=workers)
+    try:
+        fut_to_idx = {ex.submit(_one, job): i for i, job in enumerate(jobs)}
+        done, not_done = cf.wait(fut_to_idx, timeout=GROUND_BATCH_DEADLINE_S)
+        for fut in done:
+            try:
+                results[fut_to_idx[fut]] = fut.result()
+            except Exception:  # noqa: BLE001
+                results[fut_to_idx[fut]] = [_timed_out(c) for c in criteria]
+        if not_done:
+            logger.warning(
+                "grounding batch deadline (%.0fs) hit: %d/%d candidates incomplete",
+                GROUND_BATCH_DEADLINE_S, len(not_done), len(jobs),
+            )
+            for fut in not_done:
+                results[fut_to_idx[fut]] = [_timed_out(c) for c in criteria]
+    finally:
+        # Don't block the response on stragglers; cancel anything not started.
+        ex.shutdown(wait=False, cancel_futures=True)
+
+    return [(jobs[i][0], results.get(i) or [_timed_out(c) for c in criteria]) for i in range(len(jobs))]
 
 
 def _collect_criteria(parsed) -> list[str]:
@@ -429,7 +455,7 @@ def find_top_candidates(
             + [{"code": "rerank_skipped", "message": "Grounding unavailable; not filtered."}],
         }
 
-    window_size = min(len(apps), max(limit * 4, GROUND_WINDOW_CAP // 2), GROUND_WINDOW_CAP)
+    window_size = min(len(apps), max(limit * 3, 8), GROUND_WINDOW_CAP)
     grounded = _ground_window(
         apps[:window_size], criteria=criteria, client=client, organization_id=organization_id
     )
