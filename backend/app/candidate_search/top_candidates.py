@@ -325,6 +325,76 @@ def _build_spec(parsed, *, query: str, rank_by: str, criteria: list[str]) -> dic
     }
 
 
+_COVER_NOTE_OPENERS = (
+    "dear ", "hi ", "hi,", "hello", "i hope this", "i am writing", "to whom",
+    "greetings", "i came across", "i recently came across",
+)
+
+
+def _candidate_blurb(cand) -> str | None:
+    """A concise professional summary for the shareable report.
+
+    ``candidate.summary`` is often the candidate's Workable COVER NOTE ("Dear
+    Hiring Manager...") — not a profile — so we prefer the CV's parsed summary
+    section, then synthesise a factual one-liner from headline + most-recent
+    role + top skills, and only fall back to ``candidate.summary`` if it doesn't
+    read like a cover note."""
+    if cand is None:
+        return None
+    cv_sections = getattr(cand, "cv_sections", None) or {}
+
+    cv_summary = str(cv_sections.get("summary") or "").strip()
+    if len(cv_summary) >= 40 and not cv_summary.lower().startswith(_COVER_NOTE_OPENERS):
+        return cv_summary[:400]
+
+    parts: list[str] = []
+    headline = str(getattr(cand, "headline", "") or "").strip()
+    if headline:
+        parts.append(headline)
+    experience = cv_sections.get("experience") or getattr(cand, "experience_entries", None) or []
+    if isinstance(experience, list) and experience and isinstance(experience[0], dict):
+        e0 = experience[0]
+        recent = " at ".join(
+            p for p in [str(e0.get("title") or "").strip(), str(e0.get("company") or "").strip()] if p
+        )
+        if recent:
+            parts.append(f"most recently {recent}")
+    skills = [
+        str(s).strip()
+        for s in (cv_sections.get("skills") or getattr(cand, "skills", None) or [])[:5]
+        if str(s).strip()
+    ]
+    if skills:
+        parts.append(", ".join(skills))
+    if parts:
+        return " · ".join(parts)[:400]
+
+    # Last resort: candidate.summary, but only if it's not a cover note.
+    summary = str(getattr(cand, "summary", "") or "").strip()
+    if summary and not summary.lower().startswith(_COVER_NOTE_OPENERS):
+        return summary[:400]
+    return None
+
+
+_FIRST_SENTENCE_RE = re.compile(r"(.+?[.!?])(\s|$)", re.S)
+
+
+def _scoring_summary(app: CandidateApplication) -> tuple[str | None, str | None]:
+    """The scoring pipeline's candidate report summary (``cv_match_details.
+    summary``) split into a one-line headline (its first sentence — a "Partial
+    fit: strengths but gaps" verdict line) and the remaining detail."""
+    details = getattr(app, "cv_match_details", None) or {}
+    if not isinstance(details, dict):
+        return None, None
+    summary = str(details.get("summary") or "").strip()
+    if not summary:
+        return None, None
+    m = _FIRST_SENTENCE_RE.match(summary)
+    if m and m.end() < len(summary):
+        return m.group(1).strip()[:200], summary[m.end():].strip()[:700]
+    return summary[:200], None
+
+
 def _candidate_payload(
     app: CandidateApplication,
     *,
@@ -338,9 +408,15 @@ def _candidate_payload(
     out["meets_all_criteria"] = (
         all(v.status == "met" and v.grounded for v in verdicts) if has_criteria else None
     )
-    cand = app.candidate
-    summary = (getattr(cand, "summary", None) or "") if cand else ""
-    out["candidate_summary"] = summary[:600] or None
+    # Prefer the scoring pipeline's candidate report summary (a fit verdict +
+    # detail); fall back to a synthesised blurb when a candidate wasn't scored.
+    headline, body = _scoring_summary(app)
+    if headline:
+        out["candidate_headline"] = headline
+        out["candidate_summary"] = body
+    else:
+        out["candidate_headline"] = None
+        out["candidate_summary"] = _candidate_blurb(app.candidate)
     return out
 
 

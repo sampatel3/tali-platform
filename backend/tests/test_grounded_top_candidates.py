@@ -521,3 +521,41 @@ def test_run_search_defer_qualitative_keeps_prefilter_structural(monkeypatch):
     # But the returned filter still carries them for the grounding step.
     assert out.parsed_filter.soft_criteria == ["banking domain experience"]
     assert out.parsed_filter.keywords == ["fintech"]
+
+
+def test_candidate_blurb_skips_cover_note_and_synthesises():
+    cand = SimpleNamespace(
+        summary="Dear Hiring Manager, I hope this message finds you well...",
+        headline="Sr. MLOps and AiOps",
+        cv_sections={"summary": "", "experience": [{"title": "SRE", "company": "McKinsey"}],
+                     "skills": ["AWS", "Azure", "Kubernetes"]},
+        skills=["AWS", "Azure"],
+        experience_entries=[],
+    )
+    b = tc._candidate_blurb(cand)
+    assert "Dear Hiring Manager" not in (b or "")
+    assert "Sr. MLOps" in b and "McKinsey" in b and "AWS" in b
+
+
+def test_candidate_blurb_prefers_real_cv_summary():
+    cand = SimpleNamespace(
+        summary="Hi, I came across the role...",
+        headline="",
+        cv_sections={"summary": "Seasoned DevOps engineer with 10 years scaling cloud platforms for fintechs."},
+        skills=[], experience_entries=[],
+    )
+    assert tc._candidate_blurb(cand).startswith("Seasoned DevOps")
+
+
+def test_scoring_summary_splits_headline_and_body():
+    app = SimpleNamespace(cv_match_details={
+        "summary": "Partial fit: strong DevOps depth but gaps in banking. Candidate has 15 years cloud experience and led teams."
+    })
+    headline, body = tc._scoring_summary(app)
+    assert headline == "Partial fit: strong DevOps depth but gaps in banking."
+    assert body.startswith("Candidate has 15 years")
+
+
+def test_scoring_summary_empty_returns_none():
+    assert tc._scoring_summary(SimpleNamespace(cv_match_details={})) == (None, None)
+    assert tc._scoring_summary(SimpleNamespace(cv_match_details={"summary": ""})) == (None, None)
