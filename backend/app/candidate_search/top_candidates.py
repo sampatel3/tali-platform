@@ -312,6 +312,9 @@ def _candidate_payload(
     out["meets_all_criteria"] = (
         all(v.status == "met" and v.grounded for v in verdicts) if has_criteria else None
     )
+    cand = app.candidate
+    summary = (getattr(cand, "summary", None) or "") if cand else ""
+    out["candidate_summary"] = summary[:600] or None
     return out
 
 
@@ -431,7 +434,7 @@ def find_top_candidates(
         apps[:window_size], criteria=criteria, client=client, organization_id=organization_id
     )
 
-    shown: list[dict[str, Any]] = []
+    survivors: list[tuple[CandidateApplication, list[CriterionVerdict]]] = []
     excluded_not_met = 0
     by_criterion: dict[str, int] = {}
     for app, verdicts in grounded:
@@ -441,12 +444,25 @@ def find_top_candidates(
             for v in failed:
                 by_criterion[v.criterion] = by_criterion.get(v.criterion, 0) + 1
             continue
-        if len(shown) < limit:
-            shown.append(
-                _candidate_payload(
-                    app, rank=len(shown) + 1, verdicts=verdicts, has_criteria=True
-                )
-            )
+        survivors.append((app, verdicts))
+
+    # Rank the survivors by CLEAR SIGNAL first: candidates who demonstrably meet
+    # the criteria (grounded `met`) surface above those with only partial
+    # evidence, above those whose data is unknown/`missing` — and fit (score)
+    # breaks ties. So strong matches lead; the fuzzier/unknown ones rank below
+    # rather than being hidden.
+    def _signal_key(item):
+        app, verdicts = item
+        met = sum(1 for v in verdicts if v.status == "met" and v.grounded)
+        partial = sum(1 for v in verdicts if v.status == "partially_met" and v.grounded)
+        fit = getattr(app, score_col)
+        return (met, partial, fit if fit is not None else float("-inf"))
+
+    survivors.sort(key=_signal_key, reverse=True)
+    shown = [
+        _candidate_payload(app, rank=i, verdicts=verdicts, has_criteria=True)
+        for i, (app, verdicts) in enumerate(survivors[:limit], start=1)
+    ]
 
     # 5. Assemble.
     return {

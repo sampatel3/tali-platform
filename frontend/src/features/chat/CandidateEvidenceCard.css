@@ -47,6 +47,31 @@
   color: var(--muted, #6b6480);
   margin-bottom: 8px;
 }
+.ev-ext {
+  color: var(--purple, #6d28d9);
+  text-decoration: none;
+  font-weight: 600;
+}
+.ev-ext:hover {
+  text-decoration: underline;
+}
+.ev-summary {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #3a3450;
+  margin: 0 0 6px 22px;
+}
+.ev-report-link {
+  display: inline-block;
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--purple, #6d28d9);
+  text-decoration: none;
+}
+.ev-report-link:hover {
+  text-decoration: underline;
+}
 
 .ev-list {
   list-style: none;

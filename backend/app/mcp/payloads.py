@@ -126,6 +126,7 @@ def application_summary(
         "auto_reject_state": app.auto_reject_state,
         "created_at": _isoformat(app.created_at),
         "frontend_url": application_url(app.id, role_id=app.role_id),
+        "workable_profile_url": getattr(app, "workable_profile_url", None),
     }
 
 

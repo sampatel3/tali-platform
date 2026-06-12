@@ -17,6 +17,10 @@ const api = axios.create({
 export const viewShareLink = (token) =>
   axios.get(`${API_URL}/share/${encodeURIComponent(token)}`);
 
+// Public unauth "top candidates report" — same pattern as the share link.
+export const viewTopReport = (token) =>
+  axios.get(`${API_URL}/report/${encodeURIComponent(token)}`);
+
 const isAuthEndpoint = (url = '') => (
   url.includes('/auth/jwt/login')
   || url.includes('/auth/register')
@@ -37,6 +41,7 @@ const isPublicPath = (pathname = '', search = '') => {
     || pathname.startsWith('/demo')
     || pathname.startsWith('/c/')
     || pathname.startsWith('/share/')
+    || pathname.startsWith('/report/')
     || pathname.startsWith('/assess/')
     || pathname.startsWith('/assessment/')
     || pathname.startsWith('/showcase/')) {

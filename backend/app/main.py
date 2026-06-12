@@ -293,6 +293,7 @@ from .domains.share_links import (
     public_router as share_links_public_router,
     router as share_links_router,
 )
+from .domains.top_reports.routes import public_router as top_reports_public_router
 
 # FastAPI-Users auth routers
 app.include_router(
@@ -359,6 +360,7 @@ app.include_router(workable_provider_router)
 # (no /api/v1 prefix) so the URL the recruiter copy-pastes works in
 # any browser without auth and without exposing the API surface.
 app.include_router(share_links_public_router)
+app.include_router(top_reports_public_router)
 
 # cv_match_v3.0 admin + override surface (gated server-side; flag controls runner)
 from .cv_matching.routes import (
