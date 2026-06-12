@@ -88,6 +88,27 @@ _THRESHOLD_RE = re.compile(
 _UNIT_RE = re.compile(r"\b(aed|usd|eur|gbp|sar|inr|years?|yrs?|months?|days?|\d{3,})\b", re.I)
 _CURRENCY_RE = re.compile(r"\b(aed|usd|eur|gbp|sar|inr)\b", re.I)
 
+# The parser occasionally splits a numeric constraint into a bare label and a
+# bare value ("salary" + "30000 AED") and drops the operator. These detect each
+# fragment so we can reassemble one operator-bearing line ("salary <= 30000 AED").
+_LABEL_FRAGMENT_RE = re.compile(
+    r"(salar(?:y|ies)|compensation|\bpay\b|package|day\s*rate|\brate\b|notice(?:\s+period)?)"
+    r"(?:\s+(?:expectation|expected|requirement|req))?",
+    re.I,
+)
+_VALUE_FRAGMENT_RE = re.compile(
+    r"(?:<=|>=|<|>|less\s+than|under|below|over|above|at\s+most|at\s+least|"
+    r"no\s+more\s+than|up\s+to|max(?:imum)?|min(?:imum)?)?\s*"
+    r"\d[\d,\.]*\s*(?:k|m)?\s*"
+    r"(?:aed|usd|eur|gbp|sar|inr|dirhams?|dollars?|pounds?|euros?)?\s*"
+    r"(?:/\s*(?:year|month|yr|mo)|per\s+(?:year|month|annum)|p\.?a\.?)?",
+    re.I,
+)
+_GEQ_RE = re.compile(r"\b(over|above|more\s+than|greater\s+than|at\s+least|min(?:imum)?|>=?)\b", re.I)
+_LEQ_RE = re.compile(
+    r"\b(under|below|less\s+than|at\s+most|no\s+more\s+than|up\s+to|max(?:imum)?|<=?)\b", re.I
+)
+
 
 def _is_constraint(criterion: str) -> bool:
     c = criterion or ""
@@ -98,6 +119,36 @@ def _is_constraint(criterion: str) -> bool:
     if _CURRENCY_RE.search(c) and re.search(r"\d", c):
         return True
     return False
+
+
+def _merge_constraint_fragments(criteria: list[str], free_text: str | None) -> list[str]:
+    """Reassemble a numeric constraint the parser split apart.
+
+    A bare label ("salary") plus a bare value ("30000 AED") become one
+    operator-bearing line ("salary <= 30000 AED") so the grounder reads it as a
+    single cap rather than two meaningless criteria. The operator is taken from
+    the value fragment or the original query; it defaults to ``<=`` (the common
+    salary / notice-period cap). No-op when no such fragment pair is present —
+    so a parser that already emitted one clean phrase is left untouched."""
+    label_i = value_i = None
+    for i, c in enumerate(criteria):
+        s = (c or "").strip()
+        if label_i is None and _LABEL_FRAGMENT_RE.fullmatch(s):
+            label_i = i
+        elif value_i is None and re.search(r"\d", s) and _VALUE_FRAGMENT_RE.fullmatch(s):
+            value_i = i
+    if label_i is None or value_i is None:
+        return criteria
+
+    raw_value = criteria[value_i].strip()
+    op_src = raw_value if _THRESHOLD_RE.search(raw_value) else (free_text or "")
+    op = ">=" if (_GEQ_RE.search(op_src) and not _LEQ_RE.search(op_src)) else "<="
+    value = _THRESHOLD_RE.sub("", raw_value).strip(" \t-–—")
+    merged = f"{criteria[label_i].strip()} {op} {value}".strip()
+
+    out = [c for i, c in enumerate(criteria) if i not in (label_i, value_i)]
+    out.insert(min(label_i, value_i), merged)
+    return out
 
 _STOPWORDS = {
     "a", "an", "the", "with", "and", "or", "of", "in", "on", "for", "to",
@@ -357,6 +408,8 @@ def _collect_criteria(parsed) -> list[str]:
                 break
         if not dominated:
             kept.append(c)
+
+    kept = _merge_constraint_fragments(kept, getattr(parsed, "free_text", None))
     return kept[:MAX_CRITERIA]
 
 
