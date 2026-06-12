@@ -1,16 +1,17 @@
-"""Haiku-based parser: NL query → ``ParsedFilter``.
+"""NL query → ``ParsedFilter``.
 
-One Claude call per uncached query. ~$0.0005 / call at Haiku 4.5 rates.
-On any failure we degrade to a keyword-only filter so the user still
-gets best-effort ILIKE matches.
+One Claude call per uncached query (``PARSER_MODEL``, Sonnet by default — the
+extraction makes subtle judgement calls a smaller model gets wrong). On any
+failure we degrade to a keyword-only filter so the user still gets best-effort
+ILIKE matches.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 
 from ..llm import MeteringContext, generate_structured
-from . import MODEL_VERSION
 from .prompts import (
     build_parser_prompt,
     expand_region,
@@ -22,6 +23,12 @@ logger = logging.getLogger("taali.candidate_search.parser")
 
 PARSER_MAX_TOKENS = 512
 PARSER_TEMPERATURE = 0.0
+# Parse on a stronger model than the codebase FAST_MODEL (Haiku): the
+# NL→filter extraction makes subtle judgement calls (is "a Western company" the
+# candidate's location or the employer's origin? is "salary <= 30k" one
+# constraint?) that Haiku gets wrong and Sonnet gets right. It's ONE call per
+# query (~$0.004), negligible beside the grounding fan-out. Env-overridable.
+PARSER_MODEL = os.getenv("CLAUDE_SEARCH_PARSER_MODEL") or "claude-sonnet-4-6"
 
 
 def _normalise(filter_obj: ParsedFilter, query: str) -> ParsedFilter:
@@ -124,7 +131,7 @@ def parse_nl_query(
     # dict — one schema source, no JSON repair.
     result = generate_structured(
         client,
-        model=MODEL_VERSION,
+        model=PARSER_MODEL,
         system=system_blocks,
         messages=[{"role": "user", "content": user_prompt}],
         output_model=ParsedFilter,

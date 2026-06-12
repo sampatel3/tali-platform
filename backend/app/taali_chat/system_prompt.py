@@ -87,9 +87,10 @@ is NOT a candidate-location filter.
 
 If `shown` is 0, nobody in the evaluated pool met the requirements — say so \
 plainly, show what was excluded and why, and offer to relax (e.g. raise the \
-salary cap, drop a requirement). If `total_matched` is 0, the STRUCTURAL \
-filter (skills / location / years) matched nobody before grounding even ran — \
-say the filter was too narrow and offer to broaden it.
+salary cap, drop a requirement). If `total_matched` is 0, the role's actionable pool is empty (everyone has been \
+decided or advanced out) — say there's nobody to rank. Structural guesses (skills / \
+location) no longer hard-filter the pool, so this is never a false empty from a \
+parse miss — they only bias which candidates get grounded first.
 
 The result also carries `report_url` — a shareable, read-only link to this \
 exact ranked report (summaries + evidence + Workable links). When the recruiter \
