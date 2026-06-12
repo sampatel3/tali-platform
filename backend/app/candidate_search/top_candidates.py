@@ -68,6 +68,37 @@ _RANKING_LABELS = {
     "cv_match": "CV-match score",
 }
 
+# A criterion is a HARD CONSTRAINT (failing it HIDES the candidate) only when
+# it's a stated-value cap/threshold — salary, notice period, a years/months
+# threshold, location, or work authorisation. Everything else (company type,
+# domain, skills) is a PREFERENCE: failing it ranks the candidate lower but
+# never removes them. So "salary < 30k" filters; "ideally a Western company"
+# does not.
+_CONSTRAINT_KW_RE = re.compile(
+    r"\b(salar(?:y|ies)|compensation|\bpay\b|wage|notice period|visa|"
+    r"work auth\w*|right to work|work permit|relocat\w*|based in|located in|"
+    r"\blocation\b|nationality|citizen\w*)\b",
+    re.I,
+)
+_THRESHOLD_RE = re.compile(
+    r"\b(less than|under|below|at most|no more than|max(?:imum)?|at least|"
+    r"min(?:imum)?|over|above|fewer than|more than|<=?|>=?)\b",
+    re.I,
+)
+_UNIT_RE = re.compile(r"\b(aed|usd|eur|gbp|sar|inr|years?|yrs?|months?|days?|\d{3,})\b", re.I)
+_CURRENCY_RE = re.compile(r"\b(aed|usd|eur|gbp|sar|inr)\b", re.I)
+
+
+def _is_constraint(criterion: str) -> bool:
+    c = criterion or ""
+    if _CONSTRAINT_KW_RE.search(c):
+        return True
+    if _THRESHOLD_RE.search(c) and _UNIT_RE.search(c):
+        return True
+    if _CURRENCY_RE.search(c) and re.search(r"\d", c):
+        return True
+    return False
+
 _STOPWORDS = {
     "a", "an", "the", "with", "and", "or", "of", "in", "on", "for", "to",
     "experience", "domain", "background", "knowledge", "skills", "strong",
@@ -540,7 +571,12 @@ def find_top_candidates(
     excluded_not_met = 0
     by_criterion: dict[str, int] = {}
     for app, verdicts in grounded:
-        failed = [v for v in verdicts if v.status == "not_met"]
+        # Only a failed HARD CONSTRAINT (salary cap, location, etc.) hides a
+        # candidate. A failed PREFERENCE (e.g. not a Western company) is shown
+        # and just ranks lower — see _signal_key below.
+        failed = [
+            v for v in verdicts if v.status == "not_met" and _is_constraint(v.criterion)
+        ]
         if failed:
             excluded_not_met += 1
             for v in failed:

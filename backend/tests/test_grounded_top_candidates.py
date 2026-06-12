@@ -559,3 +559,48 @@ def test_scoring_summary_splits_headline_and_body():
 def test_scoring_summary_empty_returns_none():
     assert tc._scoring_summary(SimpleNamespace(cv_match_details={})) == (None, None)
     assert tc._scoring_summary(SimpleNamespace(cv_match_details={"summary": ""})) == (None, None)
+
+
+def test_is_constraint_classifies():
+    assert tc._is_constraint("salary expectation less than 30000 AED")
+    assert tc._is_constraint("30000 AED")
+    assert tc._is_constraint("at least 5 years experience")
+    assert tc._is_constraint("based in UAE")
+    assert not tc._is_constraint("Western company")
+    assert not tc._is_constraint("Western enterprises")
+    assert not tc._is_constraint("banking domain experience")
+
+
+def test_find_top_candidates_keeps_failed_preference(monkeypatch):
+    """A failed PREFERENCE (not a Western company) must NOT hide the candidate —
+    only a failed hard constraint does. The candidate is shown, ranked lower."""
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(runner_mod, "run_search", lambda **kw: SearchOutput(
+        application_ids=[1, 2],
+        parsed_filter=ParsedFilter(soft_criteria=["Western company"]),
+        warnings=[]))
+    monkeypatch.setattr(tc, "_notes_text", lambda app: None)
+
+    a = _fake_app(1, taali=80, name="A"); a.cv_text = "WESTERN worked at McKinsey"
+    b = _fake_app(2, taali=95, name="B"); b.cv_text = "worked at Emirates NBD Dubai"
+    db = MagicMock()
+    db.query.return_value.options.return_value.filter.return_value.all.return_value = [a, b]
+
+    class _FakeClient:
+        class _M:
+            def create(self, **kw):
+                docs = [x for x in kw["messages"][0]["content"] if x.get("type") == "document"]
+                cv = " ".join(ch["text"] for d in docs for ch in d["source"]["content"])
+                if "WESTERN" in cv:
+                    return SimpleNamespace(content=[_text_block("[[C1]] MET — McKinsey"),
+                                                   _text_block("m", citations=[_cite("McKinsey", document_index=0)])])
+                return SimpleNamespace(content=[_text_block("[[C1]] NOT_MET — Emirates NBD is not Western"),
+                                               _text_block("e", citations=[_cite("Emirates NBD", document_index=0)])])
+        messages = _M()
+
+    out = tc.find_top_candidates(db=db, organization_id=1, query="top with Western company",
+                                 base_query=MagicMock(), limit=5, evidence_client=_FakeClient())
+    ids = [c["application_id"] for c in out["candidates"]]
+    assert ids == [1, 2]  # B (not_met Western) shown, ranked below A (met)
+    assert out["excluded"]["not_met_total"] == 0
