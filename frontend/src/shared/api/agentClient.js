@@ -53,6 +53,14 @@ export const agent = {
   pauseAll: () => api.post('/agent/pause-all', {}),
   resumeAll: () => api.post('/agent/resume-all', {}),
 
+  // Per-role soft pause / resume — the per-role twin of pauseAll/resumeAll.
+  // pause sets agent_paused_at WITHOUT disabling the agent, so the role's
+  // pending decisions are KEPT; resume clears it when back under the monthly
+  // cap and kicks an immediate cycle. Distinct from the role PATCH
+  // agentic_mode_enabled toggle, which turns the agent fully off.
+  pause: (roleId) => api.post(`/roles/${roleId}/agent/pause`, {}),
+  resume: (roleId) => api.post(`/roles/${roleId}/agent/resume`, {}),
+
   // Per-role agent status
   status: (roleId) => api.get(`/roles/${roleId}/agent/status`),
 

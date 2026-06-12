@@ -1,10 +1,14 @@
-"""HTTP-layer tests for the org-wide soft pause/resume endpoints.
+"""HTTP-layer tests for the agent pause / resume / turn-off contract.
 
-  POST /api/v1/agent/pause-all     soft-pause every agent-enabled role
-  POST /api/v1/agent/resume-all    resume every paused role back under cap
+  POST /api/v1/agent/pause-all          soft-pause every agent-enabled role
+  POST /api/v1/agent/resume-all         resume every paused role back under cap
+  POST /api/v1/roles/{id}/agent/pause   soft-pause one role
+  POST /api/v1/roles/{id}/agent/resume  resume one paused role
 
-The defining contract of the *soft* pause (vs the per-role toggle-off) is
-that pending decisions survive — pausing must not empty the review queue.
+The defining contract: a pending decision's lifecycle is tied to the
+candidate, not the agent's power state. Neither a soft pause NOR turning the
+agent fully off (PATCH agentic_mode_enabled=false) empties the review queue —
+discarding it is an explicit opt-in via POST /agent-decisions/discard.
 """
 from __future__ import annotations
 
@@ -212,3 +216,147 @@ def test_pause_all_is_org_scoped(client):
     # Mine paused, theirs untouched.
     assert _role_pause_state(mine["role_ids"][0])[0] is not None
     assert _role_pause_state(other["role_ids"][0])[0] is None
+
+
+# ---------------------------------------------------------------------------
+# Per-role pause / resume (the per-role twins of pause-all / resume-all) and
+# the turn-off decoupling: neither pause NOR off discards the review queue.
+#   POST /api/v1/roles/{id}/agent/pause
+#   POST /api/v1/roles/{id}/agent/resume
+# ---------------------------------------------------------------------------
+
+
+def test_pause_one_role_keeps_pending_decisions(client):
+    from tests.conftest import auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_org_with_agent_roles("Per-role Pause Org", role_names=["A"])
+    _attach_user_to_org(email, seeded["org_id"])
+    role_id = seeded["role_ids"][0]
+    decision_id = _seed_pending_decision(seeded["org_id"], role_id)
+
+    resp = client.post(f"/api/v1/roles/{role_id}/agent/pause", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["paused"] is True
+    assert body["reason"] == "paused by recruiter"
+
+    paused_at, reason, enabled = _role_pause_state(role_id)
+    assert paused_at is not None
+    assert reason == "paused by recruiter"
+    assert enabled is True  # still enabled — that's what keeps the queue alive
+    assert _decision_status(decision_id) == "pending"
+
+
+def test_pause_one_role_is_idempotent(client):
+    from tests.conftest import auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_org_with_agent_roles("Per-role Idem Org", role_names=["A"])
+    _attach_user_to_org(email, seeded["org_id"])
+    role_id = seeded["role_ids"][0]
+
+    client.post(f"/api/v1/roles/{role_id}/agent/pause", headers=headers)
+    first_paused_at = _role_pause_state(role_id)[0]
+    second = client.post(f"/api/v1/roles/{role_id}/agent/pause", headers=headers)
+    assert second.status_code == 200
+    # The pause timestamp doesn't move on a repeat pause.
+    assert _role_pause_state(role_id)[0] == first_paused_at
+
+
+def test_pause_one_role_requires_enabled_agent(client):
+    """Pausing a role whose agent is off is a 409 — nothing to pause."""
+    from tests.conftest import TestingSessionLocal, auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_org_with_agent_roles("Off Role Org", role_names=["A"])
+    _attach_user_to_org(email, seeded["org_id"])
+    role_id = seeded["role_ids"][0]
+    sess = TestingSessionLocal()
+    try:
+        role = sess.query(Role).filter(Role.id == role_id).first()
+        role.agentic_mode_enabled = False
+        sess.commit()
+    finally:
+        sess.close()
+
+    resp = client.post(f"/api/v1/roles/{role_id}/agent/pause", headers=headers)
+    assert resp.status_code == 409
+
+
+def test_resume_one_role_clears_pause(client, monkeypatch):
+    from tests.conftest import auth_headers
+
+    # Resume kicks an immediate cycle; stub it so this stays a fast HTTP-layer
+    # check (celery runs eagerly in the suite).
+    monkeypatch.setattr(
+        "app.tasks.agent_tasks.agent_daily_review_role.delay",
+        lambda *a, **k: None,
+    )
+
+    headers, email = auth_headers(client)
+    seeded = _seed_org_with_agent_roles("Per-role Resume Org", role_names=["A"])
+    _attach_user_to_org(email, seeded["org_id"])
+    role_id = seeded["role_ids"][0]
+
+    client.post(f"/api/v1/roles/{role_id}/agent/pause", headers=headers)
+    assert _role_pause_state(role_id)[0] is not None
+
+    resp = client.post(f"/api/v1/roles/{role_id}/agent/resume", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["resumed"] is True
+    assert body["paused"] is False
+
+    paused_at, reason, _enabled = _role_pause_state(role_id)
+    assert paused_at is None
+    assert reason is None
+
+
+def test_turn_off_keeps_pending_decisions_by_default(client):
+    """Regression guard for the pause/off decoupling: turning the agent OFF
+    (PATCH agentic_mode_enabled=false) must NOT discard the role's pending
+    decisions — they stay actionable. Discarding is now an explicit opt-in.
+    """
+    from tests.conftest import auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_org_with_agent_roles("Turn-off Keep Org", role_names=["A"])
+    _attach_user_to_org(email, seeded["org_id"])
+    role_id = seeded["role_ids"][0]
+    decision_id = _seed_pending_decision(seeded["org_id"], role_id)
+
+    resp = client.patch(
+        f"/api/v1/roles/{role_id}",
+        json={"agentic_mode_enabled": False},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["agentic_mode_enabled"] is False
+    # The defining change: the queue survives turn-off.
+    assert _decision_status(decision_id) == "pending"
+
+
+def test_explicit_discard_after_turn_off_clears_queue(client):
+    """The opt-in path: POST /agent-decisions/discard wipes the queue when the
+    recruiter ticks 'also discard' on the Turn-off dialog.
+    """
+    from tests.conftest import auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_org_with_agent_roles("Turn-off Discard Org", role_names=["A"])
+    _attach_user_to_org(email, seeded["org_id"])
+    role_id = seeded["role_ids"][0]
+    decision_id = _seed_pending_decision(seeded["org_id"], role_id)
+
+    client.patch(
+        f"/api/v1/roles/{role_id}",
+        json={"agentic_mode_enabled": False},
+        headers=headers,
+    )
+    resp = client.post(
+        "/api/v1/agent-decisions/discard", json={"role_id": role_id}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["discarded"] == 1
+    assert _decision_status(decision_id) == "discarded"

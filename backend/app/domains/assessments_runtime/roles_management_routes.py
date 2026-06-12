@@ -400,26 +400,17 @@ def update_role(
             and next_enabled
             and role.agent_paused_at is None
         )
-        # Turning the agent OFF must clear its pending decisions — otherwise
-        # the recruiter is left with orphaned agent cards in the Review queue
-        # for a role the agent no longer manages.
-        if was_enabled and not next_enabled:
-            try:
-                from ...services.pre_screen_decision_emitter import (
-                    discard_pending_decisions_for_role,
-                )
-
-                discard_pending_decisions_for_role(
-                    db,
-                    role_id=int(role.id),
-                    reason="superseded: agent disabled for this role",
-                    resolved_by_user_id=getattr(current_user, "id", None),
-                )
-            except Exception:  # pragma: no cover — never block the toggle
-                import logging
-                logging.getLogger("taali.roles_management").exception(
-                    "discard on agent-off failed (role_id=%s)", role.id
-                )
+        # Turning the agent OFF no longer discards its pending decisions. A
+        # pending decision is a real recommendation about a real candidate
+        # (reject / advance / send assessment) that the recruiter can still
+        # action by hand — approving one executes the underlying action without
+        # the agent running. Its lifecycle belongs to the candidate, not to the
+        # agent's power state: the queue clears as it's actioned, when the
+        # candidate closes, or when the card goes stale. Recruiters who want a
+        # clean slate opt in explicitly via POST /agent-decisions/discard (the
+        # "also discard" choice on the Turn-off dialog). The one-pending-per-
+        # application invariant in queue_decision/pre_screen_decision_emitter
+        # means re-enabling later won't duplicate these cards.
     if "agent_action_allowlist" in updates:
         role.agent_action_allowlist = updates["agent_action_allowlist"]
     if "agent_token_budget_per_cycle" in updates:
