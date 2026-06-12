@@ -300,6 +300,52 @@ def test_collect_criteria_dedupes_and_caps():
     assert out == ["banking", "led a team", "fintech"]
 
 
+def test_collect_criteria_collapses_near_duplicate_phrasings():
+    # The parser often emits a generic AND a specific phrasing of the same ask;
+    # the generic (token-subset) is dropped so its evidence isn't shown twice.
+    parsed = ParsedFilter(
+        soft_criteria=["Western company", "Western enterprise company"], keywords=[]
+    )
+    assert tc._collect_criteria(parsed) == ["Western enterprise company"]
+
+
+def test_collect_criteria_keeps_genuinely_distinct_criteria():
+    parsed = ParsedFilter(
+        soft_criteria=["banking domain", "real-time data"], keywords=[]
+    )
+    assert tc._collect_criteria(parsed) == ["banking domain", "real-time data"]
+
+
+def test_years_experience_from_snapshot():
+    app = SimpleNamespace(cv_match_details={"candidate_snapshot": {"years_experience": 7.5}})
+    assert tc._years_experience(app) == 7.5
+    app2 = SimpleNamespace(cv_match_details={"candidate_snapshot": {"years_experience": 8}})
+    assert tc._years_experience(app2) == 8.0
+
+
+def test_years_experience_absent_or_zero_is_none():
+    for details in (
+        None,
+        {},
+        {"candidate_snapshot": {}},
+        {"candidate_snapshot": {"years_experience": 0}},
+        {"candidate_snapshot": {"years_experience": None}},
+        {"candidate_snapshot": "garbage"},
+    ):
+        assert tc._years_experience(SimpleNamespace(cv_match_details=details)) is None
+
+
+def test_candidate_payload_includes_years_and_headline():
+    app = _fake_app(1, taali=80)
+    app.cv_match_details = {
+        "summary": "Strong fit. Solid backend depth and ownership.",
+        "candidate_snapshot": {"years_experience": 9},
+    }
+    out = tc._candidate_payload(app, rank=1, verdicts=[], has_criteria=False)
+    assert out["candidate_years"] == 9.0
+    assert out["candidate_headline"] == "Strong fit."
+
+
 def test_build_spec_echo_mentions_population_criteria_and_ranking():
     parsed = ParsedFilter(skills_all=["data engineer"])
     spec = tc._build_spec(parsed, query="top data engineers with banking", rank_by="taali",

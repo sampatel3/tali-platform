@@ -2,8 +2,18 @@ import React, { useState } from 'react';
 import './CandidateEvidenceCard.css';
 
 const QUOTE_CAP = 180;
+// Show at most this many verbatim quotes per criterion — enough to back the
+// verdict (e.g. the mix of employers behind a "partial") without a wall.
+const MAX_QUOTES = 3;
 
 const SOURCE_LABEL = { cv: 'CV', notes: 'notes', role_requirement: 'role criteria' };
+
+// "8 yrs" / "7.5 yrs" from the scorer's years_experience, or null.
+function formatYears(y) {
+  if (typeof y !== 'number' || !(y > 0)) return null;
+  const r = Math.round(y * 2) / 2;
+  return `${Number.isInteger(r) ? r : r.toFixed(1)} yrs`;
+}
 
 // Verbatim quote: collapse ragged whitespace, tag where it came from (CV vs the
 // candidate's notes/stated details), and cap the length with an inline "more"
@@ -66,18 +76,33 @@ function CriterionRow({ c }) {
       : status === 'not_met'
       ? 'ev-chip-notmet'
       : 'ev-chip-missing';
-  const quotes = Array.isArray(c.evidence) ? c.evidence.filter((e) => e && e.quote) : [];
+  const allQuotes = Array.isArray(c.evidence) ? c.evidence.filter((e) => e && e.quote) : [];
+  const quotes = allQuotes.slice(0, MAX_QUOTES);
+  const moreQuotes = allQuotes.length - quotes.length;
+  // The model's one-line reason for the verdict. Surfaced for the verdicts a
+  // recruiter actually questions ("why is this partial / not met?"); met is
+  // self-evident from its quote and missing has its own line below.
+  const reason =
+    (c.note || '').trim() && (status === 'partially_met' || status === 'not_met')
+      ? c.note.trim()
+      : null;
   return (
     <div className="ev-crit">
       <div className="ev-crit-head">
         <span className={`ev-chip ${chipClass}`}>{STATUS_LABEL[status] || status}</span>
         <span className="ev-crit-text">{c.criterion}</span>
       </div>
+      {reason ? <div className="ev-reason">{reason}</div> : null}
       {grounded && quotes.length ? (
         <div className="ev-quotes">
           {quotes.map((e, i) => (
             <Quote key={i} text={e.quote} source={e.source} />
           ))}
+          {moreQuotes > 0 ? (
+            <div className="ev-more-src">
+              +{moreQuotes} more {moreQuotes === 1 ? 'source' : 'sources'}
+            </div>
+          ) : null}
         </div>
       ) : (
         <div className="ev-noquote">
@@ -167,7 +192,12 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
             {detailed && (c.candidate_headline || c.candidate_summary) ? (
               <div className="ev-summary">
                 {c.candidate_headline ? (
-                  <div className="ev-summary-headline">{c.candidate_headline}</div>
+                  <div className="ev-summary-headline">
+                    {formatYears(c.candidate_years) ? (
+                      <span className="ev-years">{formatYears(c.candidate_years)}</span>
+                    ) : null}
+                    {c.candidate_headline}
+                  </div>
                 ) : null}
                 {c.candidate_summary ? (
                   <div className="ev-summary-body">{c.candidate_summary}</div>

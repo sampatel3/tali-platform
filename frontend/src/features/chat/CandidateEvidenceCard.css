@@ -66,6 +66,18 @@
   color: var(--ink, #1c1830);
   margin-bottom: 2px;
 }
+.ev-years {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--purple, #6d28d9);
+  background: var(--purple-soft, #ece7fb);
+  border-radius: 6px;
+  padding: 0 6px;
+  margin-right: 7px;
+  vertical-align: middle;
+  letter-spacing: 0.01em;
+}
 .ev-summary-body {
   color: var(--muted, #6b6480);
 }
@@ -194,6 +206,18 @@
 }
 .ev-crit-text {
   font-size: 12.5px;
+}
+.ev-reason {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: #5b5470;
+  margin: 3px 0 0;
+}
+.ev-more-src {
+  font-size: 11px;
+  color: #9a93ad;
+  font-style: italic;
+  margin-top: 1px;
 }
 .ev-src {
   font-size: 10px;

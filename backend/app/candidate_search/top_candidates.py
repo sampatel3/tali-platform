@@ -320,18 +320,44 @@ def _ground_window(
 
 def _collect_criteria(parsed) -> list[str]:
     """Qualitative criteria to ground: soft criteria + residual keywords,
-    deduped (case-insensitive), capped."""
+    deduped and capped.
+
+    Beyond exact-text dedup, collapse NEAR-duplicates: when one criterion's
+    significant tokens are a subset of another's they're asking the same thing
+    ("Western company" vs "Western enterprise company", "banking" vs "banking
+    domain experience") — keep the more specific (superset) one and drop the
+    generic. Without this the parser's two phrasings each ground separately and
+    the card shows the same employer evidence twice."""
+    raw: list[str] = []
     seen: set[str] = set()
-    out: list[str] = []
     for c in list(parsed.soft_criteria) + list(parsed.keywords):
         c = (c or "").strip()
         key = c.lower()
         if c and key not in seen:
             seen.add(key)
-            out.append(c)
-        if len(out) >= MAX_CRITERIA:
-            break
-    return out
+            raw.append(c)
+
+    kept: list[str] = []
+    for i, c in enumerate(raw):
+        ct = _tokens(c)
+        if not ct:
+            kept.append(c)
+            continue
+        dominated = False
+        for j, other in enumerate(raw):
+            if i == j:
+                continue
+            ot = _tokens(other)
+            if not ot:
+                continue
+            # A strict superset criterion dominates (drop the generic subset);
+            # for identical token sets keep only the earliest occurrence.
+            if ct < ot or (ct == ot and j < i):
+                dominated = True
+                break
+        if not dominated:
+            kept.append(c)
+    return kept[:MAX_CRITERIA]
 
 
 def _build_spec(parsed, *, query: str, rank_by: str, criteria: list[str]) -> dict[str, Any]:
@@ -432,6 +458,23 @@ def _scoring_summary(app: CandidateApplication) -> tuple[str | None, str | None]
     return summary[:200], None
 
 
+def _years_experience(app: CandidateApplication) -> float | None:
+    """Total professional years from the scoring snapshot
+    (``cv_match_details.candidate_snapshot.years_experience``) for the headline.
+    ``None`` when the candidate wasn't scored or the CV lacked dates."""
+    details = getattr(app, "cv_match_details", None) or {}
+    if not isinstance(details, dict):
+        return None
+    snap = details.get("candidate_snapshot") or {}
+    if not isinstance(snap, dict):
+        return None
+    try:
+        y = float(snap.get("years_experience"))
+    except (TypeError, ValueError):
+        return None
+    return round(y * 2) / 2 if y > 0 else None
+
+
 def _candidate_payload(
     app: CandidateApplication,
     *,
@@ -454,6 +497,7 @@ def _candidate_payload(
     else:
         out["candidate_headline"] = None
         out["candidate_summary"] = _candidate_blurb(app.candidate)
+    out["candidate_years"] = _years_experience(app)
     return out
 
 
