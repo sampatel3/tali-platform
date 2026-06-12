@@ -10,7 +10,7 @@ and (when relevant) ``MODEL_VERSION``.
 
 from ..llm.models import FAST_MODEL
 
-PROMPT_VERSION = "cv_match_v16"
+PROMPT_VERSION = "cv_match_v17"
 MODEL_VERSION = FAST_MODEL
 
 
