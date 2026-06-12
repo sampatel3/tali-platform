@@ -41,6 +41,7 @@ from ..models.organization import Organization
 from ..models.role import Role
 from ..models.user import User
 from ..platform.config import settings
+from ..llm.tool_pairs import sanitize_tool_pairs
 from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
 from ..services.usage_metering_service import record_event
@@ -87,7 +88,8 @@ def _load_history(db: Session, conversation: AgentConversation) -> list[dict[str
     """Persisted messages in Anthropic ``{role, content}`` format for replay.
 
     Includes the hidden tool plumbing (tool_use / tool_result turns) so the
-    model gets full context; only the rendered timeline hides them.
+    model gets full context; only the rendered timeline hides them. Sanitised
+    so an interrupted-turn orphan can't 400 the whole conversation.
     """
     rows = (
         db.query(AgentConversationMessage)
@@ -98,7 +100,9 @@ def _load_history(db: Session, conversation: AgentConversation) -> list[dict[str
         )
         .all()
     )
-    return [{"role": r.author_role, "content": r.content} for r in rows]
+    return sanitize_tool_pairs(
+        [{"role": r.author_role, "content": r.content} for r in rows]
+    )
 
 
 def _persist(
