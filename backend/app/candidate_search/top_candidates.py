@@ -50,6 +50,12 @@ DEFAULT_LIMIT = 10
 MAX_LIMIT = 25
 # Cap the number of qualitative criteria we ground per query.
 MAX_CRITERIA = 5
+# When criteria are present we must ground MORE than `limit` candidates,
+# because requirements act as a filter — some of the top-by-fit will fail
+# (e.g. salary above the cap) and get hidden, so we need a window deep enough
+# to still surface `limit` who qualify. Bounds cost + latency.
+GROUND_WINDOW_CAP = 24
+GROUND_CONCURRENCY = 8
 
 _RANKING_LABELS = {
     "taali": "Taali fit",
@@ -154,16 +160,29 @@ def _reuse_stored(criterion: str, stored: list[dict[str, Any]]) -> CriterionVerd
     return None
 
 
-def _ground_application(
+def _collect_evidence(app: CandidateApplication):
+    """Pull the candidate's evidence off the (already-loaded) ORM objects.
+
+    Runs in the MAIN thread before grounding is fanned out, so the parallel
+    grounding workers never touch the request's DB session."""
+    return (_cv_text(app), _notes_text(app), _stored_assessments(app))
+
+
+def _ground(
+    cv: str | None,
+    notes: str | None,
+    stored: list[dict[str, Any]],
     *,
-    app: CandidateApplication,
     criteria: list[str],
     client,
     organization_id: int,
+    application_id: int,
 ) -> list[CriterionVerdict]:
+    """Pure (no DB / no ORM access) — safe to run in a worker thread. Reuses a
+    stored requirement assessment where it cleanly covers a criterion, else
+    runs one fresh CV+notes citation call for the remainder."""
     if not criteria:
         return []
-    stored = _stored_assessments(app)
     verdicts: list[CriterionVerdict | None] = []
     remaining: list[str] = []
     for c in criteria:
@@ -173,8 +192,6 @@ def _ground_application(
             remaining.append(c)
 
     if remaining:
-        cv = _cv_text(app)
-        notes = _notes_text(app)
         if cv or notes:
             fresh = _ge.extract_cv_evidence(
                 cv_text=cv,
@@ -182,7 +199,7 @@ def _ground_application(
                 criteria=remaining,
                 client=client,
                 organization_id=organization_id,
-                application_id=int(app.id),
+                application_id=int(application_id),
             )
             fresh_by_text = {v.criterion: v for v in fresh}
             for i, c in enumerate(criteria):
@@ -198,6 +215,44 @@ def _ground_application(
                     )
 
     return [v for v in verdicts if v is not None]
+
+
+def _ground_window(
+    apps: list[CandidateApplication],
+    *,
+    criteria: list[str],
+    client,
+    organization_id: int,
+) -> list[tuple[CandidateApplication, list[CriterionVerdict]]]:
+    """Ground each app in ``apps`` concurrently (I/O-bound Haiku calls).
+
+    Evidence is collected in this (main) thread; only the pure ``_ground`` runs
+    in workers, so the DB session is never touched off-thread. Order preserved.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    if not apps:
+        return []
+    jobs = [(app, *_collect_evidence(app)) for app in apps]
+
+    def _one(job):
+        app, cv, notes, stored = job
+        try:
+            return _ground(
+                cv, notes, stored,
+                criteria=criteria,
+                client=client,
+                organization_id=organization_id,
+                application_id=int(app.id),
+            )
+        except Exception as exc:  # noqa: BLE001 — degrade this candidate, not the query
+            logger.warning("ground app=%s failed: %s", getattr(app, "id", "?"), exc)
+            return [CriterionVerdict(criterion=c, status="missing") for c in criteria]
+
+    workers = max(1, min(GROUND_CONCURRENCY, len(jobs)))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        verdicts_list = list(ex.map(_one, jobs))
+    return [(jobs[i][0], verdicts_list[i]) for i in range(len(jobs))]
 
 
 def _collect_criteria(parsed) -> list[str]:
@@ -296,7 +351,7 @@ def find_top_candidates(
     parsed = result.parsed_filter
     criteria = _collect_criteria(parsed)
 
-    # 3. Rank the full match set by the chosen score, THEN shortlist.
+    # 3. Rank the full match set by the chosen score.
     score_col = SCORE_FIELDS[rank_by]
     apps = (
         db.query(CandidateApplication)
@@ -316,11 +371,37 @@ def find_top_candidates(
         ),
         reverse=True,
     )
-    shortlist = apps[:limit]
 
-    # 4. Ground the shortlist (reuse stored evidence; else fresh CV citation).
+    base_payload = {
+        "spec": _build_spec(parsed, query=query, rank_by=rank_by, criteria=criteria),
+        "total_matched": len(result.application_ids),
+        "warnings": [w.model_dump(mode="json") for w in result.warnings],
+        "rank_by": rank_by,
+    }
+
+    # No qualitative/constraint criteria → nothing to ground or filter; return
+    # the top `limit` by score.
+    if not criteria:
+        shown = [
+            _candidate_payload(app, rank=i, verdicts=[], has_criteria=False)
+            for i, app in enumerate(apps[:limit], start=1)
+        ]
+        return {
+            **base_payload,
+            "evaluated": len(shown),
+            "shown": len(shown),
+            "candidates": shown,
+            "excluded": {"not_met_total": 0, "by_criterion": []},
+            "evidence_model": None,
+        }
+
+    # 4. Ground a bounded, score-ranked WINDOW (parallel). Requirements act as
+    #    a HARD FILTER: a candidate who clearly fails any criterion (NOT_MET —
+    #    e.g. salary above the cap) is hidden. met / partial / missing stay
+    #    (e.g. salary not stated = negotiable). We ground deeper than `limit`
+    #    so enough qualify after filtering.
     client = evidence_client
-    if client is None and criteria and shortlist:
+    if client is None:
         try:
             from ..services.claude_client_resolver import get_metered_client
 
@@ -328,29 +409,56 @@ def find_top_candidates(
         except Exception as exc:  # noqa: BLE001
             logger.warning("grounding client init failed: %s", exc)
 
-    candidates: list[dict[str, Any]] = []
-    for idx, app in enumerate(shortlist, start=1):
-        verdicts: list[CriterionVerdict] = []
-        if criteria and client is not None:
-            verdicts = _ground_application(
-                app=app,
-                criteria=criteria,
-                client=client,
-                organization_id=organization_id,
+    if client is None:
+        # Grounding unavailable → degrade to a ranked list, no filtering.
+        shown = [
+            _candidate_payload(app, rank=i, verdicts=[], has_criteria=True)
+            for i, app in enumerate(apps[:limit], start=1)
+        ]
+        return {
+            **base_payload,
+            "evaluated": 0,
+            "shown": len(shown),
+            "candidates": shown,
+            "excluded": {"not_met_total": 0, "by_criterion": []},
+            "evidence_model": None,
+            "warnings": base_payload["warnings"]
+            + [{"code": "rerank_skipped", "message": "Grounding unavailable; not filtered."}],
+        }
+
+    window_size = min(len(apps), max(limit * 4, GROUND_WINDOW_CAP // 2), GROUND_WINDOW_CAP)
+    grounded = _ground_window(
+        apps[:window_size], criteria=criteria, client=client, organization_id=organization_id
+    )
+
+    shown: list[dict[str, Any]] = []
+    excluded_not_met = 0
+    by_criterion: dict[str, int] = {}
+    for app, verdicts in grounded:
+        failed = [v for v in verdicts if v.status == "not_met"]
+        if failed:
+            excluded_not_met += 1
+            for v in failed:
+                by_criterion[v.criterion] = by_criterion.get(v.criterion, 0) + 1
+            continue
+        if len(shown) < limit:
+            shown.append(
+                _candidate_payload(
+                    app, rank=len(shown) + 1, verdicts=verdicts, has_criteria=True
+                )
             )
-        candidates.append(
-            _candidate_payload(
-                app, rank=idx, verdicts=verdicts, has_criteria=bool(criteria)
-            )
-        )
 
     # 5. Assemble.
     return {
-        "spec": _build_spec(parsed, query=query, rank_by=rank_by, criteria=criteria),
-        "total_matched": len(result.application_ids),
-        "shortlist_size": len(shortlist),
-        "candidates": candidates,
-        "warnings": [w.model_dump(mode="json") for w in result.warnings],
-        "evidence_model": _ge.GROUNDING_MODEL if criteria else None,
-        "rank_by": rank_by,
+        **base_payload,
+        "evaluated": len(grounded),
+        "shown": len(shown),
+        "candidates": shown,
+        "excluded": {
+            "not_met_total": excluded_not_met,
+            "by_criterion": [
+                {"criterion": c, "count": n} for c, n in by_criterion.items()
+            ],
+        },
+        "evidence_model": _ge.GROUNDING_MODEL,
     }

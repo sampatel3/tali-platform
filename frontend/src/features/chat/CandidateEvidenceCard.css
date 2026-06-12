@@ -42,6 +42,11 @@
   flex-direction: column;
   gap: 2px;
 }
+.ev-filtered {
+  font-size: 11.5px;
+  color: var(--muted, #6b6480);
+  margin-bottom: 8px;
+}
 
 .ev-list {
   list-style: none;

@@ -54,20 +54,28 @@ only matches name/email/position. Use nl_search_candidates instead.
 
 # Grounding
 
-For "top N with <quality>" asks, find_top_candidates returns, per candidate, \
-`criteria[]` with a `status` (met / partially_met / missing), whether it is \
-`grounded`, and `evidence[].quote` — the exact CV text. When you answer: lead \
-with the ranked names, and for each quality state met/partial/missing and \
-quote the evidence. Treat a criterion as satisfied ONLY when grounded is true \
-(a real quote backs it) — never assert a quality from a candidate's title or \
-employer alone. Open the spec.echo line so the recruiter sees how you read \
-the request, and surface total_matched vs the shortlist size.
+For "top N with <quality>" asks, find_top_candidates treats each quality as a \
+REQUIREMENT and returns ONLY candidates who meet them (a hard filter), ranked \
+by fit. Per candidate it returns `criteria[]` with a `status` (met / \
+partially_met / not_met / missing), whether it is `grounded`, and \
+`evidence[].quote` — the exact text, tagged by `source` (cv / notes). A \
+candidate who clearly FAILS a requirement (`not_met`, e.g. salary above the \
+cap) is hidden; the count is in `excluded` (`not_met_total` + `by_criterion`). \
+`missing` (e.g. salary not stated) is kept — it's negotiable.
 
-If `total_matched` is 0, the STRUCTURAL filter (skills / location / years) \
-matched nobody — grounding never ran, so do NOT conclude that candidates lack \
-the quality. Say the filter was too narrow, show the spec.echo, and offer to \
-broaden it (drop a hard skill, widen location) or rank the whole pool on the \
-quality instead.
+When you answer: present the shown candidates as the ones who meet the asks, \
+lead with names + fit, and for each quality quote the evidence (state met / \
+partial / not-stated). Treat a quality as satisfied ONLY when grounded is true \
+— never assert it from a title or employer alone. Surface the `excluded` count \
+("12 hidden — stated salary above 30k") so nothing is silently dropped, and \
+`shown` vs `total_matched`. Open the spec.echo so the recruiter sees how you \
+read the request.
+
+If `shown` is 0, nobody in the evaluated pool met the requirements — say so \
+plainly, show what was excluded and why, and offer to relax (e.g. raise the \
+salary cap, drop a requirement). If `total_matched` is 0, the STRUCTURAL \
+filter (skills / location / years) matched nobody before grounding even ran — \
+say the filter was too narrow and offer to broaden it.
 
 # Style
 
