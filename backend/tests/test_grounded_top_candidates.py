@@ -774,6 +774,57 @@ def test_structural_match_biases_but_does_not_exclude(monkeypatch):
     assert out["structural_matches"] == 1
 
 
+def test_currency_cap_verdict_recomputed_from_cited_value():
+    from app.candidate_search.grounded_evidence import CriterionVerdict, Evidence
+
+    # The Seema case: 18,000 vs a 30,000 cap was mislabelled PARTIAL → MET.
+    v = CriterionVerdict(criterion="salary expectation <= 30000 AED", status="partially_met",
+                         grounded=True, evidence=[Evidence(quote="A: 18000", source="notes")])
+    tc._recompute_currency_cap_verdict(v)
+    assert v.status == "met"
+    # 35,000 vs 30,000 (within 1.25x) → PARTIAL even if the model said met
+    v2 = CriterionVerdict(criterion="salary <= 30000 AED", status="met", grounded=True,
+                          evidence=[Evidence(quote="A: 35,000 AED", source="notes")])
+    tc._recompute_currency_cap_verdict(v2)
+    assert v2.status == "partially_met"
+    # 45,000 (beyond 1.25x) → NOT_MET
+    v3 = CriterionVerdict(criterion="salary expectation <= 30000 AED", status="met", grounded=True,
+                          evidence=[Evidence(quote="states 45000 monthly", source="notes")])
+    tc._recompute_currency_cap_verdict(v3)
+    assert v3.status == "not_met"
+    # "27k" shorthand under cap → MET
+    v4 = CriterionVerdict(criterion="salary <= 30000 AED", status="partially_met", grounded=True,
+                          evidence=[Evidence(quote="A: 27k AED", source="notes")])
+    tc._recompute_currency_cap_verdict(v4)
+    assert v4.status == "met"
+
+
+def test_currency_cap_verdict_noop_when_ambiguous_or_nonconstraint():
+    from app.candidate_search.grounded_evidence import CriterionVerdict, Evidence
+
+    # not a currency/salary cap → untouched
+    v = CriterionVerdict(criterion="Western company", status="partially_met", grounded=True,
+                         evidence=[Evidence(quote="Emirates NBD", source="cv")])
+    tc._recompute_currency_cap_verdict(v)
+    assert v.status == "partially_met"
+    # no stated value (model said missing, no evidence) → stays missing
+    v2 = CriterionVerdict(criterion="salary expectation <= 30000 AED", status="missing",
+                          grounded=False, evidence=[])
+    tc._recompute_currency_cap_verdict(v2)
+    assert v2.status == "missing"
+    # a wrong citation with only an out-of-band number (a year) → trust the model
+    v3 = CriterionVerdict(criterion="salary expectation <= 30000 AED", status="met", grounded=True,
+                          evidence=[Evidence(quote="Engineer at LSEG since 2024", source="cv")])
+    tc._recompute_currency_cap_verdict(v3)
+    assert v3.status == "met"
+    # two different stated values → ambiguous → untouched
+    v4 = CriterionVerdict(criterion="salary <= 30000 AED", status="met", grounded=True,
+                          evidence=[Evidence(quote="18000", source="notes"),
+                                    Evidence(quote="25000", source="notes")])
+    tc._recompute_currency_cap_verdict(v4)
+    assert v4.status == "met"
+
+
 def test_has_structural_classifies():
     assert tc._has_structural(ParsedFilter(skills_all=["react"]))
     assert tc._has_structural(ParsedFilter(locations_country=["United Arab Emirates"]))

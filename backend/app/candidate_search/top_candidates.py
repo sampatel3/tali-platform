@@ -109,6 +109,70 @@ _LEQ_RE = re.compile(
     r"\b(under|below|less\s+than|at\s+most|no\s+more\s+than|up\s+to|max(?:imum)?|<=?)\b", re.I
 )
 
+# A salary/currency CAP verdict is ARITHMETIC, not judgement. The grounding
+# model extracts + cites the stated figure (which it does well); the
+# met/partial/not_met call is then computed deterministically below so the model
+# can't mislabel a clear pass (e.g. 18,000 vs a 30,000 cap as "partial"). Cap
+# detection must catch a bare "<=" (no leading \b, unlike the word operators).
+_CAP_TOLERANCE = 1.25  # mirrors the grounding prompt's "partial within 25%" band
+_CAP_CRIT_RE = re.compile(
+    r"(<=?|\b(?:under|below|less\s+than|at\s+most|no\s+more\s+than|up\s+to|max(?:imum)?)\b)",
+    re.I,
+)
+_MONEY_NUM_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(k|m)?\b", re.I)
+
+
+def _money_in(text: str) -> list[float]:
+    out: list[float] = []
+    for m in _MONEY_NUM_RE.finditer(text or ""):
+        val = float(m.group(1).replace(",", ""))
+        suf = (m.group(2) or "").lower()
+        if suf == "k":
+            val *= 1_000
+        elif suf == "m":
+            val *= 1_000_000
+        out.append(val)
+    return out
+
+
+def _recompute_currency_cap_verdict(v: CriterionVerdict) -> None:
+    """Recompute a salary/currency CAP verdict from the CITED value vs the cap,
+    overriding the grounding model's verdict word. No-op unless the criterion is
+    a currency/salary cap with a number AND the evidence yields exactly one
+    value in a sane band around the cap — otherwise the model's verdict stands
+    (so a wrong/year-only citation or an ambiguous range can't flip it)."""
+    crit = v.criterion or ""
+    if not _CAP_CRIT_RE.search(crit):
+        return
+    if not (
+        _CURRENCY_RE.search(crit)
+        or re.search(r"salar|compensation|\bpay\b|wage|package", crit, re.I)
+    ):
+        return
+    caps = _money_in(crit)
+    if not caps:
+        return
+    cap = max(caps)
+    in_band = [
+        n
+        for e in v.evidence
+        for n in _money_in(e.quote)
+        if 0.1 * cap <= n <= 10 * cap
+    ]
+    # drop a bare echo of the cap itself if a distinct stated value is present
+    distinct = {round(n, 2) for n in in_band if abs(n - cap) > 1e-9} or {
+        round(n, 2) for n in in_band
+    }
+    if len(distinct) != 1:
+        return
+    stated = next(iter(distinct))
+    if stated <= cap:
+        v.status = "met"
+    elif stated <= _CAP_TOLERANCE * cap:
+        v.status = "partially_met"
+    else:
+        v.status = "not_met"
+
 
 def _is_constraint(criterion: str) -> bool:
     c = criterion or ""
@@ -319,7 +383,11 @@ def _ground(
                         criterion=c, status="missing", note="No CV or notes available."
                     )
 
-    return [v for v in verdicts if v is not None]
+    out = [v for v in verdicts if v is not None]
+    for v in out:
+        # Salary/currency caps: trust the cited figure, not the model's verdict word.
+        _recompute_currency_cap_verdict(v)
+    return out
 
 
 def _ground_window(
