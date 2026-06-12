@@ -41,6 +41,10 @@ logger = logging.getLogger("taali.candidate_search.grounded")
 GROUNDING_MODEL = os.getenv("CLAUDE_GROUNDING_MODEL") or _FAST_MODEL
 GROUNDING_MAX_TOKENS = 700
 GROUNDING_TEMPERATURE = 0.0
+# Per-request timeout for a single grounding call. Overrides the client's
+# 120s/1-retry default — grounding is fast and parallel, so a stuck call must
+# fail quickly rather than stall the chat turn.
+GROUNDING_TIMEOUT_S = 20.0
 # Cap CV text sent to bound cost; most CVs sit well under this. Citation
 # char offsets are relative to this (possibly truncated) string.
 CV_TEXT_CHAR_CAP = 16000
@@ -238,7 +242,9 @@ def parse_citation_response(
 # send the CV as a CUSTOM-CONTENT document of small pre-split blocks, so a
 # citation lands on one tight, relevant line.
 CV_CHUNK_MAX_LEN = 220
-MAX_CV_CHUNKS = 400
+# Cap citable blocks per document. Fewer blocks = faster citation processing;
+# 200 small blocks already covers a full CV well past the char cap.
+MAX_CV_CHUNKS = 200
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 _SEPARATOR_SPLIT_RE = re.compile(r"\s*[·•|;]\s*")
 
@@ -348,6 +354,10 @@ def extract_cv_evidence(
             temperature=GROUNDING_TEMPERATURE,
             system=_SYSTEM_PROMPT,
             messages=messages,
+            # Short per-request timeout: grounding is a fast Haiku call and runs
+            # in a parallel batch behind a chat turn — the default 120s/1-retry
+            # (240s) would let one stuck call hang the whole response.
+            timeout=GROUNDING_TIMEOUT_S,
             metering={
                 "feature": "candidate_grounding",
                 "organization_id": organization_id,
