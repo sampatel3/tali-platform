@@ -138,14 +138,17 @@ def _ensure_conversation(
 
 
 def _load_history(db: Session, *, conversation: TaaliChatConversation) -> list[dict[str, Any]]:
-    """Pull persisted messages and return them in Anthropic message format."""
+    """Pull persisted messages in Anthropic message format. Sanitised so a
+    tool_use orphaned by an interrupted turn can't 400 the whole conversation."""
+    from ..llm.tool_pairs import sanitize_tool_pairs
+
     rows = (
         db.query(TaaliChatMessage)
         .filter(TaaliChatMessage.conversation_id == conversation.id)
         .order_by(TaaliChatMessage.created_at.asc(), TaaliChatMessage.id.asc())
         .all()
     )
-    return [{"role": row.role, "content": row.content} for row in rows]
+    return sanitize_tool_pairs([{"role": row.role, "content": row.content} for row in rows])
 
 
 def _persist_message(
