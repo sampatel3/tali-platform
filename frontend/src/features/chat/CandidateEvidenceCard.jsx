@@ -90,7 +90,7 @@ function CriterionRow({ c }) {
   );
 }
 
-export default function CandidateEvidenceCard({ data }) {
+export default function CandidateEvidenceCard({ data, detailed = false, showReportLink = true }) {
   if (!data || !Array.isArray(data.candidates)) return null;
   const spec = data.spec || {};
   const candidates = data.candidates;
@@ -155,7 +155,18 @@ export default function CandidateEvidenceCard({ data }) {
             <div className="ev-sub">
               {[c.candidate_position, c.candidate_location].filter(Boolean).join(' · ')}
               {c.role_name ? ` — ${c.role_name}` : ''}
+              {c.workable_profile_url ? (
+                <>
+                  {' · '}
+                  <a className="ev-ext" href={c.workable_profile_url} target="_blank" rel="noreferrer">
+                    Workable ↗
+                  </a>
+                </>
+              ) : null}
             </div>
+            {detailed && c.candidate_summary ? (
+              <div className="ev-summary">{c.candidate_summary}</div>
+            ) : null}
             {Array.isArray(c.criteria) && c.criteria.length ? (
               <div className="ev-crits">
                 {c.criteria.map((cr, j) => (
@@ -166,6 +177,12 @@ export default function CandidateEvidenceCard({ data }) {
           </li>
         ))}
       </ol>
+
+      {showReportLink && data.report_url ? (
+        <a className="ev-report-link" href={data.report_url} target="_blank" rel="noreferrer">
+          Open shareable report ↗
+        </a>
+      ) : null}
     </div>
   );
 }

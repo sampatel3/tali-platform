@@ -58,7 +58,9 @@ quality (`criteria[].status` met/partial/not_met/missing + `evidence[].quote`, t
 `grounded` — never infer from a title or employer; quote the evidence. Surface the \
 `excluded` count so nothing is hidden silently. If `shown` is 0, nobody met the asks — \
 say so and offer to relax (raise the cap, drop a requirement). If `total_matched` is 0 \
-the structural filter matched nobody before grounding — say it was too narrow.
+the structural filter matched nobody before grounding — say it was too narrow. The \
+result carries `report_url` — a shareable read-only link to this ranked report; give it \
+to the recruiter when they want to share, save, or send the top candidates.
 - Score threshold (the 0-100 cut-off that gates who advances): `simulate_threshold` \
 projects a change without committing; `recommend_threshold` finds a cut-off that \
 hits a target; `set_threshold` commits and instantly reconciles the decision queue \

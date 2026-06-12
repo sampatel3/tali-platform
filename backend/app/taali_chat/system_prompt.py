@@ -77,6 +77,10 @@ salary cap, drop a requirement). If `total_matched` is 0, the STRUCTURAL \
 filter (skills / location / years) matched nobody before grounding even ran — \
 say the filter was too narrow and offer to broaden it.
 
+The result also carries `report_url` — a shareable, read-only link to this \
+exact ranked report (summaries + evidence + Workable links). When the recruiter \
+asks to share, save, or send the top candidates, give them that link.
+
 # Style
 
 Be direct and decisive. Recruiters are time-poor. When you list candidates, \

@@ -423,6 +423,62 @@ def test_find_top_candidates_hides_not_met(monkeypatch):
     assert out["excluded"]["by_criterion"][0]["count"] == 1
 
 
+def test_find_top_candidates_ranks_clear_signal_above_missing(monkeypatch):
+    """Among candidates who pass the filter, those with clear evidence (met)
+    rank ABOVE those whose data is unknown/missing — even at lower fit."""
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(
+        runner_mod,
+        "run_search",
+        lambda **kw: SearchOutput(
+            application_ids=[1, 2],
+            parsed_filter=ParsedFilter(soft_criteria=["led a large team"]),
+            warnings=[],
+        ),
+    )
+    monkeypatch.setattr(tc, "_notes_text", lambda app: None)
+
+    a = _fake_app(1, taali=70, name="A"); a.cv_text = "HASIT led a 40-person team"
+    b = _fake_app(2, taali=95, name="B"); b.cv_text = "nothing relevant here"
+    db = MagicMock()
+    db.query.return_value.options.return_value.filter.return_value.all.return_value = [a, b]
+
+    class _FakeClient:
+        class _M:
+            def create(self, **kw):
+                docs = [x for x in kw["messages"][0]["content"] if x.get("type") == "document"]
+                cv = " ".join(ch["text"] for d in docs for ch in d["source"]["content"])
+                if "HASIT" in cv:
+                    return SimpleNamespace(content=[
+                        _text_block("[[C1]] MET — led a 40-person team"),
+                        _text_block("team", citations=[_cite("led a 40-person team", document_index=0)]),
+                    ])
+                return SimpleNamespace(content=[_text_block("[[C1]] MISSING — no evidence")])
+
+        messages = _M()
+
+    out = tc.find_top_candidates(
+        db=db, organization_id=1, query="best who led a large team",
+        base_query=MagicMock(), limit=2, evidence_client=_FakeClient(),
+    )
+    ids = [c["application_id"] for c in out["candidates"]]
+    # A (met, fit 70) ranks ABOVE B (missing, fit 95) — clear signal first.
+    assert ids == [1, 2]
+    assert out["candidates"][0]["criteria"][0]["status"] == "met"
+
+
+def test_report_scrub_drops_contact_pii():
+    from app.domains.top_reports.service import _scrub
+
+    snap = {"candidates": [{"candidate_name": "X", "candidate_email": "x@y.com", "taali_score": 90}]}
+    out = _scrub(snap)
+    assert "candidate_email" not in out["candidates"][0]
+    assert out["candidates"][0]["candidate_name"] == "X"
+    # original is not mutated
+    assert "candidate_email" in snap["candidates"][0]
+
+
 def test_run_search_defer_qualitative_keeps_prefilter_structural(monkeypatch):
     """Regression for the "0 matched" bug: a qualitative phrase like "banking
     domain experience" must NOT be applied as a literal cv_text ILIKE in the

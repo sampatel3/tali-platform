@@ -82,6 +82,7 @@ const ChatShowcaseView = lazy(() =>
 const HomeShowcaseView = lazy(() =>
   import('./features/home/HomeShowcaseView').then((m) => ({ default: m.HomeShowcaseView }))
 );
+const TopReportPage = lazy(() => import('./features/chat/TopReportPage'));
 const CandidateStandingReportPage = lazy(() =>
   import('./features/candidates/CandidateStandingReportPage').then((m) => ({ default: m.CandidateStandingReportPage }))
 );
@@ -674,6 +675,17 @@ function AppContent() {
               onNavigate={navigateToPage}
               NavComponent={DashboardNavWithMode}
             />
+          </Suspense>
+        )}
+      />
+
+      {/* Public, no-auth shareable "top candidates" report — renders a
+          persisted find_top_candidates snapshot by token. */}
+      <Route
+        path="/report/:reportToken"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <TopReportPage />
           </Suspense>
         )}
       />

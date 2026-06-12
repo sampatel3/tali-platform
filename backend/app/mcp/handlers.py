@@ -11,6 +11,7 @@ Org-scoping is enforced inside every handler via ``user.organization_id``.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Iterable
 
 from sqlalchemy import func, or_
@@ -29,6 +30,8 @@ from .payloads import (
     role_detail,
     role_summary,
 )
+
+logger = logging.getLogger("taali.mcp.handlers")
 
 PIPELINE_STAGES = ("applied", "invited", "in_assessment", "review", "advanced")
 APPLICATION_OUTCOMES = ("open", "rejected", "withdrawn", "hired")
@@ -445,7 +448,7 @@ def find_top_candidates(
     if role_id is not None:
         base = base.filter(CandidateApplication.role_id == int(role_id))
 
-    return _engine(
+    result = _engine(
         db=db,
         organization_id=int(user.organization_id),
         query=text,
@@ -453,6 +456,26 @@ def find_top_candidates(
         limit=int(limit),
         rank_by=str(rank_by or "taali"),
     )
+
+    # Persist a shareable snapshot so every grounded top-N is a report the
+    # recruiter can hand out as a link. Best-effort — never fail the search.
+    try:
+        from ..domains.top_reports.service import create_report, report_public_url
+
+        report = create_report(
+            db,
+            organization_id=int(user.organization_id),
+            created_by_user_id=int(getattr(user, "id", 0)) or None,
+            role_id=int(role_id) if role_id is not None else None,
+            query=text,
+            snapshot=result,
+        )
+        result["report_token"] = report.token
+        result["report_url"] = report_public_url(report.token)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("top-candidates report persist failed: %s", exc)
+
+    return result
 
 
 def graph_search_candidates(
