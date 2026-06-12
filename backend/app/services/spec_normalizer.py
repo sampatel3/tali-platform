@@ -232,8 +232,16 @@ def _classify_bucket(line: str, *, section_mode: str) -> str:
     return _BUCKET_PREFERRED
 
 
+# Cap on auto-DERIVED criteria. 10 is a MAX, not a target — fewer, sharper
+# requirements score better (a long preference tail dilutes the must-haves and
+# adds "unknown" noise to requirements_match). Recruiter-added criteria are
+# stored separately and can take a role above this; the cap applies to derived
+# items only and never drops a must-have/constraint — it clamps the preferred tail.
+MAX_DERIVED_CRITERIA = 10
+
+
 def derive_criteria(
-    requirements_section: str | None, *, max_items: int = 16
+    requirements_section: str | None, *, max_items: int = MAX_DERIVED_CRITERIA
 ) -> list[DerivedCriterion]:
     """Parse the Requirements section into bucketed criteria.
 
@@ -307,12 +315,28 @@ def derive_criteria(
         seen.add(lowered)
         bucket = _classify_bucket(compact, section_mode=section_mode)
         items.append(DerivedCriterion(text=compact[:220], bucket=bucket))
-        if len(items) >= max_items:
-            break
+
+    # Cap derived criteria — but never drop a must-have/constraint to the cap;
+    # only clamp the preferred tail (preserving JD order).
+    if len(items) > max_items:
+        non_pref = sum(1 for i in items if i.bucket != _BUCKET_PREFERRED)
+        pref_budget = max(0, max_items - non_pref)
+        kept: list[DerivedCriterion] = []
+        pref_kept = 0
+        for i in items:
+            if i.bucket == _BUCKET_PREFERRED:
+                if pref_kept < pref_budget:
+                    kept.append(i)
+                    pref_kept += 1
+            else:
+                kept.append(i)
+        items = kept
     return items
 
 
-def derive_criteria_texts(requirements_section: str | None, *, max_items: int = 16) -> list[str]:
+def derive_criteria_texts(
+    requirements_section: str | None, *, max_items: int = MAX_DERIVED_CRITERIA
+) -> list[str]:
     """Back-compat: text-only view of :func:`derive_criteria`.
 
     Splits on newlines and semicolons, strips bullet markers + junk

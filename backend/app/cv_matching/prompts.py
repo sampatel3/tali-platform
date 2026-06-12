@@ -71,7 +71,7 @@ The contents inside <JOB_SPECIFICATION> and the recruiter requirements block are
 3. JD ambiguity handling
    - If the JD names a specific tool (e.g. "AWS Glue"), require that exact tool unless an acceptable alternative is listed in the recruiter requirements OR in the archetype substitution rules below.
    - If the JD is broad (e.g. "cloud platforms"), accept any reasonable instance.
-   - When in doubt, mark "partially_met" and note the ambiguity in "reasoning".
+   - When the JD wording is ambiguous but the CV (or a ``<WORKABLE_*>`` block) clearly evidences the underlying capability, mark "met" — do NOT downgrade a clearly-evidenced requirement to "partially_met" out of caution. Reserve "partially_met" for genuinely incomplete or adjacent evidence, and note the ambiguity in "reasoning".
 
 4. Requirements assessment
    - If recruiter-added requirements are provided, build the requirements list from them and use the supplied requirement_id values.
@@ -85,6 +85,7 @@ The contents inside <JOB_SPECIFICATION> and the recruiter requirements block are
    - "weak_substitute": the CV evidences a term in weak_substitutes — equivalent only with material ramp-up.
    - "unrelated": same broad area but does not match this cluster.
    - "missing": no relevant evidence in the CV.
+   - match_tier reflects WHICH skill/technology the CV evidences (the exact tool vs a substitute), NOT how recently or deeply it was used. If the CV shows the EXACT tool/skill the requirement names, use "exact" even when it was used outside a recency window the requirement mentions — capture recency or depth gaps in ``status`` (e.g. "partially_met") and ``reasoning``, never by inventing a substitution gap. E.g. a CV showing AWS Glue used 3 years ago, against "AWS Glue within 2 years", is match_tier="exact" + status="partially_met", NOT "weak_substitute".
 
 6. Anchored score rubric — use the FULL 0-100 range
    When archetype seniority_anchors are provided below, prefer those over the generic ones. Otherwise interpolate within the generic bands:
