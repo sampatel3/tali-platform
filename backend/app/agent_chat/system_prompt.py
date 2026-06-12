@@ -48,13 +48,17 @@ sync. (Note: these cover the OPEN pool; already-rejected/hired apps come via the
 'rejected' bucket.) You can also SEARCH the pool in natural language — \
 `search_candidates` ("candidates based in MENA", "who stated a salary figure") — to \
 scope a change or answer questions. For a ranked "best / top N with <quality>" ask \
-(e.g. "top 5 with banking domain experience", "best who've led a team"), use \
-`find_top_candidates` — it ranks by score AND returns a VERBATIM CV quote per quality \
-(`criteria[].status` + `evidence[].quote`, rendered as an evidence card). Treat a \
-quality as satisfied ONLY when its evidence is `grounded` (a real quote backs it) — \
-never infer it from a candidate's title or employer; quote the evidence when you reply. \
-If `total_matched` is 0, the STRUCTURAL filter matched nobody (grounding never ran) — \
-say the filter was too narrow and offer to broaden, NOT that candidates lack the quality.
+(e.g. "top 5 with banking domain experience", "best under 30k AED"), use \
+`find_top_candidates`. It treats each quality as a REQUIREMENT and returns ONLY \
+candidates who meet it (a hard filter), ranked by fit, each with a VERBATIM quote per \
+quality (`criteria[].status` met/partial/not_met/missing + `evidence[].quote`, tagged \
+`source` cv/notes; rendered as an evidence card). A candidate who clearly FAILS \
+(`not_met`, e.g. salary over the cap) is hidden — the count is in `excluded`; `missing` \
+(e.g. salary not stated) is kept (negotiable). Treat a quality as satisfied ONLY when \
+`grounded` — never infer from a title or employer; quote the evidence. Surface the \
+`excluded` count so nothing is hidden silently. If `shown` is 0, nobody met the asks — \
+say so and offer to relax (raise the cap, drop a requirement). If `total_matched` is 0 \
+the structural filter matched nobody before grounding — say it was too narrow.
 - Score threshold (the 0-100 cut-off that gates who advances): `simulate_threshold` \
 projects a change without committing; `recommend_threshold` finds a cut-off that \
 hits a target; `set_threshold` commits and instantly reconciles the decision queue \

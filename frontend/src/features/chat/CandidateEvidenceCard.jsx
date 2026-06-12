@@ -96,20 +96,33 @@ export default function CandidateEvidenceCard({ data }) {
   const candidates = data.candidates;
   const warnings = Array.isArray(data.warnings) ? data.warnings : [];
   const rankLabel = RANK_LABELS[data.rank_by || spec.ranking_key] || data.rank_by || 'score';
+  const shown = data.shown ?? candidates.length;
+  const excluded = data.excluded || {};
+  const hidden = excluded.not_met_total || 0;
+  const hiddenBy = Array.isArray(excluded.by_criterion) ? excluded.by_criterion : [];
 
   return (
     <div className="ev-card">
       <div className="ev-head">
         <div className="ev-title">
-          Top {data.shortlist_size ?? candidates.length}
+          Top {shown}
           {spec.echo ? <span className="ev-echo"> · {spec.echo}</span> : null}
         </div>
         <div className="ev-meta">
           {typeof data.total_matched === 'number' ? `${data.total_matched} matched · ` : ''}
           ranked by {rankLabel}
-          {data.evidence_model ? ' · grounded vs CV' : ''}
+          {data.evidence_model ? ' · grounded vs CV + notes' : ''}
         </div>
       </div>
+
+      {hidden > 0 ? (
+        <div className="ev-filtered">
+          {hidden} hidden — didn’t meet{' '}
+          {hiddenBy.length
+            ? hiddenBy.map((b) => `${b.criterion} (${b.count})`).join(', ')
+            : 'a requirement'}
+        </div>
+      ) : null}
 
       {warnings.length ? (
         <div className="ev-warn">
