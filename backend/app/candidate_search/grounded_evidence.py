@@ -44,6 +44,9 @@ GROUNDING_TEMPERATURE = 0.0
 # Cap CV text sent to bound cost; most CVs sit well under this. Citation
 # char offsets are relative to this (possibly truncated) string.
 CV_TEXT_CHAR_CAP = 16000
+# Cap the recruiter-notes / Workable evidence corpus (profile, questionnaire
+# answers, comments, activity log) sent alongside the CV.
+NOTES_CHAR_CAP = 8000
 
 _MARKER_RE = re.compile(r"\[\[\s*C(\d+)\s*\]\]", re.IGNORECASE)
 _VERDICT_RE = re.compile(
@@ -55,17 +58,21 @@ _VERDICT_RE = re.compile(
 
 @dataclass
 class Evidence:
-    """One verbatim CV quote backing a verdict, with its char span."""
+    """One verbatim quote backing a verdict. ``source`` says where it came
+    from — the CV, the candidate's recruiter notes / stated details, or a
+    reused role requirement assessment."""
 
     quote: str
     start_char: int = -1
     end_char: int = -1
+    source: str = "cv"  # cv | notes | role_requirement
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "quote": self.quote,
             "start_char": self.start_char,
             "end_char": self.end_char,
+            "source": self.source,
         }
 
 
@@ -93,21 +100,31 @@ class CriterionVerdict:
 
 
 _SYSTEM_PROMPT = (
-    "You verify whether a candidate's CV contains evidence for specific "
-    "recruiter criteria. You are given the CV as a document (citations "
-    "enabled) and a numbered list of criteria.\n\n"
+    "You verify whether a candidate meets specific recruiter criteria. You are "
+    "given the candidate's evidence as one or more documents (citations "
+    "enabled) — the CV, and often a NOTES document holding the candidate's "
+    "recruiter notes, questionnaire answers, and stated details — plus a "
+    "numbered list of criteria. All documents are candidate evidence, equal in "
+    "weight.\n\n"
     "For EACH criterion, output exactly one line in this format:\n"
     "[[C<n>]] <MET|PARTIAL|MISSING> — <one short sentence>\n\n"
     "Rules:\n"
-    "- MET: the CV clearly satisfies the criterion. PARTIAL: related but "
-    "incomplete evidence. MISSING: no supporting evidence.\n"
-    "- For MET or PARTIAL, restate the SINGLE most specific CV line or phrase "
-    "(employer, title, project, dates, or the exact phrase) that proves it, so "
-    "it is cited. Keep it tight — cite the one decisive line, NOT contact "
-    "details, full skills lists, or surrounding boilerplate.\n"
+    "- MET: the evidence clearly satisfies the criterion. PARTIAL: related but "
+    "incomplete. MISSING: no supporting evidence in ANY document.\n"
+    "- Constraints like salary expectation, notice period, location, and work "
+    "authorisation are usually stated in the NOTES (questionnaire answers / "
+    "recruiter notes), NOT the CV — check there before answering. A criterion "
+    "answered in the notes IS evidenced; do not call it missing just because "
+    "the CV is silent.\n"
+    "- For a salary cap, a stated figure may be an opening ask — allow ~25% "
+    "negotiation tolerance before judging it violated, and quote the figure.\n"
+    "- For MET or PARTIAL, restate the SINGLE most specific line or phrase "
+    "(employer, title, project, dates, stated figure, or exact phrase) that "
+    "proves it, so it is cited. Keep it tight — cite the one decisive line, "
+    "NOT contact details, full skills lists, or surrounding boilerplate.\n"
     "- For MISSING, say no evidence was found and cite nothing.\n"
-    "- NEVER claim evidence that is not in the document. Absence of evidence "
-    "is MISSING — never inferred from adjacent or similar facts.\n"
+    "- NEVER claim evidence that is not in a document. Absence of evidence is "
+    "MISSING — never inferred from adjacent or similar facts.\n"
     "- Output only the [[C<n>]] lines, one per criterion, in order. No "
     "preamble, no summary."
 )
@@ -116,8 +133,9 @@ _SYSTEM_PROMPT = (
 def _criteria_block(criteria: list[str]) -> str:
     lines = "\n".join(f"[[C{i + 1}]] {c}" for i, c in enumerate(criteria))
     return (
-        "Assess the candidate against each criterion below. Quote the CV "
-        "for every MET or PARTIAL.\n\n" + lines
+        "Assess the candidate against each criterion below, using ALL the "
+        "documents (CV and notes). Quote the supporting line for every MET or "
+        "PARTIAL.\n\n" + lines
     )
 
 
@@ -129,14 +147,18 @@ def _attr(obj: Any, name: str, default: Any = None) -> Any:
 
 
 def parse_citation_response(
-    content_blocks: list[Any], criteria: list[str]
+    content_blocks: list[Any],
+    criteria: list[str],
+    doc_sources: list[str] | None = None,
 ) -> list[CriterionVerdict]:
     """Parse the interleaved text+citation response into per-criterion verdicts.
 
     Pure function (no I/O) so it is unit-testable with synthetic blocks.
     Walks blocks in order, tracking the most recent ``[[C<n>]]`` marker as
     the "current" criterion, and attaches each block's citations to it.
-    Verdict words are read from the concatenated text.
+    Verdict words are read from the concatenated text. ``doc_sources`` maps a
+    citation's ``document_index`` to a source label (e.g. ["cv", "notes"]) so
+    each quote is tagged with where it came from.
     """
     n = len(criteria)
     verdicts = [CriterionVerdict(criterion=c) for c in criteria]
@@ -170,8 +192,15 @@ def parse_citation_response(
                     end = int(_attr(c, "end_char_index", -1))
                 except (TypeError, ValueError):
                     end = -1
+                try:
+                    doc_idx = int(_attr(c, "document_index", 0))
+                except (TypeError, ValueError):
+                    doc_idx = 0
+                src = "cv"
+                if doc_sources and 0 <= doc_idx < len(doc_sources):
+                    src = doc_sources[doc_idx]
                 verdicts[current_idx].evidence.append(
-                    Evidence(quote=quote, start_char=start, end_char=end)
+                    Evidence(quote=quote, start_char=start, end_char=end, source=src)
                 )
 
     full_text = "".join(full_text_parts)
@@ -198,7 +227,7 @@ def parse_citation_response(
     # qualifying gate ignores it.
     for v in verdicts:
         v.grounded = len(v.evidence) > 0
-        v.source = "cv_citation" if v.grounded else "none"
+        v.source = v.evidence[0].source if v.grounded else "none"
 
     return verdicts
 
@@ -241,6 +270,18 @@ def _chunk_cv(text: str) -> list[str]:
     return chunks[:MAX_CV_CHUNKS]
 
 
+def _content_document(chunks: list[str], title: str) -> dict[str, Any]:
+    return {
+        "type": "document",
+        "source": {
+            "type": "content",
+            "content": [{"type": "text", "text": ch} for ch in chunks],
+        },
+        "title": title,
+        "citations": {"enabled": True},
+    }
+
+
 def extract_cv_evidence(
     *,
     cv_text: str | None,
@@ -248,8 +289,16 @@ def extract_cv_evidence(
     client,
     organization_id: int,
     application_id: int,
+    notes_text: str | None = None,
 ) -> list[CriterionVerdict]:
-    """Run one citations call over the CV and return per-criterion verdicts.
+    """Run one citations call over the candidate's evidence (CV + recruiter
+    notes / stated details) and return per-criterion verdicts.
+
+    ``notes_text`` is the candidate's Workable evidence corpus (profile,
+    questionnaire answers, recruiter comments, activity log) — where hard
+    constraints like salary expectation, notice period, and location are
+    usually stated rather than in the CV. Each verdict's quotes are tagged
+    with their source (``cv`` / ``notes``).
 
     Never raises: on any failure every criterion degrades to ``missing``
     with an explanatory note, so the caller can still render the candidate.
@@ -258,35 +307,37 @@ def extract_cv_evidence(
     if not criteria:
         return []
 
-    cv = (cv_text or "").strip()
-    if not cv:
+    documents: list[dict[str, Any]] = []
+    doc_sources: list[str] = []
+
+    cv_chunks = _chunk_cv((cv_text or "").strip()[:CV_TEXT_CHAR_CAP])
+    if cv_chunks:
+        documents.append(_content_document(cv_chunks, "Candidate CV"))
+        doc_sources.append("cv")
+
+    notes_chunks = _chunk_cv((notes_text or "").strip()[:NOTES_CHAR_CAP])
+    if notes_chunks:
+        documents.append(
+            _content_document(
+                notes_chunks,
+                "Candidate notes & stated details (recruiter notes, "
+                "questionnaire answers, activity log)",
+            )
+        )
+        doc_sources.append("notes")
+
+    if not documents:
         return [
-            CriterionVerdict(criterion=c, status="missing", note="CV text unavailable.")
-            for c in criteria
-        ]
-    cv = cv[:CV_TEXT_CHAR_CAP]
-    chunks = _chunk_cv(cv)
-    if not chunks:
-        return [
-            CriterionVerdict(criterion=c, status="missing", note="CV text unavailable.")
+            CriterionVerdict(
+                criterion=c, status="missing", note="No CV or notes available."
+            )
             for c in criteria
         ]
 
     messages = [
         {
             "role": "user",
-            "content": [
-                {
-                    "type": "document",
-                    "source": {
-                        "type": "content",
-                        "content": [{"type": "text", "text": ch} for ch in chunks],
-                    },
-                    "title": "Candidate CV",
-                    "citations": {"enabled": True},
-                },
-                {"type": "text", "text": _criteria_block(criteria)},
-            ],
+            "content": [*documents, {"type": "text", "text": _criteria_block(criteria)}],
         }
     ]
 
@@ -315,4 +366,4 @@ def extract_cv_evidence(
         ]
 
     content = getattr(resp, "content", None) or []
-    return parse_citation_response(content, criteria)
+    return parse_citation_response(content, criteria, doc_sources)

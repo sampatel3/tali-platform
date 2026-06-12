@@ -30,9 +30,13 @@ def _text_block(text, citations=None):
     return SimpleNamespace(type="text", text=text, citations=citations)
 
 
-def _cite(quote, start=-1, end=-1):
+def _cite(quote, start=-1, end=-1, document_index=0):
     return SimpleNamespace(
-        type="char_location", cited_text=quote, start_char_index=start, end_char_index=end
+        type="char_location",
+        cited_text=quote,
+        start_char_index=start,
+        end_char_index=end,
+        document_index=document_index,
     )
 
 
@@ -52,9 +56,10 @@ def test_parse_pairs_criteria_with_quotes_and_verdicts():
     assert verdicts[0].criterion == "banking domain experience"
     assert verdicts[0].status == "met"
     assert verdicts[0].grounded is True
-    assert verdicts[0].source == "cv_citation"
+    assert verdicts[0].source == "cv"
     assert verdicts[0].evidence[0].quote.startswith("Senior Data Engineer")
     assert verdicts[0].evidence[0].start_char == 100
+    assert verdicts[0].evidence[0].source == "cv"
 
     assert verdicts[1].status == "missing"
     assert verdicts[1].grounded is False
@@ -159,6 +164,64 @@ def test_extract_happy_path_through_fake_client():
     assert out[0].status == "met"
     assert out[0].grounded is True
     assert "banking" in out[0].evidence[0].quote.lower()
+
+
+def test_parse_tags_quote_with_document_source():
+    """A citation into document 1 (notes) is tagged source='notes'."""
+    blocks = [
+        _text_block("[[C1]] MET — "),
+        _text_block(
+            "states salary under 40k",
+            citations=[_cite("Salary expectation: less than 40,000 AED", document_index=1)],
+        ),
+    ]
+    verdicts = ge.parse_citation_response(blocks, ["salary cap"], doc_sources=["cv", "notes"])
+    assert verdicts[0].evidence[0].source == "notes"
+    assert verdicts[0].source == "notes"
+
+
+def test_extract_grounds_salary_from_notes_when_cv_silent():
+    """Salary lives in the notes, not the CV — grounding must use it and tag
+    the quote source='notes' (the bug Sam hit)."""
+    captured = {}
+
+    class _FakeClient:
+        def __init__(self):
+            class _Messages:
+                def create(inner_self, **kwargs):
+                    captured["docs"] = [
+                        b for b in kwargs["messages"][0]["content"] if b.get("type") == "document"
+                    ]
+                    return SimpleNamespace(
+                        content=[
+                            _text_block("[[C1]] PARTIAL — states <40k, above the 30k cap"),
+                            _text_block(
+                                "salary expectation under 40k",
+                                citations=[
+                                    _cite(
+                                        "Salary expectation: less than 40,000 AED",
+                                        document_index=1,
+                                    )
+                                ],
+                            ),
+                        ]
+                    )
+
+            self.messages = _Messages()
+
+    out = ge.extract_cv_evidence(
+        cv_text="AWS Glue ETL pipelines, PySpark, CDC.",  # no salary in the CV
+        notes_text="Recruiter note: Salary expectation: less than 40,000 AED",
+        criteria=["salary expectation less than 30000 AED"],
+        client=_FakeClient(),
+        organization_id=1,
+        application_id=7,
+    )
+    # two documents were sent (CV + notes)
+    assert len(captured["docs"]) == 2
+    assert out[0].status == "partially_met"
+    assert out[0].grounded is True
+    assert out[0].evidence[0].source == "notes"
 
 
 # --------------------------------------------------------------------------

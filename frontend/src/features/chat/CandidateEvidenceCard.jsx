@@ -3,15 +3,19 @@ import './CandidateEvidenceCard.css';
 
 const QUOTE_CAP = 180;
 
-// Verbatim CV quote: collapse the CV's ragged whitespace, and cap the length
-// with an inline "more" toggle so a long citation doesn't dominate the card.
-function Quote({ text }) {
+const SOURCE_LABEL = { cv: 'CV', notes: 'notes', role_requirement: 'role criteria' };
+
+// Verbatim quote: collapse ragged whitespace, tag where it came from (CV vs the
+// candidate's notes/stated details), and cap the length with an inline "more"
+// toggle so a long citation doesn't dominate the card.
+function Quote({ text, source }) {
   const [open, setOpen] = useState(false);
   const clean = (text || '').replace(/\s+/g, ' ').trim();
   const long = clean.length > QUOTE_CAP;
   const shown = open || !long ? clean : `${clean.slice(0, QUOTE_CAP).trimEnd()}…`;
   return (
     <blockquote className="ev-quote">
+      {source ? <span className="ev-src">{SOURCE_LABEL[source] || source}</span> : null}
       “{shown}”
       {long ? (
         <button type="button" className="ev-more" onClick={() => setOpen((o) => !o)}>
@@ -61,21 +65,18 @@ function CriterionRow({ c }) {
       <div className="ev-crit-head">
         <span className={`ev-chip ${chipClass}`}>{STATUS_LABEL[status] || status}</span>
         <span className="ev-crit-text">{c.criterion}</span>
-        {grounded && c.source ? (
-          <span className="ev-src">{c.source === 'role_requirement' ? 'role criteria' : 'CV'}</span>
-        ) : null}
       </div>
       {grounded && quotes.length ? (
         <div className="ev-quotes">
           {quotes.map((e, i) => (
-            <Quote key={i} text={e.quote} />
+            <Quote key={i} text={e.quote} source={e.source} />
           ))}
         </div>
       ) : (
         <div className="ev-noquote">
           {status === 'missing'
-            ? 'No supporting evidence in the CV.'
-            : 'Stated, but no verbatim CV quote — treat as unverified.'}
+            ? 'No supporting evidence in the CV or notes.'
+            : 'Stated, but no verbatim quote — treat as unverified.'}
         </div>
       )}
     </div>

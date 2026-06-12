@@ -154,10 +154,15 @@
 }
 .ev-src {
   font-size: 10px;
+  font-style: normal;
   color: #9a93ad;
   border: 1px solid var(--line, #ece9f4);
   border-radius: 5px;
   padding: 0 5px;
+  margin-right: 5px;
+  vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 .ev-quotes {
   margin: 3px 0 0;
