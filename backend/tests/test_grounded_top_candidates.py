@@ -90,6 +90,25 @@ def test_parse_partial_verdict_word():
     assert verdicts[0].grounded is True
 
 
+def test_parse_not_met_constraint_cites_the_violating_value():
+    """A stated-but-violating constraint (salary over cap) is NOT_MET and still
+    carries the cited value — the fix for "shows missing though salary stated"."""
+    blocks = [
+        _text_block("[[C1]] NOT_MET — states 40,000 AED, above the 30k cap"),
+        _text_block(
+            "salary 40000",
+            citations=[_cite("A: 40000", document_index=1)],
+        ),
+    ]
+    verdicts = ge.parse_citation_response(
+        blocks, ["salary expectation less than 30000 AED"], doc_sources=["cv", "notes"]
+    )
+    assert verdicts[0].status == "not_met"
+    assert verdicts[0].grounded is True
+    assert verdicts[0].evidence[0].source == "notes"
+    assert "40000" in verdicts[0].evidence[0].quote
+
+
 def test_extract_no_criteria_short_circuits():
     assert ge.extract_cv_evidence(
         cv_text="anything", criteria=[], client=None, organization_id=1, application_id=1

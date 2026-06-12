@@ -51,7 +51,7 @@ NOTES_CHAR_CAP = 8000
 _MARKER_RE = re.compile(r"\[\[\s*C(\d+)\s*\]\]", re.IGNORECASE)
 _VERDICT_RE = re.compile(
     r"\[\[\s*C(\d+)\s*\]\]\s*[\-—:.\s]*"
-    r"(MET|PARTIAL(?:LY)?(?:[ _]MET)?|MISSING)",
+    r"(NOT[ _]?MET|MET|PARTIAL(?:LY)?(?:[ _]MET)?|MISSING)",
     re.IGNORECASE,
 )
 
@@ -100,33 +100,31 @@ class CriterionVerdict:
 
 
 _SYSTEM_PROMPT = (
-    "You verify whether a candidate meets specific recruiter criteria. You are "
-    "given the candidate's evidence as one or more documents (citations "
-    "enabled) — the CV, and often a NOTES document holding the candidate's "
-    "recruiter notes, questionnaire answers, and stated details — plus a "
-    "numbered list of criteria. All documents are candidate evidence, equal in "
-    "weight.\n\n"
-    "For EACH criterion, output exactly one line in this format:\n"
-    "[[C<n>]] <MET|PARTIAL|MISSING> — <one short sentence>\n\n"
+    "You judge whether a candidate meets specific recruiter criteria, using the "
+    "candidate's evidence documents (the CV, and usually a NOTES document of "
+    "recruiter notes, questionnaire answers, and stated details). All documents "
+    "are candidate evidence, equal weight.\n\n"
+    "For EACH criterion output exactly one line:\n"
+    "[[C<n>]] <MET|PARTIAL|NOT_MET|MISSING> — <one short sentence>\n\n"
+    "Two kinds of criteria:\n"
+    "1) CONSTRAINTS on a stated value (salary expectation, notice period, years "
+    "of experience, location, work authorisation). The value is usually in the "
+    "NOTES, not the CV — look there. If the candidate stated a value: it "
+    "satisfies -> MET (cite the value); it does NOT satisfy -> NOT_MET (cite "
+    "the value; say briefly why, e.g. 'states 40,000 AED, above the 30k cap'). "
+    "For a salary cap, allow ~25% negotiation tolerance before judging it "
+    "violated. If nothing relevant is stated -> MISSING.\n"
+    "2) QUALITATIVE criteria (experience, skills, company type, domain). MET if "
+    "clearly evidenced (cite the strongest line — employer, title, project). "
+    "PARTIAL if related but incomplete (cite it). MISSING if absent.\n\n"
     "Rules:\n"
-    "- MET: the evidence clearly satisfies the criterion. PARTIAL: related but "
-    "incomplete. MISSING: no supporting evidence in ANY document.\n"
-    "- Constraints like salary expectation, notice period, location, and work "
-    "authorisation are usually stated in the NOTES (questionnaire answers / "
-    "recruiter notes), NOT the CV — check there before answering. A criterion "
-    "answered in the notes IS evidenced; do not call it missing just because "
-    "the CV is silent.\n"
-    "- For a salary cap, a stated figure may be an opening ask — allow ~25% "
-    "negotiation tolerance before judging it violated, and quote the figure.\n"
-    "- For MET or PARTIAL, restate the SINGLE most specific line or phrase "
-    "(employer, title, project, dates, stated figure, or exact phrase) that "
-    "proves it, so it is cited. Keep it tight — cite the one decisive line, "
-    "NOT contact details, full skills lists, or surrounding boilerplate.\n"
-    "- For MISSING, say no evidence was found and cite nothing.\n"
-    "- NEVER claim evidence that is not in a document. Absence of evidence is "
-    "MISSING — never inferred from adjacent or similar facts.\n"
-    "- Output only the [[C<n>]] lines, one per criterion, in order. No "
-    "preamble, no summary."
+    "- For MET / PARTIAL / NOT_MET you MUST cite the single decisive line (a "
+    "stated figure, employer, title, project, or exact phrase). Keep it tight — "
+    "not contact details, full skills lists, or boilerplate.\n"
+    "- For MISSING cite nothing.\n"
+    "- NEVER invent evidence; if a document doesn't contain it, it is not "
+    "evidence.\n"
+    "- Output only the [[C<n>]] lines, one per criterion, in order. No preamble."
 )
 
 
@@ -134,8 +132,8 @@ def _criteria_block(criteria: list[str]) -> str:
     lines = "\n".join(f"[[C{i + 1}]] {c}" for i, c in enumerate(criteria))
     return (
         "Assess the candidate against each criterion below, using ALL the "
-        "documents (CV and notes). Quote the supporting line for every MET or "
-        "PARTIAL.\n\n" + lines
+        "documents (CV and notes). Cite the decisive line for every MET, "
+        "PARTIAL, or NOT_MET.\n\n" + lines
     )
 
 
@@ -209,7 +207,9 @@ def parse_citation_response(
         if not (1 <= k <= n):
             continue
         raw = m.group(2).upper().replace(" ", "_")
-        if raw == "MET":
+        if raw.startswith("NOT"):  # NOT_MET / NOTMET
+            status = "not_met"
+        elif raw == "MET":
             status = "met"
         elif raw == "MISSING":
             status = "missing"

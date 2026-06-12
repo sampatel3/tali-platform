@@ -39,7 +39,12 @@ const RANK_LABELS = {
   cv_match: 'CV match',
 };
 
-const STATUS_LABEL = { met: 'Met', partially_met: 'Partial', missing: 'Missing' };
+const STATUS_LABEL = {
+  met: 'Met',
+  partially_met: 'Partial',
+  not_met: 'Not met',
+  missing: 'Missing',
+};
 
 const scoreClass = (v) =>
   typeof v !== 'number'
@@ -58,6 +63,8 @@ function CriterionRow({ c }) {
       ? 'ev-chip-met'
       : status === 'partially_met' && grounded
       ? 'ev-chip-partial'
+      : status === 'not_met'
+      ? 'ev-chip-notmet'
       : 'ev-chip-missing';
   const quotes = Array.isArray(c.evidence) ? c.evidence.filter((e) => e && e.quote) : [];
   return (

@@ -141,6 +141,7 @@ class Feature(str, Enum):
     # is possible from the settings → usage tab.
     CV_PARSE = "cv_parse"                  # cv_parsing/runner
     CV_RERANK = "cv_rerank"                # candidate_search/rerank
+    CANDIDATE_GROUNDING = "candidate_grounding"  # candidate_search/grounded_evidence
     SEARCH_PARSE = "search_parse"          # candidate_search/parser
     ARCHETYPE_SYNTHESIS = "archetype_synthesis"  # cv_matching/archetype_synthesizer
     PAIRWISE_JUDGE = "pairwise_judge"      # cv_matching/pairwise + calibrators/judge
@@ -235,6 +236,13 @@ _FEATURE_PRICING: dict[Feature, FeaturePricing] = {
     ),
     Feature.CV_RERANK: FeaturePricing(
         feature=Feature.CV_RERANK,
+        markup_multiplier=Decimal("2.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.CANDIDATE_GROUNDING: FeaturePricing(
+        # Per-candidate CV+notes citation grounding for the "top N with X"
+        # search. Recruiter-facing candidate-search reasoning, like rerank.
+        feature=Feature.CANDIDATE_GROUNDING,
         markup_multiplier=Decimal("2.0"),
         cache_hit_multiplier=Decimal("0.10"),
     ),

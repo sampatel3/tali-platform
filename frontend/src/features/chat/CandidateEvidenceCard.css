@@ -144,6 +144,11 @@
   background: var(--purple-soft, #ece7fb);
   color: var(--purple, #6d28d9);
 }
+.ev-chip-notmet {
+  background: #f3f1f8;
+  color: #5b5470;
+  border: 1px solid #cfc8e0;
+}
 .ev-chip-missing {
   background: transparent;
   color: #9a93ad;
