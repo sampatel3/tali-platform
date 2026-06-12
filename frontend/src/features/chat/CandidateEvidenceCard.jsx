@@ -134,8 +134,8 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
           {spec.echo ? <span className="ev-echo"> · {spec.echo}</span> : null}
         </div>
         <div className="ev-meta">
-          {typeof data.total_matched === 'number' ? `${data.total_matched} matched · ` : ''}
           ranked by {rankLabel}
+          {typeof data.total_matched === 'number' ? ` · ${data.total_matched} in pool` : ''}
           {data.evidence_model ? ' · grounded vs CV + notes' : ''}
         </div>
       </div>

@@ -459,7 +459,8 @@ def test_find_top_candidates_ranks_then_truncates(monkeypatch):
 
     apps = [_fake_app(1, taali=50), _fake_app(2, taali=90), _fake_app(3, taali=70)]
     db = MagicMock()
-    db.query.return_value.options.return_value.filter.return_value.all.return_value = apps
+    monkeypatch.setattr(tc, "_pool_count", lambda bq: 3)
+    monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: list(apps))
 
     out = tc.find_top_candidates(
         db=db, organization_id=1, query="top data engineers", base_query=MagicMock(), limit=2
@@ -501,7 +502,8 @@ def test_find_top_candidates_hides_not_met(monkeypatch):
     a2 = _fake_app(2, taali=95, name="B"); a2.cv_text = "OVERCAP salary 40k"
     a3 = _fake_app(3, taali=70, name="C"); a3.cv_text = "ok under cap"
     db = MagicMock()
-    db.query.return_value.options.return_value.filter.return_value.all.return_value = [a1, a2, a3]
+    monkeypatch.setattr(tc, "_pool_count", lambda bq: 3)
+    monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: [a1, a2, a3])
 
     class _FakeClient:
         class _M:
@@ -551,7 +553,8 @@ def test_find_top_candidates_ranks_clear_signal_above_missing(monkeypatch):
     a = _fake_app(1, taali=70, name="A"); a.cv_text = "HASIT led a 40-person team"
     b = _fake_app(2, taali=95, name="B"); b.cv_text = "nothing relevant here"
     db = MagicMock()
-    db.query.return_value.options.return_value.filter.return_value.all.return_value = [a, b]
+    monkeypatch.setattr(tc, "_pool_count", lambda bq: 2)
+    monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: [a, b])
 
     class _FakeClient:
         class _M:
@@ -694,7 +697,8 @@ def test_find_top_candidates_keeps_failed_preference(monkeypatch):
     a = _fake_app(1, taali=80, name="A"); a.cv_text = "WESTERN worked at McKinsey"
     b = _fake_app(2, taali=95, name="B"); b.cv_text = "worked at Emirates NBD Dubai"
     db = MagicMock()
-    db.query.return_value.options.return_value.filter.return_value.all.return_value = [a, b]
+    monkeypatch.setattr(tc, "_pool_count", lambda bq: 2)
+    monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: [a, b])
 
     class _FakeClient:
         class _M:
@@ -713,3 +717,47 @@ def test_find_top_candidates_keeps_failed_preference(monkeypatch):
     ids = [c["application_id"] for c in out["candidates"]]
     assert ids == [1, 2]  # B (not_met Western) shown, ranked below A (met)
     assert out["excluded"]["not_met_total"] == 0
+
+
+def test_structural_match_biases_but_does_not_exclude(monkeypatch):
+    """The anti-collapse guarantee: a narrow/wrong structural filter (here only
+    app 3 matched) must NOT empty the result — non-matchers are still grounded
+    and shown. total_matched reflects the whole pool, not the 1 structural hit."""
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(runner_mod, "run_search", lambda **kw: SearchOutput(
+        application_ids=[3],  # structural filter matched ONLY app 3
+        parsed_filter=ParsedFilter(skills_all=["react"], soft_criteria=["fintech domain"]),
+        warnings=[]))
+    monkeypatch.setattr(tc, "_notes_text", lambda app: None)
+    monkeypatch.setattr(tc, "_pool_count", lambda bq: 3)
+
+    a1 = _fake_app(1, taali=90, name="A"); a1.cv_text = "fintech platform work"
+    a2 = _fake_app(2, taali=85, name="B"); a2.cv_text = "fintech and banking"
+    a3 = _fake_app(3, taali=40, name="C"); a3.cv_text = "fintech startup"
+    monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: [a1, a2, a3])
+
+    class _FakeClient:
+        class _M:
+            def create(self, **kw):
+                return SimpleNamespace(content=[
+                    _text_block("[[C1]] MET — fintech"),
+                    _text_block("f", citations=[_cite("fintech", document_index=0)]),
+                ])
+        messages = _M()
+
+    out = tc.find_top_candidates(
+        db=MagicMock(), organization_id=1, query="top react engineers in fintech",
+        base_query=MagicMock(), limit=3, evidence_client=_FakeClient())
+    ids = {c["application_id"] for c in out["candidates"]}
+    assert ids == {1, 2, 3}            # nobody excluded by the narrow structural filter
+    assert out["total_matched"] == 3   # the whole pool, not just the 1 structural match
+    assert out["structural_matches"] == 1
+
+
+def test_has_structural_classifies():
+    assert tc._has_structural(ParsedFilter(skills_all=["react"]))
+    assert tc._has_structural(ParsedFilter(locations_country=["United Arab Emirates"]))
+    assert tc._has_structural(ParsedFilter(min_years_experience=5))
+    assert not tc._has_structural(ParsedFilter(soft_criteria=["western company"]))
+    assert not tc._has_structural(ParsedFilter(keywords=["fintech"]))

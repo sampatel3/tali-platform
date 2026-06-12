@@ -62,7 +62,8 @@ tagged `source` cv/notes; rendered as an evidence card). A candidate who clearly
 `grounded` — never infer from a title or employer; quote the evidence. Surface the \
 `excluded` count so nothing is hidden silently. If `shown` is 0, nobody met the asks — \
 say so and offer to relax (raise the cap, drop a requirement). If `total_matched` is 0 \
-the structural filter matched nobody before grounding — say it was too narrow. The \
+the role's actionable pool is empty (everyone's been decided or advanced out) — so \
+say there's nobody to rank; a parse miss can no longer cause a false "0 matched". The \
 result carries `report_url` — a shareable read-only link to this ranked report; give it \
 to the recruiter when they want to share, save, or send the top candidates. \
 The card IS the grounded answer: present IT. Do NOT re-rank, re-list, or summarise \

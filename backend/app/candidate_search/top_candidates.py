@@ -567,6 +567,61 @@ def _candidate_payload(
     return out
 
 
+def _has_structural(parsed) -> bool:
+    """Did the query carry any HARD structural filter (skills / candidate
+    location / years / graph)? When it did NOT, the whole actionable pool is
+    ranked by score; when it did, those matches only BIAS the grounding window
+    — they never exclude. So a parser mistake can reorder the queue but cannot
+    empty the result; grounding makes the actual met/over-cap/not-met calls."""
+    return bool(
+        parsed.skills_all
+        or parsed.skills_any
+        or parsed.locations_country
+        or parsed.locations_region
+        or parsed.min_years_experience
+        or parsed.graph_predicates
+    )
+
+
+def _pool_count(base_query) -> int:
+    """Size of the actionable pool (cheap COUNT, no rows loaded)."""
+    try:
+        return int(base_query.count())
+    except Exception:  # noqa: BLE001 — count is best-effort display
+        return 0
+
+
+def _load_candidates(base_query, *, matcher_ids, score_attr, size: int):
+    """Load at most ``size`` apps from the pool — top by score, with any
+    structural matches biased to the front — WITHOUT materialising the whole
+    pool, so an org-wide query stays cheap. The caller does the final Python
+    ordering, so the IN-clause load order here doesn't matter."""
+    from sqlalchemy import case
+
+    if size <= 0:
+        return []
+    order = [score_attr.is_(None), score_attr.desc()]
+    if matcher_ids:
+        order = [case((CandidateApplication.id.in_(matcher_ids), 0), else_=1)] + order
+    ids = [
+        row[0]
+        for row in base_query.with_entities(CandidateApplication.id)
+        .order_by(*order)
+        .limit(int(size))
+        .all()
+    ]
+    if not ids:
+        return []
+    return (
+        base_query.filter(CandidateApplication.id.in_(ids))
+        .options(
+            joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.role),
+        )
+        .all()
+    )
+
+
 def find_top_candidates(
     *,
     db: Session,
@@ -586,7 +641,10 @@ def find_top_candidates(
         rank_by = "taali"
     limit = max(1, min(int(limit), MAX_LIMIT))
 
-    # 1-2. Parse + deterministic prefilter (no rerank; we rank by score below).
+    # 1. Parse. The parser's STRUCTURAL guesses (skills / candidate location /
+    #    years) are used ONLY to bias which candidates get grounded first — they
+    #    never exclude anyone. The pool is the whole actionable set; grounding
+    #    (evidence-based) makes every met / over-cap / not-met call below.
     result = run_search(
         db=db,
         organization_id=organization_id,
@@ -595,45 +653,44 @@ def find_top_candidates(
         rerank_enabled=False,
         include_subgraph=False,
         parser_client=parser_client,
-        # Keep the prefilter purely structural — qualitative criteria are
-        # grounded against the CV below, NOT ILIKE-matched into the pool
-        # (a phrase like "banking domain experience" matches ~zero CVs).
         defer_qualitative=True,
     )
     parsed = result.parsed_filter
     criteria = _collect_criteria(parsed)
 
-    # 3. Rank the full match set by the chosen score.
     score_col = SCORE_FIELDS[rank_by]
-    apps = (
-        db.query(CandidateApplication)
-        .options(
-            joinedload(CandidateApplication.candidate),
-            joinedload(CandidateApplication.role),
-        )
-        .filter(CandidateApplication.id.in_(result.application_ids))
-        .all()
-        if result.application_ids
-        else []
-    )
-    apps.sort(
-        key=lambda a: (
-            getattr(a, score_col) is not None,
-            getattr(a, score_col) or float("-inf"),
-        ),
-        reverse=True,
-    )
+    score_attr = getattr(CandidateApplication, score_col)
+    # Structural matches bias the window; `None` when the query had no structural
+    # filter at all (then the whole pool is fair game, ranked by score).
+    matcher_ids = set(result.application_ids or []) if _has_structural(parsed) else None
+    pool_count = _pool_count(base_query)
 
     base_payload = {
         "spec": _build_spec(parsed, query=query, rank_by=rank_by, criteria=criteria),
-        "total_matched": len(result.application_ids),
+        # The pool we ranked over — NOT a structural-filter count. A parse miss
+        # can no longer report a misleading "0 matched"; 0 here means the role
+        # genuinely has no actionable candidates.
+        "total_matched": pool_count,
+        "structural_matches": len(matcher_ids) if matcher_ids is not None else None,
         "warnings": [w.model_dump(mode="json") for w in result.warnings],
         "rank_by": rank_by,
     }
 
-    # No qualitative/constraint criteria → nothing to ground or filter; return
-    # the top `limit` by score.
+    # Final/window ordering: structural matches first, then by score. Applied in
+    # Python so it's deterministic regardless of the bounded load order.
+    def _rank_key(a):
+        return (
+            bool(matcher_ids) and a.id in matcher_ids,
+            getattr(a, score_col) is not None,
+            getattr(a, score_col) or float("-inf"),
+        )
+
+    # No qualitative/constraint criteria → just the top `limit` by score.
     if not criteria:
+        apps = _load_candidates(
+            base_query, matcher_ids=matcher_ids, score_attr=score_attr, size=limit
+        )
+        apps.sort(key=_rank_key, reverse=True)
         shown = [
             _candidate_payload(app, rank=i, verdicts=[], has_criteria=False)
             for i, app in enumerate(apps[:limit], start=1)
@@ -647,11 +704,7 @@ def find_top_candidates(
             "evidence_model": None,
         }
 
-    # 4. Ground a bounded, score-ranked WINDOW (parallel). Requirements act as
-    #    a HARD FILTER: a candidate who clearly fails any criterion (NOT_MET —
-    #    e.g. salary above the cap) is hidden. met / partial / missing stay
-    #    (e.g. salary not stated = negotiable). We ground deeper than `limit`
-    #    so enough qualify after filtering.
+    # 2. Grounding client.
     client = evidence_client
     if client is None:
         try:
@@ -663,6 +716,10 @@ def find_top_candidates(
 
     if client is None:
         # Grounding unavailable → degrade to a ranked list, no filtering.
+        apps = _load_candidates(
+            base_query, matcher_ids=matcher_ids, score_attr=score_attr, size=limit
+        )
+        apps.sort(key=_rank_key, reverse=True)
         shown = [
             _candidate_payload(app, rank=i, verdicts=[], has_criteria=True)
             for i, app in enumerate(apps[:limit], start=1)
@@ -678,7 +735,19 @@ def find_top_candidates(
             + [{"code": "rerank_skipped", "message": "Grounding unavailable; not filtered."}],
         }
 
-    window_size = min(len(apps), max(limit * 3, 8), GROUND_WINDOW_CAP)
+    # 3. Ground a bounded, score-ranked WINDOW (structural matches first). A
+    #    failed HARD CONSTRAINT (salary over cap, …) hides the candidate; a
+    #    failed PREFERENCE only ranks lower. We ground deeper than `limit` so
+    #    enough qualify after filtering. The window is loaded bounded, so even
+    #    an org-wide pool never materialises in full.
+    window_size = min(pool_count, max(limit * 3, 8), GROUND_WINDOW_CAP)
+    apps = _load_candidates(
+        base_query,
+        matcher_ids=matcher_ids,
+        score_attr=score_attr,
+        size=max(window_size, limit),
+    )
+    apps.sort(key=_rank_key, reverse=True)
     grounded = _ground_window(
         apps[:window_size], criteria=criteria, client=client, organization_id=organization_id
     )
@@ -687,9 +756,6 @@ def find_top_candidates(
     excluded_not_met = 0
     by_criterion: dict[str, int] = {}
     for app, verdicts in grounded:
-        # Only a failed HARD CONSTRAINT (salary cap, location, etc.) hides a
-        # candidate. A failed PREFERENCE (e.g. not a Western company) is shown
-        # and just ranks lower — see _signal_key below.
         failed = [
             v for v in verdicts if v.status == "not_met" and _is_constraint(v.criterion)
         ]
@@ -700,17 +766,17 @@ def find_top_candidates(
             continue
         survivors.append((app, verdicts))
 
-    # Rank the survivors by CLEAR SIGNAL first: candidates who demonstrably meet
-    # the criteria (grounded `met`) surface above those with only partial
-    # evidence, above those whose data is unknown/`missing` — and fit (score)
-    # breaks ties. So strong matches lead; the fuzzier/unknown ones rank below
+    # Rank survivors by CLEAR SIGNAL first: grounded `met` above `partially_met`
+    # above unknown/`missing`; a structural match breaks ties next; fit (score)
+    # last. So strong, on-target matches lead and the fuzzier ones rank below
     # rather than being hidden.
     def _signal_key(item):
         app, verdicts = item
         met = sum(1 for v in verdicts if v.status == "met" and v.grounded)
         partial = sum(1 for v in verdicts if v.status == "partially_met" and v.grounded)
+        matched = bool(matcher_ids) and app.id in matcher_ids
         fit = getattr(app, score_col)
-        return (met, partial, fit if fit is not None else float("-inf"))
+        return (met, partial, matched, fit if fit is not None else float("-inf"))
 
     survivors.sort(key=_signal_key, reverse=True)
     shown = [
@@ -718,7 +784,7 @@ def find_top_candidates(
         for i, (app, verdicts) in enumerate(survivors[:limit], start=1)
     ]
 
-    # 5. Assemble.
+    # 4. Assemble.
     return {
         **base_payload,
         "evaluated": len(grounded),
