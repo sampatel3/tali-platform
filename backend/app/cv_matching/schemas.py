@@ -291,6 +291,14 @@ class RequirementAssessment(BaseModel):
     match_tier: MatchTier = "missing"
     impact: str = ""
     confidence: Confidence = Confidence.MEDIUM
+    # Graded 0-100 fit for this requirement, populated by a focused second
+    # pass (``cv_matching.graded``). ``-1`` = not graded → aggregation falls
+    # back to the coarse status × tier weighting. ``assessable=False`` = no
+    # evidence either way → excluded from the graded average (affects coverage
+    # only, like ``status=unknown``). These two fields are SET by the runner
+    # after the graded pass; the main scoring call does not produce them.
+    match_score: int = Field(default=-1, ge=-1, le=100)
+    assessable: bool = True
 
     @field_validator("priority", mode="before")
     @classmethod
