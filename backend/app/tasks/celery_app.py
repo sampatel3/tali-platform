@@ -182,6 +182,17 @@ celery_app.conf.update(
             "task": "app.tasks.decision_policy_tasks.nightly_retune_sweep",
             "schedule": 86400.0,
         },
+        # Nightly role_fit threshold calibration: learn the advance/reject cut
+        # on the OBJECTIVE score from recruiter terminal decisions (Youden's J),
+        # bias-gate it, write SHADOW proposals (proposed-for-review; auto-apply
+        # is opt-in + bias-gated). Fixed-time crontab (NOT a float interval —
+        # see the reconciliation note above for why intervals silently die).
+        # Runs after score-terminal-for-calibration (03:45) so fresh raw scores
+        # are present.
+        "threshold-calibration-nightly": {
+            "task": "app.tasks.threshold_calibration_tasks.calibrate_thresholds_sweep",
+            "schedule": crontab(hour=4, minute=15),
+        },
         # Watchdog for AgentRun rows stuck in status='running' (worker
         # crash, deploy restart, OOM mid-cycle). Without this the row
         # stays "running" forever, hiding real failures in /agent/status.

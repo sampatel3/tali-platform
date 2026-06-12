@@ -49,7 +49,9 @@ PIPELINE_STAGE_SOURCES = ("system", "recruiter", "sync", "agent")
 # visible via the workable_stage column on the row.
 POST_HANDOVER_WORKABLE_STAGES = frozenset({
     "phone_screen", "phone_interview",
-    "interview", "technical_interview", "final_interview", "onsite",
+    "first_stage",
+    "interview", "technical", "technical_interview", "final_interview", "onsite",
+    "presentation",
     "assessment",
     "offer", "offer_extended", "offer_accepted",
     "hired",

@@ -339,9 +339,11 @@ app.include_router(background_jobs_router, prefix="/api/v1")
 app.include_router(share_links_router, prefix="/api/v1")
 from .decision_policy.routes import router as decision_policy_router  # noqa: E402
 from .domains.capabilities.routes import router as capability_flags_router  # noqa: E402
+from .services.threshold_calibration.routes import router as threshold_calibration_router  # noqa: E402
 
 app.include_router(decision_policy_router, prefix="/api/v1")
 app.include_router(capability_flags_router, prefix="/api/v1")
+app.include_router(threshold_calibration_router, prefix="/api/v1")
 
 # Public API: per-org API-key management (Developers settings) + the curated
 # /public/v1 surface external services + the Workable provider consume.

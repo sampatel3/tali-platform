@@ -82,6 +82,8 @@ from .calibration_tasks import (
     sample_prescreen_for_calibration,
     score_terminal_for_calibration,
 )
+# Eager-import the threshold-calibration beat (same NotRegistered trap).
+from .threshold_calibration_tasks import calibrate_thresholds_sweep
 # Eager-import decision_tasks so the worker registers the deferred
 # decision side-effects task. The approve / override / bulk-approve routes
 # enqueue it after commit; without this import the worker NotRegistered's it
