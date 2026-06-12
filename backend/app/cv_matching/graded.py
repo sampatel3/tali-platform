@@ -110,7 +110,9 @@ def _build_prompt(jd_text, archetype, requirements, cv_text, workable_context) -
 def _metering(metering_context, trace_id) -> MeteringContext:
     if metering_context:
         return MeteringContext(
-            feature="cv_match_graded",
+            # Metered as "score" (a valid Feature) — the graded pass is part of
+            # scoring (same model, same purpose), so its cost rolls into score.
+            feature="score",
             organization_id=metering_context.get("organization_id"),
             role_id=metering_context.get("role_id"),
             entity_id=metering_context.get("entity_id"),
