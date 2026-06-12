@@ -12,7 +12,7 @@ import * as apiClient from '../../shared/api';
 import { prefetchDocumentBlob } from '../../shared/api/documentCache';
 import { useToast } from '../../context/ToastContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
-import { Spinner } from '../../shared/ui/TaaliPrimitives';
+import { Spinner, Dialog, Button } from '../../shared/ui/TaaliPrimitives';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
 import { useRoleProgressPolling } from './useRoleProgressPolling';
@@ -1011,6 +1011,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     return buildAgentPropFromStatus(agentStatus, { isEnabled: enabled });
   }, [agentStatus, role]);
 
+  // Turn-off confirm dialog state (the "also discard pending decisions" opt-in).
+  // Declared with the other hooks — before any early return — so hook order
+  // stays stable across the loading/loaded renders.
+  const [turnOffOpen, setTurnOffOpen] = useState(false);
+  const [turnOffDiscard, setTurnOffDiscard] = useState(false);
+
   if (loading && !role) {
     return (
       <div>
@@ -1063,18 +1069,73 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     );
   };
 
+  // Manual SOFT pause — stop the agent and its spend, but KEEP this role's
+  // pending decisions (you can still action them). Resume brings it back.
+  // Distinct from Turn off (handleTurnOffAgent), which disables the agent
+  // indefinitely. Optimistically flip the polled status to paused so the strip
+  // morphs to amber without waiting for the 30s poll.
   const handlePauseAgent = () => {
-    patchAgentMode({ agentic_mode_enabled: false }, 'Failed to pause agent mode.');
+    if (!Number.isFinite(numericRoleId)) return;
+    if (setAgentStatus) {
+      setAgentStatus((cur) => (cur
+        ? { ...cur, paused: true, paused_at: new Date().toISOString(), paused_reason: 'paused by recruiter' }
+        : cur));
+    }
+    apiClient.agent
+      .pause(numericRoleId)
+      .then(() => { void refetchAgentStatus?.(); })
+      .catch((error) => {
+        void refetchAgentStatus?.();
+        showToast(getErrorMessage(error, 'Failed to pause agent.'), 'error');
+      });
   };
 
-  // PAUSED → ON. paused_at was set (budget cap or a "paused by you" hold);
-  // re-enabling clears it server-side — we clear it locally too for instant flip.
+  // PAUSED → ON. Clears the pause (manual or budget) server-side and kicks an
+  // immediate cycle; clear it locally too for an instant flip.
   const handleResumeAgent = () => {
-    patchAgentMode(
-      { agentic_mode_enabled: true },
-      'Failed to resume agent mode.',
-      { paused_at: null, paused: false, paused_reason: null },
-    );
+    if (!Number.isFinite(numericRoleId)) return;
+    if (setAgentStatus) {
+      setAgentStatus((cur) => (cur
+        ? { ...cur, paused: false, paused_at: null, paused_reason: null }
+        : cur));
+    }
+    apiClient.agent
+      .resume(numericRoleId)
+      .then(() => { void refetchAgentStatus?.(); void loadRoleWorkspace(); })
+      .catch((error) => {
+        void refetchAgentStatus?.();
+        void loadRoleWorkspace();
+        showToast(getErrorMessage(error, 'Failed to resume agent.'), 'error');
+      });
+  };
+
+  // Turn the agent OFF for this role — indefinite, no auto-resume. Opens a
+  // confirm: off KEEPS pending decisions by default (they stay actionable),
+  // with an opt-in to also discard the queue for a clean slate.
+  const handleTurnOffAgent = () => {
+    setTurnOffDiscard(false);
+    setTurnOffOpen(true);
+  };
+
+  const confirmTurnOffAgent = () => {
+    if (!Number.isFinite(numericRoleId)) return;
+    const alsoDiscard = turnOffDiscard && (roleAgent?.pending || 0) > 0;
+    setTurnOffOpen(false);
+    // Optimistic: roleAgent.on is driven by role.agentic_mode_enabled, so flip
+    // that in one frame; zero the pending count too when discarding.
+    setRole((cur) => (cur ? { ...cur, agentic_mode_enabled: false } : cur));
+    if (alsoDiscard && setAgentStatus) {
+      setAgentStatus((cur) => (cur ? { ...cur, pending_decisions: 0 } : cur));
+    }
+    rolesApi
+      .update(numericRoleId, { agentic_mode_enabled: false })
+      .then(() => (alsoDiscard ? apiClient.agent.discardPending(numericRoleId) : null))
+      .then(() => { void refetchAgentStatus?.(); void loadRoleWorkspace(); })
+      .catch((error) => {
+        void refetchAgentStatus?.();
+        void loadRoleWorkspace();
+        showToast(getErrorMessage(error, 'Failed to turn off agent.'), 'error');
+      });
   };
 
   return (
@@ -1143,6 +1204,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         onActivateAgent={handleActivateAgent}
         onPauseAgent={handlePauseAgent}
         onResumeAgent={handleResumeAgent}
+        onTurnOffAgent={handleTurnOffAgent}
         onAgentSettings={goToAgentSettings}
       />
       <div className="page">
@@ -1699,6 +1761,41 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           onClose={closeConfirm}
           onConfirm={runConfirmedAction}
         />
+
+        <Dialog
+          open={turnOffOpen}
+          onClose={() => setTurnOffOpen(false)}
+          title="Turn off the agent for this role?"
+          description="The agent stops running and won't resume on its own. You can turn it back on anytime. To pause temporarily instead, use Pause — it keeps everything and resumes on its own."
+          footer={(
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setTurnOffOpen(false)}>Cancel</Button>
+              <Button type="button" variant="danger" onClick={confirmTurnOffAgent}>Turn off</Button>
+            </div>
+          )}
+        >
+          <div className="space-y-3 text-sm">
+            {(roleAgent?.pending || 0) > 0 ? (
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={turnOffDiscard}
+                  onChange={(e) => setTurnOffDiscard(e.target.checked)}
+                  style={{ marginTop: 3 }}
+                />
+                <span>
+                  Also discard the <strong>{roleAgent.pending}</strong> pending decision{roleAgent.pending === 1 ? '' : 's'} awaiting your review.
+                  <br />
+                  <span style={{ opacity: 0.7 }}>
+                    Leave unchecked to keep them in your review queue — you can still action them after turning the agent off.
+                  </span>
+                </span>
+              </label>
+            ) : (
+              <p style={{ opacity: 0.7 }}>This role has no pending decisions.</p>
+            )}
+          </div>
+        </Dialog>
 
         <ProcessCandidatesDialog
           open={processDialogOpen}

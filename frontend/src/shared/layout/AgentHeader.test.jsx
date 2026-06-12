@@ -59,6 +59,50 @@ describe('AgentHeader — Pause/Resume panel', () => {
     expect(screen.getByText(/monthly budget reached/i)).toBeInTheDocument();
   });
 
+  it('renders a Turn off control only when onTurnOffAgent is wired, and fires it', () => {
+    const onTurnOff = vi.fn();
+    const { rerender } = render(
+      <AgentHeader title="Jobs" agent={runningAgent} onPauseAgent={() => {}} />,
+    );
+    // No Turn off button without a handler.
+    expect(screen.queryByRole('button', { name: /turn off agent/i })).not.toBeInTheDocument();
+
+    rerender(
+      <AgentHeader title="Jobs" agent={runningAgent} onPauseAgent={() => {}} onTurnOffAgent={onTurnOff} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /turn off agent/i }));
+    expect(onTurnOff).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers Turn off alongside Resume while paused', () => {
+    const onTurnOff = vi.fn();
+    render(
+      <AgentHeader
+        title="Jobs"
+        agent={{ ...runningAgent, on: false, paused: true, pausedReason: 'paused by recruiter' }}
+        onResumeAgent={() => {}}
+        onTurnOffAgent={onTurnOff}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /^resume$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /turn off agent/i })).toBeInTheDocument();
+  });
+
+  it('does not show Turn off in org bulk mode', () => {
+    render(
+      <AgentHeader
+        title="Jobs"
+        agent={runningAgent}
+        onPauseAgent={() => {}}
+        onResumeAgent={() => {}}
+        onTurnOffAgent={() => {}}
+        pauseAllCount={3}
+        resumeAllCount={2}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /turn off agent/i })).not.toBeInTheDocument();
+  });
+
   describe('org bulk mode (mixed org = both Pause and Resume)', () => {
     it('shows BOTH Pause and Resume — and states the split — in a mixed org', () => {
       const onPause = vi.fn();

@@ -57,6 +57,8 @@ vi.mock('../../shared/api', () => ({
     approveDecision: vi.fn().mockResolvedValue({ data: null }),
     overrideDecision: vi.fn().mockResolvedValue({ data: null }),
     discardPending: vi.fn().mockResolvedValue({ data: null }),
+    pause: vi.fn().mockResolvedValue({ data: null }),
+    resume: vi.fn().mockResolvedValue({ data: null }),
     runNow: vi.fn().mockResolvedValue({ data: null }),
   },
 }));
@@ -140,6 +142,7 @@ describe('JobPipelinePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     apiClient.roles.get.mockResolvedValue({ data: baseRole });
+    apiClient.roles.update.mockResolvedValue({ data: baseRole });
     apiClient.roles.listTasks.mockResolvedValue({ data: [] });
     apiClient.roles.listApplications.mockResolvedValue({ data: baseApplications });
     apiClient.roles.batchScoreStatus.mockResolvedValue({ data: { status: 'idle', total: 0, scored: 0, errors: 0 } });
@@ -435,10 +438,10 @@ Banking transformation experience
         pending_decisions: 0,
       },
     });
-    // Keep the PATCH in-flight for the whole assertion: if the flip waited on
-    // the server round-trip (the bug Sam hit), the strip would stay PAUSED here.
-    let resolveUpdate;
-    apiClient.roles.update.mockReturnValue(new Promise((res) => { resolveUpdate = res; }));
+    // Keep the resume call in-flight for the whole assertion: if the flip waited
+    // on the server round-trip (the bug Sam hit), the strip would stay PAUSED.
+    let resolveResume;
+    apiClient.agent.resume.mockReturnValue(new Promise((res) => { resolveResume = res; }));
 
     renderPipeline();
 
@@ -447,10 +450,69 @@ Banking transformation experience
 
     fireEvent.click(resumeBtn);
 
-    // Optimistic: ON immediately, before the (still-pending) PATCH resolves.
+    // Optimistic: ON immediately, before the (still-pending) resume resolves.
     expect(await screen.findByText('Agent on')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^resume$/i })).not.toBeInTheDocument();
-    expect(apiClient.roles.update).toHaveBeenCalledWith(101, { agentic_mode_enabled: true });
-    expect(resolveUpdate).toBeTypeOf('function'); // PATCH was fired, not awaited
+    // Resume hits the per-role soft-resume endpoint, NOT a role PATCH.
+    expect(apiClient.agent.resume).toHaveBeenCalledWith(101);
+    expect(resolveResume).toBeTypeOf('function'); // resume was fired, not awaited
+  });
+
+  it('Pause soft-pauses via the agent endpoint (keeps the role enabled, no PATCH)', async () => {
+    apiClient.roles.get.mockResolvedValue({ data: { ...baseRole, agentic_mode_enabled: true } });
+    apiClient.agent.status.mockResolvedValue({
+      data: { paused_at: null, monthly_spent_cents: 100, monthly_budget_cents: 10000, pending_decisions: 0 },
+    });
+
+    renderPipeline();
+
+    const pauseBtn = await screen.findByRole('button', { name: /^pause$/i });
+    expect(screen.getByText('Agent on')).toBeInTheDocument();
+
+    fireEvent.click(pauseBtn);
+
+    // Optimistic flip to PAUSED; calls the soft-pause endpoint, never a role
+    // PATCH (which would disable the agent and risk the queue).
+    expect(await screen.findByText('Paused')).toBeInTheDocument();
+    expect(apiClient.agent.pause).toHaveBeenCalledWith(101);
+    expect(apiClient.roles.update).not.toHaveBeenCalled();
+  });
+
+  it('Turn off confirms, then disables the agent and KEEPS decisions by default', async () => {
+    apiClient.roles.get.mockResolvedValue({ data: { ...baseRole, agentic_mode_enabled: true } });
+    apiClient.agent.status.mockResolvedValue({
+      data: { paused_at: null, monthly_spent_cents: 100, monthly_budget_cents: 10000, pending_decisions: 4 },
+    });
+
+    renderPipeline();
+
+    // The Turn off control is the icon-only Power button.
+    fireEvent.click(await screen.findByRole('button', { name: /turn off agent/i }));
+
+    // Confirm dialog appears, with the opt-in discard checkbox (pending > 0).
+    expect(await screen.findByText(/turn off the agent for this role\?/i)).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /also discard/i })).toBeInTheDocument();
+
+    // Confirm WITHOUT ticking discard → disable only, queue preserved.
+    fireEvent.click(screen.getByRole('button', { name: /^turn off$/i }));
+
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, { agentic_mode_enabled: false }));
+    expect(apiClient.agent.discardPending).not.toHaveBeenCalled();
+  });
+
+  it('Turn off with "also discard" ticked disables AND discards the queue', async () => {
+    apiClient.roles.get.mockResolvedValue({ data: { ...baseRole, agentic_mode_enabled: true } });
+    apiClient.agent.status.mockResolvedValue({
+      data: { paused_at: null, monthly_spent_cents: 100, monthly_budget_cents: 10000, pending_decisions: 4 },
+    });
+
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('button', { name: /turn off agent/i }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /also discard/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^turn off$/i }));
+
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, { agentic_mode_enabled: false }));
+    await waitFor(() => expect(apiClient.agent.discardPending).toHaveBeenCalledWith(101));
   });
 });

@@ -3,9 +3,13 @@
   GET    /api/v1/agent-decisions                  list pending (or any-status) decisions
   POST   /api/v1/agent-decisions/{id}/approve     execute the agent's recommendation
   POST   /api/v1/agent-decisions/{id}/override    discard recommendation; recruiter acts manually
-  POST   /api/v1/agent-decisions/discard          bulk discard pending decisions for a role (used by toggle-off)
+  POST   /api/v1/agent-decisions/discard          bulk discard pending decisions for a role (opt-in "also discard" on turn-off)
   GET    /api/v1/agent-runs                       recent autonomous-cycle log
   POST   /api/v1/roles/{id}/agent/run-now         enqueue a manual agent cycle
+  POST   /api/v1/roles/{id}/agent/pause           soft-pause one role (keeps pending decisions)
+  POST   /api/v1/roles/{id}/agent/resume          resume one paused role (if back under cap)
+  POST   /api/v1/agent/pause-all                  soft-pause every agent-enabled role
+  POST   /api/v1/agent/resume-all                 resume every paused role back under cap
 
 All endpoints are org-scoped via ``get_current_user``.
 """
@@ -1266,4 +1270,98 @@ def resume_all_agents(
         affected=affected,
         enabled_count=len(roles),
         skipped=len(roles) - affected,
+    )
+
+
+class RoleAgentPauseResult(BaseModel):
+    """Outcome of a per-role manual pause / resume."""
+
+    role_id: int
+    paused: bool  # is the role paused after this call?
+    resumed: bool = False  # did this call actually clear a pause?
+    reason: Optional[str] = None
+
+
+@router.post("/roles/{role_id}/agent/pause", response_model=RoleAgentPauseResult)
+def pause_role_agent(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Manually soft-pause ONE role's agent — the per-role twin of pause-all.
+
+    Sets ``agent_paused_at`` (the flag the cohort sweeps honour, so the agent
+    stops scoring/spending on the next beat) while leaving
+    ``agentic_mode_enabled`` true. Crucially this KEEPS the role's pending
+    decisions, and ``resume`` brings it straight back. Distinct from turning
+    the agent off (PATCH ``agentic_mode_enabled=false``), which stops the agent
+    indefinitely and doesn't auto-resume — neither path discards the queue.
+    Idempotent: pausing an already-paused role is a no-op.
+    """
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == role_id,
+            Role.organization_id == current_user.organization_id,
+            Role.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if role is None:
+        raise HTTPException(status_code=404, detail=f"role {role_id} not found")
+    if not bool(role.agentic_mode_enabled):
+        raise HTTPException(
+            status_code=409, detail="agent is not enabled for this role"
+        )
+    if role.agent_paused_at is None:
+        budget_guard.pause_role(db, role=role, reason=MANUAL_PAUSE_REASON)
+        db.commit()
+    return RoleAgentPauseResult(
+        role_id=role_id,
+        paused=role.agent_paused_at is not None,
+        reason=role.agent_paused_reason,
+    )
+
+
+@router.post("/roles/{role_id}/agent/resume", response_model=RoleAgentPauseResult)
+def resume_role_agent(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Resume ONE paused role, if it's back under its monthly cap.
+
+    Reuses ``budget_guard.resume_if_under_budget`` (the same guard as
+    resume-all and the cap-raise auto-resume) so a genuinely over-budget role
+    stays paused rather than resuming only to re-pause next cycle. On a real
+    resume we kick an immediate review cycle so the recruiter doesn't wait up
+    to 30 minutes for the next beat — mirroring the PATCH resume path.
+    """
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == role_id,
+            Role.organization_id == current_user.organization_id,
+            Role.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if role is None:
+        raise HTTPException(status_code=404, detail=f"role {role_id} not found")
+    resumed = budget_guard.resume_if_under_budget(db, role=role)
+    if resumed:
+        db.commit()
+        try:
+            from ...tasks.agent_tasks import agent_daily_review_role
+
+            agent_daily_review_role.delay(int(role.id))
+        except Exception:
+            logger.exception(
+                "Failed to enqueue resume cycle for role_id=%s", role.id
+            )
+    return RoleAgentPauseResult(
+        role_id=role_id,
+        paused=role.agent_paused_at is not None,
+        resumed=resumed,
+        reason=role.agent_paused_reason,
     )

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Pause, Play, Settings as SettingsIcon, Sparkles } from 'lucide-react';
+import { Pause, Play, Power, Settings as SettingsIcon, Sparkles } from 'lucide-react';
 
 import { useAgentStatus } from './AgentBar';
 import { BreadcrumbsRow } from '../ui/Breadcrumbs';
@@ -99,6 +99,7 @@ const AgentStrip = ({
   onActivate,
   onPause,
   onResume,
+  onTurnOff,
   onSettings,
   offStateMessage,
   pauseLabel = 'Pause',
@@ -204,15 +205,41 @@ const AgentStrip = ({
               ) : null}
             </>
           ) : status === 'on' ? (
-            <button type="button" className="ab-btn" onClick={onPause} disabled={!onPause}>
-              <Pause size={11} strokeWidth={2} />
-              {pauseLabel}
-            </button>
+            <>
+              <button type="button" className="ab-btn" onClick={onPause} disabled={!onPause}>
+                <Pause size={11} strokeWidth={2} />
+                {pauseLabel}
+              </button>
+              {onTurnOff ? (
+                <button
+                  type="button"
+                  className="ab-btn ic"
+                  title="Turn off agent for this role"
+                  aria-label="Turn off agent"
+                  onClick={onTurnOff}
+                >
+                  <Power size={13} strokeWidth={2} />
+                </button>
+              ) : null}
+            </>
           ) : status === 'paused' ? (
-            <button type="button" className="ab-btn primary" onClick={onResume} disabled={!onResume}>
-              <Play size={11} strokeWidth={2} fill="currentColor" />
-              {resumeLabel}
-            </button>
+            <>
+              <button type="button" className="ab-btn primary" onClick={onResume} disabled={!onResume}>
+                <Play size={11} strokeWidth={2} fill="currentColor" />
+                {resumeLabel}
+              </button>
+              {onTurnOff ? (
+                <button
+                  type="button"
+                  className="ab-btn ic"
+                  title="Turn off agent for this role"
+                  aria-label="Turn off agent"
+                  onClick={onTurnOff}
+                >
+                  <Power size={13} strokeWidth={2} />
+                </button>
+              ) : null}
+            </>
           ) : null}
           {onSettings ? (
             <button
@@ -251,6 +278,7 @@ export const AgentHeader = ({
   onActivateAgent,
   onPauseAgent,
   onResumeAgent,
+  onTurnOffAgent,
   onAgentSettings,
   offStateMessage,
   pauseLabel,
@@ -302,6 +330,7 @@ export const AgentHeader = ({
                   onActivate={onActivateAgent}
                   onPause={onPauseAgent}
                   onResume={onResumeAgent}
+                  onTurnOff={onTurnOffAgent}
                   onSettings={onAgentSettings}
                   offStateMessage={offStateMessage}
                   pauseLabel={pauseLabel}
