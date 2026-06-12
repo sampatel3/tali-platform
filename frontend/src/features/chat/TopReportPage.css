@@ -21,8 +21,14 @@
 .trp-title {
   font-size: 26px;
   font-weight: 700;
-  margin: 0 0 4px;
+  margin: 0 0 2px;
   color: var(--ink, #1c1830);
+}
+.trp-role {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--purple, #6d28d9);
+  margin: 0 0 4px;
 }
 .trp-sub {
   font-size: 13px;

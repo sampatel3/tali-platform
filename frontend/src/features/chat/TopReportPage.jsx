@@ -68,6 +68,9 @@ export default function TopReportPage() {
       <div className="trp-head">
         <div className="trp-brand">taali<span>.</span></div>
         <h1 className="trp-title">Top candidates</h1>
+        {snapshot && snapshot.role_name ? (
+          <div className="trp-role">{snapshot.role_name}</div>
+        ) : null}
         <div className="trp-sub">
           {spec.echo || query || 'Ranked shortlist'}
           {created ? ` · ${created}` : ''}
