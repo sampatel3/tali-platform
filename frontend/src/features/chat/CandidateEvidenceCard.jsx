@@ -164,8 +164,15 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
                 </>
               ) : null}
             </div>
-            {detailed && c.candidate_summary ? (
-              <div className="ev-summary">{c.candidate_summary}</div>
+            {detailed && (c.candidate_headline || c.candidate_summary) ? (
+              <div className="ev-summary">
+                {c.candidate_headline ? (
+                  <div className="ev-summary-headline">{c.candidate_headline}</div>
+                ) : null}
+                {c.candidate_summary ? (
+                  <div className="ev-summary-body">{c.candidate_summary}</div>
+                ) : null}
+              </div>
             ) : null}
             {Array.isArray(c.criteria) && c.criteria.length ? (
               <div className="ev-crits">

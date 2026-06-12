@@ -59,7 +59,15 @@
   font-size: 12px;
   line-height: 1.45;
   color: #3a3450;
-  margin: 0 0 6px 22px;
+  margin: 0 0 8px 22px;
+}
+.ev-summary-headline {
+  font-weight: 650;
+  color: var(--ink, #1c1830);
+  margin-bottom: 2px;
+}
+.ev-summary-body {
+  color: var(--muted, #6b6480);
 }
 .ev-report-link {
   display: inline-block;
