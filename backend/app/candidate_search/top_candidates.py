@@ -152,7 +152,13 @@ def _reuse_stored(criterion: str, stored: list[dict[str, Any]]) -> CriterionVerd
     with verbatim quotes) or a clean *negative* (missing) — an ``unknown`` or
     a quote-less positive falls through to a fresh citation so we never pass
     off an ungrounded claim as grounded.
+
+    Constraint criteria (salary cap, years, location, …) are NEVER reused — the
+    recruiter's query value (e.g. "<= 30k") can differ from the role's stored
+    requirement, so they're always freshly judged against the asked value.
     """
+    if _is_constraint(criterion):
+        return None
     crit_tokens = _tokens(criterion)
     if not crit_tokens:
         return None
