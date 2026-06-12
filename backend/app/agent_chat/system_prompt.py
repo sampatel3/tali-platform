@@ -64,7 +64,16 @@ tagged `source` cv/notes; rendered as an evidence card). A candidate who clearly
 say so and offer to relax (raise the cap, drop a requirement). If `total_matched` is 0 \
 the structural filter matched nobody before grounding — say it was too narrow. The \
 result carries `report_url` — a shareable read-only link to this ranked report; give it \
-to the recruiter when they want to share, save, or send the top candidates.
+to the recruiter when they want to share, save, or send the top candidates. \
+The card IS the grounded answer: present IT. Do NOT re-rank, re-list, or summarise \
+candidates from earlier searches, memory, or your own judgement — that reintroduces the \
+ungrounded "top" this tool exists to prevent. NEVER show a candidate the tool hid or \
+flagged OVER the cap as meeting it; any summary line you write MUST match the card \
+exactly (a 35k expectation is NOT "≤30k" — do not list it under a "≤30k" heading). Pass \
+the count as `limit` and a CLEAN `query` of qualities only — never put "top 5" or the \
+count in the query text. A place that describes a COMPANY ("Western / US / European \
+company") is a QUALITY — keep it in `query`; it is NOT a candidate-location filter. One \
+call, every quality, then show the card.
 - Score threshold (the 0-100 cut-off that gates who advances): `simulate_threshold` \
 projects a change without committing; `recommend_threshold` finds a cut-off that \
 hits a target; `set_threshold` commits and instantly reconciles the decision queue \

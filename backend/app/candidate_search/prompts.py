@@ -84,6 +84,8 @@ SCHEMA (every field optional, omit if empty):
 NORMALISATION RULES:
 - Country aliases: UK → "United Kingdom"; USA / US / America → "United States"; UAE → "United Arab Emirates"; KSA → "Saudi Arabia". Lower-case input matches case-insensitively.
 - Regions: lowercase region keys. If user says "Europe" use locations_region: ["europe"], NOT a list of countries.
+- CANDIDATE LOCATION vs COMPANY ORIGIN — a place goes in locations_country / locations_region ONLY when it is the CANDIDATE'S OWN location: "based in Dubai", "candidates in the UAE", "located in London", "UK-based candidates", "living in Europe". When a place instead describes an EMPLOYER / COMPANY — "a Western company", "a US company", "European employer", "worked at a UK firm", "experience at a Western (Europe/UK/US) company" — it is NOT a candidate location: keep it as ONE qualitative soft_criteria phrase about the company's origin and put NOTHING in locations. A parenthetical or list attached to "company"/"employer" (e.g. "Western (Europe, UK, US) company") qualifies the COMPANY, never the candidate — never extract those countries into locations.
+- IGNORE the requested count: a leading "top N" / "best N" / "first N" / "show me N candidates" only says how many to return — it is NOT a filter. Never put "top 5", a bare number, or "candidates" into keywords or soft_criteria; omit it entirely.
 - Skills: keep technology names verbatim (case as given). Do not split multi-word skills ("AWS Glue", "Kubernetes Operators").
 - Years: "5 years" / "5+ years" / "five years" → min_years_experience: 5. "senior" alone is NOT a years number — route to soft_criteria.
 - Company-size phrases ("large enterprise", "Fortune 500", "FAANG", "startup", "scale-up") → soft_criteria.
@@ -112,6 +114,12 @@ Query: "senior engineers from FAANG based in London or Dublin"
 
 Query: "data engineers asking for less than 30000 AED in salary"
 {"soft_criteria":["data engineer","salary expectation <= 30000 AED"],"free_text":"data engineers asking for less than 30000 AED in salary"}
+
+Query: "top 5 candidates with experience at a Western (Europe, UK, US) company"
+{"soft_criteria":["experience at a Western (Europe/UK/US) company"],"free_text":"top 5 candidates with experience at a Western (Europe, UK, US) company"}
+
+Query: "best 3 data engineers based in the UAE"
+{"locations_country":["United Arab Emirates"],"soft_criteria":["data engineer"],"free_text":"best 3 data engineers based in the UAE"}
 """
 
 

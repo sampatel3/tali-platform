@@ -162,6 +162,19 @@ def _tokens(text: str) -> set[str]:
     return {t for t in _TOKEN_RE.findall((text or "").lower()) if t not in _STOPWORDS}
 
 
+# Count / filler fragments that leak from a query's text ("top 5", "candidates",
+# "best 3 candidates") — never a real quality to ground against.
+_JUNK_CRITERION_RE = re.compile(
+    r"(?:(?:the\s+)?(?:top|best|first|latest|show(?:\s+me)?|give\s+me|find|list))?\s*"
+    r"\d*\s*(?:candidates?|people|profiles?|results?|matches)?",
+    re.I,
+)
+
+
+def _is_junk_criterion(text: str) -> bool:
+    return bool(_JUNK_CRITERION_RE.fullmatch((text or "").strip()))
+
+
 def _cv_text(app: CandidateApplication) -> str | None:
     own = getattr(app, "cv_text", None)
     if own and own.strip():
@@ -384,7 +397,7 @@ def _collect_criteria(parsed) -> list[str]:
     for c in list(parsed.soft_criteria) + list(parsed.keywords):
         c = (c or "").strip()
         key = c.lower()
-        if c and key not in seen:
+        if c and key not in seen and not _is_junk_criterion(c):
             seen.add(key)
             raw.append(c)
 

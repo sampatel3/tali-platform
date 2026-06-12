@@ -75,6 +75,16 @@ partial / not-stated). Treat a quality as satisfied ONLY when grounded is true \
 `shown` vs `total_matched`. Open the spec.echo so the recruiter sees how you \
 read the request.
 
+The card IS the grounded answer — present IT, exactly. Do NOT re-rank, re-list, \
+or summarise candidates from earlier searches, memory, or your own judgement; \
+that reintroduces the ungrounded "top" this path exists to prevent. NEVER show a \
+candidate the tool hid or flagged OVER the cap as meeting it — every line you \
+write must match the card (a 35k expectation is NOT "≤30k"; don't list it under a \
+"≤30k" heading). Pass the count as `limit` and a CLEAN `query` of qualities only \
+(never put "top 5" or the count in the query text). A place that describes a \
+COMPANY ("Western / US / European company") is a QUALITY you keep in `query` — it \
+is NOT a candidate-location filter.
+
 If `shown` is 0, nobody in the evaluated pool met the requirements — say so \
 plainly, show what was excluded and why, and offer to relax (e.g. raise the \
 salary cap, drop a requirement). If `total_matched` is 0, the STRUCTURAL \
