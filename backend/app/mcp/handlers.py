@@ -457,6 +457,14 @@ def find_top_candidates(
         rank_by=str(rank_by or "taali"),
     )
 
+    # Carry the role onto the result so the shareable report names which job
+    # these candidates were ranked for (role-scoped queries only).
+    if role_id is not None:
+        role = db.query(Role).filter(Role.id == int(role_id)).first()
+        if role is not None:
+            result["role_name"] = role.name
+            result["role_id"] = int(role_id)
+
     # Persist a shareable snapshot so every grounded top-N is a report the
     # recruiter can hand out as a link. Best-effort — never fail the search.
     try:
