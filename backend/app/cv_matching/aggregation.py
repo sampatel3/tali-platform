@@ -103,10 +103,20 @@ def _recruiter_weight_multiplier(assessment) -> float:
 def compute_requirements_match_score(
     assessments: Iterable[RequirementAssessment],
 ) -> float:
-    """Requirements-match score (0–100). Dispatches to v2 (coverage-blended,
-    must-have-normalised) when ``CV_MATCH_REQ_MATCH_V2`` is enabled, else the
-    original flat weighted average."""
+    """Requirements-match score (0–100).
+
+    Dispatch order:
+    1. **graded** — when any assessment carries a graded ``match_score`` (>=0,
+       set by the focused ``cv_matching.graded`` pass). The continuous 0-100
+       per-requirement score replaces the coarse ``status × tier`` weighting,
+       fixing the double-penalty (strong substitute scoring below a vague
+       partial) and the discarded-evidence problem.
+    2. **v2** — coverage-blended, must-have-normalised (``CV_MATCH_REQ_MATCH_V2``).
+    3. **v1** — original flat weighted average.
+    """
     assessments_list = list(assessments)
+    if _has_graded(assessments_list):
+        return compute_requirements_match_score_graded(assessments_list)
     if _req_match_v2_enabled():
         return compute_requirements_match_score_v2(assessments_list)
     return compute_requirements_match_score_v1(assessments_list)
@@ -209,6 +219,69 @@ def compute_requirements_match_score_v2(
         assessed_score = _MUST_SHARE * must_f + (1.0 - _MUST_SHARE) * pref_f
 
     coverage = assessed_weight / total_weight  # 0..1
+    blended = coverage * (assessed_score * 100.0) + (1.0 - coverage) * _REQ_MATCH_NEUTRAL_PRIOR
+    return round(blended, 2)
+
+
+def _has_graded(assessments: Iterable[RequirementAssessment]) -> bool:
+    """True when any assessment carries a graded ``match_score`` (>= 0).
+
+    The graded pass (``cv_matching.graded``) sets ``match_score`` to 0-100;
+    legacy/ungraded assessments keep the ``-1`` sentinel.
+    """
+    return any(getattr(a, "match_score", -1) >= 0 for a in assessments)
+
+
+def compute_requirements_match_score_graded(
+    assessments: Iterable[RequirementAssessment],
+) -> float:
+    """Graded requirements match — same coverage-blended, must-have-normalised
+    shape as v2, but each requirement contributes its continuous 0-100
+    ``match_score`` (÷100) instead of ``status_weight × tier_weight``.
+
+    This removes the double-penalty (a strong equivalent skill no longer
+    scores below a vague partial — it is graded ~0.75-0.85 directly) and stops
+    discarding evidence the coarse model abstained on. ``assessable=False`` (or
+    a missing/sentinel ``match_score``) is treated like ``unknown``: excluded
+    from the tier averages, affecting coverage only — never a 0 penalty.
+    """
+    must_num = must_den = 0.0
+    pref_num = pref_den = 0.0
+    assessed_weight = total_weight = 0.0
+    for a in assessments:
+        if a.priority == Priority.CONSTRAINT:
+            continue
+        weight = _PRIORITY_WEIGHTS.get(a.priority, 0.0) * _recruiter_weight_multiplier(a)
+        if weight <= 0:
+            continue
+        total_weight += weight
+        ms = getattr(a, "match_score", -1)
+        if not getattr(a, "assessable", True) or ms < 0:
+            continue  # unassessable → coverage only, never penalised
+        assessed_weight += weight
+        fulfilment = max(0.0, min(100.0, float(ms))) / 100.0
+        if a.priority == Priority.MUST_HAVE:
+            must_num += weight * fulfilment
+            must_den += weight
+        else:
+            pref_num += weight * fulfilment
+            pref_den += weight
+
+    if total_weight <= 0:
+        return 50.0
+
+    must_f = (must_num / must_den) if must_den > 0 else None
+    pref_f = (pref_num / pref_den) if pref_den > 0 else None
+    if must_f is None and pref_f is None:
+        assessed_score = _REQ_MATCH_NEUTRAL_PRIOR / 100.0
+    elif must_f is None:
+        assessed_score = pref_f
+    elif pref_f is None:
+        assessed_score = must_f
+    else:
+        assessed_score = _MUST_SHARE * must_f + (1.0 - _MUST_SHARE) * pref_f
+
+    coverage = assessed_weight / total_weight
     blended = coverage * (assessed_score * 100.0) + (1.0 - coverage) * _REQ_MATCH_NEUTRAL_PRIOR
     return round(blended, 2)
 
