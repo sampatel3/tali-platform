@@ -90,6 +90,7 @@ NORMALISATION RULES:
 - Industry phrases ("fintech", "healthcare", "logistics") → soft_criteria unless a specific employer is named.
 - "Worked at <Company>" → graph_predicates: [{"type": "worked_at", "value": "<Company>"}]. Combine multiple "or" companies into multiple predicates.
 - "in production" / "in prod" / "running production systems" → soft_criteria: ["in production"].
+- Monetary / threshold constraints (salary or compensation expectation, day rate, notice period) → ONE soft_criteria phrase that keeps the subject, the operator, and the value TOGETHER, e.g. "salary expectation <= 30000 AED", "notice period <= 1 month". Normalise the operator: under / less than / below / at most / up to / max → "<="; over / more than / above / at least / min → ">=". NEVER split the number or currency from the label into separate entries, and NEVER drop the operator — a bare "salary" or a bare "30000 AED" is wrong.
 - If the query is gibberish or empty, return {"free_text": "<query>"} only.
 
 EXAMPLES
@@ -108,6 +109,9 @@ Query: "Python and Kubernetes, worked at Google or Meta in last 3 years"
 
 Query: "senior engineers from FAANG based in London or Dublin"
 {"locations_country":["United Kingdom","Ireland"],"soft_criteria":["senior","FAANG"],"keywords":["London","Dublin"],"free_text":"senior engineers from FAANG based in London or Dublin"}
+
+Query: "data engineers asking for less than 30000 AED in salary"
+{"soft_criteria":["data engineer","salary expectation <= 30000 AED"],"free_text":"data engineers asking for less than 30000 AED in salary"}
 """
 
 

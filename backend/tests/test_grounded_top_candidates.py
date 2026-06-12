@@ -316,6 +316,51 @@ def test_collect_criteria_keeps_genuinely_distinct_criteria():
     assert tc._collect_criteria(parsed) == ["banking domain", "real-time data"]
 
 
+def test_collect_criteria_reassembles_split_salary_constraint():
+    # The parser fragmented "salary less than 30000 AED" into a bare label and
+    # a bare value, dropping the operator. We rebuild one clean cap line.
+    parsed = ParsedFilter(
+        soft_criteria=["salary", "30000 AED"],
+        keywords=[],
+        free_text="data engineers asking for salary less than 30000 AED",
+    )
+    out = tc._collect_criteria(parsed)
+    assert out == ["salary <= 30000 AED"]
+    assert tc._is_constraint(out[0])
+
+
+def test_merge_fragments_takes_operator_from_value_then_query():
+    # operator stated on the value fragment itself
+    assert tc._merge_constraint_fragments(
+        ["compensation", "under 40k"], None
+    ) == ["compensation <= 40k"]
+    # operator only in the query → ">=" for an "at least" phrasing
+    assert tc._merge_constraint_fragments(
+        ["salary", "30000 AED"], "salary at least 30000 AED"
+    ) == ["salary >= 30000 AED"]
+    # ambiguous → defaults to a cap
+    assert tc._merge_constraint_fragments(["salary", "30000 AED"], None) == [
+        "salary <= 30000 AED"
+    ]
+
+
+def test_merge_fragments_noop_without_a_pair():
+    # already-clean single phrase is left alone
+    assert tc._merge_constraint_fragments(
+        ["salary expectation <= 30000 AED", "react"], "…"
+    ) == ["salary expectation <= 30000 AED", "react"]
+    # a value with no label sibling is not merged
+    assert tc._merge_constraint_fragments(["react", "5 years"], "…") == [
+        "react",
+        "5 years",
+    ]
+    # a label with no value sibling is not merged
+    assert tc._merge_constraint_fragments(["salary", "react"], "…") == [
+        "salary",
+        "react",
+    ]
+
+
 def test_years_experience_from_snapshot():
     app = SimpleNamespace(cv_match_details={"candidate_snapshot": {"years_experience": 7.5}})
     assert tc._years_experience(app) == 7.5
