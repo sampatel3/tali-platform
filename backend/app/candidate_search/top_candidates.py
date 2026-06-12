@@ -80,6 +80,21 @@ def _cv_text(app: CandidateApplication) -> str | None:
     return None
 
 
+def _notes_text(app: CandidateApplication) -> str | None:
+    """The candidate's Workable evidence corpus (profile, questionnaire
+    answers, recruiter comments, activity log) — where constraints like salary
+    expectation and notice period are usually stated, not in the CV. Reuses the
+    same renderer the scorer uses so the grounding sees the same evidence."""
+    try:
+        from ..services.workable_context_service import format_workable_context
+
+        text = format_workable_context(app.candidate, app)
+        return text or None
+    except Exception as exc:  # noqa: BLE001 — notes are best-effort
+        logger.debug("notes context unavailable for app=%s: %s", app.id, exc)
+        return None
+
+
 def _stored_assessments(app: CandidateApplication) -> list[dict[str, Any]]:
     details = getattr(app, "cv_match_details", None) or {}
     if not isinstance(details, dict):
@@ -114,6 +129,7 @@ def _reuse_stored(criterion: str, stored: list[dict[str, Any]]) -> CriterionVerd
                     quote=q.strip(),
                     start_char=int(start) if i == 0 and isinstance(start, int) else -1,
                     end_char=int(end) if i == 0 and isinstance(end, int) else -1,
+                    source="role_requirement",
                 )
                 for i, q in enumerate(quotes)
             ]
@@ -158,9 +174,11 @@ def _ground_application(
 
     if remaining:
         cv = _cv_text(app)
-        if cv:
+        notes = _notes_text(app)
+        if cv or notes:
             fresh = _ge.extract_cv_evidence(
                 cv_text=cv,
+                notes_text=notes,
                 criteria=remaining,
                 client=client,
                 organization_id=organization_id,
@@ -176,7 +194,7 @@ def _ground_application(
             for i, c in enumerate(criteria):
                 if verdicts[i] is None:
                     verdicts[i] = CriterionVerdict(
-                        criterion=c, status="missing", note="CV text unavailable."
+                        criterion=c, status="missing", note="No CV or notes available."
                     )
 
     return [v for v in verdicts if v is not None]
