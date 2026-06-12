@@ -273,24 +273,63 @@ def effective_threshold(
     return role.score_threshold
 
 
+def _active_learned_threshold(db: Session, *, role: Role) -> float | None:
+    """The approved, learned-from-recruiter-decisions threshold for this role.
+
+    Prefers a role-scoped active ``ThresholdCalibration`` row, else the
+    org-wide one. ``None`` when no calibration has been activated — the caller
+    then falls back to the volume heuristic. Read defensively so a calibration
+    lookup never breaks the verdict path.
+    """
+    try:
+        from ..models.threshold_calibration import STATUS_ACTIVE, ThresholdCalibration
+
+        base = db.query(ThresholdCalibration).filter(
+            ThresholdCalibration.organization_id == role.organization_id,
+            ThresholdCalibration.status == STATUS_ACTIVE,
+        )
+        role_row = (
+            base.filter(ThresholdCalibration.role_id == role.id)
+            .order_by(ThresholdCalibration.activated_at.desc())
+            .first()
+        )
+        if role_row is not None:
+            return float(role_row.learned_threshold)
+        org_row = (
+            base.filter(ThresholdCalibration.role_id.is_(None))
+            .order_by(ThresholdCalibration.activated_at.desc())
+            .first()
+        )
+        if org_row is not None:
+            return float(org_row.learned_threshold)
+    except Exception:  # pragma: no cover — never break the verdict path
+        return None
+    return None
+
+
 def resolve_role_fit_threshold(db: Session, *, role: Role) -> float | None:
     """The single role-fit send/reject boundary the decision engine uses.
 
-    Auto mode → the dynamic, agent-managed ``compute_role_fit_send_threshold``
-    (strong-stage anchor + 5–10% volume cap, recomputed live). Manual mode →
-    the recruiter's fixed ``score_threshold``, falling back to the dynamic
-    value when they haven't set one — so EVERY candidate lands on one side of
-    the boundary and gets a decision (no silent "gap"). Returns None only if
-    nothing is computable, in which case the engine keeps the stored policy
-    thresholds unchanged.
+    Precedence:
+      1. Manual mode + a recruiter-set ``score_threshold`` → that value wins
+         (unchanged — including an explicit 0).
+      2. Otherwise (auto mode, or manual with no value set): an approved,
+         learned-from-recruiter-decisions threshold (``ThresholdCalibration``,
+         role-scoped then org-scoped) — this REPLACES the volume heuristic once
+         a recruiter has activated a calibration.
+      3. Else the dynamic ``compute_role_fit_send_threshold`` volume heuristic.
+
+    The learned value only slots in where the heuristic was already in play, so
+    activating a calibration never changes a role the recruiter pinned manually.
+    Returns None only if nothing is computable (engine keeps stored thresholds).
     """
     try:
         mode = getattr(role, "auto_reject_threshold_mode", None) or "manual"
-        if mode == "auto":
-            return float(compute_role_fit_send_threshold(db, role=role).value)
-        # Manual mode: recruiter's fixed value, else the dynamic recommendation.
-        if role.score_threshold is not None:
+        if mode != "auto" and role.score_threshold is not None:
             return float(role.score_threshold)
+        learned = _active_learned_threshold(db, role=role)
+        if learned is not None:
+            return float(learned)
         return float(compute_role_fit_send_threshold(db, role=role).value)
     except Exception:  # pragma: no cover — never break the verdict path
         return None
