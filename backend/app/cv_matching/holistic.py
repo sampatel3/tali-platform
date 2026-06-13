@@ -36,7 +36,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..llm import MeteringContext, generate_structured
+from ..llm import MeteringContext, fuzzy_locate, generate_structured
 from .cache import compute_cache_key, get as _cache_get, set as _cache_set
 from .schemas import (
     CandidateSnapshot,
@@ -49,7 +49,6 @@ from .schemas import (
     Status,
     TimelineEntry,
 )
-from .validation import validate_evidence_grounding
 
 logger = logging.getLogger(__name__)
 
@@ -383,14 +382,40 @@ def run_holistic_match(
     report = report_res.value if (report_res.ok and report_res.value) else _Report()
 
     out = _to_output(score_res.value, report, deriv, trace_id, score_res, report_res)
-    # Canonical grounding pass — drop any evidence quote that isn't a real CV
-    # substring and downgrade the requirement, so cited evidence stays honest.
     try:
-        validate_evidence_grounding(out, cv_text=cv)
+        _ground_quotes(out, cv)
     except Exception:  # pragma: no cover — never fail a score on grounding
         logger.warning("holistic grounding pass failed", exc_info=True)
     _cache_set(cache_key, out)
     return out
+
+
+def _ground_quotes(out: CVMatchOutput, cv: str) -> None:
+    """Verify evidence citations without erasing the per-requirement judgment.
+
+    Each requirement's status/score is the model's holistic assessment
+    (call 2), NOT derived from the quote — so unlike the canonical
+    ``validate_evidence_grounding`` (which downgrades to UNKNOWN when no quote
+    survives), we DROP any quote that doesn't fuzzy-locate in the CV but KEEP
+    the status/score/impact. Net effect: a paraphrased citation is removed so
+    it can never be shown as a verbatim quote, but the assessment stands — and
+    downstream "grounded = status met/partial AND has quotes" correctly treats
+    a quote-less requirement as ungrounded.
+    """
+    for ra in out.requirements_assessment:
+        kept: list[str] = []
+        first: tuple[int, int] | None = None
+        for q in (ra.evidence_quotes or []):
+            located = fuzzy_locate(q, cv)
+            if located is not None:
+                kept.append(q)
+                if first is None:
+                    first = located
+        ra.evidence_quotes = kept
+        if first is not None:
+            ra.evidence_start_char, ra.evidence_end_char = first[0], first[1]
+        else:
+            ra.evidence_start_char = ra.evidence_end_char = -1
 
 
 def _tier_from_score(score: int) -> str:
