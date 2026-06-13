@@ -330,7 +330,11 @@ def run_holistic_match(
     # Anthropic cost instead of re-firing both Sonnet calls.
     cache_key = compute_cache_key(
         cv_text=cv, jd_text=jd, requirements=[],
-        prompt_version=HOLISTIC_PROMPT_VERSION, model_version=HOLISTIC_MODEL,
+        # Key on the engine version too, so a logic/calibration fix (which
+        # bumps engine_version without changing the prompt) invalidates stale
+        # cached scores instead of serving the old result.
+        prompt_version=f"{HOLISTIC_PROMPT_VERSION}+{HOLISTIC_ENGINE_VERSION}",
+        model_version=HOLISTIC_MODEL,
         workable_context=workable_context or "",
     )
     cached = _cache_get(cache_key)
