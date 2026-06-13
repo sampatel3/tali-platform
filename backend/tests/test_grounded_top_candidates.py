@@ -831,3 +831,168 @@ def test_has_structural_classifies():
     assert tc._has_structural(ParsedFilter(min_years_experience=5))
     assert not tc._has_structural(ParsedFilter(soft_criteria=["western company"]))
     assert not tc._has_structural(ParsedFilter(keywords=["fintech"]))
+
+
+# --------------------------------------------------------------------------
+# structured salary field — read the number captured at sync, skip the LLM
+# --------------------------------------------------------------------------
+
+
+def test_currency_cap_extracts_value_or_none():
+    assert tc._currency_cap("salary <= 30000 AED") == 30000.0
+    assert tc._currency_cap("salary expectation less than 30000 AED") == 30000.0
+    assert tc._currency_cap("compensation under 40k") == 40000.0
+    assert tc._currency_cap("Western company") is None
+    # a MINIMUM (">= / at least") is not a cap — handled by the LLM path
+    assert tc._currency_cap("at least 5 years experience") is None
+    assert tc._currency_cap("salary at least 30000 AED") is None
+
+
+def test_structured_salary_reads_app_field():
+    app = SimpleNamespace(salary_expectation_aed=18000.0, salary_expectation_raw="A: 18000")
+    assert tc._structured_salary(app) == {"aed": 18000.0, "raw": "A: 18000"}
+    # absent / non-positive / unparseable → None so grounding falls back to LLM
+    assert tc._structured_salary(SimpleNamespace(salary_expectation_aed=None)) is None
+    assert tc._structured_salary(SimpleNamespace(salary_expectation_aed=0)) is None
+    assert tc._structured_salary(SimpleNamespace()) is None
+
+
+def test_structured_salary_verdict_mirrors_cap_arithmetic():
+    crit = "salary <= 30000 AED"
+    assert tc._structured_salary_verdict(crit, 30000.0, 18000.0, "A: 18000").status == "met"
+    assert tc._structured_salary_verdict(crit, 30000.0, 35000.0, None).status == "partially_met"
+    assert tc._structured_salary_verdict(crit, 30000.0, 45000.0, None).status == "not_met"
+    v = tc._structured_salary_verdict(crit, 30000.0, 18000.0, "A: 18000")
+    assert v.grounded is True
+    assert v.source == "workable_field"
+    assert v.evidence[0].quote == "A: 18000"
+    # no raw answer → a formatted AED figure stands in as the evidence quote
+    assert "AED" in tc._structured_salary_verdict(crit, 30000.0, 18000.0, None).evidence[0].quote
+
+
+def test_ground_uses_structured_salary_and_never_calls_llm():
+    """The whole point: a salary cap criterion + a structured figure is answered
+    from data, so the citation client is never invoked."""
+
+    class _NoCallClient:
+        class _M:
+            def create(self, **kw):
+                raise AssertionError("LLM must not be called when salary is structured")
+
+        messages = _M()
+
+    out = tc._ground(
+        "some cv text", "some notes text", [],
+        criteria=["salary <= 30000 AED"],
+        client=_NoCallClient(), organization_id=1, application_id=1,
+        salary={"aed": 18000.0, "raw": "A: 18000"},
+    )
+    assert len(out) == 1
+    assert out[0].status == "met"
+    assert out[0].grounded is True
+    assert out[0].source == "workable_field"
+    assert "18000" in out[0].evidence[0].quote
+
+
+def test_ground_structured_salary_over_cap_is_not_met():
+    out = tc._ground(
+        None, None, [],
+        criteria=["salary <= 30000 AED"],
+        client=None, organization_id=1, application_id=1,
+        salary={"aed": 45000.0, "raw": "A: 45000"},
+    )
+    assert out[0].status == "not_met"
+    assert out[0].grounded is True
+
+
+def test_ground_mixes_structured_salary_and_llm_qualitative():
+    """Salary answered from the field; a co-occurring qualitative criterion still
+    hits the LLM — and the salary criterion is NOT sent to it."""
+
+    class _FakeClient:
+        class _M:
+            def create(self, **kw):
+                block = [b for b in kw["messages"][0]["content"] if b.get("type") == "text"][-1]["text"]
+                assert "banking" in block.lower()
+                assert "salary" not in block.lower()  # salary never sent to the model
+                return SimpleNamespace(content=[
+                    _text_block("[[C1]] MET — banking"),
+                    _text_block("b", citations=[_cite("JPMorgan Chase", document_index=0)]),
+                ])
+
+        messages = _M()
+
+    out = tc._ground(
+        "JPMorgan banking platform", None, [],
+        criteria=["salary <= 30000 AED", "banking domain"],
+        client=_FakeClient(), organization_id=1, application_id=1,
+        salary={"aed": 18000.0, "raw": "A: 18000"},
+    )
+    by = {v.criterion: v for v in out}
+    assert by["salary <= 30000 AED"].status == "met"
+    assert by["salary <= 30000 AED"].source == "workable_field"
+    assert by["banking domain"].status == "met"
+    assert by["banking domain"].source == "cv"
+
+
+def test_ground_without_structured_salary_falls_back_to_llm():
+    """No structured figure → the criterion is grounded by the citation call,
+    exactly as before (the fallback path)."""
+    captured = {}
+
+    class _FakeClient:
+        class _M:
+            def create(self, **kw):
+                captured["called"] = True
+                return SimpleNamespace(content=[
+                    _text_block("[[C1]] MET — under cap"),
+                    _text_block("x", citations=[_cite("A: 18000", document_index=0)]),
+                ])
+
+        messages = _M()
+
+    out = tc._ground(
+        None, "A: 18000", [],
+        criteria=["salary <= 30000 AED"],
+        client=_FakeClient(), organization_id=1, application_id=1,
+        salary=None,
+    )
+    assert captured.get("called") is True
+    assert out[0].status == "met"
+    assert out[0].source == "notes"  # grounded from the notes citation, not the field
+
+
+def test_find_top_candidates_uses_structured_salary_no_grounding_call(monkeypatch):
+    """End-to-end: 'top N with salary <= 30000 AED' hides the over-cap candidate
+    using the structured field, and the grounding client is never called."""
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(runner_mod, "run_search", lambda **kw: SearchOutput(
+        application_ids=[1, 2, 3],
+        parsed_filter=ParsedFilter(soft_criteria=["salary <= 30000 AED"]),
+        warnings=[]))
+    monkeypatch.setattr(tc, "_notes_text", lambda app: None)
+
+    a1 = _fake_app(1, taali=80, name="A"); a1.salary_expectation_aed = 18000.0; a1.salary_expectation_raw = "A: 18000"
+    a2 = _fake_app(2, taali=95, name="B"); a2.salary_expectation_aed = 45000.0; a2.salary_expectation_raw = "A: 45000"
+    a3 = _fake_app(3, taali=70, name="C"); a3.salary_expectation_aed = 27000.0; a3.salary_expectation_raw = "A: 27000"
+    db = MagicMock()
+    monkeypatch.setattr(tc, "_pool_count", lambda bq: 3)
+    monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: [a1, a2, a3])
+
+    class _NoCallClient:
+        class _M:
+            def create(self, **kw):
+                raise AssertionError("structured salary must not hit the grounding LLM")
+
+        messages = _M()
+
+    out = tc.find_top_candidates(
+        db=db, organization_id=1, query="top with salary <= 30000 AED",
+        base_query=MagicMock(), limit=5, evidence_client=_NoCallClient(),
+    )
+    ids = [c["application_id"] for c in out["candidates"]]
+    assert 2 not in ids                 # B (45k > 30k cap) hidden
+    assert ids == [1, 3]                # A (met, 80) then C (met, 70)
+    assert out["excluded"]["not_met_total"] == 1
+    assert out["candidates"][0]["criteria"][0]["source"] == "workable_field"

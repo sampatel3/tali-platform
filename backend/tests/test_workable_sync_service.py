@@ -3,6 +3,7 @@
 import pytest
 
 from app.components.integrations.workable.sync_service import (
+    _apply_salary_expectation,
     _format_job_spec_from_api,
     _strip_html,
     _is_terminal_candidate,
@@ -16,6 +17,58 @@ from app.components.integrations.workable.sync_service import (
     WorkableSyncService,
 )
 from app.components.integrations.workable.service import WorkableService
+from app.models.candidate_application import CandidateApplication
+
+
+class TestApplySalaryExpectation:
+    """Salary expectation parsed from the questionnaire answers onto the app at
+    sync, so the grounded search reads a number instead of LLM-extracting it."""
+
+    def _answer(self, question: str, body: str) -> dict:
+        return {"question": {"body": question}, "answer": {"body": body}}
+
+    def test_populates_columns_from_salary_answer(self):
+        app = CandidateApplication()
+        _apply_salary_expectation(
+            app,
+            {"answers": [self._answer("What is your expected salary?", "AED 25,000")]},
+        )
+        assert app.salary_expectation_amount == 25000.0
+        assert app.salary_expectation_currency == "AED"
+        assert app.salary_expectation_aed == 25000.0
+        assert app.salary_expectation_raw == "AED 25,000"
+
+    def test_normalises_foreign_currency_to_aed(self):
+        app = CandidateApplication()
+        _apply_salary_expectation(
+            app,
+            {"answers": [self._answer("Expected monthly salary", "5000 USD")]},
+        )
+        assert app.salary_expectation_currency == "USD"
+        assert app.salary_expectation_aed == pytest.approx(5000 * 3.6725, rel=1e-6)
+
+    def test_clears_columns_when_answers_present_but_no_salary(self):
+        # A stale value must not linger if this application's questionnaire has
+        # no salary question.
+        app = CandidateApplication(
+            salary_expectation_amount=99.0,
+            salary_expectation_currency="AED",
+            salary_expectation_aed=99.0,
+            salary_expectation_raw="old",
+        )
+        _apply_salary_expectation(
+            app, {"answers": [self._answer("Notice period?", "30 days")]}
+        )
+        assert app.salary_expectation_amount is None
+        assert app.salary_expectation_aed is None
+        assert app.salary_expectation_raw is None
+
+    def test_leaves_columns_untouched_when_no_answers(self):
+        # A metadata-only payload carries no answers — don't clobber a prior parse.
+        app = CandidateApplication(salary_expectation_aed=20000.0, salary_expectation_raw="A: 20000")
+        _apply_salary_expectation(app, {"stage": "applied"})
+        assert app.salary_expectation_aed == 20000.0
+        assert app.salary_expectation_raw == "A: 20000"
 
 
 class TestStripHtml:

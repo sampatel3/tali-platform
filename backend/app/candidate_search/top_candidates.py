@@ -14,10 +14,11 @@ domain experience" request, made explicit and inspectable end to end:
    THEN take the shortlist. (The old NL path truncated in DB order before
    any ranking, so "top N" wasn't actually top.)
 4. **Ground the shortlist** — for each qualitative criterion attach a
-   verdict backed by *verbatim CV evidence*: reuse the stored
-   requirement-assessment quote when the criterion is already a role
-   requirement (zero extra LLM cost), else extract a fresh citation from
-   the CV. Only the shortlist pays for grounding.
+   verdict backed by *verbatim CV evidence*: a salary/currency cap is read
+   from the structured ``salary_expectation_aed`` captured at Workable sync
+   (no LLM call); else reuse the stored requirement-assessment quote when the
+   criterion is already a role requirement (zero extra LLM cost); else extract
+   a fresh citation from the CV. Only the shortlist pays for grounding.
 5. **Assemble a cited answer** — ranked candidates, each criterion carrying
    its status + verbatim quote + provenance, plus the spec echo, match
    count, and warnings.
@@ -135,24 +136,47 @@ def _money_in(text: str) -> list[float]:
     return out
 
 
+def _currency_cap(criterion: str) -> float | None:
+    """The numeric CAP of a salary/currency cap criterion, else ``None``.
+
+    A criterion is a currency cap when it pairs a cap operator ("<= / under / at
+    most / …") with a currency/salary keyword and a number — e.g. "salary <=
+    30000 AED". Returns the cap value (the max number, so "30,000" wins over a
+    stray "5"). Shared by the LLM-citation recompute below and the structured
+    salary-field path so both read the cap identically."""
+    crit = criterion or ""
+    if not _CAP_CRIT_RE.search(crit):
+        return None
+    if not (
+        _CURRENCY_RE.search(crit)
+        or re.search(r"salar|compensation|\bpay\b|wage|package", crit, re.I)
+    ):
+        return None
+    caps = _money_in(crit)
+    if not caps:
+        return None
+    return max(caps)
+
+
+def _cap_status(stated: float, cap: float) -> str:
+    """met / partially_met / not_met for a stated value against a cap, using the
+    grounding prompt's 25% partial band (so structured + LLM paths agree)."""
+    if stated <= cap:
+        return "met"
+    if stated <= _CAP_TOLERANCE * cap:
+        return "partially_met"
+    return "not_met"
+
+
 def _recompute_currency_cap_verdict(v: CriterionVerdict) -> None:
     """Recompute a salary/currency CAP verdict from the CITED value vs the cap,
     overriding the grounding model's verdict word. No-op unless the criterion is
     a currency/salary cap with a number AND the evidence yields exactly one
     value in a sane band around the cap — otherwise the model's verdict stands
     (so a wrong/year-only citation or an ambiguous range can't flip it)."""
-    crit = v.criterion or ""
-    if not _CAP_CRIT_RE.search(crit):
+    cap = _currency_cap(v.criterion or "")
+    if cap is None:
         return
-    if not (
-        _CURRENCY_RE.search(crit)
-        or re.search(r"salar|compensation|\bpay\b|wage|package", crit, re.I)
-    ):
-        return
-    caps = _money_in(crit)
-    if not caps:
-        return
-    cap = max(caps)
     in_band = [
         n
         for e in v.evidence
@@ -165,13 +189,43 @@ def _recompute_currency_cap_verdict(v: CriterionVerdict) -> None:
     }
     if len(distinct) != 1:
         return
-    stated = next(iter(distinct))
-    if stated <= cap:
-        v.status = "met"
-    elif stated <= _CAP_TOLERANCE * cap:
-        v.status = "partially_met"
-    else:
-        v.status = "not_met"
+    v.status = _cap_status(next(iter(distinct)), cap)
+
+
+def _structured_salary(app: CandidateApplication) -> dict[str, Any] | None:
+    """The salary expectation captured as structured data at Workable sync
+    (``salary_expectation_aed`` normalised to AED + the raw answer for the
+    evidence quote), or ``None`` when absent so grounding falls back to the LLM
+    extraction path. Read off the already-loaded ORM row — no extra query."""
+    aed = getattr(app, "salary_expectation_aed", None)
+    if aed is None:
+        return None
+    try:
+        aed = float(aed)
+    except (TypeError, ValueError):
+        return None
+    if aed <= 0:
+        return None
+    return {"aed": aed, "raw": getattr(app, "salary_expectation_raw", None)}
+
+
+def _structured_salary_verdict(
+    criterion: str, cap: float, salary_aed: float, raw: str | None
+) -> CriterionVerdict:
+    """A grounded salary-cap verdict computed directly from the structured AED
+    figure — no LLM call. The arithmetic mirrors ``_recompute_currency_cap_verdict``
+    so the verdict matches the prior LLM-extraction behaviour, and the raw answer
+    is carried as the evidence quote. ``source='workable_field'`` marks it so the
+    recompute pass leaves it alone (it's already correct)."""
+    quote = (raw or "").strip() or f"{salary_aed:g} AED"
+    return CriterionVerdict(
+        criterion=criterion,
+        status=_cap_status(salary_aed, cap),
+        grounded=True,
+        source="workable_field",
+        evidence=[Evidence(quote=quote, source="workable_field")],
+        note="Salary expectation captured as structured data at Workable sync.",
+    )
 
 
 def _is_constraint(criterion: str) -> bool:
@@ -333,8 +387,15 @@ def _collect_evidence(app: CandidateApplication):
     """Pull the candidate's evidence off the (already-loaded) ORM objects.
 
     Runs in the MAIN thread before grounding is fanned out, so the parallel
-    grounding workers never touch the request's DB session."""
-    return (_cv_text(app), _notes_text(app), _stored_assessments(app))
+    grounding workers never touch the request's DB session. The structured
+    salary expectation (captured at Workable sync) is read here too, so a salary
+    cap criterion is answered from data without an LLM call."""
+    return (
+        _cv_text(app),
+        _notes_text(app),
+        _stored_assessments(app),
+        _structured_salary(app),
+    )
 
 
 def _ground(
@@ -346,15 +407,23 @@ def _ground(
     client,
     organization_id: int,
     application_id: int,
+    salary: dict[str, Any] | None = None,
 ) -> list[CriterionVerdict]:
-    """Pure (no DB / no ORM access) — safe to run in a worker thread. Reuses a
-    stored requirement assessment where it cleanly covers a criterion, else
-    runs one fresh CV+notes citation call for the remainder."""
+    """Pure (no DB / no ORM access) — safe to run in a worker thread. For a
+    salary/currency cap criterion, reads the structured salary figure captured
+    at sync (no LLM call); else reuses a stored requirement assessment where it
+    cleanly covers a criterion, else runs one fresh CV+notes citation call for
+    the remainder."""
     if not criteria:
         return []
     verdicts: list[CriterionVerdict | None] = []
     remaining: list[str] = []
     for c in criteria:
+        # Salary cap + a structured figure → answer from data, skip the LLM.
+        cap = _currency_cap(c)
+        if salary is not None and cap is not None:
+            verdicts.append(_structured_salary_verdict(c, cap, salary["aed"], salary.get("raw")))
+            continue
         reused = _reuse_stored(c, stored)
         verdicts.append(reused)
         if reused is None:
@@ -385,6 +454,10 @@ def _ground(
 
     out = [v for v in verdicts if v is not None]
     for v in out:
+        # A structured salary verdict is already computed from the AED figure;
+        # only the LLM-citation verdicts need the cited-figure recompute.
+        if v.source == "workable_field":
+            continue
         # Salary/currency caps: trust the cited figure, not the model's verdict word.
         _recompute_currency_cap_verdict(v)
     return out
@@ -409,7 +482,7 @@ def _ground_window(
     jobs = [(app, *_collect_evidence(app)) for app in apps]
 
     def _one(job):
-        app, cv, notes, stored = job
+        app, cv, notes, stored, salary = job
         try:
             return _ground(
                 cv, notes, stored,
@@ -417,6 +490,7 @@ def _ground_window(
                 client=client,
                 organization_id=organization_id,
                 application_id=int(app.id),
+                salary=salary,
             )
         except Exception as exc:  # noqa: BLE001 — degrade this candidate, not the query
             logger.warning("ground app=%s failed: %s", getattr(app, "id", "?"), exc)
