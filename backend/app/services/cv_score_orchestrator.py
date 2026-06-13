@@ -455,6 +455,26 @@ def _emit_cv_scored_event(
         )
 
 
+def _holistic_enabled_for(application: CandidateApplication) -> bool:
+    """True when the holistic Sonnet engine is enabled for this app's org.
+
+    Gated by two settings so deploy is zero-behaviour-change until both are
+    set: ``HOLISTIC_SCORING_ENABLED`` (master switch) and
+    ``HOLISTIC_SCORING_ORG_IDS`` (comma-separated org allowlist, or "*").
+    """
+    if not getattr(settings, "HOLISTIC_SCORING_ENABLED", False):
+        return False
+    allow = (getattr(settings, "HOLISTIC_SCORING_ORG_IDS", "") or "").strip()
+    if not allow:
+        return False
+    if allow == "*":
+        return True
+    org_id = getattr(application, "organization_id", None)
+    if org_id is None:
+        return False
+    return str(int(org_id)) in {x.strip() for x in allow.split(",") if x.strip()}
+
+
 def _execute_scoring_v3(
     db: Session,
     *,
@@ -677,14 +697,29 @@ def _execute_scoring_v3(
             "format_workable_context failed for application=%s; scoring without it",
             getattr(application, "id", None),
         )
-    output = run_cv_match(
-        cv_text,
-        job_spec_text,
-        requirements,
-        client=org_client,
-        metering_context=score_metering_context,
-        workable_context=workable_context or None,
-    )
+    if _holistic_enabled_for(application):
+        # Holistic Sonnet engine: single calibrated call whose ``overall``
+        # becomes role_fit_score directly. The pre-screen gate above already
+        # filtered this candidate in, so this is the "spend more on the
+        # survivors" tier of the two-tier strategy.
+        from ..cv_matching.holistic import run_holistic_match
+
+        output = run_holistic_match(
+            cv_text,
+            job_spec_text,
+            client=org_client,
+            metering_context=score_metering_context,
+            workable_context=workable_context or None,
+        )
+    else:
+        output = run_cv_match(
+            cv_text,
+            job_spec_text,
+            requirements,
+            client=org_client,
+            metering_context=score_metering_context,
+            workable_context=workable_context or None,
+        )
     job.cache_hit = "hit" if getattr(output, "cache_hit", False) else "miss"
     # CACHE HITS ONLY: a cache hit makes no Anthropic call, so the wrapper
     # never runs and never records. Record it here so cached scores still
