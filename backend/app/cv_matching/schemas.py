@@ -482,6 +482,10 @@ class CVMatchOutput(BaseModel):
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
     prompt_version: str
+    # Semantic scoring-engine version, a.b.c (a=major engine, b=feature,
+    # c=fix). Empty on legacy engines; resolve_engine_version() maps those
+    # from prompt_version. Surfaced under the score everywhere as provenance.
+    engine_version: str = ""
     skills_match_score: float = Field(default=0.0, ge=0, le=100)
     experience_relevance_score: float = Field(default=0.0, ge=0, le=100)
     dimension_scores: DimensionScores | None = None

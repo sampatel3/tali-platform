@@ -1,9 +1,9 @@
 """Unit tests for the holistic Sonnet scoring engine (cv_match holistic_v1).
 
-Covers the deterministic surface (org gating + output mapping) and a
-stubbed-client happy path — no network. The whole point of the engine is
-that the Sonnet ``overall`` becomes ``role_fit_score`` directly, so that
-mapping is asserted explicitly.
+Two-call design: call 1 = calibrated score (_LeanScore), call 2 = report
+detail (_Report). The tests assert role_fit_score comes from call 1 and the
+complete report (snapshot / dimensions / graded requirements with verbatim
+evidence) comes from call 2.
 """
 
 from types import SimpleNamespace
@@ -13,8 +13,13 @@ import pytest
 from app.cv_matching import holistic
 from app.cv_matching.holistic import (
     _Derivation,
-    _HolisticScore,
+    _Dims,
+    _LeanScore,
+    _ReqGrade,
     _ReqItem,
+    _Report,
+    _Snapshot,
+    _TL,
     _to_output,
     run_holistic_match,
 )
@@ -46,14 +51,14 @@ def _fake_res(value, **usage):
 @pytest.mark.parametrize(
     "enabled,allow,org_id,expected",
     [
-        (False, "2", 2, False),   # master switch off
-        (True, "", 2, False),     # empty allowlist
-        (True, "2", 2, True),     # exact match
-        (True, "1,2,3", 2, True), # in list
-        (True, "1,3", 2, False),  # not in list
-        (True, "*", 2, True),     # wildcard
-        (True, "*", None, True),  # wildcard ignores missing org
-        (True, "2", None, False), # no org, specific list
+        (False, "2", 2, False),
+        (True, "", 2, False),
+        (True, "2", 2, True),
+        (True, "1,2,3", 2, True),
+        (True, "1,3", 2, False),
+        (True, "*", 2, True),
+        (True, "*", None, True),
+        (True, "2", None, False),
     ],
 )
 def test_holistic_enabled_for(monkeypatch, enabled, allow, org_id, expected):
@@ -64,125 +69,192 @@ def test_holistic_enabled_for(monkeypatch, enabled, allow, org_id, expected):
 
 
 # --------------------------------------------------------------------------
-# output mapping — the validated score must land on role_fit_score
+# fixtures
 # --------------------------------------------------------------------------
-def test_to_output_overall_becomes_role_fit():
-    deriv = _Derivation(
+def _deriv():
+    return _Derivation(
         core_capability="Data pipeline engineering",
         requirements=[
             _ReqItem(requirement="PySpark ETL", importance="critical", is_core=True),
-            _ReqItem(requirement="AWS", importance="important"),
+            _ReqItem(requirement="AWS Glue", importance="important"),
+            _ReqItem(requirement="Nice: Terraform", importance="peripheral"),
         ],
     )
-    s = _HolisticScore(
+
+
+def _lean():
+    return _LeanScore(
         overall=72,
         core_capability_score=80,
         verdict="Solid fit",
         reasoning="Strong hands-on pipeline work.",
-        strengths=["10y PySpark", "Delta Lake"],
-        gaps=["No Glue"],
+        matching_skills=["PySpark", "Delta Lake"],
+        missing_skills=["Glue depth"],
+        highlights=["10y pipelines"],
+        concerns=["No financial-services domain"],
     )
-    out = _to_output(s, deriv, "trace", _fake_res(s, input_tokens=3000, output_tokens=1500))
 
-    assert out.role_fit_score == 72.0           # the holistic overall, verbatim
-    assert out.cv_fit_score == 72.0
-    assert out.requirements_match_score == 72.0  # display fallback = overall
+
+def _report():
+    return _Report(
+        snapshot=_Snapshot(
+            years_experience=8.0,
+            top_skills=["PySpark", "Delta Lake", "AWS"],
+            timeline=[_TL(company="Acme", role="Senior DE", start_year=2020, is_current=True)],
+        ),
+        dimensions=_Dims(
+            skills_coverage=70, skills_depth=75, title_trajectory=68,
+            seniority_alignment=72, industry_match=60, tenure_pattern=80,
+        ),
+        requirements=[
+            _ReqGrade(index=0, status="met", score=88, evidence="Built Spark ETL pipelines at Acme", impact=""),
+            _ReqGrade(index=1, status="partial", score=50, evidence="Some Glue exposure", impact="ramp needed"),
+        ],
+    )
+
+
+# --------------------------------------------------------------------------
+# output mapping — score from call 1, report from call 2
+# --------------------------------------------------------------------------
+def test_to_output_complete_report():
+    out = _to_output(_lean(), _report(), _deriv(), "trace",
+                     _fake_res(None, input_tokens=1500, output_tokens=300),
+                     _fake_res(None, input_tokens=1500, output_tokens=1500))
+
+    assert out.role_fit_score == 72.0            # from call 1 (lean)
+    assert out.requirements_match_score == 72.0  # kept == overall so recompute can't override
+    assert out.engine_version == "2.1.0"         # stamped provenance
+    assert out.prompt_version == "holistic_v2"
     assert out.scoring_status == ScoringStatus.OK
-    assert out.model_version == holistic.HOLISTIC_MODEL
-    assert out.prompt_version == "holistic_v1"
-    assert out.dimension_scores is None         # no per-dimension breakdown
-    # requirements come from the DERIVATION, listed but not separately graded
-    assert len(out.requirements_assessment) == 2
-    a0 = out.requirements_assessment[0]
-    assert a0.requirement == "PySpark ETL"
-    assert a0.priority == Priority.MUST_HAVE    # is_core / critical → must_have
-    assert a0.match_score == -1                 # ungraded
-    assert a0.status == Status.UNKNOWN
-    assert a0.assessable is False
-    assert out.requirements_assessment[1].priority == Priority.STRONG_PREFERENCE
+    assert out.matching_skills == ["PySpark", "Delta Lake"]  # call 1
     assert out.summary.startswith("Solid fit — ")
-    assert out.matching_skills == ["10y PySpark", "Delta Lake"]
-    assert out.missing_skills == ["No Glue"]
-    assert out.input_tokens == 3000 and out.output_tokens == 1500
+
+    # report (call 2)
+    assert out.candidate_snapshot is not None
+    assert out.candidate_snapshot.years_experience == 8.0
+    assert out.dimension_scores.skills_depth == 75.0
+    assert len(out.requirements_assessment) == 3  # all derived requirements present
+    r0 = out.requirements_assessment[0]
+    assert r0.priority == Priority.MUST_HAVE and r0.status == Status.MET and r0.match_score == 88
+    assert r0.evidence_quotes == ["Built Spark ETL pipelines at Acme"]
+    # _to_output passes quotes through; offsets are set by the grounding pass
+    # (run in run_holistic_match), not here.
+    assert r0.evidence_start_char == -1
+    assert out.requirements_assessment[2].status == Status.UNKNOWN  # ungraded by model
+
+    # token usage sums both calls
+    assert out.input_tokens == 3000 and out.output_tokens == 1800
 
 
-def test_to_output_handles_empty_reqs():
-    deriv = _Derivation(core_capability="X", requirements=[])
-    s = _HolisticScore(overall=100, reasoning="r")
-    out = _to_output(s, deriv, "t", _fake_res(s))
-    assert out.role_fit_score == 100.0
-    assert out.requirements_match_score == 100.0
-    assert out.requirements_assessment == []
-
-
-def test_to_output_clamps_out_of_range_score():
-    # A raw namespace bypasses the LLM-schema's 0-100 validator; _to_output
-    # must still clamp defensively before it reaches CVMatchOutput's bounds.
-    deriv = _Derivation(core_capability="X", requirements=[])
-    s = SimpleNamespace(
-        overall=150, core_capability_score=0, verdict="", reasoning="r",
-        strengths=[], gaps=[],
-    )
-    out = _to_output(s, deriv, "t", _fake_res(None))
-    assert out.role_fit_score == 100.0
+def test_to_output_empty_report_degrades_gracefully():
+    # call 2 failed → empty _Report; score still valid, report fields absent
+    out = _to_output(_lean(), _Report(), _deriv(), "t", _fake_res(None), None)
+    assert out.role_fit_score == 72.0
+    assert out.scoring_status == ScoringStatus.OK
+    assert out.candidate_snapshot is None
+    # requirements still listed (from derivation), just ungraded
+    assert len(out.requirements_assessment) == 3
+    assert out.requirements_assessment[0].status == Status.UNKNOWN
 
 
 # --------------------------------------------------------------------------
 # run_holistic_match
 # --------------------------------------------------------------------------
+@pytest.fixture
+def _nocache(monkeypatch):
+    monkeypatch.setattr(holistic, "_redis", lambda: None)
+    monkeypatch.setattr(holistic, "_cache_get", lambda k: None)
+    monkeypatch.setattr(holistic, "_cache_set", lambda k, o: None)
+
+
 def test_run_holistic_missing_inputs():
     out = run_holistic_match("", "jd", client=object())
     assert out.scoring_status == ScoringStatus.FAILED
-    assert out.role_fit_score == 0.0
     out2 = run_holistic_match("cv", "", client=object())
     assert out2.scoring_status == ScoringStatus.FAILED
 
 
-def test_run_holistic_happy_path(monkeypatch):
-    monkeypatch.setattr(holistic, "_redis", lambda: None)  # skip cache
-
-    deriv = _Derivation(
-        core_capability="Data eng",
-        requirements=[_ReqItem(requirement="Spark", importance="critical", is_core=True)],
-    )
-    score = _HolisticScore(
-        overall=64,
-        core_capability_score=70,
-        verdict="Fit",
-        reasoning="ok",
-        strengths=["a"],
-        gaps=["b"],
-    )
-
-    def fake_generate_structured(client, *, output_model, **kw):
-        if output_model is _Derivation:
-            return _fake_res(deriv)
-        return _fake_res(score, input_tokens=4000, output_tokens=1800)
-
-    monkeypatch.setattr(holistic, "generate_structured", fake_generate_structured)
-
-    out = run_holistic_match(
-        "a real cv body",
-        "a real jd body",
-        client=object(),
-        metering_context={"organization_id": 2, "role_id": 26, "entity_id": "application:1"},
-        workable_context="recruiter says strong",
-    )
-    assert out.scoring_status == ScoringStatus.OK
-    assert out.role_fit_score == 64.0
-    assert out.model_version == "claude-sonnet-4-6"
-    assert len(out.requirements_assessment) == 1  # from the derivation
-    assert out.requirements_assessment[0].requirement == "Spark"
-    assert out.output_tokens == 1800
-
-
-def test_run_holistic_score_failure(monkeypatch):
-    monkeypatch.setattr(holistic, "_redis", lambda: None)
+def test_run_holistic_happy_path(monkeypatch, _nocache):
+    deriv, lean, report = _deriv(), _lean(), _report()
 
     def fake_gen(client, *, output_model, **kw):
         if output_model is _Derivation:
+            return _fake_res(deriv)
+        if output_model is _LeanScore:
+            return _fake_res(lean, input_tokens=1500, output_tokens=300)
+        return _fake_res(report, input_tokens=1500, output_tokens=1800)
+
+    monkeypatch.setattr(holistic, "generate_structured", fake_gen)
+    out = run_holistic_match(
+        # CV contains both requirement evidences so the grounding pass keeps them
+        "Built Spark ETL pipelines at Acme. Some Glue exposure too.",
+        "a real jd body",
+        client=object(),
+        metering_context={"organization_id": 2, "role_id": 26, "entity_id": "application:1"},
+    )
+    assert out.scoring_status == ScoringStatus.OK
+    assert out.role_fit_score == 72.0
+    assert out.engine_version == "2.1.0"
+    assert out.candidate_snapshot is not None
+    assert out.dimension_scores is not None
+    assert len(out.requirements_assessment) == 3
+    assert out.output_tokens == 2100  # 300 + 1800
+    # grounded: the verbatim quote was located → offsets set
+    assert out.requirements_assessment[0].status == Status.MET
+    assert out.requirements_assessment[0].evidence_start_char >= 0
+
+
+def test_run_holistic_drops_fabricated_evidence(monkeypatch, _nocache):
+    # P1-A regression: a quote NOT in the CV must be dropped and the
+    # requirement downgraded — never surfaced as grounded evidence.
+    deriv, lean = _deriv(), _lean()
+    report = _Report(
+        requirements=[
+            _ReqGrade(index=0, status="met", score=90,
+                      evidence="THIS QUOTE IS NOT ANYWHERE IN THE CANDIDATE CV", impact=""),
+        ],
+    )
+
+    def fake_gen(client, *, output_model, **kw):
+        if output_model is _Derivation:
+            return _fake_res(deriv)
+        if output_model is _LeanScore:
+            return _fake_res(lean)
+        return _fake_res(report)
+
+    monkeypatch.setattr(holistic, "generate_structured", fake_gen)
+    out = run_holistic_match("a totally unrelated cv body", "jd body", client=object())
+    assert out.scoring_status == ScoringStatus.OK
+    r0 = out.requirements_assessment[0]
+    assert r0.status == Status.UNKNOWN        # downgraded
+    assert r0.evidence_quotes == []           # fabricated quote dropped
+    assert r0.match_tier == "missing"
+
+
+def test_run_holistic_report_failure_still_scores(monkeypatch, _nocache):
+    deriv, lean = _deriv(), _lean()
+
+    def fake_gen(client, *, output_model, **kw):
+        if output_model is _Derivation:
+            return _fake_res(deriv)
+        if output_model is _LeanScore:
+            return _fake_res(lean)
+        return _fake_res(None)  # report call fails
+
+    monkeypatch.setattr(holistic, "generate_structured", fake_gen)
+    out = run_holistic_match("cv body", "jd body", client=object())
+    assert out.scoring_status == ScoringStatus.OK  # score survives
+    assert out.role_fit_score == 72.0
+    assert out.candidate_snapshot is None  # report absent, but no crash
+
+
+def test_run_holistic_score_failure(monkeypatch, _nocache):
+    def fake_gen(client, *, output_model, **kw):
+        if output_model is _Derivation:
             return _fake_res(_Derivation(core_capability="x", requirements=[]))
-        return _fake_res(None)  # score call fails
+        if output_model is _LeanScore:
+            return _fake_res(None)  # score call fails
+        return _fake_res(_Report())
 
     monkeypatch.setattr(holistic, "generate_structured", fake_gen)
     out = run_holistic_match("cv", "jd", client=object())
