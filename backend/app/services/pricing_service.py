@@ -149,6 +149,7 @@ class Feature(str, Enum):
     INTERVIEW_TECH = "interview_tech"      # services/interview_tech_prompt
     FIT_MATCHING = "fit_matching"          # services/fit_matching_service
     GRAPH_SYNC = "graph_sync"              # candidate_graph (semantic search indexing)
+    INTENT_PARSER = "intent_parser"        # sub_agents/intent_parser (recruiter intent-chip parse)
     OTHER = "other"
 
 
@@ -248,6 +249,11 @@ _FEATURE_PRICING: dict[Feature, FeaturePricing] = {
     ),
     Feature.SEARCH_PARSE: FeaturePricing(
         feature=Feature.SEARCH_PARSE,
+        markup_multiplier=Decimal("1.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.INTENT_PARSER: FeaturePricing(
+        feature=Feature.INTENT_PARSER,
         markup_multiplier=Decimal("1.0"),
         cache_hit_multiplier=Decimal("0.10"),
     ),
@@ -455,6 +461,7 @@ def estimate_reservation(feature: Feature | str) -> int:
         Feature.CV_PARSE: 2_000,
         Feature.CV_RERANK: 5_000,
         Feature.SEARCH_PARSE: 500,
+        Feature.INTENT_PARSER: 3_000,  # Sonnet structured parse (~2.7k-tok prompt + small output)
         Feature.ARCHETYPE_SYNTHESIS: 8_000,
         Feature.PAIRWISE_JUDGE: 4_000,
         Feature.INTERVIEW_FOCUS: 6_000,

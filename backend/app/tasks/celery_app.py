@@ -147,13 +147,17 @@ celery_app.conf.update(
             "schedule": crontab(hour=4, minute=0, day_of_week=0),
             "kwargs": {"days": 14},
         },
-        # Phase 7 cohort planner tick: every 30 min, fan a tick to each
+        # Phase 7 cohort planner tick: every 60 min, fan a tick to each
         # agent-enabled, non-paused role. The orchestrator surveys
         # cohort state and acts on what it finds. Replaces the old
-        # per-application event trigger.
-        "agent-cohort-tick-every-30-minutes": {
+        # per-application event trigger. Cadence is 60 min (was 30) — the
+        # standing-backlog re-examination is the only thing this proactive
+        # sweep does; genuinely new candidates still fire an event-driven
+        # cycle (agent_react_to_event, 60s debounce), so halving this only
+        # cuts redundant re-scans of an unchanged cohort (LLM-cost win).
+        "agent-cohort-tick-every-60-minutes": {
             "task": "app.tasks.agent_tasks.agent_cohort_tick_sweep",
-            "schedule": 1800.0,
+            "schedule": 3600.0,
         },
         # Deterministic, free pre-screen reject catch-up. Unlike the cohort
         # tick above (which skips budget-paused roles), this culls already

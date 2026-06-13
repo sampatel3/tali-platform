@@ -60,8 +60,6 @@ from ..models.role_criterion import RoleCriterion
 from ..platform.config import settings
 from ..platform.database import SessionLocal
 from ..services.claude_client_resolver import get_client_for_org
-from ..services.pricing_service import Feature
-from ..services.usage_metering_service import record_event
 from .base import SubAgent, SubAgentRequest, SubAgentResult
 from .registry import register_sub_agent
 
@@ -350,29 +348,12 @@ class IntentParserSubAgent:
                 error=f"claude_call_failed: {exc}",
             )
 
-        usage = getattr(response, "usage", None)
-        in_tok = int(getattr(usage, "input_tokens", 0) or 0)
-        out_tok = int(getattr(usage, "output_tokens", 0) or 0)
-
-        # Record usage event so the call is billed/attributed.
-        try:
-            record_event(
-                db,
-                organization_id=int(role.organization_id),
-                feature=Feature.OTHER,
-                model=model_version,
-                input_tokens=in_tok,
-                output_tokens=out_tok,
-                role_id=int(role.id),
-                metadata={
-                    **(req.metering_context or {}),
-                    "sub_agent": "intent_parser",
-                    "prompt_version": INTENT_PROMPT_VERSION,
-                },
-            )
-        except Exception:  # pragma: no cover — never let metering block
-            logger.exception("intent_parser metering record_event failed")
-
+        # Metering is handled by the MeteredAnthropicClient wrapper off the
+        # `metering={... "feature": "intent_parser"}` kwarg above — one UsageEvent
+        # + the call_log wire-tap per call, now correctly attributed to
+        # Feature.INTENT_PARSER. The explicit record_event that used to live here
+        # was a SECOND write (under Feature.OTHER) — a double-count that also
+        # polluted the OTHER bucket. Removed; the wrapper is the canonical path.
         try:
             raw = response.content[0].text  # type: ignore[attr-defined]
         except (AttributeError, IndexError):
