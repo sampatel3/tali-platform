@@ -205,13 +205,15 @@ def test_run_holistic_happy_path(monkeypatch, _nocache):
 
 
 def test_run_holistic_drops_fabricated_evidence(monkeypatch, _nocache):
-    # P1-A regression: a quote NOT in the CV must be dropped and the
-    # requirement downgraded — never surfaced as grounded evidence.
+    # P1-A regression: a quote NOT in the CV must be DROPPED so it can never be
+    # shown as a verbatim citation — but the model's per-requirement judgment
+    # (status/score) is KEPT (it's an independent grade, not derived from the
+    # quote). A quote-less requirement reads as ungrounded downstream.
     deriv, lean = _deriv(), _lean()
     report = _Report(
         requirements=[
             _ReqGrade(index=0, status="met", score=90,
-                      evidence="THIS QUOTE IS NOT ANYWHERE IN THE CANDIDATE CV", impact=""),
+                      evidence="THIS QUOTE IS NOT ANYWHERE IN THE CANDIDATE CV", impact="x"),
         ],
     )
 
@@ -226,9 +228,10 @@ def test_run_holistic_drops_fabricated_evidence(monkeypatch, _nocache):
     out = run_holistic_match("a totally unrelated cv body", "jd body", client=object())
     assert out.scoring_status == ScoringStatus.OK
     r0 = out.requirements_assessment[0]
-    assert r0.status == Status.UNKNOWN        # downgraded
-    assert r0.evidence_quotes == []           # fabricated quote dropped
-    assert r0.match_tier == "missing"
+    assert r0.evidence_quotes == []            # fabricated quote dropped
+    assert r0.evidence_start_char == -1        # no verbatim location
+    assert r0.status == Status.MET             # judgment kept (independent grade)
+    assert r0.match_score == 90
 
 
 def test_run_holistic_report_failure_still_scores(monkeypatch, _nocache):
