@@ -330,6 +330,17 @@ class Settings(BaseSettings):
     # Recruiters override per candidate via enqueue_score(force=True).
     ENABLE_PRE_SCREEN_GATE: bool = False
 
+    # Holistic scoring engine (cv_match holistic_v1). When enabled for an
+    # org, the full-score stage (after the pre-screen gate) runs the
+    # single-call Sonnet holistic scorer (app.cv_matching.holistic) instead
+    # of the Haiku run_cv_match main+graded pipeline. The Sonnet ``overall``
+    # becomes role_fit_score directly (no 0.40·cv_fit+0.60·req_match
+    # aggregation). Default off → zero behaviour change on deploy.
+    # HOLISTIC_SCORING_ORG_IDS is a comma-separated allowlist of org ids,
+    # or "*" for every org. Both must be set for the engine to activate.
+    HOLISTIC_SCORING_ENABLED: bool = False
+    HOLISTIC_SCORING_ORG_IDS: str = ""
+
     # Numeric threshold (0-100) for the pre-screen gate. Candidates whose
     # pre-screen score is strictly below this value are filtered out without
     # running the full v3 scoring pipeline. Tune this to filter 10-50% of
