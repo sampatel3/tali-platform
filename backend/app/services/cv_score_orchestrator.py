@@ -731,7 +731,7 @@ def _execute_scoring_v3(
             organization_id=getattr(application, "organization_id", None),
             role_id=getattr(application, "role_id", None),
             feature=Feature.SCORE,
-            model=V3_MODEL_VERSION,
+            model=getattr(output, "model_version", None) or V3_MODEL_VERSION,
             input_tokens=int(getattr(output, "input_tokens", 0) or 0),
             output_tokens=int(getattr(output, "output_tokens", 0) or 0),
             cache_read_tokens=int(getattr(output, "cache_read_tokens", 0) or 0),
@@ -756,6 +756,13 @@ def _execute_scoring_v3(
     application.cv_match_score = output.role_fit_score
     application.cv_match_details = output.model_dump(mode="json")
     application.cv_match_scored_at = datetime.now(timezone.utc)
+    # Record the engine that ACTUALLY scored this candidate on the job row +
+    # timeline event (the top-of-function defaults assume the Haiku v3 path;
+    # the holistic engine runs Sonnet / holistic_v2).
+    if getattr(output, "prompt_version", None):
+        job.prompt_version = output.prompt_version
+    if getattr(output, "model_version", None):
+        job.model = output.model_version
     job.status = SCORE_JOB_DONE
     job.finished_at = datetime.now(timezone.utc)
     # The authoritative full score just landed. If a pending pre-screen reject
@@ -797,8 +804,8 @@ def _execute_scoring_v3(
         job=job,
         score_100=output.role_fit_score,
         recommendation=getattr(output.recommendation, "value", str(output.recommendation or "")),
-        prompt_version=V3_PROMPT_VERSION,
-        model_version=V3_MODEL_VERSION,
+        prompt_version=getattr(output, "prompt_version", None) or V3_PROMPT_VERSION,
+        model_version=getattr(output, "model_version", None) or V3_MODEL_VERSION,
         trace_id=output.trace_id or f"job-{job.id}",
         cache_hit="hit" if getattr(output, "cache_hit", False) else "miss",
     )
