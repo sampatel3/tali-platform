@@ -77,7 +77,19 @@ def set_agent_state(db: Session, role: Role, *, action: str) -> dict[str, Any]:
         db.commit()
         if (not was_enabled) or was_paused:         # activation OR resume → kick a cycle
             _kick_cycle(role)
-        return {"type": "agent_state", "ok": True, "action": "activated", "agent": _state(role)}
+        result = {"type": "agent_state", "ok": True, "action": "activated", "agent": _state(role)}
+        # Heads-up on activation: if the role still carries OLD-engine scores,
+        # surface the count so the agent OFFERS a (scoped, opt-in) re-score in
+        # its reply — the recruiter steers what actually gets re-scored.
+        try:
+            from . import rescore as _rescore
+
+            stale = _rescore.stale_scores_summary(db, role)
+            if stale:
+                result["stale_scores"] = stale
+        except Exception:  # pragma: no cover — heads-up is best-effort
+            logger.exception("stale-scores heads-up failed role_id=%s", role.id)
+        return result
 
     if act in _PAUSE:
         role.agent_paused_at = _now()

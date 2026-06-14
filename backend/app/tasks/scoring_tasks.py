@@ -140,6 +140,29 @@ def score_application_job(
                         "post-pre-screen auto-reject dispatch failed application_id=%s",
                         application_id,
                     )
+            elif application.cv_match_score is not None:
+                # A real (re)score landed. The candidate's pending agent decision
+                # may now be stale — its verdict can flip under the deterministic
+                # policy (e.g. a re-score dropped a "send" below bar). Auto-correct
+                # the SAFE subset in place (reject<->send only, no hard gate, never
+                # advance) so a stale card doesn't strand; gated/advance ones keep
+                # their banner for the recruiter. Best-effort — never blocks scoring.
+                try:
+                    from ..services.bulk_decision_service import (
+                        auto_correct_stale_verdict,
+                    )
+
+                    role = getattr(application, "role", None)
+                    if role is not None and auto_correct_stale_verdict(
+                        db, app=application, role=role
+                    ):
+                        db.commit()
+                except Exception:  # pragma: no cover — never block scoring
+                    logger.exception(
+                        "post-score verdict auto-correct failed application_id=%s",
+                        application_id,
+                    )
+                    db.rollback()
             return {
                 "status": job.status,
                 "application_id": application_id,

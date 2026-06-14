@@ -484,6 +484,36 @@ def update_role(
                 "activation" if agent_activated_now else "resume",
                 role.id,
             )
+        # Toggling the agent on from Settings doesn't run a chat turn, so if the
+        # role still carries OLD-engine scores, drop an opt-in re-score offer
+        # into its agent chat — the recruiter steers the scope when they open it.
+        if agent_activated_now:
+            try:
+                from ...agent_chat import rescore as _rescore
+                from ...agent_chat import service as _chat_service
+
+                stale = _rescore.stale_scores_summary(db, role)
+                if stale:
+                    convo = _chat_service.ensure_conversation(
+                        db, organization_id=int(role.organization_id), role=role
+                    )
+                    _chat_service.post_agent_message(
+                        db,
+                        conversation=convo,
+                        text=(
+                            f"I'm on for this role. Heads-up: {stale['stale_count']} candidate"
+                            f"{'s' if stale['stale_count'] != 1 else ''} here still have old-engine "
+                            f"(v1.x) scores (current scores {stale['score_min']}–{stale['score_max']}). "
+                            f"I can re-score them to v2.1.0 — all {stale['stale_count']} for about "
+                            f"${stale['est_cost_all_usd']}, or just a subset (say the top 10, or only "
+                            "those above/below a score). Want me to, and which?"
+                        ),
+                    )
+                    db.commit()
+            except Exception:  # pragma: no cover — heads-up is best-effort
+                logger.exception(
+                    "stale-scores chat heads-up failed for role_id=%s", role.id
+                )
     # When the effective pre-screen threshold actually moved, re-align the
     # deterministic skip_assessment_reject queue so the Decision Hub, the
     # role's pending count, and the "below threshold" stat all agree with
