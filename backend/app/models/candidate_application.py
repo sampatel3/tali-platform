@@ -64,6 +64,18 @@ class CandidateApplication(Base):
     rank_score = Column(Float, nullable=True)
     last_synced_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Salary expectation parsed from the Workable questionnaire answer at sync
+    # (see workable/salary_parser.py). Captured as structured data so the
+    # grounded "top N with salary <= X" search reads a number directly instead
+    # of LLM-extracting + citing the figure from the notes on every query. NULL
+    # when no salary answer was confidently identified (older rows, or orgs
+    # whose questionnaire has no salary question) — the search then falls back
+    # to the LLM-extraction path.
+    salary_expectation_amount = Column(Float, nullable=True)  # in source currency
+    salary_expectation_currency = Column(String, nullable=True)  # ISO code (detected or assumed AED)
+    salary_expectation_aed = Column(Float, nullable=True)  # normalised to AED — the search compares this
+    salary_expectation_raw = Column(String, nullable=True)  # verbatim answer text (display / audit / evidence quote)
+
     # Candidate CV scoped to this role application
     cv_file_url = Column(String, nullable=True)
     cv_filename = Column(String, nullable=True)

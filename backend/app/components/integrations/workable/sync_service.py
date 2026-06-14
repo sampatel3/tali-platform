@@ -50,9 +50,38 @@ from ....services.spec_normalizer import normalize_spec
 from ....services.interview_support_service import build_role_interview_pack_templates
 from ....services.pre_screening_service import refresh_pre_screening_fields
 from ....services.taali_scoring import normalize_score_100
+from .salary_parser import extract_salary_expectation
 from .service import WorkableRateLimitError, WorkableService
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_salary_expectation(app: CandidateApplication, payload: dict) -> None:
+    """Parse the candidate's salary-expectation questionnaire answer into the
+    structured columns on ``app`` so the grounded search reads a number instead
+    of LLM-extracting it per query.
+
+    Only writes when the payload carries questionnaire answers (each Workable
+    candidate record is one job application, so its answers are this app's). When
+    answers are present but none is a confidently-identified salary expectation,
+    the columns are cleared so a stale figure can't linger; when the payload has
+    no answers at all (e.g. a metadata-only sync) the columns are left untouched.
+    """
+    answers = payload.get("answers") if isinstance(payload, dict) else None
+    if not isinstance(answers, list) or not answers:
+        return
+    parsed = extract_salary_expectation(answers)
+    if parsed is None:
+        app.salary_expectation_amount = None
+        app.salary_expectation_currency = None
+        app.salary_expectation_aed = None
+        app.salary_expectation_raw = None
+        return
+    app.salary_expectation_amount = parsed.amount
+    app.salary_expectation_currency = parsed.currency
+    app.salary_expectation_aed = parsed.amount_aed
+    app.salary_expectation_raw = sanitize_text_for_storage(parsed.raw)
+
 
 class WorkableSyncCancelled(Exception):
     """Raised when the user requested sync cancellation; sync should stop immediately."""
@@ -2211,6 +2240,14 @@ class WorkableSyncService:
         profile_url = candidate_payload.get("profile_url") or candidate_payload.get("url")
         if isinstance(profile_url, str) and profile_url.strip():
             app.workable_profile_url = sanitize_text_for_storage(profile_url.strip())
+
+        # Capture salary expectation as structured data from the questionnaire
+        # answers so the grounded search reads a number instead of LLM-extracting
+        # it per query (best-effort — never block a sync on a parse).
+        try:
+            _apply_salary_expectation(app, candidate_payload)
+        except Exception:  # pragma: no cover — defensive; parsing is best-effort
+            logger.debug("salary-expectation parse failed for app_id=%s", getattr(app, "id", "?"))
 
         # Skip ratings API during sync to stay under rate limit (10 req/10 sec); use candidate payload score only
         ratings_payload = None
