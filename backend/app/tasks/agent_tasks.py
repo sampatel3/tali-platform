@@ -522,6 +522,33 @@ def agent_cohort_tick_role(self, role_id: int) -> dict:
                 "bulk_decided": bulk_decided,
             }
 
+        # Phase 2.5: redundant-cycle gate. The bulk pass above already queued
+        # every CLEAR verdict (no LLM); run_cycle only adds value when it can
+        # resolve a NEW escalation/question. If the last LLM cycle for this role
+        # succeeded with ZERO decisions and nothing in the cohort changed since,
+        # re-running would again yield nothing — skip it. A force-run backstop
+        # (max staleness) guarantees a real cycle at least every N hours, so a
+        # missed yield is delayed (≤N h), never lost. Backtest (30d real runs):
+        # ~half the cron LLM cycles avoided, zero decisions lost.
+        from ..platform.config import settings as _settings
+
+        _gate_mode = (_settings.AGENT_COHORT_GATE_MODE or "off").strip().lower()
+        if _gate_mode in ("shadow", "on"):
+            _gate = _redundant_cycle_gate(db, role=role)
+            if _gate.get("would_skip"):
+                if _gate_mode == "on":
+                    logger.info("cohort gate SKIP role_id=%s (%s)", role_id, _gate["reason"])
+                    return {
+                        "status": "skipped",
+                        "reason": "redundant_cycle",
+                        "role_id": role_id,
+                        "auto_scored_enqueued": auto_scored,
+                        "bulk_decided": bulk_decided,
+                    }
+                logger.info(
+                    "cohort gate SHADOW would-skip role_id=%s (%s)", role_id, _gate["reason"]
+                )
+
         try:
             run = run_cycle(
                 db,
@@ -658,6 +685,84 @@ def _auto_enqueue_scoring(db, *, role, limit: int = AUTO_SCORE_PER_TICK_CAP) -> 
         logger.exception("auto-enqueue scoring failed for role_id=%s", getattr(role, "id", None))
         db.rollback()
         return 0
+
+
+def _redundant_cycle_gate(db, *, role) -> dict:
+    """Would re-running the autonomous LLM cycle for ``role`` yield nothing?
+
+    Returns ``{"would_skip": bool, "reason": str}``. ``would_skip`` is True only
+    when the most recent CRON LLM cycle SUCCEEDED with ZERO decisions, nothing
+    in the cohort has changed since it started, and we're still within the
+    force-run staleness window. The bulk-deterministic pass runs every tick
+    regardless, so a skip only suppresses redundant re-deliberation of an
+    unchanged cohort — a yield this gate skips is delayed until the next forced
+    cycle (≤ ``AGENT_COHORT_GATE_MAX_STALENESS_HOURS``), never lost.
+
+    Pure read; never raises (any error → ``would_skip=False`` so the cycle runs).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import or_
+
+    from ..models.agent_run import AgentRun
+    from ..models.candidate_application import CandidateApplication
+    from ..platform.config import settings
+
+    try:
+        last = (
+            db.query(AgentRun)
+            .filter(
+                AgentRun.role_id == int(role.id),
+                AgentRun.trigger == "cron",
+                AgentRun.model_version != "bulk-deterministic",
+            )
+            .order_by(AgentRun.started_at.desc())
+            .first()
+        )
+        if last is None:
+            return {"would_skip": False, "reason": "no_prior_llm_cycle"}
+        if last.status != "succeeded" or (last.decisions_emitted or 0) > 0:
+            return {"would_skip": False, "reason": "prior_yielded_or_failed"}
+        started = last.started_at
+        if started is None:
+            return {"would_skip": False, "reason": "no_started_at"}
+        # Time math needs an aware value (SQLite returns naive → assume UTC); the
+        # SQL change-comparison below keeps the RAW `started` so it matches the
+        # column's stored tz-ness (naive↔naive on SQLite, aware↔aware on PG).
+        started_aware = started if started.tzinfo else started.replace(tzinfo=timezone.utc)
+
+        stale_h = int(getattr(settings, "AGENT_COHORT_GATE_MAX_STALENESS_HOURS", 4) or 4)
+        if datetime.now(timezone.utc) - started_aware >= timedelta(hours=stale_h):
+            return {"would_skip": False, "reason": "force_run_stale"}
+
+        # Any cohort change since the last cycle started? (new score, stage move,
+        # outcome flip, recruiter edit reflected on the app) → there may be new
+        # work to deliberate, so run.
+        changed = (
+            db.query(CandidateApplication.id)
+            .filter(
+                CandidateApplication.role_id == int(role.id),
+                or_(
+                    CandidateApplication.updated_at > started,
+                    CandidateApplication.score_cached_at > started,
+                    CandidateApplication.pipeline_stage_updated_at > started,
+                    CandidateApplication.application_outcome_updated_at > started,
+                ),
+            )
+            .first()
+            is not None
+        )
+        if changed:
+            return {"would_skip": False, "reason": "cohort_changed"}
+
+        role_updated = getattr(role, "updated_at", None)
+        if role_updated is not None and role_updated > started:
+            return {"would_skip": False, "reason": "role_changed"}
+
+        return {"would_skip": True, "reason": "redundant_unchanged_zero_yield"}
+    except Exception:  # noqa: BLE001 — gate is best-effort; never block a cycle
+        logger.exception("redundant_cycle_gate failed role_id=%s", getattr(role, "id", "?"))
+        return {"would_skip": False, "reason": "gate_error"}
 
 
 def _cycle_would_be_noop(db, *, role) -> bool:

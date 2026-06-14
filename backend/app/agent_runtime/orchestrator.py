@@ -314,10 +314,11 @@ def run_cycle(
         raise ValueError(f"role {role.id} has no organization")
 
     client = get_client_for_org(org)
-    # Per-role override (Sonnet for borderline-judgment roles, etc.). Falls
-    # back to the global setting when unset.
+    # Per-role override (Sonnet for borderline-judgment roles, etc.) wins; else
+    # the autonomous-loop model (cheaper than the interactive agent by default —
+    # this loop is ~92% no-op/fail and the clear decisions are deterministic).
     role_model = (role.agent_model or "").strip() if isinstance(role.agent_model, str) else ""
-    model = role_model or settings.resolved_claude_model
+    model = role_model or settings.resolved_agent_autonomous_model
 
     monthly = budget_guard.check_monthly_usd(db, role=role)
     if not monthly.ok:
