@@ -46,6 +46,20 @@ class Settings(BaseSettings):
     # budget; (c) Haiku is fully capable for the read/edit-file tool-use shape
     # the chat exercises.
     CLAUDE_CHAT_MODEL: str = "claude-3-5-haiku-latest"
+    # Autonomous cohort-loop (agent_runtime/orchestrator) model. Independent of
+    # CLAUDE_MODEL — the interactive recruitment agent + chat stay on it. The
+    # cron deliberation loop is ~92% no-op/fail and the safety-critical decisions
+    # are made deterministically by bulk_decision_service (no LLM) + HITL review,
+    # so it runs on a cheaper model by default. Per-role role.agent_model still
+    # wins. Empty → falls back to resolved_claude_model (no behaviour change).
+    CLAUDE_AGENT_AUTONOMOUS_MODEL: str = ""
+    # Redundant-cycle gate for the autonomous cohort loop: skip a cron LLM cycle
+    # when the previous one succeeded with 0 decisions and nothing in the cohort
+    # changed since — with a force-run backstop so a gated role still runs at
+    # least every N hours (a missed yield is delayed ≤N h, never lost).
+    # off (no-op) | shadow (log would-skip, still run) | on (actually skip).
+    AGENT_COHORT_GATE_MODE: str = "off"
+    AGENT_COHORT_GATE_MAX_STALENESS_HOURS: int = 4
     MAX_TOKENS_PER_RESPONSE: int = 1024
     # Terminal-native Claude Code runtime
     ASSESSMENT_TERMINAL_ENABLED: bool = True
@@ -179,6 +193,14 @@ class Settings(BaseSettings):
         """Claude model for assessment terminal, chat, and general use. Defaults to claude-3-5-haiku-latest."""
         model = (self.CLAUDE_MODEL or "").strip()
         return model or "claude-3-5-haiku-latest"
+
+    @property
+    def resolved_agent_autonomous_model(self) -> str:
+        """Model for the autonomous cohort loop (agent_runtime/orchestrator).
+        Falls back to the interactive agent model when unset, so the code default
+        is unchanged; set CLAUDE_AGENT_AUTONOMOUS_MODEL to run the loop cheaper."""
+        model = (self.CLAUDE_AGENT_AUTONOMOUS_MODEL or "").strip()
+        return model or self.resolved_claude_model
 
     @property
     def resolved_claude_chat_model(self) -> str:
