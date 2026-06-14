@@ -13,7 +13,6 @@ from ...models.candidate_application import CandidateApplication
 from ...models.user import User
 from ...platform.config import settings
 from ...platform.database import get_db
-from ...platform.request_context import get_request_id
 from ...services.ai_assisted_evaluator import generate_ai_suggestions
 from ...services.candidate_feedback_engine import (
     build_candidate_feedback_payload,
@@ -46,26 +45,6 @@ def _report_filename_part(value: str, fallback: str) -> str:
     cleaned = re.sub(r'[\\/:*?"<>|]+', " ", str(value or "").strip())
     cleaned = re.sub(r"\s+", " ", cleaned).strip().rstrip(".")
     return cleaned or fallback
-
-
-def _dispatch_candidate_feedback_email(
-    *,
-    candidate_email: str,
-    candidate_name: str,
-    org_name: str,
-    role_title: str,
-    feedback_link: str,
-) -> None:
-    from ...tasks.assessment_tasks import send_candidate_feedback_ready_email
-
-    send_candidate_feedback_ready_email.delay(
-        candidate_email=candidate_email,
-        candidate_name=candidate_name,
-        org_name=org_name,
-        role_title=role_title,
-        feedback_link=feedback_link,
-        request_id=get_request_id(),
-    )
 
 
 @router.get("/{assessment_id}/report.pdf")
@@ -312,8 +291,6 @@ def finalize_candidate_feedback(
 ):
     payload = body or {}
     force_regenerate = bool(payload.get("force_regenerate", False))
-    send_email = bool(payload.get("send_email", True))
-    resend_email = bool(payload.get("resend_email", False))
     include_feedback = bool(payload.get("include_feedback", True))
 
     assessment = (
@@ -359,28 +336,10 @@ def finalize_candidate_feedback(
         generated_payload = assessment.candidate_feedback_json or {}
 
     feedback_link = _candidate_feedback_link(assessment.token)
-    email_dispatched = False
-    if send_email and assessment.candidate and assessment.candidate.email:
-        should_send_email = (
-            resend_email
-            or force_regenerate
-            or assessment.candidate_feedback_sent_at is None
-        )
-        if should_send_email:
-            role_title = (
-                (assessment.role.name if assessment.role else None)
-                or (assessment.task.name if assessment.task else None)
-                or "technical assessment"
-            )
-            _dispatch_candidate_feedback_email(
-                candidate_email=assessment.candidate.email,
-                candidate_name=(assessment.candidate.full_name or assessment.candidate.email),
-                org_name=(org.name if org and org.name else "your company"),
-                role_title=role_title,
-                feedback_link=feedback_link,
-            )
-            assessment.candidate_feedback_sent_at = utcnow()
-            email_dispatched = True
+    # Taali does not email the candidate about feedback — candidate comms are
+    # the ATS's responsibility and there is no candidate-facing feedback report
+    # to announce (see the taali-no-candidate-job-emails policy). Feedback is
+    # generated for the recruiter view only.
 
     try:
         db.commit()
@@ -393,9 +352,7 @@ def finalize_candidate_feedback(
         "success": True,
         "feedback_ready": bool(assessment.candidate_feedback_ready),
         "feedback_generated_at": assessment.candidate_feedback_generated_at,
-        "feedback_sent_at": assessment.candidate_feedback_sent_at,
         "feedback_url": feedback_link,
-        "email_dispatched": email_dispatched,
         "feedback": generated_payload if include_feedback else None,
     }
 

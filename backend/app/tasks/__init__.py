@@ -1,6 +1,5 @@
 from .celery_app import celery_app
 from .assessment_tasks import (
-    send_candidate_feedback_ready_email,
     post_results_to_workable,
     cleanup_expired_assessments,
     sync_workable_jobs,
@@ -120,7 +119,6 @@ from .workable_provider_tasks import flush_workable_provider
 
 __all__ = [
     "celery_app",
-    "send_candidate_feedback_ready_email",
     "post_results_to_workable",
     "cleanup_expired_assessments",
     "sync_workable_jobs",
