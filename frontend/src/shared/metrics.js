@@ -65,20 +65,28 @@ export const funnelDecisionRow = (stageCounts, decisions) => {
     const count = gate.types.reduce((acc, t) => acc + (Number(counts[t]) || 0), 0);
     if (count > 0) push(gate.stage, { key: gate.key, label: gate.label, count, tone: gate.tone });
   }
-  for (const stage of DECISION_PENDING_STAGES) {
-    const decided = (byStage[stage] || []).reduce((acc, c) => acc + c.count, 0);
-    const pending = Math.max(0, (Number(sc[stage]) || 0) - decided);
-    if (pending > 0) push(stage, {
-      key: 'pending',
-      // NOT "decision pending" — that read like a decision waiting on the
-      // recruiter. These are scored candidates the AGENT hasn't ruled on yet
-      // (its to-do, not yours), almost always because its agent is paused on
-      // that role. They get a verdict the moment the agent runs.
-      label: 'not yet decided',
-      count: pending,
-      tone: 'pending',
-      tip: "Scored candidates the agent hasn't ruled on yet — usually because the agent is paused on this role. Each gets a decision (from its current score) when the agent runs; it isn't waiting on you.",
-    });
+  // "Not yet decided" = scored candidates that carry NO agent decision yet
+  // (the agent hasn't ruled — usually a paused role). Prefer the backend's TRUE
+  // count (sc.not_yet_decided): the old fallback derived it as scored − pending,
+  // which over-counted resolved candidates AND the cv_match_scored_at "scored"
+  // basis (which includes pre-screen-filtered candidates with no real score).
+  const chip = (count) => ({
+    key: 'pending',
+    label: 'not yet decided',
+    count,
+    tone: 'pending',
+    tip: "Scored candidates the agent hasn't ruled on yet — usually because the agent is paused on this role. Each gets a decision (from its current score) when the agent runs; it isn't waiting on you.",
+  });
+  const explicit = Number(sc.not_yet_decided);
+  if (Number.isFinite(explicit)) {
+    if (explicit > 0) push('scored', chip(explicit));
+  } else {
+    // Legacy fallback when the backend hasn't supplied the count.
+    for (const stage of DECISION_PENDING_STAGES) {
+      const decided = (byStage[stage] || []).reduce((acc, c) => acc + c.count, 0);
+      const pending = Math.max(0, (Number(sc[stage]) || 0) - decided);
+      if (pending > 0) push(stage, chip(pending));
+    }
   }
   return byStage;
 };
