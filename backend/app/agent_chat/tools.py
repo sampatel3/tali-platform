@@ -27,6 +27,7 @@ from . import assessments as _assessments
 from . import constraints as _constraints
 from . import controls as _controls
 from . import draft_tasks as _draft_tasks
+from . import health as _health
 from . import impact as _impact
 from . import rescore as _rescore
 
@@ -426,6 +427,28 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
+    {
+        "name": "role_health_check",
+        "description": (
+            "FREE, read-only scan of what's most likely HURTING this role's "
+            "decisions, ranked, so you can proactively steer the recruiter. "
+            "Surfaces: a must-have almost nobody meets (killing the pool), a "
+            "requirement you often can't verify from the CV, a requirement "
+            "everyone meets (no signal), a score cut-off set too strict / too "
+            "loose, a PATTERN of the recruiter overriding your decisions in one "
+            "direction (you're mis-calibrated — the strongest signal), stale "
+            "old-engine scores, and a decision backlog. Returns `findings` "
+            "(ranked) + `top_finding` + `all_clear`. RUN IT when a conversation "
+            "opens fresh, when the recruiter asks an open-ended 'how's this role "
+            "/ what should I change / review this', or after they resolve a "
+            "batch. Then LEAD with `top_finding` phrased as a question + the "
+            "concrete fix you can make; one finding at a time, never a wall. "
+            "Each finding carries the handles (criterion_id, threshold) to act. "
+            "If `all_clear`, say the role looks healthy in a line — don't invent "
+            "problems."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
 ]
 
 
@@ -802,6 +825,8 @@ def dispatch_tool(
         )
     if name == "list_draft_tasks":
         return _draft_tasks.draft_review_card(db, role)
+    if name == "role_health_check":
+        return _health.role_health_check(db, role)
     if name == "sync_workable_comments":
         return _controls.sync_workable_comments(db, role, user=user)
 
