@@ -301,6 +301,18 @@ def evaluate(
             "current": current_last_note,
         }
 
+    # Verdict-aware: a pure re-score that shifts the score but does NOT change
+    # the deterministic rule's verdict is a "hold" — immaterial to the outcome.
+    # Drop the score-shift reasons so a mass re-score doesn't re-banner every
+    # unchanged decision; a genuine flip (or a now-ambiguous verdict) keeps them.
+    # No LLM — reuses the same pure-rule engine the bulk decisioner runs.
+    if any(r in reasons for r in _SCORE_SHIFT_REASONS) and _verdict_holds(
+        db, decision=decision, application=application, role=role
+    ):
+        reasons = [r for r in reasons if r not in _SCORE_SHIFT_REASONS]
+        for r in _SCORE_SHIFT_REASONS:
+            details.pop(r, None)
+
     is_stale = bool(reasons)
     summary = _summarize(reasons) if is_stale else None
     return StalenessReport(
@@ -309,6 +321,31 @@ def evaluate(
         summary=summary,
         details=details,
     )
+
+
+_SCORE_SHIFT_REASONS = ("pre_screen_score_shifted", "assessment_score_shifted")
+
+
+def _verdict_holds(
+    db: Session,
+    *,
+    decision: AgentDecision,
+    application: CandidateApplication,
+    role: Role,
+) -> bool:
+    """True iff the deterministic policy verdict against the CURRENT scores
+    equals the decision's queued ``decision_type`` — i.e. the score drift is
+    immaterial to the outcome. Conservative: any error, or a now-ambiguous
+    (escalate / skip) verdict, returns False so the banner stays. Lazy import
+    avoids a circular dependency (bulk_decision_service → queue_decision →
+    decision_staleness)."""
+    try:
+        from .bulk_decision_service import recompute_persisted_verdict
+
+        recomputed = recompute_persisted_verdict(db, role=role, app=application)
+        return recomputed is not None and recomputed == decision.decision_type
+    except Exception:  # noqa: BLE001 — fail safe: keep the banner
+        return False
 
 
 def is_human_suppression_live(

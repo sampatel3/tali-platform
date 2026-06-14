@@ -506,3 +506,67 @@ def test_recently_discarded_decision_suppresses_reemit(db):
         AgentDecision.status == "pending",
     ).count()
     assert pending == 0
+
+
+# ---------------------------------------------------------------------------
+# Verdict-aware staleness: a score re-score that doesn't flip the deterministic
+# verdict is a "hold" — its banner clears itself; only genuine flips stay.
+# ---------------------------------------------------------------------------
+
+
+def test_score_drift_suppressed_when_verdict_holds(db, monkeypatch):
+    org, role, _, app = _seed(db)
+    decision = _queue(db, org, role, app)  # advance_to_interview, pre_screen@emit=72
+    app.pre_screen_score_100 = 60.0  # 12pt drift → would normally banner
+    db.flush()
+    import app.services.bulk_decision_service as bds
+    # The rule still says the same thing → a hold.
+    monkeypatch.setattr(bds, "recompute_persisted_verdict",
+                        lambda db, *, role, app: "advance_to_interview")
+    report = decision_staleness.evaluate(db, decision, application=app, role=role)
+    assert report.is_stale is False
+    assert "pre_screen_score_shifted" not in report.reasons
+
+
+def test_score_drift_kept_when_verdict_flips(db, monkeypatch):
+    org, role, _, app = _seed(db)
+    decision = _queue(db, org, role, app)
+    app.pre_screen_score_100 = 60.0
+    db.flush()
+    import app.services.bulk_decision_service as bds
+    # The rule now says reject — a genuine flip; the recruiter must see it.
+    monkeypatch.setattr(bds, "recompute_persisted_verdict",
+                        lambda db, *, role, app: "reject")
+    report = decision_staleness.evaluate(db, decision, application=app, role=role)
+    assert report.is_stale is True
+    assert "pre_screen_score_shifted" in report.reasons
+
+
+def test_score_drift_kept_when_recompute_unavailable(db, monkeypatch):
+    org, role, _, app = _seed(db)
+    decision = _queue(db, org, role, app)
+    app.pre_screen_score_100 = 60.0
+    db.flush()
+    import app.services.bulk_decision_service as bds
+    # Can't recompute (escalate / unscorable / error) → fail safe, keep banner.
+    monkeypatch.setattr(bds, "recompute_persisted_verdict",
+                        lambda db, *, role, app: None)
+    report = decision_staleness.evaluate(db, decision, application=app, role=role)
+    assert report.is_stale is True
+    assert "pre_screen_score_shifted" in report.reasons
+
+
+def test_verdict_hold_does_not_suppress_cv_replaced(db, monkeypatch):
+    # A holding verdict clears the score noise but NOT genuine new info (a new CV).
+    org, role, _, app = _seed(db)
+    decision = _queue(db, org, role, app)
+    app.pre_screen_score_100 = 60.0
+    app.cv_text = "an entirely different resume body now"
+    db.flush()
+    import app.services.bulk_decision_service as bds
+    monkeypatch.setattr(bds, "recompute_persisted_verdict",
+                        lambda db, *, role, app: "advance_to_interview")
+    report = decision_staleness.evaluate(db, decision, application=app, role=role)
+    assert report.is_stale is True
+    assert "cv_replaced" in report.reasons
+    assert "pre_screen_score_shifted" not in report.reasons  # score noise still cleared

@@ -123,6 +123,40 @@ def _inputs_for(app, *, role_id, org_id, eff, has_task):
     )
 
 
+def recompute_persisted_verdict(
+    db: Session, *, role: Role, app: CandidateApplication
+) -> str | None:
+    """The deterministic persisted decision_type for ``app`` against the role's
+    CURRENT scores + threshold — the same pure-rule path ``decide_role_cohort``
+    and the threshold reconcile use, no LLM. Returns ``None`` when the rule
+    yields a non-queueable verdict (escalate / skip / no_action), the candidate
+    isn't scorable, or on any error — so callers treat "can't recompute" as
+    "don't claim the verdict still holds" (fail safe, keep the banner)."""
+    try:
+        eff = resolve_role_fit_threshold(db, role=role)
+        has_task = bool(getattr(role, "tasks", None))
+        inputs = _inputs_for(
+            app,
+            role_id=int(role.id),
+            org_id=int(role.organization_id),
+            eff=eff,
+            has_task=has_task,
+        )
+        if inputs is None:
+            return None
+        verdict = evaluate(inputs, db=db)
+        if verdict.decision_type not in QUEUEABLE_VERDICTS:
+            return None
+        return resolve_persisted_decision_type(
+            verdict.decision_type, has_assessment_task=has_task
+        )
+    except Exception:  # noqa: BLE001 — recompute is best-effort
+        logger.exception(
+            "recompute_persisted_verdict failed app=%s", getattr(app, "id", "?")
+        )
+        return None
+
+
 def _reconcile_stale_pending(db: Session, *, role: Role, eff, has_task: bool) -> int:
     """Re-evaluate this role's bulk-created PENDING decisions against the
     current (recalibrated) threshold; discard any whose band has flipped so
