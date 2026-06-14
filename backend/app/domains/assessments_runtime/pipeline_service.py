@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from ...models.agent_decision import AgentDecision
@@ -121,6 +121,23 @@ def _not_post_handover_sql():
     return or_(
         CandidateApplication.workable_stage.is_(None),
         norm.notin_(tuple(POST_HANDOVER_WORKABLE_STAGES)),
+    )
+
+
+def _post_handover_sql():
+    """Boolean SQL form of ``is_post_handover_workable_stage(workable_stage)`` —
+    true when the recruiter has advanced the candidate into an interview/offer/
+    hired stage in Workable. Used to DISPLAY such candidates as 'advanced' in the
+    funnel (alignment with Workable) without touching pipeline_stage, so every
+    backend decision/calibration service keeps Tali's own decision-based
+    'advanced'. Mirrors normalize_pipeline_key (lower → '-'→'_' → ' '→'_')."""
+    norm = func.replace(
+        func.replace(func.lower(CandidateApplication.workable_stage), "-", "_"),
+        " ", "_",
+    )
+    return and_(
+        CandidateApplication.workable_stage.isnot(None),
+        norm.in_(tuple(POST_HANDOVER_WORKABLE_STAGES)),
     )
 
 
@@ -714,10 +731,15 @@ def role_pipeline_counts(
     role_id: int,
 ) -> dict[str, int]:
     scored_expr = CandidateApplication.cv_match_scored_at.isnot(None)
+    # A candidate the recruiter has advanced in Workable (interview/offer/hired)
+    # shows in the funnel as 'advanced' for alignment — the furthest stage wins —
+    # regardless of Tali's pipeline_stage (which stays 'applied' for the backend).
+    ph_expr = _post_handover_sql()
     rows = (
         db.query(
             CandidateApplication.pipeline_stage,
             scored_expr,
+            ph_expr,
             func.count(CandidateApplication.id),
         )
         .filter(
@@ -726,11 +748,14 @@ def role_pipeline_counts(
             CandidateApplication.deleted_at.is_(None),
             CandidateApplication.application_outcome == "open",
         )
-        .group_by(CandidateApplication.pipeline_stage, scored_expr)
+        .group_by(CandidateApplication.pipeline_stage, scored_expr, ph_expr)
         .all()
     )
     counts = {bucket: 0 for bucket in FUNNEL_BUCKETS}
-    for stage, is_scored, total in rows:
+    for stage, is_scored, is_post_handover, total in rows:
+        if is_post_handover:
+            counts["advanced"] += int(total or 0)
+            continue
         bucket = funnel_bucket_for(normalize_pipeline_key(stage), bool(is_scored))
         if bucket:
             counts[bucket] += int(total or 0)
@@ -801,11 +826,15 @@ def role_pipeline_counts_bulk(
         return counts
 
     scored_expr = CandidateApplication.cv_match_scored_at.isnot(None)
+    # Workable-advanced candidates display as 'advanced' (alignment) regardless of
+    # Tali's pipeline_stage — see role_pipeline_counts().
+    ph_expr = _post_handover_sql()
     open_rows = (
         db.query(
             CandidateApplication.role_id,
             CandidateApplication.pipeline_stage,
             scored_expr,
+            ph_expr,
             func.count(CandidateApplication.id),
         )
         .filter(
@@ -814,12 +843,20 @@ def role_pipeline_counts_bulk(
             CandidateApplication.deleted_at.is_(None),
             CandidateApplication.application_outcome == "open",
         )
-        .group_by(CandidateApplication.role_id, CandidateApplication.pipeline_stage, scored_expr)
+        .group_by(
+            CandidateApplication.role_id,
+            CandidateApplication.pipeline_stage,
+            scored_expr,
+            ph_expr,
+        )
         .all()
     )
-    for role_id, stage, is_scored, total in open_rows:
+    for role_id, stage, is_scored, is_post_handover, total in open_rows:
         bucket = counts.get(int(role_id))
         if bucket is None:
+            continue
+        if is_post_handover:
+            bucket["advanced"] += int(total or 0)
             continue
         key = funnel_bucket_for(normalize_pipeline_key(stage), bool(is_scored))
         if key:

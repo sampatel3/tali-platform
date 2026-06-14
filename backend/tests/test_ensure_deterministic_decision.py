@@ -220,4 +220,8 @@ def test_role_pipeline_counts_not_yet_decided(db):
     )
     # only a_undecided counts: a_decided has a card; a_interviewing is post-handover
     assert counts["not_yet_decided"] == 1
+    # a_interviewing displays as 'advanced' (Workable hand-off), NOT in its
+    # normal bucket, even though its Tali pipeline_stage is still 'applied'.
+    assert counts["advanced"] == 1
+    assert counts["applied"] == 2  # a_undecided + a_decided (no cv_match_scored_at)
     assert a_undecided.id is not None and a_interviewing.id is not None
