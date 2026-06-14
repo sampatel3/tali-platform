@@ -1,5 +1,7 @@
 import React from 'react';
 
+import { ScoreProvenance } from '../candidates/ScoreProvenance';
+
 const scoreClass = (s) => {
   if (s == null) return '';
   if (s >= 75) return 'cp-score-high';
@@ -37,6 +39,7 @@ const CandidateCard = ({ row }) => (
         <span className="cp-stage-pill">{row.pipeline_stage}</span>
       ) : null}
     </div>
+    <ScoreProvenance provenance={row?.score_summary?.score_provenance} density="pill" />
   </a>
 );
 

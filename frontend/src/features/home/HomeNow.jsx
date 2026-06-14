@@ -40,6 +40,7 @@ import {
 import { TeachModal } from './TeachModal';
 import { OverrideModal, normalizeWorkableStages } from './OverrideModal';
 import { ActivityFeed } from './ActivityFeed';
+import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import AgentNeedsInputCard from '../jobs/AgentNeedsInputCard';
 
 
@@ -379,9 +380,12 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
               }
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
               <TypeBadge type={p.decision_type} size="sm" />
-              <ScoreChip score={p.taali_score} size="sm" />
+              <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+                <ScoreChip score={p.taali_score} size="sm" />
+                <ScoreProvenance provenance={p?.score_summary?.score_provenance} density="pill" />
+              </span>
               <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.625rem', color: 'var(--mute)', letterSpacing: '.06em', marginLeft: 'auto' }}>
                 {formatRelativeAge(p.created_at)}
               </span>
@@ -505,7 +509,10 @@ export const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, on
           </div>
         </div>
         {decision.taali_score != null ? (
-          <ScoreRing score={decision.taali_score} size={72} label="TALI" />
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+            <ScoreRing score={decision.taali_score} size={72} label="TALI" />
+            <ScoreProvenance provenance={decision?.score_summary?.score_provenance} density="full" />
+          </div>
         ) : null}
       </div>
 

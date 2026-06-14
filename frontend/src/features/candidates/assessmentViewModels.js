@@ -379,6 +379,7 @@ export const buildRoleFitEvidenceModel = ({ application, completedAssessment }) 
 
   return {
     ...payload,
+    provenance: application?.score_summary?.score_provenance,
     rationaleBullets: rationaleBullets.length
       ? rationaleBullets
       : buildFallbackRationale(details, payload.roleFitScore, payload.cvFitScore, payload.requirementsFitScore),
