@@ -10,19 +10,19 @@ The report body below was written from the repo, which carries conservative defa
 
 | Setting | Repo default | **Live prod** | Note |
 |---|---|---|---|
-| `ENABLE_PRE_SCREEN_GATE` | `False` | **`true`** (API + scoring worker) | The gate is ON. |
+| `ENABLE_PRE_SCREEN_GATE` | `False` (now `True` on main, PR #618) | **`true`** (API + scoring worker) | The gate is ON. |
 | `PRE_SCREEN_THRESHOLD` | `30` | **`50` on the API, UNSET (→30) on both workers** | ⚠️ **Per-service drift** — see below. |
-| `HOLISTIC_SCORING_ENABLED` / `_ORG_IDS` | `False` / `""` | **`true` / `2`** (scoring worker) | Holistic Sonnet is LIVE for **org 2** — so the A7 silent-zero bug is live. |
+| `HOLISTIC_SCORING_ENABLED` / `_ORG_IDS` | now `True` / `"*"` on main (PR #618) | **`true` / `*`** (scoring worker) | Holistic Sonnet is the **platform-wide default — LIVE for ALL orgs**, so the A7 silent-zero bug affected every org's new scores. |
 | `CLAUDE_MODEL` / `CLAUDE_SCORING_MODEL` | haiku / "" | `claude-sonnet-4-5` | Agent/chat on Sonnet; the pre-screen gate still pins Haiku (`FAST_MODEL`) regardless. |
 
 **⚠️ Threshold drift (new finding, only visible from prod).** The autonomous scoring funnel runs in the Celery **`taali-worker-scoring`** service, where `PRE_SCREEN_THRESHOLD` is **unset → code default 30**. The API (`resourceful-adaptation`) has it at **50**. So the same candidate is gated at **30 by the autonomous loop** and **50 by manual/API-triggered scoring** — a real inconsistency (memory's per-service-env-drift hazard). Raising the worker to 50 rejects more candidates; this is a **volume/policy decision**, left for Sam — I did not change prod env.
 
 ### What shipped in this PR (provably never-worse)
-- **A7 fix** — `_LeanScore.overall` made **required** (`holistic.py`). Previously a degraded-but-schema-valid Sonnet tool emission that omitted `overall` validated as `overall=0` → `cv_match_score=0` with status OK = a **silent 0-score auto-reject of a real candidate, live on org 2**. Now an absent field raises in the structured layer's `model_validate` → `ValidationFailure` → retry-with-feedback → only-if-still-missing `FAILED` (→ `cv_match_score=None`, retried later — never a 0 auto-reject). A genuine model-emitted `overall=0` (real clear-misfit) still passes. Verified: the FAILED branch (`cv_score_orchestrator.py:743`) sets `cv_match_score=None`, never persisting the 0. Regression test added; holistic/orchestrator/runner/qa/gateway/arch suites green.
+- **A7 fix** — `_LeanScore.overall` made **required** (`holistic.py`). Previously a degraded-but-schema-valid Sonnet tool emission that omitted `overall` validated as `overall=0` → `cv_match_score=0` with status OK = a **silent 0-score auto-reject of a real candidate — live across ALL orgs** (holistic is the platform default, PR #618). Now an absent field raises in the structured layer's `model_validate` → `ValidationFailure` → retry-with-feedback → only-if-still-missing `FAILED` (→ `cv_match_score=None`, retried later — never a 0 auto-reject). A genuine model-emitted `overall=0` (real clear-misfit) still passes. Verified: the FAILED branch (`cv_score_orchestrator.py:743`) sets `cv_match_score=None`, never persisting the 0. Regression test added; holistic/orchestrator/runner/qa/gateway/arch suites green.
 
-### Deliberately NOT auto-shipped (would change live verdicts for org 2 or are policy calls — would violate "don't break prod")
+### Deliberately NOT auto-shipped (would change live verdicts platform-wide or are policy calls — would violate "don't break prod")
 - **R1** (sub-agent omits must-haves) — fixing it re-scores the autonomous pre-screen path; bounded by the fast-path but still a live behaviour change → validate first.
-- **R5** (holistic skips the timeline/unverified-claim integrity penalties) — porting them lowers some org-2 scores and could flip send→reject → Sam's open question #2 (intentional?).
+- **R5** (holistic skips the timeline/unverified-claim integrity penalties) — now that holistic is the all-org default, porting them lowers some scores platform-wide and could flip send→reject → Sam's open question #2 (intentional?).
 - **Threshold drift** (above) — env/policy decision.
 - **Integrity-axis framework + measurement (shadow-eval, adverse-impact monitor) + new modules** — the P1/P2 roadmap; build behind shadow + the bias monitor, not blind.
 
