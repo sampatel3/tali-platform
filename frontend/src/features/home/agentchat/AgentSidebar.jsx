@@ -68,7 +68,7 @@ export function AgentSidebar({
         key={a.role_id}
         className={`ac-agent ac-${rowStatus} ${!bulkMode && a.role_id === activeRoleId ? 'is-active' : ''} ${selected ? 'is-selected' : ''}`}
         onClick={() => (bulkMode ? onToggleSelected?.(a.role_id) : onSelect?.(a.role_id))}
-        title={a.role_name}
+        title={!bulkMode && a.role_id === activeRoleId ? `${a.role_name} — click to deselect (view all roles)` : a.role_name}
       >
         {bulkMode && (
           <span className={`ac-check ${selected ? 'on' : ''}`} aria-hidden="true">

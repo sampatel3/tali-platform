@@ -525,20 +525,36 @@ def needs_reeval_count(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Accurate count of PENDING decisions that are stale (older scoring model
-    or changed inputs) for the current role/type scope.
+    """Count of PENDING decisions scored by an OLD engine (the "needs re-eval"
+    backlog) for the current role/type scope.
 
     The home "Needs re-eval" pill reads this so its number reflects the WHOLE
     queue, not the page-fetch window — the per-row is_stale on the list is only
     computed for the (capped) rows returned, which silently under-counts a deep
-    backlog. Same staleness definition as the list (decision_staleness.evaluate),
-    so the pill total and the per-card markers agree.
+    backlog (e.g. ~63 shown vs ~2,300 real).
+
+    Counts ENGINE staleness only (the dominant "old model" case the pill is
+    about), not the rarer input-change staleness the per-card banner also flags
+    — so on a multi-thousand-row queue this is one cheap pass instead of a
+    per-row evaluate that loads + hashes every CV (~9x faster). It pulls only
+    the two engine-version sub-keys from cv_match_details and reuses the real
+    score_is_outdated / is_resolved via a lightweight shim, so there's no
+    staleness logic duplicated in SQL.
     """
-    from ...services import decision_staleness
+    from types import SimpleNamespace
+
+    from ...services.cv_score_orchestrator import score_is_outdated
 
     query = (
-        db.query(AgentDecision, CandidateApplication)
-        .join(CandidateApplication, CandidateApplication.id == AgentDecision.application_id)
+        db.query(
+            CandidateApplication.cv_match_details["engine_version"].as_string(),
+            CandidateApplication.cv_match_details["prompt_version"].as_string(),
+            CandidateApplication.organization_id,
+            CandidateApplication.application_outcome,
+            CandidateApplication.pipeline_stage,
+            CandidateApplication.cv_match_score,
+        )
+        .join(AgentDecision, AgentDecision.application_id == CandidateApplication.id)
         .filter(
             AgentDecision.organization_id == current_user.organization_id,
             AgentDecision.status.in_(("pending", "processing")),
@@ -554,25 +570,24 @@ def needs_reeval_count(
         types = DECISION_TYPE_CATEGORIES.get(decision_type, [decision_type])
         query = query.filter(AgentDecision.decision_type.in_(types))
 
-    rows = query.all()
-    # Preload the roles once so the per-row evaluate hits the cache, not a query.
-    role_by_id: dict[int, Role] = {}
-    role_ids = {int(d.role_id) for d, _ in rows}
-    if role_ids:
-        for r in db.query(Role).filter(Role.id.in_(role_ids)).all():
-            role_by_id[int(r.id)] = r
-
-    cache = decision_staleness.StalenessCache()
     count = 0
-    for decision, application in rows:
+    for ev, pv, org_id, outcome, stage, score in query.all():
+        if score is None:
+            continue
+        details: dict[str, str] = {}
+        if ev:
+            details["engine_version"] = ev
+        if pv:
+            details["prompt_version"] = pv
+        shim = SimpleNamespace(
+            organization_id=org_id,
+            cv_match_details=details,
+            application_outcome=outcome,
+            pipeline_stage=stage,
+            cv_match_score=score,
+        )
         try:
-            report = decision_staleness.evaluate(
-                db, decision,
-                application=application,
-                role=role_by_id.get(int(decision.role_id)),
-                cache=cache,
-            )
-            if report.is_stale:
+            if not is_resolved(shim) and score_is_outdated(shim):
                 count += 1
         except Exception:  # pragma: no cover — a bad row must not fail the count
             pass
