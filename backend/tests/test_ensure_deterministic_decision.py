@@ -198,3 +198,23 @@ def test_awaiting_you_counts_all_pending_decisions(db):
     # Both count toward 'awaiting you' — consistent with the funnel.
     kpi = _compute_kpis(db, organization_id=int(org.id))
     assert kpi.pending == 2
+
+
+def test_role_pipeline_counts_not_yet_decided(db):
+    """'not_yet_decided' = scored candidates with NO decision (pending or
+    resolved) — the TRUE funnel count, replacing the FE's scored-minus-pending
+    over-count."""
+    from app.domains.assessments_runtime.pipeline_service import role_pipeline_counts
+
+    org, role = _seed_role(db, score_threshold=50)
+    a_undecided = _add_app(db, org, role, role_fit=30.0)  # scored, no card
+    a_decided = _add_app(db, org, role, role_fit=80.0)  # scored → will get a card
+    assert bds.ensure_deterministic_decision(db, app=a_decided, role=role)
+    db.commit()
+
+    counts = role_pipeline_counts(
+        db, organization_id=int(org.id), role_id=int(role.id)
+    )
+    # only the candidate with no decision counts (a_decided has a pending card)
+    assert counts["not_yet_decided"] == 1
+    assert a_undecided.id is not None

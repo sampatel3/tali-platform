@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ...models.agent_decision import AgentDecision
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
 
@@ -729,6 +730,33 @@ def role_pipeline_counts(
         .scalar()
     )
     counts["rejected"] = int(rejected_total or 0)
+    # 'not_yet_decided' = scored, open candidates that carry NO agent decision
+    # (pending OR resolved). The TRUE count for the funnel's "not yet decided"
+    # chip — the frontend used to derive it as scored − pending, which
+    # over-counted resolved candidates + the cv_match_scored_at basis (which
+    # includes pre-screen-filtered candidates with no real score).
+    not_yet_decided = (
+        db.query(func.count(CandidateApplication.id))
+        .filter(
+            CandidateApplication.organization_id == organization_id,
+            CandidateApplication.role_id == role_id,
+            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.application_outcome == "open",
+            CandidateApplication.cv_match_score.isnot(None),
+            ~(
+                db.query(AgentDecision.id)
+                .filter(
+                    AgentDecision.application_id == CandidateApplication.id,
+                    AgentDecision.status.in_(
+                        ("pending", "processing", "approved", "overridden")
+                    ),
+                )
+                .exists()
+            ),
+        )
+        .scalar()
+    )
+    counts["not_yet_decided"] = int(not_yet_decided or 0)
     return counts
 
 
@@ -746,7 +774,7 @@ def role_pipeline_counts_bulk(
     e.g. the Hub's /agent/roles/breakdown — would N+1 without this.
     """
     counts: dict[int, dict[str, int]] = {
-        int(rid): {bucket: 0 for bucket in FUNNEL_BUCKETS}
+        int(rid): {**{bucket: 0 for bucket in FUNNEL_BUCKETS}, "not_yet_decided": 0}
         for rid in role_ids
     }
     if not role_ids:
@@ -797,5 +825,35 @@ def role_pipeline_counts_bulk(
         bucket = counts.get(int(role_id))
         if bucket is not None:
             bucket["rejected"] = int(total or 0)
+
+    # 'not_yet_decided' per role — scored, open candidates with NO agent decision
+    # (pending OR resolved). The TRUE count for the funnel's chip (see the
+    # single-role helper). One batched query, NOT EXISTS against AgentDecision.
+    nyd_rows = (
+        db.query(CandidateApplication.role_id, func.count(CandidateApplication.id))
+        .filter(
+            CandidateApplication.organization_id == organization_id,
+            CandidateApplication.role_id.in_(role_ids),
+            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.application_outcome == "open",
+            CandidateApplication.cv_match_score.isnot(None),
+            ~(
+                db.query(AgentDecision.id)
+                .filter(
+                    AgentDecision.application_id == CandidateApplication.id,
+                    AgentDecision.status.in_(
+                        ("pending", "processing", "approved", "overridden")
+                    ),
+                )
+                .exists()
+            ),
+        )
+        .group_by(CandidateApplication.role_id)
+        .all()
+    )
+    for role_id, total in nyd_rows:
+        bucket = counts.get(int(role_id))
+        if bucket is not None:
+            bucket["not_yet_decided"] = int(total or 0)
 
     return counts
