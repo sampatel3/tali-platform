@@ -608,6 +608,31 @@ def _score_summary_from_active_assessments(
         "assessment_status": assessment_status,
         "assessment_completed_at": assessment_completed_at,
         "has_voided_attempts": _has_voided_attempts_from_loaded_relationship(app),
+        # Invite delivery tracking for the invited-candidate tracker. Drawn from
+        # the latest attempt (the one currently in flight for pending invites).
+        "invite_tracking": _invite_tracking_payload(latest_assessment),
+    }
+
+
+def _invite_tracking_payload(assessment: "Assessment | None") -> "dict[str, Any] | None":
+    """Delivery/engagement tracking for an invite, or None when no attempt yet.
+
+    ``email_status`` is the Resend lifecycle (sent/delivered/opened/clicked or
+    bounced/complained) — None until the delivery webhook is wired/fires.
+    ``started_at`` needs no webhook (we already record it when the candidate
+    opens the assessment).
+    """
+    if assessment is None:
+        return None
+    return {
+        "invite_sent_at": getattr(assessment, "invite_sent_at", None),
+        "invite_channel": getattr(assessment, "invite_channel", None),
+        "email_status": getattr(assessment, "invite_email_status", None),
+        "delivered_at": getattr(assessment, "invite_delivered_at", None),
+        "opened_at": getattr(assessment, "invite_opened_at", None),
+        "bounced_at": getattr(assessment, "invite_bounced_at", None),
+        "started_at": getattr(assessment, "started_at", None),
+        "expires_at": getattr(assessment, "expires_at", None),
     }
 
 
@@ -1154,6 +1179,22 @@ def application_list_payload(
         score_status=score_status,
     )
     payload = data.model_dump()
+    # The cached score_summary blanks out assessment status; the invited-
+    # candidate tracker chip needs it + invite delivery tracking. Recompute
+    # both from the already-selectinload'd assessments relationship (no extra
+    # query) so list rows show "Invited / Delivered / Opened / Bounced".
+    if isinstance(payload.get("score_summary"), dict):
+        active = _active_assessments_for_application(app)
+        latest = active[0] if active else None
+        if latest is not None:
+            completed = next((a for a in active if _is_completed_assessment(a)), None)
+            relevant = completed or latest
+            payload["score_summary"]["assessment_id"] = int(relevant.id)
+            payload["score_summary"]["assessment_status"] = _assessment_status_value(relevant)
+            payload["score_summary"]["assessment_completed_at"] = (
+                getattr(completed, "completed_at", None) if completed is not None else None
+            )
+            payload["score_summary"]["invite_tracking"] = _invite_tracking_payload(latest)
     # Resolved by the list route in one batch query (see _pending_decision_map)
     # so the AGENT column shows a chip for every row that has a pending
     # decision, not just the first page of a capped decisions fetch.
