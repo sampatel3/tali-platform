@@ -6,8 +6,8 @@ unused ``candidate_feedback_*`` columns from ``assessments`` and the
 ``candidate_feedback_enabled`` toggle from ``organizations``. The interview
 debrief columns added by 029 are KEPT — that feature stays.
 
-Revision ID: 117_drop_candidate_feedback
-Revises: 116_add_workable_stage_local_write_at
+Revision ID: 118_drop_candidate_feedback
+Revises: 117_add_assessment_invite_email_tracking
 Create Date: 2026-06-14
 
 """
@@ -16,8 +16,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "117_drop_candidate_feedback"
-down_revision = "116_add_workable_stage_local_write_at"
+revision = "118_drop_candidate_feedback"
+down_revision = "117_add_assessment_invite_email_tracking"
 branch_labels = None
 depends_on = None
 
