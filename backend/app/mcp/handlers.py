@@ -451,9 +451,11 @@ def find_top_candidates(
         #     grounding window. (b) Not below the role's reject cutoff — the
         #     "Below threshold" recommendation is the threshold-aware reject
         #     signal (it tracks the role's actual cutoff, and a definitive
-        #     pre-screen "no"/fraud flag also lands here).
+        #     pre-screen "no"/fraud flag also lands here). Normalise the label
+        #     (lower/trim) to match how the reject policy stores it elsewhere —
+        #     non-canonical rows like 'below threshold ' must still be excluded.
         getattr(CandidateApplication, SCORE_FIELDS.get(str(rank_by or "taali"), "taali_score_cache_100")).isnot(None),
-        func.coalesce(CandidateApplication.pre_screen_recommendation, "") != "Below threshold",
+        func.lower(func.trim(func.coalesce(CandidateApplication.pre_screen_recommendation, ""))) != "below threshold",
     )
     if role_id is not None:
         base = base.filter(CandidateApplication.role_id == int(role_id))

@@ -158,6 +158,11 @@ def test_find_top_candidates_pool_is_scored_and_not_below_threshold(db):
     below = _make_app(db, org_id=org.id, role=role, candidate_name="Below",
                       email="below@x.test", taali=20.0)
     below.pre_screen_recommendation = "Below threshold"
+    # Non-canonical label (case/trailing space) must still be excluded — the
+    # reject policy stores it lower/trim-normalised elsewhere.
+    below_noncanonical = _make_app(db, org_id=org.id, role=role, candidate_name="BelowMessy",
+                                   email="belowmessy@x.test", taali=30.0)
+    below_noncanonical.pre_screen_recommendation = "below threshold "
     unscored = _make_app(db, org_id=org.id, role=role, candidate_name="Unscored",
                          email="unscored@x.test", taali=None)
     db.commit()
@@ -179,8 +184,9 @@ def test_find_top_candidates_pool_is_scored_and_not_below_threshold(db):
         )
 
     assert captured["ids"] == sorted([strong.id, review.id])
-    assert below.id not in captured["ids"]      # below-threshold reject excluded
-    assert unscored.id not in captured["ids"]   # un-evaluated excluded
+    assert below.id not in captured["ids"]              # below-threshold reject excluded
+    assert below_noncanonical.id not in captured["ids"] # case/space variant excluded too
+    assert unscored.id not in captured["ids"]           # un-evaluated excluded
     assert captured["limit"] == 5
     assert captured["rank_by"] == "taali"
 
