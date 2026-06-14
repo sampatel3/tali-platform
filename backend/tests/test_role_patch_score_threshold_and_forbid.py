@@ -79,6 +79,10 @@ def test_patch_role_threshold_change_reconciles_reject_queue(db, client):
         name=f"Agent role {id(db)}",
         source="manual",
         score_threshold=50,
+        # Manual mode: this test reconciles against a recruiter-pinned threshold
+        # change. The product default is now ``auto`` (the pinned value is
+        # ignored), so opt into manual to exercise the reconciliation path.
+        auto_reject_threshold_mode="manual",
         agentic_mode_enabled=True,
         auto_reject=False,
     )

@@ -42,6 +42,9 @@ def _seed_role(db, *, score_threshold=50, with_task=False):
     role = Role(
         organization_id=org.id, name="R", source="manual",
         score_threshold=score_threshold,
+        # These tests exercise a recruiter-pinned threshold; the product default
+        # is now ``auto`` (dynamic), so opt into manual to honour score_threshold.
+        auto_reject_threshold_mode="manual",
     )
     db.add(role)
     db.flush()

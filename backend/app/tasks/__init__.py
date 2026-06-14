@@ -79,6 +79,7 @@ from .decision_policy_tasks import nightly_retune_sweep
 # an app.tasks.tasks module, which doesn't exist.)
 from .calibration_tasks import (
     recalibrate_cv_match,
+    recalibrate_prescreen_gate,
     sample_prescreen_for_calibration,
     score_terminal_for_calibration,
 )
@@ -148,6 +149,7 @@ __all__ = [
     "score_terminal_for_calibration",
     "sample_prescreen_for_calibration",
     "recalibrate_cv_match",
+    "recalibrate_prescreen_gate",
     "apply_decision_side_effects",
     "drain_graph_episode_outbox",
     "flush_brain_feed",

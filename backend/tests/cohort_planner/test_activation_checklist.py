@@ -25,6 +25,11 @@ def _make_role(db, org, **overrides) -> Role:
         agentic_mode_enabled=True,
         monthly_usd_budget_cents=5000,
         score_threshold=None,
+        # A missing score_threshold is only an activation gap
+        # (``threshold_ambiguous``) in manual mode. The product default is now
+        # ``auto`` (a missing threshold is fine — it's computed), so tests that
+        # want the ambiguity gap must opt into manual explicitly.
+        auto_reject_threshold_mode="manual",
         auto_promote=False,
     )
     defaults.update(overrides)

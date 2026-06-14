@@ -74,6 +74,10 @@ def _role(db, org, *, name="Backend", threshold=70, agentic=True) -> Role:
         name=name,
         source="manual",
         score_threshold=threshold,
+        # Impact reporting is computed against a KNOWN pinned threshold. The
+        # product default is now ``auto`` (dynamic); pin manual so these tests
+        # exercise the recruiter-set-threshold path they were written for.
+        auto_reject_threshold_mode="manual",
         agentic_mode_enabled=agentic,
     )
     db.add(role)

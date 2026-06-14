@@ -86,10 +86,47 @@ def sample_and_shadow_score_rejects(
             if getattr(app, "organization_id", None)
             else None
         )
+        # Shadow-score with the SAME engine the org uses in prod, so the
+        # (pre_screen -> full_score) pair the gate calibrator trains on matches
+        # what survivors actually get. Orgs default to the holistic Sonnet engine
+        # (2026-06); a Haiku-v18 shadow score would mis-train the gate cut.
         try:
-            out = run_cv_match(cv_text, jd_text, requirements, metering_context=metering)
-        except Exception:  # pragma: no cover — run_cv_match shouldn't raise
-            logger.exception("shadow cv_match raised for app=%s", app.id)
+            workable_context = ""
+            try:
+                from .workable_context_service import format_workable_context
+
+                workable_context = (
+                    format_workable_context(
+                        candidate=getattr(app, "candidate", None), application=app
+                    )
+                    or ""
+                )
+            except Exception:  # pragma: no cover — proceed without context
+                workable_context = ""
+            from .cv_score_orchestrator import _holistic_enabled_for
+
+            if _holistic_enabled_for(app):
+                from ..cv_matching.holistic import run_holistic_match
+                from .claude_client_resolver import get_client_for_org
+
+                org_client = get_client_for_org(getattr(app, "organization", None))
+                out = run_holistic_match(
+                    cv_text,
+                    jd_text,
+                    client=org_client,
+                    metering_context=metering,
+                    workable_context=workable_context or None,
+                )
+            else:
+                out = run_cv_match(
+                    cv_text,
+                    jd_text,
+                    requirements,
+                    metering_context=metering,
+                    workable_context=workable_context or None,
+                )
+        except Exception:  # pragma: no cover — runners shouldn't raise
+            logger.exception("shadow score raised for app=%s", app.id)
             failed += 1
             continue
 

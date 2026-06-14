@@ -47,12 +47,14 @@ def test_survey_exposes_effective_role_fit_threshold(db):
     agent reasons against it (not the legacy role.reject_threshold)."""
     org, role, _, _ = make_world(db)
     role.score_threshold = 55
+    # Manual mode resolves to the recruiter-pinned score_threshold. (The default
+    # is now ``auto``; set it explicitly to exercise the manual path.)
+    role.auto_reject_threshold_mode = "manual"
     db.flush()
     out = survey_role_state(
         db, organization_id=int(org.id), role_id=int(role.id)
     )
     assert "effective_role_fit_threshold" in out
-    # Manual mode (no auto_reject_threshold_mode) resolves to score_threshold.
     assert out["effective_role_fit_threshold"] == 55.0
 
 
