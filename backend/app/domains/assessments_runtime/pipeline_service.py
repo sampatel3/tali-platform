@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from ...models.agent_decision import AgentDecision
@@ -105,6 +105,23 @@ def is_post_handover_workable_stage(value: str | None) -> bool:
     honour the same rule, even though it never runs the agent prompt.
     """
     return normalize_pipeline_key(value) in POST_HANDOVER_WORKABLE_STAGES
+
+
+def _not_post_handover_sql():
+    """SQL form of ``not is_post_handover_workable_stage(workable_stage)``: a
+    candidate is NOT past hand-off when workable_stage is null or its normalised
+    value isn't a post-handover stage. Used to keep candidates the recruiter is
+    already interviewing/offering in Workable OUT of 'not yet decided' — they're
+    past the decision, not awaiting one. Mirrors normalize_pipeline_key
+    (lower → '-'→'_' → ' '→'_')."""
+    norm = func.replace(
+        func.replace(func.lower(CandidateApplication.workable_stage), "-", "_"),
+        " ", "_",
+    )
+    return or_(
+        CandidateApplication.workable_stage.is_(None),
+        norm.notin_(tuple(POST_HANDOVER_WORKABLE_STAGES)),
+    )
 
 
 def normalize_pipeline_stage(value: str | None) -> str:
@@ -743,6 +760,9 @@ def role_pipeline_counts(
             CandidateApplication.deleted_at.is_(None),
             CandidateApplication.application_outcome == "open",
             CandidateApplication.cv_match_score.isnot(None),
+            # Exclude candidates already advanced in Workable (interview/offer/
+            # hired) — they're being interviewed, not awaiting a Tali decision.
+            _not_post_handover_sql(),
             ~(
                 db.query(AgentDecision.id)
                 .filter(
@@ -837,6 +857,9 @@ def role_pipeline_counts_bulk(
             CandidateApplication.deleted_at.is_(None),
             CandidateApplication.application_outcome == "open",
             CandidateApplication.cv_match_score.isnot(None),
+            # Exclude candidates already advanced in Workable (interview/offer/
+            # hired) — they're being interviewed, not awaiting a Tali decision.
+            _not_post_handover_sql(),
             ~(
                 db.query(AgentDecision.id)
                 .filter(

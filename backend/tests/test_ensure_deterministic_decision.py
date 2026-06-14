@@ -209,12 +209,15 @@ def test_role_pipeline_counts_not_yet_decided(db):
     org, role = _seed_role(db, score_threshold=50)
     a_undecided = _add_app(db, org, role, role_fit=30.0)  # scored, no card
     a_decided = _add_app(db, org, role, role_fit=80.0)  # scored → will get a card
+    # scored, no card, BUT already interviewing in Workable → NOT "not yet decided"
+    a_interviewing = _add_app(db, org, role, role_fit=80.0)
+    a_interviewing.workable_stage = "Technical Interview"
     assert bds.ensure_deterministic_decision(db, app=a_decided, role=role)
     db.commit()
 
     counts = role_pipeline_counts(
         db, organization_id=int(org.id), role_id=int(role.id)
     )
-    # only the candidate with no decision counts (a_decided has a pending card)
+    # only a_undecided counts: a_decided has a card; a_interviewing is post-handover
     assert counts["not_yet_decided"] == 1
-    assert a_undecided.id is not None
+    assert a_undecided.id is not None and a_interviewing.id is not None
