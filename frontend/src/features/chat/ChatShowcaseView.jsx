@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
+import React from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Plus, Trash2, ChevronRight, Search, ArrowUp } from 'lucide-react';
+import { Plus, Trash2, ArrowUp } from 'lucide-react';
 
 import './chat.css';
 import GraphView from './GraphView';
 import CandidateGrid from './CandidateGrid';
+import ToolCallCard from './ToolCallCard';
+import CandidateEvidenceCard from './CandidateEvidenceCard';
 
 const SHOWCASE_CONVERSATIONS = [
   {
@@ -125,7 +127,7 @@ const SHOWCASE_APPLICATIONS = [
 const SHOWCASE_TOOL_PART = {
   type: 'tool_call',
   toolCallId: 'tool_graph_1',
-  toolName: 'Candidate search',
+  toolName: 'graph_search_candidates',
   args: {
     query: 'YC company background AND Postgres expertise',
     limit: 25,
@@ -136,6 +138,126 @@ const SHOWCASE_TOOL_PART = {
     total_matched: 14,
     graph: SHOWCASE_GRAPH,
   },
+};
+
+// Grounded "top N with X and Y" result the live <CandidateEvidenceCard> renders
+// from find_top_candidates. The flagship chat surface: criteria are treated as
+// hard filters (candidates who fail a must-have are hidden + counted), the
+// survivors are ranked, and EVERY qualitative verdict is backed by a verbatim
+// CV/notes quote — a criterion only reads as satisfied when `grounded` is true.
+const SHOWCASE_TOP_RESULT = {
+  spec: { echo: 'owned a production GenAI launch · Postgres in production', ranking_key: 'taali' },
+  rank_by: 'taali',
+  shown: 3,
+  total_matched: 14,
+  evidence_model: 'claude-sonnet', // truthy → "grounded vs CV + notes"
+  excluded: {
+    not_met_total: 11,
+    by_criterion: [
+      { criterion: 'owned a production GenAI launch', count: 8 },
+      { criterion: 'Postgres in production', count: 3 },
+    ],
+  },
+  warnings: [],
+  candidates: [
+    {
+      application_id: 'app_priya',
+      rank: 1,
+      candidate_name: 'Priya Raman',
+      candidate_position: 'Senior AI Engineer',
+      candidate_location: 'London, UK',
+      role_name: 'AI Engineer',
+      taali_score: 81,
+      meets_all_criteria: true,
+      frontend_url: '/c/demo?view=interview&k=demo-token&showcase=1',
+      criteria: [
+        {
+          criterion: 'owned a production GenAI launch',
+          status: 'met',
+          grounded: true,
+          evidence: [
+            { quote: 'Led the patient-summarisation GenAI rollout across two NHS trusts at Helix Health — owned the offline eval harness, retrieval grounding, and the release gate end to end.', source: 'cv' },
+          ],
+        },
+        {
+          criterion: 'Postgres in production',
+          status: 'met',
+          grounded: true,
+          evidence: [
+            { quote: 'Designed the Postgres schema and partitioning for the clinical audit store (≈14M rows/day) and the row-level-security policies the launch gate required.', source: 'cv' },
+          ],
+        },
+      ],
+    },
+    {
+      application_id: 'app_daniel',
+      rank: 2,
+      candidate_name: 'Daniel Okafor',
+      candidate_position: 'Staff Engineer',
+      candidate_location: 'Lagos, NG',
+      role_name: 'Senior Backend',
+      taali_score: 76,
+      meets_all_criteria: false,
+      criteria: [
+        {
+          criterion: 'owned a production GenAI launch',
+          status: 'partially_met',
+          grounded: true,
+          note: 'Shipped a GenAI feature but did not own the launch gate — release sign-off sat with the platform lead.',
+          evidence: [
+            { quote: 'Built the retrieval-augmented support assistant at Ledger and shipped it to 40k users behind a feature flag.', source: 'cv' },
+            { quote: 'I owned the embedding pipeline and prompt templates; the go/no-go decision was the platform lead’s.', source: 'notes' },
+          ],
+        },
+        {
+          criterion: 'Postgres in production',
+          status: 'met',
+          grounded: true,
+          evidence: [
+            { quote: 'Ran the primary Postgres fleet at Wander — logical replication, PITR, and a zero-downtime major-version upgrade.', source: 'cv' },
+          ],
+        },
+      ],
+    },
+    {
+      application_id: 'app_maya',
+      rank: 3,
+      candidate_name: 'Maya Chen',
+      candidate_position: 'Senior Engineer',
+      candidate_location: 'San Francisco, US',
+      role_name: 'AI Engineer',
+      taali_score: 73,
+      meets_all_criteria: false,
+      criteria: [
+        {
+          criterion: 'owned a production GenAI launch',
+          status: 'met',
+          grounded: true,
+          evidence: [
+            { quote: 'Took the Helix Pay fraud-explanations LLM feature from prototype to GA; defined the offline eval set and the human-review fallback.', source: 'cv' },
+          ],
+        },
+        {
+          criterion: 'Postgres in production',
+          status: 'partially_met',
+          grounded: true,
+          note: 'Uses Postgres through the ORM; no evidence of owning schema design, tuning, or operations.',
+          evidence: [
+            { quote: 'Built product features against a Postgres-backed Rails monolith.', source: 'cv' },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+const SHOWCASE_TOP_PART = {
+  type: 'tool_call',
+  toolCallId: 'tool_top_1',
+  toolName: 'find_top_candidates',
+  args: { criteria: ['owned a production GenAI launch', 'Postgres in production'], limit: 3, rank_by: 'taali' },
+  status: 'complete',
+  result: SHOWCASE_TOP_RESULT,
 };
 
 const SHOWCASE_MESSAGES = [
@@ -152,6 +274,20 @@ const SHOWCASE_MESSAGES = [
     tool: SHOWCASE_TOOL_PART,
     tailText:
       "**14 candidates** match. Top hits all have hands-on Postgres in production at a YC-backed company. **Priya Raman** is the strongest signal — Helix Pay + Caldera Health, Postgres-heavy infra ownership.\n\nWant me to compare the top three side-by-side, or open Priya's standing report?",
+  },
+  {
+    id: 'm3',
+    role: 'user',
+    text: 'Now just the top 3 who’ve owned a production GenAI launch AND use Postgres in production — and show me the evidence for each.',
+  },
+  {
+    id: 'm4',
+    role: 'assistant',
+    leadText:
+      'Treating both as hard filters and ranking the survivors by Taali fit. Every verdict below is grounded in a verbatim quote from the CV or the candidate’s notes — anything I can’t cite, I mark unverified rather than assume.',
+    tool: SHOWCASE_TOP_PART,
+    tailText:
+      '**Priya Raman** is the only one who clears both cleanly. Daniel owns Postgres deeply but didn’t own the launch gate; Maya owns the launch but her Postgres is ORM-only. **11 candidates dropped** for failing a must-have — they’re listed in the shareable report so you can audit every cut.',
   },
 ];
 
@@ -192,48 +328,6 @@ const SidebarConversationGroup = ({ label, rows }) => {
           </button>
         </div>
       ))}
-    </div>
-  );
-};
-
-const StaticToolCard = ({ part }) => {
-  const [open, setOpen] = useState(false);
-  const argsLabel = Object.entries(part.args || {}).map(([k, v]) => (
-    <span key={k}>
-      <b>{k}=</b>
-      {Array.isArray(v) ? `[${v.join(',')}]` : String(v)}{' '}
-    </span>
-  ));
-  const total = part.result?.total_matched ?? part.result?.applications?.length;
-  const showing = part.result?.applications?.length;
-
-  return (
-    <div className={`cp-tool ${open ? 'cp-tool-open' : ''}`}>
-      <button type="button" className="cp-tool-head" onClick={() => setOpen((v) => !v)}>
-        <span className="cp-tool-glyph">
-          <Search size={13} strokeWidth={2.2} />
-        </span>
-        <span className="cp-tool-tname">{part.toolName}</span>
-        <span className="cp-tool-args">{argsLabel}</span>
-        <span className="cp-tool-count">{showing} of {total}</span>
-        <ChevronRight size={14} className="cp-tool-chev" />
-      </button>
-      {open ? (
-        <div className="cp-tool-body">
-          <div className="cp-tool-kv">
-            <div className="k">tool</div>
-            <div className="v">{part.toolName}</div>
-            <div className="k">args</div>
-            <div className="v">
-              <pre className="cp-tool-raw">{JSON.stringify(part.args || {}, null, 2)}</pre>
-            </div>
-            <div className="k">graph</div>
-            <div className="v">
-              {part.result.graph.nodes.length} nodes · {part.result.graph.edges.length} edges
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 };
@@ -293,10 +387,18 @@ export const ChatShowcaseView = () => {
                     </div>
                   ) : null}
                   {m.tool ? (
+                    // Mirrors the live Thread's ToolResultRender: find_top_candidates
+                    // → the grounded evidence card; the search tools → grid + graph.
                     <>
-                      <StaticToolCard part={m.tool} />
-                      <CandidateGrid rows={m.tool.result.applications} />
-                      <GraphView graph={m.tool.result.graph} />
+                      <ToolCallCard part={m.tool} />
+                      {m.tool.toolName === 'find_top_candidates' ? (
+                        <CandidateEvidenceCard data={m.tool.result} />
+                      ) : (
+                        <>
+                          <CandidateGrid rows={m.tool.result.applications} />
+                          {m.tool.result.graph ? <GraphView graph={m.tool.result.graph} /> : null}
+                        </>
+                      )}
                     </>
                   ) : null}
                   {m.tailText ? (
