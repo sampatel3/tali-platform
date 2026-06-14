@@ -357,11 +357,16 @@ class Settings(BaseSettings):
     # single-call Sonnet holistic scorer (app.cv_matching.holistic) instead
     # of the Haiku run_cv_match main+graded pipeline. The Sonnet ``overall``
     # becomes role_fit_score directly (no 0.40·cv_fit+0.60·req_match
-    # aggregation). Default off → zero behaviour change on deploy.
+    # aggregation).
     # HOLISTIC_SCORING_ORG_IDS is a comma-separated allowlist of org ids,
     # or "*" for every org. Both must be set for the engine to activate.
-    HOLISTIC_SCORING_ENABLED: bool = False
-    HOLISTIC_SCORING_ORG_IDS: str = ""
+    # DEFAULT ON for every org (2026-06-14): v2.1.0 holistic is the standing
+    # scoring engine platform-wide. This governs NEW scores only — existing
+    # scores are NOT re-scored on deploy (a re-score is opt-in, prompted by the
+    # agent when switched on for a role carrying stale v1.x scores). An env
+    # override can still pin a narrower allowlist or disable it per environment.
+    HOLISTIC_SCORING_ENABLED: bool = True
+    HOLISTIC_SCORING_ORG_IDS: str = "*"
 
     # Numeric threshold (0-100) for the pre-screen gate. Candidates whose
     # pre-screen score is strictly below this value are filtered out without
