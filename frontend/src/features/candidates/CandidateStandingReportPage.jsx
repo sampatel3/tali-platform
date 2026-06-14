@@ -17,6 +17,7 @@ import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
 import { RadarChart } from '../../shared/ui/RadarChart';
 import { ScoreRing } from '../../shared/ui/ScoreRing';
+import { ScoreProvenance } from './ScoreProvenance';
 import { ErrorBoundary } from '../../shared/ui/ErrorBoundary';
 import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAssessmentToCandidateView } from './assessmentViewModels';
 import { AssessmentEvidencePanels, EvaluatePanel, InterviewTranscriptCapture } from './CandidateAssessmentDetailPanels';
@@ -1542,6 +1543,10 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     <ScoreRing score={(reqMet / reqTotal) * 100} display={`${reqMet}/${reqTotal}`} label="REQUIREMENTS" size={120} />
                   ) : null}
                 </div>
+                <ScoreProvenance
+                  provenance={application?.score_summary?.score_provenance}
+                  className="mc-overview-hero-provenance"
+                />
               </div>
 
               {/* (2) CV match review — full requirement breakdown, gaps first */}
