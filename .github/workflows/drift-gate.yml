@@ -1,0 +1,61 @@
+name: Vendor drift gate
+
+# Verifies the vendored mainspring_* seams (backend/vendor/) haven't silently
+# drifted from upstream mainspring. Runs backend/scripts/check_vendor_drift.sh.
+#
+# Kept OUT of ci.yml on purpose: ci.yml is deliberately token-free (compileall +
+# alembic, no pip install, no private-repo clone). This gate needs a mainspring
+# checkout, and mainspring is private, so it requires a read-only clone token.
+#
+# OPT-IN: add a repo secret `MAINSPRING_CLONE_TOKEN` (a fine-grained PAT or
+# deploy token with read access to sampatel3/mainspring). Until it's set this
+# job NO-OPs (emits a notice and passes), so it never blocks PRs prematurely.
+#
+# Scoped to PRs that touch the vendored seams or their scripts, so normal PRs
+# don't pay for it.
+
+on:
+  pull_request:
+    paths:
+      - 'backend/vendor/**'
+      - 'backend/scripts/vendor_mainspring_*.sh'
+      - 'backend/scripts/check_vendor_drift.sh'
+  workflow_dispatch:
+
+jobs:
+  vendor-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Gate on token presence
+        id: tok
+        env:
+          MS_TOKEN: ${{ secrets.MAINSPRING_CLONE_TOKEN }}
+        run: |
+          if [ -n "$MS_TOKEN" ]; then
+            echo "have=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "have=0" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Vendor drift gate skipped::Set the MAINSPRING_CLONE_TOKEN secret (read access to sampatel3/mainspring) to enable this gate."
+          fi
+
+      - name: Clone mainspring (pinned-safe, shallow)
+        if: steps.tok.outputs.have == '1'
+        env:
+          MS_TOKEN: ${{ secrets.MAINSPRING_CLONE_TOKEN }}
+        run: |
+          git clone --depth 1 \
+            "https://x-access-token:${MS_TOKEN}@github.com/sampatel3/mainspring.git" \
+            /tmp/mainspring
+
+      - name: Setup Python
+        if: steps.tok.outputs.have == '1'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Run vendor drift gate
+        if: steps.tok.outputs.have == '1'
+        run: MAINSPRING_DIR=/tmp/mainspring bash backend/scripts/check_vendor_drift.sh
