@@ -395,6 +395,51 @@
   opacity: 0.72;
 }
 
+/* Invited-candidate tracker ("Assessment pending" view) */
+.rq-invited-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+}
+.rq-invited-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+}
+.rq-invited-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+.rq-invited-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rq-invited-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.rq-invited-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.rq-invited-age {
+  font-size: 0.75rem;
+  color: var(--mute);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .rq-hybrid-right {
   display: flex;
   flex-direction: column;

@@ -24,7 +24,7 @@ from ...components.assessments.service import get_assessment_creation_gate
 from ...components.integrations.workable.sync_service import _extract_candidate_fields
 from ...deps import get_current_user
 from ...domains.integrations_notifications.invite_flow import dispatch_assessment_invite
-from ...models.assessment import Assessment
+from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
@@ -1267,6 +1267,14 @@ def list_applications_global(
     pipeline_stages: str | None = Query(default=None),
     application_outcome: str | None = Query(default=None),
     application_outcomes: str | None = Query(default=None),
+    assessment_status: str | None = Query(
+        default=None,
+        description=(
+            "CSV of latest-assessment statuses to filter to "
+            "(pending,in_progress,completed,expired). Powers the Home "
+            "'Assessment pending' tracker."
+        ),
+    ),
     search: str | None = Query(default=None),
     nl_query: str | None = Query(default=None, max_length=500),
     view: str = Query(default="list", pattern="^(list|graph)$"),
@@ -1432,6 +1440,41 @@ def list_applications_global(
     filtered_query = base_query
     if requested_stages:
         filtered_query = filtered_query.filter(CandidateApplication.pipeline_stage.in_(requested_stages))
+
+    # Latest-assessment-status filter (Home "Assessment pending" tracker).
+    # Applied before count/pagination so totals stay accurate.
+    requested_assessment_statuses = _parse_choice_csv_filter(
+        assessment_status,
+        allowed={"pending", "in_progress", "completed", "expired"},
+        field_name="assessment_status",
+    )
+    if requested_assessment_statuses:
+        status_by_value = {s.value: s for s in AssessmentStatus}
+        wanted = [status_by_value[s] for s in requested_assessment_statuses if s in status_by_value]
+        if "completed" in requested_assessment_statuses:
+            wanted.append(AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT)
+        if wanted:
+            # Keep apps whose LATEST non-voided assessment is in the set.
+            # Correlated subquery, cross-DB safe (no DISTINCT ON): "latest" is
+            # max(id), monotonic with creation.
+            latest_assessment_id = (
+                db.query(func.max(Assessment.id))
+                .filter(
+                    Assessment.application_id == CandidateApplication.id,
+                    Assessment.is_voided.isnot(True),
+                )
+                .correlate(CandidateApplication)
+                .scalar_subquery()
+            )
+            filtered_query = filtered_query.filter(
+                db.query(Assessment.id)
+                .filter(
+                    Assessment.id == latest_assessment_id,
+                    Assessment.status.in_(wanted),
+                )
+                .correlate(CandidateApplication)
+                .exists()
+            )
 
     total = filtered_query.order_by(None).count()
     page_ids = [
