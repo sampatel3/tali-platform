@@ -68,7 +68,17 @@ export const funnelDecisionRow = (stageCounts, decisions) => {
   for (const stage of DECISION_PENDING_STAGES) {
     const decided = (byStage[stage] || []).reduce((acc, c) => acc + c.count, 0);
     const pending = Math.max(0, (Number(sc[stage]) || 0) - decided);
-    if (pending > 0) push(stage, { key: 'pending', label: 'decision pending', count: pending, tone: 'pending' });
+    if (pending > 0) push(stage, {
+      key: 'pending',
+      // NOT "decision pending" — that read like a decision waiting on the
+      // recruiter. These are scored candidates the AGENT hasn't ruled on yet
+      // (its to-do, not yours), almost always because its agent is paused on
+      // that role. They get a verdict the moment the agent runs.
+      label: 'not yet decided',
+      count: pending,
+      tone: 'pending',
+      tip: "Scored candidates the agent hasn't ruled on yet — usually because the agent is paused on this role. Each gets a decision (from its current score) when the agent runs; it isn't waiting on you.",
+    });
   }
   return byStage;
 };

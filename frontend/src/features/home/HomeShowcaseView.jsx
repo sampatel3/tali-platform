@@ -172,7 +172,7 @@ const SHOWCASE_AGENT = {
 };
 
 const SHOWCASE_KPIS = [
-  { key: 'awaiting', label: 'Awaiting you', value: '103', emph: true, sub: '85 decision pending' },
+  { key: 'awaiting', label: 'Awaiting you', value: '103', emph: true, sub: '85 not yet decided by the agent' },
   { key: 'today', label: 'Decisions today', value: '14', sub: '11 auto-applied' },
   { key: 'budget', label: 'Org budget · MTD', value: '$18', unit: '/ $50', bar: { pct: 36, over: false }, sub: '36% · proj $44 EOM' },
   { key: 'override', label: 'Override rate · 7d', value: '8%', sub: '12% taught' },

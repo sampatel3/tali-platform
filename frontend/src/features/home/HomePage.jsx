@@ -512,8 +512,11 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
               value: formatCount(pendingDecisions),
               emph: pendingDecisions > 0,
               sub: orgNotYetDecided > 0
-                ? `${formatCount(orgNotYetDecided)} decision pending`
+                ? `${formatCount(orgNotYetDecided)} not yet decided by the agent`
                 : (pendingDecisions > 0 ? 'all flagged' : 'queue clear'),
+              subTitle: orgNotYetDecided > 0
+                ? "Scored candidates the agent hasn't ruled on yet — usually because its agent is paused on that role. Each is decided from its current score when the agent runs; these are not waiting on you."
+                : null,
             },
             {
               key: 'today',

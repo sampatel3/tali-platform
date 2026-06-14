@@ -9,7 +9,7 @@ import './KpiStrip.css';
 // ({ pct, over }, e.g. the object returned by metrics.budgetTile), and a
 // sub-line. `columns` fixes the wide-screen column count (default 4) so the
 // row stays one band instead of wrapping.
-export const KpiTile = ({ label, value, unit = null, emph = false, bar = null, sub = null }) => (
+export const KpiTile = ({ label, value, unit = null, emph = false, bar = null, sub = null, subTitle = null }) => (
   <div className={`kpi-tile${emph ? ' is-emph' : ''}`}>
     <div className="kpi-l">{label}</div>
     <div className="kpi-v">
@@ -21,7 +21,7 @@ export const KpiTile = ({ label, value, unit = null, emph = false, bar = null, s
         <i style={{ width: `${bar.pct}%`, background: bar.over ? 'var(--red)' : 'var(--purple)' }} />
       </div>
     ) : null}
-    {sub != null ? <div className="kpi-d">{sub}</div> : null}
+    {sub != null ? <div className="kpi-d" title={subTitle || undefined}>{sub}</div> : null}
   </div>
 );
 
