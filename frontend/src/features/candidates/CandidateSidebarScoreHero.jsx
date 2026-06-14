@@ -3,8 +3,8 @@ import React from 'react';
 import { formatScale100Score } from '../../lib/scoreDisplay';
 import { BrandLabel } from '../../shared/ui/Branding';
 import { Badge, Panel } from '../../shared/ui/TaaliPrimitives';
-import { formatDateTime } from './candidatesUiUtils';
 import { CandidateScoreRing } from './CandidateScoreRing';
+import { ScoreProvenance } from './ScoreProvenance';
 
 export function CandidateSidebarScoreHero({
   application,
@@ -49,6 +49,10 @@ export function CandidateSidebarScoreHero({
               <p className="mt-2 taali-display text-4xl font-semibold text-[var(--taali-text)]">
                 {formatScale100Score(score, scoreDetails?.score_scale || '0-100')}
               </p>
+              <ScoreProvenance
+                provenance={application?.score_summary?.score_provenance}
+                className="mt-1.5"
+              />
               {resolvedSubtitle ? (
                 <p className="mt-2 text-sm text-[var(--taali-muted)]">{resolvedSubtitle}</p>
               ) : null}
@@ -57,9 +61,6 @@ export function CandidateSidebarScoreHero({
 
           <div className="space-y-3 sm:text-right">
             {mode ? <Badge variant={mode.variant}>{mode.label}</Badge> : null}
-            <p className="text-xs text-[var(--taali-muted)]">
-              Updated {formatDateTime(sourceMeta?.updatedAt || application?.updated_at || application?.created_at)}
-            </p>
           </div>
         </div>
 

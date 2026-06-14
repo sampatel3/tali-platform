@@ -521,6 +521,28 @@ def completed_valid_role_assessment(
     )
 
 
+def _score_provenance(app: CandidateApplication) -> dict[str, Any]:
+    """When + by which engine version + model the CV score was produced.
+
+    Surfaced under the score everywhere ("scored {date} · v{version} · {model}").
+    Reads the semantic a.b.c engine version from cv_match_details (mapping
+    legacy cv_match_vN → 1.N.0), the scored-at timestamp, and the LLM tier.
+    """
+    from app.cv_matching.holistic import resolve_engine_version
+
+    details = app.cv_match_details if isinstance(app.cv_match_details, dict) else {}
+    scored_at = getattr(app, "cv_match_scored_at", None)
+    model = details.get("model_version") or None
+    tier = None
+    if model:
+        tier = "Sonnet" if "sonnet" in model else "Haiku" if "haiku" in model else model
+    return {
+        "engine_version": resolve_engine_version(details) or None,
+        "scored_at": scored_at.isoformat() if scored_at else None,
+        "model": tier,
+    }
+
+
 def _score_summary_from_active_assessments(
     app: CandidateApplication,
     active_assessments: list[Assessment],
@@ -568,6 +590,7 @@ def _score_summary_from_active_assessments(
         "role_fit_score": role_fit_score,
         "cv_fit_score": cv_fit_score,
         "requirements_fit_score": requirements_fit_score,
+        "score_provenance": _score_provenance(app),
         "role_fit_components": {
             "cv_fit_score": cv_fit_score,
             "requirements_fit_score": requirements_fit_score,
@@ -701,6 +724,7 @@ def score_summary_from_cache(app: CandidateApplication) -> dict[str, Any]:
         "role_fit_score": role_fit_score,
         "cv_fit_score": cv_fit_score,
         "requirements_fit_score": requirements_fit_score,
+        "score_provenance": _score_provenance(app),
         "role_fit_components": {
             "cv_fit_score": cv_fit_score,
             "requirements_fit_score": requirements_fit_score,
