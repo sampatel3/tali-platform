@@ -106,10 +106,32 @@ def _queue(db, org, role, app, run, decision_type="send_assessment"):
     )
 
 
-def _discard(db, decision: AgentDecision) -> None:
+def _discard(db, decision: AgentDecision, *, by_user: bool = True) -> None:
+    """Discard a decision. ``by_user`` mirrors a recruiter's explicit "no"
+    (sets ``resolved_by_user_id`` — the only kind that suppresses re-emit);
+    ``by_user=False`` mirrors a SYSTEM discard (re-score supersede / reconcile),
+    which leaves the field NULL and must NOT suppress re-decision."""
+    from app.models.user import User
+
     decision.status = "discarded"
     decision.resolved_at = datetime.now(timezone.utc)
-    decision.resolution_note = "Recruiter said no."
+    if by_user:
+        decision.resolution_note = "Recruiter said no."
+        u = User(
+            email=f"u-{id(decision)}-{decision.id}@x.test",
+            hashed_password="x",
+            full_name="U",
+            organization_id=decision.organization_id,
+            is_active=True,
+            is_verified=True,
+        )
+        db.add(u)
+        db.flush()
+        decision.resolved_by_user_id = u.id
+    else:
+        decision.resolution_note = (
+            "superseded: candidate_data_changed; agent will re-decide once the new score lands"
+        )
     db.flush()
 
 
@@ -147,6 +169,30 @@ def test_discard_suppresses_reemit_until_inputs_change(db):
     assert pending == 0
 
 
+def test_system_discard_does_not_suppress_reemit(db):
+    """A SYSTEM discard (re-score supersede / reconcile — no resolved_by_user_id)
+    must NOT suppress re-decision, even when the verdict holds (so verdict-aware
+    staleness reports 'not stale'). Otherwise a re-score discards the card and it
+    can never be re-created — the stranding bug."""
+    org, role, app = _seed(db)
+    run1 = _agent_run(db, role)
+    db.commit()
+
+    first = _queue(db, org, role, app, run1)
+    db.commit()
+    _discard(db, first, by_user=False)  # system discard — inputs UNCHANGED
+    db.commit()
+
+    # Same verdict, inputs unchanged → a HUMAN discard would suppress, but a
+    # system discard must let the agent re-create the card.
+    run2 = _agent_run(db, role)
+    second = _queue(db, org, role, app, run2)
+    db.commit()
+    assert int(second.id) != int(first.id)
+    assert second.status == "pending"
+    assert getattr(second, "_just_created", None) is True
+
+
 def test_score_change_releases_suppression(db):
     org, role, app = _seed(db, pre_screen=60.0)
     run1 = _agent_run(db, role)
@@ -178,9 +224,18 @@ def test_override_also_suppresses_reemit(db):
 
     first = _queue(db, org, role, app, run1)
     db.commit()
+    from app.models.user import User
+
+    overrider = User(
+        email=f"ovr-{id(db)}@x.test", hashed_password="x", full_name="O",
+        organization_id=org.id, is_active=True, is_verified=True,
+    )
+    db.add(overrider)
+    db.flush()
     first.status = "overridden"
     first.resolved_at = datetime.now(timezone.utc)
     first.human_disposition = "overridden"
+    first.resolved_by_user_id = overrider.id  # an override is a human action
     db.commit()
 
     run2 = _agent_run(db, role)
