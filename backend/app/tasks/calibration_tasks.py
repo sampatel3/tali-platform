@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import func
+
 from .celery_app import celery_app
 
 logger = logging.getLogger("taali.tasks.calibration")
@@ -100,3 +102,51 @@ def recalibrate_cv_match(lookback_days: int = 90) -> dict:
     }
     logger.info("recalibrate_cv_match: %s", summary)
     return summary
+
+
+@celery_app.task(name="app.tasks.calibration_tasks.recalibrate_prescreen_gate")
+def recalibrate_prescreen_gate() -> dict:
+    """Recompute the data-driven Stage-1 gate threshold per org and log the
+    divergence vs the static env threshold.
+
+    SHADOW measurement — changes nothing live (the gate enforces the static
+    threshold until ``PRE_SCREEN_DYNAMIC_GATE_ENFORCE`` is on). Runs weekly,
+    after ``sample_prescreen_for_calibration`` so the latest shadow rejects are
+    included. The recommendation itself is read live (TTL-cached) by the gate;
+    this job is the recalibration heartbeat + the false-reject report.
+    """
+    from ..models.role import Role
+    from ..platform.config import settings
+    from ..platform.database import SessionLocal
+    from ..services.prescreen_gate_calibration import compute_gate_threshold
+
+    db = SessionLocal()
+    results: list[dict] = []
+    try:
+        # One representative live role per org (the cut is org-wide).
+        org_rows = (
+            db.query(Role.organization_id, func.min(Role.id))
+            .filter(Role.deleted_at.is_(None))
+            .group_by(Role.organization_id)
+            .all()
+        )
+        for org_id, role_id in org_rows:
+            role = db.query(Role).filter(Role.id == role_id).one_or_none()
+            if role is None:
+                continue
+            rec = compute_gate_threshold(db, role=role)
+            entry = {"organization_id": int(org_id), "static": int(settings.PRE_SCREEN_THRESHOLD), **rec.to_dict()}
+            results.append(entry)
+            logger.info(
+                "recalibrate_prescreen_gate org=%s static=%s dynamic=%s source=%s "
+                "fr_rate=%s filtered_frac=%s n=%s n_pos=%s enforce=%s",
+                org_id, entry["static"], rec.value, rec.source, rec.fr_rate,
+                rec.filtered_frac, rec.sample_size, rec.n_positive,
+                settings.PRE_SCREEN_DYNAMIC_GATE_ENFORCE,
+            )
+    except Exception:
+        logger.exception("recalibrate_prescreen_gate failed")
+        raise
+    finally:
+        db.close()
+    return {"orgs": len(results), "enforced": bool(settings.PRE_SCREEN_DYNAMIC_GATE_ENFORCE), "results": results}

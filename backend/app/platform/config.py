@@ -375,6 +375,15 @@ class Settings(BaseSettings):
     # Recommended: 30 (catches only clear mismatches).
     PRE_SCREEN_THRESHOLD: int = 30
 
+    # When True, the Stage-1 gate ENFORCES the data-driven threshold from
+    # ``prescreen_gate_calibration.compute_gate_threshold`` (a false-reject-
+    # budgeted, org-wide cut) instead of the static ``PRE_SCREEN_THRESHOLD``.
+    # Default False = SHADOW: the dynamic value is still computed, logged, and
+    # stamped into cv_match_details for measurement, but the static env value
+    # decides — so nothing changes live until the false-reject numbers are
+    # proven. Flip to True per environment once the shadow data validates.
+    PRE_SCREEN_DYNAMIC_GATE_ENFORCE: bool = False
+
     # Pre-screen fraud detection — currently the only signal is "CV
     # copy-pasted from the JD". When the copy-paste fraction of the CV
     # crosses FRAUD_COPY_PASTE_THRESHOLD (0.0–1.0), the pre-screen agent

@@ -563,7 +563,29 @@ def _execute_scoring_v3(
         if application_needs_pre_screen(application):
             execute_pre_screen_only(application, db=db, client=org_client)
 
-        threshold = settings.PRE_SCREEN_THRESHOLD
+        static_threshold = int(settings.PRE_SCREEN_THRESHOLD)
+        # Stage-1 gate threshold is data-driven (shadow-first). We ALWAYS compute
+        # the dynamic, false-reject-budgeted cut for measurement and stamp it
+        # below; it only DECIDES when PRE_SCREEN_DYNAMIC_GATE_ENFORCE is on.
+        # Until then the static env value governs, so behaviour is unchanged.
+        dynamic_rec = None
+        try:
+            from .prescreen_gate_calibration import compute_gate_threshold_cached
+
+            if role is not None:
+                dynamic_rec = compute_gate_threshold_cached(db, role=role)
+        except Exception:  # never let calibration break scoring
+            logger.warning("dynamic pre-screen gate threshold failed; using static", exc_info=True)
+        dynamic_threshold = (
+            int(dynamic_rec.value)
+            if dynamic_rec is not None and dynamic_rec.source == "calibrated"
+            else None
+        )
+        threshold = (
+            dynamic_threshold
+            if (settings.PRE_SCREEN_DYNAMIC_GATE_ENFORCE and dynamic_threshold is not None)
+            else static_threshold
+        )
         evidence = application.pre_screen_evidence if isinstance(application.pre_screen_evidence, dict) else {}
         fraud_capped = bool(evidence.get("fraud_capped", False))
         # Gate on the GENUINE pre-screen score from THIS run's evidence — not
@@ -614,6 +636,20 @@ def _execute_scoring_v3(
             application.cv_match_details = None
             application.cv_match_scored_at = None
             return
+        # Shadow measurement: record what the dynamic cut WOULD do vs the static
+        # one for EVERY gated candidate (survivor or filtered), so the divergence
+        # and false-reject impact are observable before we ever enforce.
+        if gated_score is not None:
+            logger.info(
+                "pre_screen_gate org=%s role=%s score=%.1f static=%s dynamic=%s enforced=%s "
+                "static_filter=%s dynamic_filter=%s source=%s",
+                getattr(application, "organization_id", None),
+                getattr(application, "role_id", None),
+                float(gated_score), static_threshold, dynamic_threshold, threshold,
+                gated_score < static_threshold,
+                (dynamic_threshold is not None and gated_score < dynamic_threshold),
+                getattr(dynamic_rec, "source", None),
+            )
         # Only filter when we have a numeric score AND it's below threshold.
         if gated_score is not None and gated_score < threshold:
             now = datetime.now(timezone.utc)
@@ -643,6 +679,12 @@ def _execute_scoring_v3(
                 "fraud_signals": evidence.get("fraud_signals", {}),
                 "fraud_capped": fraud_capped,
                 "llm_score_100": evidence.get("llm_score_100"),
+                # Gate-threshold provenance (audit + shadow measurement): which
+                # cut actually decided, plus the dynamic recommendation alongside.
+                "gate_threshold_static": static_threshold,
+                "gate_threshold_dynamic": dynamic_threshold,
+                "gate_threshold_enforced": threshold,
+                "gate_dynamic_source": getattr(dynamic_rec, "source", None),
             }
             application.cv_match_score = None
             application.cv_match_details = details

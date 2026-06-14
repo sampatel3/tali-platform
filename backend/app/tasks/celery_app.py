@@ -249,6 +249,14 @@ celery_app.conf.update(
             "task": "app.tasks.calibration_tasks.sample_prescreen_for_calibration",
             "schedule": crontab(hour=2, minute=30, day_of_week=0),
         },
+        # Recompute the data-driven Stage-1 gate threshold per org + log the
+        # divergence vs the static env threshold (SHADOW measurement — changes
+        # nothing live until PRE_SCREEN_DYNAMIC_GATE_ENFORCE). Runs ~30 min after
+        # the prescreen sampler so the week's fresh shadow rejects are included.
+        "recalibrate-prescreen-gate-weekly": {
+            "task": "app.tasks.calibration_tasks.recalibrate_prescreen_gate",
+            "schedule": crontab(hour=3, minute=0, day_of_week=0),
+        },
         # Drain the durable Graphiti episode outbox. Realised-outcome (and
         # decision) episodes are written to graph_episode_outbox in the
         # producer's transaction so a graph outage can't drop the

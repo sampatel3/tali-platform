@@ -56,7 +56,12 @@ def test_sample_shadow_scores_rejects_without_surfacing(db):
     db.add(role); db.flush()
     app = _reject_app(db, org, role, ps_score=18.0)  # below threshold 30 → reject
 
-    with patch("app.cv_matching.runner.run_cv_match", return_value=_stub_output(72.0)) as m:
+    # Non-holistic org → the v18 run_cv_match shadow path.
+    with patch(
+        "app.services.cv_score_orchestrator._holistic_enabled_for", return_value=False
+    ), patch(
+        "app.cv_matching.runner.run_cv_match", return_value=_stub_output(72.0)
+    ) as m:
         res = sample_and_shadow_score_rejects(db, organization_id=int(org.id), limit=10)
 
     assert res == {"sampled": 1, "scored": 1, "failed": 0}
@@ -67,6 +72,32 @@ def test_sample_shadow_scores_rejects_without_surfacing(db):
     sample = db.query(PrescreenCalibrationSample).filter_by(application_id=app.id).one()
     assert sample.pre_screen_score == 18.0
     assert sample.full_cv_match_score == 72.0
+    assert sample.scoring_status == "ok"
+
+
+def test_sample_shadow_scores_with_holistic_engine(db):
+    """Holistic-enabled org shadow-scores on the SAME engine prod uses, so the
+    (pre_screen -> full_score) pair matches what survivors actually get."""
+    org = Organization(name="O", slug=f"o-{id(db)}calh"); db.add(org); db.flush()
+    role = Role(organization_id=org.id, name="R", source="manual", job_spec_text="JD requirements")
+    db.add(role); db.flush()
+    app = _reject_app(db, org, role, ps_score=18.0)
+
+    with patch(
+        "app.services.cv_score_orchestrator._holistic_enabled_for", return_value=True
+    ), patch(
+        "app.services.claude_client_resolver.get_client_for_org", return_value=object()
+    ), patch(
+        "app.cv_matching.holistic.run_holistic_match", return_value=_stub_output(81.0)
+    ) as m:
+        res = sample_and_shadow_score_rejects(db, organization_id=int(org.id), limit=10)
+
+    assert res == {"sampled": 1, "scored": 1, "failed": 0}
+    m.assert_called_once()
+    db.refresh(app)
+    assert app.cv_match_score is None  # still shadow-only
+    sample = db.query(PrescreenCalibrationSample).filter_by(application_id=app.id).one()
+    assert sample.full_cv_match_score == 81.0
     assert sample.scoring_status == "ok"
 
 

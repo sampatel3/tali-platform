@@ -60,12 +60,17 @@ class Role(Base):
     tech_questions_cached = Column(JSON, nullable=True)
     tech_questions_cached_at = Column(DateTime(timezone=True), nullable=True)
     tech_questions_signature = Column(String(length=64), nullable=True)
-    # ``manual`` — recruiter sets the threshold by hand.
-    # ``auto``   — agent computes a recommendation from the role's score
-    # distribution + any advance/hire labels each time the threshold is
-    # consulted (see ``services.auto_threshold_service``).
+    # ``auto``   — DEFAULT. The threshold is computed from the role's score
+    # distribution + any advance/hire labels each time it's consulted (see
+    # ``services.auto_threshold_service``), so it's data-driven, not a recruiter
+    # number. A recruiter-set ``score_threshold`` only wins when this is flipped
+    # back to ``manual``.
+    # ``manual`` — recruiter pins the threshold by hand (opt-out of dynamic).
+    # NOTE (2026-06-14): default flipped manual -> auto so NEW roles are dynamic
+    # by default. Existing roles keep their stored mode (migration 115 only
+    # changes the server_default; it does not touch existing rows).
     auto_reject_threshold_mode = Column(
-        String(length=8), nullable=False, default="manual", server_default="manual"
+        String(length=8), nullable=False, default="auto", server_default="auto"
     )
     workable_actor_member_id = Column(String, nullable=True)
     starred_for_auto_sync = Column(
