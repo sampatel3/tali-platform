@@ -1683,6 +1683,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                               </td>
                               <td>
                                 {renderJobPipelineScoreCell(score, scoreClass, application?.score_status)}
+                                <ScoreProvenance
+                                  provenance={application?.score_summary?.score_provenance}
+                                  density="compact"
+                                  className="mt-0.5"
+                                />
                               </td>
                               <td>
                                 <span className="stage-pill">{stageLabel}</span>
