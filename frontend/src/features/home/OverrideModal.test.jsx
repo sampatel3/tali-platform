@@ -28,11 +28,15 @@ const baseDecision = {
   decision_type: 'send_assessment',
 };
 
-const skipAndAdvanceAlt = {
-  action: 'skip_assessment_advance',
-  label: 'Skip & advance',
-  kicker: 'SKIP ASSESSMENT',
-  headline: 'Skip the assessment and advance {name}?',
+// The stage-pick mechanism is exercised by the "Advance instead" override on
+// a reject card (action 'advance') — the one remaining override that still
+// requires a Workable stage. ("Skip & advance" now reclassifies into the
+// advance queue with no stage pick, so it no longer drives this modal path.)
+const advanceInsteadAlt = {
+  action: 'advance',
+  label: 'Advance instead',
+  kicker: 'OVERRIDE TO ADVANCE',
+  headline: 'Advance {name} instead?',
   body: 'Pick the Workable stage to move them into.',
   confirmLabel: 'Advance',
   confirmClass: 'rq-approve',
@@ -66,7 +70,7 @@ describe('OverrideModal', () => {
     render(
       <OverrideModal
         decision={baseDecision}
-        alternative={skipAndAdvanceAlt}
+        alternative={advanceInsteadAlt}
         workableStages={stages}
         onClose={vi.fn()}
         onSubmitted={onSubmitted}
@@ -87,11 +91,11 @@ describe('OverrideModal', () => {
     expect(confirm).not.toBeDisabled();
   });
 
-  it('sends workable_target_stage on Skip & advance override', async () => {
+  it('sends workable_target_stage on Advance-instead override', async () => {
     render(
       <OverrideModal
         decision={baseDecision}
-        alternative={skipAndAdvanceAlt}
+        alternative={advanceInsteadAlt}
         workableStages={stages}
         onClose={vi.fn()}
         onSubmitted={vi.fn()}
@@ -109,7 +113,7 @@ describe('OverrideModal', () => {
     });
     const [decisionId, payload] = agentApi.overrideDecision.mock.calls[0];
     expect(decisionId).toBe(42);
-    expect(payload.override_action).toBe('skip_assessment_advance');
+    expect(payload.override_action).toBe('advance');
     expect(payload.workable_target_stage).toBe('tech-interview');
     expect(payload.note).toBe('Internal referral — pre-vetted');
   });
@@ -145,7 +149,7 @@ describe('OverrideModal', () => {
     render(
       <OverrideModal
         decision={{ ...baseDecision, workable_stage: 'phone-screen' }}
-        alternative={skipAndAdvanceAlt}
+        alternative={advanceInsteadAlt}
         workableStages={stages}
         onClose={vi.fn()}
         onSubmitted={vi.fn()}
@@ -161,7 +165,7 @@ describe('OverrideModal', () => {
     render(
       <OverrideModal
         decision={baseDecision}
-        alternative={skipAndAdvanceAlt}
+        alternative={advanceInsteadAlt}
         workableStages={[]}
         onClose={vi.fn()}
         onSubmitted={vi.fn()}
