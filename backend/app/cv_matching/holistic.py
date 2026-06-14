@@ -150,7 +150,17 @@ class _LeanScore(BaseModel):
     a re-score, so they're safe to keep here for the summary."""
 
     model_config = ConfigDict(extra="ignore")
-    overall: int = Field(default=0, ge=0, le=100)
+    # ``overall`` is REQUIRED (no default) on purpose: it maps directly to
+    # ``role_fit_score`` (see ``_to_output``). A default here let a degraded
+    # but schema-valid tool emission that omitted ``overall`` validate as
+    # ok=True with overall=0 → the orchestrator persisted cv_match_score=0
+    # with status OK = a silent 0-score auto-reject of a real candidate.
+    # Required → an absent field raises ValidationFailure, which the
+    # structured layer retries (with feedback) and, only if still missing,
+    # returns ok=False → ``_failed_output`` (FAILED → cv_match_score=None,
+    # retried later — never a 0 auto-reject). A genuine model-emitted
+    # ``overall=0`` (real clear-misfit verdict) is a valid int and still passes.
+    overall: int = Field(ge=0, le=100)
     core_capability_score: int = Field(default=0, ge=0, le=100)
     verdict: str = ""
     reasoning: str = ""

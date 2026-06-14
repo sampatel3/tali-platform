@@ -263,3 +263,27 @@ def test_run_holistic_score_failure(monkeypatch, _nocache):
     out = run_holistic_match("cv", "jd", client=object())
     assert out.scoring_status == ScoringStatus.FAILED
     assert "holistic_score_failed" in out.error_reason
+
+
+def test_lean_score_overall_is_required():
+    """A7 regression: ``overall`` maps DIRECTLY to role_fit_score (see
+    ``_to_output``), so it must be REQUIRED. A ``default=0`` previously let a
+    degraded-but-schema-valid tool emission that omitted ``overall`` validate as
+    ok=True with overall=0 → the orchestrator persisted cv_match_score=0 with
+    status OK = a silent 0-score auto-reject of a real candidate (live on the
+    holistic org). Required means an absent field raises in the structured
+    layer's ``model_validate`` → ValidationFailure → retry → only-then FAILED
+    (cv_match_score=None, retried later), never a 0 auto-reject."""
+    from pydantic import ValidationError
+
+    # An emission that omits ``overall`` must NOT silently validate to 0.
+    with pytest.raises(ValidationError):
+        _LeanScore(core_capability_score=80, verdict="degraded emission")
+
+    # The synthetic tool's input_schema must list ``overall`` as required so the
+    # model is constrained to emit it (input_schema == model_json_schema()).
+    assert "overall" in (_LeanScore.model_json_schema().get("required") or [])
+
+    # A genuine model-emitted ``overall=0`` (a real clear-misfit verdict) is a
+    # valid int and still passes — the fix targets ABSENCE, not low scores.
+    assert _LeanScore(overall=0, core_capability_score=0).overall == 0
