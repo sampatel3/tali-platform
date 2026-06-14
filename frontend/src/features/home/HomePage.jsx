@@ -73,6 +73,9 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     type: searchParams.get('type') || null,
     status: searchParams.get('status') || 'pending',
     q: searchParams.get('q') || null,
+    // 'invited' switches the queue to the Assessment-pending tracker. Persisted
+    // like the other filters so the pill round-trips through the URL.
+    view: searchParams.get('view') || null,
   }), [searchParams]);
 
   const setFilters = useCallback((updater) => {
@@ -82,6 +85,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
         type: prev.get('type') || null,
         status: prev.get('status') || 'pending',
         q: prev.get('q') || null,
+        view: prev.get('view') || null,
         pending: prev.get('pending') || null,
       };
       const next = typeof updater === 'function'
@@ -90,6 +94,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           type: current.type,
           status: current.status,
           q: current.q,
+          view: current.view,
         })
         : updater;
       const out = new URLSearchParams();
@@ -97,6 +102,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       if (next.type) out.set('type', String(next.type));
       if (next.status && next.status !== 'pending') out.set('status', String(next.status));
       if (next.q) out.set('q', String(next.q));
+      if (next.view) out.set('view', String(next.view));
       if (current.pending) out.set('pending', current.pending);
       return out;
     }, { replace: true });

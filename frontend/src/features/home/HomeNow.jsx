@@ -1167,7 +1167,7 @@ export const HomeNow = ({
   // history the user is just browsing — and hide it under the "needs
   // re-eval" filter, where bulk-approving stale scores is exactly what we
   // want the recruiter to stop and re-evaluate instead.
-  const bulkActionEl = filters.status === 'pending' && !staleOnly && visiblePending.length > 0 ? (
+  const bulkActionEl = !invitedView && filters.status === 'pending' && !staleOnly && visiblePending.length > 0 ? (
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
       <button
         type="button"
@@ -1200,6 +1200,7 @@ export const HomeNow = ({
   // so search-as-you-type stays usable.
   useEffect(() => {
     const onKey = (e) => {
+      if (invitedView) return;  // invited tracker has no decision under focus
       if (teachFor || bulkConfirm) return;  // an open modal owns the keyboard
       if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
       const tag = (e.target?.tagName || '').toLowerCase();
@@ -1218,7 +1219,7 @@ export const HomeNow = ({
     // — re-binding on each pending row is cheap and keeps the closure
     // pointing at the right target.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, selected?.status, teachFor, bulkConfirm]);
+  }, [selected?.id, selected?.status, teachFor, bulkConfirm, invitedView]);
 
   // Esc cancels / Enter confirms the bulk-approve modal.
   useEffect(() => {
