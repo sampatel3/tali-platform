@@ -58,7 +58,6 @@ def _make_org(db) -> Organization:
         name="Send Test Org",
         slug=f"send-org-{id(db)}",
         credits_balance=1_000_000,  # plenty for the billing gate
-        candidate_feedback_enabled=True,
     )
     db.add(org)
     db.flush()

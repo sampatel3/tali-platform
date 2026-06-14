@@ -532,7 +532,6 @@ def _create_application_assessment(
         expires_at=utcnow() + timedelta(days=settings.ASSESSMENT_EXPIRY_DAYS),
         workable_candidate_id=app.workable_candidate_id,
         workable_job_id=role.workable_job_id,
-        candidate_feedback_enabled=bool(getattr(org, "candidate_feedback_enabled", True)) if org else True,
     )
     db.add(assessment)
     db.flush()

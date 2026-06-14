@@ -859,61 +859,6 @@ def test_manual_evaluation_rejects_invalid_decision_value(client):
     assert "decision must be one of" in resp.json()["detail"]
 
 
-def test_finalize_candidate_feedback_and_fetch_public_report(client):
-    env = setup_full_environment(client)
-    assessment_id = env["assessment"]["id"]
-    assessment_token = env["assessment"]["token"]
-
-    with TestingSessionLocal() as db:
-        assessment = db.query(Assessment).filter(Assessment.id == assessment_id).first()
-        assert assessment is not None
-        assessment.status = AssessmentStatus.COMPLETED
-        assessment.score = 7.4
-        assessment.started_at = datetime.now(timezone.utc)
-        assessment.completed_at = datetime.now(timezone.utc)
-        assessment.score_breakdown = {
-            "category_scores": {
-                "task_completion": 7.8,
-                "prompt_clarity": 8.1,
-                "context_provision": 4.2,
-                "independence_efficiency": 7.6,
-                "response_utilization": 7.0,
-                "debugging_design": 7.3,
-                "written_communication": 5.1,
-                "role_fit": 6.8,
-            },
-        }
-        assessment.ai_prompts = [
-            {
-                "message": "Write a function for X. Context: service Y and caller Z. Return JSON and do not modify interface.",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-        ]
-        db.commit()
-
-    finalize_resp = client.post(
-        f"/api/v1/assessments/{assessment_id}/finalize-candidate-feedback",
-        json={},
-        headers=env["headers"],
-    )
-    assert finalize_resp.status_code == 200, finalize_resp.text
-    finalize_payload = finalize_resp.json()
-    assert finalize_payload["feedback_ready"] is True
-    assert isinstance(finalize_payload.get("feedback"), dict)
-
-    public_resp = client.get(f"/api/v1/assessments/{assessment_token}/feedback")
-    assert public_resp.status_code == 200, public_resp.text
-    public_payload = public_resp.json()
-    assert public_payload["feedback_ready"] is True
-    assert isinstance(public_payload["feedback"].get("dimensions"), list)
-    assert public_payload["feedback"].get("overall_score") is not None
-
-    pdf_resp = client.get(f"/api/v1/assessments/{assessment_token}/feedback.pdf")
-    assert pdf_resp.status_code == 200
-    assert pdf_resp.headers["content-type"].startswith("application/pdf")
-    assert pdf_resp.content.startswith(b"%PDF")
-
-
 def test_recruiter_report_pdf_is_client_facing_and_wrapped(client):
     env = setup_full_environment(client)
     assessment_id = env["assessment"]["id"]
@@ -1040,23 +985,6 @@ def test_report_benchmark_filter_avoids_timeout_enum_literal():
 
     assert "COMPLETED_DUE_TO_TIMEOUT" not in " ".join(params.values())
     assert any("completed" in value.lower() for value in params.values())
-
-
-def test_public_feedback_rejected_before_finalize(client):
-    env = setup_full_environment(client)
-    assessment_id = env["assessment"]["id"]
-    assessment_token = env["assessment"]["token"]
-
-    with TestingSessionLocal() as db:
-        assessment = db.query(Assessment).filter(Assessment.id == assessment_id).first()
-        assert assessment is not None
-        assessment.status = AssessmentStatus.COMPLETED
-        assessment.score = 6.9
-        db.commit()
-
-    public_resp = client.get(f"/api/v1/assessments/{assessment_token}/feedback")
-    assert public_resp.status_code == 403
-    assert "not ready" in public_resp.json()["detail"].lower()
 
 
 def test_interview_debrief_generation_is_cached(client):
@@ -1187,31 +1115,3 @@ def test_interview_debrief_generation_includes_linked_fireflies_context_from_app
     assert payload["interview_debrief"]["fireflies_context"]["invite_email"] == "taali@fireflies.ai"
     assert "Stage 1 Fireflies transcript is linked" in payload["interview_debrief"]["summary"]
     assert payload["interview_debrief"]["probing_questions"][0]["dimension"] == "Stage 1 screening"
-
-
-def test_finalize_candidate_feedback_blocked_when_org_toggle_disabled(client):
-    headers, _ = auth_headers(client)
-    task = create_task_via_api(client, headers).json()
-    assessment = create_assessment_via_api(client, headers, task["id"]).json()
-
-    patch_org = client.patch(
-        "/api/v1/organizations/me",
-        json={"candidate_feedback_enabled": False},
-        headers=headers,
-    )
-    assert patch_org.status_code == 200, patch_org.text
-
-    with TestingSessionLocal() as db:
-        row = db.query(Assessment).filter(Assessment.id == assessment["id"]).first()
-        assert row is not None
-        row.status = AssessmentStatus.COMPLETED
-        row.score = 7.0
-        db.commit()
-
-    finalize_resp = client.post(
-        f"/api/v1/assessments/{assessment['id']}/finalize-candidate-feedback",
-        json={},
-        headers=headers,
-    )
-    assert finalize_resp.status_code == 403
-    assert "disabled" in finalize_resp.json()["detail"].lower()

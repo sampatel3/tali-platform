@@ -95,11 +95,6 @@ export const CandidateEvaluateTab = ({
   recommendation = null,
   recruiterSummary = '',
   actionPanel = null,
-  onFinalizeCandidateFeedback = () => {},
-  finalizeFeedbackLoading = false,
-  candidateFeedbackReady = false,
-  candidateFeedbackSentAt = null,
-  canFinalizeCandidateFeedback = false,
 }) => {
   const { showToast } = useToast();
   const assessment = candidate?._raw || {};
@@ -465,34 +460,6 @@ export const CandidateEvaluateTab = ({
           </>
         )}
       </Panel>
-
-      {canFinalizeCandidateFeedback ? (
-        <Panel className="border-[var(--taali-purple)] bg-[var(--taali-purple-soft)] p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="font-mono text-xs font-bold text-[var(--taali-text)]">Candidate Feedback Report</div>
-              <div className="mt-1 text-xs text-[var(--taali-muted)]">
-                {candidateFeedbackReady
-                  ? `Candidate feedback is finalized${candidateFeedbackSentAt ? ` and email sent on ${new Date(candidateFeedbackSentAt).toLocaleString()}` : ''}.`
-                  : 'Finalize review to generate and email the candidate report.'}
-              </div>
-            </div>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => onFinalizeCandidateFeedback({
-                forceRegenerate: candidateFeedbackReady,
-                resendEmail: candidateFeedbackReady,
-              })}
-              disabled={finalizeFeedbackLoading}
-            >
-              {finalizeFeedbackLoading
-                ? 'Finalizing...'
-                : (candidateFeedbackReady ? 'Regenerate + resend' : 'Finalize + send report')}
-            </Button>
-          </div>
-        </Panel>
-      ) : null}
 
       <Panel className="bg-[var(--taali-surface-muted)] p-4">
         <div className="mb-2 font-mono text-xs font-bold text-gray-600">Summary notes</div>

@@ -99,10 +99,6 @@ export const pathForPage = (page, options = {}) => {
         return `/assess/${encodeURIComponent(options.assessmentToken)}`;
       }
       return '/';
-    case 'candidate-feedback':
-      return options.assessmentToken
-        ? `/assessment/${encodeURIComponent(options.assessmentToken)}/feedback`
-        : '/';
     case 'assessment':
       return `/assessment/live${options.assessmentToken ? `?token=${encodeURIComponent(options.assessmentToken)}` : ''}`;
     case 'workable-callback':

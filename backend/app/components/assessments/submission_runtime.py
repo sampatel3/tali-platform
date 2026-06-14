@@ -25,7 +25,6 @@ from ...models.role import Role
 from ...models.task import Task
 from ...models.user import User
 from ...platform.request_context import get_request_id
-from ...services.candidate_feedback_engine import build_candidate_feedback_payload
 from ...services.fit_matching_service import (
     CvMatchValidationError,
     calculate_cv_job_match_sync,
@@ -1047,18 +1046,6 @@ def submit_assessment_impl(
     assessment.time_efficiency_score = round(component_scores.get("time_efficiency", 0.0) / 10.0, 2)
 
     org = db.query(Organization).filter(Organization.id == assessment.organization_id).first()
-    org_feedback_enabled = bool(getattr(org, "candidate_feedback_enabled", True)) if org else True
-    assessment_feedback_enabled = bool(getattr(assessment, "candidate_feedback_enabled", True))
-    if org_feedback_enabled and assessment_feedback_enabled:
-        try:
-            assessment.candidate_feedback_json = build_candidate_feedback_payload(
-                assessment=assessment,
-                db=db,
-            )
-            assessment.candidate_feedback_generated_at = utcnow()
-            assessment.candidate_feedback_ready = True
-        except Exception:
-            assessment.candidate_feedback_ready = False
 
     if application_row is not None:
         ensure_pipeline_fields(application_row)

@@ -1444,7 +1444,6 @@ def _ab_arm_metrics(arm, arm_assessments, apps_by_id, *, min_sample: int) -> Dic
         for a in started
         if isinstance(getattr(a, "time_to_first_prompt_seconds", None), (int, float))
     ]
-    has_feedback = sum(1 for a in completed if getattr(a, "candidate_feedback_json", None))
 
     return {
         "arm_id": int(arm.id),
@@ -1480,7 +1479,6 @@ def _ab_arm_metrics(arm, arm_assessments, apps_by_id, *, min_sample: int) -> Dic
             "avg_tab_switches": _avg(tab_switches, 1),
             "avg_browser_focus_ratio": _avg(focus, 2),
             "avg_time_to_first_prompt_seconds": _avg(ttfp, 1),
-            "has_feedback_count": has_feedback,
         },
         "small_sample": len(completed) < min_sample,
     }

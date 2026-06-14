@@ -55,9 +55,6 @@ const ToastShowcasePage = lazy(() =>
 );
 
 const AssessmentPage = lazy(() => import('./features/assessment_runtime/AssessmentPage'));
-const CandidateFeedbackPage = lazy(() =>
-  import('./features/assessment_runtime/CandidateFeedbackPage').then((m) => ({ default: m.CandidateFeedbackPage }))
-);
 const DemoExperiencePage = lazy(() =>
   import('./features/demo/DemoExperiencePage').then((m) => ({ default: m.DemoExperiencePage }))
 );
@@ -433,15 +430,6 @@ function AppContent() {
             output: demoFixtures.runtime.output,
           } : undefined}
         />
-      </Suspense>
-    );
-  };
-
-  const CandidateFeedbackRoute = () => {
-    const { token } = useParams();
-    return (
-      <Suspense fallback={lazyFallback}>
-        <CandidateFeedbackPage token={token || ''} />
       </Suspense>
     );
   };
@@ -833,7 +821,6 @@ function AppContent() {
       />
 
       <Route path="/assess/:token" element={<CandidateWelcomeRoute />} />
-      <Route path="/assessment/:token/feedback" element={<CandidateFeedbackRoute />} />
       <Route path="/assessment/:assessmentId" element={<CandidateWelcomeWithIdRoute />} />
       <Route path="/assessment/live" element={<AssessmentLiveRoute />} />
 

@@ -131,10 +131,6 @@ class AssessmentResponse(BaseModel):
     evaluation_rubric: Optional[Dict[str, Any]] = None
     manual_evaluation: Optional[Dict[str, Any]] = None
     evaluation_result: Optional[Dict[str, Any]] = None
-    candidate_feedback_ready: Optional[bool] = None
-    candidate_feedback_generated_at: Optional[datetime] = None
-    candidate_feedback_sent_at: Optional[datetime] = None
-    candidate_feedback_enabled: Optional[bool] = None
     interview_debrief_generated_at: Optional[datetime] = None
     is_demo: Optional[bool] = False
     demo_track: Optional[str] = None

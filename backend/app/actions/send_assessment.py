@@ -167,7 +167,6 @@ def run(
             str(gate.get("message") or gate.get("reason") or ""),
         )
     org = gate.get("organization")
-    org_feedback_enabled = bool(getattr(org, "candidate_feedback_enabled", True)) if org else True
 
     # Pipeline: invited.
     ensure_pipeline_fields(app)
@@ -207,7 +206,6 @@ def run(
         expires_at=utcnow() + timedelta(days=settings.ASSESSMENT_EXPIRY_DAYS),
         workable_candidate_id=app.workable_candidate_id,
         workable_job_id=role.workable_job_id,
-        candidate_feedback_enabled=org_feedback_enabled,
         experiment_id=int(choice.experiment.id) if choice.experiment is not None else None,
         experiment_arm_id=int(choice.arm.id) if choice.arm is not None else None,
         assignment_method=choice.method,

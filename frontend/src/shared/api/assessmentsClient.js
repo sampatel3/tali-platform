@@ -57,10 +57,6 @@ export const assessments = {
   remove: (id) => api.delete(`/assessments/${id}`),
   resend: (id) => api.post(`/assessments/${id}/resend`),
   downloadReport: (id) => api.get(`/assessments/${id}/report.pdf`, { responseType: 'blob' }),
-  finalizeCandidateFeedback: (id, data = {}) => api.post(`/assessments/${id}/finalize-candidate-feedback`, data),
-  getCandidateFeedback: (token) => api.get(`/assessments/${encodeURIComponent(token)}/feedback`),
-  downloadCandidateFeedbackPdf: (token) =>
-    api.get(`/assessments/${encodeURIComponent(token)}/feedback.pdf`, { responseType: 'blob' }),
   generateInterviewDebrief: (id, data = {}) => api.post(`/assessments/${id}/interview-debrief`, data),
   aiEvalSuggestions: (id) => api.post(`/assessments/${id}/ai-eval-suggestions`),
   updateManualEvaluation: (id, data) => api.patch(`/assessments/${id}/manual-evaluation`, data),
