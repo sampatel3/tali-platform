@@ -50,12 +50,16 @@ DEFAULT_LIMIT = 10
 MAX_LIMIT = 25
 # Cap the number of qualitative criteria we ground per query.
 MAX_CRITERIA = 5
-# When criteria are present we must ground MORE than `limit` candidates,
-# because requirements act as a filter — some of the top-by-fit will fail
-# (e.g. salary above the cap) and get hidden, so we need a window deep enough
-# to still surface `limit` who qualify. Bounds cost + latency.
-GROUND_WINDOW_CAP = 15
-GROUND_CONCURRENCY = 8
+# When criteria are present we ground a DEEP, score-ranked window — not just
+# `limit*3`. Requirements act as a filter (salary over cap is hidden) and the
+# soft-criteria re-sort floats criteria-meeting candidates above higher-scored
+# partial matches; both only work if the candidate is in the window. A shallow
+# window silently drops a mid-scored candidate who meets every criterion. We
+# therefore ground the whole viable pool up to this cap (callers restrict the
+# pool to in-the-running candidates, so this rarely truncates). Bounds cost +
+# latency; stragglers past GROUND_BATCH_DEADLINE_S degrade to "unknown".
+GROUND_WINDOW_CAP = 50
+GROUND_CONCURRENCY = 12
 # Hard wall-clock deadline for the whole grounding batch behind a chat turn.
 # Any candidate not grounded by then degrades to "unknown" (missing) rather
 # than stalling the response — strangler calls are abandoned, not awaited.
@@ -820,10 +824,13 @@ def find_top_candidates(
 
     # 3. Ground a bounded, score-ranked WINDOW (structural matches first). A
     #    failed HARD CONSTRAINT (salary over cap, …) hides the candidate; a
-    #    failed PREFERENCE only ranks lower. We ground deeper than `limit` so
-    #    enough qualify after filtering. The window is loaded bounded, so even
-    #    an org-wide pool never materialises in full.
-    window_size = min(pool_count, max(limit * 3, 8), GROUND_WINDOW_CAP)
+    #    failed PREFERENCE only ranks lower. Ground the whole pool up to the
+    #    cap — NOT just `limit*3` — so a criteria-meeting but mid-scored
+    #    candidate is never silently dropped before the soft-criteria re-sort
+    #    can float them up. Callers scope the pool to in-the-running candidates
+    #    (scored, not below-threshold), so this seldom truncates. The window is
+    #    loaded bounded, so even an org-wide pool never materialises in full.
+    window_size = min(pool_count, GROUND_WINDOW_CAP)
     apps = _load_candidates(
         base_query,
         matcher_ids=matcher_ids,

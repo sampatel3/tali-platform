@@ -444,6 +444,18 @@ def find_top_candidates(
         # (outcome != open) and ones already advanced out of the funnel.
         CandidateApplication.application_outcome == "open",
         func.lower(func.coalesce(CandidateApplication.pipeline_stage, "")) != "advanced",
+        # IN THE RUNNING only. A "top candidates" answer must rank candidates
+        # who are genuinely still in play — not the engine's reject verdicts.
+        # (a) Scored: you can't call an unevaluated candidate a "top" one, and
+        #     an unscored candidate would otherwise sort last and waste the
+        #     grounding window. (b) Not below the role's reject cutoff — the
+        #     "Below threshold" recommendation is the threshold-aware reject
+        #     signal (it tracks the role's actual cutoff, and a definitive
+        #     pre-screen "no"/fraud flag also lands here). Normalise the label
+        #     (lower/trim) to match how the reject policy stores it elsewhere —
+        #     non-canonical rows like 'below threshold ' must still be excluded.
+        getattr(CandidateApplication, SCORE_FIELDS.get(str(rank_by or "taali"), "taali_score_cache_100")).isnot(None),
+        func.lower(func.trim(func.coalesce(CandidateApplication.pre_screen_recommendation, ""))) != "below threshold",
     )
     if role_id is not None:
         base = base.filter(CandidateApplication.role_id == int(role_id))
