@@ -571,41 +571,6 @@ def results_notification_html(
     )
 
 
-def candidate_feedback_ready_html(
-    candidate_name: str,
-    org_name: str,
-    role_title: str,
-    feedback_link: str,
-) -> str:
-    cand = _h(candidate_name) or "there"
-    org = _h(org_name)
-    role = _h(role_title)
-    link = _h(feedback_link)
-    intro = _taali_intro(
-        _taali_paragraph(f"Hi {cand},")
-        + _taali_paragraph(
-            f'Your AI-collaboration feedback report for the '
-            f'<strong style="color:#1d1730;font-weight:600;">{role}</strong> role at '
-            f'<strong style="color:#1d1730;font-weight:600;">{org}</strong> is now available.'
-        )
-    )
-    body = (
-        intro
-        + _taali_cta_row("View feedback report", link)
-        + _taali_link_fallback(link)
-    )
-    return _render_taali_email(
-        title=f"Your feedback report — {org}",
-        preview=f"Your AI-collaboration feedback for {role} at {org} is ready.",
-        eyebrow_left="Application",
-        eyebrow_right="Feedback ready",
-        subtitle=org,
-        headline="Your feedback report is ready",
-        body=body,
-        footer=_taali_footer_org(org),
-    )
-
-
 def assessment_expiry_reminder_html(
     candidate_name: str,
     task_name: str,

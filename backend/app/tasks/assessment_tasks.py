@@ -10,55 +10,8 @@ logger = logging.getLogger(__name__)
 # imports celery_app from this package, so a top-level back-import creates a
 # circular import that breaks request-time email dispatch (the importer hits
 # a partially-initialized notifications.tasks). Import them from the canonical
-# module instead.
-
-
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-def send_candidate_feedback_ready_email(
-    self,
-    candidate_email: str,
-    candidate_name: str,
-    org_name: str,
-    role_title: str,
-    feedback_link: str,
-    request_id: str | None = None,
-):
-    """Notify candidate that their feedback report is ready."""
-    from ..domains.integrations_notifications.adapters import build_email_adapter
-
-    log_extra = {"request_id": request_id or self.request.id}
-    if not (settings.RESEND_API_KEY or "").strip():
-        logger.info(
-            "RESEND_API_KEY not set — skipping candidate feedback email to %s",
-            candidate_email,
-            extra=log_extra,
-        )
-        return {"success": False, "skipped": True}
-    try:
-        email_svc = build_email_adapter()
-        result = email_svc.send_candidate_feedback_ready(
-            candidate_email=candidate_email,
-            candidate_name=candidate_name,
-            org_name=org_name,
-            role_title=role_title,
-            feedback_link=feedback_link,
-        )
-        if not result["success"]:
-            raise Exception(result.get("error", "Email send failed"))
-        logger.info(
-            "Candidate feedback email sent to %s",
-            candidate_email,
-            extra={"request_id": request_id or self.request.id},
-        )
-        return result
-    except Exception as exc:
-        logger.error(
-            "Failed to send candidate feedback email to %s: %s",
-            candidate_email,
-            exc,
-            extra={"request_id": request_id or self.request.id},
-        )
-        raise self.retry(exc=exc)
+# module instead. (There is no candidate feedback-ready email — Taali does not
+# email candidates about feedback; see the taali-no-candidate-job-emails policy.)
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=120)
