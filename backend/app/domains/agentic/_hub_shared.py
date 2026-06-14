@@ -80,6 +80,25 @@ def pending_filter(now: datetime):
     )
 
 
+def active_role_pending_filter(now: datetime):
+    """The URGENT 'awaiting you' slice: a pending decision on a role whose agent
+    is ON and NOT paused (and the role isn't deleted). Requires the query to
+    ``.join(Role, AgentDecision.role_id == Role.id)``.
+
+    Every scored candidate now carries a deterministic pending verdict the moment
+    it's scored (decoupled from the agent tick), so paused / agent-off roles
+    accumulate pending decisions too. Those stay visible PER-ROLE (roles_breakdown
+    / funnel chips) but must not dominate the global urgent badge — otherwise a
+    paused-role backlog floods 'awaiting you'. This scopes the org-wide urgent
+    count to roles the recruiter is actively running."""
+    return and_(
+        pending_filter(now),
+        Role.agentic_mode_enabled.is_(True),
+        Role.agent_paused_at.is_(None),
+        Role.deleted_at.is_(None),
+    )
+
+
 def role_pending_decisions_by_type(db, *, organization_id: int, role_id: int, now: datetime | None = None) -> dict[str, int]:
     """Pending agent decisions for one role, grouped by decision_type — the
     uncapped source for the funnel's "awaiting your decision" chips. (The

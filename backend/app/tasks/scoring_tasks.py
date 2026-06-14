@@ -141,25 +141,40 @@ def score_application_job(
                         application_id,
                     )
             elif application.cv_match_score is not None:
-                # A real (re)score landed. The candidate's pending agent decision
-                # may now be stale — its verdict can flip under the deterministic
-                # policy (e.g. a re-score dropped a "send" below bar). Auto-correct
-                # the SAFE subset in place (reject<->send only, no hard gate, never
-                # advance) so a stale card doesn't strand; gated/advance ones keep
-                # their banner for the recruiter. Best-effort — never blocks scoring.
+                # A real (re)score landed. Make sure the candidate ALWAYS carries
+                # its deterministic verdict as a pending HITL decision, the moment
+                # the score lands — decoupled from the agent cohort tick (which
+                # only runs on active roles, stranding paused-role candidates as
+                # "not yet decided"):
+                #   1. existing pending card → auto-correct the SAFE subset in
+                #      place (reject<->send, no hard gate, never advance); gated/
+                #      advance ones keep their re-evaluate banner.
+                #   2. no card at all → queue the fresh verdict now.
+                # Fresh score → HITL (the recruiter approves; never auto-applied).
+                # Best-effort — never blocks scoring.
                 try:
                     from ..services.bulk_decision_service import (
                         auto_correct_stale_verdict,
+                        ensure_deterministic_decision,
                     )
 
                     role = getattr(application, "role", None)
-                    if role is not None and auto_correct_stale_verdict(
-                        db, app=application, role=role
-                    ):
-                        db.commit()
+                    if role is not None:
+                        corrected = auto_correct_stale_verdict(
+                            db, app=application, role=role
+                        )
+                        queued = (
+                            ensure_deterministic_decision(
+                                db, app=application, role=role
+                            )
+                            if corrected is None
+                            else None
+                        )
+                        if corrected or queued:
+                            db.commit()
                 except Exception:  # pragma: no cover — never block scoring
                     logger.exception(
-                        "post-score verdict auto-correct failed application_id=%s",
+                        "post-score decision ensure failed application_id=%s",
                         application_id,
                     )
                     db.rollback()
