@@ -198,6 +198,9 @@ export const AI_SHOWCASE_APPLICATION = {
     assessment_status: 'completed',
     assessment_id: 1042,
     taali_score: 81,
+    // Provenance line shown under the score on the standing report + role-fit
+    // summary ("Scored 20 Apr 2026 · v2.1.0 · Sonnet"). Holistic engine v2.1.0.
+    score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-20T08:14:00.000Z', model: 'Sonnet' },
   },
   screening_interview_summary: {
     fireflies: {
@@ -793,7 +796,8 @@ export const CANDIDATES_DIRECTORY_SHOWCASE = [
     application_outcome: 'open',
     pre_screen_score: 86,
     taali_score: 81,
-    score_summary: { taali_score: 81, assessment_status: 'completed', assessment_id: 1042 },
+    // Re-scored on the current holistic engine — fresh v2.1.0 provenance.
+    score_summary: { taali_score: 81, assessment_status: 'completed', assessment_id: 1042, score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-20T08:14:00.000Z', model: 'Sonnet' } },
     score_status: 'done',
     source: 'workable',
     workable_candidate_id: 'wkbl-cand-91',
@@ -894,7 +898,10 @@ export const CANDIDATES_DIRECTORY_SHOWCASE = [
     application_outcome: 'open',
     pre_screen_score: 88,
     taali_score: 79,
-    score_summary: { taali_score: 79, assessment_status: 'completed', assessment_id: 1101 },
+    // Scored before the engine cutover — legacy v1.18.0 (graded Haiku). Renders
+    // muted on every surface so a recruiter can spot it needs re-scoring at a
+    // glance; demonstrates the stale half of the provenance feature.
+    score_summary: { taali_score: 79, assessment_status: 'completed', assessment_id: 1101, score_provenance: { engine_version: '1.18.0', scored_at: '2026-04-15T11:30:00.000Z', model: 'Haiku' } },
     score_status: 'done',
     source: 'workable',
     workable_candidate_id: 'wkbl-cand-96',

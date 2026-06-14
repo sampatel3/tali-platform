@@ -24,6 +24,14 @@ const containerClass = 'mx-auto max-w-[85rem] px-6 md:px-10 xl:px-16';
 // post-assessment reject overridden + taught back to the agent. Timestamps
 // are anchored to a recent moment so formatRelativeAge renders "Xm/h ago".
 const _NOW = Date.now();
+// Score-provenance the live <ActivityFeed> renders under each score (a "v2.1.0"
+// pill in the list). Mirrors production — the agent scores on the current
+// holistic engine. Pre-screen rejects are unscored, so they carry none.
+const _prov = (hoursAgo) => ({
+  engine_version: '2.1.0',
+  scored_at: new Date(_NOW - hoursAgo * 60 * 60 * 1000).toISOString(),
+  model: 'Sonnet',
+});
 const MARKETING_DECISION_FEED_ROWS = [
   {
     id: 312,
@@ -34,6 +42,7 @@ const MARKETING_DECISION_FEED_ROWS = [
     role_id: 109,
     role_name: 'Senior Backend Engineer',
     taali_score: 88,
+    score_summary: { score_provenance: _prov(0.2) },
     confidence: 0.91,
     reasoning:
       "Clears every must-have with strong AWS + Python evidence. Assessment 88/100 — top of this role's pipeline. Ready for the technical panel.",
@@ -48,6 +57,7 @@ const MARKETING_DECISION_FEED_ROWS = [
     role_id: 109,
     role_name: 'Senior Backend Engineer',
     taali_score: 64,
+    score_summary: { score_provenance: _prov(0.6) },
     confidence: 0.5,
     reasoning:
       "Sub-agents split on systems-design depth — two said advance, one said assess again. I can't call this one confidently. Over to you.",
@@ -75,6 +85,7 @@ const MARKETING_DECISION_FEED_ROWS = [
     role_id: 112,
     role_name: 'Data Engineer',
     taali_score: 84,
+    score_summary: { score_provenance: _prov(0.5) },
     human_disposition: 'approved',
     resolved_at: new Date(_NOW - 18 * 60 * 1000).toISOString(),
   },
@@ -87,6 +98,7 @@ const MARKETING_DECISION_FEED_ROWS = [
     role_id: 109,
     role_name: 'Senior Backend Engineer',
     taali_score: 58,
+    score_summary: { score_provenance: _prov(1.4) },
     human_disposition: 'taught',
     resolution_note: 'override → advance',
     resolved_at: new Date(_NOW - 52 * 60 * 1000).toISOString(),

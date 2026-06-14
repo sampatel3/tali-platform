@@ -82,6 +82,8 @@ const SHOWCASE_APPLICATIONS = [
     role_name: 'AI Engineer',
     taali_score: 81,
     pre_screen_score: 84,
+    // Provenance pill under the score in the candidate grid (current engine).
+    score_summary: { score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-20T08:14:00.000Z', model: 'Sonnet' } },
     pipeline_stage: 'Onsite',
     frontend_url: '/c/demo?view=interview&k=demo-token&showcase=1',
   },
@@ -93,6 +95,7 @@ const SHOWCASE_APPLICATIONS = [
     role_name: 'Senior Backend',
     taali_score: 76,
     pre_screen_score: 79,
+    score_summary: { score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-22T13:05:00.000Z', model: 'Sonnet' } },
     pipeline_stage: 'Review',
   },
   {
@@ -103,6 +106,7 @@ const SHOWCASE_APPLICATIONS = [
     role_name: 'AI Engineer',
     taali_score: 73,
     pre_screen_score: 71,
+    score_summary: { score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-23T09:40:00.000Z', model: 'Sonnet' } },
     pipeline_stage: 'Review',
   },
   {
@@ -113,6 +117,7 @@ const SHOWCASE_APPLICATIONS = [
     role_name: 'Senior Backend',
     taali_score: 68,
     pre_screen_score: 70,
+    score_summary: { score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-24T16:12:00.000Z', model: 'Sonnet' } },
     pipeline_stage: 'Pre-screen',
   },
 ];
