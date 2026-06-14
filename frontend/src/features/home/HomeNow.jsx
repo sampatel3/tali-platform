@@ -215,14 +215,9 @@ const DEFAULT_ACTIONS = {
   alternatives: [],
 };
 
-// Two real states for the action queue. Returned/Approved/Overrides/All were
-// removed: they don't change the (always-pending) queue sidebar here — they're
-// decision history, which lives in Monitoring → History. 'stale' ("Needs
-// re-eval") is a client-side lens over pending (see filters.status handling).
-const STATUS_TABS = [
-  { id: 'pending', label: 'Pending', hint: 'Every decision waiting for your approval' },
-  { id: 'stale', label: 'Needs re-eval', hint: 'Pending decisions whose score is out of date — older scoring model or changed inputs. Re-evaluate before acting.' },
-];
+// Everything in the queue is pending (history lives in Monitoring → History),
+// so there's no status filter — only the standing "needs re-eval" warning chip
+// in the toolbar (toggles filters.status between 'pending' and 'stale').
 
 // 'advance' and 'assessment' are categories — the backend expands them to
 // their underlying decision_types (advance → advance_to_interview;
@@ -276,19 +271,26 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
           Assessment pending
         </button>
       </div>
-      <div className="rq-tabset" role="group" aria-label="Filter the queue">
-        {STATUS_TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            className={(!filters.view && filters.status === t.id) ? 'on' : ''}
-            title={t.hint}
-            onClick={() => setFilters((f) => ({ ...f, status: t.id, view: null }))}
-          >
-            {t.label}{t.id === 'stale' && staleCount > 0 ? ` ${staleCount}` : ''}
-          </button>
-        ))}
-      </div>
+      {/* Everything in this queue is pending, so there's no "Pending" filter to
+          offer — just a standing warning chip for the ones whose score is out
+          of date, toggled to review only those. Hidden when there are none and
+          nothing is being filtered. */}
+      {(staleCount > 0 || filters.status === 'stale') ? (
+        <button
+          type="button"
+          className={`rq-reeval-chip${filters.status === 'stale' ? ' on' : ''}`}
+          aria-pressed={filters.status === 'stale'}
+          title="Candidates whose score is out of date — older scoring model or changed inputs since they were queued. Toggle to review only these."
+          onClick={() => setFilters((f) => ({
+            ...f,
+            status: f.status === 'stale' ? 'pending' : 'stale',
+            view: null,
+          }))}
+        >
+          <RefreshCw size={12} strokeWidth={2.2} aria-hidden="true" />
+          {staleCount.toLocaleString()} need re-eval
+        </button>
+      ) : null}
     </div>
     <div className="rq-toolbar-r">
       {bulkAction}
