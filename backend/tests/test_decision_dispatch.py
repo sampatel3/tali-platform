@@ -458,8 +458,8 @@ def test_bulk_override_dispatches_per_decision_with_resolved_stage(db, monkeypat
     from app.domains.agentic import routes as agentic_routes
 
     org, role, user = _seed(db)
-    _, d1 = _add_decision(db, org, role, status="pending", decision_type="send_assessment")
-    _, d2 = _add_decision(db, org, role, status="pending", decision_type="send_assessment")
+    _, d1 = _add_decision(db, org, role, status="pending", decision_type="reject")
+    _, d2 = _add_decision(db, org, role, status="pending", decision_type="reject")
     db.commit()
 
     calls = []
@@ -472,7 +472,7 @@ def test_bulk_override_dispatches_per_decision_with_resolved_stage(db, monkeypat
     result = agentic_routes.bulk_override(
         agentic_routes.BulkOverrideBody(
             decision_ids=[d1.id, d2.id, 999_999],
-            override_action="skip_assessment_advance",
+            override_action="advance",
             workable_target_stages={str(role.id): "Phone Screen"},
         ),
         db=db,
@@ -482,7 +482,46 @@ def test_bulk_override_dispatches_per_decision_with_resolved_stage(db, monkeypat
     assert result.accepted == 2
     assert [f.decision_id for f in result.failures] == [999_999]
     assert sorted(c[0] for c in calls) == sorted([d1.id, d2.id])
-    assert all(c[1] == "skip_assessment_advance" and c[2] == "Phone Screen" for c in calls)
+    assert all(c[1] == "advance" and c[2] == "Phone Screen" for c in calls)
+
+
+def test_bulk_override_skip_assessment_advance_reclassifies_not_enqueues(db, monkeypatch):
+    """Bulk "Skip & advance" reclassifies each card into the advance queue
+    (sync, no Workable op) rather than enqueuing an immediate advance."""
+    from app.domains.agentic import routes as agentic_routes
+
+    org, role, user = _seed(db)
+    _, d1 = _add_decision(db, org, role, status="pending", decision_type="send_assessment")
+    _, d2 = _add_decision(db, org, role, status="pending", decision_type="send_assessment")
+    db.commit()
+
+    enqueued = []
+    reclassified = []
+
+    def _fake_enqueue(db_, actor, **kw):
+        enqueued.append(kw.get("decision_id"))
+
+    def _fake_reclassify(db_, actor, *, organization_id, decision_id, note=None):
+        reclassified.append(decision_id)
+
+    monkeypatch.setattr(agentic_routes.override_decision_action, "enqueue", _fake_enqueue)
+    monkeypatch.setattr(
+        agentic_routes.override_decision_action,
+        "reclassify_to_advance_queue",
+        _fake_reclassify,
+    )
+
+    result = agentic_routes.bulk_override(
+        agentic_routes.BulkOverrideBody(
+            decision_ids=[d1.id, d2.id],
+            override_action="skip_assessment_advance",
+        ),
+        db=db,
+        current_user=user,
+    )
+    assert result.accepted == 2
+    assert enqueued == []  # no immediate-advance / Workable op
+    assert sorted(reclassified) == sorted([d1.id, d2.id])
 
 
 def test_bulk_override_rejects_unsupported_action(db):

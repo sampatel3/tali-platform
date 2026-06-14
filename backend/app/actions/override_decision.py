@@ -7,9 +7,14 @@ one who took the action. ``override_action`` is one of:
 
   - ``reject``                  → reject_application.run
   - ``advance``                 → advance_stage.run (to next stage)
-  - ``skip_assessment_advance`` → advance_stage.run + metadata flag
   - ``send_assessment``         → send_assessment.run
   - ``hold`` / None             → no side effect (legacy "just disagree")
+
+``skip_assessment_advance`` is handled SEPARATELY (not in ``run``'s dispatch):
+the route calls ``reclassify_to_advance_queue`` so the card moves into the
+advance queue rather than advancing + writing Workable immediately. The
+``run`` branch for it is kept only for back-compat with any in-flight queued
+override op.
 
 The free-text ``note`` is the recruiter's "why" — fed to calibration
 so the agent learns from the disagreement on top of the concrete
@@ -46,6 +51,75 @@ _OVERRIDE_LEGACY_NOOP = {
     "manual_review",
     "hold",
 }
+
+
+def reclassify_to_advance_queue(
+    db: Session,
+    actor: Actor,
+    *,
+    organization_id: int,
+    decision_id: int,
+    note: Optional[str] = None,
+) -> AgentDecision:
+    """"Skip & advance" — reclassify a pending card into the advance queue.
+
+    Instead of advancing + writing Workable immediately (which needs a target
+    stage the Hub card can't reliably collect — an empty/failed stage list used
+    to advance Tali-internally with no Workable move at all), this turns the
+    pending decision into a pending ``advance_to_interview`` decision. It then
+    sits in the advance queue, where the normal advance flow collects the
+    Workable stage and posts the summary comment when the recruiter approves it.
+
+    No Workable write and no stage transition happen here; the decision stays
+    PENDING. Recruiter-only. Reclassifying a row that is already
+    ``advance_to_interview`` is a no-op.
+    """
+    if actor.type != ACTOR_RECRUITER:
+        raise HTTPException(status_code=403, detail="override is recruiter-only")
+
+    q = db.query(AgentDecision).filter(
+        AgentDecision.id == decision_id,
+        AgentDecision.organization_id == organization_id,
+    )
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        q = q.with_for_update()
+    decision = q.first()
+    if decision is None:
+        raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
+    if decision.status not in ("pending", "reverted_for_feedback", "processing"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"agent_decision {decision_id} is {decision.status}, not actionable",
+        )
+
+    if decision.decision_type != "advance_to_interview":
+        from .queue_decision import _compute_dedup_key
+
+        prior_type = decision.decision_type
+        decision.decision_type = "advance_to_interview"
+        decision.recommendation = "advance_to_interview"
+        ev = dict(decision.evidence) if isinstance(decision.evidence, dict) else {}
+        ev["reclassified_from"] = prior_type
+        ev["reclassified_by"] = "recruiter_skip_assessment_advance"
+        if note:
+            ev["recruiter_skip_note"] = note
+        decision.evidence = ev
+        # Refresh the cross-cycle dedup key for the new type so a later agent
+        # tick doesn't read the advance as a brand-new decision to re-queue.
+        try:
+            decision.decision_dedup_key = _compute_dedup_key(
+                db,
+                application_id=int(decision.application_id),
+                decision_type="advance_to_interview",
+            )
+        except Exception:  # pragma: no cover — dedup is best-effort
+            pass
+
+    # Stays PENDING (not a resolution): the recruiter approves the advance —
+    # and picks the Workable stage — from the advance queue.
+    decision.status = "pending"
+    db.commit()
+    return decision
 
 
 def enqueue(

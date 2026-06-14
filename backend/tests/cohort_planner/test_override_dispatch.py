@@ -98,6 +98,50 @@ def test_override_to_skip_assessment_advance_dispatches_advance(db):
     assert decision.override_action == "skip_assessment_advance"
 
 
+def test_reclassify_to_advance_queue_requeues_without_advancing(db):
+    """"Skip & advance" reclassifies the card into the advance queue: it
+    becomes a PENDING advance_to_interview decision, with no stage transition
+    and no Workable write (the advance flow collects the stage later)."""
+    org, role, _, app = make_world(db)
+    user = _make_user(db, org)
+    decision = _make_decision(db, org, role, app, "send_assessment")
+
+    with patch("app.actions.advance_stage.run") as mock_advance:
+        result = override_decision.reclassify_to_advance_queue(
+            db,
+            Actor.recruiter(user),
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+            note="Pre-vetted referral",
+        )
+        db.flush()
+
+    assert not mock_advance.called  # no stage transition / no Workable write
+    db.refresh(decision)
+    assert decision.status == "pending"  # stays in the queue for approval
+    assert decision.decision_type == "advance_to_interview"
+    assert decision.recommendation == "advance_to_interview"
+    assert (decision.evidence or {}).get("reclassified_from") == "send_assessment"
+    assert (decision.evidence or {}).get("recruiter_skip_note") == "Pre-vetted referral"
+    assert result.id == decision.id
+
+
+def test_reclassify_to_advance_queue_is_noop_when_already_advance(db):
+    org, role, _, app = make_world(db)
+    user = _make_user(db, org)
+    decision = _make_decision(db, org, role, app, "advance_to_interview")
+
+    override_decision.reclassify_to_advance_queue(
+        db,
+        Actor.recruiter(user),
+        organization_id=int(org.id),
+        decision_id=int(decision.id),
+    )
+    db.refresh(decision)
+    assert decision.status == "pending"
+    assert decision.decision_type == "advance_to_interview"
+
+
 def test_override_to_send_assessment_on_reject_dispatches_send(db):
     """Recruiter disagrees with reject and wants to send the assessment."""
     org, role, _, app = make_world(db)

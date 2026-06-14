@@ -95,12 +95,11 @@ const DECISION_ACTIONS = {
         label: 'Skip & advance',
         icon: ArrowRight,
         kicker: 'SKIP ASSESSMENT',
-        headline: 'Skip the assessment and advance {name}?',
-        body: 'Pick the Workable stage to move them into. Skips the assessment email.',
-        confirmLabel: 'Advance',
+        headline: 'Skip the assessment and move {name} to the advance queue?',
+        body: "Skips the assessment email and queues them as an advance. You'll pick the Workable stage when you approve the advance from the queue — nothing posts to Workable yet.",
+        confirmLabel: 'Move to advance queue',
         confirmClass: 'rq-approve',
         placeholder: 'e.g. Internal referral — pre-vetted, no need for an assessment',
-        requireStagePick: true,
       },
     ],
   },
@@ -198,11 +197,10 @@ const DECISION_ACTIONS = {
         label: 'Skip & advance',
         icon: ArrowRight,
         kicker: 'SKIP ASSESSMENT',
-        headline: 'Skip the assessment and advance {name}?',
-        body: 'Pick the Workable stage to move them into. Skips resending the invite.',
-        confirmLabel: 'Advance',
+        headline: 'Skip the assessment and move {name} to the advance queue?',
+        body: "Skips resending the invite and queues them as an advance. You'll pick the Workable stage when you approve the advance from the queue — nothing posts to Workable yet.",
+        confirmLabel: 'Move to advance queue',
         confirmClass: 'rq-approve',
-        requireStagePick: true,
       },
     ],
   },
@@ -942,11 +940,11 @@ export const HomeNow = ({
     }
   };
 
-  // Bulk counterpart of the per-card "Skip & advance" override: advance every
-  // visible candidate WITHOUT sending the assessment. Direct action (no stage
-  // picker in v1) — candidates advance on Tali's internal stage; the per-role
-  // Workable target-stage map the backend accepts is a follow-up. Serialized
-  // per org server-side, so a big batch can't breach the Workable rate limit.
+  // Bulk counterpart of the per-card "Skip & advance": reclassify every visible
+  // candidate into the advance queue WITHOUT sending the assessment. No stage
+  // picker and no Workable write here — each card becomes a pending
+  // advance_to_interview decision, and the recruiter picks the Workable stage
+  // when approving the advance from the queue. Serialized per org server-side.
   const handleBulkSkipAdvance = async () => {
     const ids = visiblePending.map((d) => d.id);
     if (!ids.length || bulkBusy) return;
@@ -960,8 +958,8 @@ export const HomeNow = ({
       const failed = Array.isArray(payload.failures) ? payload.failures.length : 0;
       showToast?.(
         failed === 0
-          ? `Skipped & advanced ${accepted} / ${ids.length}.`
-          : `Skipped & advanced ${accepted} / ${ids.length} — ${failed} failed.`,
+          ? `Moved ${accepted} / ${ids.length} to the advance queue.`
+          : `Moved ${accepted} / ${ids.length} to the advance queue — ${failed} failed.`,
         failed === 0 ? 'success' : 'warning',
       );
       await reload?.();
@@ -1014,7 +1012,7 @@ export const HomeNow = ({
         className="btn btn-outline btn-sm"
         onClick={handleBulkSkipAdvance}
         disabled={bulkBusy}
-        title="Advance every visible candidate without sending the assessment"
+        title="Move every visible candidate to the advance queue without sending the assessment (you pick the Workable stage when approving each advance)"
       >
         <ArrowRight size={13} strokeWidth={2} aria-hidden="true" style={{ marginRight: 6, verticalAlign: '-2px' }} />
         {bulkBusy ? 'Working…' : `Skip & advance ${visiblePending.length} visible`}

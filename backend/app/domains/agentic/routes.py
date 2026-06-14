@@ -609,19 +609,33 @@ def override(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        # Optimistic + async: flip to 'processing' and run the override via the
-        # serialized Workable runner. State-change actions (reject/advance/
-        # skip-advance) are gated on Workable and re-queue on failure — no more
-        # silent 429 drops. (Eager Celery in tests finishes inline.)
-        decision = override_decision_action.enqueue(
-            db,
-            Actor.recruiter(current_user),
-            organization_id=current_user.organization_id,
-            decision_id=decision_id,
-            override_action=body.override_action,
-            note=body.note,
-            workable_target_stage=body.workable_target_stage,
-        )
+        if (body.override_action or "") == "skip_assessment_advance":
+            # "Skip & advance" no longer advances + writes Workable directly
+            # (it couldn't reliably collect the target stage — an empty stage
+            # list silently advanced Tali-internal only). It now reclassifies
+            # the card into the advance queue — synchronous, no Workable op —
+            # where the normal advance flow collects the stage on approval.
+            decision = override_decision_action.reclassify_to_advance_queue(
+                db,
+                Actor.recruiter(current_user),
+                organization_id=current_user.organization_id,
+                decision_id=decision_id,
+                note=body.note,
+            )
+        else:
+            # Optimistic + async: flip to 'processing' and run the override via
+            # the serialized Workable runner. State-change actions (reject/
+            # advance) are gated on Workable and re-queue on failure — no more
+            # silent 429 drops. (Eager Celery in tests finishes inline.)
+            decision = override_decision_action.enqueue(
+                db,
+                Actor.recruiter(current_user),
+                organization_id=current_user.organization_id,
+                decision_id=decision_id,
+                override_action=body.override_action,
+                note=body.note,
+                workable_target_stage=body.workable_target_stage,
+            )
         db.refresh(decision)
     except HTTPException:
         db.rollback()
@@ -956,15 +970,26 @@ def bulk_override(
             continue
         stage = stages.get(str(decision.role_id)) if decision.role_id is not None else None
         try:
-            override_decision_action.enqueue(
-                db,
-                Actor.recruiter(current_user),
-                organization_id=current_user.organization_id,
-                decision_id=decision_id,
-                override_action=action,
-                note=note,
-                workable_target_stage=stage,
-            )
+            if action == "skip_assessment_advance":
+                # Reclassify into the advance queue (sync, no Workable write);
+                # the stage is collected later when the advance is approved.
+                override_decision_action.reclassify_to_advance_queue(
+                    db,
+                    Actor.recruiter(current_user),
+                    organization_id=current_user.organization_id,
+                    decision_id=decision_id,
+                    note=note,
+                )
+            else:
+                override_decision_action.enqueue(
+                    db,
+                    Actor.recruiter(current_user),
+                    organization_id=current_user.organization_id,
+                    decision_id=decision_id,
+                    override_action=action,
+                    note=note,
+                    workable_target_stage=stage,
+                )
             accepted.append(decision_id)
         except HTTPException as exc:
             failures.append(
