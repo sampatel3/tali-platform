@@ -73,7 +73,7 @@ import {
 import { NLSearchBar } from './NLSearchBar';
 import { CandidateGraphView } from './CandidateGraphView';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
-import { AssessmentInviteChip, FraudChip, GraphStatusChip, PreScreenChip } from './CandidateStatusChips';
+import { FraudChip, GraphStatusChip, PreScreenChip } from './CandidateStatusChips';
 import { PendingAgentDecisionsPanel } from './agent/PendingAgentDecisionsPanel';
 
 const PAGE_SIZE = 50;
@@ -2366,11 +2366,6 @@ export const CandidatesDirectoryPage = ({
                                 compact
                               />
                               <FraudChip application={application} compact />
-                              <AssessmentInviteChip
-                                status={application.score_summary?.assessment_status}
-                                tracking={application.score_summary?.invite_tracking}
-                                compact
-                              />
                               <GraphStatusChip
                                 syncedAt={application.graph_synced_at}
                                 stale={!!application.graph_stale}

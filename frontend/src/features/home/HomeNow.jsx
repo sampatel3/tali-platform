@@ -21,7 +21,8 @@ import {
   X,
 } from 'lucide-react';
 
-import { agent as agentApi, organizations as orgsApi } from '../../shared/api';
+import { agent as agentApi, organizations as orgsApi, roles as rolesApi } from '../../shared/api';
+import { AssessmentInviteChip } from '../candidates/CandidateStatusChips';
 import { PIPELINE_FUNNEL_STAGES } from '../../shared/metrics';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { useToast } from '../../context/ToastContext';
@@ -255,22 +256,36 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleOnly, setStaleOn
           <button
             key={o.id || 'all'}
             type="button"
-            className={(filters.type || '') === o.id ? 'on' : ''}
+            className={(!filters.view && (filters.type || '') === o.id) ? 'on' : ''}
             title={o.hint}
-            onClick={() => setFilters((f) => ({ ...f, type: o.id || null }))}
+            onClick={() => setFilters((f) => ({ ...f, type: o.id || null, view: null }))}
           >
             {o.label}
           </button>
         ))}
+        {/* Not a decision-type — switches the queue to the invited-candidate
+            tracker (sent-but-not-completed assessments). Sits next to the
+            decision-type pills so it reads as part of the same control. */}
+        <button
+          type="button"
+          className={filters.view === 'invited' ? 'on' : ''}
+          onClick={() => {
+            setStaleOnly?.(false);
+            setFilters((f) => ({ ...f, view: f.view === 'invited' ? null : 'invited' }));
+          }}
+          title="Candidates sent an assessment that hasn't been completed yet"
+        >
+          Assessment pending
+        </button>
       </div>
       <div className="rq-tabset" role="group" aria-label="Filter by decision status">
         {STATUS_TABS.map((t) => (
           <button
             key={t.id}
             type="button"
-            className={filters.status === t.id ? 'on' : ''}
+            className={(!filters.view && filters.status === t.id) ? 'on' : ''}
             title={t.hint}
-            onClick={() => setFilters((f) => ({ ...f, status: t.id }))}
+            onClick={() => setFilters((f) => ({ ...f, status: t.id, view: null }))}
           >
             {t.label}
           </button>
@@ -285,7 +300,7 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleOnly, setStaleOn
           type="button"
           className={staleOnly ? 'on' : ''}
           title="Show only candidates whose score is out of date (older model or changed inputs) and should be re-evaluated"
-          onClick={() => setStaleOnly((v) => !v)}
+          onClick={() => { setStaleOnly((v) => !v); setFilters((f) => ({ ...f, view: null })); }}
         >
           <RefreshCw size={11} strokeWidth={2.2} aria-hidden="true" style={{ marginRight: 5, verticalAlign: '-1px' }} />
           Needs re-eval{staleCount > 0 ? ` ${staleCount}` : ''}
@@ -682,6 +697,61 @@ export const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, on
 };
 
 
+// Invited-candidate tracker — the Home "Assessment pending" view. Lists
+// candidates with a sent-but-not-completed assessment + delivery tracking
+// (Invited / Delivered / Opened / Started). These aren't agent decisions
+// (those leave the queue once approved) — they're assessments in flight, so
+// this is a flat list rather than the decision split-view.
+const InvitedPanel = ({ candidates, loading, roleNameById }) => {
+  if (loading) {
+    return (
+      <div className="rq-empty">
+        <RefreshCw size={16} aria-hidden="true" style={{ marginBottom: 6, color: 'var(--mute)' }} />
+        <div>Loading invited candidates…</div>
+      </div>
+    );
+  }
+  if (!candidates.length) {
+    return (
+      <div className="rq-empty">
+        <Inbox size={18} aria-hidden="true" style={{ marginBottom: 6, color: 'var(--mute)' }} />
+        <div>No assessments awaiting completion. Invites you've sent that haven't been started or completed show up here.</div>
+      </div>
+    );
+  }
+  return (
+    <div className="rq-invited-list">
+      {candidates.map((c) => {
+        const ss = c.score_summary || {};
+        const tracking = ss.invite_tracking || {};
+        const roleName = c.role?.name || roleNameById?.(c.role_id) || null;
+        return (
+          <a
+            key={c.id}
+            className="rq-split-row rq-invited-row"
+            href={pathForPage('candidate-report', { candidateApplicationId: c.id, fromHome: true })}
+          >
+            <Avatar initials={initialsFrom(c.candidate_name || c.candidate_email)} size={34} />
+            <div className="rq-invited-main">
+              <div className="rq-invited-name">{c.candidate_name || c.candidate_email}</div>
+              <div className="rq-invited-meta">
+                <RolePill roleName={roleName} roleId={c.role_id} />
+                <ScoreChip score={ss.taali_score} size="sm" />
+              </div>
+              <div className="rq-invited-chips">
+                <AssessmentInviteChip status={ss.assessment_status} tracking={tracking} />
+              </div>
+            </div>
+            <span className="rq-invited-age">
+              {tracking.invite_sent_at ? formatRelativeAge(tracking.invite_sent_at) : ''}
+            </span>
+          </a>
+        );
+      })}
+    </div>
+  );
+};
+
 export const HomeNow = ({
   decisions,
   pendingOrdered,
@@ -699,6 +769,44 @@ export const HomeNow = ({
 }) => {
   const { showToast } = useToast() || { showToast: () => {} };
   const [busyId, setBusyId] = useState(null);
+  // Invited-candidate tracker ("Assessment pending" view). Fetched on demand
+  // from the applications list — these are sent assessments, not decisions, so
+  // they don't ride the decision queue's data flow.
+  const invitedView = filters.view === 'invited';
+  const [invited, setInvited] = useState([]);
+  const [invitedLoading, setInvitedLoading] = useState(false);
+  const roleNameById = useCallback((id) => {
+    const match = (rolesBreakdown || []).find((r) => String(r.role_id) === String(id));
+    return match ? (match.name || match.short_name) : null;
+  }, [rolesBreakdown]);
+  useEffect(() => {
+    if (!invitedView) return undefined;
+    let cancelled = false;
+    setInvitedLoading(true);
+    rolesApi
+      .listApplicationsGlobal({
+        assessment_status: 'pending,in_progress',
+        role_id: filters.role_id || undefined,
+        limit: 100,
+        include_stage_counts: false,
+        sort_by: 'pipeline_stage_updated_at',
+        sort_order: 'desc',
+      })
+      .then((res) => {
+        if (cancelled) return;
+        const items = Array.isArray(res?.data?.items) ? res.data.items : [];
+        setInvited(items);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setInvited([]);
+        showToast?.(apiErrorMessage(err, "Couldn't load invited candidates."), 'error');
+      })
+      .finally(() => {
+        if (!cancelled) setInvitedLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [invitedView, filters.role_id, showToast]);
   const [teachFor, setTeachFor] = useState(null);
   // Alternative-action confirmation modal target. When set, OverrideModal
   // is rendered with the decision + the chosen alternative spec. Used for
@@ -1157,35 +1265,45 @@ export const HomeNow = ({
           to bounce into each role page. */}
       {!questionsInDock && <AgentNeedsInputCard roleId={filters.role_id || undefined} />}
 
-      <div className="rq-hybrid-grid">
-        <PendingSidebar
-          pending={effPending}
-          selectedId={selected?.id}
-          onSelect={setSelectedId}
-          loading={loading}
-          onNavigate={onNavigate}
-          staleOnly={staleOnly}
+      {invitedView ? (
+        <InvitedPanel
+          candidates={invited}
+          loading={invitedLoading}
+          roleNameById={roleNameById}
         />
-        <div className="rq-hybrid-right">
-          <DecisionDetail
-            decision={selected}
-            busy={busyId === selected?.id}
-            onApprove={handleApprove}
-            onAlternative={handleAlternative}
-            onReEvaluate={handleReEvaluate}
-            onSnooze={handleSnooze}
-            onTeach={(d) => setTeachFor(d)}
+      ) : (
+        <>
+          <div className="rq-hybrid-grid">
+            <PendingSidebar
+              pending={effPending}
+              selectedId={selected?.id}
+              onSelect={setSelectedId}
+              loading={loading}
+              onNavigate={onNavigate}
+              staleOnly={staleOnly}
+            />
+            <div className="rq-hybrid-right">
+              <DecisionDetail
+                decision={selected}
+                busy={busyId === selected?.id}
+                onApprove={handleApprove}
+                onAlternative={handleAlternative}
+                onReEvaluate={handleReEvaluate}
+                onSnooze={handleSnooze}
+                onTeach={(d) => setTeachFor(d)}
+                onNavigate={onNavigate}
+              />
+            </div>
+          </div>
+
+          <ActivityFeed
+            rows={effDecisions}
+            selectedId={selected?.id}
+            onSelect={setSelectedId}
             onNavigate={onNavigate}
           />
-        </div>
-      </div>
-
-      <ActivityFeed
-        rows={effDecisions}
-        selectedId={selected?.id}
-        onSelect={setSelectedId}
-        onNavigate={onNavigate}
-      />
+        </>
+      )}
 
       {teachFor ? (
         <TeachModal
