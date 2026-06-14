@@ -85,7 +85,6 @@ def create_assessment(
     resolved_role_id = data.role_id
     candidate_email = None
     candidate_name = None
-    org_feedback_enabled = True
 
     try:
         # task_id is optional: when omitted we let an active A/B experiment on
@@ -104,9 +103,6 @@ def create_assessment(
         )
         if not creation_gate.get("can_create"):
             raise HTTPException(status_code=402, detail=creation_gate.get("message"))
-        org_record = creation_gate.get("organization")
-        if org_record is not None:
-            org_feedback_enabled = bool(getattr(org_record, "candidate_feedback_enabled", True))
 
         if data.application_id:
             application = (
@@ -238,7 +234,6 @@ def create_assessment(
                 application.workable_candidate_id if application else getattr(candidate, "workable_candidate_id", None)
             ),
             workable_job_id=(resolved_role.workable_job_id if resolved_role else None),
-            candidate_feedback_enabled=org_feedback_enabled,
             # task_id given → FORCED (excluded from the experiment's analysis
             # cohort). task_id omitted → the shared resolver assigned the arm
             # (random/stable) or a single-task default; carry its assignment

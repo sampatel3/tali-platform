@@ -43,10 +43,6 @@ from ...models.candidate import Candidate
 from ...models.task import Task
 from ...platform.config import settings
 from ...platform.database import get_db
-from ...services.candidate_feedback_engine import (
-    build_feedback_text_report,
-    build_plain_text_pdf,
-)
 from ...services.task_repo_service import normalize_repo_files
 from ...services.task_spec_loader import candidate_rubric_view
 from ...schemas.assessment import (
@@ -484,50 +480,6 @@ def _upsert_demo_candidate(
     return candidate
 
 
-def _get_feedback_assessment_or_404(token: str, db: Session) -> Assessment:
-    assessment = (
-        db.query(Assessment)
-        .options(
-            joinedload(Assessment.candidate),
-            joinedload(Assessment.task),
-            joinedload(Assessment.role),
-            joinedload(Assessment.organization),
-        )
-        .filter(Assessment.token == token)
-        .first()
-    )
-    if not assessment:
-        raise HTTPException(status_code=404, detail="Invalid assessment token")
-    return assessment
-
-
-def _feedback_payload_response(assessment: Assessment) -> dict:
-    org_enabled = bool(getattr(assessment.organization, "candidate_feedback_enabled", True))
-    assessment_enabled = bool(getattr(assessment, "candidate_feedback_enabled", True))
-    if not org_enabled or not assessment_enabled:
-        raise HTTPException(status_code=404, detail="Feedback is unavailable for this assessment")
-    feedback = getattr(assessment, "candidate_feedback_json", None)
-    if not bool(getattr(assessment, "candidate_feedback_ready", False)) or not isinstance(feedback, dict):
-        raise HTTPException(status_code=403, detail="Your feedback report is not ready yet")
-    candidate_name = (
-        (assessment.candidate.full_name if assessment.candidate else None)
-        or (assessment.candidate.email if assessment.candidate else None)
-        or "Candidate"
-    )
-    return {
-        "assessment_id": assessment.id,
-        "token": assessment.token,
-        "feedback_ready": True,
-        "feedback_generated_at": getattr(assessment, "candidate_feedback_generated_at", None),
-        "feedback_sent_at": getattr(assessment, "candidate_feedback_sent_at", None),
-        "organization_name": assessment.organization.name if assessment.organization else None,
-        "task_name": assessment.task.name if assessment.task else None,
-        "role_name": assessment.role.name if assessment.role else None,
-        "candidate_name": candidate_name,
-        "feedback": feedback,
-    }
-
-
 @router.post("/token/{token}/start", response_model=AssessmentStart)
 def start_assessment(
     token: str,
@@ -644,7 +596,6 @@ def start_demo_assessment(
         expires_at=utcnow() + timedelta(days=settings.ASSESSMENT_EXPIRY_DAYS),
         is_demo=True,
         demo_track=track,
-        candidate_feedback_enabled=bool(getattr(org, "candidate_feedback_enabled", True)),
         demo_profile={
             "full_name": data.full_name,
             "position": data.position,
@@ -703,31 +654,6 @@ def request_demo_walkthrough(
 
     db.refresh(candidate)
     return DemoBookingResponse(candidate_id=candidate.id)
-
-
-@router.get("/{token}/feedback")
-def get_candidate_feedback(
-    token: str,
-    db: Session = Depends(get_db),
-):
-    assessment = _get_feedback_assessment_or_404(token, db)
-    return _feedback_payload_response(assessment)
-
-
-@router.get("/{token}/feedback.pdf")
-def download_candidate_feedback_pdf(
-    token: str,
-    db: Session = Depends(get_db),
-):
-    assessment = _get_feedback_assessment_or_404(token, db)
-    payload = _feedback_payload_response(assessment)
-    report_text = build_feedback_text_report(payload.get("feedback") or {})
-    pdf = build_plain_text_pdf(report_text)
-    return Response(
-        content=pdf,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="candidate-feedback-{assessment.id}.pdf"'},
-    )
 
 
 @router.post("/{assessment_id}/upload-cv")

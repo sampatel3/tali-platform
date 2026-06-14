@@ -123,8 +123,6 @@ def get_my_org(
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
-    if getattr(org, "candidate_feedback_enabled", None) is None:
-        org.candidate_feedback_enabled = True
     if getattr(org, "default_assessment_duration_minutes", None) is None:
         org.default_assessment_duration_minutes = 30
     org.allowed_email_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))
@@ -183,8 +181,6 @@ def update_my_org(
         org.saml_metadata_url = metadata_url or None
     if data.two_factor_required is not None:
         org.two_factor_required = bool(data.two_factor_required)
-    if data.candidate_feedback_enabled is not None:
-        org.candidate_feedback_enabled = bool(data.candidate_feedback_enabled)
     if data.default_assessment_duration_minutes is not None:
         org.default_assessment_duration_minutes = int(data.default_assessment_duration_minutes)
     if data.invite_email_template is not None:
@@ -269,8 +265,6 @@ def update_my_org(
                 "Failed to re-apply org threshold policy for org_id=%s", org.id
             )
             db.rollback()
-    if getattr(org, "candidate_feedback_enabled", None) is None:
-        org.candidate_feedback_enabled = True
     if getattr(org, "default_assessment_duration_minutes", None) is None:
         org.default_assessment_duration_minutes = 30
     org.allowed_email_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))

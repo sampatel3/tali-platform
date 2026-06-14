@@ -272,7 +272,6 @@ def test_dispatch_resolves_candidate_facing_brand_from_workspace_settings(db, mo
         token="tok-abc",
         duration_minutes=60,
         expires_at=datetime.now(timezone.utc),
-        candidate_feedback_enabled=True,
     )
     db.add(a)
     db.flush()
@@ -337,7 +336,6 @@ def test_dispatch_passes_none_brand_when_workspace_setting_missing(db, monkeypat
         token="tok-bob",
         duration_minutes=60,
         expires_at=datetime.now(timezone.utc),
-        candidate_feedback_enabled=True,
     )
     db.add(a)
     db.flush()

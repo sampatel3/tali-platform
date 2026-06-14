@@ -56,7 +56,6 @@ def _make_org(
         workable_access_token=("tk-1" if workable_connected else None),
         workable_subdomain=("acme" if workable_connected else None),
         workable_config=config,
-        candidate_feedback_enabled=True,
     )
     db.add(org)
     db.flush()
@@ -94,7 +93,6 @@ def _make_assessment(
         duration_minutes=60,
         expires_at=datetime.now(timezone.utc),
         workable_candidate_id=workable_candidate_id,
-        candidate_feedback_enabled=True,
     )
     db.add(a)
     db.flush()

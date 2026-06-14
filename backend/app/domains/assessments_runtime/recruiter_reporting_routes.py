@@ -15,7 +15,6 @@ from ...platform.config import settings
 from ...platform.database import get_db
 from ...services.ai_assisted_evaluator import generate_ai_suggestions
 from ...services.candidate_feedback_engine import (
-    build_candidate_feedback_payload,
     build_client_assessment_report_payload,
     build_client_assessment_summary_pdf,
     build_interview_debrief_payload,
@@ -35,10 +34,6 @@ def _is_completed(assessment: Assessment) -> bool:
         AssessmentStatus.COMPLETED.value,
         AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT.value,
     }
-
-
-def _candidate_feedback_link(token: str) -> str:
-    return f"{settings.FRONTEND_URL}/assessment/{token}/feedback"
 
 
 def _report_filename_part(value: str, fallback: str) -> str:
@@ -280,81 +275,6 @@ def add_assessment_note(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to save note")
     return {"success": True, "timeline": assessment.timeline}
-
-
-@router.post("/{assessment_id}/finalize-candidate-feedback")
-def finalize_candidate_feedback(
-    assessment_id: int,
-    body: Dict[str, Any] | None = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    payload = body or {}
-    force_regenerate = bool(payload.get("force_regenerate", False))
-    include_feedback = bool(payload.get("include_feedback", True))
-
-    assessment = (
-        db.query(Assessment)
-        .options(
-            joinedload(Assessment.candidate),
-            joinedload(Assessment.task),
-            joinedload(Assessment.role),
-            joinedload(Assessment.organization),
-        )
-        .filter(
-            Assessment.id == assessment_id,
-            Assessment.organization_id == current_user.organization_id,
-        )
-        .first()
-    )
-    if not assessment:
-        raise HTTPException(status_code=404, detail="Assessment not found")
-    if not _is_completed(assessment):
-        raise HTTPException(status_code=400, detail="Assessment must be completed before feedback finalization")
-
-    org = assessment.organization
-    org_feedback_enabled = bool(getattr(org, "candidate_feedback_enabled", True))
-    assessment_feedback_enabled = bool(getattr(assessment, "candidate_feedback_enabled", True))
-    if not org_feedback_enabled or not assessment_feedback_enabled:
-        raise HTTPException(status_code=403, detail="Candidate feedback is disabled for this organization")
-
-    should_generate = (
-        force_regenerate
-        or not bool(getattr(assessment, "candidate_feedback_ready", False))
-        or not isinstance(getattr(assessment, "candidate_feedback_json", None), dict)
-    )
-    if should_generate:
-        generated_payload = build_candidate_feedback_payload(
-            db,
-            assessment,
-            organization_name=(org.name if org and org.name else "Company"),
-        )
-        assessment.candidate_feedback_json = generated_payload
-        assessment.candidate_feedback_generated_at = utcnow()
-        assessment.candidate_feedback_ready = True
-    else:
-        generated_payload = assessment.candidate_feedback_json or {}
-
-    feedback_link = _candidate_feedback_link(assessment.token)
-    # Taali does not email the candidate about feedback — candidate comms are
-    # the ATS's responsibility and there is no candidate-facing feedback report
-    # to announce (see the taali-no-candidate-job-emails policy). Feedback is
-    # generated for the recruiter view only.
-
-    try:
-        db.commit()
-        db.refresh(assessment)
-    except Exception:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to finalize candidate feedback")
-
-    return {
-        "success": True,
-        "feedback_ready": bool(assessment.candidate_feedback_ready),
-        "feedback_generated_at": assessment.candidate_feedback_generated_at,
-        "feedback_url": feedback_link,
-        "feedback": generated_payload if include_feedback else None,
-    }
 
 
 @router.post("/{assessment_id}/interview-debrief")

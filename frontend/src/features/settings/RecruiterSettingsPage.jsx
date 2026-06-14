@@ -350,7 +350,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [notificationsSaving, setNotificationsSaving] = useState(false);
   const [accessForm, setAccessForm] = useState({
     allowedEmailDomains: '',
-    candidateFeedbackEnabled: true,
   });
   const [accessSaving, setAccessSaving] = useState(false);
   const [ssoForm, setSsoForm] = useState({
@@ -682,7 +681,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     });
     setAccessForm({
       allowedEmailDomains: Array.isArray(orgData.allowed_email_domains) ? orgData.allowed_email_domains.join(', ') : '',
-      candidateFeedbackEnabled: orgData.candidate_feedback_enabled !== false,
     });
     setSsoForm({
       ssoEnforced: Boolean(orgData.sso_enforced),
@@ -822,7 +820,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     try {
       const res = await orgsApi.update({
         allowed_email_domains: domains,
-        candidate_feedback_enabled: Boolean(accessForm.candidateFeedbackEnabled),
       });
       setOrgData(res?.data || null);
       showToast('Roles and access settings saved.', 'success');
@@ -1527,14 +1524,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   </div>
 
                   <div className="settings-top-gap" style={{ borderTop: '1px solid var(--line)', paddingTop: 18 }}>
-                    <div className="settings-toggle-list">
-                      <ToggleCard
-                        title="Candidate feedback reports"
-                        description="Allow candidate-facing post-assessment feedback reports."
-                        checked={accessForm.candidateFeedbackEnabled}
-                        onChange={(value) => setAccessForm((prev) => ({ ...prev, candidateFeedbackEnabled: value }))}
-                      />
-                    </div>
                     <div className="row-form settings-top-gap">
                       <label className="field">
                         <span className="k">Allowed email domains (comma separated)</span>

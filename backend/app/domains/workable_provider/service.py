@@ -201,7 +201,6 @@ def provision_assessment(
     org = gate.get("organization") or db.query(Organization).filter(
         Organization.id == organization_id
     ).first()
-    feedback_enabled = bool(getattr(org, "candidate_feedback_enabled", True))
 
     role = _resolve_or_provision_role(
         db, organization_id, job_shortcode=job_shortcode, job_title=job_title
@@ -221,7 +220,6 @@ def provision_assessment(
         workable_candidate_id=getattr(cand, "workable_candidate_id", None),
         workable_job_id=role.workable_job_id,
         workable_callback_url=callback_url,
-        candidate_feedback_enabled=feedback_enabled,
         invite_channel="workable_marketplace",
     )
     db.add(assessment)
