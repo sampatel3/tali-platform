@@ -3,6 +3,10 @@ import api from './httpClient';
 export const agent = {
   // Decisions queue
   listDecisions: (params = {}) => api.get('/agent-decisions', { params }),
+  // Accurate "Needs re-eval" total for the current role/type scope — computed
+  // server-side over the whole queue (the per-row is_stale on listDecisions
+  // only covers the capped page, so a deep backlog under-counts client-side).
+  needsReevalCount: (params = {}) => api.get('/agent-decisions/needs-reeval-count', { params }),
   // ``opts.force`` approves even when the decision's inputs are stale — the
   // recruiter deliberately taking the recommended action (parity with the
   // always-available Reject / Skip & advance overrides).

@@ -510,6 +510,76 @@ def list_agent_decisions(
 
 
 # ---------------------------------------------------------------------------
+# GET /agent-decisions/needs-reeval-count
+# ---------------------------------------------------------------------------
+
+
+class NeedsReevalCount(BaseModel):
+    count: int
+
+
+@router.get("/agent-decisions/needs-reeval-count", response_model=NeedsReevalCount)
+def needs_reeval_count(
+    role_id: Optional[int] = Query(default=None),
+    decision_type: Optional[str] = Query(default=None, alias="type"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Accurate count of PENDING decisions that are stale (older scoring model
+    or changed inputs) for the current role/type scope.
+
+    The home "Needs re-eval" pill reads this so its number reflects the WHOLE
+    queue, not the page-fetch window — the per-row is_stale on the list is only
+    computed for the (capped) rows returned, which silently under-counts a deep
+    backlog. Same staleness definition as the list (decision_staleness.evaluate),
+    so the pill total and the per-card markers agree.
+    """
+    from ...services import decision_staleness
+
+    query = (
+        db.query(AgentDecision, CandidateApplication)
+        .join(CandidateApplication, CandidateApplication.id == AgentDecision.application_id)
+        .filter(
+            AgentDecision.organization_id == current_user.organization_id,
+            AgentDecision.status.in_(("pending", "processing")),
+        )
+    )
+    if role_id is not None:
+        query = query.filter(AgentDecision.role_id == int(role_id))
+    now = datetime.now(timezone.utc)
+    query = query.filter(
+        or_(AgentDecision.snoozed_until.is_(None), AgentDecision.snoozed_until <= now)
+    )
+    if decision_type:
+        types = DECISION_TYPE_CATEGORIES.get(decision_type, [decision_type])
+        query = query.filter(AgentDecision.decision_type.in_(types))
+
+    rows = query.all()
+    # Preload the roles once so the per-row evaluate hits the cache, not a query.
+    role_by_id: dict[int, Role] = {}
+    role_ids = {int(d.role_id) for d, _ in rows}
+    if role_ids:
+        for r in db.query(Role).filter(Role.id.in_(role_ids)).all():
+            role_by_id[int(r.id)] = r
+
+    cache = decision_staleness.StalenessCache()
+    count = 0
+    for decision, application in rows:
+        try:
+            report = decision_staleness.evaluate(
+                db, decision,
+                application=application,
+                role=role_by_id.get(int(decision.role_id)),
+                cache=cache,
+            )
+            if report.is_stale:
+                count += 1
+        except Exception:  # pragma: no cover — a bad row must not fail the count
+            pass
+    return NeedsReevalCount(count=count)
+
+
+# ---------------------------------------------------------------------------
 # POST /agent-decisions/{id}/approve
 # ---------------------------------------------------------------------------
 
