@@ -215,12 +215,13 @@ const DEFAULT_ACTIONS = {
   alternatives: [],
 };
 
+// Two real states for the action queue. Returned/Approved/Overrides/All were
+// removed: they don't change the (always-pending) queue sidebar here — they're
+// decision history, which lives in Monitoring → History. 'stale' ("Needs
+// re-eval") is a client-side lens over pending (see filters.status handling).
 const STATUS_TABS = [
-  { id: 'pending', label: 'Pending', hint: 'Decisions waiting for your approval' },
-  { id: 'reverted_for_feedback', label: 'Returned', hint: 'Sent back to the agent with your feedback, to re-decide' },
-  { id: 'approved', label: 'Approved', hint: "Decisions you've approved — history, read-only" },
-  { id: 'overridden', label: 'Overrides', hint: 'Decisions where you overrode the agent — history, read-only' },
-  { id: 'all', label: 'All', hint: 'Every decision — pending and resolved' },
+  { id: 'pending', label: 'Pending', hint: 'Every decision waiting for your approval' },
+  { id: 'stale', label: 'Needs re-eval', hint: 'Pending decisions whose score is out of date — older scoring model or changed inputs. Re-evaluate before acting.' },
 ];
 
 // 'advance' and 'assessment' are categories — the backend expands them to
@@ -236,7 +237,7 @@ const TYPE_OPTIONS = [
   { id: 'skip_assessment_reject', label: 'Reject (pre-screen)', hint: 'Rejected at pre-screen, before any assessment' },
 ];
 
-const Toolbar = ({ filters, setFilters, roles, bulkAction, staleOnly, setStaleOnly, staleCount }) => (
+const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
   <div className="rq-toolbar">
     <div className="rq-toolbar-l">
       <span className="kicker mute" style={{ marginRight: 8 }}>ROLE</span>
@@ -269,16 +270,13 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleOnly, setStaleOn
         <button
           type="button"
           className={filters.view === 'invited' ? 'on' : ''}
-          onClick={() => {
-            setStaleOnly?.(false);
-            setFilters((f) => ({ ...f, view: f.view === 'invited' ? null : 'invited' }));
-          }}
+          onClick={() => setFilters((f) => ({ ...f, view: f.view === 'invited' ? null : 'invited' }))}
           title="Candidates sent an assessment that hasn't been completed yet"
         >
           Assessment pending
         </button>
       </div>
-      <div className="rq-tabset" role="group" aria-label="Filter by decision status">
+      <div className="rq-tabset" role="group" aria-label="Filter the queue">
         {STATUS_TABS.map((t) => (
           <button
             key={t.id}
@@ -287,24 +285,9 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleOnly, setStaleOn
             title={t.hint}
             onClick={() => setFilters((f) => ({ ...f, status: t.id, view: null }))}
           >
-            {t.label}
+            {t.label}{t.id === 'stale' && staleCount > 0 ? ` ${staleCount}` : ''}
           </button>
         ))}
-      </div>
-      {/* Cross-cuts the status tabs: a pending decision is "needs re-eval" when
-          its score is out of date (older scoring model, or an input changed
-          since it queued). Client-side toggle over the already-loaded pending
-          rows — instant, no refetch. */}
-      <div className="rq-tabset" role="group" aria-label="Show only candidates that need re-evaluation">
-        <button
-          type="button"
-          className={staleOnly ? 'on' : ''}
-          title="Show only candidates whose score is out of date (older model or changed inputs) and should be re-evaluated"
-          onClick={() => { setStaleOnly((v) => !v); setFilters((f) => ({ ...f, view: null })); }}
-        >
-          <RefreshCw size={11} strokeWidth={2.2} aria-hidden="true" style={{ marginRight: 5, verticalAlign: '-1px' }} />
-          Needs re-eval{staleCount > 0 ? ` ${staleCount}` : ''}
-        </button>
       </div>
     </div>
     <div className="rq-toolbar-r">
@@ -859,11 +842,11 @@ export const HomeNow = ({
   // Overlays applied to the server data: approved-in-flight rows leave the
   // pending sidebar entirely (the queue visibly shrinks) and show as
   // ``processing`` in the activity feed (greyed, not gone).
-  // "Needs re-eval" view: filter the pending queue to decisions whose score is
-  // stale (older model or changed inputs). Client-side over the already-loaded
-  // pending rows, so toggling is instant. The count is the stale total in scope
-  // (independent of the toggle) so the pill advertises how many need attention.
-  const [staleOnly, setStaleOnly] = useState(false);
+  // "Needs re-eval" is a lens over the pending queue, driven by the status pill
+  // (filters.status === 'stale', fetched as pending): same rows, filtered to
+  // those whose score is stale (older model or changed inputs). The count is
+  // the stale total in scope so the pill advertises how many need attention.
+  const staleOnly = filters.status === 'stale';
   const stalePendingCount = useMemo(
     () => pendingOrdered.filter((d) => inRoleScope(d) && !acted.has(d.id) && d.is_stale).length,
     [pendingOrdered, acted, inRoleScope],
@@ -1162,12 +1145,11 @@ export const HomeNow = ({
     });
   }, [bulkConfirm, stagesByShortcode, bulkStages]);
 
-  // The action only makes sense when looking at pending rows. Hide
-  // otherwise so we don't promise to approve overridden / approved
-  // history the user is just browsing — and hide it under the "needs
-  // re-eval" filter, where bulk-approving stale scores is exactly what we
-  // want the recruiter to stop and re-evaluate instead.
-  const bulkActionEl = !invitedView && filters.status === 'pending' && !staleOnly && visiblePending.length > 0 ? (
+  // Only on the plain Pending view: not the invited tracker, and not "Needs
+  // re-eval" (status 'stale', which status==='pending' already excludes) —
+  // bulk-approving stale scores is what we want the recruiter to stop and
+  // re-evaluate instead.
+  const bulkActionEl = !invitedView && filters.status === 'pending' && visiblePending.length > 0 ? (
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
       <button
         type="button"
@@ -1250,8 +1232,6 @@ export const HomeNow = ({
         setFilters={setFilters}
         roles={rolesBreakdown}
         bulkAction={bulkActionEl}
-        staleOnly={staleOnly}
-        setStaleOnly={setStaleOnly}
         staleCount={stalePendingCount}
       />
 

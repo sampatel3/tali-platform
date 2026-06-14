@@ -40,6 +40,11 @@ const filtersToParams = (filters) => {
   if (filters.q) params.q = filters.q;
   if (filters.status === 'all') {
     params.status = 'all';
+  } else if (filters.status === 'stale') {
+    // 'stale' ("Needs re-eval") is a client-side lens over the pending queue,
+    // not a backend status — fetch pending and let HomeNow filter to the
+    // stale subset.
+    params.status = 'pending';
   } else {
     params.status = filters.status || 'pending';
   }
