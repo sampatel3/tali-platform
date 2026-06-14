@@ -215,11 +215,11 @@ const DEFAULT_ACTIONS = {
 };
 
 const STATUS_TABS = [
-  { id: 'pending', label: 'Pending' },
-  { id: 'reverted_for_feedback', label: 'Returned' },
-  { id: 'approved', label: 'Approved' },
-  { id: 'overridden', label: 'Overrides' },
-  { id: 'all', label: 'All' },
+  { id: 'pending', label: 'Pending', hint: 'Decisions waiting for your approval' },
+  { id: 'reverted_for_feedback', label: 'Returned', hint: 'Sent back to the agent with your feedback, to re-decide' },
+  { id: 'approved', label: 'Approved', hint: "Decisions you've approved — history, read-only" },
+  { id: 'overridden', label: 'Overrides', hint: 'Decisions where you overrode the agent — history, read-only' },
+  { id: 'all', label: 'All', hint: 'Every decision — pending and resolved' },
 ];
 
 // 'advance' and 'assessment' are categories — the backend expands them to
@@ -228,14 +228,14 @@ const STATUS_TABS = [
 // 'skip_assessment_reject' map 1:1 to their decision_type so the Hub
 // distinguishes the pre-screen reject from a post-assessment reject.
 const TYPE_OPTIONS = [
-  { id: '', label: 'All types' },
-  { id: 'advance', label: 'Advance' },
-  { id: 'assessment', label: 'Send assessment' },
-  { id: 'reject', label: 'Reject' },
-  { id: 'skip_assessment_reject', label: 'Reject (pre-screen)' },
+  { id: '', label: 'All types', hint: 'All decision types' },
+  { id: 'advance', label: 'Advance', hint: 'Advance the candidate to the next stage' },
+  { id: 'assessment', label: 'Send assessment', hint: 'Send or resend an assessment invite' },
+  { id: 'reject', label: 'Reject', hint: 'Reject after scoring / assessment' },
+  { id: 'skip_assessment_reject', label: 'Reject (pre-screen)', hint: 'Rejected at pre-screen, before any assessment' },
 ];
 
-const Toolbar = ({ filters, setFilters, roles, bulkAction }) => (
+const Toolbar = ({ filters, setFilters, roles, bulkAction, staleOnly, setStaleOnly, staleCount }) => (
   <div className="rq-toolbar">
     <div className="rq-toolbar-l">
       <span className="kicker mute" style={{ marginRight: 8 }}>ROLE</span>
@@ -256,6 +256,7 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction }) => (
             key={o.id || 'all'}
             type="button"
             className={(filters.type || '') === o.id ? 'on' : ''}
+            title={o.hint}
             onClick={() => setFilters((f) => ({ ...f, type: o.id || null }))}
           >
             {o.label}
@@ -268,11 +269,27 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction }) => (
             key={t.id}
             type="button"
             className={filters.status === t.id ? 'on' : ''}
+            title={t.hint}
             onClick={() => setFilters((f) => ({ ...f, status: t.id }))}
           >
             {t.label}
           </button>
         ))}
+      </div>
+      {/* Cross-cuts the status tabs: a pending decision is "needs re-eval" when
+          its score is out of date (older scoring model, or an input changed
+          since it queued). Client-side toggle over the already-loaded pending
+          rows — instant, no refetch. */}
+      <div className="rq-tabset" role="group" aria-label="Show only candidates that need re-evaluation">
+        <button
+          type="button"
+          className={staleOnly ? 'on' : ''}
+          title="Show only candidates whose score is out of date (older model or changed inputs) and should be re-evaluated"
+          onClick={() => setStaleOnly((v) => !v)}
+        >
+          <RefreshCw size={11} strokeWidth={2.2} aria-hidden="true" style={{ marginRight: 5, verticalAlign: '-1px' }} />
+          Needs re-eval{staleCount > 0 ? ` ${staleCount}` : ''}
+        </button>
       </div>
     </div>
     <div className="rq-toolbar-r">
@@ -332,7 +349,7 @@ const PipelineStandingStrip = ({ rolesBreakdown, filters }) => {
   return <FunnelBoard stageCounts={counts} decisionsByType={decisionsByType} scopeLabel={scopeLabel} />;
 };
 
-const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) => {
+const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, staleOnly = false }) => {
   // The list is sorted by score, so the oldest item is no longer at a fixed
   // position — derive its age explicitly for the header label.
   const oldestCreatedAt = pending.reduce((oldest, p) => {
@@ -344,7 +361,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
   <aside className="rq-split-list">
     <div className="rq-split-list-head">
       <span style={{ fontFamily: 'var(--font-display)', fontSize: '0.875rem', fontWeight: 600, color: 'var(--ink)' }}>
-        Pending <span style={{ color: 'var(--purple)', marginLeft: 4 }}>{pending.length}</span>
+        {staleOnly ? 'Needs re-eval' : 'Pending'} <span style={{ color: 'var(--purple)', marginLeft: 4 }}>{pending.length}</span>
       </span>
       <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65625rem', color: 'var(--mute)', letterSpacing: '.06em' }}>
         {oldestCreatedAt ? `OLDEST ${formatRelativeAge(oldestCreatedAt)}` : ''}
@@ -356,7 +373,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
       ) : pending.length === 0 ? (
         <div className="home-empty" style={{ margin: 6 }}>
           <Inbox size={18} aria-hidden="true" style={{ marginBottom: 6, color: 'var(--mute)' }} />
-          <div>Queue is empty. The agent is running unattended.</div>
+          <div>{staleOnly ? 'No candidates need re-evaluation right now.' : 'Queue is empty. The agent is running unattended.'}</div>
         </div>
       ) : (
         pending.map((p) => (
@@ -384,6 +401,18 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate }) 
                 <ScoreChip score={p.taali_score} size="sm" />
                 <ScoreProvenance provenance={p?.score_summary?.score_provenance} density="pill" />
               </span>
+              {p.is_stale ? (
+                <span
+                  title="Score out of date — re-evaluate"
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 3, fontFamily: 'var(--font-mono)',
+                    fontSize: '0.5625rem', letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--purple)',
+                    background: 'var(--purple-soft)', borderRadius: 4, padding: '1px 5px', whiteSpace: 'nowrap',
+                  }}
+                >
+                  <RefreshCw size={9} strokeWidth={2.4} aria-hidden="true" /> re-eval
+                </span>
+              ) : null}
               <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.625rem', color: 'var(--mute)', letterSpacing: '.06em', marginLeft: 'auto' }}>
                 {formatRelativeAge(p.created_at)}
               </span>
@@ -722,9 +751,20 @@ export const HomeNow = ({
   // Overlays applied to the server data: approved-in-flight rows leave the
   // pending sidebar entirely (the queue visibly shrinks) and show as
   // ``processing`` in the activity feed (greyed, not gone).
-  const effPending = useMemo(
-    () => pendingOrdered.filter((d) => inRoleScope(d) && !acted.has(d.id)),
+  // "Needs re-eval" view: filter the pending queue to decisions whose score is
+  // stale (older model or changed inputs). Client-side over the already-loaded
+  // pending rows, so toggling is instant. The count is the stale total in scope
+  // (independent of the toggle) so the pill advertises how many need attention.
+  const [staleOnly, setStaleOnly] = useState(false);
+  const stalePendingCount = useMemo(
+    () => pendingOrdered.filter((d) => inRoleScope(d) && !acted.has(d.id) && d.is_stale).length,
     [pendingOrdered, acted, inRoleScope],
+  );
+  const effPending = useMemo(
+    () => pendingOrdered.filter(
+      (d) => inRoleScope(d) && !acted.has(d.id) && (!staleOnly || d.is_stale),
+    ),
+    [pendingOrdered, acted, inRoleScope, staleOnly],
   );
   const effDecisions = useMemo(
     () => decisions
@@ -1016,8 +1056,10 @@ export const HomeNow = ({
 
   // The action only makes sense when looking at pending rows. Hide
   // otherwise so we don't promise to approve overridden / approved
-  // history the user is just browsing.
-  const bulkActionEl = filters.status === 'pending' && visiblePending.length > 0 ? (
+  // history the user is just browsing — and hide it under the "needs
+  // re-eval" filter, where bulk-approving stale scores is exactly what we
+  // want the recruiter to stop and re-evaluate instead.
+  const bulkActionEl = filters.status === 'pending' && !staleOnly && visiblePending.length > 0 ? (
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
       <button
         type="button"
@@ -1094,7 +1136,15 @@ export const HomeNow = ({
         </div>
       </div>
 
-      <Toolbar filters={filters} setFilters={setFilters} roles={rolesBreakdown} bulkAction={bulkActionEl} />
+      <Toolbar
+        filters={filters}
+        setFilters={setFilters}
+        roles={rolesBreakdown}
+        bulkAction={bulkActionEl}
+        staleOnly={staleOnly}
+        setStaleOnly={setStaleOnly}
+        staleCount={stalePendingCount}
+      />
 
       {/* Funnel standing for the scoped role — how many are already advanced /
           in review / rejected — so the pending count has a denominator. */}
@@ -1114,6 +1164,7 @@ export const HomeNow = ({
           onSelect={setSelectedId}
           loading={loading}
           onNavigate={onNavigate}
+          staleOnly={staleOnly}
         />
         <div className="rq-hybrid-right">
           <DecisionDetail
