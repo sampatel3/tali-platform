@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from ...models.agent_decision import AgentDecision
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
+from ...models.role import Role
 
 # An application is described by TWO independent axes:
 #
@@ -779,12 +780,18 @@ def role_pipeline_counts(
     # includes pre-screen-filtered candidates with no real score).
     not_yet_decided = (
         db.query(func.count(CandidateApplication.id))
+        .join(Role, Role.id == CandidateApplication.role_id)
         .filter(
             CandidateApplication.organization_id == organization_id,
             CandidateApplication.role_id == role_id,
             CandidateApplication.deleted_at.is_(None),
             CandidateApplication.application_outcome == "open",
             CandidateApplication.cv_match_score.isnot(None),
+            # "Not yet decided BY THE AGENT" only means anything where the agent
+            # is ON for the role (it may be paused — that's the usual case). On a
+            # role with the agent OFF the recruiter decides manually, so there's
+            # no agent verdict to await — don't count it as limbo.
+            Role.agentic_mode_enabled.is_(True),
             # Exclude candidates already advanced in Workable (interview/offer/
             # hired) — they're being interviewed, not awaiting a Tali decision.
             _not_post_handover_sql(),
@@ -888,12 +895,16 @@ def role_pipeline_counts_bulk(
     # single-role helper). One batched query, NOT EXISTS against AgentDecision.
     nyd_rows = (
         db.query(CandidateApplication.role_id, func.count(CandidateApplication.id))
+        .join(Role, Role.id == CandidateApplication.role_id)
         .filter(
             CandidateApplication.organization_id == organization_id,
             CandidateApplication.role_id.in_(role_ids),
             CandidateApplication.deleted_at.is_(None),
             CandidateApplication.application_outcome == "open",
             CandidateApplication.cv_match_score.isnot(None),
+            # Only roles with the agent ON — see role_pipeline_counts(). An
+            # agent-off role's candidates aren't awaiting an agent verdict.
+            Role.agentic_mode_enabled.is_(True),
             # Exclude candidates already advanced in Workable (interview/offer/
             # hired) — they're being interviewed, not awaiting a Tali decision.
             _not_post_handover_sql(),
