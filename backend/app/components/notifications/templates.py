@@ -250,52 +250,6 @@ def _taali_footer_brand(extra: str = "") -> str:
     return f"{base} {extra}".strip()
 
 
-def application_rejected_html(
-    candidate_name: str,
-    org_name: str,
-    position: str,
-) -> str:
-    """Brief, professional candidate-rejection email.
-
-    Used when a recruiter rejects an application — including via approving
-    an agent-queued ``reject`` decision. Body kept short on purpose; orgs
-    that want to share scores or excerpts do so manually before clicking
-    approve.
-    """
-    cand = _h(candidate_name) or "there"
-    org = _h(org_name)
-    pos = _h(position)
-    intro = _taali_intro(
-        _taali_paragraph(f"Hi {cand},")
-        + _taali_paragraph(
-            f'Thank you for your interest in the '
-            f'<strong style="color:#1d1730;font-weight:600;">{pos}</strong> role at '
-            f'<strong style="color:#1d1730;font-weight:600;">{org}</strong>, '
-            f'and for the time you put into your application.'
-        )
-        + _taali_paragraph(
-            "After careful review we&rsquo;ve decided not to move forward with your "
-            "application at this time. We received many strong submissions, and this "
-            "decision is in no way a reflection on the quality of your work."
-        )
-        + _taali_paragraph(
-            "We&rsquo;ll keep your details on file and reach out if a future opening "
-            "looks like a better fit. We wish you the best in your search."
-        )
-    )
-    signoff = _taali_signoff(f"Warm regards,<br />The {org} hiring team")
-    return _render_taali_email(
-        title=f"Application update — {org}",
-        preview=f"Update on your {pos} application at {org}.",
-        eyebrow_left="Application",
-        eyebrow_right="Update",
-        subtitle=org,
-        headline="Update on your application",
-        body=intro + signoff,
-        footer=_taali_footer_org(org),
-    )
-
-
 def assessment_invite_text(
     candidate_name: str,
     org_name: str,

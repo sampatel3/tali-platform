@@ -50,37 +50,6 @@ def send_assessment_email(
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-def send_application_rejected_email(
-    self,
-    candidate_email: str,
-    candidate_name: str,
-    org_name: str,
-    position: str,
-):
-    """Send candidate-facing rejection email (best-effort, retries on transient failure)."""
-    from .email_client import EmailService
-
-    if not (settings.RESEND_API_KEY or "").strip():
-        logger.info(f"RESEND_API_KEY not set — skipping rejection email to {candidate_email}")
-        return {"success": False, "skipped": True}
-    try:
-        email_svc = EmailService(api_key=settings.RESEND_API_KEY, from_email=settings.EMAIL_FROM)
-        result = email_svc.send_application_rejected(
-            candidate_email=candidate_email,
-            candidate_name=candidate_name,
-            org_name=org_name,
-            position=position,
-        )
-        if not result["success"]:
-            raise Exception(result.get("error", "Email send failed"))
-        logger.info("Rejection email sent to %s for position '%s'", candidate_email, position)
-        return result
-    except Exception as exc:
-        logger.error("Failed to send rejection email to %s: %s", candidate_email, exc)
-        raise self.retry(exc=exc)
-
-
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
 def send_results_email(self, user_email: str, candidate_name: str, score: float, assessment_id: int):
     """Notify hiring manager that assessment is complete."""
     from .email_client import EmailService

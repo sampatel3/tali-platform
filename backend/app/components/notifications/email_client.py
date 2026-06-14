@@ -12,7 +12,6 @@ import resend
 
 from ...platform.brand import BRAND_NAME, brand_email_from
 from .templates import (
-    application_rejected_html,
     assessment_expiry_reminder_html,
     assessment_invite_html,
     assessment_invite_text,
@@ -202,37 +201,6 @@ class EmailService:
             return {"success": True, "email_id": email_id}
         except Exception as e:
             logger.error("Failed to send password reset to %s: %s", to_email, str(e))
-            return {"success": False, "email_id": ""}
-
-    def send_application_rejected(
-        self,
-        candidate_email: str,
-        candidate_name: str,
-        org_name: str,
-        position: str,
-    ) -> dict:
-        try:
-            logger.info(
-                "Sending application-rejected email to %s for position '%s' at %s",
-                candidate_email, position, org_name,
-            )
-            html_body = application_rejected_html(
-                candidate_name=candidate_name,
-                org_name=org_name,
-                position=position,
-            )
-            email = resend.Emails.send({
-                "from": self.from_email,
-                "to": [candidate_email],
-                "subject": f"Update on your application at {org_name}",
-                "html": html_body,
-            })
-            email_id = email.get("id", "") if isinstance(email, dict) else str(email)
-            return {"success": True, "email_id": email_id}
-        except Exception as exc:
-            logger.error(
-                "Failed to send rejection email to %s: %s", candidate_email, str(exc)
-            )
             return {"success": False, "email_id": ""}
 
     def send_assessment_expiry_reminder(

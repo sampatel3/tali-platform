@@ -241,7 +241,8 @@ def run(
     role = getattr(app, "role", None) if app is not None else None
 
     # "Did this override freshly reject the candidate?" — gates the deferred
-    # Workable disqualify / rejection email. Set in the reject branch below.
+    # Workable disqualify (Taali never emails the candidate; the ATS owns job
+    # comms). Set in the reject branch below.
     reject_notify = False
 
     # Dispatch the alternative action the recruiter picked. None / "hold"

@@ -10,17 +10,19 @@ by:
 
 The agent itself never calls this — it queues a decision instead.
 
-Notification policy (matches the existing pre-screen auto-reject and
-manual recruiter-outcome PATCH paths):
+Notification policy — Taali NEVER emails candidates about the job.
 
-1. If the application is linked to Workable AND the org has Workable
-   write capability → call ``disqualify_candidate_in_workable``. On
-   success, the org's Workable disqualify-stage workflow is responsible
-   for sending the rejection email; we DO NOT send a Taali-branded one
-   on top.
-2. If Workable isn't connected, the application isn't linked, or the
-   disqualify call fails → send the Taali rejection email as a fallback
-   so the candidate still gets notified.
+All candidate job communication (including rejections) belongs to the ATS.
+When a candidate is rejected, Taali disqualifies them in Workable
+(``disqualify_candidate_in_workable``) and Workable's own disqualify-stage
+workflow is what notifies the candidate. Taali only ever emails candidates
+about the assessment itself (invite / expiry reminder / feedback) — never
+about a hiring decision.
+
+When Workable can't be written (req archived/closed, app not linked, org
+disconnected, or the call fails), the candidate is rejected locally in Taali
+and simply NOT emailed — the recruiter owns any candidate-facing message via
+the ATS. We never send a Taali-branded rejection email.
 
 Workable failures are logged and recorded as application events but do
 NOT raise — unlike the manual recruiter outcome PATCH which raises 502.
@@ -51,35 +53,6 @@ from .types import ACTOR_AGENT, Actor
 logger = logging.getLogger("taali.actions.reject_application")
 
 
-def _dispatch_rejection_email(
-    *,
-    candidate_email: str,
-    candidate_name: str,
-    org_name: str,
-    position: str,
-) -> None:
-    """Enqueue the rejection email on Celery.
-
-    Best-effort: any exception is logged and swallowed — the rejection
-    has already landed in the DB before this fires.
-    """
-    if not (settings.RESEND_API_KEY or "").strip():
-        return
-    from ..components.notifications.tasks import send_application_rejected_email
-
-    try:
-        send_application_rejected_email.delay(
-            candidate_email=candidate_email,
-            candidate_name=candidate_name,
-            org_name=org_name,
-            position=position,
-        )
-    except Exception:  # pragma: no cover — best-effort
-        logger.exception(
-            "rejection email enqueue failed (candidate=%s)", candidate_email
-        )
-
-
 def _try_workable_disqualify(
     db: Session,
     *,
@@ -90,16 +63,16 @@ def _try_workable_disqualify(
 ) -> str:
     """Attempt to disqualify the candidate in Workable.
 
-    Returns one of:
-    - ``"handled"`` — disqualify succeeded; the caller must NOT send a Taali
-      email (Workable's stage workflow sends the rejection email).
+    Taali never emails the candidate, so the return value is purely
+    informational (it no longer gates a fallback email):
+    - ``"handled"`` — disqualify succeeded; Workable's disqualify-stage
+      workflow notifies the candidate.
     - ``"retry_scheduled"`` — the call failed with a transient API error
-      (e.g. a 429 rate limit) and a bounded background retry was enqueued.
-      The caller must NOT send a Taali email now: the retry owns candidate
-      notification (email on exhaustion), which avoids a double-send if the
-      retry later succeeds and Workable emails.
+      (e.g. a 429 rate limit) and a bounded background retry was enqueued
+      to push the disqualify through.
     - ``"fallback"`` — Workable isn't applicable (not linked/configured) or
-      the failure isn't retriable; the caller should send the Taali email.
+      the failure isn't retriable; the local reject stands and the candidate
+      is not emailed by Taali.
 
     Records a ``workable_disqualified`` or ``workable_writeback_failed``
     application event mirroring the pre-screen auto-reject path so the
@@ -129,8 +102,9 @@ def _try_workable_disqualify(
     if not workable_job_syncable(getattr(app, "role", None)):
         # Archived/closed/draft Workable req — Workable 403s any disqualify
         # there. Skip the sync entirely; the local reject (transition_outcome in
-        # run()) stands and the Taali fallback email notifies the candidate, so
-        # the candidate still resolves to 'rejected' instead of waiting forever.
+        # run()) stands so the candidate resolves to 'rejected' instead of
+        # waiting forever. Taali sends no candidate email — job comms are the
+        # ATS's responsibility and the req is no longer live there.
         append_application_event(
             db,
             app=app,
@@ -232,52 +206,30 @@ def notify_rejection(
     app: CandidateApplication,
     actor: Actor,
     reason: Optional[str] = None,
-    send_email: bool = True,
 ) -> None:
-    """Notify the candidate of a rejection — Workable-first, email fallback.
+    """Resolve a rejection in the ATS — Taali never emails the candidate.
 
-    Disqualify the candidate in Workable when the org has write capability
-    and the application is linked; otherwise (or on failure) send the
-    Taali-branded rejection email. Best-effort: never raises. Extracted so
-    the decision-resolution path can run it off the request thread via the
-    deferred ``apply_decision_side_effects`` Celery task — the Workable HTTP
-    call adds seconds the recruiter shouldn't wait on.
+    Disqualifies the candidate in Workable when the org has write capability
+    and the application is linked; Workable's own disqualify-stage workflow is
+    what notifies the candidate. When Workable can't be written, the local
+    reject stands and the candidate is not emailed by Taali (job comms belong
+    to the ATS). Best-effort: never raises (except a strict
+    ``WorkableWritebackError`` on the batch dispatch path). Extracted so the
+    decision-resolution path can run the Workable HTTP call off the request
+    thread via the deferred ``apply_decision_side_effects`` Celery task — it
+    adds seconds the recruiter shouldn't wait on.
     """
-    candidate = app.candidate
-    candidate_email = (
-        (getattr(candidate, "email", "") or "").strip() if candidate else ""
-    )
     org = db.query(Organization).filter(Organization.id == app.organization_id).first()
-    # Workable-first: when the org has Workable connected and the
-    # application is linked, disqualify there regardless of whether the
-    # local candidate row has an email. ``Candidate.email`` is nullable for
-    # imported / partially-populated records, but those candidates still
-    # need their Workable status moved to rejected. Only the fallback
-    # Taali-branded email requires a local email.
-    workable_status = _try_workable_disqualify(
+    # Disqualify in the ATS so Workable's disqualify-stage workflow notifies
+    # the candidate. The local candidate row's email is irrelevant — Taali
+    # sends no candidate email regardless; we only move the Workable status.
+    _try_workable_disqualify(
         db,
         app=app,
         org=org,
         actor=actor,
         reason=reason,
     )
-    # Send the Taali fallback email only when Workable won't notify the
-    # candidate: "handled" → Workable's disqualify workflow emails;
-    # "retry_scheduled" → the retry task owns the eventual email (avoids a
-    # double-send). Only "fallback" needs the Taali-branded email here.
-    if workable_status == "fallback" and send_email and candidate_email:
-        role = app.role
-        position = (
-            getattr(role, "name", None)
-            or getattr(candidate, "position", None)
-            or "the role you applied for"
-        )
-        _dispatch_rejection_email(
-            candidate_email=candidate_email,
-            candidate_name=(candidate.full_name or candidate.email),
-            org_name=(org.name if org else "the hiring team"),
-            position=position,
-        )
 
 
 def run(
@@ -290,7 +242,6 @@ def run(
     idempotency_key: Optional[str] = None,
     expected_version: Optional[int] = None,
     metadata: Optional[dict[str, Any]] = None,
-    send_email: bool = True,
     defer_notify: bool = False,
 ) -> CandidateApplication:
     if actor.type == ACTOR_AGENT:
@@ -320,18 +271,17 @@ def run(
         metadata=metadata,
     )
 
-    # Notify the candidate, but only on a fresh rejection (not idempotent
-    # re-reject — transition_outcome is a no-op on the second call).
+    # Resolve the rejection in the ATS, but only on a fresh rejection (not an
+    # idempotent re-reject — transition_outcome is a no-op on the second call).
     # ``defer_notify`` lets the decision-resolution path skip the inline
     # Workable HTTP call and run it via a background task instead; the
     # caller computes the same freshness check and dispatches notify_rejection.
     notify = (
-        send_email
-        and not defer_notify
+        not defer_notify
         and previous_outcome != "rejected"
         and app.application_outcome == "rejected"
     )
     if notify:
-        notify_rejection(db, app=app, actor=actor, reason=reason, send_email=send_email)
+        notify_rejection(db, app=app, actor=actor, reason=reason)
 
     return app
