@@ -90,6 +90,16 @@ class Assessment(Base):
     workable_provider_pushed_at = Column(DateTime(timezone=True), nullable=True)
     invite_channel = Column(String, default="manual", nullable=False)
     invite_sent_at = Column(DateTime(timezone=True), nullable=True)
+    # Email-delivery tracking (Resend). ``invite_email_id`` is the Resend
+    # message id captured at send time; the Resend webhook correlates
+    # delivered/opened/bounced/complained events back to this row by it.
+    # ``invite_email_status`` is the latest lifecycle state:
+    # sent → delivered → opened/clicked, or bounced/complained.
+    invite_email_id = Column(String, nullable=True, index=True)
+    invite_email_status = Column(String, nullable=True)
+    invite_delivered_at = Column(DateTime(timezone=True), nullable=True)
+    invite_opened_at = Column(DateTime(timezone=True), nullable=True)
+    invite_bounced_at = Column(DateTime(timezone=True), nullable=True)
     credit_consumed_at = Column(DateTime(timezone=True), nullable=True)
     # Prompt scoring fields (Phase 2)
     prompt_quality_score = Column(Float, nullable=True)

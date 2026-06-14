@@ -27,6 +27,10 @@ from ...services.fireflies_service import (
 )
 from ...services.interview_support_service import refresh_application_interview_support
 from ...services.credit_ledger_service import append_credit_ledger_entry
+from ...services.resend_webhook_service import (
+    apply_resend_event,
+    verify_resend_webhook_signature,
+)
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
@@ -242,6 +246,36 @@ async def fireflies_webhook(request: Request, db: Session = Depends(get_db)):
         "application_id": app.id,
         "interview_id": interview.id,
     }
+
+
+@router.post("/resend")
+async def resend_webhook(request: Request, db: Session = Depends(get_db)):
+    """Handle Resend email-delivery webhooks (Svix-signed).
+
+    Correlates delivered/opened/bounced/complained events back to the
+    assessment by the Resend message id stored at send time, powering the
+    invited-candidate delivery tracker. Returns 200 with a small ack so Resend
+    doesn't retry, even when the event doesn't match one of our assessments.
+    """
+    if not settings.RESEND_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Resend webhook secret is not configured")
+
+    body = await request.body()
+    if not verify_resend_webhook_signature(
+        secret=settings.RESEND_WEBHOOK_SECRET,
+        svix_id=request.headers.get("svix-id", ""),
+        svix_timestamp=request.headers.get("svix-timestamp", ""),
+        svix_signature=request.headers.get("svix-signature", ""),
+        body=body,
+    ):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
+
+    return apply_resend_event(db, payload)
 
 
 @router.post("/stripe")

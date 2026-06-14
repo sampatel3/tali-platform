@@ -493,7 +493,7 @@
 }
 
 /* ── Pre-screen recommendation chip + Graph status chip ──────────────────── */
-.ps-chip, .graph-chip {
+.ps-chip, .graph-chip, .asmt-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -510,6 +510,18 @@
 .ps-chip--review   { background: rgba(253, 203, 110, 0.28); color: #6a5008; }
 .ps-chip--rejected { background: rgba(214, 48, 49, 0.18); color: #8a1d1d; }
 .ps-chip--unrun    { background: rgba(178, 190, 195, 0.30); color: #555; }
+
+/* Assessment invite tracker chips — purple-leaning lifecycle, red only for a
+   genuine delivery failure (bounce/complaint the recruiter must act on). */
+.asmt-chip { background: rgba(0, 0, 0, 0.06); color: #555; }
+.asmt-chip--invited   { background: rgba(124, 92, 246, 0.14); color: #4c2fb0; }
+.asmt-chip--sent      { background: rgba(124, 92, 246, 0.10); color: #5b46a8; }
+.asmt-chip--delivered { background: rgba(124, 92, 246, 0.20); color: #3f2596; }
+.asmt-chip--opened    { background: rgba(99, 64, 232, 0.26); color: #2e1a82; }
+.asmt-chip--progress  { background: rgba(124, 92, 246, 0.28); color: #2e1a82; }
+.asmt-chip--done      { background: rgba(0, 184, 148, 0.18); color: #00604a; }
+.asmt-chip--expired   { background: rgba(178, 190, 195, 0.32); color: #555; }
+.asmt-chip--bounced   { background: rgba(214, 48, 49, 0.18); color: #8a1d1d; }
 
 .graph-chip { background: rgba(0, 0, 0, 0.06); color: #555; }
 .graph-chip--in    { background: rgba(0, 184, 148, 0.18); color: #00604a; }

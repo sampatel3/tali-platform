@@ -3,7 +3,17 @@ import { Loader2, X } from 'lucide-react';
 
 import { Button } from '../../shared/ui/TaaliPrimitives';
 import { CandidateAuditTimeline } from './CandidateAuditTimeline';
+import { AssessmentInviteChip } from './CandidateStatusChips';
 import { ScoreProvenance } from './ScoreProvenance';
+
+const _fmtTrackTs = (ts) => {
+  if (!ts) return null;
+  try {
+    return new Date(ts).toLocaleString();
+  } catch {
+    return null;
+  }
+};
 import {
   CandidateAvatar,
   WorkableScorePip,
@@ -330,6 +340,43 @@ export function CandidateTriageDrawer({
 
       {activeTab === 'send' ? (
         <div className="ctc-tab-pane" role="tabpanel">
+          {application?.score_summary?.invite_tracking?.invite_sent_at ? (
+            <div className="ctc-invite-track">
+              <div className="ctc-invite-track-head">
+                <span className="ctc-invite-track-title">Invite tracking</span>
+                <AssessmentInviteChip
+                  status={application?.score_summary?.assessment_status}
+                  tracking={application?.score_summary?.invite_tracking}
+                />
+              </div>
+              <ul className="ctc-invite-track-list">
+                {(() => {
+                  const t = application.score_summary.invite_tracking;
+                  const rows = [
+                    ['Invited', t.invite_sent_at, false],
+                    ['Delivered', t.delivered_at, false],
+                    ['Email opened', t.opened_at, false],
+                    ['Bounced', t.bounced_at, true],
+                    ['Started', t.started_at, false],
+                    ['Expires', t.expires_at, false],
+                  ];
+                  return rows
+                    .filter(([, ts]) => ts)
+                    .map(([label, ts, danger]) => (
+                      <li key={label} className={danger ? 'is-danger' : ''}>
+                        <span>{label}</span>
+                        <span>{_fmtTrackTs(ts)}</span>
+                      </li>
+                    ));
+                })()}
+              </ul>
+              {!application.score_summary.invite_tracking.email_status ? (
+                <div className="ctc-invite-track-note">
+                  Email delivery/open tracking shows here once the Resend webhook is configured.
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <div className="ctc-cards">
             {roleTasks.length === 0 ? (
               <div className="ctc-empty">No tasks linked to this role yet.</div>

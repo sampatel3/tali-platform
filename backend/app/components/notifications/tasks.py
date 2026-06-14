@@ -43,6 +43,37 @@ def send_assessment_email(
         if not result["success"]:
             raise Exception(result.get("error", "Email send failed"))
         logger.info(f"Assessment email sent to {candidate_email}", extra=log_extra)
+        # Persist the Resend message id so the delivery webhook can correlate
+        # delivered/opened/bounced events back to this assessment. Best-effort:
+        # a tracking-id write must never fail the (already-sent) email task.
+        email_id = (result or {}).get("email_id")
+        if assessment_id and email_id:
+            try:
+                from ...platform.database import SessionLocal
+                from ...models.assessment import Assessment
+
+                db = SessionLocal()
+                try:
+                    asmt = (
+                        db.query(Assessment)
+                        .filter(Assessment.id == int(assessment_id))
+                        .first()
+                    )
+                    if asmt is not None:
+                        asmt.invite_email_id = email_id
+                        # Don't clobber a delivered/opened/bounced state if the
+                        # webhook somehow raced ahead of this writeback.
+                        if not asmt.invite_email_status:
+                            asmt.invite_email_status = "sent"
+                        db.commit()
+                finally:
+                    db.close()
+            except Exception:  # pragma: no cover — defensive, never block send
+                logger.warning(
+                    "could not persist invite_email_id for assessment_id=%s",
+                    assessment_id,
+                    extra=log_extra,
+                )
         return result
     except Exception as exc:
         logger.error(f"Failed to send assessment email to {candidate_email}: {exc}", extra=log_extra)

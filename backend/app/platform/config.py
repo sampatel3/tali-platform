@@ -263,6 +263,10 @@ class Settings(BaseSettings):
 
     # Resend
     RESEND_API_KEY: str = ""
+    # Svix signing secret for the Resend delivery webhook (`whsec_...`). When
+    # unset the /webhooks/resend endpoint 503s — delivery/open/bounce tracking
+    # is simply off until configured in the Resend dashboard.
+    RESEND_WEBHOOK_SECRET: str = ""
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379"
