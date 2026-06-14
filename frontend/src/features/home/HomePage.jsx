@@ -157,6 +157,9 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
 
   // Track in-flight reloads so rapid clicks don't pile up requests.
   const reloadCounter = useRef(0);
+  // Once the recruiter has picked (or cleared) an agent in the rail, the 30s
+  // poll stops auto-focusing the top agent — so a deselect sticks.
+  const userTouchedSelectionRef = useRef(false);
   // Stale-while-revalidate cache of the last rows seen per filter, so flipping
   // between filters you've already opened paints instantly instead of blanking
   // to a spinner while the (authenticated) refetch round-trips. Search queries
@@ -218,18 +221,6 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       });
       setPendingOrdered(pending);
       setDecisions(feedRows);
-      // Accurate "Needs re-eval" total for the pill — scoped to role + type,
-      // computed over the whole queue. Skipped on the silent poll (it's a
-      // heavier scan); fired on real loads / filter changes / post-action
-      // reloads. Non-blocking; guarded by the same staleness ticket.
-      if (!silent) {
-        agentApi.needsReevalCount({
-          role_id: filters.role_id || undefined,
-          type: filters.type || undefined,
-        }).then((res) => {
-          if (reloadCounter.current === ticket) setStaleCount(Number(res?.data?.count) || 0);
-        }).catch(() => {});
-      }
       if (cacheKey) {
         const cache = decisionsCacheRef.current;
         cache.set(cacheKey, { pending, feed: feedRows });
@@ -311,6 +302,22 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   useEffect(() => { void loadDecisions(); }, [loadDecisions]);
   useEffect(() => { void loadSignal(); }, [loadSignal]);
 
+  // Accurate "Needs re-eval" total for the pill — scoped to role + type, over
+  // the whole queue (the per-row is_stale on the list only covers the capped
+  // page). Its OWN effect, decoupled from the decisions reload so the slower
+  // count can't be superseded by a poll's reload ticket; refreshes when the
+  // scope changes.
+  useEffect(() => {
+    let cancelled = false;
+    agentApi.needsReevalCount({
+      role_id: filters.role_id || undefined,
+      type: filters.type || undefined,
+    }).then((res) => {
+      if (!cancelled) setStaleCount(Number(res?.data?.count) || 0);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [filters.role_id, filters.type]);
+
   // Silent background refresh of the decision list so in-flight rows resolve
   // on their own. A ref holds the latest loader so the interval isn't torn
   // down and rebuilt every time the filters change. Gated on tab visibility
@@ -352,6 +359,10 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       setAgents(list);
       setActiveRoleId((cur) => {
         if (cur && list.some((a) => a.role_id === cur)) return cur;
+        // Auto-focus the most-urgent agent on FIRST load only. Once the
+        // recruiter has chosen (incl. deliberately deselecting to view all
+        // roles), don't yank a selection back on the 30s poll.
+        if (userTouchedSelectionRef.current) return null;
         const ranked = [...list].sort((a, b) => (b.attention || 0) - (a.attention || 0));
         return ranked.length ? ranked[0].role_id : null;
       });
@@ -366,13 +377,16 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     return () => window.clearInterval(id);
   }, [loadAgents]);
 
-  // Selecting an agent focuses both the chat dock and the decision feed on
-  // that role so the two surfaces stay in sync.
+  // Selecting an agent focuses both the chat dock and the decision feed on that
+  // role. Clicking the already-selected agent toggles it OFF — back to all
+  // roles / no agent focused — so there's always a way out of a scoped view.
   const handleSelectAgent = useCallback((roleId) => {
-    setActiveRoleId(roleId);
-    setDockCollapsed(false);
-    setFilters((f) => ({ ...f, role_id: roleId }));
-  }, [setFilters]);
+    userTouchedSelectionRef.current = true;
+    const deselect = activeRoleId === roleId;
+    setActiveRoleId(deselect ? null : roleId);
+    setFilters((f) => ({ ...f, role_id: deselect ? null : roleId }));
+    if (!deselect) setDockCollapsed(false);
+  }, [activeRoleId, setFilters]);
 
   const activeAgent = useMemo(
     () => agents.find((a) => a.role_id === activeRoleId) || null,
