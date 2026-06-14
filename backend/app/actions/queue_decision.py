@@ -244,6 +244,16 @@ def _human_suppressed(
     note — releases the suppression so the agent can re-decide on fresh
     information.
 
+    ONLY an explicit HUMAN no suppresses (``resolved_by_user_id`` set). SYSTEM
+    discards — the re-score supersede (``_supersede_decisions_for_rescore``,
+    "candidate_data_changed") and the threshold reconcile — leave
+    ``resolved_by_user_id`` NULL precisely BECAUSE they expect the agent to
+    re-decide. Treating those as a human "no" stranded re-scored candidates:
+    a re-score discards the pending decision, then (with verdict-aware
+    staleness, #615) a held verdict reads as "not stale" so the suppression
+    never releases and the card is never re-created. Filtering to human-resolved
+    rows fixes that — the system discard no longer blocks its own re-decision.
+
     Returns the suppressing decision (caller dedups to it) or None when a
     fresh emit is allowed.
     """
@@ -253,6 +263,7 @@ def _human_suppressed(
             AgentDecision.application_id == application_id,
             AgentDecision.decision_type == decision_type,
             AgentDecision.status.in_(("discarded", "overridden")),
+            AgentDecision.resolved_by_user_id.isnot(None),
         )
         .order_by(
             AgentDecision.resolved_at.desc().nullslast(),
