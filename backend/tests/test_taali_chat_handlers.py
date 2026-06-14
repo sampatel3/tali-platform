@@ -135,6 +135,57 @@ def test_nl_search_candidates_rejects_empty_query(db):
 
 
 # ---------------------------------------------------------------------------
+# find_top_candidates — in-the-running pool filter
+# ---------------------------------------------------------------------------
+
+
+def test_find_top_candidates_pool_is_scored_and_not_below_threshold(db):
+    """The 'top candidates' pool must be in-the-running candidates only:
+    scored AND not the engine's below-threshold/reject verdict. Unscored and
+    'Below threshold' applications are dropped before ranking/grounding, so a
+    re-score reject can't surface as a 'top' candidate and the deep grounding
+    window isn't wasted on un-evaluated rows."""
+    user, org = _make_user_and_org(db)
+    role = Role(organization_id=org.id, name="Backend", source="manual")
+    db.add(role)
+    db.commit()
+
+    strong = _make_app(db, org_id=org.id, role=role, candidate_name="Strong",
+                       email="strong@x.test", taali=80.0)
+    review = _make_app(db, org_id=org.id, role=role, candidate_name="Review",
+                       email="review@x.test", taali=55.0)
+    review.pre_screen_recommendation = "Manual review recommended"
+    below = _make_app(db, org_id=org.id, role=role, candidate_name="Below",
+                      email="below@x.test", taali=20.0)
+    below.pre_screen_recommendation = "Below threshold"
+    unscored = _make_app(db, org_id=org.id, role=role, candidate_name="Unscored",
+                         email="unscored@x.test", taali=None)
+    db.commit()
+
+    captured: dict = {}
+
+    def _fake_engine(*, db, organization_id, query, base_query, limit, rank_by):
+        captured["ids"] = sorted(a.id for a in base_query.all())
+        captured["limit"] = limit
+        captured["rank_by"] = rank_by
+        return {"candidates": [], "shown": 0}
+
+    with patch(
+        "app.candidate_search.top_candidates.find_top_candidates",
+        side_effect=_fake_engine,
+    ):
+        handlers.find_top_candidates(
+            db, user, query="top 5 with salary <= 30000 AED", role_id=role.id, limit=5
+        )
+
+    assert captured["ids"] == sorted([strong.id, review.id])
+    assert below.id not in captured["ids"]      # below-threshold reject excluded
+    assert unscored.id not in captured["ids"]   # un-evaluated excluded
+    assert captured["limit"] == 5
+    assert captured["rank_by"] == "taali"
+
+
+# ---------------------------------------------------------------------------
 # _graph_topology — referential-integrity guard
 # ---------------------------------------------------------------------------
 
