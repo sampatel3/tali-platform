@@ -65,15 +65,16 @@ def _make_world(db, *, candidate_email: str | None):
 
 
 def test_workable_disqualify_called_even_when_candidate_email_missing(db):
-    """Old behaviour skipped Workable when local email was empty."""
+    """The Workable disqualify must run regardless of the local email — it's how
+    the candidate is notified (via Workable's own workflow). Taali emails no one."""
     org, user, role, app = _make_world(db, candidate_email=None)
     actor = Actor.recruiter(user)
     with patch(
         "app.actions.reject_application._try_workable_disqualify",
         return_value="handled",
     ) as wk, patch(
-        "app.actions.reject_application._dispatch_rejection_email"
-    ) as email_mock:
+        "app.components.notifications.email_client.resend.Emails.send"
+    ) as mock_resend:
         reject_application.run(
             db,
             actor,
@@ -83,20 +84,22 @@ def test_workable_disqualify_called_even_when_candidate_email_missing(db):
             idempotency_key="t1",
         )
     wk.assert_called_once()
-    # No local email present, so the Taali-branded fallback shouldn't fire.
-    email_mock.assert_not_called()
+    # Taali never emails the candidate about the job.
+    mock_resend.assert_not_called()
 
 
-def test_taali_fallback_only_when_email_present_and_workable_failed(db):
-    """When Workable disqualify fails non-retriably AND we have an email, send fallback."""
+def test_no_candidate_email_even_when_workable_falls_back(db):
+    """When Workable can't be written (returns "fallback"), the reject lands
+    locally and Taali still sends the candidate NO email — job comms belong to
+    the ATS, not Taali."""
     org, user, role, app = _make_world(db, candidate_email="c@x.test")
     actor = Actor.recruiter(user)
     with patch(
         "app.actions.reject_application._try_workable_disqualify",
         return_value="fallback",
     ) as wk, patch(
-        "app.actions.reject_application._dispatch_rejection_email"
-    ) as email_mock:
+        "app.components.notifications.email_client.resend.Emails.send"
+    ) as mock_resend:
         reject_application.run(
             db,
             actor,
@@ -106,4 +109,4 @@ def test_taali_fallback_only_when_email_present_and_workable_failed(db):
             idempotency_key="t2",
         )
     wk.assert_called_once()
-    email_mock.assert_called_once()
+    mock_resend.assert_not_called()

@@ -11,8 +11,10 @@ from .assessment_tasks import (
     generate_assessment_task_for_role,
 )
 # Eager-import the canonical email-task module so Celery registers
-# send_assessment_email / send_results_email / send_application_rejected_email
-# on the worker. Imported as a module (not by name) on purpose: notifications.
+# send_assessment_email / send_results_email on the worker. (Taali never
+# emails candidates about the job — there is no rejection-email task; the ATS
+# owns candidate job communication.) Imported as a module (not by name) on
+# purpose: notifications.
 # tasks imports celery_app from this package, so a name-level import here would
 # re-enter while that module is half-loaded and raise ImportError.
 from ..components.notifications import tasks as _notification_email_tasks  # noqa: F401

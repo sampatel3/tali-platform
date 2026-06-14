@@ -73,12 +73,12 @@ def test_retry_task_success_records_event_no_email(db):
         "app.services.workable_actions_service.disqualify_candidate_in_workable",
         return_value=_SUCCESS,
     ) as mock_dq, patch(
-        "app.actions.reject_application._dispatch_rejection_email"
-    ) as mock_email:
+        "app.components.notifications.email_client.resend.Emails.send"
+    ) as mock_resend:
         out = retry_workable_disqualify_task.run(application_id=app_id)
     assert out["status"] == "ok"
     assert mock_dq.called
-    assert not mock_email.called, "success defers candidate email to Workable's workflow"
+    assert not mock_resend.called, "Workable's own workflow notifies the candidate"
 
 
 def test_retry_task_skips_when_not_rejected(db):
@@ -116,8 +116,10 @@ def test_retry_task_skips_when_already_disqualified(db):
     assert not mock_dq.called
 
 
-def test_retry_task_nonretriable_failure_emails_and_gives_up(db):
-    """A non-API failure won't self-heal — record it and notify the candidate."""
+def test_retry_task_nonretriable_failure_records_and_gives_up_no_email(db):
+    """A non-API failure won't self-heal — record the failure and stop. The
+    local reject already stands; Taali never emails the candidate (job comms
+    belong to the ATS)."""
     org, role, app = _seed(db, outcome="rejected", email="cand@x.test")
     app_id = int(app.id)
     failure = {
@@ -130,12 +132,12 @@ def test_retry_task_nonretriable_failure_emails_and_gives_up(db):
         "app.services.workable_actions_service.disqualify_candidate_in_workable",
         return_value=failure,
     ) as mock_dq, patch(
-        "app.actions.reject_application._dispatch_rejection_email"
-    ) as mock_email:
+        "app.components.notifications.email_client.resend.Emails.send"
+    ) as mock_resend:
         out = retry_workable_disqualify_task.run(application_id=app_id)
     assert out["status"] == "failed"
     assert mock_dq.called
-    assert mock_email.called, "candidate must still be notified when Workable can't be used"
+    assert not mock_resend.called, "Taali never emails the candidate about the job"
 
 
 def test_retry_task_transient_failure_reschedules(db, monkeypatch):

@@ -243,9 +243,10 @@ def run(
     )
     role = getattr(app, "role", None) if app is not None else None
 
-    # "Did this approval freshly reject the candidate?" — gates the
-    # background Workable disqualify / rejection email so an already-rejected
-    # candidate isn't notified twice. Set in the reject branch below.
+    # "Did this approval freshly reject the candidate?" — gates the background
+    # Workable disqualify so an already-rejected candidate isn't re-processed.
+    # (Taali never emails the candidate; the ATS owns job comms.) Set in the
+    # reject branch below.
     reject_notify = False
 
     if decision.decision_type == "advance_to_interview":

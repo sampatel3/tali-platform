@@ -362,10 +362,9 @@ def retry_workable_disqualify_task(self, application_id: int, reason: str | None
     shows the candidate active — permanent drift with no reconciliation. Runs
     bounded, backed-off retries. Idempotent: skips if the candidate is no
     longer rejected in Tali (recruiter override) or has already been
-    disqualified in Workable. On exhaustion, sends the Taali rejection email
-    so the candidate is still notified.
+    disqualified in Workable. On exhaustion, records the failure and stops —
+    Taali never emails the candidate (job comms belong to the ATS).
     """
-    from ..actions.reject_application import _dispatch_rejection_email
     from ..domains.assessments_runtime.pipeline_service import append_application_event
     from ..models.candidate_application import CandidateApplication
     from ..models.candidate_application_event import CandidateApplicationEvent
@@ -436,8 +435,9 @@ def retry_workable_disqualify_task(self, application_id: int, reason: str | None
             db.rollback()
             raise self.retry(countdown=_disqualify_retry_countdown(self.request.retries))
 
-        # Give up: record the final failure and notify the candidate directly
-        # so a permanent Workable outage doesn't silently swallow the rejection.
+        # Give up: record the final failure for the audit trail. The local
+        # reject already stands in Taali; the candidate is NOT emailed —
+        # candidate job communication belongs to the ATS, not Taali.
         append_application_event(
             db,
             app=app,
@@ -451,20 +451,6 @@ def retry_workable_disqualify_task(self, application_id: int, reason: str | None
             },
         )
         db.commit()
-        candidate = app.candidate
-        candidate_email = (getattr(candidate, "email", "") or "").strip() if candidate else ""
-        if candidate_email:
-            position = (
-                getattr(app.role, "name", None)
-                or getattr(candidate, "position", None)
-                or "the role you applied for"
-            )
-            _dispatch_rejection_email(
-                candidate_email=candidate_email,
-                candidate_name=(candidate.full_name or candidate.email),
-                org_name=(org.name if org else "the hiring team"),
-                position=position,
-            )
         return {"status": "failed", "application_id": application_id, "code": result.get("code")}
     finally:
         db.close()

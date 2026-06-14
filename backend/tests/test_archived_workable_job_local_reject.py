@@ -93,25 +93,23 @@ def test_reject_on_archived_job_rejects_locally_without_workable(db):
     role = _seed_role(db, org, job_state="archived")
     app = _seed_app(db, org, role)
 
-    # send_email=True so notify_rejection actually runs (and hits the guard).
     # Patch disqualify at the source module — it's imported inline at call time.
     with patch(
         "app.services.workable_actions_service.disqualify_candidate_in_workable"
-    ) as mock_dq, patch.object(
-        reject_application, "_dispatch_rejection_email"
-    ) as mock_email:
+    ) as mock_dq, patch(
+        "app.components.notifications.email_client.resend.Emails.send"
+    ) as mock_resend:
         reject_application.run(
             db,
             Actor.system(),
             organization_id=org.id,
             application_id=app.id,
             reason="below threshold",
-            send_email=True,
         )
 
     assert app.application_outcome == "rejected"   # local reject stands
     mock_dq.assert_not_called()                     # Workable sync skipped (archived)
-    mock_email.assert_called_once()                 # candidate still notified via Taali
+    mock_resend.assert_not_called()                 # Taali never emails the candidate
 
 
 def test_reject_on_published_job_still_disqualifies_in_workable(db):
@@ -130,7 +128,6 @@ def test_reject_on_published_job_still_disqualifies_in_workable(db):
             organization_id=org.id,
             application_id=app.id,
             reason="below threshold",
-            send_email=True,
         )
 
     assert app.application_outcome == "rejected"

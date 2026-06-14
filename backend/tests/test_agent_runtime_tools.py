@@ -1019,18 +1019,16 @@ def test_approve_reject_decision_sets_outcome_rejected(db):
     )
     db.flush()
 
-    # Recruiter approves — should now succeed (previously raised 501).
-    # Patch the email dispatch so the test stays hermetic.
-    with patch(
-        "app.actions.reject_application._dispatch_rejection_email"
-    ) as mock_email:
-        approve_decision.run(
-            db,
-            Actor.recruiter(recruiter),
-            organization_id=int(org.id),
-            decision_id=int(queued.id),
-        )
-        db.flush()
+    # Recruiter approves — should now succeed (previously raised 501). The org
+    # isn't Workable-connected, so the reject resolves locally with no external
+    # calls and Taali sends the candidate no email (job comms belong to the ATS).
+    approve_decision.run(
+        db,
+        Actor.recruiter(recruiter),
+        organization_id=int(org.id),
+        decision_id=int(queued.id),
+    )
+    db.flush()
 
     db.refresh(app)
     assert app.application_outcome == "rejected"
@@ -1038,11 +1036,6 @@ def test_approve_reject_decision_sets_outcome_rejected(db):
     db.refresh(queued)
     assert queued.status == "approved"
     assert queued.resolved_by_user_id == recruiter.id
-
-    # Email dispatch happened with the candidate's address.
-    assert mock_email.called
-    kwargs = mock_email.call_args.kwargs
-    assert kwargs["candidate_email"] == "x@x.test"
 
 
 def test_approve_skip_assessment_reject_sets_outcome_rejected(db):
@@ -1069,14 +1062,13 @@ def test_approve_skip_assessment_reject_sets_outcome_rejected(db):
     )
     db.flush()
 
-    with patch("app.actions.reject_application._dispatch_rejection_email"):
-        approve_decision.run(
-            db,
-            Actor.recruiter(recruiter),
-            organization_id=int(org.id),
-            decision_id=int(queued.id),
-        )
-        db.flush()
+    approve_decision.run(
+        db,
+        Actor.recruiter(recruiter),
+        organization_id=int(org.id),
+        decision_id=int(queued.id),
+    )
+    db.flush()
 
     db.refresh(app)
     assert app.application_outcome == "rejected"
