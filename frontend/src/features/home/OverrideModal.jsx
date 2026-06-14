@@ -37,6 +37,34 @@ export const normalizeWorkableStages = (stages) => {
     .filter(Boolean);
 };
 
+// Workable's two pre-application stage kinds. You can't *advance* a candidate
+// INTO "Sourced" or "Applied" — they sit before the funnel's hand-off — so an
+// advance picker must never offer them. (A job whose Workable pipeline has only
+// these two has no advance target at all; the caller then advances on Tali's
+// internal stage and posts nothing to Workable.)
+const PRE_HANDOVER_STAGE_KEYS = new Set(['sourced', 'applied']);
+const stageKey = (raw) =>
+  String(raw || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+
+// The subset of a Workable job's stages a candidate can be ADVANCED into —
+// everything except the pre-application stages. Use this for every advance /
+// move-forward picker; use normalizeWorkableStages() for a plain full listing
+// (e.g. settings), where excluding stages would be wrong.
+export const advanceableWorkableStages = (stages) => {
+  if (!Array.isArray(stages)) return [];
+  return normalizeWorkableStages(
+    stages.filter((stage) => {
+      if (stage && typeof stage === 'object') {
+        if (PRE_HANDOVER_STAGE_KEYS.has(stageKey(stage.kind))) return false;
+        return !PRE_HANDOVER_STAGE_KEYS.has(
+          stageKey(stage.slug || stage.value || stage.name),
+        );
+      }
+      return !PRE_HANDOVER_STAGE_KEYS.has(stageKey(stage));
+    }),
+  );
+};
+
 export const OverrideModal = ({
   decision,
   alternative,
@@ -49,7 +77,8 @@ export const OverrideModal = ({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
 
-  const stageOptions = useMemo(() => normalizeWorkableStages(workableStages), [workableStages]);
+  // Advance pickers only ever offer forward stages — never Sourced/Applied.
+  const stageOptions = useMemo(() => advanceableWorkableStages(workableStages), [workableStages]);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -145,7 +174,7 @@ export const OverrideModal = ({
               </span>
               {stageOptions.length === 0 ? (
                 <span style={{ fontSize: 12, color: 'var(--mute)' }}>
-                  No Workable stages found for this role. The candidate's internal stage will still update; nothing posts to Workable until stages load.
+                  This Workable job has no advance stages — only pre-application stages (Sourced / Applied) exist. The candidate advances on Tali's internal stage; nothing posts to Workable. Add interview/offer stages to the job in Workable to move them there.
                 </span>
               ) : (
                 <div
