@@ -23,9 +23,19 @@ import './agentchat/agentchat.css';
 
 const _NOW = Date.now();
 
+// Score-provenance line the live feed + detail panel render under each score
+// ("Scored {date} · v2.1.0 · Sonnet" in the detail panel; a version pill in the
+// list). Today's decisions are all on the current holistic engine.
+const prov = (hoursAgo, version = '2.1.0', model = 'Sonnet') => ({
+  engine_version: version,
+  scored_at: new Date(_NOW - hoursAgo * 60 * 60 * 1000).toISOString(),
+  model,
+});
+
 // Rows match the AgentDecisionPayload shape the live feed consumes:
 // role_name (RolePill), taali_score (ScoreChip), confidence ("agent N%
-// confident"), and evidence.{cells,trace} for the detail panel.
+// confident"), score_summary.score_provenance (ScoreProvenance), and
+// evidence.{cells,trace} for the detail panel.
 const INITIAL_FEED_ROWS = [
   {
     id: 28,
@@ -37,6 +47,7 @@ const INITIAL_FEED_ROWS = [
     role_id: 109,
     role_name: 'Senior Backend Engineer',
     taali_score: 88,
+    score_summary: { score_provenance: prov(0.1) },
     confidence: 0.92,
     reasoning:
       "Strong fit — clears every must-have with room to spare. Assessment 88/100; verified the dedupe before editing. Top of this role's pipeline.",
@@ -65,6 +76,7 @@ const INITIAL_FEED_ROWS = [
     role_id: 109,
     role_name: 'Senior Backend Engineer',
     taali_score: 41,
+    score_summary: { score_provenance: prov(0.8) },
     confidence: 0.81,
     reasoning: 'Well below your bar. Missing the must-have distributed-systems and AWS depth; assessment stalled on the schema-drift path.',
     created_at: new Date(_NOW - 44 * 60 * 1000).toISOString(),
@@ -91,6 +103,7 @@ const INITIAL_FEED_ROWS = [
     role_id: 110,
     role_name: 'Data Engineer',
     taali_score: 84,
+    score_summary: { score_provenance: prov(1.2) },
     confidence: 0.88,
     reasoning: 'Strong system design and a clean grounding-vs-ranking split. Flag for the hiring manager — borderline on streaming depth.',
     created_at: new Date(_NOW - 71 * 60 * 1000).toISOString(),
@@ -115,6 +128,7 @@ const INITIAL_FEED_ROWS = [
     role_id: 109,
     role_name: 'Senior Backend Engineer',
     taali_score: 86,
+    score_summary: { score_provenance: prov(0.4) },
     human_disposition: 'approved',
     resolved_at: new Date(_NOW - 18 * 60 * 1000).toISOString(),
   },
@@ -127,6 +141,7 @@ const INITIAL_FEED_ROWS = [
     role_id: 109,
     role_name: 'Senior Backend Engineer',
     taali_score: 58,
+    score_summary: { score_provenance: prov(0.9) },
     human_disposition: 'taught',
     resolution_note: 'override → advance',
     resolved_at: new Date(_NOW - 52 * 60 * 1000).toISOString(),
@@ -140,6 +155,7 @@ const INITIAL_FEED_ROWS = [
     role_id: 110,
     role_name: 'Data Engineer',
     taali_score: 39,
+    score_summary: { score_provenance: prov(1.6) },
     human_disposition: 'approved',
     resolved_at: new Date(_NOW - 95 * 60 * 1000).toISOString(),
   },
