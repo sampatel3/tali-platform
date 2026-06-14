@@ -132,6 +132,11 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   const [orgStatus, setOrgStatus] = useState(null);
   const [decisions, setDecisions] = useState([]);
   const [pendingOrdered, setPendingOrdered] = useState([]);
+  // True "Needs re-eval" total for the current scope, computed server-side over
+  // the whole queue (the per-row is_stale on the list only covers the capped
+  // page, so a deep backlog under-counts client-side). Refreshed on real loads,
+  // not the silent poll.
+  const [staleCount, setStaleCount] = useState(0);
   const [rolesBreakdown, setRolesBreakdown] = useState([]);
   const [feedback, setFeedback] = useState([]);
   const [outcomes, setOutcomes] = useState([]);
@@ -213,6 +218,18 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       });
       setPendingOrdered(pending);
       setDecisions(feedRows);
+      // Accurate "Needs re-eval" total for the pill — scoped to role + type,
+      // computed over the whole queue. Skipped on the silent poll (it's a
+      // heavier scan); fired on real loads / filter changes / post-action
+      // reloads. Non-blocking; guarded by the same staleness ticket.
+      if (!silent) {
+        agentApi.needsReevalCount({
+          role_id: filters.role_id || undefined,
+          type: filters.type || undefined,
+        }).then((res) => {
+          if (reloadCounter.current === ticket) setStaleCount(Number(res?.data?.count) || 0);
+        }).catch(() => {});
+      }
       if (cacheKey) {
         const cache = decisionsCacheRef.current;
         cache.set(cacheKey, { pending, feed: feedRows });
@@ -555,6 +572,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
         <HomeNow
           decisions={decisions}
           pendingOrdered={pendingOrdered}
+          staleCount={staleCount}
           selectedId={selectedId}
           setSelectedId={setSelectedId}
           loading={loadingDecisions}

@@ -837,6 +837,7 @@ const InvitedDetail = ({ candidate, roleNameById, onNavigate }) => {
 export const HomeNow = ({
   decisions,
   pendingOrdered,
+  staleCount = 0,
   selectedId,
   setSelectedId,
   loading,
@@ -950,13 +951,11 @@ export const HomeNow = ({
   // ``processing`` in the activity feed (greyed, not gone).
   // "Needs re-eval" is a lens over the pending queue, driven by the status pill
   // (filters.status === 'stale', fetched as pending): same rows, filtered to
-  // those whose score is stale (older model or changed inputs). The count is
-  // the stale total in scope so the pill advertises how many need attention.
+  // those whose score is stale (older model or changed inputs). The pill COUNT
+  // comes from the server (staleCount prop) so it reflects the whole queue, not
+  // the capped page — counting client-side here silently under-reports a deep
+  // backlog.
   const staleOnly = filters.status === 'stale';
-  const stalePendingCount = useMemo(
-    () => pendingOrdered.filter((d) => inRoleScope(d) && !acted.has(d.id) && d.is_stale).length,
-    [pendingOrdered, acted, inRoleScope],
-  );
   const effPending = useMemo(
     () => pendingOrdered.filter(
       (d) => inRoleScope(d) && !acted.has(d.id) && (!staleOnly || d.is_stale),
@@ -1338,7 +1337,7 @@ export const HomeNow = ({
         setFilters={setFilters}
         roles={rolesBreakdown}
         bulkAction={bulkActionEl}
-        staleCount={stalePendingCount}
+        staleCount={staleCount}
       />
 
       {/* Funnel standing for the scoped role — how many are already advanced /
