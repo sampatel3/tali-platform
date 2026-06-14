@@ -530,8 +530,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         value: formatCount(awaitingCount),
         emph: awaitingCount > 0,
         sub: notYetDecided > 0
-          ? `${formatCount(notYetDecided)} decision pending`
+          ? `${formatCount(notYetDecided)} not yet decided by the agent`
           : (awaitingCount > 0 ? 'all flagged' : 'queue clear'),
+        subTitle: notYetDecided > 0
+          ? "Scored candidates the agent hasn't ruled on yet — usually because the agent is paused on this role. Each is decided from its current score when the agent runs; these are not waiting on you."
+          : null,
       },
       {
         key: 'spend',
