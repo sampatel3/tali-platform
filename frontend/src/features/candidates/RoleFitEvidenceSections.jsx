@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 
 import { formatScale100Score, scoreTone100 } from '../../lib/scoreDisplay';
 import { Badge, Card, Panel, cx } from '../../shared/ui/TaaliPrimitives';
+import { ScoreProvenance } from './ScoreProvenance';
 
 const variantConfig = {
   compact: {
@@ -236,10 +237,13 @@ export function RoleFitEvidenceSections({
   return (
     <div className={cx('space-y-4', className)}>
       {showScoreCards ? (
-        <div className={cx('grid gap-3', variant === 'compact' ? 'md:grid-cols-2' : 'md:grid-cols-3')}>
-          {model?.roleFitScore != null ? <ScoreCard label="Role fit" value={model.roleFitScore} /> : null}
-          {model?.cvFitScore != null ? <ScoreCard label="CV fit" value={model.cvFitScore} /> : null}
-          {model?.requirementsFitScore != null ? <ScoreCard label="Requirements fit" value={model.requirementsFitScore} /> : null}
+        <div>
+          <div className={cx('grid gap-3', variant === 'compact' ? 'md:grid-cols-2' : 'md:grid-cols-3')}>
+            {model?.roleFitScore != null ? <ScoreCard label="Role fit" value={model.roleFitScore} /> : null}
+            {model?.cvFitScore != null ? <ScoreCard label="CV fit" value={model.cvFitScore} /> : null}
+            {model?.requirementsFitScore != null ? <ScoreCard label="Requirements fit" value={model.requirementsFitScore} /> : null}
+          </div>
+          <ScoreProvenance provenance={model?.provenance} density="compact" className="mt-2" />
         </div>
       ) : null}
 

@@ -127,6 +127,11 @@ class AgentDecisionPayload(BaseModel):
     # the card. Null for pre-screen rejects — surfaced before any scoring runs,
     # so there's no score to show.
     taali_score: Optional[float] = None
+    # Minimal score-summary carrying the provenance ({score_provenance:
+    # {engine_version, scored_at, model}}) so the decision feed / cards can
+    # render the "scored {date} · v{version}" line under the score — the same
+    # shape the candidate surfaces read.
+    score_summary: Optional[dict] = None
     # Workable shortcode (= role.workable_job_id) so the home-page modal
     # can fetch this role's Workable stages for the Advance / Skip & advance
     # stage <select> without a second round-trip.
@@ -308,6 +313,15 @@ def _decision_to_payload(
             getattr(application, "role_fit_score_cache_100", None) if application else None,
         )
 
+    score_provenance = None
+    if application is not None:
+        try:
+            from ..assessments_runtime.role_support import _score_provenance
+
+            score_provenance = _score_provenance(application)
+        except Exception:  # pragma: no cover — never fail the feed on provenance
+            score_provenance = None
+
     return AgentDecisionPayload(
         id=int(decision.id),
         role_id=int(decision.role_id),
@@ -330,6 +344,7 @@ def _decision_to_payload(
         candidate_email=getattr(candidate, "email", None) if candidate else None,
         role_name=getattr(role, "name", None) if role else None,
         taali_score=taali_score,
+        score_summary={"score_provenance": score_provenance} if score_provenance else None,
         workable_job_id=getattr(role, "workable_job_id", None) if role else None,
         is_stale=is_stale,
         staleness_reasons=staleness_reasons or [],

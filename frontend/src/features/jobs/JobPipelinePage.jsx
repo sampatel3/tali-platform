@@ -32,6 +32,7 @@ import { CandidateSheet } from '../candidates/CandidateSheet';
 // the Candidates tab now renders a canvas-spec inline ctable directly.
 // Standalone /candidates route still uses the directory.
 import { CandidateTriageDrawer, candidateReportHref } from '../candidates/CandidateTriageDrawer';
+import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSheet } from '../candidates/RoleSheet';
 import { getErrorMessage, trimOrUndefined, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
@@ -1290,6 +1291,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                               {isLive ? <span className="live-pip"> · LIVE</span> : null}
                             </span>
                           </div>
+                          <ScoreProvenance
+                            provenance={application?.score_summary?.score_provenance}
+                            density="pill"
+                          />
                           {isReview ? (
                             <div className="cc-agent">
                               <div className="cc-agent-glyph" aria-hidden="true">

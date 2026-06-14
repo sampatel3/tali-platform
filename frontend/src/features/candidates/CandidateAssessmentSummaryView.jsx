@@ -2,6 +2,7 @@ import React from 'react';
 
 import { Badge, Button, Panel, cx } from '../../shared/ui/TaaliPrimitives';
 import { CandidateReportView } from './CandidateReportView';
+import { ScoreProvenance } from './ScoreProvenance';
 import {
   ConcernsCallout,
   RequirementCoverageStrip,
@@ -61,9 +62,12 @@ const RoleFitSummaryPanel = ({ reportModel }) => {
           </div>
         </div>
         {reportModel?.summaryModel?.roleFitScore != null ? (
-          <Badge variant="purple" className="font-mono text-[0.6875rem]">
-            Role fit {Math.round(reportModel.summaryModel.roleFitScore)} / 100
-          </Badge>
+          <div className="flex flex-col items-end gap-1">
+            <Badge variant="purple" className="font-mono text-[0.6875rem]">
+              Role fit {Math.round(reportModel.summaryModel.roleFitScore)} / 100
+            </Badge>
+            <ScoreProvenance provenance={roleFitModel.provenance} density="compact" />
+          </div>
         ) : null}
       </div>
 

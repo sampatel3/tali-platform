@@ -3,6 +3,7 @@ import { Loader2, X } from 'lucide-react';
 
 import { Button } from '../../shared/ui/TaaliPrimitives';
 import { CandidateAuditTimeline } from './CandidateAuditTimeline';
+import { ScoreProvenance } from './ScoreProvenance';
 import {
   CandidateAvatar,
   WorkableScorePip,
@@ -274,6 +275,10 @@ export function CandidateTriageDrawer({
             <span className="ctc-grow" />
             <span className="ctc-meta-faint">{application?.candidate_email || 'No email captured'}</span>
           </div>
+          <ScoreProvenance
+            provenance={application?.score_summary?.score_provenance}
+            density="compact"
+          />
           {applicationId ? (
             <div className="ctc-timeline">
               <CandidateAuditTimeline applicationId={applicationId} />

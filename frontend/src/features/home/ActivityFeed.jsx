@@ -12,6 +12,7 @@ import { Check, X } from 'lucide-react';
 
 import { Avatar, RolePill, ScoreChip, TypeBadge, formatRelativeAge, initialsFrom } from './atoms';
 import { pathForPage } from '../../app/routing';
+import { ScoreProvenance } from '../candidates/ScoreProvenance';
 
 // Import home.css here so any surface that renders <ActivityFeed />
 // (the Hub today, marketing landing tomorrow, anywhere else later)
@@ -68,7 +69,10 @@ export const ActivityFeed = ({
                 <div className="rq-stream-body">
                   <div className="rq-stream-meta">
                     <TypeBadge type={row.decision_type} size="sm" />
-                    <ScoreChip score={row.taali_score} size="sm" />
+                    <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+                      <ScoreChip score={row.taali_score} size="sm" />
+                      <ScoreProvenance provenance={row?.score_summary?.score_provenance} density="pill" />
+                    </span>
                     {/* Processing has no pill — the card is already dimmed
                         (.is-processing opacity) which reads as in-flight. */}
                     {isProcessing
@@ -117,7 +121,10 @@ export const ActivityFeed = ({
               <div className="rq-stream-body">
                 <div className="rq-stream-meta">
                   <TypeBadge type={row.decision_type} size="sm" />
-                  <ScoreChip score={row.taali_score} size="sm" />
+                  <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+                    <ScoreChip score={row.taali_score} size="sm" />
+                    <ScoreProvenance provenance={row?.score_summary?.score_provenance} density="pill" />
+                  </span>
                   {row.status === 'overridden' ? <span className="rq-stream-overridepill">OVERRIDE</span> : null}
                   {row.human_disposition === 'taught' ? <span className="rq-stream-teachpill">+ FEEDBACK</span> : null}
                   <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--mute)', letterSpacing: '.06em', marginLeft: 'auto' }}>
