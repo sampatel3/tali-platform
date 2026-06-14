@@ -161,7 +161,7 @@ describe('OverrideModal', () => {
     expect(otherPill).not.toBeDisabled();
   });
 
-  it('shows a "no stages found" hint when the role has no Workable stages', () => {
+  it('shows a "no advance stages" hint when the role has no Workable stages', () => {
     render(
       <OverrideModal
         decision={baseDecision}
@@ -172,7 +172,43 @@ describe('OverrideModal', () => {
       />,
     );
     expect(
-      screen.getByText(/No Workable stages found for this role/i),
+      screen.getByText(/no advance stages/i),
     ).toBeInTheDocument();
+  });
+
+  it('never offers Sourced/Applied as an advance target — they are pre-application', () => {
+    render(
+      <OverrideModal
+        decision={baseDecision}
+        alternative={advanceInsteadAlt}
+        workableStages={[
+          { slug: 'sourced', name: 'Sourced', kind: 'sourced' },
+          { slug: 'applied', name: 'Applied', kind: 'applied' },
+          { slug: 'technical-interview', name: 'Technical Interview', kind: 'assessment' },
+        ]}
+        onClose={vi.fn()}
+        onSubmitted={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('radio', { name: /Sourced/i })).toBeNull();
+    expect(screen.queryByRole('radio', { name: /Applied/i })).toBeNull();
+    expect(screen.getByRole('radio', { name: /Technical Interview/i })).toBeInTheDocument();
+  });
+
+  it('shows the "no advance stages" hint for a job that only has Sourced/Applied', () => {
+    render(
+      <OverrideModal
+        decision={baseDecision}
+        alternative={advanceInsteadAlt}
+        workableStages={[
+          { slug: 'sourced', name: 'Sourced', kind: 'sourced' },
+          { slug: 'applied', name: 'Applied', kind: 'applied' },
+        ]}
+        onClose={vi.fn()}
+        onSubmitted={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/no advance stages/i)).toBeInTheDocument();
+    expect(screen.queryByRole('radio')).toBeNull();
   });
 });

@@ -38,7 +38,7 @@ import {
   TypeBadge,
 } from './atoms';
 import { TeachModal } from './TeachModal';
-import { OverrideModal, normalizeWorkableStages } from './OverrideModal';
+import { OverrideModal, advanceableWorkableStages } from './OverrideModal';
 import { ActivityFeed } from './ActivityFeed';
 import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import AgentNeedsInputCard from '../jobs/AgentNeedsInputCard';
@@ -852,6 +852,18 @@ export const HomeNow = ({
   // bulk-approve action: we only ever approve what's visible, so the
   // recruiter's confirmation matches the rows they see on screen.
   const visiblePending = useMemo(() => effDecisions.filter((d) => d.status === 'pending'), [effDecisions]);
+  // "Skip & advance" only makes sense for the assessment decisions — it skips
+  // the assessment and re-queues the candidate as an advance. It's meaningless
+  // (and a no-op the server would reject) for an advance or reject decision, so
+  // in the advance / reject queues there are no targets and the bulk button is
+  // hidden. In a mixed "all types" view it acts on just the assessment subset.
+  const skipAdvanceTargets = useMemo(
+    () => visiblePending.filter(
+      (d) => d.decision_type === 'send_assessment'
+        || d.decision_type === 'resend_assessment_invite',
+    ),
+    [visiblePending],
+  );
 
   const [bulkBusy, setBulkBusy] = useState(false);
   // Bulk-approve confirmation target. null = modal closed. We snapshot the
@@ -946,7 +958,7 @@ export const HomeNow = ({
   // advance_to_interview decision, and the recruiter picks the Workable stage
   // when approving the advance from the queue. Serialized per org server-side.
   const handleBulkSkipAdvance = async () => {
-    const ids = visiblePending.map((d) => d.id);
+    const ids = skipAdvanceTargets.map((d) => d.id);
     if (!ids.length || bulkBusy) return;
     setBulkBusy(true);
     // Optimistic: clear the batch immediately; failures reappear on reload.
@@ -988,7 +1000,7 @@ export const HomeNow = ({
     return roles.every((r) => {
       const raw = stagesByShortcode[r.shortcode];
       if (raw === undefined || raw === 'loading' || raw === 'error') return false;
-      if (normalizeWorkableStages(raw).length === 0) return true; // nothing to pick
+      if (advanceableWorkableStages(raw).length === 0) return true; // nothing to pick
       return Boolean(bulkStages[r.role_id]);
     });
   }, [bulkConfirm, stagesByShortcode, bulkStages]);
@@ -1007,16 +1019,18 @@ export const HomeNow = ({
         <Check size={13} strokeWidth={2} aria-hidden="true" style={{ marginRight: 6, verticalAlign: '-2px' }} />
         {bulkBusy ? 'Approving…' : `Approve ${visiblePending.length} visible`}
       </button>
-      <button
-        type="button"
-        className="btn btn-outline btn-sm"
-        onClick={handleBulkSkipAdvance}
-        disabled={bulkBusy}
-        title="Move every visible candidate to the advance queue without sending the assessment (you pick the Workable stage when approving each advance)"
-      >
-        <ArrowRight size={13} strokeWidth={2} aria-hidden="true" style={{ marginRight: 6, verticalAlign: '-2px' }} />
-        {bulkBusy ? 'Working…' : `Skip & advance ${visiblePending.length} visible`}
-      </button>
+      {skipAdvanceTargets.length > 0 ? (
+        <button
+          type="button"
+          className="btn btn-outline btn-sm"
+          onClick={handleBulkSkipAdvance}
+          disabled={bulkBusy}
+          title="Skip the assessment and move these candidates to the advance queue (you pick the Workable stage when approving each advance)"
+        >
+          <ArrowRight size={13} strokeWidth={2} aria-hidden="true" style={{ marginRight: 6, verticalAlign: '-2px' }} />
+          {bulkBusy ? 'Working…' : `Skip & advance ${skipAdvanceTargets.length} visible`}
+        </button>
+      ) : null}
     </div>
   ) : null;
 
@@ -1185,7 +1199,7 @@ export const HomeNow = ({
                   </span>
                   {bulkConfirm.advanceRoles.map((r) => {
                     const raw = stagesByShortcode[r.shortcode];
-                    const stages = normalizeWorkableStages(raw);
+                    const stages = advanceableWorkableStages(raw);
                     const picked = bulkStages[r.role_id];
                     return (
                       <div key={r.role_id} style={{ marginTop: 10 }}>
@@ -1209,7 +1223,7 @@ export const HomeNow = ({
                           </span>
                         ) : stages.length === 0 ? (
                           <span style={{ fontSize: '0.75rem', color: 'var(--mute)' }}>
-                            No Workable stages found for this role. These candidates' internal stage will still update; nothing posts to Workable.
+                            No advance stages in this Workable job — only Sourced / Applied. These candidates advance on Tali's internal stage; nothing posts to Workable. Add interview/offer stages to the job in Workable to move them there.
                           </span>
                         ) : (
                           <div className="rq-modal-pills" role="radiogroup" aria-label={`Workable stage for ${r.role_name}`}>
