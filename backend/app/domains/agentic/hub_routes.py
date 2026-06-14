@@ -28,7 +28,6 @@ from ._hub_shared import (
     RANGE_TO_DAYS,
     RealisedOutcomeRow,
     RoleBreakdownRow,
-    active_role_pending_filter,
     month_start_utc,
     now_utc,
     pending_filter,
@@ -67,32 +66,27 @@ def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> 
     # conflating them. Schema requires both — older versions of this
     # function only emitted ``pending`` and the endpoint 500'd on
     # pydantic validation.
-    # URGENT 'awaiting you' = pending decisions on ACTIVE (agent-on, not paused)
-    # roles only. Every scored candidate now carries a deterministic pending
-    # verdict the moment it's scored, so paused / agent-off roles accumulate
-    # pending decisions too — but those stay per-role (roles_breakdown below);
-    # they must not flood the global urgent badge. (Pre-decoupling this was
-    # naturally active-only because only the agent tick minted verdicts.)
-    pending_decisions_q = (
-        db.query(AgentDecision)
-        .join(Role, AgentDecision.role_id == Role.id)
-        .filter(
-            AgentDecision.organization_id == organization_id,
-            active_role_pending_filter(now),
-        )
+    # 'Awaiting you' = ALL pending decisions org-wide (snooze-aware) — one honest
+    # number that reconciles with the funnel and the Pending list. (An earlier
+    # attempt scoped this to active roles only; it disagreed with the funnel and
+    # confused the count, so it's reverted. Paused-role candidates still carry a
+    # verdict and count here — they're recommendations waiting on you regardless
+    # of pause.)
+    pending_decisions_q = db.query(AgentDecision).filter(
+        AgentDecision.organization_id == organization_id,
+        pending_filter(now),
     )
     pending_decisions = pending_decisions_q.count()
-    # Same active-role pending slice, split by decision_type. Sums to
+    # Same snooze-aware pending slice, split by decision_type. Sums to
     # ``pending_decisions`` so the Hub "Pending by type" strip reconciles
     # with the queue count.
     pending_by_type = {
         str(dt): int(c)
         for dt, c in (
             db.query(AgentDecision.decision_type, func.count(AgentDecision.id))
-            .join(Role, AgentDecision.role_id == Role.id)
             .filter(
                 AgentDecision.organization_id == organization_id,
-                active_role_pending_filter(now),
+                pending_filter(now),
             )
             .group_by(AgentDecision.decision_type)
             .all()

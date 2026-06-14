@@ -163,10 +163,11 @@ def test_paused_role_still_queues_and_leaves_state_untouched(db):
     assert db.query(UsageEvent).count() == 0
 
 
-def test_awaiting_you_count_excludes_paused_roles(db):
-    """THE CRUX: every scored candidate now carries a pending verdict (active OR
-    paused), but the global 'awaiting you' urgent count must only include ACTIVE
-    roles — else the paused-role backlog floods the badge."""
+def test_awaiting_you_counts_all_pending_decisions(db):
+    """Every scored candidate carries a pending verdict (active OR paused), and
+    'awaiting you' is ONE honest number — all pending decisions org-wide — so it
+    reconciles with the funnel and the Pending list (an earlier active-only
+    scoping disagreed with the funnel and confused the count; it was reverted)."""
     from app.domains.agentic.hub_routes import _compute_kpis
 
     org = Organization(name="O", slug=f"o-kpi-{id(db)}")
@@ -193,8 +194,7 @@ def test_awaiting_you_count_excludes_paused_roles(db):
     assert bds.ensure_deterministic_decision(db, app=a2, role=paused) == "reject"
     db.commit()
 
-    # Both roles carry a pending verdict...
     assert db.query(AgentDecision).filter(AgentDecision.status == "pending").count() == 2
-    # ...but only the ACTIVE role's counts toward the urgent 'awaiting you'.
+    # Both count toward 'awaiting you' — consistent with the funnel.
     kpi = _compute_kpis(db, organization_id=int(org.id))
-    assert kpi.pending == 1
+    assert kpi.pending == 2
