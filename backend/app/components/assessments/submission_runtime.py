@@ -1087,7 +1087,19 @@ def submit_assessment_impl(
         raise HTTPException(status_code=500, detail="Failed to submit assessment")
 
     # --- 5. Notifications ---
-    notify_user = db.query(User).filter(User.organization_id == assessment.organization_id).first()
+    # Notify the org's primary admin — the oldest active admin account, falling
+    # back to the oldest active member. Deterministic, unlike a bare .first()
+    # (which picked an arbitrary user); the assessment-complete email now has a
+    # well-defined recipient rather than whoever the DB happened to return.
+    notify_user = (
+        db.query(User)
+        .filter(
+            User.organization_id == assessment.organization_id,
+            User.is_active.is_(True),
+        )
+        .order_by(User.is_superuser.desc(), User.created_at.asc())
+        .first()
+    )
     if notify_user:
         from ...components.notifications.tasks import send_results_email
 
