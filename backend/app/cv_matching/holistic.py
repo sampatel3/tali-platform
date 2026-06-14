@@ -84,6 +84,22 @@ def resolve_engine_version(details: dict | None) -> str:
         return f"1.{n}.0" if n.isdigit() else "1.x"
     return ""
 
+
+def is_engine_outdated(details: dict | None) -> bool:
+    """True when a stored score was produced by an engine OLDER than the
+    current default (:data:`HOLISTIC_ENGINE_VERSION`).
+
+    The single source of truth for "this score is from an old model", shared by
+    the agent-chat re-score offer (``agent_chat.rescore``) and the
+    decision-staleness banner (``services.decision_staleness``). An unscored
+    blob (no resolvable version) is NOT outdated — it's simply unscored — so
+    this returns ``False`` there. Pure version comparison; org-gating (does
+    re-scoring this app actually move it forward?) lives in
+    ``cv_score_orchestrator.score_is_outdated``.
+    """
+    ev = resolve_engine_version(details if isinstance(details, dict) else {})
+    return bool(ev) and ev != HOLISTIC_ENGINE_VERSION
+
 _REQ_CACHE_PREFIX = "holistic_reqs:v1:"
 _REQ_CACHE_TTL = 7 * 24 * 3600  # 7 days; job-spec edits change the hash anyway
 _CV_CHARS = 14000

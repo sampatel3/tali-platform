@@ -6,13 +6,16 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from app.agent_chat import rescore
+from app.cv_matching.holistic import is_engine_outdated
 
 
-def test_is_stale_detects_old_engine():
-    assert rescore._is_stale({"prompt_version": "cv_match_v16"}) is True
-    assert rescore._is_stale({"prompt_version": "holistic_v1"}) is True  # 2.0.0, superseded
-    assert rescore._is_stale({"prompt_version": "holistic_v2", "engine_version": "2.1.0"}) is False
-    assert rescore._is_stale({}) is False  # unscored / no version → not stale
+def test_is_engine_outdated_detects_old_engine():
+    # Canonical pure-version helper shared by the agent-chat re-score offer and
+    # the decision-staleness "older model" flag.
+    assert is_engine_outdated({"prompt_version": "cv_match_v16"}) is True
+    assert is_engine_outdated({"prompt_version": "holistic_v1"}) is True  # 2.0.0, superseded
+    assert is_engine_outdated({"prompt_version": "holistic_v2", "engine_version": "2.1.0"}) is False
+    assert is_engine_outdated({}) is False  # unscored / no version → not stale
 
 
 def _stale_rows(scores):

@@ -21,6 +21,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from ..cv_matching.holistic import HOLISTIC_ENGINE_VERSION, resolve_engine_version
 from ..domains.assessments_runtime.role_support import is_resolved
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
@@ -175,6 +176,20 @@ def _latest_recruiter_note_id(
     return result
 
 
+def _engine_outdated(application: CandidateApplication) -> bool:
+    """True when the application's stored score is from a superseded engine AND
+    re-scoring would actually upgrade it (the org is on the current holistic
+    engine). Lazy import keeps the heavy scoring stack off this module's import
+    path and avoids a cycle; any error fails safe to 'not stale' so a staleness
+    read never crashes the Hub."""
+    try:
+        from .cv_score_orchestrator import score_is_outdated
+
+        return bool(score_is_outdated(application))
+    except Exception:  # noqa: BLE001 — fail safe: don't crash the read
+        return False
+
+
 def evaluate(
     db: Session,
     decision: AgentDecision,
@@ -205,17 +220,49 @@ def evaluate(
     if application is None or is_resolved(application):
         return StalenessReport(is_stale=False)
 
+    reasons: list[str] = []
+    details: dict = {}
+
+    # Engine-version staleness — independent of the queue-time fingerprint.
+    # A superseded-engine score is stale regardless of when the decision
+    # queued, and we know it from the stored blob alone, so it flags even
+    # pre-A1 (fingerprint-less) rows. Held aside and appended LAST so genuine
+    # input drift leads the one-line summary when both are present.
+    engine_stale = _engine_outdated(application)
+    engine_details = (
+        {
+            "engine_outdated": {
+                "engine_version": resolve_engine_version(
+                    application.cv_match_details
+                    if isinstance(application.cv_match_details, dict)
+                    else {}
+                ),
+                "current": HOLISTIC_ENGINE_VERSION,
+            }
+        }
+        if engine_stale
+        else {}
+    )
+
+    def _finish() -> StalenessReport:
+        all_reasons = reasons + (["engine_outdated"] if engine_stale else [])
+        all_details = {**details, **engine_details}
+        is_stale = bool(all_reasons)
+        return StalenessReport(
+            is_stale=is_stale,
+            reasons=all_reasons,
+            summary=_summarize(all_reasons) if is_stale else None,
+            details=all_details,
+        )
+
     fingerprint = decision.input_fingerprint or {}
     if not fingerprint:
-        return StalenessReport(is_stale=False)
+        return _finish()
 
     if role is None:
         role = db.query(Role).filter(Role.id == int(decision.role_id)).one_or_none()
     if role is None:
-        return StalenessReport(is_stale=False)
-
-    reasons: list[str] = []
-    details: dict = {}
+        return _finish()
 
     # 1. Role criteria edited
     current_criteria_fp = _recompute_criteria_fingerprint(
@@ -313,14 +360,7 @@ def evaluate(
         for r in _SCORE_SHIFT_REASONS:
             details.pop(r, None)
 
-    is_stale = bool(reasons)
-    summary = _summarize(reasons) if is_stale else None
-    return StalenessReport(
-        is_stale=is_stale,
-        reasons=reasons,
-        summary=summary,
-        details=details,
-    )
+    return _finish()
 
 
 _SCORE_SHIFT_REASONS = ("pre_screen_score_shifted", "assessment_score_shifted")
@@ -388,6 +428,7 @@ _REASON_LABELS = {
     "assessment_score_shifted": "Assessment score changed",
     "cutoff_changed": "Pre-screen cutoff changed",
     "recruiter_note_added": "Recruiter note added",
+    "engine_outdated": "Scored by an older model",
 }
 
 

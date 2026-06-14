@@ -29,16 +29,15 @@ _RESCORE_COST_PER_CANDIDATE_USD = 0.083
 _SCOPES = {"all", "top_n", "above_threshold", "below_threshold", "none"}
 
 
-def _is_stale(details: Any) -> bool:
-    """A score is stale when it was produced by anything other than the current
-    engine version (the v1.x Haiku pipeline, or a superseded holistic build)."""
-    ev = resolve_engine_version(details if isinstance(details, dict) else {})
-    return bool(ev) and ev != HOLISTIC_ENGINE_VERSION
-
-
 def find_stale_scored(db: Session, role: Role) -> list[dict[str, Any]]:
     """Open candidates on the role whose stored score is from an OLD engine,
-    highest current-score first. Each row keeps the live app object for enqueue."""
+    highest current-score first. Each row keeps the live app object for enqueue.
+
+    Uses the org-aware :func:`score_is_outdated` so this never offers a re-score
+    that would just reproduce the same legacy score (an org not on the holistic
+    engine has no newer engine to move to)."""
+    from ..services.cv_score_orchestrator import score_is_outdated
+
     apps = (
         db.query(CandidateApplication)
         .filter(
@@ -50,7 +49,7 @@ def find_stale_scored(db: Session, role: Role) -> list[dict[str, Any]]:
     )
     out: list[dict[str, Any]] = []
     for a in apps:
-        if _is_stale(a.cv_match_details):
+        if score_is_outdated(a):
             out.append(
                 {
                     "application_id": int(a.id),
