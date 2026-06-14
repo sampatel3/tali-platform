@@ -28,6 +28,7 @@ from . import constraints as _constraints
 from . import controls as _controls
 from . import draft_tasks as _draft_tasks
 from . import impact as _impact
+from . import rescore as _rescore
 
 
 # Card payload ``type`` values the engine surfaces in message.actions.
@@ -296,6 +297,45 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "ONLY once they explicitly say yes."
         ),
         "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "rescore_candidates",
+        "description": (
+            "Re-score this role's OLD-engine (v1.x) candidates with the current "
+            "holistic v2.1.0 engine. Use when the recruiter wants stale scores "
+            "refreshed — and let THEM steer the scope; never assume 'all'. ALWAYS "
+            "call once WITHOUT confirm first (confirm=false) to preview the matched "
+            "count + $ cost, show the recruiter, and call again with confirm=true "
+            "ONLY after they explicitly say yes. Scope the subset: 'all', 'top_n' "
+            "(highest current scores, set `limit`), 'above_threshold' / "
+            "'below_threshold' (set `threshold` 0-100), or 'none'. Re-scoring spends "
+            "~$0.083/candidate, so the preview-then-confirm step is mandatory."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "scope": {
+                    "type": "string",
+                    "enum": ["all", "top_n", "above_threshold", "below_threshold", "none"],
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "For scope=top_n: how many of the highest-scoring stale candidates.",
+                },
+                "threshold": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "description": "For scope=above_threshold/below_threshold: the current-score cutoff.",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": "false = preview count+cost only (default); true = actually re-score (recruiter must have confirmed).",
+                },
+            },
+            "required": ["scope"],
+        },
     },
     {
         "name": "get_criterion_breakdown",
@@ -697,6 +737,15 @@ def dispatch_tool(
         result = _constraints.rescreen_role(db, role)
         _maybe_report_rescreen(db, role=role, conversation=conversation, result=result)
         return result
+    if name == "rescore_candidates":
+        return _rescore.rescore_candidates(
+            db,
+            role,
+            scope=str(args.get("scope") or "all"),
+            limit=int(args["limit"]) if args.get("limit") is not None else 10,
+            threshold=float(args["threshold"]) if args.get("threshold") is not None else None,
+            confirm=bool(args.get("confirm") or False),
+        )
     if name == "get_criterion_breakdown":
         return _assessments.criterion_breakdown(db, role, int(args["criterion_id"]))
     if name == "rescreen_scoped":

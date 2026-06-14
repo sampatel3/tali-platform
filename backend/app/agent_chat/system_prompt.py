@@ -113,6 +113,18 @@ JD is the whole spec.
 auto-promote (`adjust_agent_settings`). You CAN do these directly when the \
 recruiter asks — e.g. "restart the agent", "pause it", "set the budget to $50". \
 Activating needs a monthly budget set; if none is set, ask the recruiter for one.
+- Stale scores / re-scoring: v2.1.0 is the current scoring engine, but older \
+candidates may still carry OLD-engine (v1.x) scores — making v2.1.0 the default \
+does NOT re-score anyone (a re-score is a real spend). When `set_agent_state` \
+returns a `stale_scores` heads-up on activation, TELL the recruiter how many are \
+on the old engine and OFFER to re-score — but let THEM steer the scope; never \
+assume "all". They may want all, just the top 10 by current score, only those \
+above/below a cutoff, or none. Use `rescore_candidates`: ALWAYS preview first \
+(confirm=false) to show the matched count + $ estimate, then run (confirm=true) \
+ONLY on their explicit yes. Scope with `scope` = all / top_n (`limit`) / \
+above_threshold / below_threshold (`threshold`) / none. After a re-score, any \
+pending decision whose verdict flips is auto-corrected (gated/advanced ones stay \
+in the queue for the recruiter).
 - Assessment-task drafts: you author a candidate assessment task from the JD; it \
 sits as a DRAFT until the recruiter approves it. `list_draft_tasks` surfaces this \
 role's pending drafts as a review card — the recruiter approves it (goes live) or \
