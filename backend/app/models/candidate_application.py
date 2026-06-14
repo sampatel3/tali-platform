@@ -50,6 +50,11 @@ class CandidateApplication(Base):
     source = Column(String, default="manual", nullable=False)
     workable_candidate_id = Column(String, nullable=True, index=True)
     workable_stage = Column(String, nullable=True)
+    # When Taali itself last wrote workable_stage (a recruiter advance / move).
+    # The candidate sync uses this as a local-write-wins guard so it doesn't
+    # clobber a just-moved stage with a stale bulk-list snapshot. See
+    # workable stage sync_service guard + _workable_decision_summary / op_runner.
+    workable_stage_local_write_at = Column(DateTime(timezone=True), nullable=True)
     workable_sourced = Column(Boolean, nullable=True)
     workable_profile_url = Column(String, nullable=True)
     workable_score_raw = Column(Float, nullable=True)

@@ -172,6 +172,9 @@ def try_workable_advance(
         return False
 
     app.workable_stage = target
+    # Local-write-wins: stamp so the candidate sync won't revert this fresh move
+    # with a stale snapshot still propagating in Workable.
+    app.workable_stage_local_write_at = datetime.now(timezone.utc)
     append_application_event(
         db,
         app=app,

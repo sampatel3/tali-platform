@@ -23,6 +23,7 @@ bookkeeping and the retry/backoff lives in
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from fastapi import HTTPException
@@ -263,6 +264,8 @@ def _op_move_stage(db: Session, organization_id: int, payload: dict) -> dict:
             role=role,
         )
     app.workable_stage = target_stage
+    # Local-write-wins: stamp so the candidate sync won't revert this fresh move.
+    app.workable_stage_local_write_at = datetime.now(timezone.utc)
     append_application_event(
         db,
         app=app,

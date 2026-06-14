@@ -875,6 +875,28 @@ def _extract_candidate_fields(payload: dict) -> dict:
 # still picking up the occasional pipeline edit within a few hours.
 WORKABLE_STAGES_TTL = timedelta(hours=6)
 
+# Local-write-wins guard. When Taali itself moved a candidate (a recruiter
+# advance/move that Taali wrote to Workable), it stamps
+# ``workable_stage_local_write_at``. A candidate sync running with a bulk-list
+# snapshot fetched BEFORE that move (or just lagging) would otherwise overwrite
+# the fresh stage with the old one. Within this window we keep Taali's value;
+# after it, Workable has settled and the sync wins again.
+_LOCAL_STAGE_WRITE_GUARD = timedelta(minutes=15)
+
+
+def _stage_overwrite_blocked(app, new_stage) -> bool:
+    """True when a sync must NOT overwrite ``workable_stage`` because Taali set
+    it itself within the guard window and the sync wants a *different* value."""
+    written_at = getattr(app, "workable_stage_local_write_at", None)
+    if written_at is None:
+        return False
+    if str(new_stage or "") == str(getattr(app, "workable_stage", None) or ""):
+        return False  # same value — nothing to protect
+    try:
+        return (datetime.now(timezone.utc) - written_at) < _LOCAL_STAGE_WRITE_GUARD
+    except Exception:  # pragma: no cover — never let the guard break a sync
+        return False
+
 
 class WorkableSyncService:
     def __init__(self, client: WorkableService):
@@ -1886,7 +1908,7 @@ class WorkableSyncService:
             if existing is None:
                 return counters
             existing.deleted_at = None
-            if stage:
+            if stage and not _stage_overwrite_blocked(existing, stage):
                 existing.workable_stage = sanitize_text_for_storage(str(stage))
             existing.last_synced_at = now
             if ref_disqualified:
@@ -1952,7 +1974,7 @@ class WorkableSyncService:
             # terminal branch above when it lands. Their data is used solely for
             # model refinement from here on.
             existing.deleted_at = None
-            if stage:
+            if stage and not _stage_overwrite_blocked(existing, stage):
                 existing.workable_stage = sanitize_text_for_storage(str(stage))
                 existing.external_stage_raw = sanitize_text_for_storage(str(stage))
                 existing.external_stage_normalized = normalize_pipeline_key(str(stage))
@@ -2174,9 +2196,10 @@ class WorkableSyncService:
                 reason="Imported from Workable",
             )
         app.workable_candidate_id = sanitize_text_for_storage(candidate_id)
-        app.workable_stage = sanitize_text_for_storage(str(stage or ""))
-        app.external_stage_raw = sanitize_text_for_storage(str(stage or ""))
-        app.external_stage_normalized = normalize_pipeline_key(str(stage or ""))
+        if not _stage_overwrite_blocked(app, stage):
+            app.workable_stage = sanitize_text_for_storage(str(stage or ""))
+            app.external_stage_raw = sanitize_text_for_storage(str(stage or ""))
+            app.external_stage_normalized = normalize_pipeline_key(str(stage or ""))
 
         # NOTE: sync deliberately does NOT move the candidate to Tali's
         # `advanced` stage based on their Workable stage. `advanced` is reserved
