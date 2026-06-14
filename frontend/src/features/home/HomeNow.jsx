@@ -450,6 +450,11 @@ export const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, on
   const trace = Array.isArray(decision.evidence?.trace) ? decision.evidence.trace : [];
   const isStale = Boolean(decision.is_stale);
   const stalenessSummary = decision.staleness_summary;
+  // Old-model staleness reads differently from an input change — the inputs
+  // didn't move, the scoring engine did. Re-evaluate here re-scores on the
+  // current engine rather than just re-running the agent.
+  const stalenessReasons = Array.isArray(decision.staleness_reasons) ? decision.staleness_reasons : [];
+  const staleEngineOnly = stalenessReasons.length > 0 && stalenessReasons.every((r) => r === 'engine_outdated');
 
   return (
     <section className="rq-hybrid-detail">
@@ -522,7 +527,9 @@ export const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, on
         <div className="rq-stale-banner" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 14px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: '0.8125rem', fontWeight: 500 }}>
           <RefreshCw size={14} strokeWidth={2} aria-hidden="true" />
           <span>
-            Inputs changed since this was decided{stalenessSummary ? ` · ${stalenessSummary}` : ''}. Re-evaluate before approving.
+            {staleEngineOnly
+              ? 'This score is from an older model. Re-evaluate to re-score on the current engine.'
+              : `Inputs changed since this was decided${stalenessSummary ? ` · ${stalenessSummary}` : ''}. Re-evaluate before approving.`}
           </span>
         </div>
       ) : null}
@@ -597,9 +604,11 @@ export const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, on
                   onClick={() => onApprove(decision)}
                   disabled={busy}
                   title={
-                    isStale
-                      ? 'Inputs changed since this was decided — this acts on them anyway. Re-evaluate first to refresh.'
-                      : undefined
+                    staleEngineOnly
+                      ? 'Scored by an older model — this approves the old score as-is. Re-evaluate to re-score first.'
+                      : isStale
+                        ? 'Inputs changed since this was decided — this acts on them anyway. Re-evaluate first to refresh.'
+                        : undefined
                   }
                 >
                   <PrimaryIcon size={14} strokeWidth={2.4} aria-hidden="true" />

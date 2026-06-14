@@ -735,6 +735,36 @@ def re_evaluate(
         .first()
     )
 
+    # Old-MODEL staleness re-SCORES rather than re-decides: a discard + agent
+    # re-run would only re-run the SAME stale score. Enqueue a forced re-score
+    # on the current engine; its completion reconciles this candidate's pending
+    # decision (a verdict flip auto-corrects, a gated/advanced one stays in the
+    # queue), so we don't supersede here. Mirrors the agent-chat bulk re-score
+    # (agent_chat.rescore) and works even when the role agent is paused — the
+    # score still refreshes to the current engine.
+    from ...services.cv_score_orchestrator import enqueue_score, score_is_outdated
+
+    if application is not None and score_is_outdated(application):
+        try:
+            job = enqueue_score(db, application, force=True, bypass_pre_screen=True)
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"re-score failed: {exc}")
+        return ReEvaluateResult(
+            decision_id=decision_id,
+            role_id=int(decision.role_id),
+            application_id=int(decision.application_id),
+            superseded=0,
+            queued=job is not None,
+            task_id=None,
+            detail=(
+                "re-scoring on the current engine; the decision refreshes when scoring completes"
+                if job is not None
+                else "could not enqueue a re-score (no CV / spec / API key)"
+            ),
+        )
+
     try:
         superseded = supersede_pending_decisions_for_app(
             db, int(decision.application_id), reason="recruiter_requested_re_evaluate",

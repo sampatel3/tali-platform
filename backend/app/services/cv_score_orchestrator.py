@@ -475,6 +475,23 @@ def _holistic_enabled_for(application: CandidateApplication) -> bool:
     return str(int(org_id)) in {x.strip() for x in allow.split(",") if x.strip()}
 
 
+def score_is_outdated(application: CandidateApplication) -> bool:
+    """True when re-scoring this application would move it to a NEWER engine
+    than the one its stored score came from.
+
+    Two conditions: the holistic engine is enabled for the app's org (so a
+    re-score would actually produce the current ``HOLISTIC_ENGINE_VERSION``,
+    not just reproduce the same legacy score in a loop) AND the stored score
+    predates that version. The org-aware single source of truth behind both the
+    agent-chat re-score offer and the decision-staleness "older model" flag.
+    """
+    from ..cv_matching.holistic import is_engine_outdated
+
+    return _holistic_enabled_for(application) and is_engine_outdated(
+        getattr(application, "cv_match_details", None)
+    )
+
+
 def _execute_scoring_v3(
     db: Session,
     *,

@@ -163,6 +163,86 @@ def test_criteria_edit_marks_stale(db):
     assert report.summary  # human label present
 
 
+# ---------------------------------------------------------------------------
+# A2: engine-version staleness (the "old model" dimension)
+# ---------------------------------------------------------------------------
+
+def _force_holistic(monkeypatch, enabled: bool = True):
+    """Pin the org-gate so engine-staleness is exercised independently of the
+    ambient HOLISTIC_SCORING_* settings."""
+    monkeypatch.setattr(
+        "app.services.cv_score_orchestrator._holistic_enabled_for",
+        lambda application: enabled,
+    )
+
+
+def test_old_engine_score_marks_stale(db, monkeypatch):
+    _force_holistic(monkeypatch)
+    org, role, _, app = _seed(db)
+    app.cv_match_details = {"prompt_version": "cv_match_v16"}  # → engine v1.16.0
+    db.add(app); db.commit()
+    decision = _queue(db, org, role, app)
+    report = decision_staleness.evaluate(db, decision)
+    assert report.is_stale is True
+    assert "engine_outdated" in report.reasons
+    assert report.details["engine_outdated"]["engine_version"] == "1.16.0"
+    assert report.details["engine_outdated"]["current"]  # current engine version
+    assert "older model" in (report.summary or "").lower()
+
+
+def test_current_engine_score_not_stale(db, monkeypatch):
+    _force_holistic(monkeypatch)
+    org, role, _, app = _seed(db)
+    app.cv_match_details = {"prompt_version": "holistic_v2", "engine_version": "2.1.0"}
+    db.add(app); db.commit()
+    decision = _queue(db, org, role, app)
+    report = decision_staleness.evaluate(db, decision)
+    assert report.is_stale is False
+    assert "engine_outdated" not in report.reasons
+
+
+def test_old_engine_not_flagged_when_org_off_holistic(db, monkeypatch):
+    # An org NOT on the holistic engine has no newer engine to move to —
+    # flagging its v1.x scores would loop forever. score_is_outdated gates it.
+    _force_holistic(monkeypatch, enabled=False)
+    org, role, _, app = _seed(db)
+    app.cv_match_details = {"prompt_version": "cv_match_v16"}
+    db.add(app); db.commit()
+    decision = _queue(db, org, role, app)
+    report = decision_staleness.evaluate(db, decision)
+    assert report.is_stale is False
+
+
+def test_resolved_app_never_stale_even_on_old_engine(db, monkeypatch):
+    _force_holistic(monkeypatch)
+    org, role, _, app = _seed(db)
+    app.cv_match_details = {"prompt_version": "cv_match_v16"}
+    db.add(app); db.commit()
+    decision = _queue(db, org, role, app)
+    # Candidate later rejected → frozen audit snapshot, never re-flagged (A6).
+    app.application_outcome = "rejected"
+    db.add(app); db.commit()
+    report = decision_staleness.evaluate(db, decision)
+    assert report.is_stale is False
+
+
+def test_old_engine_flags_even_without_fingerprint(db, monkeypatch):
+    # Engine staleness is known from the stored blob alone, so it flags even a
+    # pre-A1 (fingerprint-less) decision — unlike the input-drift dimensions.
+    _force_holistic(monkeypatch)
+    org, role, _, app = _seed(db)
+    app.cv_match_details = {"prompt_version": "cv_match_v16"}
+    db.add(app); db.commit()
+    decision = _queue(db, org, role, app)
+    # Simulate a pre-A1 row: wipe the captured fingerprint baseline.
+    decision.input_fingerprint = {}
+    decision.criteria_fingerprint = None
+    db.add(decision); db.commit()
+    report = decision_staleness.evaluate(db, decision)
+    assert report.is_stale is True
+    assert report.reasons == ["engine_outdated"]
+
+
 def _rederive_criteria(db, role, specs):
     """Simulate Workable ``_replace_derived_criteria``: hard-delete every
     active criterion and re-insert ``specs`` with genuinely FRESH row ids.

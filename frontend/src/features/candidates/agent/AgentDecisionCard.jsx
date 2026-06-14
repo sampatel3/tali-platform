@@ -26,6 +26,19 @@ const CONFIDENCE_BAND_CLASS = {
   low: 'bg-taali-bg-muted text-taali-fg-muted',
 };
 
+// Human labels for the backend staleness reason codes (mirror of
+// decision_staleness._REASON_LABELS). ``engine_outdated`` is the "old model"
+// dimension: advisory, not blocking — see the Approve gate below.
+const STALENESS_LABELS = {
+  criteria_changed: 'role criteria edited',
+  cv_replaced: 'new CV uploaded',
+  pre_screen_score_shifted: 'pre-screen score changed',
+  assessment_score_shifted: 'assessment score changed',
+  cutoff_changed: 'cutoff changed',
+  recruiter_note_added: 'recruiter note added',
+  engine_outdated: 'scored by an older model',
+};
+
 // Relative-age label from the backend-computed age_seconds. Keeps the
 // "how old is this decision" signal visible without a date library.
 const formatAge = (seconds) => {
@@ -72,6 +85,11 @@ export const AgentDecisionCard = ({ decision, onApprove, onOverride, onReEvaluat
   const isStale = Boolean(decision.is_stale);
   const stalenessSummary = decision.staleness_summary;
   const stalenessReasons = Array.isArray(decision.staleness_reasons) ? decision.staleness_reasons : [];
+  // "Old model" is advisory — flag it and offer Re-evaluate, but never block
+  // the recruiter's Approve on it (the score is superseded, not wrong). A
+  // genuine INPUT change (criteria/CV/cutoff/note/score drift) still blocks.
+  const staleEngineOnly = stalenessReasons.length > 0 && stalenessReasons.every((r) => r === 'engine_outdated');
+  const stalenessBlocking = stalenessReasons.some((r) => r !== 'engine_outdated');
   const bandClass = CONFIDENCE_BAND_CLASS[decision.confidence_band] || 'bg-taali-bg-muted text-taali-fg-muted';
   const ageLabel = formatAge(decision.age_seconds);
   const costLabel = formatCost(decision.cost_usd_cents);
@@ -95,7 +113,11 @@ export const AgentDecisionCard = ({ decision, onApprove, onOverride, onReEvaluat
           {isStale ? (
             <div className="mt-1.5 inline-flex items-center gap-1.5 rounded-md bg-taali-accent/10 px-2 py-1 text-[0.6875rem] font-medium text-taali-accent">
               <RefreshCw size={12} aria-hidden />
-              <span>Inputs changed{stalenessSummary ? ` · ${stalenessSummary}` : ''}</span>
+              <span>
+                {staleEngineOnly
+                  ? stalenessSummary || 'Scored by an older model'
+                  : `Inputs changed${stalenessSummary ? ` · ${stalenessSummary}` : ''}`}
+              </span>
             </div>
           ) : null}
 
@@ -122,7 +144,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onOverride, onReEvaluat
               )}
               {isStale && stalenessReasons.length ? (
                 <div className="mt-2 text-[0.6875rem] text-taali-accent">
-                  Stale because: {stalenessReasons.join(', ')}
+                  Stale because: {stalenessReasons.map((r) => STALENESS_LABELS[r] || r).join(', ')}
                 </div>
               ) : null}
               <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[0.6875rem] text-taali-fg-muted">
@@ -142,8 +164,14 @@ export const AgentDecisionCard = ({ decision, onApprove, onOverride, onReEvaluat
               variant="primary"
               size="xs"
               onClick={onApprove}
-              disabled={busy || isStale}
-              title={isStale ? 'Inputs changed since this decision — re-evaluate before approving' : undefined}
+              disabled={busy || stalenessBlocking}
+              title={
+                stalenessBlocking
+                  ? 'Inputs changed since this decision — re-evaluate before approving'
+                  : staleEngineOnly
+                    ? 'Scored by an older model — re-evaluate to re-score, or approve as-is'
+                    : undefined
+              }
               aria-label={`Approve agent recommendation for ${candidateLabel}`}
             >
               <Check size={14} aria-hidden /> Approve
