@@ -225,3 +225,27 @@ def test_role_pipeline_counts_not_yet_decided(db):
     assert counts["advanced"] == 1
     assert counts["applied"] == 2  # a_undecided + a_decided (no cv_match_scored_at)
     assert a_undecided.id is not None and a_interviewing.id is not None
+
+
+def test_not_yet_decided_excludes_agent_off_role(db):
+    """'not yet decided BY THE AGENT' must not count roles where the agent is
+    OFF — there's no agent to rule, the recruiter decides manually. (All 9 org-2
+    residuals were on one agent-off role; the count should be 0, not 9.)"""
+    from app.domains.assessments_runtime.pipeline_service import (
+        role_pipeline_counts,
+        role_pipeline_counts_bulk,
+    )
+
+    org, role = _seed_role(db, score_threshold=50)
+    role.agentic_mode_enabled = False  # agent OFF — recruiter runs it manually
+    db.commit()
+    _add_app(db, org, role, role_fit=30.0)  # scored, open, no decision
+
+    counts = role_pipeline_counts(
+        db, organization_id=int(org.id), role_id=int(role.id)
+    )
+    assert counts["not_yet_decided"] == 0
+    bulk = role_pipeline_counts_bulk(
+        db, organization_id=int(org.id), role_ids=[int(role.id)]
+    )
+    assert bulk[int(role.id)]["not_yet_decided"] == 0
