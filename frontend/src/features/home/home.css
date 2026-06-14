@@ -303,6 +303,37 @@
   color: var(--purple);
 }
 
+/* Standalone "needs re-evaluation" warning chip — toggles the queue to just the
+   stale (older-model / changed-input) decisions. House purple attention
+   vocabulary: a standing soft-purple warning while there are stale rows, filled
+   solid when it's the active filter. */
+.rq-reeval-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.71875rem;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  color: var(--purple);
+  background: var(--purple-soft);
+  border: 1px solid color-mix(in oklab, var(--purple) 30%, var(--line));
+  border-radius: 8px;
+  padding: 6px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.rq-reeval-chip:hover {
+  border-color: color-mix(in oklab, var(--purple) 55%, var(--line));
+}
+
+.rq-reeval-chip.on {
+  background: var(--purple);
+  color: var(--bg);
+  border-color: var(--purple);
+}
+
 .rq-tinybtn {
   border: 1px solid var(--line);
   background: var(--bg);
