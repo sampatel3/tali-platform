@@ -4,6 +4,7 @@ import {
   BriefcaseBusiness,
   ChevronDown,
   Loader2,
+  RefreshCw,
   Share2,
   Sparkles,
 } from 'lucide-react';
@@ -220,6 +221,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [preScreenProgress, setPreScreenProgress] = useState(EMPTY_PRE_SCREEN_PROGRESS);
   const [confirmAction, setConfirmAction] = useState(EMPTY_CONFIRM);
   const [processDialogOpen, setProcessDialogOpen] = useState(false);
+  const [syncingStages, setSyncingStages] = useState(false);
   const [loading, setLoading] = useState(true);
   const [savingRoleConfig, setSavingRoleConfig] = useState(false);
   const [thresholdDraft, setThresholdDraft] = useState('');
@@ -382,6 +384,24 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setLoading(false);
     }
   }, [numericRoleId, rolesApi, showToast, trackRole]);
+
+  // Pull this role's candidates' CURRENT Workable stages on demand — the manual
+  // recovery for when the periodic sync lags or a Taali-side move raced a stale
+  // sync snapshot. Updates workable_stage only (fast; no re-import / scoring).
+  const handleSyncWorkableStages = useCallback(async () => {
+    if (syncingStages) return;
+    setSyncingStages(true);
+    try {
+      const res = await rolesApi.refreshWorkableStages(numericRoleId);
+      const data = res?.data || {};
+      showToast(data.message || 'Synced stages from Workable.', data.updated > 0 ? 'success' : 'info');
+      if (data.updated > 0) await loadRoleWorkspace();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Could not sync stages from Workable.'), 'error');
+    } finally {
+      setSyncingStages(false);
+    }
+  }, [numericRoleId, rolesApi, showToast, loadRoleWorkspace, syncingStages]);
 
   useEffect(() => {
     void loadRoleWorkspace();
@@ -1546,6 +1566,24 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               </div>
               <div className="ctable-toolbar-grow" />
               {/* Sorting lives on the column headers (Score / Last updated). */}
+              {/* Manual stage refresh: pull each candidate's current Workable
+                  stage on demand (recovery for sync lag / a move that raced a
+                  stale sync). Only for Workable-linked roles. */}
+              {role?.workable_job_id ? (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={handleSyncWorkableStages}
+                  disabled={syncingStages}
+                  title="Pull each candidate's current Workable stage and update it here"
+                >
+                  {syncingStages ? (
+                    <><Loader2 size={12} className="animate-spin" />Syncing…</>
+                  ) : (
+                    <><RefreshCw size={12} />Sync from Workable</>
+                  )}
+                </button>
+              ) : null}
               {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — primary
                   recruiter action: cascade Process opened via
                   ProcessCandidatesDialog. Label flips live during runs. */}

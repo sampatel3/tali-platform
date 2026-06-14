@@ -156,6 +156,10 @@ export const roles = {
   syncGraphCancel: () => api.post(`/candidates/sync-graph/cancel`),
   // Workable sync — org-wide. Live status reads the latest run; runs lists history.
   workableSync: (mode = 'metadata') => api.post('/workable/sync', { mode }),
+  // Fast, targeted: pull this role's candidates' current Workable stages and
+  // update workable_stage only (no re-import / scoring). For the job page button.
+  refreshWorkableStages: (roleId) =>
+    api.post(`/workable/roles/${roleId}/refresh-stages`),
   workableSyncStatus: () => api.get('/workable/sync/status'),
   workableSyncRuns: (limit = 10) => api.get('/workable/sync/runs', { params: { limit } }),
   workableSyncCancel: (runId = null) =>

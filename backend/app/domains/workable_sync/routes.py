@@ -19,7 +19,10 @@ from ...models.user import User
 from ...models.workable_sync_run import WorkableSyncRun
 from ...platform.config import settings
 from ...platform.database import get_db
-from ...services.document_service import sanitize_json_for_storage
+from ...services.document_service import (
+    sanitize_json_for_storage,
+    sanitize_text_for_storage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -841,6 +844,89 @@ def run_workable_sync(
         "execution_backend": execution_backend,
         "message": "Sync started in the background. Poll /workable/sync/status to see progress.",
     }
+
+
+class _StageRefreshResult(BaseModel):
+    job_linked: bool
+    checked: int
+    updated: int
+    message: str
+
+
+@router.post("/roles/{role_id}/refresh-stages", response_model=_StageRefreshResult)
+def refresh_role_workable_stages(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Pull each candidate's CURRENT Workable stage for ONE role and update
+    Taali's ``workable_stage`` to match — a fast, targeted refresh for the job
+    page's "Sync from Workable" button.
+
+    Reads the job's candidate list once (paginated) and writes ONLY
+    ``workable_stage`` — no candidate re-import, no scoring, no other side
+    effects (cheap + safe to run on demand). This is the manual recovery for
+    when the periodic candidate sync lags or a Taali-side stage move raced a
+    stale sync snapshot.
+    """
+    if settings.MVP_DISABLE_WORKABLE:
+        raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
+    org = _get_org_for_user(db, current_user)
+    _assert_workable_connected(org)
+    role = (
+        db.query(Role)
+        .filter(Role.id == int(role_id), Role.organization_id == int(org.id))
+        .one_or_none()
+    )
+    if role is None:
+        raise HTTPException(status_code=404, detail=f"role {role_id} not found")
+    if not role.workable_job_id:
+        return _StageRefreshResult(
+            job_linked=False, checked=0, updated=0,
+            message="This role isn't linked to a Workable job, so there are no stages to sync.",
+        )
+
+    client = WorkableService(
+        access_token=org.workable_access_token, subdomain=org.workable_subdomain
+    )
+    candidates = client.list_job_candidates(role.workable_job_id, paginate=True)
+    stage_by_id: dict[str, str] = {}
+    for c in candidates:
+        cid = str((c or {}).get("id") or "").strip()
+        stage = (c or {}).get("stage")
+        if cid and stage:
+            stage_by_id[cid] = str(stage)
+
+    apps = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.role_id == int(role.id),
+            CandidateApplication.organization_id == int(org.id),
+            CandidateApplication.workable_candidate_id.isnot(None),
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .all()
+    )
+    checked = updated = 0
+    for app in apps:
+        checked += 1
+        live = stage_by_id.get(str(app.workable_candidate_id))
+        if live and live != (app.workable_stage or ""):
+            app.workable_stage = sanitize_text_for_storage(live)
+            updated += 1
+    if updated:
+        db.commit()
+
+    return _StageRefreshResult(
+        job_linked=True,
+        checked=checked,
+        updated=updated,
+        message=(
+            f"Synced {updated} stage change{'s' if updated != 1 else ''} from Workable."
+            if updated
+            else "All stages already match Workable."
+        ),
+    )
 
 
 @router.post("/clear")
