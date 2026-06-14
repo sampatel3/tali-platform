@@ -680,12 +680,12 @@ export const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, on
 };
 
 
-// Invited-candidate tracker — the Home "Assessment pending" view. Lists
-// candidates with a sent-but-not-completed assessment + delivery tracking
-// (Invited / Delivered / Opened / Started). These aren't agent decisions
-// (those leave the queue once approved) — they're assessments in flight, so
-// this is a flat list rather than the decision split-view.
-const InvitedPanel = ({ candidates, loading, roleNameById }) => {
+// Invited-candidate tracker — the Home "Assessment pending" view. A split view
+// (mirrors the decision queue): a selectable list of candidates with a
+// sent-but-not-completed assessment on the left, their card + invite timeline
+// on the right. These aren't agent decisions (those leave the queue once
+// approved) — they're assessments in flight.
+const InvitedPanel = ({ candidates, loading, selectedId, onSelect, roleNameById }) => {
   if (loading) {
     return (
       <div className="rq-empty">
@@ -703,16 +703,26 @@ const InvitedPanel = ({ candidates, loading, roleNameById }) => {
     );
   }
   return (
-    <div className="rq-invited-list">
+    <aside className="rq-split-list">
+      <div className="rq-split-list-head">
+        <span className="kicker">
+          Assessment pending
+          <span style={{ color: 'var(--purple)', marginLeft: 6 }}>{candidates.length}</span>
+        </span>
+      </div>
+      <div className="rq-split-list-body">
       {candidates.map((c) => {
         const ss = c.score_summary || {};
         const tracking = ss.invite_tracking || {};
         const roleName = c.role?.name || roleNameById?.(c.role_id) || null;
         return (
-          <a
+          <div
             key={c.id}
-            className="rq-split-row rq-invited-row"
-            href={pathForPage('candidate-report', { candidateApplicationId: c.id, fromHome: true })}
+            role="button"
+            tabIndex={0}
+            className={`rq-split-row rq-invited-row ${selectedId === c.id ? 'on' : ''}`.trim()}
+            onClick={() => onSelect(c.id)}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(c.id); } }}
           >
             <Avatar initials={initialsFrom(c.candidate_name || c.candidate_email)} size={34} />
             <div className="rq-invited-main">
@@ -728,10 +738,99 @@ const InvitedPanel = ({ candidates, loading, roleNameById }) => {
             <span className="rq-invited-age">
               {tracking.invite_sent_at ? formatRelativeAge(tracking.invite_sent_at) : ''}
             </span>
-          </a>
+          </div>
         );
       })}
-    </div>
+      </div>
+    </aside>
+  );
+};
+
+// Right-pane card for the selected invited candidate — mirrors DecisionDetail's
+// identity block, with the invite delivery timeline in place of the agent's
+// reasoning/actions.
+const InvitedDetail = ({ candidate, roleNameById, onNavigate }) => {
+  if (!candidate) {
+    return (
+      <section className="rq-hybrid-detail">
+        <div className="home-empty" style={{ marginTop: 12 }}>Select a candidate to see their invite status.</div>
+      </section>
+    );
+  }
+  const ss = candidate.score_summary || {};
+  const t = ss.invite_tracking || {};
+  const roleName = candidate.role?.name || roleNameById?.(candidate.role_id) || null;
+  const fmt = (ts) => { try { return new Date(ts).toLocaleString(); } catch { return ''; } };
+  const timeline = [
+    ['Invited', t.invite_sent_at],
+    ['Delivered', t.delivered_at],
+    ['Email opened', t.opened_at],
+    ['Bounced', t.bounced_at],
+    ['Assessment started', t.started_at],
+    ['Expires', t.expires_at],
+  ].filter(([, ts]) => ts);
+  return (
+    <section className="rq-hybrid-detail">
+      <div className="rq-detail-identity" style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 14 }}>
+        <Avatar initials={initialsFrom(candidate.candidate_name || candidate.candidate_email)} size={48} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <h2 className="home-title-md" style={{ margin: 0, lineHeight: 1.2, overflowWrap: 'anywhere' }}>
+            <a
+              href={pathForPage('candidate-report', { candidateApplicationId: candidate.id, fromHome: true })}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rq-inline-link"
+              style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', textAlign: 'left', textDecoration: 'none' }}
+              title="Open candidate report in a new tab"
+            >
+              {candidate.candidate_name || `Application #${candidate.id}`}
+            </a>
+          </h2>
+          <div style={{ fontSize: '0.8125rem', color: 'var(--mute)', marginTop: 2 }}>
+            {candidate.candidate_email || ''}
+          </div>
+          <div className="rq-detail-links" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
+            <RolePill roleName={roleName} roleId={candidate.role_id} />
+            <AssessmentInviteChip status={ss.assessment_status} tracking={t} />
+          </div>
+          <div className="rq-detail-links" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
+            <DeepLinkRow
+              Icon={FileText}
+              label="Open candidate report"
+              href={pathForPage('candidate-report', { candidateApplicationId: candidate.id, fromHome: true })}
+            />
+            <DeepLinkRow
+              Icon={Eye}
+              label="Open job pipeline"
+              onClick={() => onNavigate?.('job-pipeline', { roleId: candidate.role_id })}
+            />
+          </div>
+        </div>
+        {ss.taali_score != null ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+            <ScoreRing score={ss.taali_score} size={72} label="TALI" />
+            <ScoreProvenance provenance={ss.score_provenance} density="full" />
+          </div>
+        ) : null}
+      </div>
+
+      <div className="rq-invite-timeline">
+        <span className="kicker mute">INVITE STATUS</span>
+        <ul className="rq-invite-timeline-list">
+          {timeline.map(([label, ts]) => (
+            <li key={label} className={label === 'Bounced' ? 'is-danger' : ''}>
+              <span>{label}</span>
+              <span>{fmt(ts)}</span>
+            </li>
+          ))}
+        </ul>
+        {!t.email_status ? (
+          <div className="rq-invite-note">
+            Email delivery/open tracking lights up once the Resend webhook is configured.
+          </div>
+        ) : null}
+      </div>
+    </section>
   );
 };
 
@@ -758,6 +857,7 @@ export const HomeNow = ({
   const invitedView = filters.view === 'invited';
   const [invited, setInvited] = useState([]);
   const [invitedLoading, setInvitedLoading] = useState(false);
+  const [selectedInvitedId, setSelectedInvitedId] = useState(null);
   const roleNameById = useCallback((id) => {
     const match = (rolesBreakdown || []).find((r) => String(r.role_id) === String(id));
     return match ? (match.name || match.short_name) : null;
@@ -779,6 +879,11 @@ export const HomeNow = ({
         if (cancelled) return;
         const items = Array.isArray(res?.data?.items) ? res.data.items : [];
         setInvited(items);
+        // Keep the current selection if it's still in the list, else focus the
+        // first row so the detail card is never empty on load.
+        setSelectedInvitedId((prev) => (
+          prev && items.some((i) => i.id === prev) ? prev : (items[0]?.id ?? null)
+        ));
       })
       .catch((err) => {
         if (cancelled) return;
@@ -790,6 +895,7 @@ export const HomeNow = ({
       });
     return () => { cancelled = true; };
   }, [invitedView, filters.role_id, showToast]);
+  const selectedInvited = invited.find((c) => c.id === selectedInvitedId) || invited[0] || null;
   const [teachFor, setTeachFor] = useState(null);
   // Alternative-action confirmation modal target. When set, OverrideModal
   // is rendered with the decision + the chosen alternative spec. Used for
@@ -1247,11 +1353,26 @@ export const HomeNow = ({
       {!questionsInDock && <AgentNeedsInputCard roleId={filters.role_id || undefined} />}
 
       {invitedView ? (
-        <InvitedPanel
-          candidates={invited}
-          loading={invitedLoading}
-          roleNameById={roleNameById}
-        />
+        (invitedLoading || invited.length === 0) ? (
+          <InvitedPanel candidates={invited} loading={invitedLoading} roleNameById={roleNameById} />
+        ) : (
+          <div className="rq-hybrid-grid">
+            <InvitedPanel
+              candidates={invited}
+              loading={invitedLoading}
+              selectedId={selectedInvited?.id}
+              onSelect={setSelectedInvitedId}
+              roleNameById={roleNameById}
+            />
+            <div className="rq-hybrid-right">
+              <InvitedDetail
+                candidate={selectedInvited}
+                roleNameById={roleNameById}
+                onNavigate={onNavigate}
+              />
+            </div>
+          </div>
+        )
       ) : (
         <>
           <div className="rq-hybrid-grid">
