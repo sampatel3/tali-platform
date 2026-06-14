@@ -396,12 +396,6 @@
 }
 
 /* Invited-candidate tracker ("Assessment pending" view) */
-.rq-invited-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 12px;
-}
 .rq-invited-row {
   display: flex;
   align-items: center;
@@ -438,6 +432,36 @@
   color: var(--mute);
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+/* Invite-status timeline in the right-pane card */
+.rq-invite-timeline {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+  margin-top: 4px;
+}
+.rq-invite-timeline-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rq-invite-timeline-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+}
+.rq-invite-timeline-list li span:first-child { color: var(--mute); }
+.rq-invite-timeline-list li.is-danger span { color: #8a1d1d; font-weight: 600; }
+.rq-invite-note {
+  margin-top: 10px;
+  font-size: 0.75rem;
+  color: var(--mute);
+  font-style: italic;
 }
 
 .rq-hybrid-right {
