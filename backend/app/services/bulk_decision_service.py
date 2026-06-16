@@ -447,8 +447,11 @@ def decide_post_handover(db: Session, *, app: CandidateApplication, role: Role) 
         # Reject: don't leave them silently 'advanced'. Pull back to the review
         # queue so it's a live reject card.
         if normalize_pipeline_stage(app.pipeline_stage) == "advanced":
+            # source='agent', not 'sync': this is Taali's agent overriding its
+            # own earlier auto-advance, and the sync guard (rightly) blocks sync
+            # from moving a locally-edited (version>1) stage backward.
             transition_stage(
-                db, app=app, to_stage="review", source="sync", actor_type="sync",
+                db, app=app, to_stage="review", source="agent", actor_type="agent",
                 reason=f"Taali second opinion: reject (recruiter advanced in Workable — {app.workable_stage})",
                 idempotency_key=f"posthandover_reject_review:{app.id}",
             )
