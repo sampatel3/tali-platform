@@ -2210,7 +2210,7 @@ class WorkableSyncService:
         # them there, nothing is written back. Disqualification is handled near
         # the top of this function.
         try:
-            reconcile_post_handover_advanced(db, app=app)
+            reconcile_post_handover_advanced(db, app=app, role=role)
         except Exception:  # pragma: no cover — never block the candidate sync
             logger.exception(
                 "post-handover advance reconcile failed application_id=%s", app.id
