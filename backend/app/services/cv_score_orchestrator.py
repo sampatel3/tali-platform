@@ -268,6 +268,17 @@ def enqueue_score(
         )
         return None
 
+    # Workable-disqualified candidates are out of the recruiter's funnel — never
+    # spend a score on them (it'd only produce a reject). The Workable sync sets
+    # this flag; scoring historically ignored it and burned credits on thousands
+    # of already-disqualified candidates.
+    if getattr(application, "workable_disqualified", False):
+        logger.info(
+            "disqualified_app_skipped action=enqueue_score application_id=%s",
+            application.id,
+        )
+        return None
+
     # Pre-flight credit gate. In shadow mode (USAGE_METER_LIVE=False) this
     # is a no-op. In live mode, orgs without enough balance get a silent
     # skip — the caller (batch loops or single-app routes) sees None and

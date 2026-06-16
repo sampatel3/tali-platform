@@ -542,6 +542,62 @@ def transition_stage(
     return app
 
 
+def reconcile_post_handover_advanced(db: Session, *, app: CandidateApplication) -> bool:
+    """Reflect a Workable-side advance on Taali.
+
+    When a recruiter moves a candidate forward in Workable directly (Phone
+    Screen / Technical / Final Interview / Offer … — a post-handover stage),
+    that's a hand-off: Taali should show them as ``advanced``, not strand them
+    as ``applied``. The deterministic policy already EXCLUDES post-handover
+    candidates from decisions, so without this they sit in limbo — and any
+    decision queued before the move goes stale and dangerous (a "reject" card on
+    someone in a final interview). This closes that hole.
+
+    LOCAL only — Workable already has them in that stage, so it writes NOTHING
+    back to Workable. Also discards any now-stale pending decision. Idempotent
+    (no-op once advanced, or when the candidate isn't open / isn't post-handover).
+    Does NOT commit — the caller's transaction owns that. Returns True iff it
+    advanced the candidate.
+    """
+    if app is None:
+        return False
+    if getattr(app, "application_outcome", None) != "open":
+        return False
+    if not is_post_handover_workable_stage(getattr(app, "workable_stage", None)):
+        return False
+    if normalize_pipeline_stage(app.pipeline_stage) == "advanced":
+        return False
+
+    transition_stage(
+        db,
+        app=app,
+        to_stage="advanced",
+        source="sync",
+        actor_type="sync",
+        reason=f"Advanced in Workable ({app.workable_stage}) — reflecting the hand-off on Taali",
+        idempotency_key=f"workable_handover_advance:{app.id}",
+    )
+    # A decision queued before the Workable move is moot — the candidate is past
+    # Taali's hand-off. Discard quietly so no stale reject/advance card lingers.
+    try:
+        from ...services.pre_screen_decision_emitter import (
+            discard_pending_decisions_for_app,
+        )
+
+        discard_pending_decisions_for_app(
+            db,
+            application_id=int(app.id),
+            reason=f"superseded: advanced in Workable ({app.workable_stage})",
+        )
+    except Exception:  # pragma: no cover — never block the reconcile
+        import logging
+
+        logging.getLogger("taali.pipeline_service").exception(
+            "post-handover decision discard failed (application_id=%s)", app.id,
+        )
+    return True
+
+
 def transition_outcome(
     db: Session,
     *,
