@@ -542,22 +542,25 @@ def transition_stage(
     return app
 
 
-def reconcile_post_handover_advanced(db: Session, *, app: CandidateApplication) -> bool:
-    """Reflect a Workable-side advance on Taali.
+def reconcile_post_handover_advanced(
+    db: Session, *, app: CandidateApplication, role: "Role | None" = None
+) -> bool:
+    """Reconcile a Workable-side advance onto Taali, with Taali's verdict.
 
     When a recruiter moves a candidate forward in Workable directly (Phone
     Screen / Technical / Final Interview / Offer … — a post-handover stage),
-    that's a hand-off: Taali should show them as ``advanced``, not strand them
-    as ``applied``. The deterministic policy already EXCLUDES post-handover
-    candidates from decisions, so without this they sit in limbo — and any
-    decision queued before the move goes stale and dangerous (a "reject" card on
-    someone in a final interview). This closes that hole.
+    Taali still gives its deterministic SECOND OPINION rather than blanket-
+    advancing:
+
+      * Taali would REJECT → surface it in the reject queue (don't advance) —
+        "you're interviewing someone I'd have passed on."
+      * Taali would ADVANCE (or it's unscored / undecidable) → reflect the
+        hand-off as ``advanced`` so they don't strand as ``applied``, and
+        discard any now-stale pending decision.
 
     LOCAL only — Workable already has them in that stage, so it writes NOTHING
-    back to Workable. Also discards any now-stale pending decision. Idempotent
-    (no-op once advanced, or when the candidate isn't open / isn't post-handover).
-    Does NOT commit — the caller's transaction owns that. Returns True iff it
-    advanced the candidate.
+    back. Idempotent. Does NOT commit — the caller owns the transaction. Returns
+    True iff it advanced the candidate.
     """
     if app is None:
         return False
@@ -565,6 +568,21 @@ def reconcile_post_handover_advanced(db: Session, *, app: CandidateApplication) 
         return False
     if not is_post_handover_workable_stage(getattr(app, "workable_stage", None)):
         return False
+
+    # Taali's deterministic second opinion. A reject is surfaced in the reject
+    # queue by decide_post_handover (which also un-advances) — so we must NOT
+    # advance. Lazy import: bulk_decision_service imports this module.
+    role = role if role is not None else getattr(app, "role", None)
+    if role is not None:
+        try:
+            from ...services.bulk_decision_service import decide_post_handover
+
+            action = decide_post_handover(db, app=app, role=role)
+        except Exception:  # pragma: no cover — never block the sync
+            action = None
+        if action in ("reject", "skip_assessment_reject"):
+            return False  # surfaced in the reject queue; do NOT advance
+
     if normalize_pipeline_stage(app.pipeline_stage) == "advanced":
         return False
 
