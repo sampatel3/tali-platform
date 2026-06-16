@@ -85,8 +85,8 @@ def test_bulk_matches_per_role_and_counts_advanced_and_rejected(db):
         assert bulk[role_a]["rejected"] == 5
 
         # A requested role with no applications gets a zero-filled dict
-        # (every funnel bucket), never a missing key.
-        assert bulk[role_b] == {b: 0 for b in FUNNEL_BUCKETS}
+        # (every funnel bucket + the not_yet_decided chip), never a missing key.
+        assert bulk[role_b] == {**{b: 0 for b in FUNNEL_BUCKETS}, "not_yet_decided": 0}
     finally:
         sess.close()
 
