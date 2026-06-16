@@ -787,7 +787,13 @@ def role_pipeline_counts(
     organization_id: int,
     role_id: int,
 ) -> dict[str, int]:
-    scored_expr = CandidateApplication.cv_match_scored_at.isnot(None)
+    # "Scored" means a candidate carries a REAL role-fit score, not merely a
+    # cv_match_scored_at timestamp — the timestamp is also set on pre-screen
+    # FILTERED candidates (below the cheap cutoff, never holistically scored, so
+    # cv_match_score is NULL). Counting by the timestamp inflated "Scored" with
+    # those phantoms (they have no score and no decision); count by the real
+    # score so it matches the queue and `not_yet_decided` (same basis below).
+    scored_expr = CandidateApplication.cv_match_score.isnot(None)
     # A candidate the recruiter has advanced in Workable (interview/offer/hired)
     # shows in the funnel as 'advanced' for alignment — the furthest stage wins —
     # regardless of Tali's pipeline_stage (which stays 'applied' for the backend).
@@ -888,7 +894,10 @@ def role_pipeline_counts_bulk(
     if not role_ids:
         return counts
 
-    scored_expr = CandidateApplication.cv_match_scored_at.isnot(None)
+    # Count by the REAL score, not the cv_match_scored_at timestamp (which is
+    # also set on pre-screen-filtered, null-score candidates) — see the note in
+    # role_pipeline_counts(). Keeps "Scored" matching the queue.
+    scored_expr = CandidateApplication.cv_match_score.isnot(None)
     # Workable-advanced candidates display as 'advanced' (alignment) regardless of
     # Tali's pipeline_stage — see role_pipeline_counts().
     ph_expr = _post_handover_sql()
