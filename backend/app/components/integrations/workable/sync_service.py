@@ -24,6 +24,7 @@ from ....domains.assessments_runtime.pipeline_service import (
     initialize_pipeline_event_if_missing,
     map_legacy_status_to_pipeline,
     normalize_pipeline_key,
+    reconcile_post_handover_advanced,
     transition_outcome,
     transition_stage,
 )
@@ -2201,14 +2202,19 @@ class WorkableSyncService:
             app.external_stage_raw = sanitize_text_for_storage(str(stage or ""))
             app.external_stage_normalized = normalize_pipeline_key(str(stage or ""))
 
-        # NOTE: sync deliberately does NOT move the candidate to Tali's
-        # `advanced` stage based on their Workable stage. `advanced` is reserved
-        # for an explicit Tali hand-back decision (see the
-        # /applications/{id}/workable/move-stage endpoint). Observing that a
-        # recruiter moved the candidate forward in Workable only updates
-        # `workable_stage` above — Tali keeps owning them until a Tali decision
-        # hands them off. Disqualification is the one exception, handled near
+        # A recruiter moving the candidate forward in Workable (Phone Screen /
+        # Technical / Final Interview / Offer — a post-handover stage) is a
+        # hand-off: reflect it as `advanced` on Taali so they don't strand as
+        # `applied`, and so no stale reject/advance card lingers on someone the
+        # recruiter is already interviewing. Local only — Workable already has
+        # them there, nothing is written back. Disqualification is handled near
         # the top of this function.
+        try:
+            reconcile_post_handover_advanced(db, app=app)
+        except Exception:  # pragma: no cover — never block the candidate sync
+            logger.exception(
+                "post-handover advance reconcile failed application_id=%s", app.id
+            )
 
         app.external_refs = sanitize_json_for_storage(
             {
