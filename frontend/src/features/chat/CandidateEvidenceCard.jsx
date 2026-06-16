@@ -54,6 +54,9 @@ const STATUS_LABEL = {
   partially_met: 'Partial',
   not_met: 'Not met',
   missing: 'Missing',
+  // The check couldn't complete (transient failure / timeout) — NOT a verdict
+  // of "no evidence". Shown distinctly so a blip never reads as a damning gap.
+  error: 'Unverified',
 };
 
 const scoreClass = (v) =>
@@ -75,6 +78,8 @@ function CriterionRow({ c }) {
       ? 'ev-chip-partial'
       : status === 'not_met'
       ? 'ev-chip-notmet'
+      : status === 'error'
+      ? 'ev-chip-error'
       : 'ev-chip-missing';
   const allQuotes = Array.isArray(c.evidence) ? c.evidence.filter((e) => e && e.quote) : [];
   const quotes = allQuotes.slice(0, MAX_QUOTES);
@@ -108,6 +113,8 @@ function CriterionRow({ c }) {
         <div className="ev-noquote">
           {status === 'missing'
             ? 'No supporting evidence in the CV or notes.'
+            : status === 'error'
+            ? 'Couldn’t verify — the evidence check didn’t complete. Retrying.'
             : 'Stated, but no verbatim quote — treat as unverified.'}
         </div>
       )}

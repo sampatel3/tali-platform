@@ -204,6 +204,14 @@
   color: #9a93ad;
   border: 1px solid var(--line, #e0dcec);
 }
+/* Check couldn't complete (transient failure / timeout) — a "retrying" state,
+   not a verdict. Dashed purple border distinguishes it from the solid-grey
+   "missing" so a blip never reads as a genuine evidence gap. */
+.ev-chip-error {
+  background: var(--purple-soft, #ece7fb);
+  color: var(--purple, #6d28d9);
+  border: 1px dashed var(--purple, #6d28d9);
+}
 .ev-crit-text {
   font-size: 12.5px;
 }
