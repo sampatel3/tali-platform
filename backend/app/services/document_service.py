@@ -156,6 +156,109 @@ def _extract_text_from_pdf_with_layout(content: bytes) -> str:
     return "\n\n".join(pages_text).strip()
 
 
+def _detect_column_split(frags: list[tuple[float, float, str, float]], page_w: float) -> float | None:
+    """Return the x of a clean two-column gutter, or None for single-column.
+
+    ``frags`` are ``(x, y, text, font_size)``. A real gutter is an x that
+    almost no fragment's horizontal extent crosses, with substantial,
+    vertically-broad content on both sides — that rules out a one-off indent
+    or a localized two-up list inside an otherwise single-column page.
+    """
+    if len(frags) < 25:
+        return None
+    # Estimate each fragment's horizontal extent from font-size-scaled width.
+    spans = [(x, x + max(len(t) * sz * 0.5, sz * 0.5)) for (x, _y, t, sz) in frags]
+    ys = [f[1] for f in frags]
+    full_span = (max(ys) - min(ys)) or 1.0
+    lo, hi = page_w * 0.28, page_w * 0.72
+    best: tuple[float, int] | None = None
+    x = lo
+    while x <= hi:
+        crossings = sum(1 for a, b in spans if a < x < b)
+        left = [f for f, (a, b) in zip(frags, spans) if b <= x]
+        right = [f for f, (a, b) in zip(frags, spans) if a >= x]
+        if len(left) >= len(frags) * 0.2 and len(right) >= len(frags) * 0.2:
+            ly = [f[1] for f in left]
+            ry = [f[1] for f in right]
+            if (max(ly) - min(ly)) >= full_span * 0.4 and (max(ry) - min(ry)) >= full_span * 0.4:
+                if best is None or crossings < best[1]:
+                    best = (x, crossings)
+        x += 4.0
+    if best is None or best[1] > len(frags) * 0.05:
+        return None
+    return best[0]
+
+
+def _fragments_to_lines(frags: list[tuple[float, float, str, float]]) -> list[str]:
+    """Group fragments into visual lines (by y proximity), each ordered left-to-right."""
+    lines: list[str] = []
+    cur_y: float | None = None
+    cur: list[tuple[float, str]] = []
+    for x, y, text, _sz in sorted(frags, key=lambda f: (-f[1], f[0])):
+        if cur_y is None or abs(cur_y - y) <= 3.0:
+            cur.append((x, text))
+            if cur_y is None:
+                cur_y = y
+        else:
+            lines.append(_join_pdf_fragments(cur))
+            cur = [(x, text)]
+            cur_y = y
+    if cur:
+        lines.append(_join_pdf_fragments(cur))
+    return [ln for ln in lines if ln]
+
+
+def _extract_text_from_pdf_columnar(content: bytes) -> tuple[str, bool]:
+    """Column-aware extraction. Returns ``(text, found_multicolumn)``.
+
+    Multi-column CVs (a skills / education sidebar beside the main column)
+    confuse the default top-to-bottom reader: it interleaves the two columns
+    line-by-line, scrambling the reading order — which then mixes sections
+    (e.g. summary text becomes "skills", certifications absorb hobbies) and
+    mis-attributes project bullets to the wrong role. Here we detect a
+    vertical gutter and read each column independently, ordering columns so
+    the one carrying the title/name block (topmost fragment) comes first.
+    """
+    from PyPDF2 import PdfReader
+
+    reader = PdfReader(io.BytesIO(content))
+    pages_text: list[str] = []
+    found = False
+
+    for page in reader.pages:
+        frags: list[tuple[float, float, str, float]] = []
+
+        def visitor_text(text, _cm, tm, _font_dict, font_size):
+            value = re.sub(r"\s+", " ", str(text or "")).strip()
+            if not value:
+                return
+            try:
+                size = float(font_size) or 10.0
+            except Exception:
+                size = 10.0
+            frags.append((float(tm[4]), float(tm[5]), value, size))
+
+        page.extract_text(visitor_text=visitor_text)
+        if not frags:
+            continue
+
+        page_w = float(page.mediabox.width) or 540.0
+        split = _detect_column_split(frags, page_w)
+        if split is not None:
+            found = True
+            left = [f for f in frags if f[0] < split]
+            right = [f for f in frags if f[0] >= split]
+            # Read the column with the topmost fragment first (name/header block).
+            columns = sorted([left, right], key=lambda g: -max(f[1] for f in g))
+            page_text = "\n".join("\n".join(_fragments_to_lines(col)) for col in columns)
+        else:
+            page_text = "\n".join(_fragments_to_lines(frags))
+        if page_text.strip():
+            pages_text.append(page_text.strip())
+
+    return ("\n\n".join(pages_text).strip(), found)
+
+
 def load_stored_document_bytes(file_url: str | None) -> bytes | None:
     location = str(file_url or "").strip()
     if not location:
@@ -239,6 +342,20 @@ def sanitize_json_for_storage(value: Any) -> Any:
 def extract_text_from_pdf(content: bytes) -> str:
     """Extract text from PDF bytes using PyPDF2."""
     try:
+        # Column-aware first. Multi-column CVs (sidebar + main column) get
+        # scrambled by the default top-to-bottom reader. When a clean column
+        # layout is detected we use that text directly — it's already in
+        # reading order, so we skip the paragraph-merge normalizer (which
+        # would re-merge the cleanly separated lines). Single-column CVs
+        # detect no gutter and fall through to the original path unchanged.
+        try:
+            columnar_text, multicolumn = _extract_text_from_pdf_columnar(content)
+        except Exception as col_exc:
+            logger.warning("Columnar PDF extraction failed: %s", col_exc)
+            columnar_text, multicolumn = "", False
+        if multicolumn and columnar_text:
+            return columnar_text
+
         from PyPDF2 import PdfReader
 
         reader = PdfReader(io.BytesIO(content))

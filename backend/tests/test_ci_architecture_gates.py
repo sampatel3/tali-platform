@@ -78,6 +78,7 @@ def test_file_size_guard_for_api_and_service_paths() -> None:
         "app/domains/assessments_runtime/roles_management_routes.py": "roles + job-spec upload API",
         "app/domains/billing_webhooks/billing_routes.py": "Stripe + credit-pack billing routes (TODO: split webhook handlers)",
         "app/domains/workable_sync/routes.py": "legacy Workable sync API",
+        "app/services/document_service.py": "PDF/DOCX/TXT text extraction incl. column-aware reader",
         "app/services/fit_matching_service.py": "CV-to-role fit scoring pipeline",
         "app/services/interview_support_service.py": "interview pack builder (1 LOC over after chip-helper extraction)",
     }

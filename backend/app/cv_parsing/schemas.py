@@ -34,6 +34,18 @@ class EducationEntry(BaseModel):
     notes: str = ""
 
 
+class ProjectEntry(BaseModel):
+    """A project / accomplishment listed in a section that is NOT tied to a
+    single employer (e.g. a "Key Projects" or thematic "Professional
+    Experience" list distinct from the employment timeline). Kept separate
+    so project work isn't falsely attributed to one role."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = ""
+    bullets: list[str] = Field(default_factory=list)
+
+
 class ParsedCVSections(BaseModel):
     """LLM-produced section breakdown. Validated post-parse."""
 
@@ -43,6 +55,7 @@ class ParsedCVSections(BaseModel):
     summary: str = ""
     experience: list[ExperienceEntry] = Field(default_factory=list)
     education: list[EducationEntry] = Field(default_factory=list)
+    projects: list[ProjectEntry] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     certifications: list[str] = Field(default_factory=list)
     languages: list[str] = Field(default_factory=list)
@@ -63,6 +76,7 @@ class ParsedCV(BaseModel):
     summary: str = ""
     experience: list[ExperienceEntry] = Field(default_factory=list)
     education: list[EducationEntry] = Field(default_factory=list)
+    projects: list[ProjectEntry] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     certifications: list[str] = Field(default_factory=list)
     languages: list[str] = Field(default_factory=list)
@@ -97,6 +111,7 @@ class ParsedCV(BaseModel):
             summary=sections.summary,
             experience=sections.experience,
             education=sections.education,
+            projects=sections.projects,
             skills=sections.skills,
             certifications=sections.certifications,
             languages=sections.languages,
