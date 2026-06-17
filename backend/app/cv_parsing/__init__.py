@@ -17,9 +17,10 @@ from .schemas import (
     EducationEntry,
     ExperienceEntry,
     ParsedCV,
+    ProjectEntry,
 )
 
-PROMPT_VERSION = "cv_parse_v1.0"
+PROMPT_VERSION = "cv_parse_v2.0"
 MODEL_VERSION = FAST_MODEL
 
 
@@ -30,7 +31,7 @@ def __getattr__(name: str):
         from .runner import parse_cv
 
         return parse_cv
-    if name in {"EducationEntry", "ExperienceEntry", "ParsedCV"}:
+    if name in {"EducationEntry", "ExperienceEntry", "ProjectEntry", "ParsedCV"}:
         from . import schemas
 
         return getattr(schemas, name)
@@ -43,5 +44,6 @@ __all__ = [
     "MODEL_VERSION",
     "PROMPT_VERSION",
     "ParsedCV",
+    "ProjectEntry",
     "parse_cv",
 ]

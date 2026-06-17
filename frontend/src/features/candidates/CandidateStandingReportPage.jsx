@@ -236,6 +236,13 @@ const normalizeCvSections = ({ parsedSections, cvText, application }) => {
     education: normalizeEducationEntries(
       asArray(parsed.education).length ? parsed.education : application?.candidate_education
     ),
+    projects: asArray(parsed.projects)
+      .map((entry, index) => ({
+        key: `${asCleanText(entry?.name)}-${index}`,
+        name: asCleanText(entry?.name),
+        bullets: asArray(entry?.bullets).map(asCleanText).filter(Boolean),
+      }))
+      .filter((entry) => entry.name || entry.bullets.length),
     skills: uniqueSkills,
     certifications: asArray(parsed.certifications).map(asCleanText).filter(Boolean),
     languages: asArray(parsed.languages).map(asCleanText).filter(Boolean),
@@ -318,6 +325,26 @@ const CvDocumentContent = ({ cvModel, matchingSkills }) => {
                 </div>
                 {(entry.start || entry.end) ? <span className="cv-role-date">{[entry.start, entry.end].filter(Boolean).join(' - ')}</span> : null}
               </div>
+              {entry.bullets.length ? (
+                <ul className="cv-raw-list">
+                  {entry.bullets.map((bullet, index) => <li key={`${bullet}-${index}`}>{bullet}</li>)}
+                </ul>
+              ) : null}
+            </div>
+          ))}
+        </section>
+      ) : null}
+
+      {cvModel.projects?.length ? (
+        <section className="cv-section">
+          <h4>Projects</h4>
+          {cvModel.projects.map((entry) => (
+            <div key={entry.key} className="cv-role" data-evidence={entry.bullets.length ? '' : undefined}>
+              {entry.name ? (
+                <div className="cv-role-top">
+                  <div><span className="cv-role-title">{entry.name}</span></div>
+                </div>
+              ) : null}
               {entry.bullets.length ? (
                 <ul className="cv-raw-list">
                   {entry.bullets.map((bullet, index) => <li key={`${bullet}-${index}`}>{bullet}</li>)}

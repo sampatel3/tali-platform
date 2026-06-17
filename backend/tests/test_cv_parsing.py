@@ -150,6 +150,12 @@ VALID_PARSE_PAYLOAD = {
             "notes": "",
         }
     ],
+    "projects": [
+        {
+            "name": "Realtime fraud-detection pipeline",
+            "bullets": ["Cut false positives by 30% with a streaming feature store"],
+        }
+    ],
     "skills": ["Python", "SQL", "AWS Glue", "Spark", "Airflow", "dbt"],
     "certifications": [],
     "languages": ["English (native)", "Hindi"],
@@ -171,6 +177,9 @@ def test_parsed_cv_round_trip():
     assert cv2.headline == "Senior Data Engineer"
     assert len(cv2.experience) == 2
     assert cv2.skills == ["Python", "SQL", "AWS Glue", "Spark", "Airflow", "dbt"]
+    assert len(cv2.projects) == 1
+    assert cv2.projects[0].name == "Realtime fraud-detection pipeline"
+    assert cv2.projects[0].bullets == ["Cut false positives by 30% with a streaming feature store"]
     assert cv2.parse_failed is False
 
 
