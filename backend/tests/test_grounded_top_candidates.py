@@ -21,6 +21,27 @@ from app.candidate_search import top_candidates as tc
 from app.candidate_search.schemas import ParsedFilter, SearchOutput
 
 
+@pytest.fixture(autouse=True)
+def _no_grounding_cache(monkeypatch):
+    """Disable the Redis-backed grounding cache by default so tests are
+    deterministic and never touch a real Redis. The cache-specific tests install
+    their own fake handle via monkeypatch."""
+    monkeypatch.setattr(ge, "_redis", lambda: None)
+
+
+class _FakeRedis:
+    """Minimal in-memory stand-in for the grounding cache (get / setex)."""
+
+    def __init__(self):
+        self.store: dict[str, str] = {}
+
+    def get(self, key):
+        return self.store.get(key)
+
+    def setex(self, key, _ttl, value):
+        self.store[key] = value
+
+
 # --------------------------------------------------------------------------
 # citation parsing + grounding enforcement
 # --------------------------------------------------------------------------
@@ -244,47 +265,168 @@ def test_extract_grounds_salary_from_notes_when_cv_silent():
 
 
 # --------------------------------------------------------------------------
-# stored-evidence reuse matcher
+# caching + retry + no-fallback (the Saurabh fix)
 # --------------------------------------------------------------------------
 
 
-def test_reuse_grounded_positive():
-    stored = [
-        {
-            "requirement": "Banking domain experience",
-            "status": "met",
-            "evidence_quotes": ["Vice President, Investment Banking at HSBC"],
-            "evidence_start_char": 12,
-            "evidence_end_char": 52,
-        }
-    ]
-    v = tc._reuse_stored("banking domain experience", stored)
-    assert v is not None
-    assert v.status == "met"
-    assert v.grounded is True
-    assert v.source == "role_requirement"
-    assert v.evidence[0].start_char == 12
+def _met_response():
+    return SimpleNamespace(content=[
+        _text_block("[[C1]] MET — "),
+        _text_block(
+            "led the core banking migration",
+            citations=[_cite("Led the core banking platform migration", 0, 38)],
+        ),
+    ])
 
 
-def test_reuse_skips_positive_without_quotes():
-    stored = [{"requirement": "Banking experience", "status": "met", "evidence_quotes": []}]
-    assert tc._reuse_stored("banking", stored) is None
+class _CountingClient:
+    """Fake Anthropic client whose `create` is driven by a supplied behaviour."""
+
+    def __init__(self, behaviour):
+        self.calls = 0
+        outer = self
+
+        class _M:
+            def create(self, **kwargs):
+                outer.calls += 1
+                return behaviour(outer.calls)
+
+        self.messages = _M()
 
 
-def test_reuse_missing_is_returned_ungrounded():
-    stored = [{"requirement": "Kafka streaming", "status": "missing", "evidence_quotes": []}]
-    v = tc._reuse_stored("kafka", stored)
-    assert v is not None and v.status == "missing" and v.grounded is False
+def test_cache_grounds_once_then_reuses(monkeypatch):
+    """A second identical query reads the cached verdict — no second API call."""
+    fake = _FakeRedis()
+    monkeypatch.setattr(ge, "_redis", lambda: fake)
+    client = _CountingClient(lambda _n: _met_response())
+
+    kw = dict(
+        cv_text="...led the core banking platform migration...",
+        criteria=["banking domain experience"],
+        client=client,
+        organization_id=1,
+        application_id=42,
+    )
+    first = ge.extract_cv_evidence(**kw)
+    second = ge.extract_cv_evidence(**kw)
+
+    assert client.calls == 1  # second served from cache
+    assert first[0].status == second[0].status == "met"
+    assert second[0].grounded is True
+    assert fake.store  # the met verdict was cached
 
 
-def test_reuse_no_token_overlap_returns_none():
-    stored = [{"requirement": "Banking experience", "status": "met", "evidence_quotes": ["x"]}]
-    assert tc._reuse_stored("kubernetes operations", stored) is None
+def test_failed_call_yields_error_not_missing(monkeypatch):
+    """No fallback: a call that fails after retries becomes `error` (UI shows
+    'couldn't verify'), never a fabricated `missing`, and is never cached."""
+    fake = _FakeRedis()
+    monkeypatch.setattr(ge, "_redis", lambda: fake)
+    monkeypatch.setattr(ge.time, "sleep", lambda *_a, **_k: None)
+
+    class _Boom(Exception):
+        pass
+
+    monkeypatch.setattr(ge, "_TRANSIENT_ERRORS", (_Boom,))
+
+    def _always_fail(_n):
+        raise _Boom("overloaded")
+
+    client = _CountingClient(_always_fail)
+    out = ge.extract_cv_evidence(
+        cv_text="banking platform work",
+        criteria=["banking domain experience"],
+        client=client,
+        organization_id=1,
+        application_id=7,
+    )
+    assert client.calls == ge.GROUNDING_MAX_ATTEMPTS  # retried, didn't bail early
+    assert out[0].status == "error"  # NOT "missing"
+    assert out[0].grounded is False
+    assert fake.store == {}  # errors are never cached
 
 
-def test_reuse_unknown_status_falls_through():
-    stored = [{"requirement": "Banking experience", "status": "unknown", "evidence_quotes": ["x"]}]
-    assert tc._reuse_stored("banking", stored) is None
+def test_retries_transient_then_succeeds(monkeypatch):
+    monkeypatch.setattr(ge.time, "sleep", lambda *_a, **_k: None)
+
+    class _Boom(Exception):
+        pass
+
+    monkeypatch.setattr(ge, "_TRANSIENT_ERRORS", (_Boom,))
+
+    def _fail_twice(n):
+        if n < 3:
+            raise _Boom("429")
+        return _met_response()
+
+    client = _CountingClient(_fail_twice)
+    out = ge.extract_cv_evidence(
+        cv_text="core banking platform",
+        criteria=["banking domain experience"],
+        client=client,
+        organization_id=1,
+        application_id=9,
+    )
+    assert client.calls == 3
+    assert out[0].status == "met" and out[0].grounded is True
+
+
+def test_non_transient_error_is_not_retried(monkeypatch):
+    """A 400-class error won't be fixed by retrying — fail fast to a single call."""
+    monkeypatch.setattr(ge, "_TRANSIENT_ERRORS", ())  # nothing counts as transient
+
+    def _bad_request(_n):
+        raise ValueError("malformed document")
+
+    client = _CountingClient(_bad_request)
+    out = ge.extract_cv_evidence(
+        cv_text="x banking",
+        criteria=["banking domain experience"],
+        client=client,
+        organization_id=1,
+        application_id=1,
+    )
+    assert client.calls == 1
+    assert out[0].status == "error"
+
+
+def test_find_top_candidates_shows_error_not_hidden(monkeypatch):
+    """Regression for the Saurabh bug: a grounding failure marks the criteria
+    `error` and the candidate is STILL shown — not hidden, not blanked as
+    'missing' (which read as a damning evidence gap)."""
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(runner_mod, "run_search", lambda **kw: SearchOutput(
+        application_ids=[1],
+        parsed_filter=ParsedFilter(soft_criteria=["salary under 30k AED"]),
+        warnings=[]))
+    monkeypatch.setattr(tc, "_notes_text", lambda app: None)
+    monkeypatch.setattr(ge.time, "sleep", lambda *_a, **_k: None)
+
+    class _Boom(Exception):
+        pass
+
+    monkeypatch.setattr(ge, "_TRANSIENT_ERRORS", (_Boom,))
+
+    a = _fake_app(1, taali=80, name="A")
+    a.cv_text = "some cv text"
+    monkeypatch.setattr(tc, "_pool_count", lambda bq: 1)
+    monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: [a])
+
+    class _FailClient:
+        class _M:
+            def create(self, **kw):
+                raise _Boom("overloaded")
+
+        messages = _M()
+
+    out = tc.find_top_candidates(
+        db=MagicMock(), organization_id=1, query="top under 30k",
+        base_query=MagicMock(), limit=5, evidence_client=_FailClient(),
+    )
+    ids = [c["application_id"] for c in out["candidates"]]
+    assert ids == [1]  # not hidden by the failure
+    assert out["candidates"][0]["criteria"][0]["status"] == "error"
+    assert out["excluded"]["not_met_total"] == 0
 
 
 # --------------------------------------------------------------------------

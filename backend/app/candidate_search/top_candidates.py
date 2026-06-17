@@ -13,19 +13,21 @@ domain experience" request, made explicit and inspectable end to end:
 3. **Rank before truncating** — order the matches by the chosen score key,
    THEN take the shortlist. (The old NL path truncated in DB order before
    any ranking, so "top N" wasn't actually top.)
-4. **Ground the shortlist** — for each qualitative criterion attach a
-   verdict backed by *verbatim CV evidence*: reuse the stored
-   requirement-assessment quote when the criterion is already a role
-   requirement (zero extra LLM cost), else extract a fresh citation from
-   the CV. Only the shortlist pays for grounding.
+4. **Ground the shortlist** — EVERY displayed criterion gets a verdict backed
+   by *verbatim CV evidence* from one mechanism: the Anthropic Citations pass
+   (``grounded_evidence``). This is uniform on purpose — a role-requirement
+   criterion is grounded the same citation-grade way as an ad-hoc one, rather
+   than borrowing the scorer's paraphrase-tolerant quotes. Cost is bounded by a
+   per-(CV+notes, criterion) cache: each pair is grounded at most once, so a
+   repeated or refined query is ~free.
 5. **Assemble a cited answer** — ranked candidates, each criterion carrying
    its status + verbatim quote + provenance, plus the spec echo, match
    count, and warnings.
 
 Cost shape: a few cents of parse + the cheap prefilter over the whole pool,
-then at most ``shortlist`` single Haiku citation calls (skipped entirely
-when a criterion is already covered by stored evidence, or when the query
-has no qualitative criteria).
+then at most one Citations call per shortlisted candidate on the FIRST grounding
+(cache misses only; skipped entirely when the query has no qualitative
+criteria). Repeated/overlapping queries reuse the cache and pay nothing.
 """
 
 from __future__ import annotations
@@ -40,7 +42,7 @@ from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..mcp.payloads import SCORE_FIELDS, application_summary
 from . import grounded_evidence as _ge
-from .grounded_evidence import CriterionVerdict, Evidence
+from .grounded_evidence import CriterionVerdict
 
 logger = logging.getLogger("taali.candidate_search.top_candidates")
 
@@ -268,130 +270,46 @@ def _notes_text(app: CandidateApplication) -> str | None:
         return None
 
 
-def _stored_assessments(app: CandidateApplication) -> list[dict[str, Any]]:
-    details = getattr(app, "cv_match_details", None) or {}
-    if not isinstance(details, dict):
-        return []
-    items = details.get("requirements_assessment") or []
-    return [r for r in items if isinstance(r, dict)]
-
-
-def _reuse_stored(criterion: str, stored: list[dict[str, Any]]) -> CriterionVerdict | None:
-    """Reuse a stored requirement assessment when it clearly covers ``criterion``.
-
-    Conservative: the criterion's significant tokens must be a subset of the
-    requirement's tokens. We only reuse a *grounded positive* (met/partial
-    with verbatim quotes) or a clean *negative* (missing) — an ``unknown`` or
-    a quote-less positive falls through to a fresh citation so we never pass
-    off an ungrounded claim as grounded.
-
-    Constraint criteria (salary cap, years, location, …) are NEVER reused — the
-    recruiter's query value (e.g. "<= 30k") can differ from the role's stored
-    requirement, so they're always freshly judged against the asked value.
-    """
-    if _is_constraint(criterion):
-        return None
-    crit_tokens = _tokens(criterion)
-    if not crit_tokens:
-        return None
-    for req in stored:
-        req_text = str(req.get("requirement") or "")
-        if not crit_tokens.issubset(_tokens(req_text)):
-            continue
-        status = str(req.get("status") or "").lower()
-        quotes = [q for q in (req.get("evidence_quotes") or []) if isinstance(q, str) and q.strip()]
-        if status in {"met", "partially_met"} and quotes:
-            start = req.get("evidence_start_char", -1)
-            end = req.get("evidence_end_char", -1)
-            evidence = [
-                Evidence(
-                    quote=q.strip(),
-                    start_char=int(start) if i == 0 and isinstance(start, int) else -1,
-                    end_char=int(end) if i == 0 and isinstance(end, int) else -1,
-                    source="role_requirement",
-                )
-                for i, q in enumerate(quotes)
-            ]
-            return CriterionVerdict(
-                criterion=criterion,
-                status=status,
-                grounded=True,
-                source="role_requirement",
-                evidence=evidence,
-                note=str(req.get("reasoning") or "")[:200],
-            )
-        if status == "missing":
-            return CriterionVerdict(
-                criterion=criterion,
-                status="missing",
-                grounded=False,
-                source="role_requirement",
-                note=str(req.get("reasoning") or "")[:200],
-            )
-        # met-without-quote / unknown → fall through to a fresh citation.
-        return None
-    return None
-
-
 def _collect_evidence(app: CandidateApplication):
-    """Pull the candidate's evidence off the (already-loaded) ORM objects.
+    """Pull the candidate's evidence (CV + notes) off the (already-loaded) ORM
+    objects.
 
     Runs in the MAIN thread before grounding is fanned out, so the parallel
-    grounding workers never touch the request's DB session."""
-    return (_cv_text(app), _notes_text(app), _stored_assessments(app))
+    grounding workers never touch the request's DB session. No stored-assessment
+    reuse: every displayed criterion is grounded via Citations (the cache, not
+    reuse, is what keeps that cheap), so the only evidence the workers need is
+    the raw CV + notes text."""
+    return (_cv_text(app), _notes_text(app))
 
 
 def _ground(
     cv: str | None,
     notes: str | None,
-    stored: list[dict[str, Any]],
     *,
     criteria: list[str],
     client,
     organization_id: int,
     application_id: int,
 ) -> list[CriterionVerdict]:
-    """Pure (no DB / no ORM access) — safe to run in a worker thread. Reuses a
-    stored requirement assessment where it cleanly covers a criterion, else
-    runs one fresh CV+notes citation call for the remainder."""
+    """Pure (no DB / no ORM access) — safe to run in a worker thread. Grounds
+    every criterion through the cached Citations pass (no stored-assessment
+    reuse), then recomputes salary/currency caps from the cited figure rather
+    than trusting the model's verdict word. Verdicts come back in criterion
+    order; a criterion the check couldn't complete carries ``status="error"``."""
     if not criteria:
         return []
-    verdicts: list[CriterionVerdict | None] = []
-    remaining: list[str] = []
-    for c in criteria:
-        reused = _reuse_stored(c, stored)
-        verdicts.append(reused)
-        if reused is None:
-            remaining.append(c)
-
-    if remaining:
-        if cv or notes:
-            fresh = _ge.extract_cv_evidence(
-                cv_text=cv,
-                notes_text=notes,
-                criteria=remaining,
-                client=client,
-                organization_id=organization_id,
-                application_id=int(application_id),
-            )
-            fresh_by_text = {v.criterion: v for v in fresh}
-            for i, c in enumerate(criteria):
-                if verdicts[i] is None:
-                    verdicts[i] = fresh_by_text.get(
-                        c, CriterionVerdict(criterion=c, status="missing")
-                    )
-        else:
-            for i, c in enumerate(criteria):
-                if verdicts[i] is None:
-                    verdicts[i] = CriterionVerdict(
-                        criterion=c, status="missing", note="No CV or notes available."
-                    )
-
-    out = [v for v in verdicts if v is not None]
-    for v in out:
+    verdicts = _ge.extract_cv_evidence(
+        cv_text=cv,
+        notes_text=notes,
+        criteria=criteria,
+        client=client,
+        organization_id=organization_id,
+        application_id=int(application_id),
+    )
+    for v in verdicts:
         # Salary/currency caps: trust the cited figure, not the model's verdict word.
         _recompute_currency_cap_verdict(v)
-    return out
+    return verdicts
 
 
 def _ground_window(
@@ -410,13 +328,13 @@ def _ground_window(
 
     if not apps:
         return []
-    jobs = [(app, *_collect_evidence(app)) for app in apps]
+    jobs = [(app, *_collect_evidence(app)) for app in apps]  # (app, cv, notes)
 
     def _one(job):
-        app, cv, notes, stored = job
+        app, cv, notes = job
         try:
             return _ground(
-                cv, notes, stored,
+                cv, notes,
                 criteria=criteria,
                 client=client,
                 organization_id=organization_id,
@@ -424,10 +342,17 @@ def _ground_window(
             )
         except Exception as exc:  # noqa: BLE001 — degrade this candidate, not the query
             logger.warning("ground app=%s failed: %s", getattr(app, "id", "?"), exc)
-            return [CriterionVerdict(criterion=c, status="missing") for c in criteria]
+            # An exhausted/failed check is NOT "no evidence" — mark it error so the
+            # UI shows "couldn't verify" and the candidate isn't falsely blanked.
+            return [
+                CriterionVerdict(criterion=c, status="error", note="Evidence check failed.")
+                for c in criteria
+            ]
 
     def _timed_out(c: str) -> CriterionVerdict:
-        return CriterionVerdict(criterion=c, status="missing", note="Evidence check timed out.")
+        return CriterionVerdict(
+            criterion=c, status="error", note="Evidence check didn't finish — retrying."
+        )
 
     workers = max(1, min(GROUND_CONCURRENCY, len(jobs)))
     results: dict[int, list[CriterionVerdict]] = {}

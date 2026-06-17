@@ -18,4 +18,11 @@ from __future__ import annotations
 
 FAST_MODEL = "claude-haiku-4-5-20251001"
 
-__all__ = ["FAST_MODEL"]
+# Sonnet is the mid-tier model used where Haiku isn't accurate enough — e.g.
+# candidate-evidence grounding via Citations, where Haiku under-performed. Pinned
+# to the same Sonnet the holistic scorer uses so both CV reads agree, and kept as
+# a constant so a module that forgets the env override doesn't silently fall back
+# to Haiku (the per-service env drift that put grounding on Haiku in prod).
+SONNET_MODEL = "claude-sonnet-4-6"
+
+__all__ = ["FAST_MODEL", "SONNET_MODEL"]
