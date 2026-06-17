@@ -382,7 +382,10 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   // roles / no agent focused — so there's always a way out of a scoped view.
   const handleSelectAgent = useCallback((roleId) => {
     userTouchedSelectionRef.current = true;
-    const deselect = activeRoleId === roleId;
+    // roleId == null is the explicit "All roles" reset from the rail; clicking
+    // the already-selected agent also toggles back to all roles. Either way we
+    // clear the scope without yanking the dock open.
+    const deselect = roleId == null || activeRoleId === roleId;
     setActiveRoleId(deselect ? null : roleId);
     setFilters((f) => ({ ...f, role_id: deselect ? null : roleId }));
     if (!deselect) setDockCollapsed(false);
