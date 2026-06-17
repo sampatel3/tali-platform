@@ -2273,33 +2273,16 @@ def _try_fetch_cv_from_workable(
 
     # Best-effort CV section parsing (Haiku 4.5). Failure here doesn't
     # prevent the CV fetch from succeeding — the candidate page falls
-    # back to raw text rendering when cv_sections is null or
-    # parse_failed=True.
+    # back to raw text rendering when cv_sections is null. Shared with the
+    # async post-sync task and the backfill script (see cv_parsing.apply);
+    # the helper reads the cv_text we just set on ``app`` and is itself
+    # best-effort (never raises).
     if not extracted:
         return True
 
-    try:
-        from ...cv_parsing import parse_cv
+    from ...cv_parsing.apply import parse_and_store_cv_sections
 
-        parsed = parse_cv(
-            extracted,
-            metering={
-                "feature": "cv_parse",
-                "organization_id": getattr(app, "organization_id", None),
-                "role_id": getattr(app, "role_id", None),
-                "entity_id": f"application:{app.id}",
-                "db": db,
-            },
-        )
-        sections_blob = parsed.model_dump(mode="json")
-        app.cv_sections = sections_blob
-        if candidate:
-            candidate.cv_sections = sections_blob
-    except Exception:
-        logger.exception(
-            "CV section parsing failed for application_id=%s — falling back to raw text",
-            app.id,
-        )
+    parse_and_store_cv_sections(app, db=db)
 
     # Sibling-application propagation. A candidate may have applied to
     # multiple roles, each with its own application row. Workable stores

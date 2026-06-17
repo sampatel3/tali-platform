@@ -32,6 +32,7 @@ from .scoring_tasks import (
 from .automation_tasks import (
     generate_application_interview_pack,
     generate_role_interview_focus,
+    parse_application_cv_sections,
     run_application_auto_reject,
 )
 # Eager-import workable_tasks so the worker registers the sync runner AND the
@@ -130,6 +131,7 @@ __all__ = [
     "batch_score_role",
     "generate_role_interview_focus",
     "generate_application_interview_pack",
+    "parse_application_cv_sections",
     "run_application_auto_reject",
     "run_workable_sync_run_task",
     "retry_workable_disqualify_task",

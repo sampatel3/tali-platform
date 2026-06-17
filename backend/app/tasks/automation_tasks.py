@@ -253,3 +253,74 @@ def run_application_auto_reject(
         }
     finally:
         db.close()
+
+
+@celery_app.task(
+    name="app.tasks.automation_tasks.parse_application_cv_sections",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=30,
+)
+def parse_application_cv_sections(
+    self, application_id: int, *, force: bool = False
+) -> dict:
+    """Parse an application's stored CV text into structured ``cv_sections``.
+
+    Enqueued by ``on_application_created`` whenever an application is
+    ingested with raw ``cv_text`` but no parsed sections — the dominant
+    case is the Workable bulk sync, which stores the extracted text but (by
+    design) makes no synchronous Claude call in the sync loop. Running the
+    parse here keeps the candidate page's Skills / Experience / Education
+    blocks structured instead of falling back to a naive split-by-heading
+    render of the raw (often column-scrambled) PDF text.
+
+    Idempotent: no-ops when ``cv_sections`` is already populated (unless
+    ``force``). Retries a few times when the row or its ``cv_text`` isn't
+    visible yet — the enqueue can race the sync transaction's commit.
+    """
+    from sqlalchemy.orm import joinedload
+
+    from ..cv_parsing.apply import parse_and_store_cv_sections
+    from ..models.candidate_application import CandidateApplication
+    from ..platform.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        app = (
+            db.query(CandidateApplication)
+            .options(joinedload(CandidateApplication.candidate))
+            .filter(CandidateApplication.id == application_id)
+            .first()
+        )
+        # The enqueue can land before the ingest transaction commits, so a
+        # missing row / missing text is "not yet" rather than "never" —
+        # retry a few times before giving up.
+        if app is None:
+            if self.request.retries < self.max_retries:
+                raise self.retry(countdown=30)
+            return {"status": "skipped", "reason": "not_found", "application_id": application_id}
+
+        if app.cv_sections is not None and not force:
+            return {"status": "skipped", "reason": "already_parsed", "application_id": application_id}
+
+        if not (app.cv_text or "").strip() and not ((app.candidate.cv_text if app.candidate else "") or "").strip():
+            if self.request.retries < self.max_retries:
+                raise self.retry(countdown=30)
+            return {"status": "skipped", "reason": "no_cv_text", "application_id": application_id}
+
+        wrote = parse_and_store_cv_sections(app, db=db, force=force)
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception(
+                "parse_application_cv_sections commit failed application_id=%s",
+                application_id,
+            )
+            return {"status": "error", "application_id": application_id}
+        return {
+            "status": "ok" if wrote else "no_sections",
+            "application_id": application_id,
+        }
+    finally:
+        db.close()
