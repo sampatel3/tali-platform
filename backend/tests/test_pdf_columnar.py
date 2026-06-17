@@ -7,7 +7,7 @@ with synthetic fragments — no real PDF needed. Fragments are
 
 from __future__ import annotations
 
-from app.services.document_service import _detect_column_split, _fragments_to_lines
+from app.services.pdf_text import _detect_column_split, _fragments_to_lines
 
 
 PAGE_W = 540.0
