@@ -38,6 +38,7 @@ from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.role import Role
+from ..platform.config import settings
 
 logger = logging.getLogger("taali.pre_screen_decision_emitter")
 
@@ -57,18 +58,29 @@ def _below_threshold(
     """Whether this candidate is a pre-screen reject under ``threshold`` —
     mirrors the deterministic gate in ``evaluate_auto_reject_decision``.
 
-    A numeric score is authoritative AND only meaningful against a configured
-    cutoff: with a numeric score we reject iff ``score < threshold`` and
-    ``threshold is not None``. With no threshold there is no score-based
-    reject — the ``'Below threshold'`` recommendation is a hard-coded ``< 50``
-    label, not a role verdict, so it must NOT keep a numeric-score card alive
-    after the cutoff is cleared.
+    When the role carries no explicit cutoff (manual mode with no override, or
+    a cleared threshold), the reject is still defined by the GLOBAL pre-screen
+    gate (``settings.PRE_SCREEN_THRESHOLD``) — the same cutoff the emitter and
+    the auto-scorer use to decide who is skipped from full scoring and so stays
+    a pre-screen reject. The prior behaviour treated ``threshold is None`` as
+    "no score-based reject", which disagreed with both the auto-scorer (it
+    skips every sub-gate candidate from full scoring) and
+    ``evaluate_auto_reject_decision`` (it rejects on a ``'Below threshold'``
+    verdict even with no role threshold). That divergence let the reconcile
+    discard a numerically scored sub-gate candidate's card without re-emitting
+    it, stranding the candidate in Applied with no decision to action.
 
-    The recommendation only justifies a reject when there is *no* numeric
-    score (must-have miss / invalidated score), with or without a threshold.
+    A numeric score is authoritative against the effective cutoff (reject iff
+    ``score < effective``). With no score, the ``'Below threshold'``
+    recommendation (must-have miss / invalidated score) is the reject signal.
     """
+    effective = (
+        float(threshold)
+        if threshold is not None
+        else float(settings.PRE_SCREEN_THRESHOLD)
+    )
     if score is not None:
-        return threshold is not None and float(score) < float(threshold)
+        return float(score) < effective
     return (recommendation or "").strip().lower() == "below threshold"
 
 
@@ -610,11 +622,28 @@ def reconcile_pre_screen_reject_decisions(
 
     now = datetime.now(timezone.utc)
 
-    # --- Discard cards the new threshold no longer justifies -------------
+    # The role may carry no explicit cutoff (manual mode with no override, or a
+    # cleared threshold). A pre-screen reject is still defined then by the
+    # GLOBAL gate the emitter and the auto-scorer use
+    # (``settings.PRE_SCREEN_THRESHOLD``): below it the candidate is skipped
+    # from full scoring and stays a reject. Reconciling against a bare ``None``
+    # instead made every numerically scored sub-gate candidate read as "not a
+    # reject", so the discard loop dropped its card and the emit loop never
+    # re-created it (its numeric branch was gated on a non-None threshold) —
+    # stranding the candidate in Applied with no decision.
+    effective_threshold = (
+        float(threshold)
+        if threshold is not None
+        else float(settings.PRE_SCREEN_THRESHOLD)
+    )
+
+    # --- Discard cards the effective cutoff no longer justifies -----------
     if threshold is not None:
         discard_note = f"superseded: pre-screen threshold changed to {threshold:.1f}"
     else:
-        discard_note = "superseded: pre-screen threshold cleared"
+        discard_note = (
+            f"superseded: at/above pre-screen gate {effective_threshold:.1f}"
+        )
     pending_cards = (
         db.query(AgentDecision, CandidateApplication)
         .join(
@@ -643,9 +672,11 @@ def reconcile_pre_screen_reject_decisions(
             discarded += 1
             continue
         if _below_threshold(
-            app.pre_screen_score_100, app.pre_screen_recommendation, threshold
+            app.pre_screen_score_100,
+            app.pre_screen_recommendation,
+            effective_threshold,
         ):
-            continue  # still a valid reject under the new cutoff — keep
+            continue  # still a valid reject under the effective cutoff — keep
         decision.status = "discarded"
         decision.resolved_at = now
         decision.resolution_note = discard_note[:500]
@@ -668,20 +699,17 @@ def reconcile_pre_screen_reject_decisions(
         == "below threshold"
     )
     # No numeric score → the 'Below threshold' recommendation (must-have miss
-    # / invalidated score) is the reject signal. This branch holds even when
-    # ``threshold`` is None (a cleared/auto-fallback threshold), so rec-only
-    # rejects aren't stranded.
+    # / invalidated score) is the reject signal. A numeric score is judged
+    # against the effective cutoff (the role override, else the global gate),
+    # so numerically scored sub-gate candidates are re-emitted even when the
+    # role itself has no threshold — the case that previously stranded them.
     below_conditions = [
-        and_(CandidateApplication.pre_screen_score_100.is_(None), rec_below)
+        and_(CandidateApplication.pre_screen_score_100.is_(None), rec_below),
+        and_(
+            CandidateApplication.pre_screen_score_100.isnot(None),
+            CandidateApplication.pre_screen_score_100 < effective_threshold,
+        ),
     ]
-    if threshold is not None:
-        # Numeric score is authoritative against the cutoff.
-        below_conditions.append(
-            and_(
-                CandidateApplication.pre_screen_score_100.isnot(None),
-                CandidateApplication.pre_screen_score_100 < float(threshold),
-            )
-        )
     below = (
         db.query(CandidateApplication)
         .filter(
@@ -712,7 +740,7 @@ def reconcile_pre_screen_reject_decisions(
                 pre_screen_score=float(app.pre_screen_score_100)
                 if app.pre_screen_score_100 is not None
                 else None,
-                threshold=float(threshold) if threshold is not None else None,
+                threshold=effective_threshold,
             )
             if result is not None:
                 created += 1
