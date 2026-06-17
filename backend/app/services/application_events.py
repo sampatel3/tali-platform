@@ -97,6 +97,24 @@ def on_application_created(
             application_id,
         )
 
+    # CV section parsing (Haiku 4.5) runs async so neither the Workable sync
+    # loop nor the upload request blocks on a Claude call. Enqueue only when
+    # we have raw text but no parsed sections yet — otherwise the candidate
+    # page falls back to a naive split-by-heading render of the raw (often
+    # column-scrambled) PDF text. Small countdown so the task reads the row
+    # after the ingest transaction commits.
+    try:
+        cv_text = (getattr(app, "cv_text", "") or "").strip()
+        if cv_text and getattr(app, "cv_sections", None) is None:
+            from ..tasks.automation_tasks import parse_application_cv_sections
+
+            parse_application_cv_sections.apply_async((application_id,), countdown=15)
+    except Exception:  # pragma: no cover — defensive
+        logger.exception(
+            "on_application_created cv-parse scheduling failed application_id=%s",
+            application_id,
+        )
+
     if score:
         try:
             # Reuse the orchestrator's enqueue path so caching, job-row

@@ -202,11 +202,18 @@ const normalizeCvSections = ({ parsedSections, cvText, application }) => {
   const name = application?.candidate_name || application?.candidate_email || 'Candidate';
   const headline = asCleanText(parsed.headline || application?.candidate_headline || application?.candidate_position || application?.role_name);
   const summary = asCleanText(parsed.summary || application?.candidate_summary || rawSummary);
-  const skills = [
-    ...asArray(parsed.skills).map(asCleanText),
-    ...asArray(application?.candidate_skills).map(asCleanText),
-    ...splitInlineList(rawByKey.skills?.lines?.join('\n') || ''),
-  ].filter(Boolean);
+  // Prefer the LLM-structured skills (cv_sections) when present — they're
+  // clean, discrete tags. Only fall back to splitting the raw CV text by
+  // heading when there are no structured skills, because that split turns a
+  // column-scrambled PDF's "skills" region into sentence fragments (the raw
+  // text interleaves the summary paragraph with the skills sidebar).
+  const parsedSkills = asArray(parsed.skills).map(asCleanText).filter(Boolean);
+  const skills = parsedSkills.length
+    ? [...parsedSkills, ...asArray(application?.candidate_skills).map(asCleanText)]
+    : [
+        ...asArray(application?.candidate_skills).map(asCleanText),
+        ...splitInlineList(rawByKey.skills?.lines?.join('\n') || ''),
+      ];
   const uniqueSkills = Array.from(new Set(skills.map((skill) => skill.trim()).filter(Boolean))).slice(0, 28);
 
   return {

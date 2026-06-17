@@ -261,3 +261,114 @@ def test_parser_returns_failed_on_claude_exception():
     out = parse_cv(SAMPLE_CV, client=client, skip_cache=True)
     assert out.parse_failed is True
     assert "claude_call_failed" in out.error_reason
+
+
+# ---------- apply (ORM bridge) ----------
+
+
+from types import SimpleNamespace  # noqa: E402
+
+from app.cv_parsing.apply import parse_and_store_cv_sections  # noqa: E402
+
+
+def _ok_parsed() -> ParsedCV:
+    return ParsedCV.from_sections(
+        ParsedCVSections.model_validate(VALID_PARSE_PAYLOAD),
+        prompt_version=PROMPT_VERSION,
+        model_version=MODEL_VERSION,
+    )
+
+
+def _app(**kw) -> SimpleNamespace:
+    base = dict(
+        id=1, organization_id=2, role_id=3,
+        cv_text="raw scrambled cv text", cv_sections=None, candidate=None,
+    )
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_apply_stores_sections_on_app_and_candidate(monkeypatch):
+    candidate = SimpleNamespace(cv_text=None, cv_sections=None)
+    app = _app(candidate=candidate)
+    monkeypatch.setattr("app.cv_parsing.runner.parse_cv", lambda *a, **k: _ok_parsed())
+
+    wrote = parse_and_store_cv_sections(app, db=None)
+
+    assert wrote is True
+    assert app.cv_sections["headline"] == "Senior Data Engineer"
+    # Mirrored onto the candidate so candidate-level reads see it too.
+    assert candidate.cv_sections == app.cv_sections
+
+
+def test_apply_noop_when_already_parsed(monkeypatch):
+    app = _app(cv_sections={"existing": True})
+    calls = {"n": 0}
+
+    def _spy(*a, **k):
+        calls["n"] += 1
+        return _ok_parsed()
+
+    monkeypatch.setattr("app.cv_parsing.runner.parse_cv", _spy)
+
+    wrote = parse_and_store_cv_sections(app)
+
+    assert wrote is False
+    assert calls["n"] == 0  # short-circuits before any Claude call
+    assert app.cv_sections == {"existing": True}
+
+
+def test_apply_force_reparses_even_when_present(monkeypatch):
+    app = _app(cv_sections={"existing": True})
+    monkeypatch.setattr("app.cv_parsing.runner.parse_cv", lambda *a, **k: _ok_parsed())
+
+    wrote = parse_and_store_cv_sections(app, force=True)
+
+    assert wrote is True
+    assert app.cv_sections["headline"] == "Senior Data Engineer"
+
+
+def test_apply_noop_when_no_text(monkeypatch):
+    app = _app(cv_text="   ", candidate=None)
+
+    def _boom(*a, **k):
+        raise AssertionError("parse_cv should not be called when there's no text")
+
+    monkeypatch.setattr("app.cv_parsing.runner.parse_cv", _boom)
+
+    wrote = parse_and_store_cv_sections(app)
+
+    assert wrote is False
+    assert app.cv_sections is None
+
+
+def test_apply_leaves_null_on_parse_failure(monkeypatch):
+    app = _app()
+    monkeypatch.setattr(
+        "app.cv_parsing.runner.parse_cv",
+        lambda *a, **k: ParsedCV.failed(
+            reason="boom", prompt_version=PROMPT_VERSION, model_version=MODEL_VERSION
+        ),
+    )
+
+    wrote = parse_and_store_cv_sections(app)
+
+    assert wrote is False
+    assert app.cv_sections is None  # retryable, not pinned to the fallback
+
+
+def test_apply_falls_back_to_candidate_text(monkeypatch):
+    candidate = SimpleNamespace(cv_text="candidate-level raw text", cv_sections=None)
+    app = _app(cv_text=None, candidate=candidate)
+    captured = {}
+
+    def _cap(text, **k):
+        captured["text"] = text
+        return _ok_parsed()
+
+    monkeypatch.setattr("app.cv_parsing.runner.parse_cv", _cap)
+
+    wrote = parse_and_store_cv_sections(app)
+
+    assert wrote is True
+    assert captured["text"] == "candidate-level raw text"
