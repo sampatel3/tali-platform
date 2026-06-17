@@ -1039,8 +1039,10 @@ def test_reconcile_emit_matches_recommendation_case_insensitively(db):
 
 
 def test_reconcile_emits_rec_only_rejects_when_threshold_none(db):
-    """With threshold cleared to None, numeric rejects are dropped but
-    recommendation-only (must-have miss) rejects must still be surfaced.
+    """With threshold None, recommendation-only (null-score must-have miss)
+    rejects are surfaced via the rec branch. Numeric rejects now fall back to
+    the global pre-screen gate rather than being dropped — see
+    ``test_reconcile_threshold_none_keeps_sub_gate_scored_reject``.
     """
     org, role, app = _seed(db, score=None, threshold=None)
     app.pre_screen_recommendation = "Below threshold"
@@ -1054,9 +1056,12 @@ def test_reconcile_emits_rec_only_rejects_when_threshold_none(db):
 
 
 def test_reconcile_threshold_cleared_discards_scored_reject(db):
-    """Clearing the threshold to None removes score-based rejects: a scored
-    candidate with a stale 'Below threshold' label is discarded (no cutoff),
-    while a null-score must-have-miss is kept.
+    """With the role threshold None, reconcile falls back to the global
+    pre-screen gate (``PRE_SCREEN_THRESHOLD``, 30). A scored candidate ABOVE
+    the gate (40) carrying a stale '<50 Below threshold' label is no longer a
+    reject and is discarded, while a null-score must-have-miss is kept. A
+    scored candidate BELOW the gate is kept — see
+    ``test_reconcile_threshold_none_keeps_sub_gate_scored_reject``.
     """
     org, role, scored = _seed(db, score=40.0, threshold=50.0)
     scored.pre_screen_recommendation = "Below threshold"  # stale <50 label
@@ -1071,9 +1076,54 @@ def test_reconcile_threshold_cleared_discards_scored_reject(db):
     summary = reconcile_pre_screen_reject_decisions(
         db, role=role, organization_id=int(org.id), threshold=None
     )
-    assert summary["discarded"] == 1  # the scored row — no cutoff to be below
+    assert summary["discarded"] == 1  # the scored row — 40 is above the global gate (30)
     assert _latest_status(db, scored) == "discarded"
     assert _latest_status(db, null_rec) == "pending"  # must-have miss survives
+
+
+def test_reconcile_threshold_none_keeps_sub_gate_scored_reject(db):
+    """Regression: a manual-mode role with no ``score_threshold`` resolves to a
+    None reconcile threshold. A numerically scored SUB-GATE candidate (below
+    ``PRE_SCREEN_THRESHOLD``) is a genuine pre-screen reject — the auto-scorer
+    skips it from full scoring — so reconcile must KEEP its card. The old
+    behaviour read None as "no cutoff", discarded the card every cohort tick
+    without re-emitting, and stranded the candidate in Applied with no decision
+    (prod role 26: 24 candidates, scores 15-28, all silently lost their cards).
+    """
+    org, role, app = _seed(db, score=25.0, threshold=None)
+    app.pre_screen_recommendation = "Below threshold"
+    queue_pre_screen_reject(
+        db, organization_id=org.id, role=role, application=app,
+        pre_screen_score=25.0, threshold=30.0,
+    )
+    db.commit()
+
+    summary = reconcile_pre_screen_reject_decisions(
+        db, role=role, organization_id=int(org.id), threshold=None
+    )
+    assert summary["discarded"] == 0  # 25 is below the global gate (30) — kept
+    assert _latest_status(db, app) == "pending"
+    # Kept, not duplicated.
+    assert db.query(AgentDecision).filter(AgentDecision.application_id == app.id).count() == 1
+
+
+def test_reconcile_threshold_none_reemits_stranded_sub_gate_reject(db):
+    """Regression (emit side): a sub-gate scored candidate whose card was
+    already lost (discarded by the old bug) must be re-created by reconcile
+    even when the role threshold is None — the numeric emit branch falls back
+    to the global pre-screen gate. The old emit query dropped the numeric
+    branch entirely when threshold was None, so the card was never rebuilt and
+    the candidate stayed stranded.
+    """
+    org, role, app = _seed(db, score=25.0, threshold=None)
+    app.pre_screen_recommendation = "Below threshold"
+    db.commit()  # no existing card — the post-discard stranded state
+
+    summary = reconcile_pre_screen_reject_decisions(
+        db, role=role, organization_id=int(org.id), threshold=None
+    )
+    assert summary["created"] == 1
+    assert _latest_status(db, app) == "pending"
 
 
 def test_pending_decision_map_resolves_per_app(db):
