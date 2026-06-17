@@ -46,6 +46,16 @@
 .ac-kicker { font-family: var(--font-mono); font-size: 0.65625rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); }
 .ac-sidebar-count { font-size: 0.6875rem; color: var(--purple-2); font-weight: 600; }
 .ac-agent-list { flex: 1; overflow-y: auto; padding: 2px 8px 12px; display: flex; flex-direction: column; gap: 3px; }
+/* "All roles" scope reset — sits above the sections, active when no agent is
+   focused, the one-click way back to every role's queue. */
+.ac-allroles { display: flex; align-items: center; gap: 9px; padding: 8px 11px; margin-bottom: 3px; border-radius: var(--radius); border: 1px solid transparent; background: transparent; cursor: pointer; text-align: left; width: 100%; font-family: var(--font-sans); transition: background 0.12s ease; }
+.ac-allroles:hover { background: var(--bg-3); }
+.ac-allroles.is-active { background: var(--purple-soft); border-color: var(--purple); }
+.ac-allroles-ic { width: 24px; height: 24px; border-radius: 7px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; background: var(--bg-3); border: 1px solid var(--line); color: var(--ink-soft); }
+.ac-allroles.is-active .ac-allroles-ic { background: var(--purple); border-color: transparent; color: #fff; }
+.ac-allroles-label { flex: 1; font-size: 0.8125rem; font-weight: 600; color: var(--ink); }
+.ac-allroles-hint { font-size: 0.6875rem; font-weight: 700; color: var(--purple-2); }
+.ac-allroles-check { display: inline-flex; color: var(--purple-2); }
 /* Agent-first sections (on/paused · previously-on · starred · active). */
 .ac-agent-group { display: flex; flex-direction: column; gap: 3px; }
 .ac-agent-group + .ac-agent-group { margin-top: 8px; }

@@ -6,7 +6,7 @@
 // the agents you're actively running sit at the top. A multi-select mode lets
 // you message several agents at once.
 
-import { Check, CheckSquare, MessageSquare, Pause, Sparkles } from 'lucide-react';
+import { Check, CheckSquare, Layers, MessageSquare, Pause, Sparkles } from 'lucide-react';
 
 const fmtCount = (n) => (n > 999 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 const fmtUsd = (cents) => `$${((cents || 0) / 100).toFixed(2)}`;
@@ -137,15 +137,41 @@ export function AgentSidebar({
         {agents.length === 0 ? (
           <div className="ac-empty">No live roles yet. Publish a role to chat with (or activate) its agent.</div>
         ) : (
-          sections.map((sec) => (
-            <div key={sec.key} className="ac-agent-group">
-              <div className="ac-group-head">
-                <span>{sec.label}</span>
-                <span className="ac-group-count">{sec.rows.length}</span>
+          <>
+            {/* Always-visible scope reset. Selecting an agent filters the whole
+                page to that role; this row is the one-click way back to every
+                role's queue (the active agent also toggles off when re-clicked).
+                Hidden in bulk-select mode, where scope doesn't apply. */}
+            {!bulkMode && (
+              <button
+                type="button"
+                className={`ac-allroles ${activeRoleId ? '' : 'is-active'}`}
+                onClick={() => onSelect?.(null)}
+                title="View every role's queue — clears the agent filter"
+              >
+                <span className="ac-allroles-ic" aria-hidden="true">
+                  <Layers size={13} strokeWidth={2} />
+                </span>
+                <span className="ac-allroles-label">All roles</span>
+                {activeRoleId ? (
+                  <span className="ac-allroles-hint">Clear</span>
+                ) : (
+                  <span className="ac-allroles-check" aria-hidden="true">
+                    <Check size={12} strokeWidth={3} />
+                  </span>
+                )}
+              </button>
+            )}
+            {sections.map((sec) => (
+              <div key={sec.key} className="ac-agent-group">
+                <div className="ac-group-head">
+                  <span>{sec.label}</span>
+                  <span className="ac-group-count">{sec.rows.length}</span>
+                </div>
+                {sec.rows.map(renderRow)}
               </div>
-              {sec.rows.map(renderRow)}
-            </div>
-          ))
+            ))}
+          </>
         )}
       </div>
     </aside>
