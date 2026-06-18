@@ -220,8 +220,19 @@ _DERIVE_PROMPT = """Extract an ATOMIC requirements list from this JOB SPEC.
 JOB SPEC:
 {jd}"""
 
-_SCORE_SYS = "You are a senior hiring manager. Respond only via the tool."
-_SCORE_PROMPT = """Score this candidate for the role, 0-100 — your real, calibrated hiring judgment.
+# Prompt-caching split (billing-only; the model receives the SAME instruction
+# text + CV as before). The stable, per-role portion of each call — persona +
+# rubric + core capability + requirements, byte-identical for every candidate
+# in a role's cohort/re-score batch — lives in a ``cache_control``'d SYSTEM
+# block (see ``_cached_system``); only the per-candidate CV + Workable context
+# go in the (uncached) user message. Caching on a user-message block produced
+# ZERO prod hits — the system param is the canonical fix (mirrors
+# ``prompts_pre_screen.build_pre_screen_system``). This changes neither the
+# model nor the scoring rubric, only where the (unchanged) text is placed so
+# Anthropic can amortise the prefix across the cohort.
+_SCORE_SYS = """You are a senior hiring manager. Respond only via the tool.
+
+Score this candidate for the role, 0-100 — your real, calibrated hiring judgment.
 
 CORE CAPABILITY (most important): {core}
 REQUIREMENTS (importance noted):
@@ -235,13 +246,14 @@ Calibration for `overall` — use the FULL range, be decisive, do NOT cluster at
   35-54  weak — lacks the core capability but has relevant transferable skills
   0-30   clear misfit — wrong profile ENTIRELY for this kind of work
 
-`overall` is your holistic calibrated judgment, weighting the core capability most — NOT a tally of how many requirements are partially met. Decide `overall` and `core_capability_score`, a short `verdict`, a 1-3 sentence `reasoning`, then `matching_skills` (role-relevant skills present), `missing_skills` (role-relevant skills absent), `highlights` (top achievements), `concerns` (risks) — terse, <=5 each. Do not write prose outside the tool call.
+`overall` is your holistic calibrated judgment, weighting the core capability most — NOT a tally of how many requirements are partially met. Decide `overall` and `core_capability_score`, a short `verdict`, a 1-3 sentence `reasoning`, then `matching_skills` (role-relevant skills present), `missing_skills` (role-relevant skills absent), `highlights` (top achievements), `concerns` (risks) — terse, <=5 each. Do not write prose outside the tool call."""
 
-{workable}CANDIDATE CV:
+_SCORE_USER = """{workable}CANDIDATE CV:
 {cv}"""
 
-_REPORT_SYS = "You extract structured candidate-report facts. Respond only via the tool."
-_REPORT_PROMPT = """Produce the structured report facts for this candidate against the role.
+_REPORT_SYS = """You extract structured candidate-report facts. Respond only via the tool.
+
+Produce the structured report facts for this candidate against the role.
 
 CORE CAPABILITY: {core}
 REQUIREMENTS (numbered):
@@ -252,10 +264,31 @@ Produce:
 - `dimensions` (each 0-100): skills_coverage, skills_depth, title_trajectory, seniority_alignment, industry_match, tenure_pattern.
 - `requirements`: one row per NUMBERED requirement above, referencing its `index`, with status (met|partial|missing|unknown), score 0-100 for how well the CV satisfies it, a SHORT `evidence` quote copied VERBATIM from the CV (empty if unknown/missing), and `impact` (why a gap matters). Credit equivalent tools and clearly-implied capability; "unknown" only when the CV gives no signal either way.
 
-Do not write prose outside the tool call.
+Do not write prose outside the tool call."""
 
-{workable}CANDIDATE CV:
+_REPORT_USER = """{workable}CANDIDATE CV:
 {cv}"""
+
+
+def _cached_system(text: str) -> list[dict]:
+    """Wrap a stable per-role prefix in a ``cache_control``'d system block.
+
+    Mirrors ``prompts_pre_screen.build_pre_screen_system``: Anthropic caches
+    the prefix reliably only when it lives in the ``system`` param (a
+    user-message cache block produced zero prod hits). 1h TTL keeps the cache
+    warm across a role's cohort / re-score batch and across worker-queue gaps;
+    a cache READ refreshes the TTL, so a continuous batch holds one write and
+    pays ~0.1x input on every subsequent candidate. Breaks even at >=2
+    candidates per role within the window — virtually always true for the
+    cohort scoring + base-wide re-scores that dominate spend.
+    """
+    return [
+        {
+            "type": "text",
+            "text": text,
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        }
+    ]
 
 
 def _redis():
@@ -390,24 +423,28 @@ def run_holistic_match(
             else MeteringContext.skipped(metered_by="holistic_direct", trace_id=trace_id)
         )
 
-    # Call 1 — calibrated score.
+    # Call 1 — calibrated score. Stable rubric + requirements ride a cached
+    # system block; only the CV + Workable context vary per candidate.
     score_res = generate_structured(
         client, model=HOLISTIC_MODEL,
-        messages=[{"role": "user", "content": _SCORE_PROMPT.format(core=core, reqs=reqblock, workable=wk, cv=cv[:_CV_CHARS])}],
+        messages=[{"role": "user", "content": _SCORE_USER.format(workable=wk, cv=cv[:_CV_CHARS])}],
         output_model=_LeanScore, metering=_meter(), max_tokens=2000,
-        system=_SCORE_SYS, temperature=0.0, use_tool_use=True, tool_name="score_candidate",
+        system=_cached_system(_SCORE_SYS.format(core=core, reqs=reqblock)),
+        temperature=0.0, use_tool_use=True, tool_name="score_candidate",
     )
     if not (score_res.ok and score_res.value):
         return _failed_output(
             f"holistic_score_failed: {score_res.error_reason}", trace_id, usage=score_res.usage
         )
 
-    # Call 2 — descriptive report (best-effort; never fails the score).
+    # Call 2 — descriptive report (best-effort; never fails the score). Same
+    # cached-system / per-candidate-user split as call 1.
     report_res = generate_structured(
         client, model=HOLISTIC_MODEL,
-        messages=[{"role": "user", "content": _REPORT_PROMPT.format(core=core, reqs=reqblock, workable=wk, cv=cv[:_CV_CHARS])}],
+        messages=[{"role": "user", "content": _REPORT_USER.format(workable=wk, cv=cv[:_CV_CHARS])}],
         output_model=_Report, metering=_meter(), max_tokens=5000,
-        system=_REPORT_SYS, temperature=0.0, use_tool_use=True, tool_name="emit_report_facts",
+        system=_cached_system(_REPORT_SYS.format(core=core, reqs=reqblock)),
+        temperature=0.0, use_tool_use=True, tool_name="emit_report_facts",
     )
     report = report_res.value if (report_res.ok and report_res.value) else _Report()
 

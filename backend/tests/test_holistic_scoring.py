@@ -265,6 +265,59 @@ def test_run_holistic_score_failure(monkeypatch, _nocache):
     assert "holistic_score_failed" in out.error_reason
 
 
+def test_holistic_caches_stable_prefix(monkeypatch, _nocache):
+    """Cost-efficiency (no model/methodology change): the per-role rubric +
+    requirements ride a ``cache_control``'d SYSTEM block — byte-identical across
+    candidates so Anthropic serves it from the prefix cache — while only the CV +
+    Workable context vary per candidate in the (uncached) user message.
+    """
+    deriv, lean, report = _deriv(), _lean(), _report()
+    calls = []
+
+    def fake_gen(client, *, output_model, **kw):
+        calls.append((output_model, kw))
+        if output_model is _Derivation:
+            return _fake_res(deriv)
+        if output_model is _LeanScore:
+            return _fake_res(lean)
+        return _fake_res(report)
+
+    monkeypatch.setattr(holistic, "generate_structured", fake_gen)
+
+    def _run(cv):
+        return run_holistic_match(
+            cv, "a real jd body", client=object(),
+            metering_context={"organization_id": 2, "role_id": 26, "entity_id": "application:1"},
+        )
+
+    _run("CANDIDATE ONE distinctive cv alpha")
+    _run("CANDIDATE TWO distinctive cv beta")
+
+    # Both scoring calls (score + report) cache the stable prefix in the system
+    # param; the derivation call is left untouched (already Redis-cached).
+    scored = [kw for (om, kw) in calls if om in (_LeanScore, _Report)]
+    assert len(scored) == 4  # 2 candidates x (score + report)
+    for kw in scored:
+        system = kw["system"]
+        assert isinstance(system, list) and len(system) == 1
+        blk = system[0]
+        assert blk["type"] == "text"
+        assert blk["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+        # rubric + derived requirements live in the cached prefix...
+        assert "CORE CAPABILITY" in blk["text"] and "PySpark ETL" in blk["text"]
+        # ...and the per-candidate CV does NOT leak into it (would break caching).
+        assert "distinctive cv" not in blk["text"]
+        # the CV rides the uncached user message
+        assert "CANDIDATE CV:" in kw["messages"][0]["content"]
+
+    # The cached prefix is byte-identical across candidates (cache-eligible),
+    # while each candidate's CV is distinct in the user turn.
+    score_calls = [kw for (om, kw) in calls if om is _LeanScore]
+    assert score_calls[0]["system"][0]["text"] == score_calls[1]["system"][0]["text"]
+    assert "alpha" in score_calls[0]["messages"][0]["content"]
+    assert "beta" in score_calls[1]["messages"][0]["content"]
+
+
 def test_lean_score_overall_is_required():
     """A7 regression: ``overall`` maps DIRECTLY to role_fit_score (see
     ``_to_output``), so it must be REQUIRED. A ``default=0`` previously let a
