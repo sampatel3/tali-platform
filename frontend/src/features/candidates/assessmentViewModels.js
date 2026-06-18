@@ -361,7 +361,12 @@ export const buildCandidateSnapshot = ({ application, completedAssessment } = {}
     const raw = details.candidate_snapshot;
     if (!raw || typeof raw !== 'object') continue;
 
-    const yearsLabel = formatYearsExperience(raw.years_experience);
+    // years_experience is float|null; Number(null) coerces to 0, so derive a
+    // null-preserving value and guard on it rather than on the formatted label
+    // (formatYearsExperience(null) renders "<1 yr", which would wrongly make an
+    // empty source look usable).
+    const yearsValue = raw.years_experience == null ? null : toFiniteNumber(raw.years_experience);
+    const yearsLabel = yearsValue == null ? null : formatYearsExperience(yearsValue);
     const topSkills = Array.isArray(raw.top_skills)
       ? raw.top_skills
         .map((skill) => trimmedString(skill))
@@ -371,13 +376,18 @@ export const buildCandidateSnapshot = ({ application, completedAssessment } = {}
     const snapshotTimeline = Array.isArray(raw.timeline)
       ? raw.timeline.map(buildTimelineEntry).filter(Boolean).slice(0, 3)
       : [];
-    const timeline = cvSectionsTimeline.length ? cvSectionsTimeline : snapshotTimeline;
 
-    if (!yearsLabel && !topSkills.length && !timeline.length) continue;
+    // Decide whether THIS source is usable from its OWN content — not from the
+    // injected cvSectionsTimeline — so an earlier source with an empty snapshot
+    // block doesn't short-circuit and mask a later source that still has real
+    // years/skills. Only once a source is selected do we swap in the preferred
+    // grounded cv_sections timeline.
+    if (yearsValue == null && !topSkills.length && !snapshotTimeline.length) continue;
+    const timeline = cvSectionsTimeline.length ? cvSectionsTimeline : snapshotTimeline;
 
     return {
       yearsLabel,
-      yearsExperience: toFiniteNumber(raw.years_experience),
+      yearsExperience: yearsValue,
       topSkills,
       timeline,
       source: cvSectionsTimeline.length ? 'cv_sections' : 'cv_match',

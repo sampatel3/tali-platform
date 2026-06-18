@@ -40,8 +40,8 @@ _LEGAL_SUFFIX_TOKENS = frozenset(
     {
         "inc", "incorporated", "llc", "llp", "lp", "ltd", "limited", "pvt",
         "pte", "plc", "corp", "corporation", "gmbh", "ag", "sa", "sas", "nv",
-        "bv", "oy", "ab", "as", "srl", "spa", "kk", "kg", "kft", "doo", "sro",
-        "sdn", "bhd",
+        "bv", "oy", "ab", "as", "srl", "spa", "sl", "kk", "kg", "kft", "doo",
+        "sro", "sdn", "bhd",
     }
 )
 
@@ -64,10 +64,29 @@ def normalize_for_grounding(text: str) -> str:
 
 
 def _significant_tokens(company: str) -> list[str]:
-    """Normalized company tokens with trailing legal-form tokens removed."""
+    """Normalized company tokens with trailing legal-form tokens removed.
+
+    Handles both whole-token forms ("ltd", "gmbh") and dotted forms that
+    normalize to single letters ("S.A." -> "s a", "S.A.S." -> "s a s"): a
+    trailing run of single-character tokens is joined and stripped when it
+    spells a known suffix, so "Acme S.A." grounds against a CV that just says
+    "Acme". Single letters that don't spell a suffix (initials like "J P
+    Morgan") are left intact.
+    """
     tokens = normalize_for_grounding(company).split()
-    while tokens and tokens[-1] in _LEGAL_SUFFIX_TOKENS:
-        tokens.pop()
+    while tokens:
+        if tokens[-1] in _LEGAL_SUFFIX_TOKENS:
+            tokens.pop()
+            continue
+        stripped = False
+        for k in range(min(4, len(tokens)), 1, -1):
+            tail = tokens[-k:]
+            if all(len(t) == 1 for t in tail) and "".join(tail) in _LEGAL_SUFFIX_TOKENS:
+                del tokens[-k:]
+                stripped = True
+                break
+        if not stripped:
+            break
     return tokens
 
 
