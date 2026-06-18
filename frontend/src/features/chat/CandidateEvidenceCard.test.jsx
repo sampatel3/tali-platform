@@ -58,6 +58,41 @@ test('a genuine MISSING criterion shows the no-evidence line', () => {
   ).toBeInTheDocument();
 });
 
+test('a self-referential "Taali score >= N" criterion is decided from the score, not the CV', () => {
+  // Back-compat for snapshots minted before the backend decided these: the
+  // grounder can't find a "Taali score" quote in the CV, so the stored verdict
+  // is "missing" — but the candidate scored 78, so it must render as Met.
+  render(
+    <CandidateEvidenceCard
+      data={cardWith([
+        {
+          criterion: 'Taali score >= 60',
+          status: 'missing',
+          grounded: false,
+          evidence: [],
+          note: '',
+        },
+      ])}
+    />,
+  );
+  expect(screen.getByText('Met')).toBeInTheDocument();
+  expect(screen.getByText(/Taali score 78/)).toBeInTheDocument();
+  // The misleading "no supporting evidence" copy must NOT appear.
+  expect(screen.queryByText(/No supporting evidence/)).toBeNull();
+});
+
+test('a "Taali score >= N" criterion the candidate misses renders as Not met', () => {
+  render(
+    <CandidateEvidenceCard
+      data={cardWith([
+        { criterion: 'Taali score >= 90', status: 'missing', grounded: false, evidence: [], note: '' },
+      ])}
+    />,
+  );
+  expect(screen.getByText('Not met')).toBeInTheDocument();
+  expect(screen.getByText(/below the ≥ 90 threshold/)).toBeInTheDocument();
+});
+
 test('an ERROR criterion shows "couldn’t verify" — NOT the false no-evidence line', () => {
   // The Saurabh bug: a failed/timed-out check must never read as a data gap.
   render(
