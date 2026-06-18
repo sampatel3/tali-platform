@@ -395,6 +395,31 @@ describe('assessmentViewModels', () => {
       expect(snapshot.timeline[0]).toMatchObject({ company: 'Initech', isCurrent: true });
     });
 
+    it('does not let cv_sections mask a later source with real years/skills', () => {
+      // An earlier source has an empty snapshot block; the cv_sections timeline
+      // must NOT short-circuit on it and hide the application's real years/skills.
+      const snapshot = buildCandidateSnapshot({
+        application: {
+          cv_match_details: {
+            candidate_snapshot: { years_experience: 9, top_skills: ['Kafka'], timeline: [] },
+          },
+          cv_sections: {
+            experience: [{ company: 'Globex', title: 'Engineer', start: '2021', end: 'Present' }],
+          },
+        },
+        completedAssessment: {
+          cv_job_match_details: {
+            candidate_snapshot: { years_experience: null, top_skills: [], timeline: [] },
+          },
+        },
+      });
+
+      expect(snapshot.yearsLabel).toBe('9 yrs');
+      expect(snapshot.topSkills).toEqual(['Kafka']);
+      expect(snapshot.timeline[0].company).toBe('Globex');
+      expect(snapshot.source).toBe('cv_sections');
+    });
+
     it('ignores a failed cv_sections parse and falls back to the scorer timeline', () => {
       const snapshot = buildCandidateSnapshot({
         application: {

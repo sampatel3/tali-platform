@@ -78,6 +78,20 @@ class TestEmployerIsGrounded:
         # With nothing to check against we must not declare everything fake.
         assert employer_is_grounded("Cox Communications", "") is True
 
+    def test_dotted_legal_suffix_is_tolerated(self):
+        # "S.A." / "S.A.S." normalize to single-letter tokens — they must still
+        # be stripped so the name grounds against a CV that omits the suffix.
+        cv = normalize_for_grounding("Worked at Acme on data platforms")
+        assert employer_is_grounded("Acme S.A.", cv) is True
+        assert employer_is_grounded("Acme S.A.S.", cv) is True
+
+    def test_initials_are_not_mistaken_for_a_suffix(self):
+        # "J.P. Morgan" -> "j p morgan": single letters that don't spell a
+        # legal form must be kept, so the full name is still required.
+        cv = normalize_for_grounding("Spent three years at J.P. Morgan in NY")
+        assert employer_is_grounded("J.P. Morgan", cv) is True
+        assert employer_is_grounded("J.P. Goldman", cv) is False
+
 
 class TestGroundCvSections:
     def _blob(self):
