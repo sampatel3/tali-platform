@@ -8,6 +8,11 @@ from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm.attributes import NO_VALUE
 from sqlalchemy.orm import Session, joinedload
 
+from ...candidate_search.self_score import (
+    self_score_decision,
+    self_score_evidence_quote,
+    self_score_note,
+)
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
@@ -97,6 +102,71 @@ def _normalize_cv_match_score_for_response(score: float | None, details: dict | 
 
 def _normalize_score_100_for_response(value: float | int | None) -> float | None:
     return normalize_score_100(value)
+
+
+def _apply_self_score_requirements(details: dict, taali_score: Any) -> dict:
+    """Decide self-referential "Taali score >= N" requirements at response time.
+
+    A recruiter criterion like "Taali score >= 60" gates on the platform's own
+    computed score (``taali_score_cache_100`` — the value behind the "Taali NN"
+    badge), not on anything in the CV/notes. But role criteria are fed verbatim
+    into the cv-match LLM, which only reads the CV + Workable notes, so it can
+    never find evidence and stores the requirement as "missing" even when the
+    candidate clearly clears the threshold. We correct that here, at read time,
+    so already-scored candidates render correctly without a re-score — the score
+    may not even have been computed yet when the requirement was first assessed.
+
+    Decided arithmetically (the score is its own evidence), mirroring the grounded
+    report's ``top_candidates._recompute_self_score_verdict`` via the shared
+    ``self_score`` helpers. Treated as a preference: the corrected status only
+    relabels the row (``met`` / ``missing`` — the in-enum gap value both candidate
+    surfaces render), it never hides or re-penalises the candidate.
+
+    Returns a NEW details dict; never mutates the stored ORM JSON (the items are
+    shared references with ``app.cv_match_details``). No-op — returns ``details``
+    unchanged — when there's no score yet or no such requirement (the common
+    case), so the honest "couldn't find it" stands rather than a fabricated pass.
+    """
+    items = details.get("requirements_assessment")
+    if not isinstance(items, list) or not items:
+        return details
+    recomputed: list[Any] = []
+    changed = False
+    for item in items:
+        decision = (
+            self_score_decision(item.get("requirement"), taali_score)
+            if isinstance(item, dict)
+            else None
+        )
+        if decision is None:
+            recomputed.append(item)
+            continue
+        meets, op, threshold = decision
+        quote = self_score_evidence_quote(taali_score)
+        note = self_score_note(meets, op, threshold, taali_score)
+        new_item = dict(item)
+        # "met" when it clears; "missing" (the in-enum gap status both the
+        # CvMatchReview rail and RoleFitEvidenceSections render as an amber
+        # "Gap") when it doesn't — the note says exactly why.
+        new_item["status"] = "met" if meets else "missing"
+        # The score itself is the evidence. Set every field the candidate-page
+        # surfaces read for the evidence line: ``evidence``/``evidence_quote``
+        # (extractRequirementEvidence + the RoleFit view model), the schema's
+        # ``evidence_quotes`` list, and ``impact``/``reasoning`` (the verdict
+        # reason). ``source`` tags the provenance like the report path does.
+        new_item["evidence"] = quote
+        new_item["evidence_quote"] = quote
+        new_item["evidence_quotes"] = [quote]
+        new_item["impact"] = note
+        new_item["reasoning"] = note
+        new_item["source"] = "taali_score"
+        recomputed.append(new_item)
+        changed = True
+    if not changed:
+        return details
+    new_details = dict(details)
+    new_details["requirements_assessment"] = recomputed
+    return new_details
 
 
 def role_has_job_spec(role: Role) -> bool:
@@ -872,6 +942,13 @@ def application_to_response(
     cv_match_details = dict(raw_details)
     if cv_match_score is not None and "score_scale" not in cv_match_details:
         cv_match_details["score_scale"] = "0-100"
+    # A self-referential "Taali score >= N" requirement gates on the candidate's
+    # own Taali score, which the cv-match LLM (CV + notes only) can't evidence —
+    # so it lands stored as "missing". Decide it here against the cached score the
+    # "Taali NN" badge shows, so it renders correctly without a re-score.
+    cv_match_details = _apply_self_score_requirements(
+        cv_match_details, getattr(app, "taali_score_cache_100", None)
+    )
     # When the caller supplied the latest status (list endpoints, which fetch
     # it in one grouped query) use it; otherwise read the loaded relationship.
     if score_status is _UNSET:
