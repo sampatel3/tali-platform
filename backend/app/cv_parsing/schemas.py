@@ -21,6 +21,11 @@ class ExperienceEntry(BaseModel):
     start: str = ""  # free-form date string; the model picks what's in the CV
     end: str = ""    # may include "Present"
     bullets: list[str] = Field(default_factory=list)
+    # Set post-parse by app.cv_parsing.grounding: True when ``company`` could
+    # not be found in the source CV text (likely a scrambled-extraction
+    # hallucination). The UI marks these "unverified" rather than presenting
+    # the employer as fact. Not produced by the LLM — defaults False.
+    company_unverified: bool = False
 
 
 class EducationEntry(BaseModel):

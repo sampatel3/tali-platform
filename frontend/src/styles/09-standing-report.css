@@ -798,6 +798,24 @@ button.eng-badge-button:focus-visible {
   font-weight: 500;
 }
 
+/* Employer name that could not be grounded in the CV text — auto-extracted,
+   shown but flagged. Muted, not alarmist (per the no red/amber convention). */
+.cv-role-unverified {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--line, #e0e0e6);
+  border-radius: 999px;
+  color: var(--mute-2);
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  vertical-align: middle;
+  white-space: nowrap;
+  cursor: default;
+}
+
 .cv-role-date {
   color: var(--mute-2);
   font-family: var(--font-mono);
