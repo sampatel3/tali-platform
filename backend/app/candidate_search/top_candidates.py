@@ -42,7 +42,7 @@ from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..mcp.payloads import SCORE_FIELDS, application_summary
 from . import grounded_evidence as _ge
-from .grounded_evidence import CriterionVerdict
+from .grounded_evidence import CriterionVerdict, Evidence
 
 logger = logging.getLogger("taali.candidate_search.top_candidates")
 
@@ -178,6 +178,74 @@ def _recompute_currency_cap_verdict(v: CriterionVerdict) -> None:
         v.status = "partially_met"
     else:
         v.status = "not_met"
+
+
+# A "Taali score >= 60" criterion is SELF-REFERENTIAL: it gates on the
+# platform's own computed score, not on anything in the CV or notes. The
+# grounding model only reads the CV + notes, so it can NEVER find evidence for it
+# and dutifully marks it "missing" — even though the score sits right there on
+# the candidate (the same value the ranking and the "Taali NN" badge use). So we
+# decide these ARITHMETICALLY against the candidate's Taali score, the same way
+# `_recompute_currency_cap_verdict` decides a salary cap from the cited figure
+# rather than trusting the model's verdict word. Anchored on "taali" so an
+# unrelated CV criterion ("experience with scoring models") can't match.
+_SELF_SCORE_TOKEN_RE = re.compile(r"\b(score|fit)\b", re.I)
+_SCORE_NUM_RE = re.compile(r"(\d[\d.]*)")
+_SCORE_GEQ_RE = re.compile(r"(>=|>|at\s+least|min(?:imum)?|over|above|greater)", re.I)
+_SCORE_LEQ_RE = re.compile(r"(<=|<|at\s+most|max(?:imum)?|under|below|up\s+to)", re.I)
+
+
+def _is_self_score_criterion(criterion: str) -> bool:
+    c = (criterion or "").lower()
+    return (
+        "taali" in c
+        and bool(_SELF_SCORE_TOKEN_RE.search(c))
+        and bool(_SCORE_NUM_RE.search(c))
+    )
+
+
+def _parse_score_threshold(criterion: str) -> tuple[str, float] | None:
+    """``(op, value)`` for a "Taali score >= 60" style gate. Defaults to a
+    MINIMUM ("geq") — a bare "Taali score 60" reads as a floor — and flips to
+    "leq" only on an explicit at-most operator."""
+    m = _SCORE_NUM_RE.search(criterion or "")
+    if not m:
+        return None
+    try:
+        value = float(m.group(1))
+    except (TypeError, ValueError):
+        return None
+    op = "leq" if (_SCORE_LEQ_RE.search(criterion) and not _SCORE_GEQ_RE.search(criterion)) else "geq"
+    return op, value
+
+
+def _recompute_self_score_verdict(v: CriterionVerdict, app: CandidateApplication) -> None:
+    """Decide a self-referential "Taali score" criterion against the candidate's
+    own Taali score, overriding the (always-empty) CV-evidence verdict. No-op for
+    any other criterion, or when the candidate has no score yet — then we leave
+    the honest "couldn't find it" rather than assert a pass/fail without data."""
+    if not _is_self_score_criterion(v.criterion):
+        return
+    parsed = _parse_score_threshold(v.criterion)
+    if parsed is None:
+        return
+    op, threshold = parsed
+    try:
+        score = float(getattr(app, "taali_score_cache_100", None))
+    except (TypeError, ValueError):
+        return
+    meets = score >= threshold if op == "geq" else score <= threshold
+    shown = round(score)
+    sym = "≥" if op == "geq" else "≤"
+    v.status = "met" if meets else "not_met"
+    v.grounded = True
+    v.source = "taali_score"
+    v.evidence = [Evidence(quote=f"Taali score {shown}", source="taali_score")]
+    if meets:
+        v.note = f"Taali score {shown} meets the {sym} {threshold:g} threshold."
+    else:
+        rel = "below" if op == "geq" else "above"
+        v.note = f"Taali score {shown} is {rel} the {sym} {threshold:g} threshold."
 
 
 def _is_constraint(criterion: str) -> bool:
@@ -560,6 +628,13 @@ def _candidate_payload(
     verdicts: list[CriterionVerdict],
     has_criteria: bool,
 ) -> dict[str, Any]:
+    # Self-referential "Taali score >= N" criteria can't be grounded against the
+    # CV — decide them against the candidate's actual Taali score here so they
+    # don't render as a spurious "missing". In place, so the verdict keeps its
+    # display position and the `meets_all_criteria` roll-up below sees the
+    # corrected status.
+    for v in verdicts:
+        _recompute_self_score_verdict(v, app)
     out = application_summary(app)
     out["rank"] = rank
     out["criteria"] = [v.to_dict() for v in verdicts]

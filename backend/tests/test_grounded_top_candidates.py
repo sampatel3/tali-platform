@@ -967,6 +967,110 @@ def test_currency_cap_verdict_noop_when_ambiguous_or_nonconstraint():
     assert v4.status == "met"
 
 
+def test_is_self_score_criterion_classifies():
+    for crit in [
+        "Taali score >= 60",
+        "Taali score of at least 60",
+        "minimum Taali score 55",
+        "Taali fit >= 70",
+        "taali score 60+",
+    ]:
+        assert tc._is_self_score_criterion(crit), crit
+    # NOT self-score: no "taali" anchor, or no number, or unrelated.
+    for crit in [
+        "experience with scoring models",
+        "credit score modelling",
+        "Taali platform experience",  # "taali" but no score/fit token
+        "banking domain experience",
+        "salary expectation <= 30000 AED",
+    ]:
+        assert not tc._is_self_score_criterion(crit), crit
+
+
+def test_parse_score_threshold():
+    assert tc._parse_score_threshold("Taali score >= 60") == ("geq", 60.0)
+    assert tc._parse_score_threshold("Taali score at least 55") == ("geq", 55.0)
+    assert tc._parse_score_threshold("Taali score 70") == ("geq", 70.0)  # bare → floor
+    assert tc._parse_score_threshold("Taali score <= 40") == ("leq", 40.0)
+    assert tc._parse_score_threshold("Taali score under 40") == ("leq", 40.0)
+    assert tc._parse_score_threshold("Taali score") is None  # no number
+
+
+def test_self_score_verdict_recomputed_from_taali_score():
+    from app.candidate_search.grounded_evidence import CriterionVerdict
+
+    # The reported bug: "Taali score >= 60" was MISSING even though the candidate
+    # scored 62. It's self-referential — decided against the score, not the CV.
+    v = CriterionVerdict(criterion="Taali score >= 60", status="missing", grounded=False)
+    tc._recompute_self_score_verdict(v, _fake_app(1, taali=62))
+    assert v.status == "met"
+    assert v.grounded is True
+    assert v.source == "taali_score"
+    assert "62" in v.evidence[0].quote
+
+    # Below the floor → not_met (still grounded against the real score).
+    v2 = CriterionVerdict(criterion="Taali score >= 60", status="missing", grounded=False)
+    tc._recompute_self_score_verdict(v2, _fake_app(2, taali=55))
+    assert v2.status == "not_met"
+    assert v2.grounded is True
+
+    # A cap variant ("<= 40"): 55 exceeds it → not_met.
+    v3 = CriterionVerdict(criterion="Taali score <= 40", status="missing", grounded=False)
+    tc._recompute_self_score_verdict(v3, _fake_app(3, taali=55))
+    assert v3.status == "not_met"
+
+
+def test_self_score_verdict_noop_when_not_applicable():
+    from app.candidate_search.grounded_evidence import CriterionVerdict
+
+    # Not a self-score criterion → untouched.
+    v = CriterionVerdict(criterion="banking domain experience", status="missing", grounded=False)
+    tc._recompute_self_score_verdict(v, _fake_app(1, taali=80))
+    assert v.status == "missing"
+    # No score yet → leave the honest "couldn't find it" rather than assert pass/fail.
+    v2 = CriterionVerdict(criterion="Taali score >= 60", status="missing", grounded=False)
+    tc._recompute_self_score_verdict(v2, _fake_app(2, taali=None))
+    assert v2.status == "missing"
+    assert v2.grounded is False
+
+
+def test_find_top_candidates_decides_self_score_criterion(monkeypatch):
+    """End-to-end: a "Taali score >= 60" criterion reads as MET for a candidate
+    who scored 62, even though the grounder (CV/notes only) returns MISSING — and
+    the candidate is shown, not hidden (a score gate is a preference, not a
+    hard constraint)."""
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(runner_mod, "run_search", lambda **kw: SearchOutput(
+        application_ids=[1, 2],
+        parsed_filter=ParsedFilter(soft_criteria=["Taali score >= 60"]),
+        warnings=[]))
+    monkeypatch.setattr(tc, "_notes_text", lambda app: None)
+
+    a = _fake_app(1, taali=62, name="A"); a.cv_text = "data engineer"
+    b = _fake_app(2, taali=55, name="B"); b.cv_text = "data engineer"
+    monkeypatch.setattr(tc, "_pool_count", lambda bq: 2)
+    monkeypatch.setattr(tc, "_load_candidates", lambda bq, **kw: [a, b])
+
+    class _FakeClient:
+        class _M:
+            def create(self, **kw):
+                # The grounder can't find "Taali score" in the CV — MISSING.
+                return SimpleNamespace(content=[_text_block("[[C1]] MISSING — not in CV")])
+        messages = _M()
+
+    out = tc.find_top_candidates(db=MagicMock(), organization_id=1, query="top with Taali 60+",
+                                base_query=MagicMock(), limit=5, evidence_client=_FakeClient())
+    by_id = {c["application_id"]: c for c in out["candidates"]}
+    assert set(by_id) == {1, 2}  # neither hidden — score gate is a preference
+    assert by_id[1]["criteria"][0]["status"] == "met"
+    assert by_id[1]["criteria"][0]["grounded"] is True
+    assert by_id[1]["criteria"][0]["source"] == "taali_score"
+    assert by_id[1]["meets_all_criteria"] is True
+    assert by_id[2]["criteria"][0]["status"] == "not_met"
+    assert out["excluded"]["not_met_total"] == 0
+
+
 def test_has_structural_classifies():
     assert tc._has_structural(ParsedFilter(skills_all=["react"]))
     assert tc._has_structural(ParsedFilter(locations_country=["United Arab Emirates"]))

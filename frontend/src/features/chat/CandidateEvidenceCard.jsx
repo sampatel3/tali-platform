@@ -6,7 +6,53 @@ const QUOTE_CAP = 180;
 // verdict (e.g. the mix of employers behind a "partial") without a wall.
 const MAX_QUOTES = 3;
 
-const SOURCE_LABEL = { cv: 'CV', notes: 'notes', role_requirement: 'role criteria' };
+const SOURCE_LABEL = {
+  cv: 'CV',
+  notes: 'notes',
+  role_requirement: 'role criteria',
+  taali_score: 'Taali score',
+};
+
+// A "Taali score >= N" criterion gates on the platform's own score, not on CV
+// evidence — so the grounder can never find a quote and marks it "missing". The
+// backend now decides these arithmetically; this mirror covers report snapshots
+// minted before that fix (a shared report is a frozen snapshot, TTL 30 days) so
+// they render correctly without regeneration. Idempotent: a verdict the backend
+// already decided (grounded met/not_met) is left untouched.
+const SCORE_NUM_RE = /(\d[\d.]*)/;
+const SCORE_TOKEN_RE = /\b(score|fit)\b/i;
+const SCORE_LEQ_RE = /(<=|<|at\s+most|max(?:imum)?|under|below|up\s+to)/i;
+const SCORE_GEQ_RE = /(>=|>|at\s+least|min(?:imum)?|over|above|greater)/i;
+
+function isSelfScoreCriterion(text) {
+  const t = text || '';
+  return /taali/i.test(t) && SCORE_TOKEN_RE.test(t) && SCORE_NUM_RE.test(t);
+}
+
+function withSelfScoreVerdicts(criteria, taaliScore) {
+  if (!Array.isArray(criteria) || typeof taaliScore !== 'number') return criteria;
+  return criteria.map((c) => {
+    if (!c || !isSelfScoreCriterion(c.criterion)) return c;
+    if (c.grounded && (c.status === 'met' || c.status === 'not_met')) return c;
+    const num = SCORE_NUM_RE.exec(c.criterion);
+    const threshold = num ? parseFloat(num[1]) : NaN;
+    if (!Number.isFinite(threshold)) return c;
+    const leq = SCORE_LEQ_RE.test(c.criterion) && !SCORE_GEQ_RE.test(c.criterion);
+    const meets = leq ? taaliScore <= threshold : taaliScore >= threshold;
+    const shown = Math.round(taaliScore);
+    const sym = leq ? '≤' : '≥';
+    return {
+      ...c,
+      status: meets ? 'met' : 'not_met',
+      grounded: true,
+      source: 'taali_score',
+      evidence: [{ quote: `Taali score ${shown}`, source: 'taali_score' }],
+      note: meets
+        ? `Taali score ${shown} meets the ${sym} ${threshold} threshold.`
+        : `Taali score ${shown} is ${leq ? 'above' : 'below'} the ${sym} ${threshold} threshold.`,
+    };
+  });
+}
 
 // "8 yrs" / "7.5 yrs" from the scorer's years_experience, or null.
 function formatYears(y) {
@@ -213,7 +259,7 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
             ) : null}
             {Array.isArray(c.criteria) && c.criteria.length ? (
               <div className="ev-crits">
-                {c.criteria.map((cr, j) => (
+                {withSelfScoreVerdicts(c.criteria, c.taali_score).map((cr, j) => (
                   <CriterionRow key={j} c={cr} />
                 ))}
               </div>
