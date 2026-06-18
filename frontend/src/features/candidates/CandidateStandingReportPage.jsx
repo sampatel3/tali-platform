@@ -163,6 +163,7 @@ const normalizeExperienceEntries = (entries) => asArray(entries).map((entry, ind
     key: `${company}-${title}-${index}`,
     title,
     company,
+    companyUnverified: Boolean(entry?.company_unverified),
     start,
     end,
     bullets,
@@ -322,6 +323,14 @@ const CvDocumentContent = ({ cvModel, matchingSkills }) => {
                 <div>
                   <span className="cv-role-title">{entry.title}</span>
                   {entry.company ? <span className="cv-role-co"> · {entry.company}</span> : null}
+                  {entry.company && entry.companyUnverified ? (
+                    <span
+                      className="cv-role-unverified"
+                      title="Employer name not found in the CV text — auto-extracted, treat as unverified."
+                    >
+                      Unverified
+                    </span>
+                  ) : null}
                 </div>
                 {(entry.start || entry.end) ? <span className="cv-role-date">{[entry.start, entry.end].filter(Boolean).join(' - ')}</span> : null}
               </div>

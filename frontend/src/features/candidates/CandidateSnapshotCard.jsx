@@ -26,10 +26,24 @@ const SectionLabel = ({ children }) => (
   </div>
 );
 
+const UNVERIFIED_TITLE = 'Employer name not found in the CV text — auto-extracted, treat as unverified.';
+
+const UnverifiedTag = () => (
+  <span
+    className="shrink-0 rounded-full border border-[var(--taali-border-subtle)] px-1.5 py-px text-[0.5625rem] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]"
+    title={UNVERIFIED_TITLE}
+  >
+    Unverified
+  </span>
+);
+
 const TimelineRow = ({ entry }) => (
   <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-subtle)] bg-[var(--taali-surface)] px-3 py-2">
-    <div className="truncate text-sm font-semibold text-[var(--taali-text)]" title={entry.company}>
-      {entry.company || '—'}
+    <div className="flex items-center gap-1.5">
+      <span className="truncate text-sm font-semibold text-[var(--taali-text)]" title={entry.company}>
+        {entry.company || '—'}
+      </span>
+      {entry.company && entry.companyUnverified ? <UnverifiedTag /> : null}
     </div>
     {entry.role ? (
       <div className="mt-0.5 truncate text-xs text-[var(--taali-muted)]" title={entry.role}>

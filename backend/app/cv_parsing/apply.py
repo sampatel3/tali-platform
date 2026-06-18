@@ -96,6 +96,27 @@ def parse_and_store_cv_sections(
         return False
 
     blob = parsed.model_dump(mode="json")
+
+    # Ground extracted employer names against the CV text. A scrambled
+    # multi-column extraction makes the parser guess recent employers; this
+    # flags any company name not actually present in the CV (kept, but marked
+    # ``company_unverified``) so the candidate surfaces don't present a
+    # fabricated employer as fact. Deterministic, no extra LLM call.
+    try:
+        from .grounding import ground_cv_sections
+
+        flagged = ground_cv_sections(blob, cv_text)
+        if flagged:
+            logger.info(
+                "CV grounding flagged %d unverifiable employer(s) for "
+                "application_id=%s: %s",
+                len(flagged),
+                app_id,
+                [item["company"] for item in flagged],
+            )
+    except Exception:  # pragma: no cover — grounding must never break a parse
+        logger.exception("CV employer grounding raised for application_id=%s", app_id)
+
     app.cv_sections = blob
     if candidate is not None:
         candidate.cv_sections = blob

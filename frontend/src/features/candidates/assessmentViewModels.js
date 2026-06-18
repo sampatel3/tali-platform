@@ -293,7 +293,47 @@ const buildTimelineEntry = (entry) => {
     if (endYear) return `– ${endYear}`;
     return null;
   })();
-  return { company, role, range, isCurrent };
+  return { company, role, range, isCurrent, companyUnverified: Boolean(entry.company_unverified) };
+};
+
+const TIMELINE_YEAR_RE = /\b(?:19|20)\d{2}\b/;
+const extractTimelineYear = (value) => {
+  const match = String(value || '').match(TIMELINE_YEAR_RE);
+  return match ? Number(match[0]) : null;
+};
+const looksPresent = (value) => {
+  const text = String(value || '').trim();
+  return !text || /present|current|now|ongoing|to date/i.test(text);
+};
+
+// The structured CV parse (``cv_sections.experience``) is the candidate's
+// career timeline as written on the CV — and the backend grounds each
+// employer name against the CV text (``company_unverified``). We derive the
+// recruiter snapshot timeline from it rather than the scorer's independently
+// extracted ``candidate_snapshot.timeline`` so the header "Recent roles" and
+// the CV tab can't disagree (the bug that surfaced "Cox Communications" in the
+// header vs "Syngenta" on the CV for the same person), and so the unverified
+// flag flows through to the UI. Free-form date strings ("Sep 2023", "Present")
+// are reduced to the year / is-current shape buildTimelineEntry expects.
+const buildTimelineFromCvSections = (cvSections) => {
+  const experience = cvSections && typeof cvSections === 'object' && !cvSections.parse_failed
+    ? cvSections.experience
+    : null;
+  if (!Array.isArray(experience)) return [];
+  return experience
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null;
+      return buildTimelineEntry({
+        company: entry.company,
+        role: entry.title || entry.role,
+        start_year: extractTimelineYear(entry.start),
+        end_year: looksPresent(entry.end) ? null : extractTimelineYear(entry.end),
+        is_current: looksPresent(entry.end),
+        company_unverified: entry.company_unverified,
+      });
+    })
+    .filter(Boolean)
+    .slice(0, 3);
 };
 
 // Builds the at-a-glance recruiter snapshot rendered above the prose summary.
@@ -306,6 +346,11 @@ const buildTimelineEntry = (entry) => {
 // getRoleFitPayload. We try assessment sources first so that re-scored
 // completed attempts win over stale application blobs.
 export const buildCandidateSnapshot = ({ application, completedAssessment } = {}) => {
+  // Canonical career timeline: the grounded structured CV parse. When present
+  // it wins over the scorer's candidate_snapshot.timeline so the header and the
+  // CV tab show the same employers (and the same unverified flags).
+  const cvSectionsTimeline = buildTimelineFromCvSections(application?.cv_sections);
+
   const detailsCandidates = [
     completedAssessment?.cv_job_match_details,
     completedAssessment?.prompt_analytics?.cv_job_match?.details,
@@ -323,9 +368,10 @@ export const buildCandidateSnapshot = ({ application, completedAssessment } = {}
         .filter(Boolean)
         .slice(0, 6)
       : [];
-    const timeline = Array.isArray(raw.timeline)
+    const snapshotTimeline = Array.isArray(raw.timeline)
       ? raw.timeline.map(buildTimelineEntry).filter(Boolean).slice(0, 3)
       : [];
+    const timeline = cvSectionsTimeline.length ? cvSectionsTimeline : snapshotTimeline;
 
     if (!yearsLabel && !topSkills.length && !timeline.length) continue;
 
@@ -334,13 +380,13 @@ export const buildCandidateSnapshot = ({ application, completedAssessment } = {}
       yearsExperience: toFiniteNumber(raw.years_experience),
       topSkills,
       timeline,
-      source: 'cv_match',
+      source: cvSectionsTimeline.length ? 'cv_sections' : 'cv_match',
     };
   }
 
   // Fallback for legacy applications: derive top_skills from matching_skills.
-  // Years_experience and timeline aren't recoverable from the older payload
-  // without re-parsing the CV, so we leave them empty rather than guess.
+  // Years_experience isn't recoverable from the older payload, but the
+  // structured parse — when we have one — still drives the timeline.
   for (const details of detailsCandidates) {
     const matchingSkills = Array.isArray(details.matching_skills)
       ? details.matching_skills.map((skill) => trimmedString(skill)).filter(Boolean).slice(0, 6)
@@ -350,10 +396,22 @@ export const buildCandidateSnapshot = ({ application, completedAssessment } = {}
         yearsLabel: null,
         yearsExperience: null,
         topSkills: matchingSkills,
-        timeline: [],
-        source: 'legacy_matching_skills',
+        timeline: cvSectionsTimeline,
+        source: cvSectionsTimeline.length ? 'cv_sections' : 'legacy_matching_skills',
       };
     }
+  }
+
+  // No usable cv_match payload at all, but a structured CV parse can still
+  // populate the snapshot timeline on its own.
+  if (cvSectionsTimeline.length) {
+    return {
+      yearsLabel: null,
+      yearsExperience: null,
+      topSkills: [],
+      timeline: cvSectionsTimeline,
+      source: 'cv_sections',
+    };
   }
 
   return null;
