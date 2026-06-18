@@ -42,6 +42,7 @@ from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..mcp.payloads import SCORE_FIELDS, application_summary
 from . import grounded_evidence as _ge
+from . import self_score as _ss
 from .grounded_evidence import CriterionVerdict, Evidence
 
 logger = logging.getLogger("taali.candidate_search.top_candidates")
@@ -187,36 +188,12 @@ def _recompute_currency_cap_verdict(v: CriterionVerdict) -> None:
 # the candidate (the same value the ranking and the "Taali NN" badge use). So we
 # decide these ARITHMETICALLY against the candidate's Taali score, the same way
 # `_recompute_currency_cap_verdict` decides a salary cap from the cited figure
-# rather than trusting the model's verdict word. Anchored on "taali" so an
-# unrelated CV criterion ("experience with scoring models") can't match.
-_SELF_SCORE_TOKEN_RE = re.compile(r"\b(score|fit)\b", re.I)
-_SCORE_NUM_RE = re.compile(r"(\d[\d.]*)")
-_SCORE_GEQ_RE = re.compile(r"(>=|>|at\s+least|min(?:imum)?|over|above|greater)", re.I)
-_SCORE_LEQ_RE = re.compile(r"(<=|<|at\s+most|max(?:imum)?|under|below|up\s+to)", re.I)
-
-
-def _is_self_score_criterion(criterion: str) -> bool:
-    c = (criterion or "").lower()
-    return (
-        "taali" in c
-        and bool(_SELF_SCORE_TOKEN_RE.search(c))
-        and bool(_SCORE_NUM_RE.search(c))
-    )
-
-
-def _parse_score_threshold(criterion: str) -> tuple[str, float] | None:
-    """``(op, value)`` for a "Taali score >= 60" style gate. Defaults to a
-    MINIMUM ("geq") — a bare "Taali score 60" reads as a floor — and flips to
-    "leq" only on an explicit at-most operator."""
-    m = _SCORE_NUM_RE.search(criterion or "")
-    if not m:
-        return None
-    try:
-        value = float(m.group(1))
-    except (TypeError, ValueError):
-        return None
-    op = "leq" if (_SCORE_LEQ_RE.search(criterion) and not _SCORE_GEQ_RE.search(criterion)) else "geq"
-    return op, value
+# rather than trusting the model's verdict word. Detection, threshold parsing,
+# and wording live in the shared `self_score` module so the authed candidate page
+# (which decides the same criteria over stored requirements_assessment rows)
+# can't drift from this report path.
+_is_self_score_criterion = _ss.is_self_score_criterion
+_parse_score_threshold = _ss.parse_score_threshold
 
 
 def _recompute_self_score_verdict(v: CriterionVerdict, app: CandidateApplication) -> None:
@@ -224,28 +201,16 @@ def _recompute_self_score_verdict(v: CriterionVerdict, app: CandidateApplication
     own Taali score, overriding the (always-empty) CV-evidence verdict. No-op for
     any other criterion, or when the candidate has no score yet — then we leave
     the honest "couldn't find it" rather than assert a pass/fail without data."""
-    if not _is_self_score_criterion(v.criterion):
+    score = getattr(app, "taali_score_cache_100", None)
+    decision = _ss.self_score_decision(v.criterion, score)
+    if decision is None:
         return
-    parsed = _parse_score_threshold(v.criterion)
-    if parsed is None:
-        return
-    op, threshold = parsed
-    try:
-        score = float(getattr(app, "taali_score_cache_100", None))
-    except (TypeError, ValueError):
-        return
-    meets = score >= threshold if op == "geq" else score <= threshold
-    shown = round(score)
-    sym = "≥" if op == "geq" else "≤"
+    meets, op, threshold = decision
     v.status = "met" if meets else "not_met"
     v.grounded = True
     v.source = "taali_score"
-    v.evidence = [Evidence(quote=f"Taali score {shown}", source="taali_score")]
-    if meets:
-        v.note = f"Taali score {shown} meets the {sym} {threshold:g} threshold."
-    else:
-        rel = "below" if op == "geq" else "above"
-        v.note = f"Taali score {shown} is {rel} the {sym} {threshold:g} threshold."
+    v.evidence = [Evidence(quote=_ss.self_score_evidence_quote(score), source="taali_score")]
+    v.note = _ss.self_score_note(meets, op, threshold, score)
 
 
 def _is_constraint(criterion: str) -> bool:
