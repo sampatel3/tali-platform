@@ -103,6 +103,10 @@ def _scored_app(
         application_outcome=outcome,
         source="manual",
         pre_screen_score_100=score,
+        # A genuinely pre-screened candidate has this stamp; queue_pre_screen_reject
+        # requires it (it refuses to card a candidate that was never pre-screened),
+        # so the apply_threshold reconcile only emits cards when it's set.
+        pre_screen_run_at=datetime.now(timezone.utc),
     )
     db.add(app)
     db.flush()

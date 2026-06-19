@@ -1,0 +1,77 @@
+import { useState } from 'react';
+import { render, screen, fireEvent } from '@testing-library/react';
+
+import { ChatComposer } from './ChatComposer';
+
+// Controlled harness — mirrors how every chat surface wires the composer:
+// value lives in the parent, onChange writes it back, onSubmit gets the text.
+function Harness({ onSubmit, submitMode }) {
+  const [value, setValue] = useState('');
+  return (
+    <ChatComposer value={value} onChange={setValue} onSubmit={onSubmit} submitMode={submitMode} />
+  );
+}
+
+const type = (text) =>
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: text } });
+
+const pressEnter = (init = {}) =>
+  fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', ...init });
+
+test('plain Enter sends the typed text', () => {
+  const onSubmit = vi.fn();
+  render(<Harness onSubmit={onSubmit} />);
+  type('find the top 10 candidates');
+  pressEnter();
+  expect(onSubmit).toHaveBeenCalledExactlyOnceWith('find the top 10 candidates');
+});
+
+test('Shift+Enter inserts a newline instead of sending', () => {
+  const onSubmit = vi.fn();
+  render(<Harness onSubmit={onSubmit} />);
+  type('line one');
+  pressEnter({ shiftKey: true });
+  expect(onSubmit).not.toHaveBeenCalled();
+});
+
+// The bug: hitting Enter to *commit* an IME / dictation / autocorrect
+// composition also fired submit, sending the pre-commit value — "the message
+// that gets sent is different from what I typed".
+test('Enter while an IME composition is open does NOT send', () => {
+  const onSubmit = vi.fn();
+  render(<Harness onSubmit={onSubmit} />);
+  type('cap salary at');
+  pressEnter({ isComposing: true });
+  expect(onSubmit).not.toHaveBeenCalled();
+});
+
+test('legacy keyCode 229 (composition) does NOT send', () => {
+  const onSubmit = vi.fn();
+  render(<Harness onSubmit={onSubmit} />);
+  type('cap salary at');
+  pressEnter({ keyCode: 229 });
+  expect(onSubmit).not.toHaveBeenCalled();
+});
+
+// After the composition commits (isComposing back to false), the next Enter
+// sends the final, complete text intact.
+test('Enter after the composition commits sends the final text', () => {
+  const onSubmit = vi.fn();
+  render(<Harness onSubmit={onSubmit} />);
+  type('cap salary at');
+  pressEnter({ isComposing: true }); // commit — swallowed
+  type('cap salary at AED 25k'); // composition resolved to final text
+  pressEnter(); // real send
+  expect(onSubmit).toHaveBeenCalledExactlyOnceWith('cap salary at AED 25k');
+});
+
+test("cmd mode: plain Enter never sends, even mid-composition", () => {
+  const onSubmit = vi.fn();
+  render(<Harness onSubmit={onSubmit} submitMode="cmd" />);
+  type('note to self');
+  pressEnter(); // newline in cmd mode
+  pressEnter({ isComposing: true });
+  expect(onSubmit).not.toHaveBeenCalled();
+  pressEnter({ metaKey: true });
+  expect(onSubmit).toHaveBeenCalledExactlyOnceWith('note to self');
+});

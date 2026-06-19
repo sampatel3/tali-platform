@@ -29,6 +29,9 @@ const ORG_STATUS_POLL_MS = 30_000;
 // the recruiter manually acted or switched filters. A short, silent,
 // visibility-gated refetch keeps the queue honest without a spinner flash.
 const DECISIONS_POLL_MS = 15_000;
+// Active-agents poll — also drives the "an agent replied" notification for
+// threads you're not currently viewing, so keep it reasonably brisk.
+const AGENTS_POLL_MS = 15_000;
 
 // Map a HomeNow filter shape -> the params the existing /agent-decisions
 // endpoint expects. Status='pending' is special: the backend hides
@@ -165,6 +168,16 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   // to a spinner while the (authenticated) refetch round-trips. Search queries
   // aren't cached (ad-hoc, unbounded keys); the map is capped to recent views.
   const decisionsCacheRef = useRef(new Map());
+  // Reply notifications: remember each agent's unread count between polls so we
+  // can toast when a NEW reply lands in a thread you're not currently viewing.
+  // `null` until the first poll primes it (so pre-existing unread never toasts).
+  const prevUnreadRef = useRef(null);
+  const activeRoleIdRef = useRef(null);
+  const showToastRef = useRef(showToast);
+  useEffect(() => { showToastRef.current = showToast; }, [showToast]);
+  // Keep the active role in a ref so the polling loader can skip notifying for
+  // the thread you're already looking at, without re-creating the interval.
+  useEffect(() => { activeRoleIdRef.current = activeRoleId; }, [activeRoleId]);
 
   // ``silent`` (background poll / focus refresh) skips the loading spinner so
   // the live list updates in place without a flash — the cards just reconcile
@@ -357,6 +370,19 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       const { data } = await agentChat.listConversations();
       const list = Array.isArray(data?.agents) ? data.agents : [];
       setAgents(list);
+      // Notify when a new agent reply lands in a thread you're NOT viewing (the
+      // active thread shows replies inline via the dock's own poll). First poll
+      // only primes the baseline, so existing unread never toasts.
+      const prevUnread = prevUnreadRef.current;
+      if (prevUnread) {
+        list.forEach((a) => {
+          const before = prevUnread.get(a.role_id) || 0;
+          if ((a.unread_messages || 0) > before && a.role_id !== activeRoleIdRef.current) {
+            showToastRef.current?.(`${a.role_name} replied — open the thread`, 'success');
+          }
+        });
+      }
+      prevUnreadRef.current = new Map(list.map((a) => [a.role_id, a.unread_messages || 0]));
       setActiveRoleId((cur) => {
         if (cur && list.some((a) => a.role_id === cur)) return cur;
         // Auto-focus the most-urgent agent on FIRST load only. Once the
@@ -373,7 +399,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
 
   useEffect(() => {
     void loadAgents();
-    const id = window.setInterval(() => { void loadAgents(); }, ORG_STATUS_POLL_MS);
+    const id = window.setInterval(() => { void loadAgents(); }, AGENTS_POLL_MS);
     return () => window.clearInterval(id);
   }, [loadAgents]);
 

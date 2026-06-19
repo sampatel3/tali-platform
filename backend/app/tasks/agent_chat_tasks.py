@@ -74,6 +74,80 @@ def report_rescreen_impact(
         db.close()
 
 
+@celery_app.task(name="app.tasks.agent_chat_tasks.run_agent_chat_turn")
+def run_agent_chat_turn(
+    conversation_id: int,
+    role_id: int,
+    user_id: int,
+    organization_id: int,
+) -> dict:
+    """Run the agent's response for a single conversation turn.
+
+    The web request has already persisted (and committed) the recruiter's
+    message; this runs the slow, mutating model loop and posts the reply. Split
+    out so the request returns immediately — the message is durable on send and
+    the reply lands asynchronously, surfaced by the dock's poll + a notification.
+
+    Always closes the turn with an assistant message: on an unexpected failure we
+    roll back the partial turn and post a plain error reply, so the recruiter is
+    never left looking at their own message with no response.
+    """
+    from ..agent_chat.engine import run_agent_response
+    from ..agent_chat.service import post_agent_message
+    from ..models.agent_conversation import AgentConversation
+    from ..models.organization import Organization
+    from ..models.role import Role
+    from ..models.user import User
+    from ..platform.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        role = db.query(Role).filter(Role.id == int(role_id)).first()
+        user = db.query(User).filter(User.id == int(user_id)).first()
+        org = (
+            db.query(Organization)
+            .filter(Organization.id == int(organization_id))
+            .first()
+        )
+        conversation = (
+            db.query(AgentConversation)
+            .filter(AgentConversation.id == int(conversation_id))
+            .first()
+        )
+        if role is None or user is None or org is None or conversation is None:
+            return {"status": "missing", "role_id": role_id}
+
+        try:
+            run_agent_response(
+                db=db, role=role, user=user, organization=org, conversation=conversation
+            )
+            db.commit()
+            return {"status": "replied", "role_id": role_id}
+        except Exception:
+            db.rollback()
+            logger.exception("run_agent_chat_turn failed for role_id=%s", role_id)
+            # The user message is already committed by the web request — close the
+            # turn with an error reply rather than leaving the recruiter in silence.
+            conversation = (
+                db.query(AgentConversation)
+                .filter(AgentConversation.id == int(conversation_id))
+                .first()
+            )
+            if conversation is not None:
+                post_agent_message(
+                    db,
+                    conversation=conversation,
+                    text="Sorry — I hit an error working on that. Please try again.",
+                )
+                from datetime import datetime, timezone
+
+                conversation.last_message_at = datetime.now(timezone.utc)
+                db.commit()
+            return {"status": "error", "role_id": role_id}
+    finally:
+        db.close()
+
+
 @celery_app.task(name="app.tasks.agent_chat_tasks.bulk_agent_message")
 def bulk_agent_message(
     organization_id: int,

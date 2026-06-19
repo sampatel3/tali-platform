@@ -138,24 +138,23 @@ def _persist(
     return msg
 
 
-def run_agent_turn(
+def persist_user_message(
     *,
     db: Session,
-    role: Role,
-    user: User,
-    organization: Organization,
     conversation: AgentConversation,
+    user: User,
     user_message: str,
-) -> list[AgentConversationMessage]:
-    """Run one turn; return the new VISIBLE messages (user + final assistant).
+) -> AgentConversationMessage:
+    """Persist the recruiter's message and return it.
 
-    Flushes at message boundaries so ids populate; the caller commits.
+    Split from the model loop so the web request can commit this synchronously —
+    the message is durable the instant you hit send, surviving navigation, an
+    agent switch, even a failed turn — and hand the slow response to a worker.
     """
     text_in = (user_message or "").strip()
     if not text_in:
         raise ValueError("empty message")
-
-    user_row = _persist(
+    return _persist(
         db,
         conversation,
         author_role=AUTHOR_ROLE_USER,
@@ -165,6 +164,22 @@ def run_agent_turn(
         author_user_id=int(user.id),
     )
 
+
+def run_agent_response(
+    *,
+    db: Session,
+    role: Role,
+    user: User,
+    organization: Organization,
+    conversation: AgentConversation,
+) -> AgentConversationMessage:
+    """Run the tool-use loop for a turn whose user message is ALREADY in history,
+    then persist + return the final assistant message. The slow, credit-spending,
+    role-mutating half of a turn — handed to a Celery worker by the web path
+    (see ``run_agent_chat_turn``) so the request returns immediately.
+
+    Flushes at message boundaries so ids populate; the caller commits.
+    """
     client = get_client_for_org(organization)
     model = settings.resolved_claude_model
     system_blocks = build_system_blocks(db, role=role)
@@ -318,7 +333,35 @@ def run_agent_turn(
     except Exception:
         logger.exception("agent_chat: failed to record usage_event")
 
+    return assistant_row
+
+
+def run_agent_turn(
+    *,
+    db: Session,
+    role: Role,
+    user: User,
+    organization: Organization,
+    conversation: AgentConversation,
+    user_message: str,
+) -> list[AgentConversationMessage]:
+    """Persist the user message then run the response in one synchronous call —
+    returns the new VISIBLE messages (user + final assistant). Used by the bulk
+    fan-out (already per-role in a worker) and the route tests. The single-message
+    web path splits these halves instead, to run the response asynchronously.
+    """
+    user_row = persist_user_message(
+        db=db, conversation=conversation, user=user, user_message=user_message
+    )
+    assistant_row = run_agent_response(
+        db=db, role=role, user=user, organization=organization, conversation=conversation
+    )
     return [user_row, assistant_row]
 
 
-__all__ = ["MAX_TOOL_ROUNDS", "run_agent_turn"]
+__all__ = [
+    "MAX_TOOL_ROUNDS",
+    "persist_user_message",
+    "run_agent_response",
+    "run_agent_turn",
+]
