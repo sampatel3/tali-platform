@@ -34,6 +34,28 @@ vi.mock('../shared/api', () => ({
     delete: vi.fn(),
     generate: vi.fn(),
   },
+  // The default landing is HomePage, which reads the agent decision hub + the
+  // agent-chat rail on mount — mock both so it renders (and the shared nav with
+  // the Tasks tab appears) instead of throwing on a missing export.
+  agent: {
+    listDecisions: vi.fn().mockResolvedValue({ data: [] }),
+    rolesBreakdown: vi.fn().mockResolvedValue({ data: [] }),
+    orgStatus: vi.fn().mockResolvedValue({ data: null }),
+    listFeedback: vi.fn().mockResolvedValue({ data: [] }),
+    realisedOutcomes: vi.fn().mockResolvedValue({ data: [] }),
+    needsReevalCount: vi.fn().mockResolvedValue({ data: { count: 0 } }),
+  },
+  agentChat: {
+    listConversations: vi.fn().mockResolvedValue({ data: { agents: [] } }),
+    getTimeline: vi.fn().mockResolvedValue({ data: { timeline: [], agent_working: false } }),
+    sendMessage: vi.fn().mockResolvedValue({ data: { timeline: [], agent_working: true } }),
+    bulkMessage: vi.fn().mockResolvedValue({ data: { accepted: 0 } }),
+    markRead: vi.fn(),
+    answerNeedsInput: vi.fn(),
+    dismissNeedsInput: vi.fn(),
+    approveDraftTask: vi.fn(),
+    reviseDraftTask: vi.fn(),
+  },
   candidates: {
     list: vi.fn().mockResolvedValue({ data: { items: [] } }),
     get: vi.fn(),

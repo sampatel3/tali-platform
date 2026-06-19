@@ -22,8 +22,9 @@ from ...agent_chat.draft_tasks import (
     approve_draft,
     revise_draft,
 )
-from ...agent_chat.engine import run_agent_turn
+from ...agent_chat.engine import persist_user_message
 from ...agent_chat.service import (
+    conversation_agent_working,
     ensure_conversation,
     get_owned_role,
     list_agent_conversations,
@@ -142,6 +143,7 @@ def get_timeline(
     role = _require_role(db, role_id, org_id)
     conversation = ensure_conversation(db, organization_id=org_id, role=role)
     timeline = build_timeline(db, conversation=conversation, role=role)
+    working = conversation_agent_working(db, conversation)
     # Opening the thread marks it read (clears the unread badge).
     mark_read(db, conversation=conversation, user=current_user)
     db.commit()
@@ -151,6 +153,9 @@ def get_timeline(
         "role_name": role.name,
         "agent": _agent_meta(role),
         "timeline": timeline,
+        # Recomputed from persisted state, so the "agent is working…" indicator
+        # survives navigation / an agent switch and resumes on return.
+        "agent_working": working,
     }
 
 
@@ -170,32 +175,57 @@ def send_message(
         raise HTTPException(status_code=400, detail="Organization not found")
     conversation = ensure_conversation(db, organization_id=org_id, role=role)
 
+    # One turn at a time PER agent: reject a second message while this agent is
+    # still working on the previous one, rather than starting a second turn that
+    # would replay a half-finished history and double-reply. This guard is
+    # per-conversation, so you can still message OTHER agents concurrently (and
+    # bulk-message fans out to many agents at once) — it only serialises a single
+    # agent's own thread.
+    if conversation_agent_working(db, conversation):
+        raise HTTPException(
+            status_code=409,
+            detail="The agent is still working on your previous message — it'll reply in a moment.",
+        )
+
+    # Persist the recruiter's message synchronously and commit — it's durable the
+    # instant they hit send, surviving navigation / an agent switch / a failed
+    # turn. The slow, mutating model loop runs in a worker (run_agent_chat_turn);
+    # the reply lands in the thread and the dock polls + notifies when it does.
     try:
-        new_messages = run_agent_turn(
-            db=db,
-            role=role,
-            user=current_user,
-            organization=organization,
-            conversation=conversation,
-            user_message=body.message,
+        user_row = persist_user_message(
+            db=db, conversation=conversation, user=current_user, user_message=body.message
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    except Exception:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Agent turn failed")
-
-    # The sender has, by definition, read everything through their own send.
+    # The sender has read up to their own message; the agent's reply (posted by
+    # the worker, later) then counts as unread → drives the reply notification.
     mark_read(db, conversation=conversation, user=current_user)
-    timeline = build_timeline(db, conversation=conversation, role=role)
+    user_payload = serialize_message(user_row)
     db.commit()
-    return {
+
+    # Build the response BEFORE enqueuing so it's identical under eager Celery
+    # (tests) and prod: the POST returns the user message + "working", and the
+    # reply is observed on the next timeline read.
+    timeline = build_timeline(db, conversation=conversation, role=role)
+    response = {
         "conversation_id": conversation.id,
         "role_id": role.id,
-        "messages": [serialize_message(m) for m in new_messages],
+        "status": "accepted",
+        "agent_working": True,
+        "messages": [user_payload],
         "timeline": timeline,
         "agent": _agent_meta(role),
     }
+
+    from ...tasks.agent_chat_tasks import run_agent_chat_turn
+
+    run_agent_chat_turn.delay(
+        conversation_id=int(conversation.id),
+        role_id=int(role.id),
+        user_id=int(current_user.id),
+        organization_id=int(org_id),
+    )
+    return response
 
 
 def _draft_review_card(role: Role, summary: dict) -> dict:

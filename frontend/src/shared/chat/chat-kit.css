@@ -157,9 +157,18 @@
 .tk-empty.is-compact .tk-suggest-q { font-size: 0.78125rem; }
 
 /* ============ Messages ============ */
-.tk-msg-user {
+/* User message + its timestamp, right-aligned as a column so the time sits
+   neatly under the ink pill. */
+.tk-msg-user-wrap {
   align-self: flex-end;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
   max-width: 80%;
+}
+.tk-msg-user {
+  max-width: 100%;
   padding: 12px 18px;
   border-radius: 14px;
   background: var(--ink);
@@ -180,6 +189,7 @@
   color: var(--ink);
 }
 .tk-msg-time { font-size: 0.6875rem; color: var(--mute); }
+.tk-msg-assistant .tk-msg-time { margin-top: -8px; }
 
 /* ============ Markdown (one renderer everywhere) ============ */
 .tk-md { font-size: 0.90625rem; line-height: 1.6; color: var(--ink); }

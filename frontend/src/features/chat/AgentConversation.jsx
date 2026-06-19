@@ -39,7 +39,13 @@ const AgentConversation = ({
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [input, setInput] = useState('');
+  // Durable "agent is working…" — driven by the server (the turn runs in a
+  // worker), so it survives navigation / an agent switch and resumes on return.
+  const [agentWorking, setAgentWorking] = useState(false);
   const scrollRef = useRef(null);
+  // Guards async results against an agent switch (see AgentChatDock).
+  const activeRoleRef = useRef(roleId);
+  useEffect(() => { activeRoleRef.current = roleId; }, [roleId]);
 
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -48,19 +54,23 @@ const AgentConversation = ({
 
   const load = useCallback(async (opts = {}) => {
     if (!roleId) return;
+    const forRole = roleId;
     if (!opts.silent) setLoading(true);
     try {
       const { data } = await agentChat.getTimeline(roleId);
+      if (activeRoleRef.current !== forRole) return;
       setTimeline(data.timeline || []);
+      setAgentWorking(Boolean(data.agent_working));
     } catch {
-      if (!opts.silent) setTimeline([]);
+      if (!opts.silent && activeRoleRef.current === forRole) setTimeline([]);
     } finally {
-      if (!opts.silent) setLoading(false);
+      if (!opts.silent && activeRoleRef.current === forRole) setLoading(false);
     }
   }, [roleId]);
 
   useEffect(() => {
     setTimeline([]);
+    setAgentWorking(false);
     load();
   }, [load]);
 
@@ -71,7 +81,8 @@ const AgentConversation = ({
   const send = useCallback(
     async (text) => {
       const msg = (text || '').trim();
-      if (!msg || sending || !roleId) return;
+      if (!msg || sending || agentWorking || !roleId) return;
+      const forRole = roleId;
       setInput('');
       setSending(true);
       setTimeline((t) => [
@@ -79,17 +90,31 @@ const AgentConversation = ({
         { kind: 'message', id: `local-${t.length}`, author: 'recruiter', text: msg, created_at: new Date().toISOString() },
       ]);
       try {
-        const { data } = await agentChat.sendMessage(roleId, msg);
+        // Persists the message + accepts the turn; the reply arrives via the
+        // poll. Dropped if you switch agents mid-flight (it's safe server-side).
+        const { data } = await agentChat.sendMessage(forRole, msg);
+        if (activeRoleRef.current !== forRole) return;
         setTimeline(data.timeline || []);
+        setAgentWorking(data.agent_working !== false);
         onAfterSend?.();
       } catch (err) {
-        showToast?.(err?.response?.data?.detail || 'The agent couldn’t complete that. Try again.', 'error');
-        load();
+        if (activeRoleRef.current === forRole) {
+          const status = err?.response?.status;
+          // Never lose the typed message on failure — restore it unless the
+          // user has already started typing something new. A 409 means the
+          // agent's still on the previous message (info, not an error).
+          setInput((cur) => cur || msg);
+          showToast?.(
+            err?.response?.data?.detail || 'Couldn’t send that. Try again.',
+            status === 409 ? 'info' : 'error',
+          );
+          load();
+        }
       } finally {
-        setSending(false);
+        if (activeRoleRef.current === forRole) setSending(false);
       }
     },
-    [roleId, sending, onAfterSend, showToast, load]
+    [roleId, sending, agentWorking, onAfterSend, showToast, load]
   );
 
   const answer = useCallback(
@@ -174,12 +199,28 @@ const AgentConversation = ({
     return lastRescreenIdx >= 0 && lastRescreenIdx === lastAgentIdx;
   }, [items]);
 
+  // Poll while a turn is in flight (fast) or a re-screen follow-up is pending
+  // (slower). load() flips agentWorking off when the reply lands → poll stops.
+  const livePoll = agentWorking || rescreenPending;
   useEffect(() => {
-    if (!rescreenPending) return undefined;
-    const poll = window.setInterval(() => { void load({ silent: true }); }, 5000);
+    if (!livePoll) return undefined;
+    const every = agentWorking ? 2500 : 5000;
+    const poll = window.setInterval(() => { void load({ silent: true }); }, every);
     const stop = window.setTimeout(() => window.clearInterval(poll), 6 * 60 * 1000);
     return () => { window.clearInterval(poll); window.clearTimeout(stop); };
-  }, [rescreenPending, load]);
+  }, [livePoll, agentWorking, load]);
+
+  // Toast when the reply lands while you're not looking at this thread (tab
+  // hidden); only on a real same-thread working→idle transition.
+  const workSnapRef = useRef({ working: false, role: roleId });
+  useEffect(() => {
+    const prev = workSnapRef.current;
+    if (prev.role === roleId && prev.working && !agentWorking
+        && typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+      showToast?.(`${roleName || 'The agent'} replied`, 'success');
+    }
+    workSnapRef.current = { working: agentWorking, role: roleId };
+  }, [agentWorking, roleId, roleName, showToast]);
 
   // No role resolved yet (no live agents, or before the auto-select lands):
   // show a calm placeholder rather than a spinner that never resolves.
@@ -232,7 +273,7 @@ const AgentConversation = ({
           <div className="cp-thread">
             <ChatMessage role="assistant"><ThinkingDots label="Loading the conversation…" /></ChatMessage>
           </div>
-        ) : items.length === 0 && !sending ? (
+        ) : items.length === 0 && !sending && !agentWorking ? (
           <ChatEmptyState
             title={<>What should this agent do<em>?</em></>}
             sub={<>Ask about <b>{roleName || 'this role'}</b>’s pool, or tell the agent to change something — it acts and shows the impact here.</>}
@@ -249,6 +290,7 @@ const AgentConversation = ({
                   key={it.id}
                   role={it.author === 'agent' ? 'assistant' : 'user'}
                   text={it.text}
+                  time={it.created_at}
                 >
                   {(it.actions || []).map((card, i) =>
                     card.type === 'candidate_evidence' ? (
@@ -268,12 +310,12 @@ const AgentConversation = ({
                 </ChatMessage>
               )
             )}
-            {sending && (
+            {(sending || agentWorking) && (
               <ChatMessage role="assistant">
                 <ThinkingDots label="Working…" />
               </ChatMessage>
             )}
-            {rescreenPending && !sending && (
+            {rescreenPending && !sending && !agentWorking && (
               <div className="ac-rescreen-live">
                 <span className="ac-pulse" /> Re-screening candidates… I’ll post the impact here when it lands.
               </div>
@@ -286,8 +328,12 @@ const AgentConversation = ({
           value={input}
           onChange={setInput}
           onSubmit={send}
-          placeholder="Ask about this role’s pool, or tell the agent to change something…"
-          busy={sending}
+          placeholder={
+            agentWorking
+              ? 'The agent is working on your last message…'
+              : 'Ask about this role’s pool, or tell the agent to change something…'
+          }
+          busy={sending || agentWorking}
         />
       </div>
     </div>

@@ -8,7 +8,7 @@ left rail and the notification badge.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func
@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from ..models.agent_conversation import (
     AUTHOR_ROLE_ASSISTANT,
+    AUTHOR_ROLE_USER,
     AgentConversation,
     AgentConversationMessage,
     AgentConversationRead,
@@ -92,6 +93,44 @@ def ensure_conversation(
     db.add(convo)
     db.flush()
     return convo
+
+
+# A turn is "running" while the last visible message is the recruiter's and the
+# agent hasn't replied yet. Self-clearing: the async worker always posts a reply
+# (an answer or an error) to close a turn, which flips this off — no extra
+# column. If a worker dies mid-turn it ages out after this window so the
+# composer never locks forever.
+AGENT_TURN_TIMEOUT = timedelta(minutes=5)
+
+
+def conversation_agent_working(db: Session, conversation: AgentConversation) -> bool:
+    """True when a turn is in flight for this conversation — i.e. the last
+    visible message is a recent recruiter message the agent hasn't answered yet.
+
+    Drives the durable "agent is working…" indicator: it's recomputed from
+    persisted state on every timeline read, so it survives navigation and an
+    agent switch (unlike a request-scoped spinner).
+    """
+    last = (
+        db.query(AgentConversationMessage)
+        .filter(
+            AgentConversationMessage.conversation_id == conversation.id,
+            AgentConversationMessage.kind.in_(_VISIBLE_MESSAGE_KINDS),
+        )
+        .order_by(
+            AgentConversationMessage.created_at.desc(),
+            AgentConversationMessage.id.desc(),
+        )
+        .first()
+    )
+    if last is None or last.author_role != AUTHOR_ROLE_USER:
+        return False
+    created = last.created_at
+    if created is None:
+        return True
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - created) < AGENT_TURN_TIMEOUT
 
 
 def mark_read(db: Session, *, conversation: AgentConversation, user: User) -> None:
@@ -311,6 +350,7 @@ def list_agent_conversations(
 
 
 __all__ = [
+    "conversation_agent_working",
     "ensure_conversation",
     "get_owned_role",
     "list_agent_conversations",

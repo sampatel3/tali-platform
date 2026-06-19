@@ -38,6 +38,14 @@ export function ChatComposer({
 
   const onKeyDown = (e) => {
     if (e.key !== 'Enter') return;
+    // Don't send while an IME / dictation / autocorrect composition is open:
+    // that Enter is committing the composed text, not submitting. Firing the
+    // submit here sends the *pre-commit* value (often a partial or the word
+    // before the correction) — i.e. "the message that got sent is different
+    // from what I typed". `isComposing` (legacy browsers: keyCode 229) stays
+    // true for the whole composition; once it commits, onChange writes the
+    // final text and the next Enter sends it intact.
+    if (e.nativeEvent?.isComposing || e.keyCode === 229) return;
     const sends = submitMode === 'cmd' ? (e.metaKey || e.ctrlKey) : !e.shiftKey;
     if (sends) {
       e.preventDefault();

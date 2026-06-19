@@ -131,6 +131,112 @@ def _scored_app(db, org_id, role, *, score, name) -> CandidateApplication:
 # ---------------------------------------------------------------------------
 
 
+def _timeline_json(client, role_id, headers) -> dict:
+    r = client.get(f"/api/v1/agent-chat/conversations/{role_id}/timeline", headers=headers)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _last_agent_message(client, role_id, headers) -> dict:
+    """The agent's reply now lands asynchronously (run_agent_chat_turn); under
+    eager Celery the worker has already run by the time the POST returns, so we
+    read the reply from the timeline rather than the POST body."""
+    timeline = _timeline_json(client, role_id, headers)["timeline"]
+    agent_msgs = [
+        it for it in timeline if it.get("kind") == "message" and it.get("author") == "agent"
+    ]
+    assert agent_msgs, "expected an agent reply in the timeline"
+    return agent_msgs[-1]
+
+
+def test_send_persists_user_message_and_reads_as_working(client, db):
+    """The recruiter's message is durable the instant they send (it survives
+    navigation / an agent switch / a failed turn), and the conversation reads as
+    'agent working' until the worker posts the reply."""
+    headers, email = auth_headers(client, organization_name="DurableOrg")
+    org_id = _org_id(db, email)
+    role = _role(db, org_id)
+    db.commit()
+
+    # Don't run the worker — observe the durable pending state right after send.
+    with patch("app.tasks.agent_chat_tasks.run_agent_chat_turn.delay") as delay:
+        resp = client.post(
+            f"/api/v1/agent-chat/conversations/{role.id}/messages",
+            headers=headers,
+            json={"message": "who is in the pool?"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["status"] == "accepted"
+    assert data["agent_working"] is True
+    assert data["messages"][-1]["author"] == "recruiter"
+    delay.assert_called_once()
+
+    # The message is already persisted and the turn reads as "working" on a fresh
+    # load, even though no reply exists yet — this is what survives navigation.
+    tl = _timeline_json(client, role.id, headers)
+    msgs = [it for it in tl["timeline"] if it["kind"] == "message"]
+    assert [m["author"] for m in msgs] == ["recruiter"]
+    assert msgs[0]["text"] == "who is in the pool?"
+    assert msgs[0]["created_at"]  # timestamp present for the UI
+    assert tl["agent_working"] is True
+
+
+def test_second_message_to_same_agent_while_working_is_rejected(client, db):
+    """One turn at a time per agent: a second send while the first is still
+    running is rejected with 409 (no interleaved double-turn). The worker is
+    held (delay patched) so the turn stays 'working'."""
+    headers, email = auth_headers(client, organization_name="LockOrg")
+    org_id = _org_id(db, email)
+    role = _role(db, org_id)
+    db.commit()
+
+    with patch("app.tasks.agent_chat_tasks.run_agent_chat_turn.delay"):
+        first = client.post(
+            f"/api/v1/agent-chat/conversations/{role.id}/messages",
+            headers=headers,
+            json={"message": "first message"},
+        )
+        assert first.status_code == 200, first.text
+
+        second = client.post(
+            f"/api/v1/agent-chat/conversations/{role.id}/messages",
+            headers=headers,
+            json={"message": "second message"},
+        )
+    assert second.status_code == 409, second.text
+    # The second message was NOT persisted — only the first is in the thread.
+    msgs = [it for it in _timeline_json(client, role.id, headers)["timeline"] if it["kind"] == "message"]
+    assert [m["text"] for m in msgs] == ["first message"]
+
+
+def test_can_message_other_agents_while_one_is_working(client, db):
+    """The working lock is per-agent: while one agent is mid-turn you can still
+    send to a DIFFERENT agent (independent thread)."""
+    headers, email = auth_headers(client, organization_name="MultiOrg")
+    org_id = _org_id(db, email)
+    role_a = _role(db, org_id, name="Role A")
+    role_b = _role(db, org_id, name="Role B")
+    db.commit()
+
+    with patch("app.tasks.agent_chat_tasks.run_agent_chat_turn.delay"):
+        a = client.post(
+            f"/api/v1/agent-chat/conversations/{role_a.id}/messages",
+            headers=headers,
+            json={"message": "hello A"},
+        )
+        assert a.status_code == 200, a.text
+        # A is now "working" — B must still accept a message.
+        b = client.post(
+            f"/api/v1/agent-chat/conversations/{role_b.id}/messages",
+            headers=headers,
+            json={"message": "hello B"},
+        )
+    assert b.status_code == 200, b.text
+    assert b.json()["agent_working"] is True
+
+
 def test_send_message_runs_simulate_tool_and_returns_card(client, db):
     headers, email = auth_headers(client, organization_name="ChatOrg")
     org_id = _org_id(db, email)
@@ -155,14 +261,17 @@ def test_send_message_runs_simulate_tool_and_returns_card(client, db):
 
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    assert len(data["messages"]) == 2
-    agent_msg = data["messages"][-1]
-    assert agent_msg["author"] == "agent"
+    # The POST accepts the turn and echoes the user message; the reply follows.
+    assert data["status"] == "accepted"
+    assert data["agent_working"] is True
+    assert data["messages"][-1]["author"] == "recruiter"
+
+    agent_msg = _last_agent_message(client, role.id, headers)
     assert "Bo" in agent_msg["text"]
     cards = agent_msg["actions"]
     assert any(c["type"] == "threshold_simulation" and c["simulated_threshold"] == 60 for c in cards)
-    # The timeline carries the same conversation.
-    assert any(it["kind"] == "message" for it in data["timeline"])
+    # The reply closes the turn → no longer "working".
+    assert _timeline_json(client, role.id, headers)["agent_working"] is False
 
 
 def test_send_message_truncated_reply_gets_continue_note(client, db):
@@ -189,7 +298,7 @@ def test_send_message_truncated_reply_gets_continue_note(client, db):
         )
 
     assert resp.status_code == 200, resp.text
-    text = resp.json()["messages"][-1]["text"]
+    text = _last_agent_message(client, role.id, headers)["text"]
     assert "Praveena" in text  # partial answer preserved
     assert "continue" in text.lower() and "length limit" in text.lower()
 
@@ -225,7 +334,8 @@ def test_constraint_change_is_opt_in_then_rescreens(client, db):
             headers=headers, json={"message": "cap salary at 25k"},
         )
         assert r1.status_code == 200, r1.text
-        card = next(c for c in r1.json()["messages"][-1]["actions"] if c["type"] == "constraint_change")
+        agent1 = _last_agent_message(client, role.id, headers)
+        card = next(c for c in agent1["actions"] if c["type"] == "constraint_change")
         assert card["action"] == "added"
         assert card["rescreening_count"] == 0                     # P0: not auto-re-screened
         assert card["would_rescreen"]["count"] >= 1               # estimate surfaced
