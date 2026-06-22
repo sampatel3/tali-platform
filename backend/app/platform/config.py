@@ -356,6 +356,16 @@ class Settings(BaseSettings):
     # Recruiters override per candidate via enqueue_score(force=True).
     ENABLE_PRE_SCREEN_GATE: bool = False
 
+    # Cost guard (2026-06): when True, ``enqueue_score(bypass_pre_screen=True)``
+    # is downgraded to a normal gated score for candidates that have NOT
+    # genuinely passed pre-screen (never-screened, stale CV, or genuine score
+    # below PRE_SCREEN_THRESHOLD). Stops bulk / engine-migration re-scores from
+    # paying for the expensive holistic score on candidates the cheap pre-screen
+    # would have filtered. No effect unless ENABLE_PRE_SCREEN_GATE is also on.
+    # Default off; flip to true to enforce. (2026-06 audit: ~56% of the June
+    # score line went to fail/never-pre-screened candidates.)
+    PRE_SCREEN_GATE_GUARD_RESCORE: bool = False
+
     # Holistic scoring engine (cv_match holistic_v1). When enabled for an
     # org, the full-score stage (after the pre-screen gate) runs the
     # single-call Sonnet holistic scorer (app.cv_matching.holistic) instead
