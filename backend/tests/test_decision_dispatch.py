@@ -275,6 +275,138 @@ def test_batch_resolves_per_role_workable_stage(db):
     assert seen[int(dc.id)] == "Fallback"
 
 
+# --- best-effort side-effect deferral (the slow-batch fix) ------------------
+
+
+def test_bulk_reject_runs_gated_write_inline_and_defers_best_effort(db, monkeypatch):
+    """A bulk reject batch must commit the state change + the GATED Workable
+    disqualify INLINE (so a failed critical write still re-queues) but DEFER the
+    best-effort summary note + recruiter-action graph episode to the Celery task
+    — the slow per-decision Graphiti/Voyage work that made a 100-row batch take
+    5-8+ minutes while holding the per-org mutex."""
+    from app.platform.config import settings as cfg
+    from app.tasks import decision_tasks
+
+    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
+    org, role, user = _seed(db, workable_connected=True)
+    _, d1 = _add_decision(
+        db, org, role, status="processing", decision_type="reject", workable_linked=True
+    )
+    app2, d2 = _add_decision(
+        db, org, role, status="processing",
+        decision_type="skip_assessment_reject", workable_linked=True,
+    )
+    db.commit()
+
+    # Capture the deferred enqueue WITHOUT running it, so any inline best-effort
+    # call would show up on the mocks below.
+    enqueued: list[tuple[int, dict]] = []
+    monkeypatch.setattr(
+        decision_tasks.apply_decision_side_effects,
+        "delay",
+        lambda decision_id, **kw: enqueued.append((int(decision_id), kw)),
+    )
+
+    with patch("app.services.workable_actions_service.WorkableService") as mock_svc, patch(
+        "app.candidate_graph.agent_episodes.emit_recruiter_action_event"
+    ) as mock_episode, patch(
+        "app.actions._decision_side_effects.post_decision_summary_to_workable"
+    ) as mock_summary:
+        mock_svc.return_value.disqualify_candidate.return_value = {"success": True, "response": {}}
+        out = run_workable_op_task.run(
+            job_run_id=None, organization_id=int(org.id), op_type="approve_decisions",
+            payload={"decision_ids": [int(d1.id), int(d2.id)], "user_id": int(user.id)},
+        )
+
+    assert out["status"] == "completed" and out["succeeded"] == 2
+    db.expire_all()
+    # State change committed inline.
+    assert db.query(AgentDecision).get(d1.id).status == "approved"
+    assert db.query(AgentDecision).get(d2.id).status == "approved"
+    assert db.query(CandidateApplication).get(app2.id).application_outcome == "rejected"
+    # Gated Workable disqualify ran INLINE (once per decision).
+    assert mock_svc.return_value.disqualify_candidate.call_count == 2
+    # Best-effort note + graph episode did NOT run inline...
+    assert not mock_summary.called, "summary note must be deferred, not inline"
+    assert not mock_episode.called, "graph episode must be deferred, not inline"
+    # ...they were deferred, one task per decision, scoped to best_effort only.
+    assert sorted(d for d, _ in enqueued) == sorted([int(d1.id), int(d2.id)])
+    assert all(kw.get("steps") == "best_effort" for _, kw in enqueued)
+
+
+def test_bulk_reject_failed_gated_write_still_requeues_with_deferral(db, monkeypatch):
+    """The deferral must not weaken the 'never lose a Workable write' guarantee:
+    a failed gated disqualify still re-queues the decision (and does NOT enqueue
+    the best-effort task for it)."""
+    from app.platform.config import settings as cfg
+    from app.tasks import decision_tasks
+
+    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
+    org, role, user = _seed(db, workable_connected=True)
+    _, d1 = _add_decision(
+        db, org, role, status="processing", decision_type="reject", workable_linked=True
+    )
+    db.commit()
+
+    enqueued: list[int] = []
+    monkeypatch.setattr(
+        decision_tasks.apply_decision_side_effects,
+        "delay",
+        lambda decision_id, **kw: enqueued.append(int(decision_id)),
+    )
+
+    with patch("app.services.workable_actions_service.WorkableService") as mock_svc:
+        # 429 → retriable api_error → WorkableWritebackError under strict.
+        mock_svc.return_value.disqualify_candidate.return_value = {"success": False, "error": "429"}
+        out = run_workable_op_task.run(
+            job_run_id=None, organization_id=int(org.id), op_type="approve_decisions",
+            payload={"decision_ids": [int(d1.id)], "user_id": int(user.id)},
+        )
+
+    assert out["status"] == "completed_with_errors" and out["requeued"] == 1
+    db.expire_all()
+    refreshed = db.query(AgentDecision).get(d1.id)
+    assert refreshed.status == "pending", "failed gated write must return to the queue"
+    assert "Workable writeback failed" in (refreshed.resolution_note or "")
+    assert enqueued == [], "no best-effort task for a re-queued (un-committed) decision"
+
+
+def test_bulk_reject_skips_workable_calls_for_archived_job(db, monkeypatch):
+    """Role 53 scenario: an archived Workable req 403s candidate write-backs, so
+    the batch skips the disqualify entirely (no wasted round-trip / retries via
+    the #538 workable_job_syncable check) and still resolves the decision —
+    rejected in Taali only."""
+    from app.platform.config import settings as cfg
+    from app.tasks import decision_tasks
+
+    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
+    org, role, user = _seed(db, workable_connected=True)
+    role.workable_job_id = "ARCHIVED1"
+    role.workable_job_data = {"state": "archived"}
+    db.flush()
+    app1, d1 = _add_decision(
+        db, org, role, status="processing", decision_type="reject", workable_linked=True
+    )
+    db.commit()
+
+    monkeypatch.setattr(
+        decision_tasks.apply_decision_side_effects, "delay", lambda *a, **k: None
+    )
+
+    with patch("app.services.workable_actions_service.WorkableService") as mock_svc:
+        out = run_workable_op_task.run(
+            job_run_id=None, organization_id=int(org.id), op_type="approve_decisions",
+            payload={"decision_ids": [int(d1.id)], "user_id": int(user.id)},
+        )
+
+    assert out["status"] == "completed" and out["succeeded"] == 1
+    db.expire_all()
+    assert db.query(AgentDecision).get(d1.id).status == "approved"
+    assert db.query(CandidateApplication).get(app1.id).application_outcome == "rejected"
+    # Archived req → Workable never contacted (the call would 403).
+    assert not mock_svc.called, "archived job must skip the Workable disqualify round-trip"
+
+
 # --- enqueue (optimistic flip + one job + eager end-to-end) -----------------
 
 

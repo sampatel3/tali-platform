@@ -99,6 +99,36 @@ def try_workable_advance(
         return False
     assert org is not None  # narrowed by _workable_writeback_ready
 
+    # Archived/closed/draft req guard (#538): Workable 403s candidate
+    # write-backs on a job that isn't live, which under strict (batch) mode
+    # surfaces as a retriable api_error and re-queues + retries the advance for
+    # nothing. Skip the move and treat it as a successful advance (Tali stage
+    # already changed); mirrors the reject disqualify skip.
+    from ..services.workable_actions_service import (
+        workable_job_state,
+        workable_job_syncable,
+    )
+
+    if not workable_job_syncable(role):
+        append_application_event(
+            db,
+            app=app,
+            event_type="workable_writeback_skipped",
+            actor_type=actor.type,
+            actor_id=actor.event_actor_id,
+            reason=(
+                "Workable req not live (archived/closed) — advance stage-move "
+                "skipped; advanced in Taali only."
+            ),
+            metadata={
+                "action": "move",
+                "target_stage": target,
+                "source": "decision_summary",
+                "workable_job_state": workable_job_state(role),
+            },
+        )
+        return True
+
     # No-op move guard: if the recruiter has already advanced the candidate
     # past Tali's handover point in Workable (interview/offer flow), the stage
     # move is redundant — Workable 422s a move to a stage they've already
@@ -362,9 +392,35 @@ def post_decision_summary_to_workable(
         return False
     assert org is not None  # narrowed above
 
-    from ..services.workable_actions_service import resolve_workable_actor_member_id
+    # Archived/closed/draft req guard (#538): Workable 403s candidate
+    # write-backs (including activity-feed comments) on a job that isn't live.
+    # Skip the note rather than waste a round-trip that always fails.
+    from ..services.workable_actions_service import (
+        resolve_workable_actor_member_id,
+        workable_job_state,
+        workable_job_syncable,
+    )
 
-    member_id = resolve_workable_actor_member_id(org, role=getattr(app, "role", None))
+    role = getattr(app, "role", None)
+    if not workable_job_syncable(role):
+        append_application_event(
+            db,
+            app=app,
+            event_type="workable_writeback_skipped",
+            actor_type=actor.type,
+            actor_id=actor.event_actor_id,
+            reason="Workable req not live (archived/closed) — decision note skipped.",
+            metadata={
+                "action": "decision_note",
+                "decision_id": int(decision.id),
+                "verdict": verdict,
+                "source": "decision_summary",
+                "workable_job_state": workable_job_state(role),
+            },
+        )
+        return False
+
+    member_id = resolve_workable_actor_member_id(org, role=role)
     if not member_id:
         return False
 

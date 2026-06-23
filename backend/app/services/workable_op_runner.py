@@ -69,6 +69,28 @@ def _recruiter_actor(user_id: int | None):
 # ---------------------------------------------------------------------------
 
 
+def _enqueue_best_effort_side_effects(decision_id: int) -> None:
+    """Defer a batch-approved decision's best-effort side effects (Workable
+    summary note + recruiter-action graph episode) to the Celery task.
+
+    The batch already ran the GATED Workable writeback inline + strict, so this
+    only covers the best-effort steps — run off the serialized per-org mutex so
+    a 100-row batch isn't doing a Graphiti/Voyage LLM call per decision while
+    holding it. Best-effort: a failed enqueue must never fail the approval that
+    has already committed.
+    """
+    try:
+        from ..tasks.decision_tasks import apply_decision_side_effects
+
+        apply_decision_side_effects.delay(int(decision_id), steps="best_effort")
+    except Exception:  # pragma: no cover — defensive
+        logger.warning(
+            "failed to enqueue best-effort side effects decision_id=%s",
+            decision_id,
+            exc_info=True,
+        )
+
+
 def _requeue_decision(db: Session, decision_id: int, organization_id: int, *, note: str) -> None:
     """Return a processing decision to the Hub queue (status → pending)."""
     decision = (
@@ -89,9 +111,16 @@ def _requeue_decision(db: Session, decision_id: int, organization_id: int, *, no
 def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> dict:
     """Drain a batch of approved decisions sequentially (self-contained).
 
-    Each decision's local change commits only after its Workable write
+    Each decision's local change commits only after its GATED Workable write
     confirms (gated types); a decision whose writeback fails is returned to the
     queue and the batch keeps going.
+
+    Only the gated writeback runs inline here. The best-effort side effects
+    (Workable summary note + recruiter-action graph episode — a Graphiti/Voyage
+    LLM call) are deferred per decision to ``app.tasks.decision_tasks`` so the
+    batch isn't doing ~3-8s of slow work per decision while holding the per-org
+    mutex (a 100-row batch was taking 5-8+ minutes, stranding cards on
+    "Processing…" and exposed to a deploy SIGKILL mid-run).
     """
     from ..actions import approve_decision as approve_decision_action
 
@@ -128,6 +157,12 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
         ) or workable_target_stage
         gated = decision.decision_type in _GATED_DECISION_TYPES
         try:
+            # ``defer_best_effort_side_effects`` keeps only the GATED Workable
+            # writeback inline (run under ``strict_workable_writes`` for gated
+            # types so a failure re-queues) and lets us enqueue the best-effort
+            # summary note + graph episode below — so the batch drains fast and
+            # releases the per-org mutex instead of doing a Graphiti/Voyage LLM
+            # call per decision while holding it.
             if gated:
                 with strict_workable_writes():
                     approve_decision_action.run(
@@ -137,6 +172,7 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
                         decision_id=int(decision_id),
                         note=note,
                         workable_target_stage=stage,
+                        defer_best_effort_side_effects=True,
                     )
             else:
                 approve_decision_action.run(
@@ -146,9 +182,13 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
                     decision_id=int(decision_id),
                     note=note,
                     workable_target_stage=stage,
+                    defer_best_effort_side_effects=True,
                 )
             db.commit()
             counters["succeeded"] += 1
+            # Post-commit: hand the slow best-effort effects to Celery (the
+            # decision row is now committed, so the deferred task re-reads it).
+            _enqueue_best_effort_side_effects(int(decision_id))
         except WorkableWritebackError as exc:
             db.rollback()
             _requeue_decision(

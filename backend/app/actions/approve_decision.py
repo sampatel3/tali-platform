@@ -18,7 +18,7 @@ from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from . import advance_stage, reject_application, resend_assessment_invite, send_assessment
-from ._decision_side_effects import apply_decision_side_effects
+from ._decision_side_effects import SIDE_EFFECTS_CRITICAL, apply_decision_side_effects
 from .types import ACTOR_RECRUITER, Actor
 
 
@@ -185,6 +185,7 @@ def run(
     note: Optional[str] = None,
     workable_target_stage: Optional[str] = None,
     collect_side_effects: Optional[dict] = None,
+    defer_best_effort_side_effects: bool = False,
 ) -> AgentDecision:
     if actor.type != ACTOR_RECRUITER:
         raise HTTPException(status_code=403, detail="approve is recruiter-only")
@@ -357,13 +358,35 @@ def run(
                 "realised-outcome recording failed (decision_id=%s)", decision.id,
             )
 
-    # Best-effort side effects (Workable writeback + recruiter-action graph
-    # episode). By default they run inline (agent runs, tests). When the
-    # caller passes ``collect_side_effects`` — the approve / bulk-approve
-    # routes do — we skip the inline work and hand the route what it needs to
-    # enqueue the deferred Celery task post-commit, so the recruiter's click
-    # returns immediately instead of waiting on slow Workable / LLM calls.
-    if collect_side_effects is None:
+    # Side effects (Workable writeback + summary note + recruiter-action graph
+    # episode). Three caller shapes:
+    #   * ``collect_side_effects`` set (interactive route deferral): skip ALL
+    #     inline work and hand the route the freshness signal so it can enqueue
+    #     the deferred Celery task post-commit.
+    #   * ``defer_best_effort_side_effects`` (the bulk-approve batch): run only
+    #     the GATED Workable writeback INLINE — under the batch's
+    #     ``strict_workable_writes`` so a failed critical write still re-queues
+    #     the decision — and let the batch enqueue the best-effort note + graph
+    #     episode to Celery. Keeps the batch off the slow per-decision
+    #     Graphiti/Voyage call while it holds the per-org mutex.
+    #   * Neither (agent runs, tests): run everything inline.
+    if collect_side_effects is not None:
+        collect_side_effects["reject_notify"] = reject_notify
+    elif defer_best_effort_side_effects:
+        apply_decision_side_effects(
+            db,
+            actor,
+            decision=decision,
+            app=app,
+            org=org,
+            role=role,
+            disposition="approved",
+            note=note,
+            workable_target_stage=workable_target_stage,
+            reject_notify=reject_notify,
+            steps=SIDE_EFFECTS_CRITICAL,
+        )
+    else:
         apply_decision_side_effects(
             db,
             actor,
@@ -376,7 +399,5 @@ def run(
             workable_target_stage=workable_target_stage,
             reject_notify=reject_notify,
         )
-    else:
-        collect_side_effects["reject_notify"] = reject_notify
 
     return decision

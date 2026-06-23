@@ -139,7 +139,10 @@ def run_workable_op_task(
 
     db = SessionLocal()
     try:
-        background_job_runs.update_run(job_run_id, status="running")
+        # Stamp the running-transition time (not the enqueue time) so the
+        # stuck-batch watchdog can reap a dead 'running' batch promptly without
+        # false-failing one that merely waited a long time for the mutex.
+        background_job_runs.mark_run_running(job_run_id)
         try:
             result = runner.execute_op(
                 db, organization_id=int(organization_id), op_type=op_type, payload=payload
@@ -193,14 +196,29 @@ def run_workable_op_task(
         _release_workable_org_mutex(lock)
 
 
-# Watchdog timeout for a stuck approve batch. The batch handler
-# (``_op_approve_decisions``) catches per-decision and never raises, so its
-# ``BackgroundJobRun`` is ``running`` ONLY while actively draining the loop —
-# a few minutes for 100 decisions. A run still ``queued``/``running`` past this
-# means a dead task: worker killed mid-batch (deploy SIGKILL, finally never ran)
-# or the lock-wait re-enqueue chain dropped. 15 min clears the longest realistic
-# legitimate batch AND exceeds the max lock-wait window (~60 × 5-15s) with margin.
-_STUCK_DECISION_BATCH_TIMEOUT_MINUTES = 15
+# Watchdog timeouts for a stuck approve batch, split by state because the two
+# stuck states have very different healthy-duration ceilings:
+#
+# * ``running`` — measured from the run's ``running_at`` (running-transition
+#   time, NOT enqueue). Now that the batch defers the slow per-decision
+#   best-effort work (Graphiti/Voyage note + episode) to Celery and only runs
+#   the gated Workable writeback inline, even a 100-row batch drains in well
+#   under a minute (and a few seconds for an archived job, where the writeback
+#   is skipped). So a ``running`` batch older than a few minutes is almost
+#   certainly dead (deploy SIGKILL skipped the finally block). A short timeout
+#   here returns its rows to the queue within a couple of beat ticks instead of
+#   stranding them on "Processing…" for 15+ minutes. Reaping a genuinely-still-
+#   running giant batch early is safe: the handler idempotently skips decisions
+#   no longer ``processing``, so it just re-queues the unprocessed tail.
+# * ``queued`` — measured from ``started_at`` (enqueue). A batch can sit
+#   ``queued`` for the whole lock-wait window (~60 attempts × 5-15s ≈ 10 min)
+#   while another Workable write holds the per-org mutex, so this timeout must
+#   stay above that window to avoid reaping a healthy waiter before its own
+#   chain would self-fail.
+_STUCK_RUNNING_BATCH_TIMEOUT_MINUTES = 3
+_STUCK_QUEUED_BATCH_TIMEOUT_MINUTES = 15
+# Back-compat alias (the queued timeout is the original single threshold).
+_STUCK_DECISION_BATCH_TIMEOUT_MINUTES = _STUCK_QUEUED_BATCH_TIMEOUT_MINUTES
 
 
 @celery_app.task(
@@ -233,10 +251,13 @@ def expire_stuck_decision_batches(self) -> dict:
     ``acks_late`` re-delivery instead. The leaked Redis mutex is handled
     separately by the op-path heartbeat/short-TTL, not here.
 
-    The 15-min cutoff exceeds the max lock-wait window (~60 attempts × 5-15s),
-    so a healthily-waiting ``queued`` batch isn't reaped before its own chain
-    would self-fail. A late-acquiring task after a boundary race is harmless: the
-    batch handler idempotently skips decisions no longer in ``processing``.
+    Timeouts are split by state (see the module-level constants): ``running`` is
+    measured from ``running_at`` with a short, prompt cutoff (a healthy batch
+    now drains in seconds), ``queued`` from ``started_at`` with a longer cutoff
+    that exceeds the lock-wait window so a healthy waiter isn't reaped before its
+    own chain would self-fail. A late-acquiring task after a boundary race is
+    harmless: the batch handler idempotently skips decisions no longer
+    ``processing``.
 
     No-op when nothing is stuck. Idempotent — re-running skips decisions
     already moved out of ``processing`` and runs already out of ``running``.
@@ -247,26 +268,62 @@ def expire_stuck_decision_batches(self) -> dict:
     from ..models.background_job_run import JOB_KIND_DECISION_BATCH, BackgroundJobRun
     from ..platform.database import SessionLocal
 
-    cutoff = datetime.now(timezone.utc) - timedelta(
-        minutes=_STUCK_DECISION_BATCH_TIMEOUT_MINUTES
-    )
+    now = datetime.now(timezone.utc)
+    running_cutoff = now - timedelta(minutes=_STUCK_RUNNING_BATCH_TIMEOUT_MINUTES)
+    queued_cutoff = now - timedelta(minutes=_STUCK_QUEUED_BATCH_TIMEOUT_MINUTES)
+
+    def _as_aware(dt):
+        """Coerce a possibly-naive datetime (SQLite drops tz) to aware-UTC so
+        it compares cleanly against the aware cutoffs."""
+        if dt is None:
+            return None
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+    def _running_since(run):
+        """When the run entered ``running`` — ``counters['running_at']`` if the
+        running-transition stamped it, else ``started_at`` (covers old rows /
+        runs reaped before the stamp landed)."""
+        raw = (run.counters or {}).get("running_at")
+        if raw:
+            try:
+                return _as_aware(datetime.fromisoformat(raw))
+            except (ValueError, TypeError):
+                pass
+        return _as_aware(run.started_at)
+
+    def _is_stuck(run) -> bool:
+        if run.status == "running":
+            since = _running_since(run)
+            return since is not None and since < running_cutoff
+        # queued
+        started = _as_aware(run.started_at)
+        return started is not None and started < queued_cutoff
+
     db = SessionLocal()
     failed_run_ids: list[int] = []
     requeued_ids: list[int] = []
     try:
-        stuck = (
+        # In-flight decision batches only (a small set) — refine each by its
+        # state-specific timeout in Python so we can use ``running_at`` for the
+        # running case (a JSON field, not directly comparable in SQL across
+        # SQLite/Postgres).
+        candidates = (
             db.query(BackgroundJobRun)
             .filter(
                 BackgroundJobRun.kind == JOB_KIND_DECISION_BATCH,
                 BackgroundJobRun.status.in_(("queued", "running")),
                 BackgroundJobRun.finished_at.is_(None),
-                BackgroundJobRun.started_at < cutoff,
             )
             .all()
         )
-        now = datetime.now(timezone.utc)
+        stuck = [run for run in candidates if _is_stuck(run)]
         for run in stuck:
             original_status = run.status
+            timeout_m = (
+                _STUCK_RUNNING_BATCH_TIMEOUT_MINUTES
+                if original_status == "running"
+                else _STUCK_QUEUED_BATCH_TIMEOUT_MINUTES
+            )
             decision_ids = [
                 int(x) for x in ((run.counters or {}).get("decision_ids") or [])
             ]
@@ -285,7 +342,7 @@ def expire_stuck_decision_batches(self) -> dict:
                 decision.status = "pending"
                 decision.resolution_note = (
                     f"Returned to queue by watchdog: approve batch (job {run.id}) "
-                    f"stalled in '{original_status}' >{_STUCK_DECISION_BATCH_TIMEOUT_MINUTES}m "
+                    f"stalled in '{original_status}' >{timeout_m}m "
                     "— worker killed mid-batch (deploy) or lost the lock-wait chain."
                 )[:500]
                 requeued_ids.append(decision_id)
@@ -293,7 +350,7 @@ def expire_stuck_decision_batches(self) -> dict:
             run.finished_at = now
             run.error = (
                 run.error
-                or f"watchdog: stuck in '{original_status}' >{_STUCK_DECISION_BATCH_TIMEOUT_MINUTES}m — worker killed mid-batch or lost the lock-wait chain"
+                or f"watchdog: stuck in '{original_status}' >{timeout_m}m — worker killed mid-batch or lost the lock-wait chain"
             )
             failed_run_ids.append(int(run.id))
         if failed_run_ids:
