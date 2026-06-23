@@ -354,3 +354,55 @@ def test_dispatch_passes_none_brand_when_workspace_setting_missing(db, monkeypat
     kwargs = mock_celery.delay.call_args.kwargs
     assert kwargs["candidate_facing_brand"] is None
     assert kwargs["reply_to"] is None  # default when caller doesn't set it
+
+
+# ---------------------------------------------------------------------------
+# Empty / unset ``from_email`` falls back to the brand default
+#
+# An ``EMAIL_FROM=`` env var (set but empty in Railway) used to override the
+# field default with ``""``. Resend then rejected the send with "The domain
+# is invalid" — the assessment was created and the GitHub branch provisioned,
+# but the candidate never got an invite. Both layers (Settings field validator
+# AND EmailService constructor) coerce empty/whitespace to the brand default.
+# ---------------------------------------------------------------------------
+
+
+def test_email_service_uses_brand_default_when_from_email_empty():
+    from app.components.notifications.email_client import EmailService, brand_email_from
+
+    svc = EmailService(api_key="k", from_email="")
+    assert svc.from_email == brand_email_from()
+
+
+def test_email_service_uses_brand_default_when_from_email_whitespace():
+    from app.components.notifications.email_client import EmailService, brand_email_from
+
+    svc = EmailService(api_key="k", from_email="   \t  ")
+    assert svc.from_email == brand_email_from()
+
+
+def test_email_service_uses_brand_default_when_from_email_none():
+    from app.components.notifications.email_client import EmailService, brand_email_from
+
+    svc = EmailService(api_key="k", from_email=None)
+    assert svc.from_email == brand_email_from()
+
+
+def test_email_service_respects_explicit_from_email():
+    from app.components.notifications.email_client import EmailService
+
+    svc = EmailService(api_key="k", from_email="Custom <hi@example.com>")
+    assert svc.from_email == "Custom <hi@example.com>"
+
+
+def test_settings_validator_coerces_empty_email_from():
+    from app.platform.config import Settings
+    from app.platform.brand import brand_email_from
+
+    # Bypass env loading by passing the value directly to the model.
+    s = Settings(EMAIL_FROM="")
+    assert s.EMAIL_FROM == brand_email_from()
+    s2 = Settings(EMAIL_FROM="   ")
+    assert s2.EMAIL_FROM == brand_email_from()
+    s3 = Settings(EMAIL_FROM="Custom <hi@example.com>")
+    assert s3.EMAIL_FROM == "Custom <hi@example.com>"

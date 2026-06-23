@@ -59,9 +59,14 @@ logger = logging.getLogger(__name__)
 class EmailService:
     """Service for sending transactional emails through Resend."""
 
-    def __init__(self, api_key: str, from_email: str = brand_email_from()):
+    def __init__(self, api_key: str, from_email: str | None = None):
         resend.api_key = api_key
-        self.from_email = from_email
+        # Defensive: an unset/empty ``EMAIL_FROM`` env var or a None caller
+        # would otherwise pass an empty from-address to Resend, which rejects
+        # the send with "The domain is invalid". Coerce any falsy/whitespace
+        # value to the brand default so a misconfigured deploy still sends.
+        cleaned = (from_email or "").strip()
+        self.from_email = cleaned if cleaned else brand_email_from()
         logger.info("EmailService initialised (from=%s)", self.from_email)
 
     def send_assessment_invite(
