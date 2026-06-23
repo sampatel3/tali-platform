@@ -428,6 +428,16 @@ class Settings(BaseSettings):
     # candidate below the gate. Set to 0.0 to disable.
     FRAUD_PRESCREEN_UNVERIFIED_PENALTY: float = 5.0
 
+    # Global agent kill switch (incident response). When True, EVERY
+    # autonomous agent cycle is halted across all orgs and roles, regardless
+    # of per-role agentic_mode/pause state or per-org settings. This is the
+    # platform-wide "stop everything" lever for a bad prompt version, runaway
+    # tool loops, or an Anthropic/Graphiti outage — flipping it is faster than
+    # pausing roles one by one. Org-level halts live in
+    # ``Organization.workspace_settings["agent_kill_switch"]``; this is the
+    # broader switch above them. Default False = agents run normally.
+    AGENT_GLOBAL_KILL_SWITCH: bool = False
+
     # MVP feature flags (default to MVP-safe behavior).
     # Stripe is now the live payment processor for credit top-ups; default
     # changed True → False as part of the 2026-04-29 usage-pricing cutover.

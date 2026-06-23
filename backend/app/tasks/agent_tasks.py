@@ -59,6 +59,7 @@ def agent_react_to_event(
     Skips silently if the role has agentic mode disabled or has been
     paused — re-enabling the role is the explicit unblock.
     """
+    from ..agent_runtime import kill_switch
     from ..agent_runtime.event_debounce import clear_event_window
     from ..agent_runtime.orchestrator import run_cycle
     from ..models.role import Role
@@ -73,6 +74,9 @@ def agent_react_to_event(
         # this cycle then claim a fresh window and schedule the next one,
         # rather than being silently swallowed.
         clear_event_window(db, role=role)
+        halt = kill_switch.halt_reason_for_role(db, role=role)
+        if halt is not None:
+            return {"status": "skipped", "reason": halt, "role_id": role_id}
         if not bool(role.agentic_mode_enabled):
             return {"status": "skipped", "reason": "agentic_mode_disabled", "role_id": role_id}
         if role.agent_paused_at is not None:
@@ -172,6 +176,7 @@ def agent_daily_review_role(self, role_id: int) -> dict:
     Skips silently when the role isn't agent-enabled or is paused —
     keeps the sweep idempotent against stale state.
     """
+    from ..agent_runtime import kill_switch
     from ..agent_runtime.orchestrator import run_cycle
     from ..models.role import Role
     from ..platform.database import SessionLocal
@@ -181,6 +186,9 @@ def agent_daily_review_role(self, role_id: int) -> dict:
         role = db.query(Role).filter(Role.id == role_id).first()
         if role is None:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
+        halt = kill_switch.halt_reason_for_role(db, role=role)
+        if halt is not None:
+            return {"status": "skipped", "reason": halt, "role_id": role_id}
         if not bool(role.agentic_mode_enabled):
             return {"status": "skipped", "reason": "agentic_mode_disabled", "role_id": role_id}
         if role.agent_paused_at is not None:
@@ -380,6 +388,7 @@ def agent_cohort_tick_role(self, role_id: int) -> dict:
     Scoring is async so this tick's run_cycle won't see *this* tick's
     newly enqueued scores. The next tick (30 min later) will pick them up.
     """
+    from ..agent_runtime import kill_switch
     from ..agent_runtime.orchestrator import run_cycle
     from ..models.role import Role
     from ..platform.database import SessionLocal
@@ -391,6 +400,13 @@ def agent_cohort_tick_role(self, role_id: int) -> dict:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
         if not bool(role.agentic_mode_enabled) or role.agent_paused_at is not None:
             return {"status": "skipped", "reason": "not_eligible", "role_id": role_id}
+        # Kill switch halts the WHOLE tick — checked before Phase 1 so the
+        # deterministic decision emitters (pre-screen reject reconcile, bulk
+        # decisioning) and auto-scoring don't run either. "Agent off" means
+        # no agent-driven writes, not just no LLM cycle.
+        halt = kill_switch.halt_reason_for_role(db, role=role)
+        if halt is not None:
+            return {"status": "skipped", "reason": halt, "role_id": role_id}
 
         # B4: concurrent cohort-tick guard. If a previous cycle for this
         # role is still running (deploy restart, clock drift, slow LLM
@@ -826,8 +842,10 @@ def agent_manual_run(self, role_id: int, application_id: Optional[int] = None) -
 
     Bypasses the agentic-mode-enabled check so a recruiter can dry-run
     against a role that hasn't been switched on yet, but still respects
-    the paused state.
+    the paused state and the org/global kill switch (incident response
+    must halt manual runs too).
     """
+    from ..agent_runtime import kill_switch
     from ..agent_runtime.orchestrator import run_cycle
     from ..models.role import Role
     from ..platform.database import SessionLocal
@@ -837,6 +855,9 @@ def agent_manual_run(self, role_id: int, application_id: Optional[int] = None) -
         role = db.query(Role).filter(Role.id == role_id).first()
         if role is None:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
+        halt = kill_switch.halt_reason_for_role(db, role=role)
+        if halt is not None:
+            return {"status": "skipped", "reason": halt, "role_id": role_id}
         if role.agent_paused_at is not None:
             return {
                 "status": "skipped",
