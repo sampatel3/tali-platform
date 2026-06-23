@@ -105,100 +105,6 @@ const MARKETING_DECISION_FEED_ROWS = [
   },
 ];
 
-const dashboardCandidates = [
-  { name: 'Candidate', status: 'submitted' },
-  { name: 'Candidate', status: 'in-progress' },
-  { name: 'Candidate', status: 'submitted' },
-  { name: 'Candidate', status: 'submitted' },
-  { name: 'More candidates', status: 'view all', avatar: '+' },
-];
-
-const timelineItems = [
-  { label: 'plan', pill: 'plan', body: 'Whether they thought before they prompted - design notes, tradeoffs, decisions.' },
-  { label: 'prompt', pill: 'claude', body: 'Prompt quality - scoped vs. vague, with-context vs. cold.', tone: 'ai' },
-  { label: 'recover', pill: 'claude', body: 'How they handled an incorrect AI suggestion - accepted, rejected, verified.', tone: 'ai' },
-  { label: 'test', pill: 'test', body: 'Whether tests came before or after the AI implementation.', tone: 'pass' },
-  { label: 'refactor', pill: 'refactor', body: 'Whether they shipped AI boilerplate or tightened it to your team\'s style.' },
-  { label: 'ship', pill: 'ship', body: 'Final state - tests passing, edge cases handled, graceful failure paths.', tone: 'pass' },
-];
-
-const sixAxes = [
-  'Prompt quality',
-  'Error recovery',
-  'Context utilization',
-  'Independence',
-  'Design thinking',
-  'Debugging strategy',
-];
-
-const questionBankRows = [
-  ['AI.01', 'GenAI production readiness review', 'Medium', 'amber'],
-  ['AI.01A', 'Tighten safety defaults during moderation outages', 'Hard', 'red'],
-  ['DE.01', 'AWS Glue pipeline recovery', 'Medium', 'amber'],
-  ['DE.01A', 'Fix schema drift, dedupe, and bookmark trust', 'Hard', 'red'],
-];
-
-const runtimeSignalCards = [
-  {
-    title: 'Prompt quality',
-    body: 'Whether the prompt was scoped and sequenced, with the exact prompt text linked back to the timeline.',
-  },
-  {
-    title: 'Error recovery',
-    body: 'Whether the candidate verified, rejected, or accepted incorrect AI suggestions before they touched production logic.',
-  },
-  {
-    title: 'Independence',
-    body: 'Where the candidate delegated to AI versus where they wrote and owned the critical reasoning themselves.',
-  },
-];
-
-const howItWorksSteps = [
-  {
-    step: 'STEP 01',
-    title: 'Start from the job requirement.',
-    body: 'Pick the role, stack, and bar you care about. Taali maps the assessment to the workflow you actually hire for.',
-    meta: 'calibrated to your team',
-  },
-  {
-    step: 'STEP 02',
-    title: 'Invite the candidate.',
-    body: 'They receive a simple link into the in-browser workspace with the task, repo, editor, and AI tools ready to go.',
-    meta: 'simple invite flow',
-  },
-  {
-    step: 'STEP 03',
-    title: 'They complete the task.',
-    body: 'We capture the prompts, tests, edits, and decision-making that show how the candidate actually works with AI.',
-    meta: 'silent scoring throughout',
-  },
-  {
-    step: 'STEP 04',
-    title: 'Review and decide.',
-    body: 'Recruiters and hiring managers get the report, AI-collaboration evidence, transcript context, and ATS-ready decision view in one place.',
-    meta: 'signal delivered on submit',
-  },
-];
-
-const proofItems = [
-  {
-    title: 'Live stack',
-    body: 'Candidates ship real code on your real tech - TypeScript, Python, Go, whatever you run.',
-  },
-  {
-    title: 'Real AI',
-    body: 'Claude, Cursor, Copilot in-browser. We do not block them - we score how they use them.',
-  },
-  {
-    title: 'Every keystroke',
-    body: 'Session replay, prompt log, test runs, and evaluation - all tied to the final report.',
-  },
-  {
-    title: 'Your bar',
-    body: 'Calibrate scoring to your team. Taali measures what you care about, not generic rubrics.',
-  },
-];
-
 const footerColumns = [
   {
     title: 'Product',
@@ -230,30 +136,6 @@ const footerColumns = [
     ],
   },
 ];
-
-const SectionHeading = ({ kicker, title, copy, children = null }) => (
-  <div className="mb-8 grid gap-8 lg:grid-cols-[minmax(0,1fr)_420px] lg:items-end">
-    <div>
-      <div className="kicker">{kicker}</div>
-      <h2 className="mt-3 font-[var(--font-display)] text-[clamp(38px,5vw,60px)] font-semibold leading-[0.95] tracking-[-0.04em]">
-        {title}
-      </h2>
-    </div>
-    <div>
-      <p className="max-w-[26.25rem] text-[0.9375rem] leading-7 text-[var(--mute)]">{copy}</p>
-      {children}
-    </div>
-  </div>
-);
-
-const PlatformCard = ({ kicker, title, body, children, className = '' }) => (
-  <div className={`rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)] ${className}`.trim()}>
-    <div className="font-[var(--font-mono)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--purple)]">{kicker}</div>
-    <h3 className="mt-3 font-[var(--font-display)] text-[2.125rem] leading-[1.02] tracking-[-0.03em]">{title}</h3>
-    <p className="mt-3 text-[0.875rem] leading-7 text-[var(--mute)]">{body}</p>
-    {children}
-  </div>
-);
 
 export const LandingPage = ({ onNavigate }) => {
   const showcaseAssessment = PRODUCT_WALKTHROUGH_TASK;
