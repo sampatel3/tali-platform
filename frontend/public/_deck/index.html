@@ -378,6 +378,36 @@
   .ev-quote { font-size: 12px; line-height: 1.45; color: var(--ink-2); border-left: 2px solid color-mix(in oklab, var(--amber) 50%, var(--line)); padding: 3px 0 3px 10px; margin-left: 4px; }
   .ev-cand-mini { display: flex; align-items: center; gap: 9px; padding-top: 9px; border-top: 1px solid var(--line); flex-wrap: wrap; }
   .ev-cand-mini .ev-nm { font-size: 14.5px; }
+
+  /* ---- slide 4 v9: assessment (2/3) + client report (1/3) ---- */
+  .s4-split { flex: 1; min-height: 0; display: grid; grid-template-columns: 2fr 1fr; gap: 18px; margin-top: 12px; }
+  .s4-split .ide { margin-top: 0; }
+  .s4-cap { margin-top: 12px; font-family: var(--font-mono); font-size: 12.5px; letter-spacing: 0.01em; color: var(--ink-2); background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 11px 16px; }
+  .s4-cap b { color: var(--purple); }
+  .cr-body { flex: 1; min-height: 0; padding: 15px 17px; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+  .cr-banner { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.04em; color: var(--purple); background: var(--purple-soft); border-radius: 8px; padding: 6px 10px; }
+  .cr-id { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+  .cr-name { font-family: var(--font-display); font-size: 21px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); line-height: 1.05; }
+  .cr-role { font-size: 12px; color: var(--ink-2); margin-top: 3px; }
+  .cr-verdict { font-family: var(--font-mono); font-size: 9.5px; font-weight: 700; letter-spacing: 0.04em; color: var(--green); background: color-mix(in oklab, var(--green) 14%, #fff); border-radius: 999px; padding: 3px 9px; white-space: nowrap; flex: none; }
+  .cr-scores { display: flex; gap: 7px; }
+  .cr-sc { flex: 1; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 8px 6px; text-align: center; }
+  .cr-sc .n { font-family: var(--font-display); font-size: 22px; font-weight: 600; color: var(--ink); line-height: 1; }
+  .cr-sc .k { font-family: var(--font-mono); font-size: 8px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); margin-top: 4px; }
+  .cr-sc.lead { background: var(--purple-soft); border-color: color-mix(in oklab, var(--purple) 28%, var(--line)); }
+  .cr-sc.lead .n { color: var(--purple); font-size: 26px; }
+  .cr-tag { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--purple); font-weight: 700; margin-bottom: 6px; }
+  .cr-why { margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+  .cr-why li { list-style: none; font-size: 11.5px; line-height: 1.4; color: var(--ink-2); padding-left: 13px; position: relative; }
+  .cr-why li::before { content: "•"; position: absolute; left: 2px; color: var(--purple); }
+  .cr-dims { display: flex; flex-direction: column; gap: 5px; }
+  .cr-dim { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); }
+  .cr-dim .dl { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cr-dim .db { width: 52px; height: 5px; border-radius: 3px; background: var(--bg-3); flex: none; overflow: hidden; }
+  .cr-dim .db i { display: block; height: 100%; background: var(--purple); }
+  .cr-dim .dn { width: 18px; text-align: right; color: var(--ink); font-weight: 700; flex: none; }
+  .cr-prov { font-family: var(--font-mono); font-size: 10px; color: var(--mute); }
+  .cr-foot { margin-top: auto; font-family: var(--font-mono); font-size: 10px; color: var(--mute); border-top: 1px solid var(--line); padding-top: 8px; }
 </style>
 </head>
 <body>
@@ -510,16 +540,17 @@
        ════════════════════════════════════════════════════════════════════ -->
   <section data-slide="workspace" data-screen-label="04 The work sample">
     <div class="slide-head">
-      <div class="eyebrow"><span class="num">04</span><span class="dot">·</span><span>The work sample</span></div>
-      <h2 class="slide-title" style="font-size:54px;">What you send the client <em>instead of a CV</em>.</h2>
+      <div class="eyebrow"><span class="num">04</span><span class="dot">·</span><span>Assessment → client report</span></div>
+      <h2 class="slide-title" style="font-size:54px;">The candidate does the work. <em>You send the client the report.</em></h2>
       <div class="commentary">
         <span><b>01</b> A real bank-GenAI safety task — failing tests to fix</span>
         <span><b>02</b> They work WITH Claude — every move captured</span>
-        <span><b>03</b> One Taali score, with the evidence behind it</span>
+        <span><b>03</b> The client gets a verified report, not a CV</span>
       </div>
     </div>
 
-    <div class="ide light agentic">
+    <div class="s4-split">
+      <div class="ide light agentic">
       <div class="ide-bar">
         <div class="dots"><i></i><i></i><i></i></div>
         <span class="task">TASK 01 / 01</span>
@@ -599,35 +630,52 @@
         </div>
       </div>
 
-    </div>
-
-    <!-- Captured & scored → report -->
-    <div class="s4-strip">
-      <div class="s4-cell">
-        <div class="s4-tag">// Captured · the whole session</div>
-        <div class="s4-chips"><span>every prompt</span><span>pastes</span><span>edits</span><span>time-to-first-prompt</span><span>browser focus</span><span>tab-switches</span><span>test runs</span><span>tokens</span></div>
       </div>
-      <div class="s4-cell">
-        <div class="s4-tag">// Scored · 8 weighted signals → one number</div>
-        <div class="s4-scorewrap">
-          <div class="s4-score"><span class="big">81</span><span class="lbl">Taali<br/>score</span></div>
-          <div class="s4-bars">
-            <span style="--w:84%">Coding · 84</span>
-            <span style="--w:86%">Working with AI · 86</span>
-            <span style="--w:85%">Problem-solving · 85</span>
-            <span style="--w:80%">Independence · 80</span>
-            <span style="--w:78%">Communication · 78</span>
+
+      <!-- The client report — what you actually send (right 1/3) -->
+      <div class="prod-panel cr-panel">
+        <div class="pp-bar"><span class="dots"><i></i><i></i><i></i></span><span class="pp-url">taali.ai/share/r7q2 · client view</span></div>
+        <div class="cr-body">
+          <div class="cr-banner">Client view · recruiter notes, scoring internals &amp; PII hidden</div>
+          <div class="cr-id">
+            <div><div class="cr-name">Lena Haddad</div><div class="cr-role">AI Engineer · shared for Senior AI Engineer</div></div>
+            <span class="cr-verdict">✓ Recommended</span>
           </div>
+          <div class="cr-scores">
+            <div class="cr-sc lead"><div class="n">81</div><div class="k">Taali /100</div></div>
+            <div class="cr-sc"><div class="n">84</div><div class="k">Role fit</div></div>
+            <div class="cr-sc"><div class="n">84</div><div class="k">Assess.</div></div>
+            <div class="cr-sc"><div class="n">5/6</div><div class="k">Must-haves</div></div>
+          </div>
+          <div>
+            <div class="cr-tag">Why we're sharing</div>
+            <ul class="cr-why">
+              <li>Led a regulated bank-GenAI launch end-to-end — shipped release-safe.</li>
+              <li>Top-decile on working with AI; strong systems reasoning.</li>
+              <li>Caught the high-risk-review gap in the work sample others missed.</li>
+            </ul>
+          </div>
+          <div>
+            <div class="cr-tag">Dimension scores</div>
+            <div class="cr-dims">
+              <div class="cr-dim"><span class="dl">Systems design</span><span class="db"><i style="width:79%"></i></span><span class="dn">79</span></div>
+              <div class="cr-dim"><span class="dl">Code craft</span><span class="db"><i style="width:84%"></i></span><span class="dn">84</span></div>
+              <div class="cr-dim"><span class="dl">Reasoning under pressure</span><span class="db"><i style="width:80%"></i></span><span class="dn">80</span></div>
+              <div class="cr-dim"><span class="dl">AI collaboration</span><span class="db"><i style="width:86%"></i></span><span class="dn">86</span></div>
+              <div class="cr-dim"><span class="dl">Release safety</span><span class="db"><i style="width:74%"></i></span><span class="dn">74</span></div>
+              <div class="cr-dim"><span class="dl">Communication</span><span class="db"><i style="width:78%"></i></span><span class="dn">78</span></div>
+            </div>
+          </div>
+          <div class="cr-prov">Scored 24 Jun 2026 · v2.1.0 · Sonnet</div>
+          <div class="cr-foot">Client-safe summary · sent as a share link or PDF</div>
         </div>
       </div>
-      <div class="s4-cell">
-        <div class="s4-tag">// The proof you send</div>
-        <div class="s4-rep">A client-ready report — per-axis <b>evidence</b>, fraud flags, and the <b>full prompt-by-prompt replay</b>. Defensible to a hiring committee or an auditor.</div>
-      </div>
     </div>
 
+    <div class="s4-cap"><b>Captured</b> across the session — every prompt · paste · edit · test run · time-to-first-prompt · browser focus · tab-switches → <b>scored</b> on 8 weighted signals → the <b>client report</b> on the right.</div>
+
     <div class="slide-foot">
-      <span>04 / 09 · The work sample · replayable, evidence-linked</span>
+      <span>04 / 09 · Assessment → client report</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
@@ -1037,7 +1085,7 @@
   "Thanks for the time. I'm Sam — I built Taali from the ground up, and proved it running the hiring at DeepLight, a data & AI consultancy that hires exactly the kind of technical people you place. This isn't a generic HR-tech pitch; it's one operator showing another a platform built for our shared problem. Two things to land today: it makes your consultants faster and your submissions provable, and it's a service you can sell on to your own clients. Nine slides, ending on a free pilot.",
   "The ground has shifted under recruitment — worst of all for exactly the roles you place: software, data, AI, change. 78% of CVs now contain AI-generated content and resume fraud costs around $600B a year, so your consultants burn billable hours on a slush pile that looks qualified. Legacy tech tests saw a 5x cheating spike because candidates build with AI all day and the tests pretend they don't. And one in three hiring managers has caught a fake or proxy candidate — so clients no longer trust a CV, which means they no longer trust a CV-based shortlist. Whoever can prove capability, not just forward it, wins the mandate.",
   "Taali is two things in one. A hiring agent that runs each live mandate end-to-end — and crucially, keeps you in control: it brings decisions to your home hub, you make the call. And an AI-native assessment that produces real evidence. Three pillars: Screen and search — the agent does pre-screen, scoring and ranking, and you can ask it in plain English to tailor a role and pull a shortlist. Prove — every candidate works a real task in a real repo with Claude in hand, scored on five axes including how they work with AI. Control — every advance and reject is queued for your sign-off, evidence-linked and auditable, and your overrides retrain it overnight.",
-  "This is what you send the client instead of a CV. The task is a real one — a GenAI production-readiness review for a bank, with three failing tests, including a high-risk action that wrongly skips human review. The candidate works in a real repo with Claude alongside — chatting, reading the code, fixing it; there's no terminal, just the repo and the assistant. We capture the whole session — every prompt, paste, edit, test run, even time-to-first-prompt and browser focus — and roll eight weighted signals into one Taali score: 81 here, strongest on working-with-AI and problem-solving. That becomes a client-ready report with the per-axis evidence and the full prompt-by-prompt replay. They don't get a claim on a CV; they get the work, scored and replayable.",
+  "Two halves here. On the left is the candidate's actual assessment — a real GenAI production-readiness task for a bank, three failing tests including a high-risk action that wrongly skips human review. They work in a real repo with Claude alongside; no terminal, just the repo and the assistant. We capture the whole session — every prompt, paste, edit, test run, even time-to-first-prompt and browser focus — and score it on eight weighted signals. On the right is what you actually send the client: the report. A verdict — recommended — the Taali score, the role-fit and dimension breakdown, and three grounded 'why we're sharing' highlights, with recruiter notes, scoring internals and candidate PII stripped out. It goes as a share link or a PDF. So the client doesn't get a claim on a CV — they get the verified work, in a report they can act on.",
   "Two things, both straight from the product. A — the decision hub for a role: the agent works the funnel and queues every call for you — here a send-assessment on Imran at 100% confidence with the full reasoning. You send it, reject, skip, or send it back to teach the agent; it never acts alone, which matters when your clients are banks and insurers. B — bespoke candidate search: set any criteria — skills, salary, notice period, even 'Taali score at least 60' — and it returns a ranked top ten, each criterion marked met or partial and grounded in quoted CV and notes. Arjun here meets salary, score and notice, but only partially on banking domain, and you can see exactly why. That's a defensible shortlist in seconds.",
   "Taali runs every stage of the desk — apply, pre-screen, score and search, assess, decide, submit — and the point of this slide is that this is what's live in production today, not a roadmap. Two-way ATS sync, CV-fraud detection, evidence-grounded scoring, the conversational search, the real-repo assessment with five-axis fluency, the home decision hub with human sign-off, client-ready reports as a share link or PDF, and a public API plus provider add-on that powers a white-label offer. The platform is built.",
   "Why Taali and not what you run today. Your ATS or CRM — Bullhorn, Vincere, Workable — automates workflow but doesn't measure skill. Test vendors bolt AI features onto leetcode formats. Nobody sits top-right: agent-driven, AI-native work sample, human-in-the-loop. The table is the short version — only Taali works each role end-to-end, scores how candidates work with AI, lets you tailor roles and find anyone conversationally, keeps a human on every decision, gives you an auditable verdict your FS clients can defend, and exposes an API to power your own offer.",
