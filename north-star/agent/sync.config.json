@@ -1,0 +1,10 @@
+{
+  "$comment": "Edit this in the real north-star repo. Paths resolve relative to the north-star repo root (where this file lives), or may be absolute. Each target has a `role` (substrate|brand|legacy) that selects the tailored block in agent/blocks/. `branch` is informational (the real repos use 'master' except tali-platform on 'main'). 'northStarRef' is the human/agent-facing pointer embedded in each block.",
+  "northStarRef": "the `north-star` repo (see its NORTH_STAR.md)",
+  "targets": [
+    { "repo": "mainspring",    "role": "substrate", "branch": "master", "claudeMd": "../mainspring/CLAUDE.md" },
+    { "repo": "taali-brand",   "role": "brand",     "branch": "master", "claudeMd": "../taali-brand/CLAUDE.md" },
+    { "repo": "cadence",       "role": "brand",     "branch": "master", "claudeMd": "../cadence/CLAUDE.md" },
+    { "repo": "tali-platform", "role": "legacy",    "branch": "main",   "claudeMd": "../tali-platform/CLAUDE.md" }
+  ]
+}
