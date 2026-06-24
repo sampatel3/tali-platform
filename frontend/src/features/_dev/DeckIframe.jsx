@@ -1,5 +1,5 @@
 /**
- * DeckIframe — full-viewport iframe loader for the static investor deck at
+ * DeckIframe — full-viewport iframe loader for the static deck at
  * `/_deck/index.html`. The deck is a self-contained HTML/CSS/JS bundle in
  * `frontend/public/_deck/` so it can keep the 1920×1080 stage scaling and
  * `window.print()`-as-PDF behaviour without fighting the React shell.
@@ -22,7 +22,7 @@ export default function DeckIframe() {
 
   return (
     <iframe
-      title="Taali Investor Deck"
+      title="Taali Deck"
       src="/_deck/index.html"
       style={{
         position: 'fixed',
