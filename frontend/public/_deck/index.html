@@ -60,17 +60,15 @@
 
 <!-- ───────────────────────────────────────────────────────────────────────
      Partner-pitch additions. Scoped here so the shared deck.css stays the
-     reusable base; these classes only exist for the Venquis partnership deck.
+     reusable base; these classes only exist for this partnership deck.
+     Product mocks (assessment workspace, home/HITL hub, grounded search)
+     mirror the real signed-in app surfaces.
      ──────────────────────────────────────────────────────────────────── -->
 <style id="partner-additions">
   /* Dark takeaway band under a slide's cards */
   .takeaway-band {
-    margin-top: 26px;
-    padding: 22px 30px;
-    background: var(--ink);
-    color: #fff;
-    border-radius: 16px;
-    display: flex; align-items: center; gap: 18px;
+    margin-top: 24px; padding: 22px 30px; background: var(--ink); color: #fff;
+    border-radius: 16px; display: flex; align-items: center; gap: 18px;
     font-size: 21px; line-height: 1.4;
   }
   .takeaway-band .lbl {
@@ -79,59 +77,120 @@
   }
   .takeaway-band em { color: var(--purple-lav); font-style: normal; font-weight: 600; }
 
-  /* 05 — Two ways you win */
-  .ways { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  /* Two ways it pays (offering panels) */
+  .ways { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
   .way {
-    background: var(--bg-2); border: 1px solid var(--line); border-radius: 22px;
-    padding: 34px 36px 34px; display: flex; flex-direction: column;
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 20px;
+    padding: 28px 30px; display: flex; flex-direction: column;
   }
   .way.hero { background: var(--ink); border-color: var(--ink); }
   .way-tag {
     font-family: var(--font-mono); font-size: 13px; letter-spacing: 0.16em;
-    text-transform: uppercase; color: var(--purple); font-weight: 700; margin-bottom: 14px;
+    text-transform: uppercase; color: var(--purple); font-weight: 700; margin-bottom: 12px;
   }
   .way.hero .way-tag { color: var(--purple-lav); }
   .way-h {
-    font-family: var(--font-display); font-size: 40px; font-weight: 600;
-    letter-spacing: -0.025em; line-height: 1.08; color: var(--ink); margin-bottom: 26px;
+    font-family: var(--font-display); font-size: 34px; font-weight: 600;
+    letter-spacing: -0.025em; line-height: 1.08; color: var(--ink); margin-bottom: 18px;
   }
   .way.hero .way-h { color: #fff; }
-  .way-list { display: flex; flex-direction: column; gap: 18px; flex: 1; }
+  .way-list { display: flex; flex-direction: column; gap: 13px; flex: 1; }
   .way-li {
-    display: grid; grid-template-columns: 24px 1fr; gap: 12px;
-    font-size: 18px; line-height: 1.45; color: var(--ink-2);
+    display: grid; grid-template-columns: 22px 1fr; gap: 11px;
+    font-size: 16.5px; line-height: 1.42; color: var(--ink-2);
   }
   .way.hero .way-li { color: rgba(255,255,255,0.9); }
   .way-li .ic { color: var(--purple); font-weight: 700; font-family: var(--font-mono); }
   .way.hero .way-li .ic { color: var(--purple-lav); }
   .way-li b { color: var(--ink); font-weight: 600; }
   .way.hero .way-li b { color: #fff; }
-  .way-foot {
-    margin-top: 26px; padding-top: 20px; border-top: 1px dashed var(--line);
-    font-family: var(--font-mono); font-size: 14px; letter-spacing: 0.04em;
-    color: var(--purple); text-transform: uppercase;
-  }
-  .way.hero .way-foot { border-color: rgba(255,255,255,0.18); color: var(--purple-lav); }
 
-  /* 09 — Two-sided economics */
-  .econ { display: flex; flex-direction: column; gap: 16px; }
-  .econ-flow { background: var(--bg-2); border: 1px solid var(--line); border-radius: 16px; padding: 22px 24px; }
-  .econ-flow .et {
-    font-family: var(--font-display); font-size: 21px; font-weight: 600;
-    letter-spacing: -0.02em; color: var(--ink); margin-bottom: 16px;
+  /* Offering footer: credits + pilot */
+  .offer-foot { margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .offer-cell {
+    padding: 20px 26px; border-radius: 16px; display: flex; flex-direction: column; gap: 6px;
   }
-  .econ-chain { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .econ-node {
-    padding: 9px 14px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line);
-    font-size: 13.5px; color: var(--ink-2); font-family: var(--font-mono); letter-spacing: 0.01em;
+  .offer-cell.credits { background: var(--bg-2); border: 1px solid var(--line); }
+  .offer-cell.pilot { background: var(--ink); color: #fff; }
+  .offer-cell .oc-tag {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--purple); font-weight: 700;
   }
-  .econ-node.taali { background: var(--purple); color: #fff; border-color: var(--purple); font-weight: 600; }
-  .econ-arrow { color: var(--purple); font-size: 18px; font-weight: 700; }
-  .econ-note {
-    padding: 18px 22px; background: var(--ink); color: #fff; border-radius: 14px;
-    font-size: 16px; line-height: 1.5;
+  .offer-cell.pilot .oc-tag { color: var(--purple-lav); }
+  .offer-cell .oc-body { font-size: 16px; line-height: 1.45; color: var(--ink-2); }
+  .offer-cell.pilot .oc-body { color: rgba(255,255,255,0.92); }
+  .offer-cell .oc-body b { color: var(--ink); font-weight: 600; }
+  .offer-cell.pilot .oc-body b { color: #fff; }
+  .offer-cell.pilot a { color: var(--purple-lav); text-decoration: none; font-weight: 600; }
+
+  /* ---- Assessment workspace (chat-centred, agentic) ---- */
+  .ide.agentic .ide-body { grid-template-columns: 206px 1.04fr 1fr; }
+  .ide.agentic .ide-claude { border-right: 1px solid var(--line); }
+  .claude-glyph {
+    width: 26px; height: 26px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, #7f39fb, #c44ad0); color: #fff; font-weight: 700; font-size: 13px; font-family: var(--font-display);
   }
-  .econ-note b { color: var(--purple-lav); }
+  .claude-sub { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); }
+  .term-ready {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono);
+    font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--green);
+    border: 1px solid color-mix(in oklab, var(--green) 30%, var(--line)); border-radius: 999px; padding: 3px 9px;
+  }
+  .term-ready .d { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+  .tk-tracker {
+    align-self: flex-start; margin: 0 14px 8px; font-family: var(--font-mono); font-size: 11px;
+    color: var(--purple); background: var(--purple-soft); border-radius: 999px; padding: 4px 11px;
+  }
+  .ide-dock { border-top: 1px solid #241a33; background: #15101f; color: #e6e0ee; display: flex; flex-direction: column; }
+  .ide-dock .dock-tabs { display: flex; border-bottom: 1px solid rgba(255,255,255,0.08); font-family: var(--font-mono); font-size: 12px; }
+  .ide-dock .dock-tab { padding: 8px 16px; color: rgba(255,255,255,0.45); letter-spacing: 0.04em; }
+  .ide-dock .dock-tab.on { color: #fff; box-shadow: inset 0 -2px 0 var(--purple-lav); }
+  .ide-dock .dock-body { padding: 12px 18px; font-family: var(--font-mono); font-size: 13px; line-height: 1.65; color: #cfc7da; }
+  .ide-dock .cli .pr { color: var(--purple-lav); }
+  .ide-dock .cli .ok { color: #4ade80; }
+  .ide-dock .cli .mut { color: #7d738f; }
+
+  /* ---- Product pane shell (home hub + search) ---- */
+  .prod-grid { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .prod-pane { background: var(--bg-2); border: 1px solid var(--line); border-radius: 20px; padding: 24px 26px; display: flex; flex-direction: column; gap: 14px; overflow: hidden; }
+  .pp-head { display: flex; align-items: baseline; gap: 12px; }
+  .pp-kicker { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--purple); font-weight: 700; }
+  .pp-title { font-family: var(--font-display); font-size: 27px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); line-height: 1.1; }
+  .pp-sub { font-size: 14.5px; line-height: 1.45; color: var(--ink-2); margin-top: -4px; }
+
+  /* decision (HITL) cards */
+  .dec-card { border: 1px solid var(--line); border-radius: 14px; padding: 15px 17px; display: flex; flex-direction: column; gap: 9px; background: #fff; }
+  .dec-card.sel { background: var(--purple-soft); border-color: color-mix(in oklab, var(--purple) 32%, var(--line)); }
+  .dec-meta { display: flex; align-items: center; gap: 9px; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); }
+  .dec-type { color: var(--ink-2); font-weight: 600; }
+  .dec-type.adv { color: var(--green); }
+  .dec-type.rej { color: #c0392b; }
+  .dec-score { background: var(--purple-soft); color: var(--purple); padding: 2px 9px; border-radius: 999px; font-weight: 700; }
+  .dec-needs { margin-left: auto; background: var(--purple); color: #fff; padding: 3px 10px; border-radius: 999px; font-weight: 700; letter-spacing: 0.08em; }
+  .dec-name { font-family: var(--font-display); font-size: 18px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
+  .dec-name .role { font-family: var(--font-sans); font-size: 13px; font-weight: 400; color: var(--ink-2); margin-left: 8px; }
+  .dec-reason { font-size: 13px; line-height: 1.45; color: var(--ink-2); }
+  .dec-reason b { color: var(--ink); font-weight: 600; }
+  .dec-actions { display: flex; gap: 8px; }
+  .dec-btn { padding: 7px 15px; border-radius: 10px; font-size: 12.5px; font-weight: 600; border: 1px solid var(--line); background: #fff; color: var(--ink-2); }
+  .dec-btn.approve { background: var(--green); color: #fff; border-color: var(--green); }
+  .dec-btn.override { color: var(--amber); border-color: color-mix(in oklab, var(--amber) 50%, var(--line)); }
+  .dec-btn.reject { color: #c0392b; border-color: color-mix(in oklab, #c0392b 35%, var(--line)); }
+
+  /* grounded search */
+  .sr-query { display: flex; align-items: center; gap: 10px; padding: 13px 15px; border: 1px solid color-mix(in oklab, var(--purple) 25%, var(--line)); border-radius: 12px; font-size: 14.5px; color: var(--ink); background: var(--bg); }
+  .sr-query .q { width: 7px; height: 16px; background: var(--purple); border-radius: 2px; }
+  .sr-result { border: 1px solid var(--line); border-radius: 14px; padding: 15px 17px; display: flex; flex-direction: column; gap: 11px; background: #fff; }
+  .sr-cand { display: flex; align-items: center; gap: 11px; }
+  .sr-av { width: 34px; height: 34px; border-radius: 50%; background: var(--purple-soft); color: var(--purple); display: flex; align-items: center; justify-content: center; font-weight: 700; font-family: var(--font-display); font-size: 14px; }
+  .sr-cand .nm { font-family: var(--font-display); font-size: 17px; font-weight: 600; color: var(--ink); }
+  .sr-cand .sc { margin-left: auto; background: var(--green); color: #fff; font-family: var(--font-mono); font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+  .sr-crit { display: flex; align-items: center; gap: 9px; font-size: 13.5px; color: var(--ink-2); }
+  .sr-pill { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; font-weight: 700; }
+  .sr-pill.met { background: color-mix(in oklab, var(--green) 14%, #fff); color: var(--green); }
+  .sr-pill.partial { background: color-mix(in oklab, var(--amber) 16%, #fff); color: var(--amber); }
+  .sr-quote { border-left: 3px solid var(--purple); padding: 7px 13px; background: var(--bg); border-radius: 0 8px 8px 0; font-size: 13px; line-height: 1.45; color: var(--ink); }
+  .sr-cite { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); margin-top: 5px; }
 </style>
 </head>
 <body>
@@ -154,18 +213,18 @@
     </div>
 
     <div class="cover-body">
-      <div class="cover-eyebrow">// 01 · For Venquis · change &amp; transformation staffing</div>
+      <div class="cover-eyebrow">// 01 · For consultancy &amp; staffing firms</div>
       <div class="cover-headline">Send clients <em>proof</em>, not CVs<span class="p">.</span></div>
-      <div class="cover-sub">Taali is a hiring agent and an AI-native assessment — <em>built inside a placement agency, for placement agencies</em>. It clears the AI-CV flood off your desks, and turns every candidate you put forward into verified, evidence-backed proof your clients can trust.</div>
+      <div class="cover-sub">Taali is a hiring agent and an AI-native assessment — <em>built inside a live data &amp; AI consultancy</em>. It clears the AI-CV flood off your desks, lets you tailor a role and find the right people in seconds, and turns every candidate you put forward into verified, evidence-backed proof your clients can trust.</div>
       <div class="cover-pillars">
-        <span class="cover-pillar"><b>01</b> Screen the flood — the agent runs your pipeline</span>
-        <span class="cover-pillar"><b>02</b> Prove real skill — including how they work with AI</span>
-        <span class="cover-pillar"><b>03</b> A service you can sell — co-branded to your clients</span>
+        <span class="cover-pillar"><b>01</b> The agent runs your pipeline — you stay in control</span>
+        <span class="cover-pillar"><b>02</b> Prove real skill, including how they work with AI</span>
+        <span class="cover-pillar"><b>03</b> A service you can sell on to your clients</span>
       </div>
     </div>
 
     <div class="cover-foot">
-      <span>Sam Patel · Founder, Taali · built at Deeplight</span>
+      <span>Sam Patel · Founder, Taali · built at DeepLight AI</span>
       <span><a href="mailto:sam@taali.ai">sam@taali.ai</a></span>
     </div>
   </section>
@@ -179,7 +238,7 @@
     <div class="slide-head">
       <div class="eyebrow"><span class="num">02</span><span class="dot">·</span><span>The shift</span></div>
       <h2 class="slide-title">A CV no longer proves anything — <em>for exactly the roles you place</em>.</h2>
-      <p class="slide-sub">Software, data, AI/ML, change. Whoever can <em style="color:#7f39fb;font-style:normal;font-weight:600;">prove</em> capability — not just forward a CV — wins the mandate. That's the opening.</p>
+      <p class="slide-sub">Software, data, AI, change. Whoever can <em style="color:#7f39fb;font-style:normal;font-weight:600;">prove</em> capability — not just forward a CV — wins the mandate. That's the opening.</p>
     </div>
 
     <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 32px; flex: 1;">
@@ -187,7 +246,7 @@
         <div class="pc-eyebrow">// 01 · The flood</div>
         <div class="pc-stat">78<span class="unit">%</span></div>
         <div class="pc-title">Of CVs now contain AI-generated content.</div>
-        <div class="pc-body">ChatGPT averages <b>14 embellishments</b> per CV, and resume fraud already costs employers <b>~$600B a year</b>. Your consultants burn their billable hours sorting a slush pile that <em>looks</em> qualified and isn't.</div>
+        <div class="pc-body">ChatGPT averages <b>14 embellishments</b> per CV, and resume fraud already costs employers <b>~$600B a year</b>. Your consultants burn billable hours sorting a slush pile that <em>looks</em> qualified and isn't.</div>
         <div class="pc-source">Jobcannon · Crosschq · Gartner</div>
       </div>
       <div class="problem-card">
@@ -201,13 +260,13 @@
         <div class="pc-eyebrow">// 03 · The trust gap</div>
         <div class="pc-stat">1<span class="unit">in 3</span></div>
         <div class="pc-title">Hiring managers have caught a fake or proxy candidate.</div>
-        <div class="pc-body">When a client can no longer trust a CV, they can't trust your shortlist either — and your edge as an agency erodes to whoever emails CVs <b>fastest</b>. Proof is the only thing left that travels.</div>
+        <div class="pc-body">When a client can no longer trust a CV, they can't trust your shortlist — and your edge as a firm erodes to whoever emails CVs <b>fastest</b>. Proof is the only thing left that travels.</div>
         <div class="pc-source">Industry hiring surveys · 2025</div>
       </div>
     </div>
 
     <div class="slide-foot">
-      <span>02 / 10 · The shift</span>
+      <span>02 / 09 · The shift</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
@@ -220,69 +279,69 @@
 
     <div class="slide-head">
       <div class="eyebrow"><span class="num">03</span><span class="dot">·</span><span>What Taali is</span></div>
-      <h2 class="slide-title">A hiring agent, and an AI-native assessment. <em>Built inside a placement agency.</em></h2>
-      <p class="slide-sub">Taali works each live mandate end-to-end — picks up new applicants the moment they land, clears the deterministic screening, ranks the field, and queues the calls that need a human. Every shortlisted candidate sits a real, in-browser work sample with AI in their hands. You hand the client evidence, not a hunch.</p>
+      <h2 class="slide-title">A hiring agent, and an AI-native assessment. <em>You stay in control.</em></h2>
+      <p class="slide-sub">Taali works each live mandate end-to-end — picks up applicants the moment they land, scores and ranks them, and surfaces the calls that need a human on your home hub. Ask it in plain English to tailor a role and pull the right shortlist. Every candidate you put forward can sit a real, in-browser work sample with AI in their hands.</p>
     </div>
 
     <div class="solution-grid">
       <div class="pillar">
-        <div class="p-num"><span>01</span><span class="name">SCREEN</span></div>
+        <div class="p-num"><span>01</span><span class="name">SCREEN &amp; SEARCH</span></div>
         <div class="p-title">The agent runs your pipeline.</div>
-        <div class="p-body">One orchestrator plus a deterministic policy works every active role in real time — pre-screen, CV↔JD scoring, ranking, dedupe across your ATS. Your consultants spend their hours on the shortlist, not the slush pile.</div>
+        <div class="p-body">One orchestrator plus a deterministic policy works every active role in real time — pre-screen, CV↔JD scoring, ranking, dedupe across your ATS. Then just ask: "top 5 with payments and AI experience" — and re-tune the bar on the fly.</div>
         <div class="p-meta">
           <span><b>Always-on</b> per active role</span>
-          <span><b>Two-way</b> ATS sync</span>
-          <span><b>Human sign-off</b> on every advance / reject</span>
+          <span><b>Conversational</b> search + role tailoring</span>
         </div>
       </div>
       <div class="pillar hero">
         <div class="p-num"><span>02</span><span class="name">PROVE</span></div>
-        <div class="p-title">Real IDE. Real AI. Real evidence.</div>
-        <div class="p-body">The candidate works in the exact environment they'd use on day one — editor, terminal, repo, Claude side panel. We capture every move and score a 5-axis rubric, including how well they work <em>with</em> AI — the dimension your clients now hire for, and nobody else measures.</div>
+        <div class="p-title">Real repo. Real Claude. Real evidence.</div>
+        <div class="p-body">The candidate works in the exact environment they'd use on day one — repo, editor, terminal, Claude Code in hand. We capture every move and score a 5-axis rubric, including how well they work <em>with</em> AI — the dimension your clients now hire for, and nobody else measures.</div>
         <div class="p-meta">
           <span><b>5-axis</b> · coding · working with AI · problem-solving · independence · communication</span>
           <span><b>Live</b> fraud + proxy-candidate detection</span>
         </div>
       </div>
       <div class="pillar">
-        <div class="p-num"><span>03</span><span class="name">TRUST</span></div>
-        <div class="p-title">Every verdict is evidence-linked. <em>And it learns from you.</em></div>
-        <div class="p-body">The agent makes the call; you see exactly why — which signals, which rubric version, which clip of evidence. Defensible to your client's hiring committee, and in regulated sectors, to an auditor. Override it and it retrains overnight.</div>
+        <div class="p-num"><span>03</span><span class="name">CONTROL</span></div>
+        <div class="p-title">Human sign-off on every call. <em>And it learns from you.</em></div>
+        <div class="p-body">Advance and reject decisions queue on your home hub with the agent's reasoning, score and evidence. You approve, override or reject — it never acts alone. Every verdict is rule-traced and auditable, and your overrides retrain the policy overnight.</div>
         <div class="p-meta">
-          <span><b>Rule-traced</b> verdict + exportable evidence pack</span>
-          <span><b>Overrides</b> retrain the policy nightly</span>
+          <span><b>HITL</b> gate on every advance / reject</span>
+          <span><b>Evidence-linked</b>, exportable, FS-defensible</span>
         </div>
       </div>
     </div>
 
     <div class="slide-foot">
-      <span>03 / 10 · What Taali is</span>
+      <span>03 / 09 · What Taali is</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       04 · THE WORK SAMPLE (IDE mock)
+       04 · THE WORK SAMPLE (real assessment workspace — chat-centred)
        ════════════════════════════════════════════════════════════════════ -->
   <section data-slide="workspace" data-screen-label="04 The work sample">
     <div class="slide-head">
       <div class="eyebrow"><span class="num">04</span><span class="dot">·</span><span>The work sample</span></div>
-      <h2 class="slide-title" style="font-size:60px;">What you send the client <em>instead of a CV</em>.</h2>
+      <h2 class="slide-title" style="font-size:58px;">What you send the client <em>instead of a CV</em>.</h2>
     </div>
 
-    <div class="ide light">
+    <div class="ide light agentic">
       <div class="ide-bar">
         <div class="dots"><i></i><i></i><i></i></div>
         <span class="task">TASK 01 / 01</span>
         <span class="ttl">Revenue Recovery Incident</span>
-        <span class="role">Senior Backend Engineer</span>
+        <span class="role">Senior Backend Engineer · Python</span>
         <div class="spacer"></div>
-        <span class="pill live">● LIVE</span>
-        <span class="pill">CLAUDE · $6.20 / $12.00</span>
-        <span class="pill t">27 : 14 left</span>
-        <span class="pill">Submit ↗</span>
+        <span class="pill">Guide · Report</span>
+        <span class="pill">CLAUDE · $6.20 of $12.00</span>
+        <span class="pill t">⏱ 27:14 left</span>
+        <span class="pill live">Submit ↗</span>
       </div>
       <div class="ide-body">
+        <!-- Repo (left) -->
         <div class="ide-files">
           <div class="lbl">Repository</div>
           <div class="f dir"><span class="ind">▾</span>tali-revenue/</div>
@@ -293,7 +352,38 @@
           <div class="f"><span class="ind">  </span>validators.py</div>
           <div class="f dir"><span class="ind">▾</span>tests/</div>
           <div class="f"><span class="ind">  </span>test_revenue_recovery.py</div>
+          <div style="margin-top:auto; padding-top:12px; font-family:var(--font-mono); font-size:11px; color:var(--purple);">Branch · live workspace</div>
         </div>
+
+        <!-- Claude chat (centre — the hero) -->
+        <div class="ide-claude">
+          <div class="head">
+            <span class="claude-glyph">C</span>
+            <div style="display:flex; flex-direction:column; line-height:1.1;">
+              <span class="b" style="font-size:13px;">Claude</span>
+              <span class="claude-sub">Live repo assistant</span>
+            </div>
+            <span class="term-ready"><span class="d"></span>Terminal ready</span>
+          </div>
+          <div class="msgs">
+            <div class="msg cand">
+              <span class="who">Candidate · 18:42</span>
+              <div class="bb">The CI run says <code>amount_cents</code> missing on schema v2. Read incident_notes.md — did v2 ever ship that column?</div>
+            </div>
+            <div class="msg">
+              <span class="who">Claude · 18:42</span>
+              <div class="bb">incident_notes.md: v2 used <code>amount</code> (decimal). <code>_split_posted_at</code> was meant to coerce → cents but skips when the source is null. That's your drift.</div>
+            </div>
+            <div class="msg cand">
+              <span class="who">Candidate · 18:43</span>
+              <div class="bb">Right — I'll add a coercion path before the column check, then a regression test. Run the suite when I save.</div>
+            </div>
+          </div>
+          <div class="tk-tracker">12.0k tokens · $0.42</div>
+          <div class="input"><span class="blink"></span><span>Ask Claude: attach files with @, run a tool with /…</span></div>
+        </div>
+
+        <!-- Editor (right) -->
         <div class="ide-code">
           <div class="crumb">
             <span class="file">src/revenue_recovery.py</span>
@@ -311,97 +401,105 @@
 <span class="ln"> 5</span>    <span class="kw">if</span> missing:
 <span class="ln"> 6</span>        <span class="kw">raise</span> ValueError(<span class="st">f"Schema drift: {sorted(missing)}"</span>)
 <span class="ln"> 7</span>
-<span class="ln"> 8</span>    <span class="cm"># Coerce legacy schema_version=<span class="nm">2</span> → <span class="nm">3</span> (split posted_at column)</span>
+<span class="ln"> 8</span>    <span class="cm"># Coerce legacy schema_version=<span class="nm">2</span> → <span class="nm">3</span></span>
 <span class="ln"> 9</span>    <span class="kw">if</span> schema_version == <span class="nm">2</span>:
 <span class="ln">10</span>        records = _split_posted_at(records)
 <span class="ln">11</span>
 <span class="ln">12</span>    grouped = records.groupby(<span class="st">"merchant_id"</span>, sort=<span class="kw">False</span>)
-<span class="ln">13</span>    <span class="kw">return</span> [_finalize(group) <span class="kw">for</span> _, group <span class="kw">in</span> grouped]
+<span class="ln">13</span>    <span class="kw">return</span> [_finalize(g) <span class="kw">for</span> _, g <span class="kw">in</span> grouped]
 </pre>
         </div>
-        <div class="ide-claude">
-          <div class="head"><span>●</span><span class="b">Claude Sonnet</span><span style="margin-left:auto;">14 turns</span></div>
-          <div class="msgs">
-            <div class="msg cand">
-              <span class="who">Candidate · 18:42</span>
-              <div class="bb">The CI run says <code>amount_cents</code> missing on schema v2. Can you read incident_notes.md and tell me whether v2 ever shipped that column?</div>
-            </div>
-            <div class="msg">
-              <span class="who">Claude · 18:42</span>
-              <div class="bb">incident_notes.md: v2 used <code>amount</code> (decimal). Migration utility _split_posted_at was supposed to coerce → cents but skips when source is null. That's your drift.</div>
-            </div>
-            <div class="msg cand">
-              <span class="who">Candidate · 18:43</span>
-              <div class="bb">Right — let me write a coercion path before the column check, then add a regression test.</div>
-            </div>
-          </div>
-          <div class="input"><span class="blink"></span><span>Ask Claude…</span></div>
+      </div>
+
+      <!-- Terminal / output dock (bottom) -->
+      <div class="ide-dock">
+        <div class="dock-tabs">
+          <span class="dock-tab">Output</span>
+          <span class="dock-tab on">Terminal · Claude Code CLI</span>
+        </div>
+        <div class="dock-body cli">
+          <div><span class="pr">candidate@tali-revenue</span> $ claude "add coercion + regression test for v2 drift"</div>
+          <div><span class="mut">· edited src/revenue_recovery.py · added tests/test_schema_v2.py</span></div>
+          <div><span class="pr">$</span> pytest -q&nbsp;&nbsp;<span class="ok">→ 12 passed in 1.84s</span></div>
         </div>
       </div>
     </div>
 
     <!-- floating capture badges -->
-    <div class="capture-badge" style="left: 88px; top: 600px;"><span class="dot"></span>Prompt captured · 14 turns</div>
-    <div class="capture-badge" style="left: 88px; top: 660px;"><span class="dot"></span>Paste detected · 0 lines</div>
-    <div class="capture-badge" style="right: 88px; bottom: 124px;"><span class="dot"></span>5-axis fluency · scoring live</div>
+    <div class="capture-badge" style="left: 88px; top: 590px;"><span class="dot"></span>Every prompt &amp; tool call captured</div>
+    <div class="capture-badge" style="right: 88px; bottom: 120px;"><span class="dot"></span>5-axis fluency · scoring live</div>
 
     <div class="slide-foot">
-      <span>04 / 10 · The work sample · replayable, evidence-linked</span>
+      <span>04 / 09 · The work sample · replayable, evidence-linked</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       05 · TWO WAYS YOU WIN (the two-sided partnership)
+       05 · HOME HUB (HITL) + SEARCH — the recruiter's surfaces
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="ways" data-screen-label="05 Two ways you win">
+  <section data-slide="control" data-screen-label="05 Control & search">
     <div class="slide-head">
-      <div class="eyebrow"><span class="num">05</span><span class="dot">·</span><span>Two ways you win</span></div>
-      <h2 class="slide-title">One platform. <em>Two ways it pays for Venquis.</em></h2>
+      <div class="eyebrow"><span class="num">05</span><span class="dot">·</span><span>The recruiter's seat</span></div>
+      <h2 class="slide-title" style="font-size:58px;">The agent does the work. <em>You make the calls — and find anyone in seconds.</em></h2>
     </div>
 
-    <div class="ways">
-      <div class="way">
-        <div class="way-tag">// Use it — on your desks</div>
-        <div class="way-h">Place faster, with proof.</div>
-        <div class="way-list">
-          <div class="way-li"><span class="ic">→</span><span>The agent clears top-of-funnel on every mandate — <b>more reqs per consultant, no extra heads</b>.</span></div>
-          <div class="way-li"><span class="ic">→</span><span>Every submission carries a verified work sample — <b>higher shortlist-to-placement, fewer fall-throughs and rebates</b>.</span></div>
-          <div class="way-li"><span class="ic">→</span><span>Arrive at the client with evidence — <b>win mandates against agencies still emailing CVs</b>.</span></div>
+    <div class="prod-grid">
+      <!-- Home / HITL decision hub -->
+      <div class="prod-pane">
+        <div class="pp-head">
+          <span class="pp-kicker">// Home · awaiting you</span>
+          <span class="pp-title">Every advance &amp; reject, queued for your sign-off.</span>
         </div>
-        <div class="way-foot">Outcome: more placements per consultant · fewer clawbacks</div>
+        <div class="pp-sub">The agent never acts alone. It brings you the decision, its confidence, and the evidence — you approve, override or reject.</div>
+
+        <div class="dec-card sel">
+          <div class="dec-meta"><span class="dec-type adv">▲ ADVANCE</span><span class="dec-score">SCORE 86</span><span>agent 91% confident</span><span class="dec-needs">NEEDS YOU</span></div>
+          <div class="dec-name">Priya N.<span class="role">Senior Data Engineer · Banking client</span></div>
+          <div class="dec-reason">Strong on the streaming-ETL must-have; <b>top-decile AI-fluency</b> on the work sample. Two of three nice-to-haves met.</div>
+          <div class="dec-actions"><span class="dec-btn approve">Approve</span><span class="dec-btn override">Override</span><span class="dec-btn reject">Reject</span></div>
+        </div>
+        <div class="dec-card">
+          <div class="dec-meta"><span class="dec-type rej">▼ REJECT</span><span class="dec-score">SCORE 41</span><span>agent 88% confident</span><span class="dec-needs">NEEDS YOU</span></div>
+          <div class="dec-name">Marcus L.<span class="role">Backend Engineer · Insurance client</span></div>
+          <div class="dec-reason">Misses the hard eligibility filter; CV mirrors the JD near-verbatim — <b>fraud signal capped the score</b>.</div>
+          <div class="dec-actions"><span class="dec-btn reject">Reject</span><span class="dec-btn override">Override</span><span class="dec-btn">Review</span></div>
+        </div>
       </div>
 
-      <div class="way hero">
-        <div class="way-tag">// Sell it — to your clients</div>
-        <div class="way-h">A verified-assessment service you own.</div>
-        <div class="way-list">
-          <div class="way-li"><span class="ic">→</span><span>Offer <b>"Venquis Verified"</b> assessments to your clients as a co-branded, white-labelled service.</span></div>
-          <div class="way-li"><span class="ic">→</span><span>Powered by Taali's <b>public API + provider add-on</b> — your brand on the front, our engine underneath.</span></div>
-          <div class="way-li"><span class="ic">→</span><span>A new revenue line and a stickier client — <b>you become infrastructure, not just a supplier</b>.</span></div>
+      <!-- Grounded search -->
+      <div class="prod-pane">
+        <div class="pp-head">
+          <span class="pp-kicker">// Ask · tailor &amp; find</span>
+          <span class="pp-title">Reshape the role and pull a shortlist — in plain English.</span>
         </div>
-        <div class="way-foot">Outcome: new revenue line · deeper client lock-in</div>
-      </div>
-    </div>
+        <div class="pp-sub">Every answer is grounded in the candidate's own CV and work sample, with the evidence quoted. Tighten the bar and it re-ranks live.</div>
 
-    <div class="takeaway-band">
-      <span class="lbl">// the same engine</span>
-      <span>Same platform, same usage economics underneath — <em>whether your consultants run it or your clients do</em>.</span>
+        <div class="sr-query"><span class="q"></span><span>Top 5 with payments experience who scored 80+ on the assessment</span></div>
+
+        <div class="sr-result">
+          <div class="sr-cand"><span class="sr-av">PN</span><span class="nm">Priya N.</span><span class="sc">86</span></div>
+          <div class="sr-crit"><span class="sr-pill met">Met</span><span>Payments / ledger systems</span></div>
+          <div class="sr-quote">"Owned the reconciliation pipeline for a card processor — 4M+ daily transactions across two ledgers."</div>
+          <div class="sr-cite">↳ cited · CV · Experience</div>
+          <div class="sr-crit"><span class="sr-pill met">Met</span><span>Taali score ≥ 80 — scored 86</span></div>
+        </div>
+      </div>
     </div>
 
     <div class="slide-foot">
-      <span>05 / 10 · Two ways you win</span>
+      <span>05 / 09 · The recruiter's seat · human-in-the-loop</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       06 · RUNS YOUR WHOLE DESK (pipeline)
+       06 · RUNS YOUR WHOLE DESK (pipeline — all live)
        ════════════════════════════════════════════════════════════════════ -->
   <section data-slide="pipeline" data-screen-label="06 End to end">
     <div class="slide-head">
       <div class="eyebrow"><span class="num">06</span><span class="dot">·</span><span>End to end</span></div>
-      <h2 class="slide-title" style="font-size:58px;">Taali runs every stage of the desk. <em>Most of it is live today.</em></h2>
+      <h2 class="slide-title" style="font-size:56px;">Taali runs every stage of the desk. <em>Live in production today.</em></h2>
     </div>
 
     <div class="pipeline">
@@ -409,20 +507,16 @@
       <div class="pipe-col">
         <div class="pipe-head"><span class="n">01</span><span>Apply</span></div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">ATS sync</span>
-          <span class="bd">Two-way Workable sync. Pulls applicants, dedupes by email + profile.</span>
+          <span class="ti">Two-way ATS sync</span>
+          <span class="bd">Workable sync. Pulls applicants, dedupes by email + profile, writes decisions back.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">CV parse + ingest</span>
-          <span class="bd">Drag-and-drop or API. Work history, skills, education in a clean schema.</span>
+          <span class="ti">CV parse + structure</span>
+          <span class="bd">Drag-and-drop or API. Work history, skills, education into a clean schema.</span>
         </div>
-        <div class="pipe-card roadmap"><span class="badge">Next</span>
-          <span class="ti">Bullhorn · Greenhouse · Ashby</span>
-          <span class="bd">Connector kit for the agency CRMs. Same contract as Workable.</span>
-        </div>
-        <div class="pipe-card roadmap"><span class="badge">Next</span>
-          <span class="ti">Outbound sourcing</span>
-          <span class="bd">Pull GitHub + LinkedIn signals into a passive pool, scored against open roles.</span>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">Public API</span>
+          <span class="bd">Authed endpoints to ingest candidates and roles from your own systems.</span>
         </div>
       </div>
 
@@ -431,40 +525,32 @@
         <div class="pipe-head"><span class="n">02</span><span>Pre-screen</span></div>
         <div class="pipe-card"><span class="badge">Live</span>
           <span class="ti">Yes / no / maybe</span>
-          <span class="bd">Cheap-LLM triage in seconds. Cuts obvious mismatches before full scoring.</span>
+          <span class="bd">Cheap-LLM triage in seconds. Cuts obvious mismatches before any paid scoring.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
           <span class="ti">Must-have matching</span>
-          <span class="bd">Hard filters — location, eligibility, skills the role can't bend on.</span>
+          <span class="bd">Hard filters — location, eligibility, the skills a role can't bend on.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">CV fraud detection</span>
-          <span class="bd">Catches CVs that copy-paste the job description verbatim — caps the score before paid scoring runs.</span>
-        </div>
-        <div class="pipe-card roadmap"><span class="badge">Next</span>
-          <span class="ti">Multilingual</span>
-          <span class="bd">Pre-screen + assessment in German, Dutch, French — across your EU desks.</span>
+          <span class="ti">CV-fraud detection</span>
+          <span class="bd">Flags CVs that copy the job description verbatim and caps the score.</span>
         </div>
       </div>
 
-      <!-- 03 Score & rank -->
+      <!-- 03 Score, rank & search -->
       <div class="pipe-col">
-        <div class="pipe-head"><span class="n">03</span><span>Score &amp; rank</span></div>
+        <div class="pipe-head"><span class="n">03</span><span>Score &amp; search</span></div>
         <div class="pipe-card"><span class="badge">Live</span>
           <span class="ti">CV ↔ JD scoring</span>
-          <span class="bd">Per-dimension, evidence-grounded, per-requirement breakdown.</span>
-        </div>
-        <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">Calibrated p_advance</span>
-          <span class="bd">Per-candidate probability, calibrated to the role family.</span>
+          <span class="bd">Per-requirement, evidence-grounded, with a calibrated probability to advance.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
           <span class="ti">Cohort signals + graph</span>
-          <span class="bd">Top-decile clustering. Priors pulled from candidates with shared work history.</span>
+          <span class="bd">Top-decile clustering; priors from candidates with shared work history.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">Conversational agent</span>
-          <span class="bd">Ask "top 5 with payments experience" in plain English — answers grounded in CV evidence with citations.</span>
+          <span class="ti">Conversational search</span>
+          <span class="bd">Tailor the role and pull a shortlist in plain English — grounded, with citations.</span>
         </div>
       </div>
 
@@ -472,20 +558,16 @@
       <div class="pipe-col">
         <div class="pipe-head"><span class="n">04</span><span>Assess</span></div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">In-browser IDE</span>
-          <span class="bd">Monaco + E2B sandbox + Claude side panel. The day-one workspace.</span>
+          <span class="ti">Real repo + Claude Code</span>
+          <span class="bd">In-browser editor, terminal and AI assistant — the day-one workspace.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">Session telemetry</span>
-          <span class="bd">Every prompt, paste, edit, test run — time-stamped to the second.</span>
+          <span class="ti">Full session telemetry</span>
+          <span class="bd">Every prompt, paste, edit and test run — time-stamped to the second.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
           <span class="ti">5-axis fluency</span>
-          <span class="bd">Coding ability, working with AI, problem solving, independence, communication.</span>
-        </div>
-        <div class="pipe-card roadmap"><span class="badge">Next</span>
-          <span class="ti">Role-family rubrics</span>
-          <span class="bd">ML, data, devops, security, frontend. Each with its own task pack + axes.</span>
+          <span class="bd">Coding, working with AI, problem solving, independence, communication.</span>
         </div>
       </div>
 
@@ -493,20 +575,16 @@
       <div class="pipe-col">
         <div class="pipe-head"><span class="n">05</span><span>Decide</span></div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">Deterministic policy</span>
-          <span class="bd">Pure-Python verdicts. Every call carries policy_revision_id + rule_path.</span>
+          <span class="ti">Home decision hub</span>
+          <span class="bd">Every advance / reject queues for your sign-off with reasoning + evidence.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">Approve / override</span>
-          <span class="bd">Advance and reject calls always queue for your consultant's sign-off.</span>
+          <span class="ti">Deterministic policy</span>
+          <span class="bd">Pure-Python verdicts. Every call carries its policy revision + rule path.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
           <span class="ti">Override-trained retune</span>
           <span class="bd">Nightly. Your corrections become the next pinned rubric revision.</span>
-        </div>
-        <div class="pipe-card roadmap"><span class="badge">Next</span>
-          <span class="ti">Plain-English rubrics</span>
-          <span class="bd">Describe "what good looks like" in prose; the agent compiles a versioned rubric.</span>
         </div>
       </div>
 
@@ -515,37 +593,32 @@
         <div class="pipe-head"><span class="n">06</span><span>Submit</span></div>
         <div class="pipe-card"><span class="badge">Live</span>
           <span class="ti">Client-ready report</span>
-          <span class="bd">Score, dimension breakdown, AI-usage trace, prompt-by-prompt replay — as a shareable link or PDF.</span>
+          <span class="bd">Score, breakdown, AI-usage trace, prompt replay — as a share link or PDF.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
           <span class="ti">Tailored interview pack</span>
           <span class="bd">Questions per candidate, grounded in CV + assessment evidence.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">Public API + provider add-on</span>
-          <span class="bd">Authed endpoints + a marketplace add-on — the rails for your white-label offer.</span>
-        </div>
-        <div class="pipe-card roadmap"><span class="badge">Next</span>
-          <span class="ti">Audit + compliance pack</span>
-          <span class="bd">Hiring-committee + regulator export. SSO, SOC 2, on-prem recordings for FS clients.</span>
+          <span class="ti">Provider add-on</span>
+          <span class="bd">Public API + marketplace add-on — the rails for a white-label offer.</span>
         </div>
       </div>
     </div>
 
     <div class="pipe-legend">
-      <span><span class="sw live"></span>Live in production with our design-partner agency</span>
-      <span><span class="sw roadmap"></span>Next — co-built with launch partners</span>
-      <span style="margin-left: auto; text-transform: none; letter-spacing: 0; font-family: var(--font-display); color: rgba(20,15,40,0.7); font-size: 13px;"><b style="color:#1a1228;">The platform is built.</b> The roadmap is where a partner like Venquis shapes what ships next.</span>
+      <span><span class="sw live"></span>Live in production with our design partner, DeepLight AI</span>
+      <span style="margin-left: auto; text-transform: none; letter-spacing: 0; font-family: var(--font-display); color: rgba(20,15,40,0.7); font-size: 14px;"><b style="color:#1a1228;">The platform is built.</b> This is what runs today — not a roadmap.</span>
     </div>
 
     <div class="slide-foot">
-      <span>06 / 10 · End to end · agent-led</span>
+      <span>06 / 09 · End to end · agent-led</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       07 · WHY TAALI, NOT YOUR STACK TODAY (wedge → reframed)
+       07 · WHY TAALI (wedge — true today)
        ════════════════════════════════════════════════════════════════════ -->
   <section data-slide="wedge" data-screen-label="07 Why Taali">
     <div class="slide-head">
@@ -562,14 +635,14 @@
         <div class="canvas">
           <div class="qcell tl">
             <span class="lbl">Test vendors · adding AI features</span>
-            <span class="nm">HackerRank<br/>CodeSignal<br/>Codility · CoderPad · Karat</span>
+            <span class="nm">HackerRank<br/>CodeSignal<br/>Codility · Karat</span>
           </div>
           <div class="qcell tr taali">
-            <span class="lbl">Agent + AI-native + auditable</span>
+            <span class="lbl">Agent + AI-native + human-in-loop</span>
             <span class="nm">TAALI</span>
           </div>
           <div class="qcell bl">
-            <span class="lbl">Your CRM / ATS · automation only</span>
+            <span class="lbl">Your ATS / CRM · automation only</span>
             <span class="nm">Bullhorn · Vincere<br/>Workable · Greenhouse</span>
           </div>
           <div class="qcell br">
@@ -586,7 +659,7 @@
       <div class="feat-tbl">
         <div class="th">
           <span>What it does for the desk</span>
-          <span class="col"><b>Your CRM</b><br/>Bullhorn / Workable</span>
+          <span class="col"><b>Your ATS/CRM</b><br/>Bullhorn / Workable</span>
           <span class="col"><b>Test vendors</b><br/>HR / CodeSignal</span>
           <span class="col taali"><b>TAALI</b></span>
         </div>
@@ -595,7 +668,7 @@
           <span class="cell no">○</span><span class="cell no">○</span><span class="cell yes">●</span>
         </div>
         <div class="row">
-          <span>Verifies real skill on a hands-on task (not leetcode)</span>
+          <span>Verifies real skill on a real-repo task with AI</span>
           <span class="cell no">○</span><span class="cell partial">◐</span><span class="cell yes">●</span>
         </div>
         <div class="row">
@@ -603,199 +676,121 @@
           <span class="cell no">○</span><span class="cell no">○</span><span class="cell yes">●</span>
         </div>
         <div class="row">
-          <span>AI-CV + proxy-candidate fraud detection</span>
-          <span class="cell partial">◐</span><span class="cell partial">◐</span><span class="cell yes">●</span>
+          <span>Conversational search to tailor roles + find anyone</span>
+          <span class="cell partial">◐</span><span class="cell no">○</span><span class="cell yes">●</span>
+        </div>
+        <div class="row">
+          <span>Human approves every advance / reject (HITL)</span>
+          <span class="cell partial">◐</span><span class="cell no">○</span><span class="cell yes">●</span>
         </div>
         <div class="row">
           <span>Evidence-linked, auditable verdict (FS-ready)</span>
           <span class="cell no">○</span><span class="cell no">○</span><span class="cell yes">●</span>
         </div>
         <div class="row">
-          <span>Plugs into your ATS + a public API to power your own offer</span>
+          <span>Plugs into your ATS + a public API for your own offer</span>
           <span class="cell partial">◐</span><span class="cell no">○</span><span class="cell yes">●</span>
-        </div>
-        <div class="row">
-          <span>Built by a placement agency, for placement agencies</span>
-          <span class="cell no">○</span><span class="cell no">○</span><span class="cell yes">●</span>
         </div>
       </div>
     </div>
 
     <div class="slide-foot">
-      <span>07 / 10 · Why Taali</span>
+      <span>07 / 09 · Why Taali</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       08 · ALREADY LIVE (proof + Deeplight + founder)
+       08 · PROOF (DeepLight — real numbers + correct positioning)
        ════════════════════════════════════════════════════════════════════ -->
   <section data-slide="proof" data-screen-label="08 Proof">
     <div class="tally-grid tg-tr"></div>
 
     <div class="slide-head">
       <div class="eyebrow"><span class="num">08</span><span class="dot">·</span><span>Proof</span></div>
-      <h2 class="slide-title">It already runs inside <em>a placement agency like yours</em>.</h2>
+      <h2 class="slide-title">Not a demo — it runs a <em>real hiring operation</em> every day.</h2>
     </div>
 
-    <div class="market-grid" style="grid-template-columns: 1fr 1.1fr;">
+    <div class="market-grid" style="grid-template-columns: 1fr 1.15fr;">
       <div class="traction" style="gap:16px;">
         <div class="th">// Live · production</div>
         <div class="pilot" style="grid-template-columns: 1fr;">
-          <span class="nm">Deeplight · transformation &amp; data staffing</span>
-          <span class="ds">Runs its engineering and data placements on Taali in production today — agent-screened pipelines, AI-fluency assessments, evidence reports sent to clients, and consultant-in-the-loop overrides feeding the nightly retune. The platform was built inside this desk, not in a lab.</span>
+          <span class="nm">DeepLight AI</span>
+          <span class="ds">A Dubai-based <b style="color:#1a1228;">data &amp; AI consultancy</b> that puts AI into production for banks and insurers (1,300+ models live). It hires the data scientists and AI engineers it staffs that delivery with — and runs that hiring end-to-end on Taali. Taali was built inside this operation.</span>
           <span class="live"><span class="blip"></span>Live · production</span>
         </div>
-        <div class="founder-card" style="border-radius:18px; padding:24px 26px; gap:12px;">
+        <div class="founder-card" style="border-radius:18px; padding:22px 24px; gap:10px;">
           <div class="lbl">// Founder-market fit</div>
-          <div class="bio" style="font-size:15px;">Built by <b style="color:#1a1228;">Sam Patel</b> — a data scientist who spent a decade hiring and growing engineering &amp; data teams from inside the funnel, and built Taali at Deeplight because every tool tested in 2025 measured the wrong thing. You're not buying a demo — <em style="font-style:normal;color:#7f39fb;font-weight:600;">you're buying what a peer agency already runs on</em>.</div>
+          <div class="bio" style="font-size:15px;">Built by <b style="color:#1a1228;">Sam Patel</b> — a data scientist who spent a decade hiring and growing engineering &amp; data teams, and built Taali at DeepLight because every assessment tool he tested measured the wrong thing. <em style="font-style:normal;color:#7f39fb;font-weight:600;">You're buying what a live operation already runs on.</em></div>
         </div>
       </div>
 
       <div class="traction">
-        <div class="th">// What's live today</div>
+        <div class="th">// On Taali at DeepLight — today</div>
         <div class="stats">
-          <div class="s"><div class="n">End-to-end</div><div class="l">Agent runs live mandates — screen, score, rank, assess, decide, submit.</div></div>
-          <div class="s"><div class="n">5-axis</div><div class="l">AI-fluency scoring on every assessment, including how they work with AI.</div></div>
-          <div class="s"><div class="n">API + add-on</div><div class="l">Public API and a Workable provider add-on — shipped and live. The white-label rails.</div></div>
-          <div class="s"><div class="n">Reports</div><div class="l">Two-way ATS sync + client-ready evidence reports as a share link or PDF.</div></div>
+          <div class="s"><div class="n">105</div><div class="l">Live roles run on Taali (114 created to date).</div></div>
+          <div class="s"><div class="n">58k+</div><div class="l">Applications processed · 42k+ distinct candidates.</div></div>
+          <div class="s"><div class="n">16k+</div><div class="l">Agent decisions — human sign-off on every advance &amp; reject.</div></div>
+          <div class="s"><div class="n">4,295</div><div class="l">Candidates advanced; ~5,700 screened out, defensibly.</div></div>
         </div>
         <div class="next">
-          <b>Why this matters for Venquis:</b> the risk in adopting new tooling is "does it actually work on real roles?" Taali has been answering that, in production, on a working agency's desks — every day.
+          <b>Why this matters for you:</b> the risk in new tooling is always "does it work on real roles, at real volume?" Taali has been answering that — in production, on a live FS-focused operation — at the scale your desks run at.
         </div>
       </div>
     </div>
 
     <div class="slide-foot">
-      <span>08 / 10 · Proof</span>
+      <span>08 / 09 · Proof</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       09 · HOW THE PARTNERSHIP WORKS (commercial)
+       09 · THE OFFERING (two ways it pays + credits + free pilot)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="commercial" data-screen-label="09 Commercial">
-    <div class="slide-head">
-      <div class="eyebrow"><span class="num">09</span><span class="dot">·</span><span>Commercial</span></div>
-      <h2 class="slide-title" style="font-size:58px;">One usage-based model. <em>Taali keeps its margin either way.</em></h2>
-      <p class="slide-sub">However Venquis uses it — your consultants on the platform, or your brand in front of your clients — the economics underneath are the same. You only pay for what you run; no big upfront.</p>
-    </div>
-
-    <div class="fin-grid" style="grid-template-columns: 1fr 1fr;">
-      <div class="fin-pricing">
-        <div class="ph">// The model</div>
-
-        <div class="fin-tier">
-          <span class="name">Platform</span>
-          <span class="price">per consultant<em> / mo</em></span>
-          <span class="note">Seat licence for Venquis consultants. Full pipeline — screening, scoring, assessments, decisions, ATS sync. Sized to your team.</span>
-        </div>
-
-        <div class="fin-tier pri">
-          <span class="name">Usage <span style="font-family:var(--font-mono); font-size:10px; letter-spacing:0.16em; color:#7f39fb; padding-left:8px;">// THE ENGINE</span></span>
-          <span class="price">per assessment</span>
-          <span class="note">Compute pass-through (~$0.40 Anthropic + sandbox) plus a Taali margin on every completed work sample. Margin-positive by design.</span>
-        </div>
-
-        <div class="fin-tier">
-          <span class="name">White-label</span>
-          <span class="price">your price<em> on top</em></span>
-          <span class="note">Same usage economics. Venquis sets the client-facing price and keeps the spread; Taali earns its usage margin underneath. Your brand, our engine.</span>
-        </div>
-      </div>
-
-      <div class="econ">
-        <div class="ph" style="font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: rgba(20,15,40,0.55); font-weight: 600;">// Two-sided, one engine</div>
-
-        <div class="econ-flow">
-          <div class="et">Use it — on your desks</div>
-          <div class="econ-chain">
-            <span class="econ-node">Venquis consultants</span>
-            <span class="econ-arrow">→</span>
-            <span class="econ-node">seats + usage</span>
-            <span class="econ-arrow">→</span>
-            <span class="econ-node taali">Taali margin</span>
-          </div>
-        </div>
-
-        <div class="econ-flow">
-          <div class="et">Sell it — to your clients</div>
-          <div class="econ-chain">
-            <span class="econ-node">Venquis clients</span>
-            <span class="econ-arrow">→</span>
-            <span class="econ-node">your price (you keep the spread)</span>
-            <span class="econ-arrow">→</span>
-            <span class="econ-node taali">usage → Taali margin</span>
-          </div>
-        </div>
-
-        <div class="econ-note">
-          <b>The structure is what matters today.</b> Start on a pilot, scale with placements, and we'll size the exact seat and per-assessment numbers together — to your volume and your client pricing.
-        </div>
-      </div>
-    </div>
-
-    <div class="slide-foot">
-      <span>09 / 10 · Commercial</span>
-      <span class="brand">taali<span class="p">.</span></span>
-    </div>
-  </section>
-
-  <!-- ═══════════════════════════════════════════════════════════════════════
-       10 · THE PROPOSAL (close — free pilot + partnership)
-       ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="proposal" data-screen-label="10 The proposal">
+  <section data-slide="offering" data-screen-label="09 The offering">
     <div class="tally-grid tg-br"></div>
 
     <div class="slide-head">
-      <div class="eyebrow"><span class="num">10</span><span class="dot">·</span><span>The proposal</span></div>
-      <h2 class="slide-title">Run it on your roles. <em>Free.</em></h2>
-      <p class="slide-sub">A no-cost proof-of-value pilot — the first step of a Venquis × Taali partnership.</p>
+      <div class="eyebrow"><span class="num">09</span><span class="dot">·</span><span>The offering</span></div>
+      <h2 class="slide-title" style="font-size:60px;">One platform. <em>Two ways it pays.</em></h2>
     </div>
 
-    <div class="team-grid" style="grid-template-columns: 1.15fr 1fr;">
-      <div class="ask-card">
-        <div class="lbl">// The pilot</div>
-        <div class="ask-uof" style="margin-top:4px;">
-          <div class="uof"><span class="pct">1</span><span class="desc"><b>Pick 3–5 live Venquis mandates</b> — software, data or change roles you're working now.</span></div>
-          <div class="uof"><span class="pct">2</span><span class="desc"><b>We run them through Taali end-to-end</b> — agent screening plus AI-native assessments — at no cost to you.</span></div>
-          <div class="uof"><span class="pct">3</span><span class="desc"><b>We measure together</b> — consultant hours saved, shortlist quality, and how clients react to verified submissions.</span></div>
-          <div class="uof"><span class="pct">4</span><span class="desc"><b>If it lands, we sign a partnership</b> — and agree the model: desk, white-label, or both.</span></div>
-        </div>
-        <div class="ask-cta">
-          <span>Partner with the agency-built hiring platform.</span>
-          <a href="mailto:sam@taali.ai">sam@taali.ai →</a>
+    <div class="ways">
+      <div class="way">
+        <div class="way-tag">// Use it — on your desks</div>
+        <div class="way-h">Place faster, with proof.</div>
+        <div class="way-list">
+          <div class="way-li"><span class="ic">→</span><span>The agent clears top-of-funnel on every mandate — <b>more reqs per consultant, no extra heads</b>.</span></div>
+          <div class="way-li"><span class="ic">→</span><span>Every submission carries a verified work sample — <b>higher shortlist-to-placement, fewer fall-throughs</b>.</span></div>
+          <div class="way-li"><span class="ic">→</span><span>Arrive at the client with evidence — <b>win mandates against firms still emailing CVs</b>.</span></div>
         </div>
       </div>
 
-      <div style="display:flex; flex-direction:column; gap:16px;">
-        <div class="cz-pill">
-          <span class="cz-pill-tag">// on your desk</span>
-          <span class="cz-pill-text">More placements per consultant. Submissions clients can trust.</span>
+      <div class="way hero">
+        <div class="way-tag">// Offer it — to your clients</div>
+        <div class="way-h">A verified-assessment service you own.</div>
+        <div class="way-list">
+          <div class="way-li"><span class="ic">→</span><span>Offer your own <b>branded "verified assessment"</b> to clients as a co-branded or white-labelled service.</span></div>
+          <div class="way-li"><span class="ic">→</span><span>Powered by Taali's <b>public API + provider add-on</b> — your brand on the front, our engine underneath.</span></div>
+          <div class="way-li"><span class="ic">→</span><span>A new revenue line and a stickier client — <b>you become infrastructure, not just a supplier</b>.</span></div>
         </div>
-        <div class="cz-pill">
-          <span class="cz-pill-tag">// to your clients</span>
-          <span class="cz-pill-text">A verified-assessment service you own and sell.</span>
-        </div>
-        <div class="cz-pill cz-pill-now">
-          <span class="cz-pill-tag">// to start</span>
-          <span class="cz-pill-text">A free pilot on your live roles. Zero commitment.</span>
-        </div>
-        <div style="margin-top:auto; padding-top:18px; border-top:1px solid var(--line); display:flex; flex-direction:column; gap:4px;">
-          <div style="font-family:var(--font-display); font-size:22px; font-weight:600; letter-spacing:-0.02em; color:var(--ink);">Sam Patel</div>
-          <div style="font-family:var(--font-mono); font-size:12px; letter-spacing:0.14em; text-transform:uppercase; color:var(--mute);">Founder · Taali</div>
-          <div style="margin-top:8px; display:flex; gap:14px; font-family:var(--font-mono); font-size:14px;">
-            <a href="mailto:sam@taali.ai" style="color:var(--purple); text-decoration:none;">sam@taali.ai</a>
-            <span style="color:var(--mute);">·</span>
-            <a href="https://www.taali.ai" style="color:var(--purple); text-decoration:none;">taali.ai</a>
-          </div>
-        </div>
+      </div>
+    </div>
+
+    <div class="offer-foot">
+      <div class="offer-cell credits">
+        <span class="oc-tag">// How you pay</span>
+        <span class="oc-body"><b>Credits — you pay for what you use.</b> A simple margin model, no big upfront. Offer it on to your clients and you keep the spread on top; we keep our usage margin underneath.</span>
+      </div>
+      <div class="offer-cell pilot">
+        <span class="oc-tag">// How to start</span>
+        <span class="oc-body"><b>A free proof-of-value pilot.</b> Pick a few live roles, we run them end-to-end at no cost, we measure together — then agree the model. &nbsp;<a href="mailto:sam@taali.ai">sam@taali.ai →</a></span>
       </div>
     </div>
 
     <div class="slide-foot">
-      <span>10 / 10 · Thank you</span>
+      <span>09 / 09 · The offering · thank you</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
@@ -807,16 +802,15 @@
 <!-- Speaker notes -->
 <script type="application/json" id="speaker-notes">
 [
-  "Thanks for the time. I'm Sam — I built Taali inside Deeplight, a placement agency much like Venquis. This isn't a generic HR-tech pitch; it's one recruitment operator showing another a platform built for our exact problem. Two things to land today: it makes your consultants faster and your submissions provable, and it's a service you can resell to your own clients. I'll keep it to ten slides and end on a free pilot.",
-  "The ground has shifted under recruitment — and worst of all for exactly the roles Venquis places: software, data, AI, change. Three numbers. 78% of CVs now contain AI-generated content, and resume fraud costs ~$600B a year — so your consultants burn billable hours on a slush pile that looks qualified. Legacy tech tests saw a 5x cheating spike because candidates build with AI all day and the tests pretend they don't. And one in three hiring managers has caught a fake or proxy candidate — so clients no longer trust a CV, which means they no longer trust a CV-based shortlist. The agency that can prove capability, not just forward it, wins the mandate.",
-  "Taali is two things in one: a hiring agent that runs each live mandate end-to-end, and an AI-native assessment that produces real evidence. Three pillars. Screen — the agent clears pre-screen, scoring and ranking in real time so consultants work the shortlist, not the slush pile. Prove — every shortlisted candidate works a real task in a real IDE with Claude in the side panel, scored on five axes including how well they work with AI, which is what your clients now hire for and nobody else measures. Trust — every verdict is evidence-linked and auditable, which matters for your financial-services and insurance clients, and it learns from your consultants' overrides overnight.",
-  "This is what you send the client instead of a CV. A real repo, a real incident to fix — here, a finance reconciliation bug — real AI in the side panel, and a full replayable record of how the candidate worked: every prompt, paste, edit and test run, time-stamped. Your client doesn't get a claim on a CV; they get the work, and a score that maps to the actual job.",
-  "Here's the part that matters most for a partnership: there are two ways this pays for Venquis, and we weight them equally. On your desks — the agent clears top-of-funnel so you run more reqs per consultant with no extra heads, every submission carries a verified work sample so more shortlists convert and fewer placements fall through, and you arrive at clients with evidence while competitors are still emailing CVs. As your offer — you put your brand on it: 'Venquis Verified' assessments you sell into your own client base, powered by our public API and provider add-on, a new revenue line that makes you infrastructure rather than just a supplier. Same platform, same economics underneath, whichever side you're on.",
-  "Taali runs every stage of the desk — apply, pre-screen, score and rank, assess, decide, submit — and the headline is that almost all of it is live in production today. Workable sync, CV-fraud detection, evidence-grounded scoring, the conversational agent that answers 'top five with payments experience' grounded in CV evidence, the IDE assessment, five-axis fluency, the deterministic decision policy, client-ready PDF reports, and the public API plus provider add-on that powers white-label. The dashed cards — Bullhorn and Greenhouse connectors, multilingual for your EU desks, role-family rubrics, an FS compliance pack — are the roadmap, and that's exactly where a launch partner like Venquis shapes what ships next.",
-  "Why Taali and not what you run today. Your CRM — Bullhorn, Vincere, Workable — automates workflow but doesn't measure skill. Test vendors bolt AI features onto leetcode formats. Nobody sits in the top-right: agent-driven, AI-native work sample, auditable. The table is the short version — only Taali works each role end-to-end, scores how candidates work with AI, gives you an auditable verdict your FS clients can defend, plugs into your ATS and exposes an API to power your own offer, and was built by a placement agency for placement agencies.",
-  "The honest question with any new tool is 'does it actually work on real roles?' Taali already runs in production at Deeplight — a transformation and data staffing desk — screening live pipelines, assessing for AI fluency, and sending evidence reports to clients every day. I built it from inside that desk because every tool I tested in 2025 measured the wrong thing. So you're not buying a demo; you're buying what a peer agency already runs on. Live today: the full end-to-end agent, five-axis scoring, the public API and provider add-on, two-way ATS sync and client-ready reports.",
-  "Commercial — and this is deliberately simple. One usage-based model that works whichever way you use it. A per-consultant platform seat, a per-assessment usage charge that's compute pass-through plus our margin, and white-label where you set the client price, keep the spread, and we still earn our usage margin underneath. So whether your consultants run it or your clients do, Taali keeps its margin and you only pay for what you run. Exact numbers we size together to your volume — the structure is the point today.",
-  "So here's the proposal: let's prove it on your roles, free. Pick three to five live mandates, we run them through Taali end-to-end at no cost, we measure together — hours saved, shortlist quality, client reaction to verified submissions — and if it lands we sign a partnership and agree the model: desk, white-label, or both. On your desk: more placements per consultant. To your clients: a service you own. To start: a free pilot, zero commitment. My email's on the slide — I'd like to pick the roles before we leave."
+  "Thanks for the time. I'm Sam — I built Taali inside DeepLight, a data & AI consultancy that hires exactly the kind of technical people you place. This isn't a generic HR-tech pitch; it's one operator showing another a platform built for our shared problem. Two things to land today: it makes your consultants faster and your submissions provable, and it's a service you can sell on to your own clients. Nine slides, ending on a free pilot.",
+  "The ground has shifted under recruitment — worst of all for exactly the roles you place: software, data, AI, change. 78% of CVs now contain AI-generated content and resume fraud costs around $600B a year, so your consultants burn billable hours on a slush pile that looks qualified. Legacy tech tests saw a 5x cheating spike because candidates build with AI all day and the tests pretend they don't. And one in three hiring managers has caught a fake or proxy candidate — so clients no longer trust a CV, which means they no longer trust a CV-based shortlist. Whoever can prove capability, not just forward it, wins the mandate.",
+  "Taali is two things in one. A hiring agent that runs each live mandate end-to-end — and crucially, keeps you in control: it brings decisions to your home hub, you make the call. And an AI-native assessment that produces real evidence. Three pillars: Screen and search — the agent does pre-screen, scoring and ranking, and you can ask it in plain English to tailor a role and pull a shortlist. Prove — every candidate works a real task in a real repo with Claude in hand, scored on five axes including how they work with AI. Control — every advance and reject is queued for your sign-off, evidence-linked and auditable, and your overrides retrain it overnight.",
+  "This is what you send the client instead of a CV — and it's the real product, not a mock-up. A real repo, a real incident to fix — here, a finance reconciliation bug — with Claude Code live in the workspace: the candidate chats, edits, and runs the test suite in the terminal. We capture every prompt, every tool call, every test run, and score how they actually work with AI. The client doesn't get a claim on a CV; they get the work, replayable.",
+  "This is the recruiter's seat — and the two features people always ask about. On the left, the home hub: the agent never acts alone, so every advance and reject lands here with its confidence, score and evidence, and you approve, override or reject. Human-in-the-loop by design — which matters when your clients are banks and insurers. On the right, search: ask in plain English — 'top five with payments experience who scored 80-plus' — and it pulls a shortlist grounded in each candidate's own CV and work sample, with the evidence quoted. Tighten the bar and it re-ranks live. That's how you tailor a role and find a bespoke shortlist in seconds.",
+  "Taali runs every stage of the desk — apply, pre-screen, score and search, assess, decide, submit — and the point of this slide is that this is what's live in production today, not a roadmap. Two-way ATS sync, CV-fraud detection, evidence-grounded scoring, the conversational search, the real-repo assessment with five-axis fluency, the home decision hub with human sign-off, client-ready reports as a share link or PDF, and a public API plus provider add-on that powers a white-label offer. The platform is built.",
+  "Why Taali and not what you run today. Your ATS or CRM — Bullhorn, Vincere, Workable — automates workflow but doesn't measure skill. Test vendors bolt AI features onto leetcode formats. Nobody sits top-right: agent-driven, AI-native work sample, human-in-the-loop. The table is the short version — only Taali works each role end-to-end, scores how candidates work with AI, lets you tailor roles and find anyone conversationally, keeps a human on every decision, gives you an auditable verdict your FS clients can defend, and exposes an API to power your own offer.",
+  "The honest question with any new tool is 'does it work on real roles, at real volume?' Taali runs DeepLight's hiring end-to-end, in production: 105 live roles, 58,000-plus applications, 42,000-plus candidates, 16,000-plus agent decisions with a human sign-off on every advance and reject, and over four thousand candidates advanced. DeepLight is a data and AI consultancy getting AI into production for banks and insurers — so this is exactly the technical, FS-facing hiring you do, at the scale you do it. I built Taali inside that operation because every tool I tested measured the wrong thing. You're buying what a live operation already runs on.",
+  "So, the offering — two ways it pays. Use it on your desks: more placements per consultant, submissions clients trust, mandates won against firms still emailing CVs. Or offer it to your clients: a branded verified-assessment service powered by our API, a new revenue line that makes you infrastructure. Commercially it's deliberately simple — credits, you pay for what you use; offer it on top and you keep the spread, we keep our margin underneath. And to start, it's free: pick a few live roles, we run them end-to-end at no cost, we measure together, then we agree the model. I'd like to pick those roles before we leave."
 ]
 </script>
 
