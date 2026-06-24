@@ -1,36 +1,50 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <!--
+    Taali social share card (Open Graph / Twitter), 1200x630.
+
+    DESIGN CONTRACT — center-crop safe. Link unfurlers (WhatsApp compose
+    preview, iMessage, Slack) show a SQUARE centre-crop of this image, not the
+    full banner. So every essential element (the glyph + the wordmark) lives
+    inside the central 630x630 square — x in [285, 915] — and is horizontally
+    centred on x=600. The gradient + glow are the only things that
+    bleed to the edges; cropping them away loses nothing.
+
+    REGENERATE: rsvg-convert needs the real Geist font visible to fontconfig
+    (the wordmark is Geist SemiBold, matching the product). The repo build pipes
+    brand-assets/og-image.svg -> frontend/public/og-image.png at 1200x630.
+  -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#3d1a7a"/>
       <stop offset="0.55" stop-color="#5b2ca8"/>
       <stop offset="1" stop-color="#8867c4"/>
     </linearGradient>
-    <radialGradient id="glow" cx="0.82" cy="0.18" r="0.6">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+    <radialGradient id="halo" cx="0.5" cy="0.36" r="0.42">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.20"/>
       <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
     </radialGradient>
+    <filter id="tileShadow" x="-60%" y="-60%" width="220%" height="220%">
+      <feDropShadow dx="0" dy="16" stdDeviation="26" flood-color="#190b33" flood-opacity="0.42"/>
+    </filter>
   </defs>
 
   <rect width="1200" height="630" fill="url(#bg)"/>
-  <rect width="1200" height="630" fill="url(#glow)"/>
+  <rect width="1200" height="630" fill="url(#halo)"/>
 
-  <!-- kicker -->
-  <text x="90" y="150" font-family="Helvetica, Arial, sans-serif" font-size="26" font-weight="700"
-        letter-spacing="4" fill="#e9defb" opacity="0.85">AGENTIC-FIRST · AI-NATIVE HIRING</text>
+  <!-- Brand glyph: the Taali tally mark on a white tile (app-icon lockup).
+       Drawn from the canonical 24-unit mark, scaled to a 190px tile centred on
+       x=600. A solid white tile reads cleanly even at thumbnail size, where the
+       thin purple lines on the prior wide banner turned to mush. -->
+  <g filter="url(#tileShadow)" transform="translate(505 146) scale(7.91667)">
+    <rect x="1.25" y="1.25" width="21.5" height="21.5" rx="5.35" fill="#ffffff"/>
+    <g transform="translate(2.4 2.4) scale(0.8)" fill="none" stroke="#5E3AA8"
+       stroke-width="3" stroke-linecap="round">
+      <path d="M6 4.5v15M10 4.5v15M14 4.5v15M18 4.5v15M4 18.5L20 5.5"/>
+    </g>
+  </g>
 
-  <!-- wordmark -->
-  <text x="84" y="320" font-family="Georgia, 'Times New Roman', serif" font-size="200" font-weight="700"
-        letter-spacing="-6" fill="#ffffff">taali<tspan fill="#c9b3f0">.</tspan></text>
-
-  <!-- tagline -->
-  <text x="90" y="410" font-family="Helvetica, Arial, sans-serif" font-size="48" font-weight="600" fill="#ffffff">
-    The recruiter&#8217;s agent.</text>
-
-  <!-- keyword line -->
-  <text x="90" y="470" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="400" fill="#e9defb" opacity="0.9">
-    Agentic hiring &#183; AI-native assessments &#183; scores how engineers use AI</text>
-
-  <!-- url -->
-  <text x="90" y="565" font-family="'Courier New', monospace" font-size="26" font-weight="700"
-        letter-spacing="2" fill="#ffffff" opacity="0.75">taali.ai</text>
+  <!-- Wordmark — genuine Geist SemiBold, lowercase, signature lavender dot.
+       Glyph + wordmark only: the minimal, logo-first lockup. -->
+  <text x="600" y="476" text-anchor="middle" font-family="Geist" font-weight="600"
+        font-size="150" letter-spacing="-3" fill="#ffffff">taali<tspan fill="#C4A5FD">.</tspan></text>
 </svg>
