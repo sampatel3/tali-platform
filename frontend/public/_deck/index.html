@@ -268,6 +268,64 @@
   .s4-bars span { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink); padding: 4px 9px; border-radius: 5px; border: 1px solid var(--line); background: linear-gradient(to right, color-mix(in oklab, var(--purple) 20%, #fff) var(--w,0%), var(--bg) var(--w,0%)); }
   .s4-rep { font-size: 14px; line-height: 1.5; color: var(--ink-2); }
   .s4-rep b { color: var(--ink); font-weight: 600; }
+
+  /* ---- slide 5 v6: built product panels (faithful, legible — not screenshots) ---- */
+  .prod-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg-2); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; box-shadow: 0 20px 50px -30px rgba(91,44,168,0.4); }
+  .pp-bar { display: flex; align-items: center; gap: 10px; padding: 9px 15px; border-bottom: 1px solid var(--line); background: var(--bg); }
+  .pp-bar .dots { display: flex; gap: 6px; }
+  .pp-bar .dots i { width: 10px; height: 10px; border-radius: 50%; background: #d88a1c; display: block; }
+  .pp-bar .dots i:nth-child(1) { background: #f06; }
+  .pp-bar .dots i:nth-child(3) { background: #15a36a; }
+  .pp-url { font-family: var(--font-mono); font-size: 12px; color: var(--mute); letter-spacing: 0.04em; }
+  .pp-right { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--purple); background: var(--purple-soft); border-radius: 999px; padding: 3px 11px; font-weight: 700; }
+  .pp-body { flex: 1; min-height: 0; padding: 18px 20px; display: flex; flex-direction: column; gap: 13px; overflow: hidden; }
+
+  /* HITL: decision queue */
+  .dq { display: flex; flex-direction: column; gap: 8px; }
+  .dq-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 11px; background: #fff; }
+  .dq-row.sel { border-color: color-mix(in oklab, var(--purple) 40%, var(--line)); background: var(--purple-soft); box-shadow: inset 3px 0 0 var(--purple); }
+  .dq-av { width: 26px; height: 26px; border-radius: 50%; background: var(--purple-soft); color: var(--purple); font-family: var(--font-display); font-weight: 700; font-size: 11px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .dq-nm { font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--ink); }
+  .dq-badge { font-family: var(--font-mono); font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; padding: 2px 8px; border-radius: 999px; }
+  .dq-badge.adv { color: var(--green); background: color-mix(in oklab, var(--green) 14%, #fff); }
+  .dq-badge.rej { color: #c0392b; background: color-mix(in oklab, #c0392b 12%, #fff); }
+  .dq-needs { font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.06em; color: #fff; background: var(--purple); border-radius: 999px; padding: 2px 7px; }
+  .dq-sc { margin-left: auto; font-family: var(--font-mono); font-weight: 700; font-size: 13px; color: var(--ink); }
+  .dq-row:not(.sel) .dq-needs { display: none; }
+  .dq-row:not(.sel) .dq-sc { margin-left: auto; }
+
+  /* HITL: decision detail */
+  .dd { flex: 1; border: 1px solid color-mix(in oklab, var(--purple) 22%, var(--line)); border-radius: 14px; background: #fff; padding: 15px 18px; display: flex; flex-direction: column; gap: 11px; }
+  .dd-top { display: flex; align-items: center; gap: 10px; font-family: var(--font-mono); font-size: 11px; }
+  .dd-badge.adv { color: var(--green); font-weight: 700; letter-spacing: 0.06em; }
+  .dd-needs { color: #fff; background: var(--purple); border-radius: 999px; padding: 2px 9px; font-weight: 700; }
+  .dd-conf { color: var(--mute); margin-left: auto; }
+  .dd-id { display: flex; align-items: center; justify-content: space-between; }
+  .dd-name { font-family: var(--font-display); font-size: 22px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); }
+  .dd-role { font-size: 13px; color: var(--ink-2); }
+  .dd-score { font-family: var(--font-display); font-size: 36px; font-weight: 600; color: var(--purple); line-height: 0.9; display: flex; flex-direction: column; align-items: center; }
+  .dd-score span { font-family: var(--font-mono); font-size: 9px; color: var(--mute); letter-spacing: 0.1em; margin-top: 3px; }
+  .dd-reason { font-size: 13.5px; line-height: 1.5; color: var(--ink-2); }
+  .dd-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .dd-stats div { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; }
+  .dd-stats .k { font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--mute); }
+  .dd-stats .v { font-family: var(--font-display); font-size: 17px; font-weight: 600; color: var(--ink); }
+  .dd-actions { display: flex; gap: 8px; margin-top: auto; }
+
+  /* Search: query + ranked top-N */
+  .sq { font-size: 15px; line-height: 1.4; color: var(--ink); background: var(--bg); border: 1px solid color-mix(in oklab, var(--purple) 22%, var(--line)); border-radius: 12px; padding: 11px 15px; }
+  .sq-meta { font-family: var(--font-mono); font-size: 11px; color: var(--mute); letter-spacing: 0.03em; }
+  .rank { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+  .rk-row { display: flex; align-items: center; gap: 11px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 11px; background: #fff; }
+  .rk-row:first-child { border-color: color-mix(in oklab, var(--purple) 30%, var(--line)); background: var(--purple-soft); }
+  .rk-n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; color: var(--mute); width: 14px; text-align: center; flex: none; }
+  .rk-av { width: 28px; height: 28px; border-radius: 50%; background: var(--purple-soft); color: var(--purple); font-family: var(--font-display); font-weight: 700; font-size: 11px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .rk-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+  .rk-nm { font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--ink); }
+  .rk-role { font-size: 12px; color: var(--ink-2); }
+  .rk-pre { font-family: var(--font-mono); font-size: 11px; color: var(--mute); flex: none; }
+  .rk-sc { font-family: var(--font-mono); font-weight: 700; font-size: 13px; padding: 3px 10px; border-radius: 999px; flex: none; color: var(--purple); background: var(--purple-soft); }
+  .rk-note { font-family: var(--font-mono); font-size: 11px; color: var(--mute); }
 </style>
 </head>
 <body>
@@ -541,10 +599,28 @@
             <div class="d">Every advance &amp; reject waits for your sign-off.</div>
           </div>
         </div>
-        <figure class="shot">
-          <div class="shot-bar"><span class="dots"><i></i><i></i><i></i></span><span class="shot-url">taali.ai/home · decision feed</span></div>
-          <div class="shot-img" style="background-image:url('img/home_hitl.png');"></div>
-        </figure>
+        <div class="prod-panel">
+          <div class="pp-bar"><span class="dots"><i></i><i></i><i></i></span><span class="pp-url">taali.ai/home · decision feed</span><span class="pp-right">6 awaiting you</span></div>
+          <div class="pp-body">
+            <div class="dq">
+              <div class="dq-row sel"><span class="dq-av">MC</span><span class="dq-nm">Maya Chen</span><span class="dq-badge adv">ADVANCE</span><span class="dq-needs">NEEDS YOU</span><span class="dq-sc">88</span></div>
+              <div class="dq-row"><span class="dq-av">TA</span><span class="dq-nm">Tariq Al-Ahmad</span><span class="dq-badge rej">REJECT</span><span class="dq-sc">41</span></div>
+              <div class="dq-row"><span class="dq-av">RK</span><span class="dq-nm">Rhea Kapoor</span><span class="dq-badge adv">ADVANCE</span><span class="dq-sc">79</span></div>
+            </div>
+            <div class="dd">
+              <div class="dd-top"><span class="dd-badge adv">▲ ADVANCE</span><span class="dd-needs">NEEDS YOU</span><span class="dd-conf">agent 92% confident</span></div>
+              <div class="dd-id"><div><div class="dd-name">Maya Chen</div><div class="dd-role">Senior Data Engineer</div></div><div class="dd-score">88<span>TAALI</span></div></div>
+              <div class="dd-reason">Clears every must-have with room to spare; top-decile AI collaboration on the work sample.</div>
+              <div class="dd-stats">
+                <div><span class="k">CV match</span><span class="v">94</span></div>
+                <div><span class="k">Assessment</span><span class="v">88</span></div>
+                <div><span class="k">Must-haves</span><span class="v">6/6</span></div>
+                <div><span class="k">AI collab</span><span class="v">Top 12%</span></div>
+              </div>
+              <div class="dd-actions"><span class="dec-btn approve">Approve</span><span class="dec-btn override">Override</span><span class="dec-btn reject">Reject</span></div>
+            </div>
+          </div>
+        </div>
         <div class="s5-notes">
           <div class="s5-note"><span class="k">1</span><span>The agent brings <b>every advance &amp; reject</b> to you — with its score, confidence and a full <b>decision trace</b> (CV match · assessment · must-haves).</span></div>
           <div class="s5-note"><span class="k">2</span><span>You <b>approve, override or reject</b>. It never acts alone — a human signs off on every call.</span></div>
@@ -560,10 +636,22 @@
             <div class="d">Find people for any requirement, in plain English.</div>
           </div>
         </div>
-        <figure class="shot">
-          <div class="shot-bar"><span class="dots"><i></i><i></i><i></i></span><span class="shot-url">taali.ai/chat · candidate search</span></div>
-          <div class="shot-img" style="background-image:url('img/search_bespoke.png');"></div>
-        </figure>
+        <div class="prod-panel">
+          <div class="pp-bar"><span class="dots"><i></i><i></i><i></i></span><span class="pp-url">taali.ai/chat · candidate search</span><span class="pp-right">top 10 of 14</span></div>
+          <div class="pp-body">
+            <div class="sq">"Senior data engineer — payments experience, AWS, and 80+ on the assessment"</div>
+            <div class="sq-meta">→ ranked your candidates · grounded in CV + assessment evidence</div>
+            <div class="rank">
+              <div class="rk-row"><span class="rk-n">1</span><span class="rk-av">PR</span><div class="rk-mid"><span class="rk-nm">Priya Raman</span><span class="rk-role">Senior Data Engineer · London</span></div><span class="rk-pre">pre 84</span><span class="rk-sc">86</span></div>
+              <div class="rk-row"><span class="rk-n">2</span><span class="rk-av">DO</span><div class="rk-mid"><span class="rk-nm">Daniel Okafor</span><span class="rk-role">Data Engineer · Lagos</span></div><span class="rk-pre">pre 79</span><span class="rk-sc">82</span></div>
+              <div class="rk-row"><span class="rk-n">3</span><span class="rk-av">SM</span><div class="rk-mid"><span class="rk-nm">Sofia Marchetti</span><span class="rk-role">Data Platform Engineer · Milan</span></div><span class="rk-pre">pre 77</span><span class="rk-sc">80</span></div>
+              <div class="rk-row"><span class="rk-n">4</span><span class="rk-av">WL</span><div class="rk-mid"><span class="rk-nm">Wei Lin</span><span class="rk-role">Senior Data Engineer · Singapore</span></div><span class="rk-pre">pre 73</span><span class="rk-sc">78</span></div>
+              <div class="rk-row"><span class="rk-n">5</span><span class="rk-av">AK</span><div class="rk-mid"><span class="rk-nm">Aisha Khan</span><span class="rk-role">Data Engineer · Dubai</span></div><span class="rk-pre">pre 71</span><span class="rk-sc">76</span></div>
+              <div class="rk-row"><span class="rk-n">6</span><span class="rk-av">TA</span><div class="rk-mid"><span class="rk-nm">Tomás Alvarez</span><span class="rk-role">Backend / Data · Madrid</span></div><span class="rk-pre">pre 70</span><span class="rk-sc">74</span></div>
+            </div>
+            <div class="rk-note">↳ also maps the relationship graph of who worked where</div>
+          </div>
+        </div>
         <div class="s5-notes">
           <div class="s5-note"><span class="k">1</span><span>Ask for a <b>bespoke requirement</b> — "YC-company background + hands-on Postgres".</span></div>
           <div class="s5-note"><span class="k">2</span><span>Get a <b>ranked shortlist</b>, each with its Taali + pre-screen score and the evidence behind it.</span></div>
