@@ -326,6 +326,58 @@
   .rk-pre { font-family: var(--font-mono); font-size: 11px; color: var(--mute); flex: none; }
   .rk-sc { font-family: var(--font-mono); font-weight: 700; font-size: 13px; padding: 3px 10px; border-radius: 999px; flex: none; color: var(--purple); background: var(--purple-soft); }
   .rk-note { font-family: var(--font-mono); font-size: 11px; color: var(--mute); }
+
+  /* ---- slide 5 v7: faithful home decision detail (A) ---- */
+  .hb-funnel { display: flex; gap: 7px; flex-wrap: wrap; }
+  .hb-funnel span { font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px; }
+  .hb-funnel b { color: var(--ink); font-weight: 700; }
+  .hb-await { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
+  .hb-await .kk { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); }
+  .hb-await .c { font-family: var(--font-mono); font-size: 11px; font-weight: 700; border-radius: 999px; padding: 3px 9px; }
+  .hb-await .c.sa { color: var(--purple); background: var(--purple-soft); }
+  .hb-await .c.ad { color: var(--green); background: color-mix(in oklab, var(--green) 14%, #fff); }
+  .hb-await .c.rj { color: #c0392b; background: color-mix(in oklab, #c0392b 12%, #fff); }
+  .hb-await .c.pr { color: var(--amber); background: color-mix(in oklab, var(--amber) 16%, #fff); }
+  .dd2 { flex: 1; border: 1px solid color-mix(in oklab, var(--purple) 20%, var(--line)); border-radius: 14px; background: #fff; padding: 15px 18px; display: flex; flex-direction: column; gap: 11px; }
+  .dd2-top { display: flex; align-items: center; gap: 9px; font-family: var(--font-mono); font-size: 11px; flex-wrap: wrap; }
+  .dd2-type { color: var(--purple); font-weight: 700; letter-spacing: 0.05em; }
+  .dd2-id { color: var(--mute); }
+  .dd2-needs { color: #fff; background: var(--purple); border-radius: 999px; padding: 2px 9px; font-weight: 700; }
+  .dd2-conf { color: var(--green); margin-left: auto; }
+  .dd2-id-row { display: flex; align-items: center; gap: 12px; }
+  .dd2-av { width: 40px; height: 40px; border-radius: 50%; background: var(--purple-soft); color: var(--purple); font-family: var(--font-display); font-weight: 700; font-size: 15px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .dd2-who { flex: 1; min-width: 0; }
+  .dd2-name { font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); }
+  .dd2-mail { font-family: var(--font-mono); font-size: 11.5px; color: var(--mute); }
+  .dd2-score { font-family: var(--font-display); font-size: 34px; font-weight: 600; color: var(--purple); line-height: 0.9; display: flex; flex-direction: column; align-items: center; flex: none; }
+  .dd2-score span { font-family: var(--font-mono); font-size: 9px; color: var(--mute); letter-spacing: 0.1em; margin-top: 3px; }
+  .dd2-reason { font-size: 13px; line-height: 1.5; color: var(--ink-2); flex: 1; }
+  .dd2-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+  .ab { font-family: var(--font-sans); font-size: 12.5px; font-weight: 600; border-radius: 9px; padding: 7px 13px; border: 1px solid var(--line); background: #fff; }
+  .ab.green { color: var(--green); border-color: color-mix(in oklab, var(--green) 45%, var(--line)); background: color-mix(in oklab, var(--green) 8%, #fff); }
+  .ab.amber { color: #c0392b; border-color: color-mix(in oklab, #c0392b 35%, var(--line)); }
+  .ab.amber-o { color: var(--amber); border-color: color-mix(in oklab, var(--amber) 45%, var(--line)); }
+  .ab.purple { color: #fff; background: var(--purple); border-color: var(--purple); }
+
+  /* ---- slide 5 v7: faithful candidate evidence card (B) ---- */
+  .ev-head { display: flex; flex-direction: column; gap: 5px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+  .ev-title { font-size: 13px; line-height: 1.45; color: var(--ink-2); }
+  .ev-title b { color: var(--ink); font-family: var(--font-display); }
+  .ev-sub { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.03em; color: var(--mute); }
+  .ev-cand { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .ev-rank { font-family: var(--font-mono); font-size: 12px; font-weight: 700; color: var(--mute); }
+  .ev-nm { font-family: var(--font-display); font-size: 17px; font-weight: 600; color: var(--ink); }
+  .ev-taali { font-family: var(--font-mono); font-size: 11px; font-weight: 700; color: var(--purple); background: var(--purple-soft); border-radius: 999px; padding: 2px 9px; }
+  .ev-role { font-size: 12px; color: var(--ink-2); }
+  .ev-crits { display: flex; flex-direction: column; gap: 6px; }
+  .ev-crit { font-size: 12.5px; color: var(--ink); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .ev-pill { font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.05em; padding: 2px 7px; border-radius: 999px; flex: none; }
+  .ev-pill.met { color: var(--green); background: color-mix(in oklab, var(--green) 14%, #fff); }
+  .ev-pill.partial { color: var(--amber); background: color-mix(in oklab, var(--amber) 16%, #fff); }
+  .ev-src { font-family: var(--font-mono); font-size: 10.5px; color: var(--mute); }
+  .ev-quote { font-size: 12px; line-height: 1.45; color: var(--ink-2); border-left: 2px solid color-mix(in oklab, var(--amber) 50%, var(--line)); padding: 3px 0 3px 10px; margin-left: 4px; }
+  .ev-cand-mini { display: flex; align-items: center; gap: 9px; padding-top: 9px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+  .ev-cand-mini .ev-nm { font-size: 14.5px; }
 </style>
 </head>
 <body>
@@ -600,30 +652,21 @@
           </div>
         </div>
         <div class="prod-panel">
-          <div class="pp-bar"><span class="dots"><i></i><i></i><i></i></span><span class="pp-url">taali.ai/home · decision feed</span><span class="pp-right">6 awaiting you</span></div>
+          <div class="pp-bar"><span class="dots"><i></i><i></i><i></i></span><span class="pp-url">taali.ai/home · Senior AWS Platform Engineer</span><span class="pp-right">98 awaiting you</span></div>
           <div class="pp-body">
-            <div class="dq">
-              <div class="dq-row sel"><span class="dq-av">MC</span><span class="dq-nm">Maya Chen</span><span class="dq-badge adv">ADVANCE</span><span class="dq-needs">NEEDS YOU</span><span class="dq-sc">88</span></div>
-              <div class="dq-row"><span class="dq-av">TA</span><span class="dq-nm">Tariq Al-Ahmad</span><span class="dq-badge rej">REJECT</span><span class="dq-sc">41</span></div>
-              <div class="dq-row"><span class="dq-av">RK</span><span class="dq-nm">Rhea Kapoor</span><span class="dq-badge adv">ADVANCE</span><span class="dq-sc">79</span></div>
-            </div>
-            <div class="dd">
-              <div class="dd-top"><span class="dd-badge adv">▲ ADVANCE</span><span class="dd-needs">NEEDS YOU</span><span class="dd-conf">agent 92% confident</span></div>
-              <div class="dd-id"><div><div class="dd-name">Maya Chen</div><div class="dd-role">Senior Data Engineer</div></div><div class="dd-score">88<span>TAALI</span></div></div>
-              <div class="dd-reason">Clears every must-have with room to spare; top-decile AI collaboration on the work sample.</div>
-              <div class="dd-stats">
-                <div><span class="k">CV match</span><span class="v">94</span></div>
-                <div><span class="k">Assessment</span><span class="v">88</span></div>
-                <div><span class="k">Must-haves</span><span class="v">6/6</span></div>
-                <div><span class="k">AI collab</span><span class="v">Top 12%</span></div>
-              </div>
-              <div class="dd-actions"><span class="dec-btn approve">Approve</span><span class="dec-btn override">Override</span><span class="dec-btn reject">Reject</span></div>
+            <div class="hb-funnel"><span><b>62</b> applied</span><span><b>94</b> scored</span><span><b>21</b> advanced</span><span><b>137</b> rejected</span></div>
+            <div class="hb-await"><span class="kk">awaiting you</span><span class="c sa">7 send assessment</span><span class="c ad">1 advance</span><span class="c rj">88 reject</span><span class="c pr">2 pre-screen reject</span></div>
+            <div class="dd2">
+              <div class="dd2-top"><span class="dd2-type">⊘ SEND_ASSESSMENT</span><span class="dd2-id">D-109600 · 3h ago</span><span class="dd2-needs">NEEDS YOU</span><span class="dd2-conf">● confidence 100%</span></div>
+              <div class="dd2-id-row"><span class="dd2-av">IS</span><div class="dd2-who"><div class="dd2-name">Imran S.</div><div class="dd2-mail">i.s••••@gmail.com · open candidate report ↗</div></div><div class="dd2-score">72<span>TALI</span></div></div>
+              <div class="dd2-reason">Solid partial fit — strong DevOps / IaC / Kubernetes core with real FinTech and AI/ML platform exposure, but gaps in AWS-native landing-zone architecture, Direct Connect and FinOps depth for a greenfield platform lead. 7 yrs hands-on AWS + Azure, expert Terraform, production EKS/AKS — skews DevOps over cloud architect. Recommend an assessment to confirm the architecture depth.</div>
+              <div class="dd2-actions"><span class="ab green">Send assessment</span><span class="ab amber">Reject</span><span class="ab amber-o">Skip &amp; advance</span><span class="ab purple">Send back &amp; teach</span></div>
             </div>
           </div>
         </div>
         <div class="s5-notes">
-          <div class="s5-note"><span class="k">1</span><span>The agent brings <b>every advance &amp; reject</b> to you — with its score, confidence and a full <b>decision trace</b> (CV match · assessment · must-haves).</span></div>
-          <div class="s5-note"><span class="k">2</span><span>You <b>approve, override or reject</b>. It never acts alone — a human signs off on every call.</span></div>
+          <div class="s5-note"><span class="k">1</span><span>The agent brings <b>every call</b> — advance, reject, send-assessment — with its <b>confidence and full reasoning</b>.</span></div>
+          <div class="s5-note"><span class="k">2</span><span>You <b>send it, reject, skip — or send it back to teach</b> the agent. It never acts alone.</span></div>
         </div>
       </div>
 
@@ -637,24 +680,28 @@
           </div>
         </div>
         <div class="prod-panel">
-          <div class="pp-bar"><span class="dots"><i></i><i></i><i></i></span><span class="pp-url">taali.ai/chat · candidate search</span><span class="pp-right">top 10 of 14</span></div>
+          <div class="pp-bar"><span class="dots"><i></i><i></i><i></i></span><span class="pp-url">taali.ai/chat · AWS Glue Data Engineer</span><span class="pp-right">top 10 · 13 in pool</span></div>
           <div class="pp-body">
-            <div class="sq">"Senior data engineer — payments experience, AWS, and 80+ on the assessment"</div>
-            <div class="sq-meta">→ ranked your candidates · grounded in CV + assessment evidence</div>
-            <div class="rank">
-              <div class="rk-row"><span class="rk-n">1</span><span class="rk-av">PR</span><div class="rk-mid"><span class="rk-nm">Priya Raman</span><span class="rk-role">Senior Data Engineer · London</span></div><span class="rk-pre">pre 84</span><span class="rk-sc">86</span></div>
-              <div class="rk-row"><span class="rk-n">2</span><span class="rk-av">DO</span><div class="rk-mid"><span class="rk-nm">Daniel Okafor</span><span class="rk-role">Data Engineer · Lagos</span></div><span class="rk-pre">pre 79</span><span class="rk-sc">82</span></div>
-              <div class="rk-row"><span class="rk-n">3</span><span class="rk-av">SM</span><div class="rk-mid"><span class="rk-nm">Sofia Marchetti</span><span class="rk-role">Data Platform Engineer · Milan</span></div><span class="rk-pre">pre 77</span><span class="rk-sc">80</span></div>
-              <div class="rk-row"><span class="rk-n">4</span><span class="rk-av">WL</span><div class="rk-mid"><span class="rk-nm">Wei Lin</span><span class="rk-role">Senior Data Engineer · Singapore</span></div><span class="rk-pre">pre 73</span><span class="rk-sc">78</span></div>
-              <div class="rk-row"><span class="rk-n">5</span><span class="rk-av">AK</span><div class="rk-mid"><span class="rk-nm">Aisha Khan</span><span class="rk-role">Data Engineer · Dubai</span></div><span class="rk-pre">pre 71</span><span class="rk-sc">76</span></div>
-              <div class="rk-row"><span class="rk-n">6</span><span class="rk-av">TA</span><div class="rk-mid"><span class="rk-nm">Tomás Alvarez</span><span class="rk-role">Backend / Data · Madrid</span></div><span class="rk-pre">pre 70</span><span class="rk-sc">74</span></div>
+            <div class="ev-head">
+              <div class="ev-title"><b>Top 10</b> · PySpark, AWS Glue · salary ≤ 30,000 AED/mo · Taali ≥ 60 · notice ≤ 4 weeks · Western-company experience · banking domain · 2+ yrs</div>
+              <div class="ev-sub">ranked by Taali fit · 13 in pool · grounded vs CV + notes · 1 hidden (missed notice period)</div>
             </div>
-            <div class="rk-note">↳ also maps the relationship graph of who worked where</div>
+            <div class="ev-cand"><span class="ev-rank">#1</span><span class="ev-nm">Arjun Nair</span><span class="ev-taali">Taali 62</span><span class="ev-role">Data Engineer (AI/LLM) · India — Workable ↗</span></div>
+            <div class="ev-crits">
+              <div class="ev-crit"><span class="ev-pill met">MET</span>salary ≤ 30,000 AED/mo<span class="ev-src">notes · "A: 21,000"</span></div>
+              <div class="ev-crit"><span class="ev-pill met">MET</span>Taali score ≥ 60<span class="ev-src">taali · "score 62"</span></div>
+              <div class="ev-crit"><span class="ev-pill met">MET</span>notice period ≤ 4 weeks<span class="ev-src">notes · "A: 15 days"</span></div>
+              <div class="ev-crit"><span class="ev-pill met">MET</span>Western-company experience<span class="ev-src">cv · "phData, Jul 2024–Present" +2</span></div>
+              <div class="ev-crit"><span class="ev-pill partial">PARTIAL</span>banking domain experience</div>
+              <div class="ev-quote">cv · "modular ETL in PySpark for high-volume financial-services analytics" — strong FS, but primary domain is healthcare/insurance, not banking.</div>
+            </div>
+            <div class="ev-cand-mini"><span class="ev-rank">#2</span><span class="ev-nm">Sana Iqbal</span><span class="ev-taali">Taali 52</span><span class="ev-role">Senior Data Engineer, Multi-Cloud ETL · Abu Dhabi</span></div>
+            <div class="ev-cand-mini"><span class="ev-rank">#3</span><span class="ev-nm">Wei Lin</span><span class="ev-taali">Taali 49</span><span class="ev-role">Data Platform Engineer · Singapore</span></div>
           </div>
         </div>
         <div class="s5-notes">
-          <div class="s5-note"><span class="k">1</span><span>Ask for a <b>bespoke requirement</b> — "YC-company background + hands-on Postgres".</span></div>
-          <div class="s5-note"><span class="k">2</span><span>Get a <b>ranked shortlist</b>, each with its Taali + pre-screen score and the evidence behind it.</span></div>
+          <div class="s5-note"><span class="k">1</span><span>Ask for any <b>bespoke requirement</b> — skills, salary, notice, domain, even "Taali score ≥ 60".</span></div>
+          <div class="s5-note"><span class="k">2</span><span>Get a <b>ranked top 10</b>, each criterion <b>met / partial</b> and grounded in quoted CV + notes.</span></div>
           <div class="s5-note graph"><span class="k">↳</span><span>Maps the relationship graph of who worked where, too.</span></div>
         </div>
       </div>
@@ -991,7 +1038,7 @@
   "The ground has shifted under recruitment — worst of all for exactly the roles you place: software, data, AI, change. 78% of CVs now contain AI-generated content and resume fraud costs around $600B a year, so your consultants burn billable hours on a slush pile that looks qualified. Legacy tech tests saw a 5x cheating spike because candidates build with AI all day and the tests pretend they don't. And one in three hiring managers has caught a fake or proxy candidate — so clients no longer trust a CV, which means they no longer trust a CV-based shortlist. Whoever can prove capability, not just forward it, wins the mandate.",
   "Taali is two things in one. A hiring agent that runs each live mandate end-to-end — and crucially, keeps you in control: it brings decisions to your home hub, you make the call. And an AI-native assessment that produces real evidence. Three pillars: Screen and search — the agent does pre-screen, scoring and ranking, and you can ask it in plain English to tailor a role and pull a shortlist. Prove — every candidate works a real task in a real repo with Claude in hand, scored on five axes including how they work with AI. Control — every advance and reject is queued for your sign-off, evidence-linked and auditable, and your overrides retrain it overnight.",
   "This is what you send the client instead of a CV. The task is a real one — a GenAI production-readiness review for a bank, with three failing tests, including a high-risk action that wrongly skips human review. The candidate works in a real repo with Claude alongside — chatting, reading the code, fixing it; there's no terminal, just the repo and the assistant. We capture the whole session — every prompt, paste, edit, test run, even time-to-first-prompt and browser focus — and roll eight weighted signals into one Taali score: 81 here, strongest on working-with-AI and problem-solving. That becomes a client-ready report with the per-axis evidence and the full prompt-by-prompt replay. They don't get a claim on a CV; they get the work, scored and replayable.",
-  "Two things, both real product. A — the human-in-the-loop decision feed: the agent works each role and brings you every advance and reject, with its score, confidence and a full decision trace — CV match, assessment, must-haves — and you approve, override or reject. It never acts alone, which matters when your clients are banks and insurers. B — bespoke candidate search: describe any requirement in plain English — 'YC-company background and hands-on Postgres' — and get a ranked shortlist, each with its Taali and pre-screen score and the evidence behind it; it'll even map the relationship graph of who worked where. That's how you find a needle-in-a-haystack shortlist in seconds.",
+  "Two things, both straight from the product. A — the decision hub for a role: the agent works the funnel and queues every call for you — here a send-assessment on Imran at 100% confidence with the full reasoning. You send it, reject, skip, or send it back to teach the agent; it never acts alone, which matters when your clients are banks and insurers. B — bespoke candidate search: set any criteria — skills, salary, notice period, even 'Taali score at least 60' — and it returns a ranked top ten, each criterion marked met or partial and grounded in quoted CV and notes. Arjun here meets salary, score and notice, but only partially on banking domain, and you can see exactly why. That's a defensible shortlist in seconds.",
   "Taali runs every stage of the desk — apply, pre-screen, score and search, assess, decide, submit — and the point of this slide is that this is what's live in production today, not a roadmap. Two-way ATS sync, CV-fraud detection, evidence-grounded scoring, the conversational search, the real-repo assessment with five-axis fluency, the home decision hub with human sign-off, client-ready reports as a share link or PDF, and a public API plus provider add-on that powers a white-label offer. The platform is built.",
   "Why Taali and not what you run today. Your ATS or CRM — Bullhorn, Vincere, Workable — automates workflow but doesn't measure skill. Test vendors bolt AI features onto leetcode formats. Nobody sits top-right: agent-driven, AI-native work sample, human-in-the-loop. The table is the short version — only Taali works each role end-to-end, scores how candidates work with AI, lets you tailor roles and find anyone conversationally, keeps a human on every decision, gives you an auditable verdict your FS clients can defend, and exposes an API to power your own offer.",
   "The honest question with any new tool is 'does it work on real roles?' Taali runs DeepLight's hiring end-to-end, in production: 100-plus roles, 58,000-plus applications and 42,000-plus candidates screened, 16,000-plus agent decisions with a human sign-off on every advance and reject, and 70-plus AI-native assessments sent — leading to 24 offers and 18 hires for a roughly thirty-person consultancy. The story is the compression: a huge application flood screened down to a handful of verified hires, with a human in control throughout. DeepLight is a data and AI consultancy getting AI into production for banks and insurers, hiring data scientists, ML and AI engineers — exactly the technical, FS-facing hiring you do. I built Taali inside that operation because every tool I tested measured the wrong thing.",
