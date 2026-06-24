@@ -394,6 +394,87 @@ def test_sync_respects_selected_job_shortcodes(db):
     assert apps[0].workable_candidate_id == "cand_j2"
 
 
+def test_sync_yields_mid_job_to_a_pending_op(db):
+    """A pending user-facing write must be able to interrupt a sync WITHIN a
+    big job, not only at the job boundary.
+
+    Regression: ``should_yield`` was checked only between jobs, so a starred
+    role with hundreds of candidates held the per-org Workable mutex for its
+    whole candidate walk — long enough that a queued decision approval burned
+    its entire lock-wait window and failed with "Workable lock timeout". The
+    fix re-checks ``should_yield`` between candidates: the sync stops part-way
+    through the role, commits what it did, and releases the lock. The unsynced
+    candidates AND the later jobs resync on the next tick (idempotent).
+    """
+    from app.models.organization import Organization
+    from app.models.candidate_application import CandidateApplication
+
+    class MockClient(WorkableService):
+        def __init__(self):
+            super().__init__(access_token="x", subdomain="test")
+
+        def list_open_jobs(self):
+            # Two jobs: we should yield inside the first and never reach the second.
+            return [
+                {"id": "J1", "shortcode": "J1", "title": "Busy Role"},
+                {"id": "J2", "shortcode": "J2", "title": "Next Role"},
+            ]
+
+        def list_job_candidates(self, job_identifier, *, paginate=False, max_pages=None):
+            if str(job_identifier) == "J1":
+                return [
+                    {"id": f"cand_{i}", "email": f"c{i}@example.com", "name": f"C{i}", "stage": "Screening"}
+                    for i in range(4)
+                ]
+            return [{"id": "cand_j2", "email": "j2@example.com", "name": "J2", "stage": "Screening"}]
+
+        def get_job_details(self, job_identifier):
+            return {}
+
+        def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
+            return None, None, None
+
+    org = Organization(
+        name="Yield Org",
+        slug="yield-org-workable-sync",
+        workable_connected=True,
+        workable_access_token="x",
+        workable_subdomain="test",
+    )
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+
+    # sync_org polls should_yield at three points per job: the job-top boundary,
+    # once before the (full-mode) prefetch wave, and once per candidate. Flip the
+    # signal on the 4th poll so the first job's first candidate is synced (top +
+    # pre-prefetch + candidate-0 = 3 falses) and we then yield on candidate 1 —
+    # i.e. part-way through the role, the exact case the fix targets.
+    calls = {"n": 0}
+
+    def should_yield():
+        calls["n"] += 1
+        return calls["n"] >= 4
+
+    service = WorkableSyncService(MockClient())
+    summary = service.sync_org(db, org, should_yield=should_yield)
+
+    # Stopped part-way through the first role: some — but not all — candidates synced.
+    assert 0 < summary["candidates_seen"] < 4
+    # Only the first job was touched; the second never started.
+    assert summary["jobs_processed"] == 1
+    assert summary["jobs_total"] == 2
+    # Surfaced as a partial run with the human-readable pause note.
+    assert any("Paused mid-role" in e for e in summary["errors"])
+
+    # The second job's candidate must NOT have been imported (outer loop broke).
+    j2 = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org.id,
+        CandidateApplication.workable_candidate_id == "cand_j2",
+    ).first()
+    assert j2 is None
+
+
 @pytest.mark.skip(reason="Uses sync commits; sqlite 'database is locked' when run in parallel")
 class TestWorkableSyncIntegration:
     """Integration tests with mocked Workable client; asserts sync creates roles, applications, job_spec."""
@@ -990,13 +1071,18 @@ def test_sync_org_yields_to_pending_op_at_job_boundary(db):
     assert result["candidates_seen"] == 0
     assert any("pending Workable write" in e for e in result["errors"])
 
-    # The op arrives mid-sync: finish the current job, then yield before the
-    # next one (bounds the lock hold to a single job's candidates).
+    # The op arrives just as the first job finishes: yield at the next job
+    # boundary. sync_org now polls should_yield three times per job (job-top,
+    # pre-prefetch, per-candidate), so for a 1-candidate job the first job
+    # consumes 3 polls; flip on the 4th — the second job's top boundary — to
+    # process exactly the first job, then yield before the next.
+    # (Yielding part-way through a single big job is covered by
+    # test_sync_yields_mid_job_to_a_pending_op.)
     calls = {"n": 0}
 
     def yield_after_first() -> bool:
         calls["n"] += 1
-        return calls["n"] > 1
+        return calls["n"] > 3
 
     result2 = service.sync_org(db, org, mode="full", should_yield=yield_after_first)
     assert result2["jobs_processed"] == 1
