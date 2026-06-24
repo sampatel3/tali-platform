@@ -250,6 +250,24 @@
   .s5-note b { color: var(--ink); font-weight: 600; }
   .s5-note.graph .k { color: var(--mute); }
   .s5-note.graph { color: var(--mute); }
+  /* slide 5 shot frames — fixed aspect, full content (no crop) */
+  .s5-col .shot { flex: none; }
+  .s5-col .shot-img { aspect-ratio: 1.6; background-size: cover; background-position: top center; background-color: var(--bg-2); }
+
+  /* ---- slide 4: captured & scored → report strip ---- */
+  .s4-strip { display: grid; grid-template-columns: 0.95fr 1.3fr 0.95fr; gap: 14px; margin-top: 14px; }
+  .s4-cell { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 13px 16px; display: flex; flex-direction: column; gap: 9px; }
+  .s4-tag { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--purple); font-weight: 700; }
+  .s4-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .s4-chips span { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-2); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 4px 9px; }
+  .s4-scorewrap { display: flex; gap: 16px; align-items: center; }
+  .s4-score { display: flex; flex-direction: column; align-items: center; flex: none; }
+  .s4-score .big { font-family: var(--font-display); font-size: 46px; font-weight: 600; letter-spacing: -0.03em; color: var(--purple); line-height: 0.9; }
+  .s4-score .lbl { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); text-align: center; margin-top: 5px; }
+  .s4-bars { flex: 1; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .s4-bars span { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink); padding: 4px 9px; border-radius: 5px; border: 1px solid var(--line); background: linear-gradient(to right, color-mix(in oklab, var(--purple) 20%, #fff) var(--w,0%), var(--bg) var(--w,0%)); }
+  .s4-rep { font-size: 14px; line-height: 1.5; color: var(--ink-2); }
+  .s4-rep b { color: var(--ink); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -385,9 +403,9 @@
       <div class="eyebrow"><span class="num">04</span><span class="dot">·</span><span>The work sample</span></div>
       <h2 class="slide-title" style="font-size:54px;">What you send the client <em>instead of a CV</em>.</h2>
       <div class="commentary">
-        <span><b>01</b> Real repo + failing tests — the actual job, not leetcode</span>
-        <span><b>02</b> They work WITH AI — every prompt &amp; test run captured</span>
-        <span><b>03</b> Scored on 5 axes, including AI fluency</span>
+        <span><b>01</b> A real bank-GenAI safety task — failing tests to fix</span>
+        <span><b>02</b> They work WITH Claude — every move captured</span>
+        <span><b>03</b> One Taali score, with the evidence behind it</span>
       </div>
     </div>
 
@@ -395,8 +413,8 @@
       <div class="ide-bar">
         <div class="dots"><i></i><i></i><i></i></div>
         <span class="task">TASK 01 / 01</span>
-        <span class="ttl">Revenue Recovery Incident</span>
-        <span class="role">Senior Backend Engineer · Python</span>
+        <span class="ttl">GenAI Production Readiness Review</span>
+        <span class="role">AI Engineer · 30 min · Python</span>
         <div class="spacer"></div>
         <span class="pill">Guide · Report</span>
         <span class="pill">CLAUDE · $6.20 of $12.00</span>
@@ -407,15 +425,16 @@
         <!-- Repo (left) -->
         <div class="ide-files">
           <div class="lbl">Repository</div>
-          <div class="f dir"><span class="ind">▾</span>tali-revenue/</div>
+          <div class="f dir"><span class="ind">▾</span>genai-readiness/</div>
           <div class="f"><span class="ind">  </span>README.md</div>
-          <div class="f"><span class="ind">  </span>incident_notes.md</div>
-          <div class="f dir"><span class="ind">▾</span>src/</div>
-          <div class="f act"><span class="ind">  </span>revenue_recovery.py</div>
-          <div class="f"><span class="ind">  </span>validators.py</div>
+          <div class="f"><span class="ind">  </span>RISKS.md</div>
+          <div class="f dir"><span class="ind">▾</span>intelligence/</div>
+          <div class="f"><span class="ind">  </span>config.py</div>
+          <div class="f act"><span class="ind">  </span>review.py</div>
+          <div class="f"><span class="ind">  </span>analyzer.py</div>
           <div class="f dir"><span class="ind">▾</span>tests/</div>
-          <div class="f"><span class="ind">  </span>test_revenue_recovery.py</div>
-          <div style="margin-top:auto; padding-top:12px; font-family:var(--font-mono); font-size:11px; color:var(--purple);">Branch · live workspace</div>
+          <div class="f"><span class="ind">  </span>test_analyzer.py</div>
+          <div style="margin-top:auto; padding-top:12px; font-family:var(--font-mono); font-size:11px; color:#c0392b;">● 3 failing · 17 passing</div>
         </div>
 
         <!-- Claude chat (centre — the hero) -->
@@ -424,32 +443,32 @@
             <span class="claude-glyph">C</span>
             <div style="display:flex; flex-direction:column; line-height:1.1;">
               <span class="b" style="font-size:13px;">Claude</span>
-              <span class="claude-sub">Live repo assistant</span>
+              <span class="claude-sub">Chat guidance · repo-aware</span>
             </div>
-            <span class="term-ready"><span class="d"></span>Terminal ready</span>
+            <span class="term-ready"><span class="d"></span>14 turns</span>
           </div>
           <div class="msgs">
             <div class="msg cand">
               <span class="who">Candidate · 18:42</span>
-              <div class="bb">The CI run says <code>amount_cents</code> missing on schema v2. Read incident_notes.md — did v2 ever ship that column?</div>
+              <div class="bb">RISKS.md flags 3 blockers. <code>test_..._high_risk_action_requires_review</code> fails — why does a 0.62-confidence high-risk action skip human review?</div>
             </div>
             <div class="msg">
               <span class="who">Claude · 18:42</span>
-              <div class="bb">incident_notes.md: v2 used <code>amount</code> (decimal). <code>_split_posted_at</code> was meant to coerce → cents but skips when the source is null. That's your drift.</div>
+              <div class="bb"><code>review.py</code> gates on confidence alone — <code>risk_class</code> is never checked. 0.62 clears the floor, so it returns <code>False</code> and skips review.</div>
             </div>
             <div class="msg cand">
               <span class="who">Candidate · 18:43</span>
-              <div class="bb">Right — I'll add a coercion path before the column check, then a regression test. Run the suite when I save.</div>
+              <div class="bb">Right. I'll gate on <code>risk_class == "high"</code> first, reject the default-allow fallback, then add a regression test for the LLM-failure escalation path.</div>
             </div>
           </div>
           <div class="tk-tracker">12.0k tokens · $0.42</div>
-          <div class="input"><span class="blink"></span><span>Ask Claude: attach files with @, run a tool with /…</span></div>
+          <div class="input"><span class="blink"></span><span>Ask Claude to inspect the repo, explain a failure, or suggest a patch path…</span></div>
         </div>
 
         <!-- Editor (right) -->
         <div class="ide-code">
           <div class="crumb">
-            <span class="file">src/revenue_recovery.py</span>
+            <span class="file">intelligence/review.py</span>
             <span class="lang">PYTHON</span>
             <div class="actions">
               <span>Save</span>
@@ -457,40 +476,45 @@
               <span>Run</span>
             </div>
           </div>
-<pre><span class="ln"> 1</span><span class="cm"># Restore reconcile flow before finance close — schema drift</span>
-<span class="ln"> 2</span><span class="kw">def</span> <span class="fn">reconcile_batch</span>(records, schema_version):
-<span class="em-line"><span class="ln"> 3</span>    required = {<span class="st">"transaction_id"</span>, <span class="st">"amount_cents"</span>, <span class="st">"posted_at"</span>}</span>
-<span class="em-line"><span class="ln"> 4</span>    missing = required.difference(records.columns)</span>
-<span class="ln"> 5</span>    <span class="kw">if</span> missing:
-<span class="ln"> 6</span>        <span class="kw">raise</span> ValueError(<span class="st">f"Schema drift: {sorted(missing)}"</span>)
+<pre><span class="ln"> 1</span><span class="cm"># Gate high-stakes actions for human review before they execute</span>
+<span class="ln"> 2</span><span class="kw">def</span> <span class="fn">requires_human_review</span>(decision):
+<span class="em-line"><span class="ln"> 3</span>    <span class="cm"># BUG: a confident model skips review — risk_class is never checked</span></span>
+<span class="em-line"><span class="ln"> 4</span>    <span class="kw">if</span> decision.confidence &gt;= REVIEW_CONFIDENCE_FLOOR:</span>
+<span class="em-line"><span class="ln"> 5</span>        <span class="kw">return</span> <span class="kw">False</span></span>
+<span class="ln"> 6</span>    <span class="kw">return</span> decision.requires_review  <span class="cm"># config default: False</span>
 <span class="ln"> 7</span>
-<span class="ln"> 8</span>    <span class="cm"># Coerce legacy schema_version=<span class="nm">2</span> → <span class="nm">3</span></span>
-<span class="ln"> 9</span>    <span class="kw">if</span> schema_version == <span class="nm">2</span>:
-<span class="ln">10</span>        records = _split_posted_at(records)
-<span class="ln">11</span>
-<span class="ln">12</span>    grouped = records.groupby(<span class="st">"merchant_id"</span>, sort=<span class="kw">False</span>)
-<span class="ln">13</span>    <span class="kw">return</span> [_finalize(g) <span class="kw">for</span> _, g <span class="kw">in</span> grouped]
+<span class="ln"> 8</span><span class="cm"># Fix → gate on risk first, independent of confidence:</span>
+<span class="ln"> 9</span><span class="cm">#   if decision.risk_class == "high": return True</span>
 </pre>
         </div>
       </div>
 
-      <!-- Terminal / output dock (bottom) -->
-      <div class="ide-dock">
-        <div class="dock-tabs">
-          <span class="dock-tab">Output</span>
-          <span class="dock-tab on">Terminal · Claude Code CLI</span>
-        </div>
-        <div class="dock-body cli">
-          <div><span class="pr">candidate@tali-revenue</span> $ claude "add coercion + regression test for v2 drift"</div>
-          <div><span class="mut">· edited src/revenue_recovery.py · added tests/test_schema_v2.py</span></div>
-          <div><span class="pr">$</span> pytest -q&nbsp;&nbsp;<span class="ok">→ 12 passed in 1.84s</span></div>
-        </div>
-      </div>
     </div>
 
-    <!-- floating in-place pointers -->
-    <div class="capture-badge" style="left: 88px; top: 560px;"><span class="dot"></span>Claude Code — live in the workspace</div>
-    <div class="capture-badge" style="right: 88px; bottom: 120px;"><span class="dot"></span>Runs the real test suite</div>
+    <!-- Captured & scored → report -->
+    <div class="s4-strip">
+      <div class="s4-cell">
+        <div class="s4-tag">// Captured · the whole session</div>
+        <div class="s4-chips"><span>every prompt</span><span>pastes</span><span>edits</span><span>time-to-first-prompt</span><span>browser focus</span><span>tab-switches</span><span>test runs</span><span>tokens</span></div>
+      </div>
+      <div class="s4-cell">
+        <div class="s4-tag">// Scored · 8 weighted signals → one number</div>
+        <div class="s4-scorewrap">
+          <div class="s4-score"><span class="big">81</span><span class="lbl">Taali<br/>score</span></div>
+          <div class="s4-bars">
+            <span style="--w:84%">Task completion · 84</span>
+            <span style="--w:86%">Working with AI · 86</span>
+            <span style="--w:85%">Problem-solving · 85</span>
+            <span style="--w:80%">Independence · 80</span>
+            <span style="--w:78%">Communication · 78</span>
+          </div>
+        </div>
+      </div>
+      <div class="s4-cell">
+        <div class="s4-tag">// The proof you send</div>
+        <div class="s4-rep">A client-ready report — per-axis <b>evidence</b>, fraud flags, and the <b>full prompt-by-prompt replay</b>. Defensible to a hiring committee or an auditor.</div>
+      </div>
+    </div>
 
     <div class="slide-foot">
       <span>04 / 09 · The work sample · replayable, evidence-linked</span>
@@ -514,16 +538,16 @@
           <span class="s5-badge">A</span>
           <div class="s5-htext">
             <div class="t">Agentic <em>+ human-in-the-loop</em></div>
-            <div class="d">An agent per role — and you make every call.</div>
+            <div class="d">Every advance &amp; reject waits for your sign-off.</div>
           </div>
         </div>
         <figure class="shot">
-          <div class="shot-bar"><span class="dots"><i></i><i></i><i></i></span><span class="shot-url">taali.ai/home</span></div>
-          <div class="shot-img" style="background-image:url('img/home.png');"></div>
+          <div class="shot-bar"><span class="dots"><i></i><i></i><i></i></span><span class="shot-url">taali.ai/home · decision feed</span></div>
+          <div class="shot-img" style="background-image:url('img/home_hitl.png');"></div>
         </figure>
         <div class="s5-notes">
-          <div class="s5-note"><span class="k">1</span><span>An agent works <b>each open role</b> around the clock — triage, score, rank.</span></div>
-          <div class="s5-note"><span class="k">2</span><span>Every <b>advance &amp; reject queues for your sign-off</b> with the score, confidence and evidence. It never acts alone.</span></div>
+          <div class="s5-note"><span class="k">1</span><span>The agent brings <b>every advance &amp; reject</b> to you — with its score, confidence and a full <b>decision trace</b> (CV match · assessment · must-haves).</span></div>
+          <div class="s5-note"><span class="k">2</span><span>You <b>approve, override or reject</b>. It never acts alone — a human signs off on every call.</span></div>
         </div>
       </div>
 
@@ -532,17 +556,17 @@
         <div class="s5-head">
           <span class="s5-badge b">B</span>
           <div class="s5-htext">
-            <div class="t">Bespoke search <em>→ top 10</em></div>
-            <div class="d">Find candidates for any requirement, in plain English.</div>
+            <div class="t">Bespoke <em>candidate search</em></div>
+            <div class="d">Find people for any requirement, in plain English.</div>
           </div>
         </div>
         <figure class="shot">
-          <div class="shot-bar"><span class="dots"><i></i><i></i><i></i></span><span class="shot-url">taali.ai/chat</span></div>
-          <div class="shot-img" style="background-image:url('img/search.png');"></div>
+          <div class="shot-bar"><span class="dots"><i></i><i></i><i></i></span><span class="shot-url">taali.ai/chat · candidate search</span></div>
+          <div class="shot-img" style="background-image:url('img/search_bespoke.png');"></div>
         </figure>
         <div class="s5-notes">
-          <div class="s5-note"><span class="k">1</span><span>Describe the requirement — <b>"YC-backed, ships Postgres at scale, 80+ on the assessment"</b>.</span></div>
-          <div class="s5-note"><span class="k">2</span><span>Get a <b>ranked top 10</b>, each grounded in cited CV + work-sample evidence.</span></div>
+          <div class="s5-note"><span class="k">1</span><span>Ask for a <b>bespoke requirement</b> — "YC-company background + hands-on Postgres".</span></div>
+          <div class="s5-note"><span class="k">2</span><span>Get a <b>ranked shortlist</b>, each with its Taali + pre-screen score and the evidence behind it.</span></div>
           <div class="s5-note graph"><span class="k">↳</span><span>Maps the relationship graph of who worked where, too.</span></div>
         </div>
       </div>
@@ -781,7 +805,7 @@
           <div>
             <div style="font-family:var(--font-mono); font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:var(--mute); margin-bottom:9px;">// Roles it hires on Taali</div>
             <div class="role-chips">
-              <span>Data scientists</span><span>ML engineers</span><span>Data engineers</span><span>AI engineers</span><span>Analytics leads</span><span>Solution architects</span>
+              <span>Data Engineer</span><span>AI Engineer</span><span>GenAI Engineer</span><span>AI/ML Architect</span><span>Senior AWS Solutions Architect</span><span>AI Product Owner</span><span>Platform Engineer</span><span>AI &amp; Data Governance Consultant</span>
             </div>
           </div>
           <span class="live"><span class="blip"></span>Live · production</span>
@@ -878,8 +902,8 @@
   "Thanks for the time. I'm Sam — I built Taali inside DeepLight, a data & AI consultancy that hires exactly the kind of technical people you place. This isn't a generic HR-tech pitch; it's one operator showing another a platform built for our shared problem. Two things to land today: it makes your consultants faster and your submissions provable, and it's a service you can sell on to your own clients. Nine slides, ending on a free pilot.",
   "The ground has shifted under recruitment — worst of all for exactly the roles you place: software, data, AI, change. 78% of CVs now contain AI-generated content and resume fraud costs around $600B a year, so your consultants burn billable hours on a slush pile that looks qualified. Legacy tech tests saw a 5x cheating spike because candidates build with AI all day and the tests pretend they don't. And one in three hiring managers has caught a fake or proxy candidate — so clients no longer trust a CV, which means they no longer trust a CV-based shortlist. Whoever can prove capability, not just forward it, wins the mandate.",
   "Taali is two things in one. A hiring agent that runs each live mandate end-to-end — and crucially, keeps you in control: it brings decisions to your home hub, you make the call. And an AI-native assessment that produces real evidence. Three pillars: Screen and search — the agent does pre-screen, scoring and ranking, and you can ask it in plain English to tailor a role and pull a shortlist. Prove — every candidate works a real task in a real repo with Claude in hand, scored on five axes including how they work with AI. Control — every advance and reject is queued for your sign-off, evidence-linked and auditable, and your overrides retrain it overnight.",
-  "This is what you send the client instead of a CV — and it's the real product, not a mock-up. A real repo, a real incident to fix — here, a finance reconciliation bug — with Claude Code live in the workspace: the candidate chats, edits, and runs the test suite in the terminal. We capture every prompt, every tool call, every test run, and score how they actually work with AI. The client doesn't get a claim on a CV; they get the work, replayable.",
-  "This is where you stay in command — two things, both real screenshots of the product. A — agentic plus human-in-the-loop: an agent runs each open role around the clock, triaging, scoring and ranking, but it never acts alone; every advance and reject queues on your home hub with its score, confidence and evidence, and you approve, override or reject. That matters when your clients are banks and insurers. B — bespoke search: describe a requirement in plain English — 'YC-backed, ships Postgres at scale, 80-plus on the assessment' — and get a ranked top ten, each grounded in the candidate's own CV and work-sample evidence, with the relationship graph of who worked where on top. That's how you find a needle-in-a-haystack shortlist in seconds.",
+  "This is what you send the client instead of a CV. The task is a real one — a GenAI production-readiness review for a bank, with three failing tests, including a high-risk action that wrongly skips human review. The candidate works in a real repo with Claude alongside — chatting, reading the code, fixing it; there's no terminal, just the repo and the assistant. We capture the whole session — every prompt, paste, edit, test run, even time-to-first-prompt and browser focus — and roll eight weighted signals into one Taali score: 81 here, strongest on working-with-AI and problem-solving. That becomes a client-ready report with the per-axis evidence and the full prompt-by-prompt replay. They don't get a claim on a CV; they get the work, scored and replayable.",
+  "Two things, both real product. A — the human-in-the-loop decision feed: the agent works each role and brings you every advance and reject, with its score, confidence and a full decision trace — CV match, assessment, must-haves — and you approve, override or reject. It never acts alone, which matters when your clients are banks and insurers. B — bespoke candidate search: describe any requirement in plain English — 'YC-company background and hands-on Postgres' — and get a ranked shortlist, each with its Taali and pre-screen score and the evidence behind it; it'll even map the relationship graph of who worked where. That's how you find a needle-in-a-haystack shortlist in seconds.",
   "Taali runs every stage of the desk — apply, pre-screen, score and search, assess, decide, submit — and the point of this slide is that this is what's live in production today, not a roadmap. Two-way ATS sync, CV-fraud detection, evidence-grounded scoring, the conversational search, the real-repo assessment with five-axis fluency, the home decision hub with human sign-off, client-ready reports as a share link or PDF, and a public API plus provider add-on that powers a white-label offer. The platform is built.",
   "Why Taali and not what you run today. Your ATS or CRM — Bullhorn, Vincere, Workable — automates workflow but doesn't measure skill. Test vendors bolt AI features onto leetcode formats. Nobody sits top-right: agent-driven, AI-native work sample, human-in-the-loop. The table is the short version — only Taali works each role end-to-end, scores how candidates work with AI, lets you tailor roles and find anyone conversationally, keeps a human on every decision, gives you an auditable verdict your FS clients can defend, and exposes an API to power your own offer.",
   "The honest question with any new tool is 'does it work on real roles?' Taali runs DeepLight's hiring end-to-end, in production: 100-plus roles, 58,000-plus applications and 42,000-plus candidates screened, 16,000-plus agent decisions with a human sign-off on every advance and reject, and 70-plus AI-native assessments sent — leading to 24 offers and 18 hires for a roughly thirty-person consultancy. The story is the compression: a huge application flood screened down to a handful of verified hires, with a human in control throughout. DeepLight is a data and AI consultancy getting AI into production for banks and insurers, hiring data scientists, ML and AI engineers — exactly the technical, FS-facing hiring you do. I built Taali inside that operation because every tool I tested measured the wrong thing.",
