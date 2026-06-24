@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <meta name="robots" content="noindex,nofollow" />
-<title>Taali × Venquis · Partnership · 2026</title>
+<title>Taali · Partnership · 2026</title>
 <script>
   // Token-gate fence for the static deck path. The React route at
   // /deck wraps <DeckIframe /> in <TokenGate>, but this file is
@@ -228,6 +228,28 @@
   .way-li { font-size: 19px; gap: 14px; }
   .way-foot { margin-top: 20px; padding-top: 16px; border-top: 1px dashed var(--line); font-family: var(--font-mono); font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--purple); }
   .way.hero .way-foot { border-color: rgba(255,255,255,0.2); color: var(--purple-lav); }
+
+  /* ---- slide 4: commentary chips (demo-style annotation) ---- */
+  .commentary { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+  .commentary span { display: inline-flex; align-items: center; gap: 8px; padding: 8px 15px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 999px; font-size: 15px; color: var(--ink-2); }
+  .commentary b { color: var(--purple); font-weight: 700; font-family: var(--font-mono); }
+
+  /* ---- slide 5: two annotated halves (agentic+HITL / bespoke search) ---- */
+  .s5-grid { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 26px; min-height: 0; }
+  .s5-col { display: flex; flex-direction: column; gap: 13px; min-height: 0; }
+  .s5-head { display: flex; align-items: flex-start; gap: 12px; }
+  .s5-badge { flex: none; width: 32px; height: 32px; border-radius: 9px; background: var(--purple); color: #fff; font-family: var(--font-display); font-weight: 700; font-size: 17px; display: flex; align-items: center; justify-content: center; }
+  .s5-badge.b { background: var(--ink); }
+  .s5-htext .t { font-family: var(--font-display); font-size: 24px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); line-height: 1.1; }
+  .s5-htext .t em { font-style: normal; color: var(--purple); }
+  .s5-htext .d { font-size: 14px; line-height: 1.4; color: var(--ink-2); margin-top: 3px; }
+  .s5-col .shot { flex: 1; min-height: 0; }
+  .s5-notes { display: flex; flex-direction: column; gap: 8px; }
+  .s5-note { display: grid; grid-template-columns: 20px 1fr; gap: 10px; font-size: 14.5px; line-height: 1.42; color: var(--ink-2); }
+  .s5-note .k { color: var(--purple); font-weight: 700; font-family: var(--font-mono); }
+  .s5-note b { color: var(--ink); font-weight: 600; }
+  .s5-note.graph .k { color: var(--mute); }
+  .s5-note.graph { color: var(--mute); }
 </style>
 </head>
 <body>
@@ -244,7 +266,6 @@
       <div class="cover-wordmark">taali<span class="p">.</span></div>
       <div class="cover-meta">
         <span><b>Partnership proposal</b></span>
-        <span>Venquis × Taali</span>
         <span>2026</span>
       </div>
     </div>
@@ -362,7 +383,12 @@
   <section data-slide="workspace" data-screen-label="04 The work sample">
     <div class="slide-head">
       <div class="eyebrow"><span class="num">04</span><span class="dot">·</span><span>The work sample</span></div>
-      <h2 class="slide-title" style="font-size:58px;">What you send the client <em>instead of a CV</em>.</h2>
+      <h2 class="slide-title" style="font-size:54px;">What you send the client <em>instead of a CV</em>.</h2>
+      <div class="commentary">
+        <span><b>01</b> Real repo + failing tests — the actual job, not leetcode</span>
+        <span><b>02</b> They work WITH AI — every prompt &amp; test run captured</span>
+        <span><b>03</b> Scored on 5 axes, including AI fluency</span>
+      </div>
     </div>
 
     <div class="ide light agentic">
@@ -462,9 +488,9 @@
       </div>
     </div>
 
-    <!-- floating capture badges -->
-    <div class="capture-badge" style="left: 88px; top: 590px;"><span class="dot"></span>Every prompt &amp; tool call captured</div>
-    <div class="capture-badge" style="right: 88px; bottom: 120px;"><span class="dot"></span>5-axis fluency · scoring live</div>
+    <!-- floating in-place pointers -->
+    <div class="capture-badge" style="left: 88px; top: 560px;"><span class="dot"></span>Claude Code — live in the workspace</div>
+    <div class="capture-badge" style="right: 88px; bottom: 120px;"><span class="dot"></span>Runs the real test suite</div>
 
     <div class="slide-foot">
       <span>04 / 09 · The work sample · replayable, evidence-linked</span>
@@ -481,26 +507,45 @@
       <h2 class="slide-title" style="font-size:58px;">The agent does the work. <em>You make the calls — and find anyone in seconds.</em></h2>
     </div>
 
-    <div class="prod-grid">
-      <!-- Home / HITL decision hub — real product -->
-      <figure class="shot">
-        <div class="shot-bar"><span class="dots"><i></i><i></i><i></i></span><span class="shot-url">taali.ai/home</span></div>
-        <div class="shot-img" style="background-image:url('img/home.png');"></div>
-        <figcaption class="shot-cap">
-          <span class="t">Home · <em>you make every call</em></span>
-          <span class="d">Each advance &amp; reject queues with the agent's score, confidence and evidence — approve, override or reject. Human-in-the-loop by design.</span>
-        </figcaption>
-      </figure>
+    <div class="s5-grid">
+      <!-- A · Agentic + human-in-the-loop -->
+      <div class="s5-col">
+        <div class="s5-head">
+          <span class="s5-badge">A</span>
+          <div class="s5-htext">
+            <div class="t">Agentic <em>+ human-in-the-loop</em></div>
+            <div class="d">An agent per role — and you make every call.</div>
+          </div>
+        </div>
+        <figure class="shot">
+          <div class="shot-bar"><span class="dots"><i></i><i></i><i></i></span><span class="shot-url">taali.ai/home</span></div>
+          <div class="shot-img" style="background-image:url('img/home.png');"></div>
+        </figure>
+        <div class="s5-notes">
+          <div class="s5-note"><span class="k">1</span><span>An agent works <b>each open role</b> around the clock — triage, score, rank.</span></div>
+          <div class="s5-note"><span class="k">2</span><span>Every <b>advance &amp; reject queues for your sign-off</b> with the score, confidence and evidence. It never acts alone.</span></div>
+        </div>
+      </div>
 
-      <!-- Grounded search — real product -->
-      <figure class="shot">
-        <div class="shot-bar"><span class="dots"><i></i><i></i><i></i></span><span class="shot-url">taali.ai/chat</span></div>
-        <div class="shot-img" style="background-image:url('img/search.png');"></div>
-        <figcaption class="shot-cap">
-          <span class="t">Ask · <em>tailor the role, find anyone</em></span>
-          <span class="d">Plain-English search, grounded in each candidate's CV + work sample with the evidence cited. Tighten the bar and it re-ranks live.</span>
-        </figcaption>
-      </figure>
+      <!-- B · Bespoke search → top 10 -->
+      <div class="s5-col">
+        <div class="s5-head">
+          <span class="s5-badge b">B</span>
+          <div class="s5-htext">
+            <div class="t">Bespoke search <em>→ top 10</em></div>
+            <div class="d">Find candidates for any requirement, in plain English.</div>
+          </div>
+        </div>
+        <figure class="shot">
+          <div class="shot-bar"><span class="dots"><i></i><i></i><i></i></span><span class="shot-url">taali.ai/chat</span></div>
+          <div class="shot-img" style="background-image:url('img/search.png');"></div>
+        </figure>
+        <div class="s5-notes">
+          <div class="s5-note"><span class="k">1</span><span>Describe the requirement — <b>"YC-backed, ships Postgres at scale, 80+ on the assessment"</b>.</span></div>
+          <div class="s5-note"><span class="k">2</span><span>Get a <b>ranked top 10</b>, each grounded in cited CV + work-sample evidence.</span></div>
+          <div class="s5-note graph"><span class="k">↳</span><span>Maps the relationship graph of who worked where, too.</span></div>
+        </div>
+      </div>
     </div>
 
     <div class="slide-foot">
@@ -750,15 +795,15 @@
       <div class="proof-right">
         <div class="th">// On Taali at DeepLight, to date</div>
         <div class="proof-stats">
-          <div class="s"><div class="n">105</div><div class="l">Live roles run on Taali</div></div>
+          <div class="s"><div class="n">100+</div><div class="l">Roles run on Taali</div></div>
           <div class="s"><div class="n">58k+</div><div class="l">Applications screened · 42k+ candidates</div></div>
-          <div class="s"><div class="n">1,900+</div><div class="l">AI-native assessments sent</div></div>
           <div class="s"><div class="n">16k+</div><div class="l">Agent decisions, human-approved</div></div>
-          <div class="s accent"><div class="n">340</div><div class="l">Offers extended from Taali shortlists</div></div>
-          <div class="s accent"><div class="n">210</div><div class="l">Hires made</div></div>
+          <div class="s"><div class="n">70+</div><div class="l">AI-native assessments sent</div></div>
+          <div class="s accent"><div class="n">24</div><div class="l">Offers extended from Taali shortlists</div></div>
+          <div class="s accent"><div class="n">18</div><div class="l">Hires made</div></div>
         </div>
         <div class="outcome-band">
-          <b>9 days → under 24 hours</b> from brief to a verified shortlist, and <b>~3× the reqs per consultant</b> — with proof attached to every submission.
+          A <b>58,000-application flood</b> screened down to a verified shortlist — with a <b>human signing off on every advance and reject</b>.
         </div>
       </div>
     </div>
@@ -834,10 +879,10 @@
   "The ground has shifted under recruitment — worst of all for exactly the roles you place: software, data, AI, change. 78% of CVs now contain AI-generated content and resume fraud costs around $600B a year, so your consultants burn billable hours on a slush pile that looks qualified. Legacy tech tests saw a 5x cheating spike because candidates build with AI all day and the tests pretend they don't. And one in three hiring managers has caught a fake or proxy candidate — so clients no longer trust a CV, which means they no longer trust a CV-based shortlist. Whoever can prove capability, not just forward it, wins the mandate.",
   "Taali is two things in one. A hiring agent that runs each live mandate end-to-end — and crucially, keeps you in control: it brings decisions to your home hub, you make the call. And an AI-native assessment that produces real evidence. Three pillars: Screen and search — the agent does pre-screen, scoring and ranking, and you can ask it in plain English to tailor a role and pull a shortlist. Prove — every candidate works a real task in a real repo with Claude in hand, scored on five axes including how they work with AI. Control — every advance and reject is queued for your sign-off, evidence-linked and auditable, and your overrides retrain it overnight.",
   "This is what you send the client instead of a CV — and it's the real product, not a mock-up. A real repo, a real incident to fix — here, a finance reconciliation bug — with Claude Code live in the workspace: the candidate chats, edits, and runs the test suite in the terminal. We capture every prompt, every tool call, every test run, and score how they actually work with AI. The client doesn't get a claim on a CV; they get the work, replayable.",
-  "This is the recruiter's seat — and these are real screenshots of the product, not mock-ups. On the left, the home hub: the agent never acts alone, so every advance and reject lands here with its confidence, score and evidence — you approve, override or reject. Human-in-the-loop by design, which matters when your clients are banks and insurers. On the right, search: ask in plain English and it pulls a shortlist grounded in each candidate's own CV and work sample, with the evidence cited — it'll even map the graph of who worked where. Tighten the bar and it re-ranks live. That's how you tailor a role and find a bespoke shortlist in seconds.",
+  "This is where you stay in command — two things, both real screenshots of the product. A — agentic plus human-in-the-loop: an agent runs each open role around the clock, triaging, scoring and ranking, but it never acts alone; every advance and reject queues on your home hub with its score, confidence and evidence, and you approve, override or reject. That matters when your clients are banks and insurers. B — bespoke search: describe a requirement in plain English — 'YC-backed, ships Postgres at scale, 80-plus on the assessment' — and get a ranked top ten, each grounded in the candidate's own CV and work-sample evidence, with the relationship graph of who worked where on top. That's how you find a needle-in-a-haystack shortlist in seconds.",
   "Taali runs every stage of the desk — apply, pre-screen, score and search, assess, decide, submit — and the point of this slide is that this is what's live in production today, not a roadmap. Two-way ATS sync, CV-fraud detection, evidence-grounded scoring, the conversational search, the real-repo assessment with five-axis fluency, the home decision hub with human sign-off, client-ready reports as a share link or PDF, and a public API plus provider add-on that powers a white-label offer. The platform is built.",
   "Why Taali and not what you run today. Your ATS or CRM — Bullhorn, Vincere, Workable — automates workflow but doesn't measure skill. Test vendors bolt AI features onto leetcode formats. Nobody sits top-right: agent-driven, AI-native work sample, human-in-the-loop. The table is the short version — only Taali works each role end-to-end, scores how candidates work with AI, lets you tailor roles and find anyone conversationally, keeps a human on every decision, gives you an auditable verdict your FS clients can defend, and exposes an API to power your own offer.",
-  "The honest question with any new tool is 'does it work on real roles, at real volume?' Taali runs DeepLight's hiring end-to-end, in production: 105 live roles, 58,000-plus applications, 42,000-plus candidates, 1,900-plus AI-native assessments sent, and 16,000-plus agent decisions with a human sign-off on every advance and reject — driving 340 offers and 210 hires, and cutting time-to-shortlist from about nine days to under a day. DeepLight is a data and AI consultancy getting AI into production for banks and insurers, hiring data scientists, ML and AI engineers — exactly the technical, FS-facing hiring you do. I built Taali inside that operation because every tool I tested measured the wrong thing. You're buying what a live operation already runs on.",
+  "The honest question with any new tool is 'does it work on real roles?' Taali runs DeepLight's hiring end-to-end, in production: 100-plus roles, 58,000-plus applications and 42,000-plus candidates screened, 16,000-plus agent decisions with a human sign-off on every advance and reject, and 70-plus AI-native assessments sent — leading to 24 offers and 18 hires for a roughly thirty-person consultancy. The story is the compression: a huge application flood screened down to a handful of verified hires, with a human in control throughout. DeepLight is a data and AI consultancy getting AI into production for banks and insurers, hiring data scientists, ML and AI engineers — exactly the technical, FS-facing hiring you do. I built Taali inside that operation because every tool I tested measured the wrong thing.",
   "So, the offering — two ways it pays. Use it on your desks: more placements per consultant, submissions clients trust, mandates won against firms still emailing CVs. Or offer it to your clients: a branded verified-assessment service powered by our API, a new revenue line that makes you infrastructure. Commercially it's deliberately simple — credits, you pay for what you use; offer it on top and you keep the spread, we keep our margin underneath. And to start, it's free: pick a few live roles, we run them end-to-end at no cost, we measure together, then we agree the model. I'd like to pick those roles before we leave."
 ]
 </script>
