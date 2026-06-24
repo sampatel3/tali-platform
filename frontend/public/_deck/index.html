@@ -380,7 +380,7 @@
   .ev-cand-mini .ev-nm { font-size: 14.5px; }
 
   /* ---- slide 4 v9: assessment (2/3) + client report (1/3) ---- */
-  .s4-split { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.7fr 1fr; gap: 18px; margin-top: 12px; }
+  .s4-split { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.35fr 1fr; gap: 18px; margin-top: 12px; align-items: stretch; }
   .s4-split .ide { margin-top: 0; }
   .asm-img { flex: 1; min-height: 0; background-size: cover; background-position: top center; background-color: var(--bg-2); }
   .s4-cap { margin-top: 12px; font-family: var(--font-mono); font-size: 12.5px; letter-spacing: 0.01em; color: var(--ink-2); background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 11px 16px; }
@@ -424,6 +424,13 @@
   /* agent-on treatment (the bold dark-purple ON pill, as on the live home) */
   .agent-on { font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; color: #fff; background: linear-gradient(135deg, #3a1d6e, #241147); border-radius: 999px; padding: 4px 11px; display: inline-flex; align-items: center; gap: 7px; }
   .agent-on::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--purple-lav); box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple) 30%, transparent); }
+
+  /* ---- real demo-page frames (show the actual product, focused) ---- */
+  .pg-frame { flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; box-shadow: 0 18px 44px -28px rgba(91,44,168,0.4); background: #fff; display: flex; }
+  .pg-img { flex: 1; min-height: 0; background-size: contain; background-position: center top; background-repeat: no-repeat; background-color: #fff; }
+  .rep-frame { align-self: center; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; box-shadow: 0 18px 44px -28px rgba(91,44,168,0.4); background: #fff; }
+  .rep-shot { width: 100%; background-size: cover; background-position: top center; background-repeat: no-repeat; }
+  .rep-shot + .rep-shot { border-top: 1px solid var(--line); }
 </style>
 </head>
 <body>
@@ -572,45 +579,10 @@
       </div>
 
       <!-- The client report — what you actually send (right 1/3) -->
-      <div class="prod-panel cr-panel">
-        <div class="pp-bar"><span class="dots"><i></i><i></i><i></i></span><span class="pp-url">taali.ai/share/r7q2 · client view</span></div>
-        <div class="cr-body">
-          <div class="cr-banner">Client view · recruiter notes, scoring internals &amp; PII hidden</div>
-          <div class="cr-id">
-            <div><div class="cr-name">Lena Haddad</div><div class="cr-role">AI Engineer · shared for Senior AI Engineer</div></div>
-            <span class="cr-verdict">Strong Hire</span>
-          </div>
-          <div class="cr-summary">Strong product judgment and production-readiness rigour, with a mixed release-safety signal worth probing live — and CV evidence that aligns tightly with how she worked the task.</div>
-          <div class="cr-scores">
-            <div class="cr-sc lead"><div class="n">81</div><div class="k">Taali /100</div></div>
-            <div class="cr-sc"><div class="n">78</div><div class="k">Role fit</div></div>
-            <div class="cr-sc"><div class="n">84</div><div class="k">Assess.</div></div>
-            <div class="cr-sc"><div class="n">3/5</div><div class="k">Reqs met</div></div>
-          </div>
-          <div>
-            <div class="cr-tag">CV match · 3 met · 2 partial</div>
-            <div class="cr-cov"><i class="m" style="width:60%"></i><i class="p" style="width:40%"></i></div>
-            <div class="cr-reqs" style="margin-top:7px;">
-              <div class="cr-req"><span class="rp met">MET</span><span>Owned a production GenAI release in a regulated domain</span></div>
-              <div class="cr-req"><span class="rp met">MET</span><span>Eval-harness design + offline regression testing for prompts</span></div>
-              <div class="cr-req"><span class="rp met">MET</span><span>Incident response + postmortem ownership for AI features</span></div>
-              <div class="cr-req"><span class="rp part">PART</span><span>Residual-risk comms to legal / compliance stakeholders</span></div>
-              <div class="cr-req"><span class="rp part">PART</span><span>Cross-functional leadership across eng, legal &amp; compliance</span></div>
-            </div>
-          </div>
-          <div>
-            <div class="cr-tag">Dimension scores</div>
-            <div class="cr-dims">
-              <div class="cr-dim"><span class="dl">Systems design</span><span class="db"><i style="width:79%"></i></span><span class="dn">79</span></div>
-              <div class="cr-dim"><span class="dl">Code craft</span><span class="db"><i style="width:84%"></i></span><span class="dn">84</span></div>
-              <div class="cr-dim"><span class="dl">AI collaboration</span><span class="db"><i style="width:86%"></i></span><span class="dn">86</span></div>
-              <div class="cr-dim"><span class="dl">Release safety</span><span class="db"><i style="width:74%"></i></span><span class="dn">74</span></div>
-              <div class="cr-dim"><span class="dl">Communication</span><span class="db"><i style="width:78%"></i></span><span class="dn">78</span></div>
-            </div>
-          </div>
-          <div class="cr-prov">Scored 24 Jun 2026 · v2.1.0 · Sonnet</div>
-          <div class="cr-foot">Client-safe summary · sent as a share link or PDF</div>
-        </div>
+      <div class="rep-frame">
+        <div class="pp-bar"><span class="dots"><i></i><i></i><i></i></span><span class="pp-url">taali.ai/share · candidate report</span><span class="pp-right">client view</span></div>
+        <div class="rep-shot" style="background-image:url('img/report_hero.png'); aspect-ratio: 2.79;"></div>
+        <div class="rep-shot" style="background-image:url('img/report_cv.png'); aspect-ratio: 2.85;"></div>
       </div>
     </div>
 
@@ -641,19 +613,7 @@
             <div class="d">Every advance &amp; reject waits for your sign-off.</div>
           </div>
         </div>
-        <div class="prod-panel">
-          <div class="pp-bar"><span class="dots"><i></i><i></i><i></i></span><span class="pp-url">taali.ai/home · Senior AWS Platform Engineer</span><span class="agent-on" style="margin-left:auto;">AGENT ON</span><span class="pp-right" style="margin-left:8px;">98 awaiting you</span></div>
-          <div class="pp-body">
-            <div class="hb-funnel"><span><b>62</b> applied</span><span><b>94</b> scored</span><span><b>21</b> advanced</span><span><b>137</b> rejected</span></div>
-            <div class="hb-await"><span class="kk">awaiting you</span><span class="c sa">7 send assessment</span><span class="c ad">1 advance</span><span class="c rj">88 reject</span><span class="c pr">2 pre-screen reject</span></div>
-            <div class="dd2">
-              <div class="dd2-top"><span class="dd2-type">⊘ SEND_ASSESSMENT</span><span class="dd2-id">D-109600 · 3h ago</span><span class="dd2-needs">NEEDS YOU</span><span class="dd2-conf">● confidence 100%</span></div>
-              <div class="dd2-id-row"><span class="dd2-av">IS</span><div class="dd2-who"><div class="dd2-name">Imran S.</div><div class="dd2-mail">i.s••••@gmail.com · open candidate report ↗</div></div><div class="dd2-score">72<span>TALI</span></div></div>
-              <div class="dd2-reason">Solid partial fit — strong DevOps / IaC / Kubernetes core with real FinTech and AI/ML platform exposure, but gaps in AWS-native landing-zone architecture, Direct Connect and FinOps depth for a greenfield platform lead. 7 yrs hands-on AWS + Azure, expert Terraform, production EKS/AKS — skews DevOps over cloud architect. Recommend an assessment to confirm the architecture depth.</div>
-              <div class="dd2-actions"><span class="ab green">Send assessment</span><span class="ab amber">Reject</span><span class="ab amber-o">Skip &amp; advance</span><span class="ab purple">Send back &amp; teach</span></div>
-            </div>
-          </div>
-        </div>
+        <figure class="pg-frame"><div class="pg-img" style="background-image:url('img/home_hub.png');"></div></figure>
         <div class="s5-notes">
           <div class="s5-note"><span class="k">1</span><span>The agent brings <b>every call</b> — advance, reject, send-assessment — with its <b>confidence and full reasoning</b>.</span></div>
           <div class="s5-note"><span class="k">2</span><span>You <b>send it, reject, skip — or send it back to teach</b> the agent. It never acts alone.</span></div>
@@ -669,26 +629,7 @@
             <div class="d">Find people for any requirement, in plain English.</div>
           </div>
         </div>
-        <div class="prod-panel">
-          <div class="pp-bar"><span class="dots"><i></i><i></i><i></i></span><span class="pp-url">taali.ai/chat · AWS Glue Data Engineer</span><span class="pp-right">top 10 · 13 in pool</span></div>
-          <div class="pp-body">
-            <div class="ev-head">
-              <div class="ev-title"><b>Top 10</b> · PySpark, AWS Glue · salary ≤ 30,000 AED/mo · Taali ≥ 60 · notice ≤ 4 weeks · Western-company experience · banking domain · 2+ yrs</div>
-              <div class="ev-sub">ranked by Taali fit · 13 in pool · grounded vs CV + notes · 1 hidden (missed notice period)</div>
-            </div>
-            <div class="ev-cand"><span class="ev-rank">#1</span><span class="ev-nm">Arjun Nair</span><span class="ev-taali">Taali 62</span><span class="ev-role">Data Engineer (AI/LLM) · India — Workable ↗</span></div>
-            <div class="ev-crits">
-              <div class="ev-crit"><span class="ev-pill met">MET</span>salary ≤ 30,000 AED/mo<span class="ev-src">notes · "A: 21,000"</span></div>
-              <div class="ev-crit"><span class="ev-pill met">MET</span>Taali score ≥ 60<span class="ev-src">taali · "score 62"</span></div>
-              <div class="ev-crit"><span class="ev-pill met">MET</span>notice period ≤ 4 weeks<span class="ev-src">notes · "A: 15 days"</span></div>
-              <div class="ev-crit"><span class="ev-pill met">MET</span>Western-company experience<span class="ev-src">cv · "phData, Jul 2024–Present" +2</span></div>
-              <div class="ev-crit"><span class="ev-pill partial">PARTIAL</span>banking domain experience</div>
-              <div class="ev-quote">cv · "modular ETL in PySpark for high-volume financial-services analytics" — strong FS, but primary domain is healthcare/insurance, not banking.</div>
-            </div>
-            <div class="ev-cand-mini"><span class="ev-rank">#2</span><span class="ev-nm">Sana Iqbal</span><span class="ev-taali">Taali 52</span><span class="ev-role">Senior Data Engineer, Multi-Cloud ETL · Abu Dhabi</span></div>
-            <div class="ev-cand-mini"><span class="ev-rank">#3</span><span class="ev-nm">Wei Lin</span><span class="ev-taali">Taali 49</span><span class="ev-role">Data Platform Engineer · Singapore</span></div>
-          </div>
-        </div>
+        <figure class="pg-frame"><div class="pg-img" style="background-image:url('img/search_topx.png');"></div></figure>
         <div class="s5-notes">
           <div class="s5-note"><span class="k">1</span><span>Ask for any <b>bespoke requirement</b> — skills, salary, notice, domain, even "Taali score ≥ 60".</span></div>
           <div class="s5-note"><span class="k">2</span><span>Get a <b>ranked top 10</b>, each criterion <b>met / partial</b> and grounded in quoted CV + notes.</span></div>
