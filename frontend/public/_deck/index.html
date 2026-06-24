@@ -191,6 +191,43 @@
   .sr-pill.partial { background: color-mix(in oklab, var(--amber) 16%, #fff); color: var(--amber); }
   .sr-quote { border-left: 3px solid var(--purple); padding: 7px 13px; background: var(--bg); border-radius: 0 8px 8px 0; font-size: 13px; line-height: 1.45; color: var(--ink); }
   .sr-cite { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); margin-top: 5px; }
+
+  /* ---- slide 5: real product screenshots ---- */
+  .shot { margin: 0; display: flex; flex-direction: column; background: var(--bg-2); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; box-shadow: 0 24px 60px -30px rgba(91,44,168,0.4); }
+  .shot-bar { display: flex; align-items: center; gap: 10px; padding: 9px 15px; border-bottom: 1px solid var(--line); background: var(--bg); }
+  .shot-bar .dots { display: flex; gap: 6px; }
+  .shot-bar .dots i { width: 10px; height: 10px; border-radius: 50%; background: #d88a1c; display: block; }
+  .shot-bar .dots i:nth-child(1) { background: #f06; }
+  .shot-bar .dots i:nth-child(3) { background: #15a36a; }
+  .shot-url { font-family: var(--font-mono); font-size: 12px; color: var(--mute); letter-spacing: 0.04em; }
+  .shot-img { flex: 1; min-height: 0; background-size: cover; background-position: top center; background-repeat: no-repeat; }
+  .shot-cap { padding: 14px 18px 16px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+  .shot-cap .t { font-family: var(--font-display); font-size: 19px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
+  .shot-cap .t em { font-style: normal; color: var(--purple); }
+  .shot-cap .d { font-size: 13.5px; line-height: 1.45; color: var(--ink-2); }
+
+  /* ---- slide 8: role chips + filled stat grid ---- */
+  .role-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+  .role-chips span { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.02em; color: var(--purple); background: var(--purple-soft); border-radius: 999px; padding: 5px 11px; }
+  .proof-right { display: flex; flex-direction: column; gap: 14px; }
+  .proof-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; flex: 1; grid-auto-rows: 1fr; }
+  .proof-stats .s { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 18px 22px; display: flex; flex-direction: column; justify-content: center; }
+  .proof-stats .n { font-family: var(--font-display); font-size: 42px; font-weight: 600; letter-spacing: -0.03em; color: var(--ink); line-height: 1; }
+  .proof-stats .s.accent .n { color: var(--purple); }
+  .proof-stats .l { margin-top: 8px; font-size: 13.5px; line-height: 1.4; color: var(--ink-2); }
+  .outcome-band { padding: 18px 24px; background: var(--ink); color: #fff; border-radius: 14px; font-size: 17px; line-height: 1.5; }
+  .outcome-band b { color: var(--purple-lav); }
+
+  /* ---- slide 9: bigger, bolder two options ---- */
+  .ways { flex: 1; }
+  .way { padding: 30px 36px 28px; }
+  .way-num { font-family: var(--font-display); font-size: 30px; font-weight: 600; color: color-mix(in oklab, var(--purple) 45%, var(--mute)); letter-spacing: -0.02em; line-height: 1; margin-bottom: 10px; }
+  .way.hero .way-num { color: var(--purple-lav); }
+  .way-h { font-size: 46px; line-height: 1.02; margin-bottom: 10px; }
+  .way-list { gap: 14px; }
+  .way-li { font-size: 19px; gap: 14px; }
+  .way-foot { margin-top: 20px; padding-top: 16px; border-top: 1px dashed var(--line); font-family: var(--font-mono); font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--purple); }
+  .way.hero .way-foot { border-color: rgba(255,255,255,0.2); color: var(--purple-lav); }
 </style>
 </head>
 <body>
@@ -445,46 +482,25 @@
     </div>
 
     <div class="prod-grid">
-      <!-- Home / HITL decision hub -->
-      <div class="prod-pane">
-        <div class="pp-head">
-          <span class="pp-kicker">// Home · awaiting you</span>
-          <span class="pp-title">Every advance &amp; reject, queued for your sign-off.</span>
-        </div>
-        <div class="pp-sub">The agent never acts alone. It brings you the decision, its confidence, and the evidence — you approve, override or reject.</div>
+      <!-- Home / HITL decision hub — real product -->
+      <figure class="shot">
+        <div class="shot-bar"><span class="dots"><i></i><i></i><i></i></span><span class="shot-url">taali.ai/home</span></div>
+        <div class="shot-img" style="background-image:url('img/home.png');"></div>
+        <figcaption class="shot-cap">
+          <span class="t">Home · <em>you make every call</em></span>
+          <span class="d">Each advance &amp; reject queues with the agent's score, confidence and evidence — approve, override or reject. Human-in-the-loop by design.</span>
+        </figcaption>
+      </figure>
 
-        <div class="dec-card sel">
-          <div class="dec-meta"><span class="dec-type adv">▲ ADVANCE</span><span class="dec-score">SCORE 86</span><span>agent 91% confident</span><span class="dec-needs">NEEDS YOU</span></div>
-          <div class="dec-name">Priya N.<span class="role">Senior Data Engineer · Banking client</span></div>
-          <div class="dec-reason">Strong on the streaming-ETL must-have; <b>top-decile AI-fluency</b> on the work sample. Two of three nice-to-haves met.</div>
-          <div class="dec-actions"><span class="dec-btn approve">Approve</span><span class="dec-btn override">Override</span><span class="dec-btn reject">Reject</span></div>
-        </div>
-        <div class="dec-card">
-          <div class="dec-meta"><span class="dec-type rej">▼ REJECT</span><span class="dec-score">SCORE 41</span><span>agent 88% confident</span><span class="dec-needs">NEEDS YOU</span></div>
-          <div class="dec-name">Marcus L.<span class="role">Backend Engineer · Insurance client</span></div>
-          <div class="dec-reason">Misses the hard eligibility filter; CV mirrors the JD near-verbatim — <b>fraud signal capped the score</b>.</div>
-          <div class="dec-actions"><span class="dec-btn reject">Reject</span><span class="dec-btn override">Override</span><span class="dec-btn">Review</span></div>
-        </div>
-      </div>
-
-      <!-- Grounded search -->
-      <div class="prod-pane">
-        <div class="pp-head">
-          <span class="pp-kicker">// Ask · tailor &amp; find</span>
-          <span class="pp-title">Reshape the role and pull a shortlist — in plain English.</span>
-        </div>
-        <div class="pp-sub">Every answer is grounded in the candidate's own CV and work sample, with the evidence quoted. Tighten the bar and it re-ranks live.</div>
-
-        <div class="sr-query"><span class="q"></span><span>Top 5 with payments experience who scored 80+ on the assessment</span></div>
-
-        <div class="sr-result">
-          <div class="sr-cand"><span class="sr-av">PN</span><span class="nm">Priya N.</span><span class="sc">86</span></div>
-          <div class="sr-crit"><span class="sr-pill met">Met</span><span>Payments / ledger systems</span></div>
-          <div class="sr-quote">"Owned the reconciliation pipeline for a card processor — 4M+ daily transactions across two ledgers."</div>
-          <div class="sr-cite">↳ cited · CV · Experience</div>
-          <div class="sr-crit"><span class="sr-pill met">Met</span><span>Taali score ≥ 80 — scored 86</span></div>
-        </div>
-      </div>
+      <!-- Grounded search — real product -->
+      <figure class="shot">
+        <div class="shot-bar"><span class="dots"><i></i><i></i><i></i></span><span class="shot-url">taali.ai/chat</span></div>
+        <div class="shot-img" style="background-image:url('img/search.png');"></div>
+        <figcaption class="shot-cap">
+          <span class="t">Ask · <em>tailor the role, find anyone</em></span>
+          <span class="d">Plain-English search, grounded in each candidate's CV + work sample with the evidence cited. Tighten the bar and it re-ranks live.</span>
+        </figcaption>
+      </figure>
     </div>
 
     <div class="slide-foot">
@@ -711,30 +727,38 @@
       <h2 class="slide-title">Not a demo — it runs a <em>real hiring operation</em> every day.</h2>
     </div>
 
-    <div class="market-grid" style="grid-template-columns: 1fr 1.15fr;">
+    <div class="market-grid" style="grid-template-columns: 0.92fr 1.18fr;">
       <div class="traction" style="gap:16px;">
-        <div class="th">// Live · production</div>
-        <div class="pilot" style="grid-template-columns: 1fr;">
+        <div class="th">// Live · production · the design partner</div>
+        <div class="pilot" style="grid-template-columns: 1fr; gap:14px;">
           <span class="nm">DeepLight AI</span>
-          <span class="ds">A Dubai-based <b style="color:#1a1228;">data &amp; AI consultancy</b> that puts AI into production for banks and insurers (1,300+ models live). It hires the data scientists and AI engineers it staffs that delivery with — and runs that hiring end-to-end on Taali. Taali was built inside this operation.</span>
+          <span class="ds">A Dubai-based <b style="color:#1a1228;">data &amp; AI consultancy</b> getting AI into production for banks, insurers and capital-markets firms — 1,300+ models live, $250M+ GWP under live AI. It hires the technical bench it staffs that delivery with, and runs that hiring end-to-end on Taali.</span>
+          <div>
+            <div style="font-family:var(--font-mono); font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:var(--mute); margin-bottom:9px;">// Roles it hires on Taali</div>
+            <div class="role-chips">
+              <span>Data scientists</span><span>ML engineers</span><span>Data engineers</span><span>AI engineers</span><span>Analytics leads</span><span>Solution architects</span>
+            </div>
+          </div>
           <span class="live"><span class="blip"></span>Live · production</span>
         </div>
-        <div class="founder-card" style="border-radius:18px; padding:22px 24px; gap:10px;">
+        <div class="founder-card" style="border-radius:18px; padding:20px 24px; gap:8px;">
           <div class="lbl">// Founder-market fit</div>
-          <div class="bio" style="font-size:15px;">Built by <b style="color:#1a1228;">Sam Patel</b> — a data scientist who spent a decade hiring and growing engineering &amp; data teams, and built Taali at DeepLight because every assessment tool he tested measured the wrong thing. <em style="font-style:normal;color:#7f39fb;font-weight:600;">You're buying what a live operation already runs on.</em></div>
+          <div class="bio" style="font-size:14.5px;">Built by <b style="color:#1a1228;">Sam Patel</b> — a data scientist who spent a decade hiring &amp; growing data teams, and built Taali at DeepLight because every tool he tested measured the wrong thing. <em style="font-style:normal;color:#7f39fb;font-weight:600;">You're buying what a live operation already runs on.</em></div>
         </div>
       </div>
 
-      <div class="traction">
-        <div class="th">// On Taali at DeepLight — today</div>
-        <div class="stats">
-          <div class="s"><div class="n">105</div><div class="l">Live roles run on Taali (114 created to date).</div></div>
-          <div class="s"><div class="n">58k+</div><div class="l">Applications processed · 42k+ distinct candidates.</div></div>
-          <div class="s"><div class="n">16k+</div><div class="l">Agent decisions — human sign-off on every advance &amp; reject.</div></div>
-          <div class="s"><div class="n">4,295</div><div class="l">Candidates advanced; ~5,700 screened out, defensibly.</div></div>
+      <div class="proof-right">
+        <div class="th">// On Taali at DeepLight, to date</div>
+        <div class="proof-stats">
+          <div class="s"><div class="n">105</div><div class="l">Live roles run on Taali</div></div>
+          <div class="s"><div class="n">58k+</div><div class="l">Applications screened · 42k+ candidates</div></div>
+          <div class="s"><div class="n">1,900+</div><div class="l">AI-native assessments sent</div></div>
+          <div class="s"><div class="n">16k+</div><div class="l">Agent decisions, human-approved</div></div>
+          <div class="s accent"><div class="n">340</div><div class="l">Offers extended from Taali shortlists</div></div>
+          <div class="s accent"><div class="n">210</div><div class="l">Hires made</div></div>
         </div>
-        <div class="next">
-          <b>Why this matters for you:</b> the risk in new tooling is always "does it work on real roles, at real volume?" Taali has been answering that — in production, on a live FS-focused operation — at the scale your desks run at.
+        <div class="outcome-band">
+          <b>9 days → under 24 hours</b> from brief to a verified shortlist, and <b>~3× the reqs per consultant</b> — with proof attached to every submission.
         </div>
       </div>
     </div>
@@ -758,34 +782,38 @@
 
     <div class="ways">
       <div class="way">
-        <div class="way-tag">// Use it — on your desks</div>
+        <div class="way-num">01</div>
+        <div class="way-tag">Use it — on your desks</div>
         <div class="way-h">Place faster, with proof.</div>
         <div class="way-list">
           <div class="way-li"><span class="ic">→</span><span>The agent clears top-of-funnel on every mandate — <b>more reqs per consultant, no extra heads</b>.</span></div>
           <div class="way-li"><span class="ic">→</span><span>Every submission carries a verified work sample — <b>higher shortlist-to-placement, fewer fall-throughs</b>.</span></div>
-          <div class="way-li"><span class="ic">→</span><span>Arrive at the client with evidence — <b>win mandates against firms still emailing CVs</b>.</span></div>
+          <div class="way-li"><span class="ic">→</span><span>Arrive with evidence — <b>win mandates against firms still emailing CVs</b>.</span></div>
         </div>
+        <div class="way-foot">More placements per consultant · fewer clawbacks</div>
       </div>
 
       <div class="way hero">
-        <div class="way-tag">// Offer it — to your clients</div>
-        <div class="way-h">A verified-assessment service you own.</div>
+        <div class="way-num">02</div>
+        <div class="way-tag">Offer it — to your clients</div>
+        <div class="way-h">A verified service you own.</div>
         <div class="way-list">
-          <div class="way-li"><span class="ic">→</span><span>Offer your own <b>branded "verified assessment"</b> to clients as a co-branded or white-labelled service.</span></div>
+          <div class="way-li"><span class="ic">→</span><span>Sell your own <b>branded "verified assessment"</b> to clients — co-branded or fully white-labelled.</span></div>
           <div class="way-li"><span class="ic">→</span><span>Powered by Taali's <b>public API + provider add-on</b> — your brand on the front, our engine underneath.</span></div>
-          <div class="way-li"><span class="ic">→</span><span>A new revenue line and a stickier client — <b>you become infrastructure, not just a supplier</b>.</span></div>
+          <div class="way-li"><span class="ic">→</span><span>A new revenue line — <b>you become infrastructure, not just a supplier</b>.</span></div>
         </div>
+        <div class="way-foot">New revenue line · deeper client lock-in</div>
       </div>
     </div>
 
     <div class="offer-foot">
       <div class="offer-cell credits">
         <span class="oc-tag">// How you pay</span>
-        <span class="oc-body"><b>Credits — you pay for what you use.</b> A simple margin model, no big upfront. Offer it on to your clients and you keep the spread on top; we keep our usage margin underneath.</span>
+        <span class="oc-body"><b>Credits — pay only for what you use.</b> No big upfront. Offer it on and you keep the spread; we keep our margin underneath.</span>
       </div>
       <div class="offer-cell pilot">
-        <span class="oc-tag">// How to start</span>
-        <span class="oc-body"><b>A free proof-of-value pilot.</b> Pick a few live roles, we run them end-to-end at no cost, we measure together — then agree the model. &nbsp;<a href="mailto:sam@taali.ai">sam@taali.ai →</a></span>
+        <span class="oc-tag">// How to start — free</span>
+        <span class="oc-body"><b>A no-cost proof-of-value pilot</b> on a few live roles. We run them, we measure together, then agree the model. &nbsp;<a href="mailto:sam@taali.ai">sam@taali.ai →</a></span>
       </div>
     </div>
 
@@ -806,10 +834,10 @@
   "The ground has shifted under recruitment — worst of all for exactly the roles you place: software, data, AI, change. 78% of CVs now contain AI-generated content and resume fraud costs around $600B a year, so your consultants burn billable hours on a slush pile that looks qualified. Legacy tech tests saw a 5x cheating spike because candidates build with AI all day and the tests pretend they don't. And one in three hiring managers has caught a fake or proxy candidate — so clients no longer trust a CV, which means they no longer trust a CV-based shortlist. Whoever can prove capability, not just forward it, wins the mandate.",
   "Taali is two things in one. A hiring agent that runs each live mandate end-to-end — and crucially, keeps you in control: it brings decisions to your home hub, you make the call. And an AI-native assessment that produces real evidence. Three pillars: Screen and search — the agent does pre-screen, scoring and ranking, and you can ask it in plain English to tailor a role and pull a shortlist. Prove — every candidate works a real task in a real repo with Claude in hand, scored on five axes including how they work with AI. Control — every advance and reject is queued for your sign-off, evidence-linked and auditable, and your overrides retrain it overnight.",
   "This is what you send the client instead of a CV — and it's the real product, not a mock-up. A real repo, a real incident to fix — here, a finance reconciliation bug — with Claude Code live in the workspace: the candidate chats, edits, and runs the test suite in the terminal. We capture every prompt, every tool call, every test run, and score how they actually work with AI. The client doesn't get a claim on a CV; they get the work, replayable.",
-  "This is the recruiter's seat — and the two features people always ask about. On the left, the home hub: the agent never acts alone, so every advance and reject lands here with its confidence, score and evidence, and you approve, override or reject. Human-in-the-loop by design — which matters when your clients are banks and insurers. On the right, search: ask in plain English — 'top five with payments experience who scored 80-plus' — and it pulls a shortlist grounded in each candidate's own CV and work sample, with the evidence quoted. Tighten the bar and it re-ranks live. That's how you tailor a role and find a bespoke shortlist in seconds.",
+  "This is the recruiter's seat — and these are real screenshots of the product, not mock-ups. On the left, the home hub: the agent never acts alone, so every advance and reject lands here with its confidence, score and evidence — you approve, override or reject. Human-in-the-loop by design, which matters when your clients are banks and insurers. On the right, search: ask in plain English and it pulls a shortlist grounded in each candidate's own CV and work sample, with the evidence cited — it'll even map the graph of who worked where. Tighten the bar and it re-ranks live. That's how you tailor a role and find a bespoke shortlist in seconds.",
   "Taali runs every stage of the desk — apply, pre-screen, score and search, assess, decide, submit — and the point of this slide is that this is what's live in production today, not a roadmap. Two-way ATS sync, CV-fraud detection, evidence-grounded scoring, the conversational search, the real-repo assessment with five-axis fluency, the home decision hub with human sign-off, client-ready reports as a share link or PDF, and a public API plus provider add-on that powers a white-label offer. The platform is built.",
   "Why Taali and not what you run today. Your ATS or CRM — Bullhorn, Vincere, Workable — automates workflow but doesn't measure skill. Test vendors bolt AI features onto leetcode formats. Nobody sits top-right: agent-driven, AI-native work sample, human-in-the-loop. The table is the short version — only Taali works each role end-to-end, scores how candidates work with AI, lets you tailor roles and find anyone conversationally, keeps a human on every decision, gives you an auditable verdict your FS clients can defend, and exposes an API to power your own offer.",
-  "The honest question with any new tool is 'does it work on real roles, at real volume?' Taali runs DeepLight's hiring end-to-end, in production: 105 live roles, 58,000-plus applications, 42,000-plus candidates, 16,000-plus agent decisions with a human sign-off on every advance and reject, and over four thousand candidates advanced. DeepLight is a data and AI consultancy getting AI into production for banks and insurers — so this is exactly the technical, FS-facing hiring you do, at the scale you do it. I built Taali inside that operation because every tool I tested measured the wrong thing. You're buying what a live operation already runs on.",
+  "The honest question with any new tool is 'does it work on real roles, at real volume?' Taali runs DeepLight's hiring end-to-end, in production: 105 live roles, 58,000-plus applications, 42,000-plus candidates, 1,900-plus AI-native assessments sent, and 16,000-plus agent decisions with a human sign-off on every advance and reject — driving 340 offers and 210 hires, and cutting time-to-shortlist from about nine days to under a day. DeepLight is a data and AI consultancy getting AI into production for banks and insurers, hiring data scientists, ML and AI engineers — exactly the technical, FS-facing hiring you do. I built Taali inside that operation because every tool I tested measured the wrong thing. You're buying what a live operation already runs on.",
   "So, the offering — two ways it pays. Use it on your desks: more placements per consultant, submissions clients trust, mandates won against firms still emailing CVs. Or offer it to your clients: a branded verified-assessment service powered by our API, a new revenue line that makes you infrastructure. Commercially it's deliberately simple — credits, you pay for what you use; offer it on top and you keep the spread, we keep our margin underneath. And to start, it's free: pick a few live roles, we run them end-to-end at no cost, we measure together, then we agree the model. I'd like to pick those roles before we leave."
 ]
 </script>
