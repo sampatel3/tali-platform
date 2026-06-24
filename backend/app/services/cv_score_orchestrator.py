@@ -279,6 +279,30 @@ def enqueue_score(
         )
         return None
 
+    # Pre-screen integrity guard (flag-gated). A bypass is only safe for
+    # REFRESHING the score of a candidate that genuinely PASSED pre-screen.
+    # For never-screened, stale, or below-threshold candidates, do NOT bypass —
+    # route through the gate so the cheap pre-screen runs (and filters) before
+    # the expensive holistic score. Without this, bulk / engine-migration
+    # re-scores (bypass_pre_screen=True) paid for full holistic scores on
+    # candidates the gate would have filtered (2026-06 cost audit: ~56% of the
+    # score line went to fail / never-pre-screened candidates).
+    if bypass_pre_screen and settings.PRE_SCREEN_GATE_GUARD_RESCORE:
+        from .pre_screening_service import application_needs_pre_screen
+
+        genuine = getattr(application, "genuine_pre_screen_score_100", None)
+        if (
+            application_needs_pre_screen(application)
+            or genuine is None
+            or genuine < int(settings.PRE_SCREEN_THRESHOLD)
+        ):
+            logger.info(
+                "pre_screen_guard: not bypassing pre-screen application_id=%s "
+                "genuine=%s threshold=%s",
+                application.id, genuine, settings.PRE_SCREEN_THRESHOLD,
+            )
+            bypass_pre_screen = False
+
     # Pre-flight credit gate. In shadow mode (USAGE_METER_LIVE=False) this
     # is a no-op. In live mode, orgs without enough balance get a silent
     # skip — the caller (batch loops or single-app routes) sees None and
