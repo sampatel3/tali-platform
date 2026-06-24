@@ -197,6 +197,7 @@ function GraphCounters({ data }) {
 // Recruiter approve / bulk-approve of Hub decisions — one row drains the
 // batch's Workable writebacks sequentially.
 function DecisionBatchCounters({ data }) {
+  const status = String(data?.status || '').toLowerCase();
   const total = Number(data?.total ?? 0);
   const succeeded = Number(data?.succeeded ?? 0);
   const requeued = Number(data?.requeued ?? 0);
@@ -205,14 +206,25 @@ function DecisionBatchCounters({ data }) {
   // idempotently. Surface them so "18 / 100 approved" reads as success, not a
   // partial failure. Computed from the total for older runs whose stored
   // counters predate the explicit `skipped` key.
-  const skipped =
-    data?.skipped != null
-      ? Number(data.skipped)
-      : Math.max(0, total - succeeded - requeued - failed);
+  const hasExplicitSkipped = data?.skipped != null;
+  const skipped = hasExplicitSkipped
+    ? Number(data.skipped)
+    : Math.max(0, total - succeeded - requeued - failed);
   const annot = [];
   if (requeued) annot.push(`${requeued} requeued`);
   if (failed) annot.push(`${failed} failed`);
-  if (skipped) annot.push(`${skipped} already resolved`);
+  // A run that FAILED before the batch drained (e.g. "Workable lock timeout",
+  // or reaped by the watchdog) carries only its enqueue-time counters — no
+  // per-decision outcome. The leftover `total - succeeded` were NOT "already
+  // resolved"; they were returned to the queue. Labelling them "already
+  // resolved" made a stuck org read as healthy. Only infer "already resolved"
+  // when the run actually completed (or stored an explicit skipped count).
+  if (status === 'failed' && !hasExplicitSkipped) {
+    const returned = Math.max(0, total - succeeded - requeued - failed);
+    if (returned) annot.push(`${returned} returned to queue`);
+  } else if (skipped) {
+    annot.push(`${skipped} already resolved`);
+  }
   return (
     <div className="bg-jobs-panel-counters">
       <strong>{succeeded}</strong> / {total} approved
@@ -609,7 +621,7 @@ export default function BackgroundJobsPanel() {
             type="Decision approvals"
             status={r.status}
             scope="Org-wide"
-            counters={<DecisionBatchCounters data={{ ...r.counters }} />}
+            counters={<DecisionBatchCounters data={{ ...r.counters, status: r.status }} />}
             startedAt={r.started_at}
             finishedAt={r.finished_at}
           />
