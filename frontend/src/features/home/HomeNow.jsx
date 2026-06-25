@@ -828,7 +828,7 @@ const InvitedDetail = ({ candidate, roleNameById, onNavigate }) => {
         </ul>
         {!t.email_status ? (
           <div className="rq-invite-note">
-            Email delivery/open tracking lights up once the Resend webhook is configured.
+            No delivery or open events recorded for this invite yet.
           </div>
         ) : null}
       </div>
