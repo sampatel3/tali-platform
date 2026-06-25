@@ -427,6 +427,48 @@ export const buildCandidateSnapshot = ({ application, completedAssessment } = {}
   return null;
 };
 
+// Flatten cv_match_details.integrity_signals (the deterministic fraud surface:
+// document hygiene, JD mirroring, unverified employers, CV↔Workable diff) into
+// recruiter-readable strings for the "Verify before interview" panel. Flag-only
+// — these never change the score, they prompt a question in screening.
+const buildIntegrityFlags = (details) => {
+  const sig = details && typeof details.integrity_signals === 'object' ? details.integrity_signals : null;
+  if (!sig) return [];
+  const flags = [];
+
+  const dh = sig.document_hygiene && typeof sig.document_hygiene === 'object' ? sig.document_hygiene : null;
+  if (dh) {
+    if (dh.injection_detected) {
+      flags.push('Hidden instruction / prompt-injection text aimed at the automated screener was found in the CV file (removed before scoring).');
+    } else if (dh.has_tag_chars) {
+      flags.push('Invisible Unicode (Tags-block) characters were embedded in the CV file.');
+    } else if (Number(dh.invisible_char_count) >= 8) {
+      flags.push(`${dh.invisible_char_count} invisible characters were embedded in the CV file.`);
+    }
+  }
+
+  const sh = sig.jd_shingle && typeof sig.jd_shingle === 'object' ? sig.jd_shingle : null;
+  if (sh && sh.triggered) {
+    flags.push(`CV closely mirrors the job description (${Math.round((Number(sh.similarity) || 0) * 100)}% phrase overlap).`);
+  }
+
+  const ue = sig.unverified_employers && typeof sig.unverified_employers === 'object' ? sig.unverified_employers : null;
+  if (ue && Number(ue.count) > 0) {
+    const names = Array.isArray(ue.companies) ? ue.companies.filter(Boolean).join(', ') : '';
+    flags.push(`${ue.count} employer name${Number(ue.count) > 1 ? 's' : ''} not found verbatim in the CV text${names ? `: ${names}` : ''}.`);
+  }
+
+  const wd = sig.workable_history_diff && typeof sig.workable_history_diff === 'object' ? sig.workable_history_diff : null;
+  if (wd && Array.isArray(wd.issues)) {
+    wd.issues.forEach((item) => {
+      const detail = String(item?.detail || '').trim();
+      if (detail) flags.push(`Workable mismatch — ${detail}`);
+    });
+  }
+
+  return flags.map((item) => String(item).trim()).filter(Boolean);
+};
+
 export const buildRoleFitEvidenceModel = ({ application, completedAssessment }) => {
   const payload = getRoleFitPayload({ application, completedAssessment });
   const details = payload.details && typeof payload.details === 'object' ? payload.details : {};
@@ -472,6 +514,7 @@ export const buildRoleFitEvidenceModel = ({ application, completedAssessment }) 
     timelineFlags: Array.isArray(details.timeline_flags)
       ? details.timeline_flags.map((item) => String(item || '').trim()).filter(Boolean)
       : [],
+    integrityFlags: buildIntegrityFlags(details),
     summaryText,
     hasAnyEvidence: Boolean(
       payload.roleFitScore != null

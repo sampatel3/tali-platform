@@ -848,7 +848,11 @@ def _execute_scoring_v3(
         return
 
     application.cv_match_score = output.role_fit_score
-    application.cv_match_details = output.model_dump(mode="json")
+    details = output.model_dump(mode="json")
+    details["integrity_signals"] = _augment_integrity_signals(
+        details.get("integrity_signals"), application, cv_text, job_spec_text
+    )
+    application.cv_match_details = details
     application.cv_match_scored_at = datetime.now(timezone.utc)
     # Record the engine that ACTUALLY scored this candidate on the job row +
     # timeline event (the top-of-function defaults assume the Haiku v3 path;
@@ -1161,4 +1165,45 @@ def mark_application_scores_stale(
         return False
     _clear_application_scores(app)
     supersede_pending_decisions_for_app(db, app.id, reason=reason)
+
+
+def _augment_integrity_signals(
+    existing: dict | None,
+    application: CandidateApplication,
+    cv_text: str,
+    job_spec_text: str,
+) -> dict | None:
+    """Merge the flag-only supplementary fraud signals (JD shingle similarity,
+    CV↔Workable history diff, unverified-employer surfacing) into the score's
+    ``integrity_signals``. Computed here because this is the one place with the
+    CV text, the parsed ``cv_sections``, the candidate's Workable history AND
+    the role JD all in scope, so both scoring engines surface them uniformly.
+    Best-effort — never raises into the scoring path, returns ``existing`` on
+    any failure."""
+    try:
+        from ..platform.config import settings
+        from .fraud_detection import build_supplementary_fraud_signals
+
+        cand = getattr(application, "candidate", None)
+        cv_sections = (
+            getattr(application, "cv_sections", None)
+            or (getattr(cand, "cv_sections", None) if cand is not None else None)
+            or {}
+        )
+        cv_exp = cv_sections.get("experience") if isinstance(cv_sections, dict) else None
+        wk_exp = getattr(cand, "experience_entries", None) if cand is not None else None
+        supp = build_supplementary_fraud_signals(
+            cv_text=cv_text or "",
+            jd_text=job_spec_text or "",
+            cv_experience=cv_exp,
+            workable_experience=wk_exp,
+            shingle_threshold=settings.FRAUD_SHINGLE_THRESHOLD,
+            workable_diff_enabled=settings.FRAUD_WORKABLE_DIFF_ENABLED,
+        )
+        merged = dict(existing or {})
+        merged.update(supp)
+        return merged or None
+    except Exception:  # pragma: no cover — never break scoring on a flag
+        logger.debug("supplementary fraud signals failed", exc_info=True)
+        return existing
     return True
