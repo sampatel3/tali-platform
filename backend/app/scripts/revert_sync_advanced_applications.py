@@ -56,6 +56,7 @@ from ..models.candidate_application import CandidateApplication
 from ..models.candidate_application_event import CandidateApplicationEvent
 from ..domains.assessments_runtime.pipeline_service import (
     PIPELINE_STAGES,
+    is_terminal_workable_stage,
     normalize_pipeline_key,
     status_from_pipeline,
 )
@@ -92,12 +93,27 @@ def _revert_target_stage(db: Session, app: CandidateApplication) -> str:
     return _FALLBACK_STAGE
 
 
-def revert_sync_advanced_applications(db: Session, *, apply: bool = False) -> dict:
+def revert_sync_advanced_applications(
+    db: Session,
+    *,
+    apply: bool = False,
+    scored_only: bool = False,
+    skip_terminal: bool = True,
+) -> dict:
     """Revert sync-mis-advanced applications. Returns a summary dict.
 
     Idempotent: once reverted, a row's ``pipeline_stage_source`` is set to
     ``system`` and its stage is no longer ``advanced``, so re-running matches
     zero rows.
+
+    ``skip_terminal`` (default True): leave rows whose ``workable_stage`` is a
+    TERMINAL hand-off (offer / hired) alone — post the freeze-only-on-terminal
+    change these are *legitimately* ``advanced``; only mid-interview rows were
+    mis-frozen. ``scored_only`` (default False): only revert rows that already
+    have a ``cv_match_score`` — un-freezing an unscored row lets the agent
+    re-score it (a cv_match LLM call); restricting to scored rows keeps the
+    backfill zero-re-score-cost (cached score is reused, the sync re-evaluation
+    is the deterministic policy).
     """
     rows = (
         db.query(CandidateApplication)
@@ -110,8 +126,28 @@ def revert_sync_advanced_applications(db: Session, *, apply: bool = False) -> di
         .all()
     )
 
+    skipped_terminal = 0
+    skipped_unscored = 0
+    selected = []
+    for app in rows:
+        if skip_terminal and is_terminal_workable_stage(app.workable_stage):
+            skipped_terminal += 1
+            continue
+        if scored_only and app.cv_match_score is None:
+            skipped_unscored += 1
+            continue
+        selected.append(app)
+    rows = selected
+
     now = datetime.now(timezone.utc)
-    summary = {"matched": len(rows), "reverted": 0, "by_target_stage": {}, "applied": apply}
+    summary = {
+        "matched": len(rows),
+        "reverted": 0,
+        "by_target_stage": {},
+        "applied": apply,
+        "skipped_terminal": skipped_terminal,
+        "skipped_unscored": skipped_unscored,
+    }
 
     for app in rows:
         target = _revert_target_stage(db, app)
@@ -162,17 +198,22 @@ def revert_sync_advanced_applications(db: Session, *, apply: bool = False) -> di
 def main() -> int:
     from ..platform.database import SessionLocal
 
-    apply = "--apply" in sys.argv[1:]
+    args = sys.argv[1:]
+    apply = "--apply" in args
+    scored_only = "--scored-only" in args
     db = SessionLocal()
     try:
         print(
-            f"[revert_sync_advanced_applications] mode={'APPLY' if apply else 'DRY-RUN'}",
+            f"[revert_sync_advanced_applications] mode={'APPLY' if apply else 'DRY-RUN'} "
+            f"scored_only={scored_only}",
             flush=True,
         )
-        summary = revert_sync_advanced_applications(db, apply=apply)
+        summary = revert_sync_advanced_applications(db, apply=apply, scored_only=scored_only)
         print(
             f"[revert_sync_advanced_applications] matched={summary['matched']} "
-            f"reverted={summary['reverted']} by_target_stage={summary['by_target_stage']}",
+            f"reverted={summary['reverted']} by_target_stage={summary['by_target_stage']} "
+            f"skipped_terminal={summary['skipped_terminal']} "
+            f"skipped_unscored={summary['skipped_unscored']}",
             flush=True,
         )
         if not apply and summary["matched"]:
