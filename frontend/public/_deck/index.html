@@ -546,11 +546,13 @@
   .surf-out span { display: block; position: relative; padding-left: 18px; font-size: 12.5px; line-height: 1.4; color: var(--ink-2); }
   .surf-out span::before { content: "→"; position: absolute; left: 0; top: 0; color: var(--purple); font-weight: 700; }
   .surf-out b { color: var(--ink); font-weight: 600; }
-  /* iframes can't render in PDF/print export — show a graceful hint instead */
+  /* Live iframes can't render in a PDF/print export, so each surface also
+     carries a captured screenshot of the real product — hidden on screen,
+     swapped in for print so the downloaded PDF shows the actual surfaces. */
+  .surf-shot { display: none; }
   @media print {
     .surf-frame iframe { display: none; }
-    .surf-frame { min-height: 460px; position: relative; }
-    .surf-frame::after { content: "▸ Live product surface — open the deck at taali.ai/deck to view"; position: absolute; inset: 46px 0 0; display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 15px; color: var(--mute); }
+    .surf-shot { display: block; flex: 1; width: 100%; min-height: 0; object-fit: cover; object-position: top center; }
   }
 </style>
 </head>
@@ -691,6 +693,7 @@
       <div class="surf-frame">
         <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/home · your hiring Hub</span><span class="surf-badge">Live surface</span></div>
         <iframe src="/showcase/home" title="Taali — the hiring Hub" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        <img class="surf-shot" src="img/surf-hub.png" alt="Taali — the hiring Hub" />
       </div>
       <div class="surf-out">
         <span>Steer each role's agent in <b>plain English</b> — "cap salary at £90k", "drop the cut-off to 65" — it reasons, shows the impact, and asks before it spends.</span>
@@ -716,6 +719,7 @@
       <div class="surf-frame">
         <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/jobs · agent on duty</span><span class="surf-badge">Live surface</span></div>
         <iframe src="/jobs?demo=1&amp;showcase=1" title="Taali — Jobs board" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        <img class="surf-shot" src="img/surf-triage.png" alt="Taali — Jobs board, agent on duty" />
       </div>
       <div class="surf-out">
         <span>The <b>live agent bar</b> shows what each role's agent advanced, escalated, or pre-screen rejected in the last hour.</span>
@@ -741,6 +745,7 @@
       <div class="surf-frame">
         <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/assess · candidate workspace</span><span class="surf-badge">Live surface</span></div>
         <iframe src="/assessment/live?demo=1&amp;showcase=1" title="Taali — AI assessment" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        <img class="surf-shot" src="img/surf-assess.png" alt="Taali — AI assessment workspace" />
       </div>
       <div class="surf-out">
         <span><b>Claude at the centre</b>, a real editor + sandboxed runtime alongside — we measure how they pair with AI, not whether they memorised syntax.</span>
@@ -766,6 +771,7 @@
       <div class="surf-frame">
         <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/c/demo · candidate standing report</span><span class="surf-badge">Live surface</span></div>
         <iframe src="/c/demo?view=client&amp;k=demo-token&amp;showcase=1" title="Taali — candidate standing report" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        <img class="surf-shot" src="img/surf-report.png" alt="Taali — candidate standing report" />
       </div>
       <div class="surf-out">
         <span><b>Six evidence-linked axes</b>: systems design, code craft, reasoning under pressure, AI collaboration, release safety, communication.</span>
@@ -791,6 +797,7 @@
       <div class="surf-frame">
         <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/chat · ask + per-role agents</span><span class="surf-badge">Live surface</span></div>
         <iframe src="/showcase/chat" title="Taali — chat and agents" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        <img class="surf-shot" src="img/surf-chat.png" alt="Taali — chat and agents" />
       </div>
       <div class="surf-out">
         <span>"Top 3 who've <b>owned a GenAI launch</b>, run Postgres in prod, and led a backend team" → a grounded shortlist, every verdict backed by a <b>verbatim CV quote</b>.</span>
