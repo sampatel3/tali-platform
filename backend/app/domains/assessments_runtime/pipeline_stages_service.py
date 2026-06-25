@@ -13,13 +13,17 @@ the contract step removes it.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
+from fastapi import HTTPException
+from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session
 
 from ...models.pipeline_stage import (
     CANONICAL_SEED_STAGES,
     LEGACY_STAGE_KIND,
+    STAGE_KINDS,
     PipelineStage,
 )
 
@@ -111,3 +115,148 @@ def stage_kind_for(db: Session, organization_id: int, slug: str | None) -> str |
         if stage.slug == slug:
             return stage.kind
     return LEGACY_STAGE_KIND.get(slug)
+
+
+# --- Management (CRUD) ------------------------------------------------------
+# Recruiter-facing stage management. Returns/raises HTTPException on validation
+# (consistent with the rest of the domain). All mutators flush but do NOT commit.
+
+
+def _slugify_stage(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", (value or "").strip().lower()).strip("_")
+
+
+def list_org_stages(
+    db: Session, organization_id: int, *, include_inactive: bool = False
+) -> list[PipelineStage]:
+    """The org's materialized stage rows (for management), ordered by position.
+    Unlike ``resolve_org_stages`` this does NOT fall back to canonical — call
+    ``ensure_org_stages_seeded`` first when you need guaranteed rows."""
+    query = db.query(PipelineStage).filter(
+        PipelineStage.organization_id == organization_id
+    )
+    if not include_inactive:
+        query = query.filter(PipelineStage.is_active.is_(True))
+    return query.order_by(PipelineStage.position, PipelineStage.id).all()
+
+
+def _next_position(db: Session, organization_id: int) -> int:
+    current_max = (
+        db.query(sa_func.max(PipelineStage.position))
+        .filter(PipelineStage.organization_id == organization_id)
+        .scalar()
+    )
+    return int(current_max) + 1 if current_max is not None else 0
+
+
+def create_org_stage(
+    db: Session,
+    organization_id: int,
+    *,
+    name: str,
+    kind: str,
+    slug: str | None = None,
+    position: int | None = None,
+) -> PipelineStage:
+    """Create a custom stage. Validates kind + unique slug per org."""
+    clean_name = (name or "").strip()
+    if not clean_name:
+        raise HTTPException(status_code=422, detail="Stage name is required")
+    if kind not in STAGE_KINDS:
+        raise HTTPException(status_code=422, detail=f"Unsupported stage kind={kind!r}")
+    stage_slug = _slugify_stage(slug or clean_name)
+    if not stage_slug:
+        raise HTTPException(status_code=422, detail="Could not derive a stage slug")
+    clash = (
+        db.query(PipelineStage.id)
+        .filter(
+            PipelineStage.organization_id == organization_id,
+            PipelineStage.slug == stage_slug,
+        )
+        .first()
+    )
+    if clash:
+        raise HTTPException(
+            status_code=409, detail=f"Stage slug {stage_slug!r} already exists"
+        )
+    row = PipelineStage(
+        organization_id=organization_id,
+        slug=stage_slug,
+        name=clean_name,
+        kind=kind,
+        position=position
+        if position is not None
+        else _next_position(db, organization_id),
+        is_default=False,
+        is_active=True,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def _get_org_stage(db: Session, organization_id: int, stage_id: int) -> PipelineStage:
+    row = (
+        db.query(PipelineStage)
+        .filter(
+            PipelineStage.id == stage_id,
+            PipelineStage.organization_id == organization_id,
+        )
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Pipeline stage not found")
+    return row
+
+
+def update_org_stage(
+    db: Session,
+    organization_id: int,
+    stage_id: int,
+    *,
+    name: str | None = None,
+    kind: str | None = None,
+    position: int | None = None,
+    is_active: bool | None = None,
+) -> PipelineStage:
+    """Update a stage's name / kind / position / is_active."""
+    row = _get_org_stage(db, organization_id, stage_id)
+    if name is not None:
+        clean = name.strip()
+        if not clean:
+            raise HTTPException(status_code=422, detail="Stage name cannot be empty")
+        row.name = clean
+    if kind is not None:
+        if kind not in STAGE_KINDS:
+            raise HTTPException(
+                status_code=422, detail=f"Unsupported stage kind={kind!r}"
+            )
+        row.kind = kind
+    if position is not None:
+        row.position = int(position)
+    if is_active is not None:
+        row.is_active = bool(is_active)
+    db.flush()
+    return row
+
+
+def reorder_org_stages(
+    db: Session, organization_id: int, ordered_ids: list[int]
+) -> list[PipelineStage]:
+    """Set stage positions to the given id order (0-based). Ids must all belong
+    to the org."""
+    rows = {
+        row.id: row
+        for row in db.query(PipelineStage).filter(
+            PipelineStage.organization_id == organization_id,
+            PipelineStage.id.in_(ordered_ids or []),
+        )
+    }
+    if len(rows) != len(set(ordered_ids or [])):
+        raise HTTPException(
+            status_code=422, detail="ordered_ids contains unknown stage ids"
+        )
+    for index, stage_id in enumerate(ordered_ids):
+        rows[stage_id].position = index
+    db.flush()
+    return list_org_stages(db, organization_id, include_inactive=True)

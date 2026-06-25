@@ -1,9 +1,16 @@
-"""P0: per-org pipeline-stage resolution (pipeline_stages_service)."""
+"""P0: per-org pipeline-stage resolution + management (pipeline_stages_service)."""
+import pytest
+from fastapi import HTTPException
+
 from app.domains.assessments_runtime.pipeline_stages_service import (
+    create_org_stage,
     ensure_org_stages_seeded,
+    list_org_stages,
+    reorder_org_stages,
     resolve_org_stages,
     resolve_stage_slugs,
     stage_kind_for,
+    update_org_stage,
 )
 from app.models import Organization, PipelineStage
 
@@ -103,3 +110,54 @@ def test_two_orgs_are_isolated(db):
     db.flush()
     assert "x" in resolve_stage_slugs(db, a.id)
     assert "x" not in resolve_stage_slugs(db, b.id)
+
+
+# --- Management (CRUD) ------------------------------------------------------
+
+def test_create_org_stage_validates_and_dedups(db):
+    org = _make_org(db)
+    ensure_org_stages_seeded(db, org.id)
+    row = create_org_stage(db, org.id, name="Phone Screen", kind="screening")
+    assert row.slug == "phone_screen"
+    assert row.is_default is False and row.is_active is True
+    with pytest.raises(HTTPException) as e1:
+        create_org_stage(db, org.id, name="Bad", kind="not_a_kind")
+    assert e1.value.status_code == 422
+    with pytest.raises(HTTPException) as e2:
+        create_org_stage(db, org.id, name="Applied", kind="applied")  # 'applied' seeded
+    assert e2.value.status_code == 409
+
+
+def test_update_org_stage(db):
+    org = _make_org(db)
+    ensure_org_stages_seeded(db, org.id)
+    review = (
+        db.query(PipelineStage)
+        .filter_by(organization_id=org.id, slug="review")
+        .one()
+    )
+    update_org_stage(db, org.id, review.id, name="Manual Review", is_active=False)
+    assert review.name == "Manual Review"
+    assert review.is_active is False
+    assert "review" not in resolve_stage_slugs(db, org.id)
+    with pytest.raises(HTTPException) as e:
+        update_org_stage(db, org.id, 999999, name="X")
+    assert e.value.status_code == 404
+
+
+def test_reorder_org_stages(db):
+    org = _make_org(db)
+    ensure_org_stages_seeded(db, org.id)
+    stages = list_org_stages(db, org.id)
+    reversed_ids = [s.id for s in reversed(stages)]
+    result = reorder_org_stages(db, org.id, reversed_ids)
+    assert [s.slug for s in result] == [
+        "advanced",
+        "review",
+        "in_assessment",
+        "invited",
+        "applied",
+    ]
+    with pytest.raises(HTTPException) as e:
+        reorder_org_stages(db, org.id, [stages[0].id, 999999])
+    assert e.value.status_code == 422
