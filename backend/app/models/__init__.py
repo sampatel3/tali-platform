@@ -17,6 +17,11 @@ from .pipeline_stage import (
     STAGE_KINDS,
     PipelineStage,
 )
+from .disqualification_reason import (
+    CANONICAL_DISQUALIFICATION_REASONS,
+    DISPOSITION_CATEGORIES,
+    DisqualificationReason,
+)
 from .role import Role, role_tasks
 from .org_criterion import (
     BUCKET_CONSTRAINT,
@@ -185,6 +190,9 @@ __all__ = [
     "STAGE_KINDS",
     "CANONICAL_SEED_STAGES",
     "LEGACY_STAGE_KIND",
+    "DisqualificationReason",
+    "DISPOSITION_CATEGORIES",
+    "CANONICAL_DISQUALIFICATION_REASONS",
     "Assessment",
     "AssessmentStatus",
     "Candidate",
