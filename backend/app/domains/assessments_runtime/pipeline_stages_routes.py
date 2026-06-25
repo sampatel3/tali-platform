@@ -11,9 +11,12 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from ...deps import get_current_user
-from ...models.user import User
+from ...deps import get_current_user, require_role
+from ...models.user import ROLE_ADMIN, ROLE_RECRUITER, User
 from ...platform.database import get_db
+
+# Pipeline configuration (stages + reason catalog) is managed by admins/recruiters.
+_manage_config = require_role(ROLE_ADMIN, ROLE_RECRUITER)
 from .disqualification_reasons_service import (
     create_org_reason,
     ensure_org_reasons_seeded,
@@ -80,7 +83,7 @@ def list_pipeline_stages(
 def create_pipeline_stage(
     data: StageCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_manage_config),
 ):
     row = create_org_stage(
         db,
@@ -100,7 +103,7 @@ def update_pipeline_stage(
     stage_id: int,
     data: StageUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_manage_config),
 ):
     row = update_org_stage(
         db,
@@ -117,7 +120,7 @@ def update_pipeline_stage(
 def reorder_pipeline_stages(
     data: StageReorder,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_manage_config),
 ):
     rows = reorder_org_stages(db, current_user.organization_id, data.ordered_ids)
     db.commit()
@@ -177,7 +180,7 @@ def list_disqualification_reasons(
 def create_disqualification_reason(
     data: ReasonCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_manage_config),
 ):
     row = create_org_reason(
         db,
@@ -198,7 +201,7 @@ def update_disqualification_reason(
     reason_id: int,
     data: ReasonUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_manage_config),
 ):
     row = update_org_reason(
         db,
@@ -217,7 +220,7 @@ def update_disqualification_reason(
 def reorder_disqualification_reasons(
     data: ReasonReorder,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_manage_config),
 ):
     rows = reorder_org_reasons(db, current_user.organization_id, data.ordered_ids)
     db.commit()

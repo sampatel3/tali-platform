@@ -1,4 +1,12 @@
-from .user import User
+from .user import (
+    ROLE_ADMIN,
+    ROLE_HIRING_MANAGER,
+    ROLE_INTERVIEWER,
+    ROLE_RECRUITER,
+    ROLE_VIEWER,
+    USER_ROLES,
+    User,
+)
 from .organization import (
     SYNC_MODE_STANDALONE,
     SYNC_MODE_TAALI_PRIMARY,
@@ -181,6 +189,7 @@ from .workable_webhook_outbox import (
 
 __all__ = [
     "User",
+    "USER_ROLES",
     "Organization",
     "SYNC_MODE_STANDALONE",
     "SYNC_MODE_WORKABLE_PRIMARY",
