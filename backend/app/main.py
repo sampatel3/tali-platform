@@ -472,6 +472,22 @@ def graphiti_health():
     return healthcheck()
 
 
+@app.get("/healthz/github")
+def github_provisioning_health():
+    """On-demand probe of the GitHub credential assessment repo provisioning needs.
+
+    Returns ``{ok, status_code, detail, org}``. ``ok=false`` (e.g. a 401) means an
+    expired/invalid GITHUB_TOKEN — candidates cannot start assessments until it is
+    rotated on all services. Mirrors the proactive
+    ``assessment_provisioning_healthcheck`` beat; handy to curl right after a token
+    rotation. Not the Railway healthcheck (that's ``/health``) — this makes a live
+    GitHub call.
+    """
+    from .services.github_credentials import verify_github_credentials
+
+    return verify_github_credentials(org=settings.GITHUB_ORG, token=settings.GITHUB_TOKEN)
+
+
 @app.get("/admin/graphiti/stats")
 def graphiti_stats(request: Request):
     """Return CV + graph sync counts for operational visibility."""

@@ -136,6 +136,15 @@ celery_app.conf.update(
             "task": "app.tasks.assessment_tasks.finalize_timed_out_assessments",
             "schedule": 900.0,
         },
+        # Watchdog for the GitHub credential that assessment repo provisioning
+        # depends on. An expired token returns 401 and silently blocks every
+        # candidate from starting an assessment (repo init fails at send + start)
+        # — the 2026-06-25 zero-traction incident. Alerts on failure (log + Sentry)
+        # so it surfaces in minutes, not days. Light call → default queue.
+        "assessment-provisioning-healthcheck-every-30-minutes": {
+            "task": "app.tasks.assessment_tasks.assessment_provisioning_healthcheck",
+            "schedule": 1800.0,
+        },
         # Anthropic billing reconciliation. Pulls the last 48h so
         # late-arriving Anthropic data on the previous day gets re-checked.
         #
