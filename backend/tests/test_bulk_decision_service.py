@@ -184,7 +184,7 @@ def test_skips_candidate_with_existing_pending(db):
 
 
 def test_volume_guard_raises_threshold_question(db, monkeypatch):
-    monkeypatch.setattr(bulk_decision_service, "VOLUME_GUARD_PENDING_LIMIT", 2)
+    monkeypatch.setattr(bulk_decision_service.cohort, "VOLUME_GUARD_PENDING_LIMIT", 2)
     org, role = _seed_role(db, score_threshold=50, with_task=False)
     _add_app(db, org, role, role_fit=80.0)
     _add_app(db, org, role, role_fit=75.0)
