@@ -527,11 +527,11 @@
   .rp2-foot { margin-top: auto; font-family: var(--font-mono); font-size: 10px; color: #8b8595; }
 
   /* ── Product surfaces — live iframes of the real app (mirrors taali.ai/demo) ── */
-  section[data-slide^="surf-"] { display: flex; flex-direction: column; }
-  .slide-head.surf-head { margin-bottom: 14px; flex: none; }
-  .surf-title { margin: 9px 0 0; font-family: var(--font-display); font-size: 35px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.1; color: var(--ink); max-width: 1500px; }
+  deck-stage > section[data-slide^="surf-"] { display: flex; flex-direction: column; padding: 46px 88px 48px; }
+  .slide-head.surf-head { margin-bottom: 10px; flex: none; }
+  .surf-title { margin: 6px 0 0; font-family: var(--font-display); font-size: 30px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.1; color: var(--ink); max-width: 1500px; }
   .surf-title em { color: var(--purple); font-style: normal; }
-  .surf { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 16px; }
+  .surf { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
   .surf-frame { flex: 1; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: var(--bg-2); box-shadow: var(--shadow-lg); }
   .surf-chrome { flex: none; display: flex; align-items: center; gap: 11px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--bg); }
   .surf-chrome .dots { display: flex; gap: 6px; }
@@ -542,8 +542,8 @@
   .surf-url .lock { color: var(--green); margin-right: 6px; font-size: 9px; vertical-align: 1px; }
   .surf-badge { margin-left: auto; font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--purple); background: var(--purple-soft); border-radius: 999px; padding: 3px 12px; }
   .surf-frame iframe { flex: 1; width: 100%; min-height: 0; border: 0; display: block; background: var(--bg-2); }
-  .surf-out { flex: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
-  .surf-out span { display: block; position: relative; padding-left: 19px; font-size: 13.5px; line-height: 1.46; color: var(--ink-2); }
+  .surf-out { flex: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .surf-out span { display: block; position: relative; padding-left: 18px; font-size: 12.5px; line-height: 1.4; color: var(--ink-2); }
   .surf-out span::before { content: "→"; position: absolute; left: 0; top: 0; color: var(--purple); font-weight: 700; }
   .surf-out b { color: var(--ink); font-weight: 600; }
   /* iframes can't render in PDF/print export — show a graceful hint instead */
@@ -917,9 +917,17 @@
       </div>
     </div>
 
+    <div class="roadmap-strip">
+      <span class="rm-eyebrow">Next on<br>the roadmap →</span>
+      <div class="pipe-card roadmap rm-c"><span class="badge">Next</span><span class="ti">Standalone ATS</span><span class="bd">Own the whole funnel — sourcing &amp; job distribution, not just sync into someone else's ATS.</span></div>
+      <div class="pipe-card roadmap rm-c"><span class="badge">Next</span><span class="ti">More ATS &amp; CRM connectors</span><span class="bd">Bullhorn, Vincere, Greenhouse &amp; Lever alongside Workable.</span></div>
+      <div class="pipe-card roadmap rm-c"><span class="badge">Next</span><span class="ti">Candidate sourcing</span><span class="bd">Find talent in-platform, then screen, assess &amp; submit in one flow.</span></div>
+    </div>
+
     <div class="pipe-legend">
       <span><span class="sw live"></span>Live in production with our design partner, DeepLight AI</span>
-      <span style="margin-left: auto; text-transform: none; letter-spacing: 0; font-family: var(--font-display); color: rgba(20,15,40,0.7); font-size: 14px;"><b style="color:#1a1228;">The platform is built.</b> This is what runs today — not a roadmap.</span>
+      <span><span class="sw roadmap"></span>On the roadmap — shipping next</span>
+      <span style="margin-left: auto; text-transform: none; letter-spacing: 0; font-family: var(--font-display); color: rgba(20,15,40,0.7); font-size: 14px;"><b style="color:#1a1228;">The platform is built</b> — live today, and we're still shipping.</span>
     </div>
 
     <div class="slide-foot">
