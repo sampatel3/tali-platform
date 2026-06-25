@@ -431,6 +431,100 @@
   .rep-frame { align-self: center; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; box-shadow: 0 18px 44px -28px rgba(91,44,168,0.4); background: #fff; }
   .rep-shot { width: 100%; background-size: cover; background-position: top center; background-repeat: no-repeat; }
   .rep-shot + .rep-shot { border-top: 1px solid var(--line); }
+
+  /* ============================================================
+     PRODUCT-BRANDED SURFACE MOCKS (clean, built — actual product
+     branding: #b450ff purple family, Geist, agent-ON gradient)
+     ============================================================ */
+  .pcard { flex: 1; min-height: 0; background: #fff; border: 1px solid #e8e2ee; border-radius: 16px; box-shadow: 0 24px 54px -34px rgba(91,44,168,0.45); display: flex; flex-direction: column; overflow: hidden; color: #15121a; }
+  .pcard-bar { display: flex; align-items: center; gap: 9px; padding: 11px 16px; border-bottom: 1px solid #f1edf5; font-family: var(--font-mono); font-size: 12px; color: #8b8595; letter-spacing: 0.02em; }
+  .pcard-bar .glyph { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, #b450ff, #7a2fd6); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; font-family: var(--font-display); flex: none; }
+  .pcard-bar .ttl { color: #15121a; font-weight: 600; font-family: var(--font-display); letter-spacing: -0.01em; font-size: 13px; }
+  .pcard-bar .live { color: #15a36a; display: inline-flex; align-items: center; gap: 5px; }
+  .pcard-bar .live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #15a36a; }
+  .pcard-bar .r { margin-left: auto; color: #8b8595; }
+  .pbody { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+  /* agent-on (product treatment) */
+  .ao { font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: 0.09em; color: #fff; background: linear-gradient(135deg, #3a1d6e, #241147); border-radius: 999px; padding: 4px 11px; display: inline-flex; align-items: center; gap: 7px; }
+  .ao::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #c98bff; box-shadow: 0 0 0 3px rgba(180,80,255,0.28); }
+
+  /* --- 5A · decision (HITL) --- */
+  .dc-top { display: flex; align-items: center; gap: 10px; padding: 14px 20px 0; }
+  .dc-top .role { font-family: var(--font-display); font-size: 14px; font-weight: 600; color: #3a3343; }
+  .dc-needs { margin-left: auto; font-family: var(--font-mono); font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; color: #fff; background: #b450ff; border-radius: 999px; padding: 3px 10px; }
+  .dc-mid { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; flex: 1; }
+  .dc-verdict { display: flex; align-items: center; gap: 12px; }
+  .dc-adv { font-family: var(--font-display); font-size: 24px; font-weight: 600; letter-spacing: -0.02em; color: #15a36a; }
+  .dc-conf { font-family: var(--font-mono); font-size: 11.5px; color: #8b8595; }
+  .dc-cand { display: flex; align-items: center; gap: 13px; }
+  .dc-av { width: 44px; height: 44px; border-radius: 50%; background: #f4e8ff; color: #b450ff; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-weight: 700; font-size: 16px; flex: none; }
+  .dc-name { font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -0.02em; color: #15121a; }
+  .dc-csub { font-size: 13px; color: #3a3343; }
+  .dc-score { margin-left: auto; font-family: var(--font-display); font-size: 36px; font-weight: 600; color: #b450ff; line-height: 0.9; display: flex; flex-direction: column; align-items: center; flex: none; }
+  .dc-score span { font-family: var(--font-mono); font-size: 9px; color: #8b8595; letter-spacing: 0.1em; margin-top: 4px; }
+  .dc-reason { font-size: 14px; line-height: 1.5; color: #3a3343; }
+  .dc-ev { display: flex; gap: 8px; flex-wrap: wrap; }
+  .dc-ev span { font-family: var(--font-mono); font-size: 11px; color: #3a3343; background: #f7f4fb; border: 1px solid #e8e2ee; border-radius: 8px; padding: 6px 11px; }
+  .dc-ev b { color: #15121a; font-weight: 700; }
+  .dc-trace { margin-top: auto; border-top: 1px solid #f1edf5; padding-top: 13px; display: flex; flex-direction: column; gap: 8px; }
+  .dc-tracetag { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: #8b8595; }
+  .dc-step { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: #3a3343; }
+  .dc-step .d { width: 7px; height: 7px; border-radius: 50%; background: #b450ff; flex: none; }
+  .dc-act { display: flex; gap: 9px; padding: 0 20px 18px; }
+  .btn-primary { flex: 1; text-align: center; font-family: var(--font-display); font-size: 14px; font-weight: 600; color: #fff; background: #b450ff; border-radius: 11px; padding: 11px; }
+  .btn-ghost { font-family: var(--font-display); font-size: 14px; font-weight: 600; color: #3a3343; background: #fff; border: 1px solid #e8e2ee; border-radius: 11px; padding: 11px 18px; }
+
+  /* --- 5B · search --- */
+  .sr2 { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; }
+  .sr2-q { display: flex; align-items: center; gap: 10px; font-size: 15px; color: #15121a; background: #f7f4fb; border: 1px solid color-mix(in oklab, #b450ff 22%, #e8e2ee); border-radius: 12px; padding: 12px 15px; }
+  .sr2-q .qi { width: 7px; height: 17px; background: #b450ff; border-radius: 2px; flex: none; }
+  .sr2-meta { font-family: var(--font-mono); font-size: 11px; color: #8b8595; letter-spacing: 0.02em; }
+  .sr2-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid #e8e2ee; border-radius: 12px; }
+  .sr2-row.top { background: #f4e8ff; border-color: color-mix(in oklab, #b450ff 28%, #e8e2ee); }
+  .sr2-rank { font-family: var(--font-mono); font-size: 13px; font-weight: 700; color: #8b8595; width: 14px; text-align: center; flex: none; }
+  .sr2-av { width: 32px; height: 32px; border-radius: 50%; background: #efe8f7; color: #b450ff; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-weight: 700; font-size: 12px; flex: none; }
+  .sr2-mid { flex: 1; min-width: 0; }
+  .sr2-name { font-family: var(--font-display); font-size: 16px; font-weight: 600; color: #15121a; }
+  .sr2-sub { font-size: 12.5px; color: #3a3343; }
+  .sr2-sc { font-family: var(--font-mono); font-size: 14px; font-weight: 700; color: #b450ff; background: #fff; border: 1px solid color-mix(in oklab, #b450ff 30%, #e8e2ee); border-radius: 999px; padding: 4px 12px; flex: none; }
+  .sr2-ev { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; line-height: 1.45; color: #3a3343; padding: 2px 4px 2px 26px; }
+  .sr2-ev .m { font-family: var(--font-mono); font-size: 9px; font-weight: 700; color: #15a36a; background: color-mix(in oklab, #15a36a 14%, #fff); border-radius: 999px; padding: 2px 7px; flex: none; }
+  .sr2-ev i { font-style: italic; color: #15121a; }
+
+  /* --- 4A · assessment (work sample) --- */
+  .wp-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 168px 1fr; }
+  .wp-repo { border-right: 1px solid #f1edf5; background: #faf8fd; padding: 14px 14px; display: flex; flex-direction: column; gap: 7px; font-family: var(--font-mono); font-size: 12.5px; }
+  .wp-rh { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #8b8595; margin-bottom: 3px; }
+  .wp-f { color: #3a3343; padding: 3px 8px; border-radius: 6px; }
+  .wp-f.act { background: #f4e8ff; color: #b450ff; font-weight: 600; }
+  .wp-f.act::after { content: " ●"; color: #ef4444; }
+  .wp-fail { margin-top: auto; color: #c0392b; font-size: 11.5px; }
+  .wp-chat { padding: 16px 18px; display: flex; flex-direction: column; gap: 11px; min-height: 0; }
+  .wp-ch { font-family: var(--font-mono); font-size: 11px; color: #8b8595; display: flex; align-items: center; gap: 7px; }
+  .wp-ch .cg { width: 22px; height: 22px; border-radius: 7px; background: linear-gradient(135deg, #b450ff, #c44ad0); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; font-family: var(--font-display); }
+  .wp-ch b { color: #15121a; font-family: var(--font-display); font-size: 13px; }
+  .wp-msg { font-size: 14px; line-height: 1.5; border-radius: 13px; padding: 12px 15px; max-width: 88%; }
+  .wp-msg.cand { background: #f4e8ff; color: #15121a; align-self: flex-end; border-bottom-right-radius: 4px; }
+  .wp-msg.ai { background: #f7f4fb; border: 1px solid #e8e2ee; color: #3a3343; align-self: flex-start; border-bottom-left-radius: 4px; }
+  .wp-msg code { font-family: var(--font-mono); font-size: 12.5px; background: rgba(180,80,255,0.10); color: #7a2fd6; padding: 1px 5px; border-radius: 5px; }
+
+  /* --- 4B · report --- */
+  .rp2 { flex: 1; min-height: 0; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+  .rp2-rec { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #b450ff; font-weight: 700; }
+  .rp2-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+  .rp2-verdict { font-family: var(--font-display); font-size: 30px; font-weight: 600; letter-spacing: -0.03em; color: #b450ff; line-height: 1; }
+  .rp2-rings { display: grid; grid-template-columns: repeat(4, auto); gap: 14px; }
+  .rp2-ring { display: flex; flex-direction: column; align-items: center; }
+  .rp2-ring .n { font-family: var(--font-display); font-size: 22px; font-weight: 600; color: #15121a; line-height: 1; width: 46px; height: 46px; border-radius: 50%; border: 3px solid #b450ff; display: flex; align-items: center; justify-content: center; }
+  .rp2-ring .l { font-family: var(--font-mono); font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: #8b8595; margin-top: 5px; }
+  .rp2-sum { font-size: 13.5px; line-height: 1.5; color: #3a3343; }
+  .rp2-cvh { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #b450ff; font-weight: 700; border-top: 1px solid #f1edf5; padding-top: 12px; }
+  .rp2-crit { display: flex; align-items: flex-start; gap: 9px; font-size: 13px; line-height: 1.4; color: #3a3343; }
+  .rp2-crit .p { font-family: var(--font-mono); font-size: 8.5px; font-weight: 700; letter-spacing: 0.04em; padding: 2px 7px; border-radius: 999px; flex: none; margin-top: 1px; }
+  .rp2-crit .p.met { color: #15a36a; background: color-mix(in oklab, #15a36a 14%, #fff); }
+  .rp2-crit .p.part { color: #f59e0b; background: color-mix(in oklab, #f59e0b 16%, #fff); }
+  .rp2-foot { margin-top: auto; font-family: var(--font-mono); font-size: 10px; color: #8b8595; }
 </style>
 </head>
 <body>
@@ -573,16 +667,46 @@
     </div>
 
     <div class="s4-split">
-      <div class="prod-panel">
-        <div class="pp-bar"><span class="dots"><i></i><i></i><i></i></span><span class="pp-url">taali.ai/assessment · live · GenAI Production Readiness Review</span><span class="pp-right">AI Engineer · 27:14 left</span></div>
-        <div class="asm-img" style="background-image:url('img/assessment.png');"></div>
+      <div class="pcard">
+        <div class="pcard-bar"><span class="glyph">t</span><span class="ttl">GenAI Production Readiness Review</span><span class="live">live</span><span class="r">AI Engineer · 27:14 left</span></div>
+        <div class="wp-body">
+          <div class="wp-repo">
+            <div class="wp-rh">Repository</div>
+            <div class="wp-f">README.md</div>
+            <div class="wp-f">RISKS.md</div>
+            <div class="wp-f act">review.py</div>
+            <div class="wp-f">analyzer.py</div>
+            <div class="wp-f">test_analyzer.py</div>
+            <div class="wp-fail">● 3 failing · 17 passing</div>
+          </div>
+          <div class="wp-chat">
+            <div class="wp-ch"><span class="cg">C</span><b>Claude</b> · live repo assistant</div>
+            <div class="wp-msg cand"><code>test_high_risk</code> fails — why does a 0.62-confidence high-risk action skip human review?</div>
+            <div class="wp-msg ai"><code>review.py</code> gates on confidence alone — <code>risk_class</code> is never checked. 0.62 clears the floor, so it skips review.</div>
+            <div class="wp-msg cand">Right — I'll gate on <code>risk_class</code> first, reject the default-allow fallback, then add a regression test.</div>
+          </div>
+        </div>
       </div>
 
-      <!-- The client report — what you actually send (right 1/3) -->
-      <div class="rep-frame">
-        <div class="pp-bar"><span class="dots"><i></i><i></i><i></i></span><span class="pp-url">taali.ai/share · candidate report</span><span class="pp-right">client view</span></div>
-        <div class="rep-shot" style="background-image:url('img/report_hero.png'); aspect-ratio: 2.79;"></div>
-        <div class="rep-shot" style="background-image:url('img/report_cv.png'); aspect-ratio: 2.85;"></div>
+      <!-- The client report — what you actually send -->
+      <div class="pcard">
+        <div class="pcard-bar"><span class="glyph">t</span><span class="ttl">Candidate report</span><span class="r">client view ↗</span></div>
+        <div class="rp2">
+          <div class="rp2-rec">Recommendation</div>
+          <div class="rp2-verdict">Strong Hire</div>
+          <div class="rp2-rings">
+            <div class="rp2-ring"><span class="n">81</span><span class="l">Taali</span></div>
+            <div class="rp2-ring"><span class="n">78</span><span class="l">Role fit</span></div>
+            <div class="rp2-ring"><span class="n">84</span><span class="l">Assess</span></div>
+            <div class="rp2-ring"><span class="n">3/5</span><span class="l">Reqs</span></div>
+          </div>
+          <div class="rp2-sum">Strong product judgment and production-readiness rigour, with a mixed release-safety signal worth probing live. CV evidence aligns tightly with how she worked the task.</div>
+          <div class="rp2-cvh">CV match · 3 met · 2 partial</div>
+          <div class="rp2-crit"><span class="p met">MET</span>Owned a production GenAI release in a regulated domain</div>
+          <div class="rp2-crit"><span class="p met">MET</span>Eval-harness design + offline regression testing for prompts</div>
+          <div class="rp2-crit"><span class="p part">PARTIAL</span>Residual-risk comms to legal / compliance stakeholders</div>
+          <div class="rp2-foot">Scored 24 Jun 2026 · v2.1.0 · recruiter notes &amp; PII hidden</div>
+        </div>
       </div>
     </div>
 
@@ -613,7 +737,27 @@
             <div class="d">Every advance &amp; reject waits for your sign-off.</div>
           </div>
         </div>
-        <figure class="pg-frame"><div class="pg-img" style="background-image:url('img/home_hub.png');"></div></figure>
+        <div class="pcard">
+          <div class="pcard-bar"><span class="ao">AGENT ON</span><span class="ttl" style="margin-left:3px;">Senior AWS Platform Engineer</span><span class="r">1 of 98 awaiting you</span></div>
+          <div class="pbody">
+            <div class="dc-mid">
+              <div class="dc-verdict"><span class="dc-adv">▲ Advance</span><span class="dc-conf">agent 92% confident</span><span class="dc-needs" style="margin-left:auto;">NEEDS YOU</span></div>
+              <div class="dc-cand">
+                <span class="dc-av">PR</span>
+                <div><div class="dc-name">Priya Raman</div><div class="dc-csub">Senior AI Engineer · London</div></div>
+                <div class="dc-score">88<span>TAALI</span></div>
+              </div>
+              <div class="dc-reason">"Clears every must-have with room to spare; top-decile AI collaboration on the work sample. Two of three nice-to-haves met."</div>
+              <div class="dc-ev"><span>CV match <b>94</b></span><span>Assessment <b>88</b></span><span>Must-haves <b>6/6</b></span></div>
+              <div class="dc-trace">
+                <div class="dc-tracetag">Decision trace · 3 steps</div>
+                <div class="dc-step"><span class="d"></span>Pre-screened the CV — clears every must-have</div>
+                <div class="dc-step"><span class="d"></span>Scored the assessment — 88/100, top-decile AI collaboration</div>
+              </div>
+            </div>
+            <div class="dc-act"><span class="btn-primary">Approve</span><span class="btn-ghost">Override</span><span class="btn-ghost">Reject</span></div>
+          </div>
+        </div>
         <div class="s5-notes">
           <div class="s5-note"><span class="k">1</span><span>The agent brings <b>every call</b> — advance, reject, send-assessment — with its <b>confidence and full reasoning</b>.</span></div>
           <div class="s5-note"><span class="k">2</span><span>You <b>send it, reject, skip — or send it back to teach</b> the agent. It never acts alone.</span></div>
@@ -629,7 +773,17 @@
             <div class="d">Find people for any requirement, in plain English.</div>
           </div>
         </div>
-        <figure class="pg-frame"><div class="pg-img" style="background-image:url('img/search_topx.png');"></div></figure>
+        <div class="pcard">
+          <div class="pcard-bar"><span class="glyph">t</span><span class="ttl">Candidate search</span><span class="r">13 in pool</span></div>
+          <div class="sr2">
+            <div class="sr2-q"><span class="qi"></span>"Senior data engineer — payments, AWS, 80+ on the assessment"</div>
+            <div class="sr2-meta">Top 10 · ranked by Taali fit · grounded vs CV + notes</div>
+            <div class="sr2-row top"><span class="sr2-rank">1</span><span class="sr2-av">PR</span><div class="sr2-mid"><div class="sr2-name">Priya Raman</div><div class="sr2-sub">Senior Data Engineer · London</div></div><span class="sr2-sc">86</span></div>
+            <div class="sr2-ev"><span class="m">MET</span>Payments / ledger — <i>"owned reconciliation for a card processor, 4M+ daily txns"</i></div>
+            <div class="sr2-row"><span class="sr2-rank">2</span><span class="sr2-av">DO</span><div class="sr2-mid"><div class="sr2-name">Daniel Okafor</div><div class="sr2-sub">Data Engineer · Lagos</div></div><span class="sr2-sc">82</span></div>
+            <div class="sr2-row"><span class="sr2-rank">3</span><span class="sr2-av">SM</span><div class="sr2-mid"><div class="sr2-name">Sofia Marchetti</div><div class="sr2-sub">Data Platform Engineer · Milan</div></div><span class="sr2-sc">80</span></div>
+          </div>
+        </div>
         <div class="s5-notes">
           <div class="s5-note"><span class="k">1</span><span>Ask for any <b>bespoke requirement</b> — skills, salary, notice, domain, even "Taali score ≥ 60".</span></div>
           <div class="s5-note"><span class="k">2</span><span>Get a <b>ranked top 10</b>, each criterion <b>met / partial</b> and grounded in quoted CV + notes.</span></div>
