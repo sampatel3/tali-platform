@@ -437,6 +437,12 @@ class Settings(BaseSettings):
     MVP_DISABLE_CALIBRATION: bool = False
     MVP_DISABLE_PROCTORING: bool = True
     SCORING_V2_ENABLED: bool = False
+    # ATS: when on, pipeline stages are per-org configurable (pipeline_stages
+    # table) and recruiters may move candidates to any active stage. Default OFF
+    # preserves the legacy hard-coded PIPELINE_STAGES tuple + strict transition
+    # graph EXACTLY (so the live workable_primary org is unaffected). Flipped on
+    # per-environment (staging) once the reader surface is fully migrated.
+    ATS_CONFIGURABLE_STAGES_ENABLED: bool = False
 
     # TAALI score blending. assessment vs. role-fit (0.0..1.0 each); role-fit
     # is a 50/50 mix of CV fit and requirements fit. Weights are normalized in

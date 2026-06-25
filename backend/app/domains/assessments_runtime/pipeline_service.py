@@ -12,6 +12,8 @@ from ...models.agent_decision import AgentDecision
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.role import Role
+from ...platform.config import settings
+from .pipeline_stages_service import resolve_stage_slugs
 
 # An application is described by TWO independent axes:
 #
@@ -163,6 +165,32 @@ def normalize_stage_source(value: str | None) -> str:
     return normalized
 
 
+def _normalize_stage_against(
+    value: str | None, allowed_slugs: tuple[str, ...] | None
+) -> str:
+    """Normalize + validate a stage slug. With ``allowed_slugs`` (configurable
+    stages, flag ON) validate against the org's own stages; with ``None`` (flag
+    OFF) fall back to the legacy hard-coded ``PIPELINE_STAGES`` — unchanged."""
+    if allowed_slugs is None:
+        return normalize_pipeline_stage(value)
+    normalized = normalize_pipeline_key(value)
+    if normalized not in allowed_slugs:
+        raise HTTPException(
+            status_code=422, detail=f"Unsupported pipeline_stage={value!r}"
+        )
+    return normalized
+
+
+def _configurable_stage_slugs(
+    db: Session, app: CandidateApplication
+) -> tuple[str, ...] | None:
+    """The org's configurable stage slugs when ATS_CONFIGURABLE_STAGES_ENABLED is
+    on; ``None`` when off (callers then use the legacy ``PIPELINE_STAGES``)."""
+    if not settings.ATS_CONFIGURABLE_STAGES_ENABLED:
+        return None
+    return resolve_stage_slugs(db, app.organization_id)
+
+
 def map_legacy_status_to_pipeline(status: str | None) -> tuple[str, str]:
     key = normalize_pipeline_key(status)
     if key in {"invited", "pending", "assessment_sent"}:
@@ -201,7 +229,10 @@ def should_auto_advance_to_advanced(current_stage: str | None) -> bool:
 
 
 def status_from_pipeline(stage: str, outcome: str) -> str:
-    normalized_stage = normalize_pipeline_stage(stage)
+    # Tolerate per-org configurable stages (flag ON): normalize the KEY without
+    # validating against the legacy tuple. Callers pass already-validated stages,
+    # so for legacy stages this is identical to normalize_pipeline_stage.
+    normalized_stage = normalize_pipeline_key(stage)
     normalized_outcome = normalize_application_outcome(outcome)
     if normalized_outcome in {"rejected", "withdrawn", "hired"}:
         return normalized_outcome
@@ -263,12 +294,14 @@ def ensure_pipeline_fields(
     app: CandidateApplication,
     *,
     source: str = "system",
+    allowed_slugs: tuple[str, ...] | None = None,
 ) -> None:
     now = _utcnow()
     normalized_source = normalize_stage_source(source)
     stage = normalize_pipeline_key(app.pipeline_stage)
     outcome = normalize_pipeline_key(app.application_outcome)
-    if stage not in PIPELINE_STAGES or outcome not in APPLICATION_OUTCOMES:
+    valid_stages = allowed_slugs if allowed_slugs is not None else PIPELINE_STAGES
+    if stage not in valid_stages or outcome not in APPLICATION_OUTCOMES:
         mapped_stage, mapped_outcome = map_legacy_status_to_pipeline(app.status)
         stage = mapped_stage
         outcome = mapped_outcome
@@ -284,8 +317,20 @@ def ensure_pipeline_fields(
         app.version = 1
 
 
-def _guard_stage_transition(*, source: str, from_stage: str, to_stage: str, app: CandidateApplication) -> None:
+def _guard_stage_transition(
+    *,
+    source: str,
+    from_stage: str,
+    to_stage: str,
+    app: CandidateApplication,
+    allowed_targets: tuple[str, ...] | None = None,
+) -> None:
     if from_stage == to_stage:
+        return
+    if allowed_targets is not None and source == "recruiter":
+        # Configurable stages (flag ON): recruiters may move a candidate to any
+        # active stage — the ATS-standard model. Target validity is already
+        # enforced by _normalize_stage_against against the org's stages.
         return
     if source == "recruiter":
         if (from_stage, to_stage) not in _RECRUITER_STAGE_TRANSITIONS:
@@ -474,10 +519,11 @@ def transition_stage(
     idempotency_key: str | None = None,
     expected_version: int | None = None,
 ) -> CandidateApplication:
-    ensure_pipeline_fields(app, source=source)
+    allowed_slugs = _configurable_stage_slugs(db, app)
+    ensure_pipeline_fields(app, source=source, allowed_slugs=allowed_slugs)
     source_key = normalize_stage_source(source)
-    target = normalize_pipeline_stage(to_stage)
-    from_stage = normalize_pipeline_stage(app.pipeline_stage)
+    target = _normalize_stage_against(to_stage, allowed_slugs)
+    from_stage = _normalize_stage_against(app.pipeline_stage, allowed_slugs)
     if expected_version is not None and int(expected_version) != int(app.version or 0):
         raise HTTPException(
             status_code=409,
@@ -492,7 +538,13 @@ def transition_stage(
     if existing_idempotent:
         return app
 
-    _guard_stage_transition(source=source_key, from_stage=from_stage, to_stage=target, app=app)
+    _guard_stage_transition(
+        source=source_key,
+        from_stage=from_stage,
+        to_stage=target,
+        app=app,
+        allowed_targets=allowed_slugs,
+    )
     if from_stage == target:
         return app
 

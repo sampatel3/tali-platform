@@ -1,0 +1,118 @@
+"""P0: flag-gated configurable-stage transitions in pipeline_service.
+
+Flag OFF (default) must be byte-for-byte the legacy strict behaviour; flag ON
+makes transitions org-aware with ATS-standard free recruiter movement.
+"""
+from __future__ import annotations
+
+import pytest
+from fastapi import HTTPException
+
+from app.domains.assessments_runtime import pipeline_service
+from app.domains.assessments_runtime.pipeline_service import transition_stage
+from app.domains.assessments_runtime.pipeline_stages_service import (
+    ensure_org_stages_seeded,
+)
+from app.models.candidate import Candidate
+from app.models.candidate_application import CandidateApplication
+from app.models.organization import Organization
+from app.models.pipeline_stage import PipelineStage
+from app.models.role import Role
+
+
+def _seed_app(db, *, stage="applied"):
+    org = Organization(name="Acme")
+    db.add(org)
+    db.flush()
+    role = Role(organization_id=org.id, name="Eng", source="manual")
+    db.add(role)
+    db.flush()
+    cand = Candidate(organization_id=org.id, email="c@x.test", full_name="C")
+    db.add(cand)
+    db.flush()
+    app = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=cand.id,
+        role_id=role.id,
+        status="applied",
+        pipeline_stage=stage,
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+    )
+    db.add(app)
+    db.flush()
+    return org, app
+
+
+def _enable_flag(monkeypatch):
+    monkeypatch.setattr(
+        pipeline_service.settings, "ATS_CONFIGURABLE_STAGES_ENABLED", True
+    )
+
+
+# --- Flag OFF: legacy strict graph unchanged -------------------------------
+
+def test_flag_off_blocks_non_edge_recruiter_move(db):
+    _org, app = _seed_app(db, stage="applied")
+    # applied->review is NOT an allowed recruiter edge in the legacy graph.
+    with pytest.raises(HTTPException) as exc:
+        transition_stage(
+            db, app=app, to_stage="review", source="recruiter", actor_type="recruiter"
+        )
+    assert exc.value.status_code == 409
+    assert app.pipeline_stage == "applied"
+
+
+def test_flag_off_allows_legacy_edge(db):
+    _org, app = _seed_app(db, stage="applied")
+    transition_stage(
+        db, app=app, to_stage="invited", source="recruiter", actor_type="recruiter"
+    )
+    assert app.pipeline_stage == "invited"
+
+
+# --- Flag ON: org-aware, free recruiter movement ---------------------------
+
+def test_flag_on_allows_free_recruiter_move(db, monkeypatch):
+    _enable_flag(monkeypatch)
+    org, app = _seed_app(db, stage="applied")
+    ensure_org_stages_seeded(db, org.id)
+    # applied->review is blocked when OFF, allowed when ON (free movement).
+    transition_stage(
+        db, app=app, to_stage="review", source="recruiter", actor_type="recruiter"
+    )
+    assert app.pipeline_stage == "review"
+
+
+def test_flag_on_rejects_stage_not_in_org(db, monkeypatch):
+    _enable_flag(monkeypatch)
+    org, app = _seed_app(db, stage="applied")
+    ensure_org_stages_seeded(db, org.id)
+    with pytest.raises(HTTPException) as exc:
+        transition_stage(
+            db, app=app, to_stage="nonexistent", source="recruiter", actor_type="recruiter"
+        )
+    assert exc.value.status_code == 422
+
+
+def test_flag_on_accepts_custom_stage(db, monkeypatch):
+    _enable_flag(monkeypatch)
+    org, app = _seed_app(db, stage="applied")
+    ensure_org_stages_seeded(db, org.id)
+    db.add(
+        PipelineStage(
+            organization_id=org.id,
+            slug="sourced",
+            name="Sourced",
+            kind="sourced",
+            position=10,
+            is_default=False,
+            is_active=True,
+        )
+    )
+    db.flush()
+    transition_stage(
+        db, app=app, to_stage="sourced", source="recruiter", actor_type="recruiter"
+    )
+    assert app.pipeline_stage == "sourced"
