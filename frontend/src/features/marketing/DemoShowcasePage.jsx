@@ -83,16 +83,16 @@ const SHOWCASE_TABS = [
   {
     k: 'chat',
     n: '05',
-    label: 'Plain-English search',
-    sub: 'Query your pipeline in english',
+    label: 'Chat & agents',
+    sub: 'Ask anything, or steer each role’s agent',
     src: '/showcase/chat',
-    urlLabel: 'taali.ai/chat · plain-English candidate search',
+    urlLabel: 'taali.ai/chat · ask + per-role agents',
     why: {
-      headline: 'Ask questions of your pipeline. No boolean strings.',
+      headline: 'Two ways to talk to your pipeline: ask it anything, or steer a role’s agent.',
       outcomes: [
-        '"Top backend candidates above 8 on AI prompting" → 3 results in 0.4s',
-        'Tool calls visible — see exactly what the agent queried',
-        'Compare candidates side-by-side, pull shortlists for new briefs',
+        '“Top 3 who’ve owned a GenAI launch, run Postgres in prod, and led a backend team” → a grounded shortlist, every verdict backed by a verbatim CV quote',
+        'Ask mode searches your whole pipeline; tool calls are visible — see exactly what was queried, compare side-by-side, pull shortlists',
+        'Agent mode is per-role: it finds, reasons over the evidence, and acts — invite the matches to assessment, adjust the cut-off, draft the task — within the budget you set',
       ],
     },
   },
