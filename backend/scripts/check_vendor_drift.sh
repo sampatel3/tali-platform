@@ -48,7 +48,11 @@ for c in $REGEN; do
   fi
 done
 
-changed="$(git diff --name-only -- backend/vendor ':(exclude)backend/vendor/**/MAINSPRING_REF.txt' 2>/dev/null)"
+# git status --porcelain (not git diff --name-only) so a re-vendor that emits a
+# NEW, untracked file is caught too: git diff ignores untracked files, and the
+# `git clean` below would then delete that fresh output — letting CI pass with
+# an incomplete committed vendor tree. The `sed` strips the 3-char status prefix.
+changed="$(git status --porcelain -- backend/vendor ':(exclude)backend/vendor/**/MAINSPRING_REF.txt' 2>/dev/null | sed 's/^...//')"
 if [ -n "$changed" ]; then
   echo "DRIFT — committed seams differ from a fresh re-vendor of mainspring @ $MS_HEAD:"
   echo "$changed" | sed 's/^/    /'
