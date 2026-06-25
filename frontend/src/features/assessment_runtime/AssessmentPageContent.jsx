@@ -95,6 +95,19 @@ const initializeRepoEditorState = (runtimeData) => {
       editorContent: starter,
     };
   }
+  // An explicit initial_selected_repo_path (set only by the demo/showcase
+  // fixtures) opens that file immediately, so the preview lands on the code
+  // workspace instead of chat-only. Live assessments never set it, so the
+  // chat-centred default below is unchanged for real candidates.
+  const explicitPath = String(runtimeData?.initial_selected_repo_path || '').trim();
+  const explicitFile = explicitPath ? files.find((file) => file.path === explicitPath) : null;
+  if (explicitFile) {
+    return {
+      repoFiles: files,
+      selectedRepoFile: explicitFile.path,
+      editorContent: explicitFile.content ?? '',
+    };
+  }
   // Chat-centred init (2026-06-01): code-kind tasks land with NO file
   // selected so the editor pane stays hidden and the candidate's first
   // surface is chat only. Doc-kind tasks (PM, Scrum Master) auto-open

@@ -38,6 +38,19 @@ const NAV_TABS = [
   { id: 'settings', label: 'Settings', Icon: SettingsIcon },
 ];
 
+// Preview surfaces — the public /demo and the pitch-deck iframes — render the
+// real app chrome but have no auth session. Clicking a nav item there escapes
+// to an auth-gated route and lands on the sign-in page. Lock the whole header
+// (logo, tabs, search, avatar, mobile trigger) to non-interactive on those
+// surfaces so the preview stays a preview. Page content below the header is
+// untouched and stays fully interactive (tabs, scrolling, the assessment, etc.).
+const isPreviewNavSurface = () => {
+  if (typeof window === 'undefined') return false;
+  const { pathname, search } = window.location;
+  if (pathname.startsWith('/showcase/') || pathname.startsWith('/c/')) return true;
+  return new URLSearchParams(search || '').get('showcase') === '1';
+};
+
 const pickUserName = (user) => {
   const direct = String(user?.full_name || user?.name || '').trim();
   if (direct) return direct;
@@ -253,6 +266,7 @@ export const Shell = ({ currentPage, onNavigate }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const homePending = useHomePendingCount(Boolean(user));
+  const navLocked = isPreviewNavSurface();
 
   // Map legacy page identifiers onto canonical tabs.
   // 'reporting' / 'analytics' fold into 'home' (the Hub) — keep the icon
@@ -284,7 +298,12 @@ export const Shell = ({ currentPage, onNavigate }) => {
 
   return (
     <>
-    <header className="mc-nav" role="banner">
+    <header
+      className="mc-nav"
+      role="banner"
+      style={navLocked ? { pointerEvents: 'none' } : undefined}
+      title={navLocked ? 'Preview — navigation disabled' : undefined}
+    >
       <PageLink
         page="jobs"
         className="mc-nav-logo"
