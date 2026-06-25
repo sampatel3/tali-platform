@@ -3,6 +3,17 @@
 > _Generated 2026-06-25 via a deep multi-agent research workflow (8 internal codebase auditors + 8 external ATS / Workable-API researchers → synthesis → adversarial critique → finalize; 19 agents, ~1.7M tokens). Load-bearing facts spot-verified against the current codebase: `MVP_DISABLE_WORKABLE: bool = True` default at `backend/app/platform/config.py:435` (gated in ~10 sites); `PIPELINE_STAGES` hard-coded 5-tuple at `pipeline_service.py:44`; `User` extends fastapi-users with no role column; inbound Workable webhook raises 503 when disabled (`webhook_routes.py:164`). Status: SCOPING — not for production until fully tested._
 
 
+## 0. P-1 census result (2026-06-25, verified against prod)
+
+The strategic reframe below is **refined** by live data: prod runs `MVP_DISABLE_WORKABLE=false` (the code *default* is standalone, but the deployment overrides it). A read-only census of prod found:
+
+- **201 orgs, but exactly ONE real tenant: `deeplight-ai`** (id 2). The other 200 are QA/smoke/test orgs (`qa-smoke-org-*`, `codex-smoke-org-*`, checkout tests, empty `tali`/`taali-demo`).
+- **`deeplight-ai` is fully Workable-primary:** 58,560 active applications, **58,552 (99.99%) linked to Workable**, last sync today (`status=partial`); 115 roles. Only 8 apps are native (7 `manual`, 1 `recruiter`).
+
+**So the cutover is single-tenant, not a fleet.** Build standalone (new-org default `sync_mode=standalone`); the one real migration target is `deeplight-ai` (`workable_primary` → staged `taali_primary` → `standalone`, reconciling one Workable account + ~58.5k apps). This makes §9's "track 2" the live path — but far simpler than assumed, since it is exactly one well-understood tenant.
+
+---
+
 ## 1. Executive Summary
 
 **What "full ATS" means for Taali.** A full ATS owns the complete hiring lifecycle end-to-end: publish a requisition → distribute it → receive applications directly → resolve candidate identity → move candidates through a configurable pipeline → schedule and score interviews → extend a structured offer → hand the hire off to HRIS — all under an audit trail and a defensible compliance posture. Today Taali is a best-in-class **AI scoring + technical-assessment layer**. It owns the hard, differentiated middle (CV scoring `cv_matching/holistic.py`, agentic decisions `decision_policy/engine.py` + `domains/agentic/`, real-work assessments `components/assessments/`) and is missing the candidate-acquisition **front** (no careers page, no application form, no job distribution), the hire-completion **back** (no offers, no scheduling, no scorecards, no HRIS handoff), and the **cross-cutting spine** every ATS needs (configurable stages, RBAC, identity resolution, audit immutability, deletion/erasure, anti-abuse).
