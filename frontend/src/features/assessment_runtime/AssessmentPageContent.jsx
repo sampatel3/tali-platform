@@ -1153,6 +1153,12 @@ export default function AssessmentPage({
   const handleSubmit = useCallback(
     async (autoSubmit = false) => {
       if (submitted) return;
+      // The demo / showcase preview is read-only — a viewer (or the pitch
+      // deck) must never be able to submit the walkthrough assessment, which
+      // would flip the surface to the "Task submitted" screen. This covers the
+      // manual click, the confirm dialog, and the timer auto-submit, which all
+      // route through handleSubmit.
+      if (demoMode) return;
       if (isTimerPaused) {
         setOutput("Assessment is paused. Retry Claude before submitting.");
         return;
@@ -1311,6 +1317,7 @@ export default function AssessmentPage({
         onOpenGuide={handleOpenGuide}
         reportIssueHref={reportIssueHref}
         onSubmit={() => handleSubmit(false)}
+        submitDisabled={demoMode}
       />
 
       <div className="flex-1 overflow-y-auto">
