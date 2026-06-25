@@ -967,8 +967,16 @@ def screen_pool_against_requirement(
 
     # No qualitative criteria → nothing to ground; rank the recall by fit.
     if not criteria:
+        # Structural-only ask (e.g. a bare skill like "Python"): the requirement
+        # IS the structural filter, so HARD-restrict to the matches. matcher_ids
+        # is only an ordering bias inside _load_candidates, so without this a
+        # short match list gets padded with high-scoring candidates that don't
+        # match the requirement at all — surfacing unrelated people as finds.
+        pool = base_query if matcher_ids is None else base_query.filter(
+            CandidateApplication.id.in_(matcher_ids)
+        )
         apps = _load_candidates(
-            base_query, matcher_ids=matcher_ids, score_attr=score_attr, size=limit
+            pool, matcher_ids=matcher_ids, score_attr=score_attr, size=limit
         )
         return _degrade(
             apps,
