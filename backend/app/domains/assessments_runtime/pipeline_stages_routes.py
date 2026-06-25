@@ -14,6 +14,13 @@ from sqlalchemy.orm import Session
 from ...deps import get_current_user
 from ...models.user import User
 from ...platform.database import get_db
+from .disqualification_reasons_service import (
+    create_org_reason,
+    ensure_org_reasons_seeded,
+    list_org_reasons,
+    reorder_org_reasons,
+    update_org_reason,
+)
 from .pipeline_stages_service import (
     create_org_stage,
     ensure_org_stages_seeded,
@@ -113,5 +120,105 @@ def reorder_pipeline_stages(
     current_user: User = Depends(get_current_user),
 ):
     rows = reorder_org_stages(db, current_user.organization_id, data.ordered_ids)
+    db.commit()
+    return rows
+
+
+# --- Disqualification (disposition) reasons --------------------------------
+
+
+class ReasonOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    label: str
+    category: str
+    position: int
+    is_default: bool
+    is_active: bool
+
+
+class ReasonCreate(BaseModel):
+    label: str
+    category: str = "we_rejected"
+    position: int | None = None
+
+
+class ReasonUpdate(BaseModel):
+    label: str | None = None
+    category: str | None = None
+    position: int | None = None
+    is_active: bool | None = None
+
+
+class ReasonReorder(BaseModel):
+    ordered_ids: list[int] = Field(default_factory=list)
+
+
+@router.get(
+    "/pipeline/disqualification-reasons", response_model=list[ReasonOut]
+)
+def list_disqualification_reasons(
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    org_id = current_user.organization_id
+    if ensure_org_reasons_seeded(db, org_id):
+        db.commit()
+    return list_org_reasons(db, org_id, include_inactive=include_inactive)
+
+
+@router.post(
+    "/pipeline/disqualification-reasons",
+    response_model=ReasonOut,
+    status_code=201,
+)
+def create_disqualification_reason(
+    data: ReasonCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    row = create_org_reason(
+        db,
+        current_user.organization_id,
+        label=data.label,
+        category=data.category,
+        position=data.position,
+    )
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.patch(
+    "/pipeline/disqualification-reasons/{reason_id}", response_model=ReasonOut
+)
+def update_disqualification_reason(
+    reason_id: int,
+    data: ReasonUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    row = update_org_reason(
+        db,
+        current_user.organization_id,
+        reason_id,
+        **data.model_dump(exclude_unset=True),
+    )
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.post(
+    "/pipeline/disqualification-reasons/reorder", response_model=list[ReasonOut]
+)
+def reorder_disqualification_reasons(
+    data: ReasonReorder,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rows = reorder_org_reasons(db, current_user.organization_id, data.ordered_ids)
     db.commit()
     return rows
