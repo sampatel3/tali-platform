@@ -55,6 +55,12 @@ class CopyPasteResult:
     triggered: bool
     threshold: float
     evidence: list[FraudEvidenceSnippet] = field(default_factory=list)
+    # Longest single contiguous run of CV words lifted verbatim from the JD.
+    # Dilution-resistant: a candidate who pastes a JD paragraph then pads the
+    # CV with original prose can push the *ratio* under ``threshold``, but the
+    # absolute block length doesn't move. ``triggered`` factors this in when a
+    # ``min_block_words`` floor is supplied to ``detect_cv_copy_paste``.
+    longest_block_words: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -63,6 +69,7 @@ class CopyPasteResult:
             "cv_chars": self.cv_chars,
             "triggered": self.triggered,
             "threshold": self.threshold,
+            "longest_block_words": self.longest_block_words,
             "evidence": [asdict(snippet) for snippet in self.evidence],
         }
 
@@ -78,6 +85,7 @@ def detect_cv_copy_paste(
     threshold: float = 0.05,
     ngram_size: int = _NGRAM_SIZE,
     max_evidence: int = _MAX_EVIDENCE_SNIPPETS,
+    min_block_words: int = 0,
 ) -> CopyPasteResult:
     """Score how much of the CV is lifted verbatim from the job description.
 
@@ -85,6 +93,10 @@ def detect_cv_copy_paste(
     we hit a JD N-gram, extend the match forward as far as the words keep
     matching (so a copy-pasted paragraph counts as one snippet, not dozens
     of overlapping windows). Score is matched-CV-chars / total-CV-chars.
+
+    ``min_block_words`` (0 = off) is a dilution-resistant floor: the CV also
+    triggers when its single longest contiguous lifted block reaches that many
+    words, even if padding kept the ratio below ``threshold``.
     """
     cv_chars = len(cv_text or "")
     cv_tokens = _tokenize(cv_text)
@@ -108,6 +120,7 @@ def detect_cv_copy_paste(
 
     evidence: list[FraudEvidenceSnippet] = []
     matched_word_chars = 0
+    longest_block_words = 0
     i = 0
     while i <= len(cv_tokens) - ngram_size:
         gram = tuple(cv_tokens[i : i + ngram_size])
@@ -128,6 +141,7 @@ def detect_cv_copy_paste(
         snippet_tokens = cv_tokens[i:end]
         snippet_text = " ".join(snippet_tokens)
         matched_word_chars += len(snippet_text)
+        longest_block_words = max(longest_block_words, end - i)
         if len(evidence) < max_evidence:
             evidence.append(
                 FraudEvidenceSnippet(
@@ -140,7 +154,9 @@ def detect_cv_copy_paste(
         i = end  # skip past the match — no overlapping double-count
 
     score = (matched_word_chars / cv_chars) if cv_chars else 0.0
-    triggered = score >= threshold
+    triggered = score >= threshold or (
+        min_block_words > 0 and longest_block_words >= min_block_words
+    )
     return CopyPasteResult(
         score=score,
         matched_chars=matched_word_chars,
@@ -148,6 +164,7 @@ def detect_cv_copy_paste(
         triggered=triggered,
         threshold=threshold,
         evidence=evidence,
+        longest_block_words=longest_block_words,
     )
 
 
@@ -458,3 +475,271 @@ def build_integrity_signals_payload(
             else {"triggered": False, "issues": []}
         ),
     }
+
+
+# ── Near-duplicate (paraphrased-JD) copy-paste ─────────────────────────────
+# Verbatim 8-gram overlap collapses to ~0 after a single "reword this" pass on
+# the JD. Word k-shingle Jaccard degrades gracefully: synonym swaps and
+# sentence reordering still share many short shingles, so a CV that mirrors the
+# spec scores far above an organically-written one. SOFT signal — it flags for
+# review; only verbatim copy-paste hard-caps. Heavy semantic paraphrase (every
+# word changed) needs embeddings — the T1 "too-aligned" check — not this.
+_SHINGLE_SIZE = 4
+
+
+@dataclass
+class ShingleResult:
+    similarity: float  # |CV∩JD shingles| / |CV shingles|, the fraud direction
+    jaccard: float  # symmetric set similarity, 0–1
+    shared_shingles: int
+    cv_shingles: int
+    triggered: bool
+    threshold: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "similarity": round(self.similarity, 4),
+            "jaccard": round(self.jaccard, 4),
+            "shared_shingles": self.shared_shingles,
+            "cv_shingles": self.cv_shingles,
+            "triggered": self.triggered,
+            "threshold": self.threshold,
+        }
+
+
+def _shingles(tokens: list[str], size: int) -> set[tuple[str, ...]]:
+    if len(tokens) < size:
+        return set()
+    return {tuple(tokens[i : i + size]) for i in range(len(tokens) - size + 1)}
+
+
+def detect_jd_shingle_similarity(
+    cv_text: str,
+    jd_text: str,
+    *,
+    threshold: float = 0.34,
+    shingle_size: int = _SHINGLE_SIZE,
+) -> ShingleResult:
+    """Near-duplicate overlap between CV and JD via word k-shingle Jaccard.
+
+    ``similarity`` is the fraction of the CV's shingles that also appear in the
+    JD — the fraud-relevant, asymmetric direction ("how much of this CV is the
+    spec"). Triggers on ``similarity >= threshold``. Fails closed (no trigger)
+    on inputs too short to shingle.
+    """
+    cv_set = _shingles(_tokenize(cv_text), shingle_size)
+    jd_set = _shingles(_tokenize(jd_text), shingle_size)
+    if not cv_set or not jd_set:
+        return ShingleResult(0.0, 0.0, 0, len(cv_set), False, threshold)
+    shared = cv_set & jd_set
+    similarity = len(shared) / len(cv_set)
+    union = len(cv_set | jd_set)
+    jaccard = (len(shared) / union) if union else 0.0
+    return ShingleResult(
+        similarity=similarity,
+        jaccard=jaccard,
+        shared_shingles=len(shared),
+        cv_shingles=len(cv_set),
+        triggered=similarity >= threshold,
+        threshold=threshold,
+    )
+
+
+# ── CV ↔ Workable structured-history diff ──────────────────────────────────
+# The platform stores TWO independent structured views of the same career
+# history: the CV-parsed ``cv_sections.experience`` and Workable's own
+# self-reported ``experience_entries`` (synced from the candidate profile).
+# Diffing them catches roles fabricated on the CV (present on the CV, absent
+# from Workable), omitted roles, and shifted dates / inflated tenure. FLAG-ONLY
+# and deliberately tolerant — people legitimately abbreviate, omit and round on
+# one surface but not the other — so it raises a question for the recruiter,
+# never a verdict, and never a score change.
+_COMPANY_STOP = {
+    "ltd", "limited", "llc", "inc", "incorporated", "corp", "corporation",
+    "plc", "gmbh", "co", "llp", "pvt", "private", "sa", "ag", "bv", "the",
+    "company", "group", "holdings",
+}
+_YEAR_RE = re.compile(r"(19|20)\d{2}")
+
+
+def _company_tokens(name: Any) -> frozenset[str]:
+    toks = _WORD_RE.findall((str(name or "")).lower())
+    return frozenset(t for t in toks if t not in _COMPANY_STOP and len(t) > 1)
+
+
+def _companies_match(a: frozenset[str], b: frozenset[str]) -> bool:
+    if not a or not b:
+        return False
+    inter = a & b
+    if not inter:
+        return False
+    # Subset (one name is a shortening of the other) or majority overlap.
+    return a <= b or b <= a or len(inter) / len(a | b) >= 0.5
+
+
+def _first_year(*values: Any) -> int | None:
+    for v in values:
+        m = _YEAR_RE.search(str(v or ""))
+        if m:
+            return int(m.group(0))
+    return None
+
+
+@dataclass
+class HistoryDiffIssue:
+    kind: str  # cv_only_role | date_shift
+    detail: str
+
+
+@dataclass
+class WorkableDiffResult:
+    issues: list[HistoryDiffIssue] = field(default_factory=list)
+    cv_role_count: int = 0
+    workable_role_count: int = 0
+
+    @property
+    def triggered(self) -> bool:
+        return bool(self.issues)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "triggered": self.triggered,
+            "cv_role_count": self.cv_role_count,
+            "workable_role_count": self.workable_role_count,
+            "issues": [asdict(i) for i in self.issues],
+        }
+
+
+def diff_cv_vs_workable_history(
+    cv_experience: Iterable[Any] | None,
+    workable_experience: Iterable[Any] | None,
+    *,
+    year_shift_tolerance: int = 1,
+    max_issues: int = 8,
+) -> WorkableDiffResult:
+    """Diff the CV-parsed employment history against Workable's self-reported
+    entries. Both are lists of dicts (or objects); company under ``company``,
+    dates under ``start``/``end`` (CV) or ``start_date``/``end_date``
+    (Workable). Only confident tells are flagged:
+
+    * ``cv_only_role`` — a CV role whose employer matches NO Workable entry,
+      *and only when Workable has its own entries to diff against* (so we never
+      flag a candidate who simply didn't fill in Workable). Potential
+      fabrication / spec-padding.
+    * ``date_shift`` — a matched employer whose start or end year differs by
+      more than ``year_shift_tolerance`` between the two surfaces. Possible
+      inflated tenure.
+
+    Fails open on anything ambiguous (missing company, unparseable dates).
+    """
+    cv_roles = [r for r in (cv_experience or [])]
+    wk_roles = [r for r in (workable_experience or [])]
+    result = WorkableDiffResult(cv_role_count=len(cv_roles), workable_role_count=len(wk_roles))
+    if not cv_roles or not wk_roles:
+        # Nothing to corroborate against — stay silent (fail open).
+        return result
+
+    wk_index = [
+        (
+            _company_tokens(_attr(r, "company")),
+            _first_year(_attr(r, "start_date"), _attr(r, "start")),
+            _first_year(_attr(r, "end_date"), _attr(r, "end")),
+        )
+        for r in wk_roles
+    ]
+
+    for cv_role in cv_roles:
+        if len(result.issues) >= max_issues:
+            break
+        cv_company_raw = str(_attr(cv_role, "company") or "").strip()
+        cv_tokens = _company_tokens(cv_company_raw)
+        if not cv_tokens:
+            continue  # no usable company name → can't diff, fail open
+        match = next(
+            ((wt, ws, we) for (wt, ws, we) in wk_index if _companies_match(cv_tokens, wt)),
+            None,
+        )
+        if match is None:
+            result.issues.append(
+                HistoryDiffIssue(
+                    "cv_only_role",
+                    f"{cv_company_raw or 'role'}: on the CV but not in the Workable profile",
+                )
+            )
+            continue
+        _, wk_start, wk_end = match
+        cv_start = _first_year(_attr(cv_role, "start"), _attr(cv_role, "start_date"))
+        cv_end = _first_year(_attr(cv_role, "end"), _attr(cv_role, "end_date"))
+        if (
+            cv_start is not None
+            and wk_start is not None
+            and abs(cv_start - wk_start) > year_shift_tolerance
+        ):
+            result.issues.append(
+                HistoryDiffIssue(
+                    "date_shift",
+                    f"{cv_company_raw}: CV start {cv_start} vs Workable {wk_start}",
+                )
+            )
+        elif (
+            cv_end is not None
+            and wk_end is not None
+            and abs(cv_end - wk_end) > year_shift_tolerance
+        ):
+            result.issues.append(
+                HistoryDiffIssue(
+                    "date_shift",
+                    f"{cv_company_raw}: CV end {cv_end} vs Workable {wk_end}",
+                )
+            )
+    return result
+
+
+# ── Supplementary signal bundle (flag-only) ────────────────────────────────
+def build_supplementary_fraud_signals(
+    *,
+    cv_text: str,
+    jd_text: str,
+    cv_experience: Iterable[Any] | None = None,
+    workable_experience: Iterable[Any] | None = None,
+    shingle_threshold: float = 0.34,
+    workable_diff_enabled: bool = True,
+) -> dict[str, Any]:
+    """Bundle the deterministic flag-only signals that ride on the score but
+    never cap it: JD near-duplicate (shingle) similarity, the CV↔Workable
+    history diff, and the already-computed ``company_unverified`` employer
+    flags surfaced from ``cv_sections.experience``. Each sub-signal is wrapped
+    in its own try so one bad input never blocks the others (or the score).
+    """
+    signals: dict[str, Any] = {}
+    try:
+        signals["jd_shingle"] = detect_jd_shingle_similarity(
+            cv_text, jd_text, threshold=shingle_threshold
+        ).to_dict()
+    except Exception:  # pragma: no cover — defensive
+        pass
+
+    cv_exp = list(cv_experience or [])
+    if workable_diff_enabled:
+        try:
+            diff = diff_cv_vs_workable_history(cv_exp, workable_experience)
+            if diff.cv_role_count or diff.workable_role_count:
+                signals["workable_history_diff"] = diff.to_dict()
+        except Exception:  # pragma: no cover — defensive
+            pass
+
+    try:
+        unverified = [
+            str(_attr(e, "company"))[:120]
+            for e in cv_exp
+            if _attr(e, "company_unverified") and _attr(e, "company")
+        ]
+        if unverified:
+            signals["unverified_employers"] = {
+                "count": len(unverified),
+                "companies": unverified[:10],
+            }
+    except Exception:  # pragma: no cover — defensive
+        pass
+
+    return signals

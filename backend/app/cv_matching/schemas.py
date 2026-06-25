@@ -506,6 +506,13 @@ class CVMatchOutput(BaseModel):
     # (unverified claims + timeline issues). 0.0 when clean. role_fit_score
     # below already reflects this deduction; this field makes it auditable.
     integrity_penalty: float = Field(default=0.0, ge=0, le=100)
+    # Structured CV-integrity / fraud surface for the "verify before interview"
+    # UI: penalty breakdown, timeline issues, and — when computed at scoring
+    # time — document-hygiene (hidden-text / injection) findings. Built by
+    # ``fraud_detection.build_integrity_signals_payload`` (+ extras); None on
+    # engines/paths that don't compute it. ``applied`` says whether the penalty
+    # was actually deducted (vs computed in shadow).
+    integrity_signals: dict[str, Any] | None = None
 
     requirements_match_score: float = Field(default=0.0, ge=0, le=100)
     cv_fit_score: float = Field(default=0.0, ge=0, le=100)

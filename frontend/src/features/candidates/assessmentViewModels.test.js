@@ -38,6 +38,37 @@ describe('assessmentViewModels', () => {
     expect(summaryModel.taaliScore).toBe(74);
   });
 
+  it('surfaces integrity_signals as recruiter-readable integrity flags', () => {
+    const application = {
+      cv_match_score: 70,
+      cv_match_details: {
+        score_scale: '0-100',
+        summary: 'ok',
+        integrity_signals: {
+          document_hygiene: { injection_detected: true, has_tag_chars: false, invisible_char_count: 0 },
+          jd_shingle: { triggered: true, similarity: 0.62 },
+          unverified_employers: { count: 1, companies: ['Faketron'] },
+          workable_history_diff: { issues: [{ kind: 'date_shift', detail: 'Acme: CV start 2018 vs Workable 2021' }] },
+        },
+      },
+    };
+    const model = buildRoleFitEvidenceModel({ application, completedAssessment: null });
+    const joined = model.integrityFlags.join(' | ');
+    expect(model.integrityFlags.length).toBe(4);
+    expect(joined).toContain('prompt-injection');
+    expect(joined).toContain('62% phrase overlap');
+    expect(joined).toContain('Faketron');
+    expect(joined).toContain('Workable mismatch');
+  });
+
+  it('returns no integrity flags when integrity_signals is absent', () => {
+    const model = buildRoleFitEvidenceModel({
+      application: { cv_match_score: 80, cv_match_details: { summary: 'x' } },
+      completedAssessment: null,
+    });
+    expect(model.integrityFlags).toEqual([]);
+  });
+
   it('prefers completed assessment evidence over application CV-fit data', () => {
     const application = {
       cv_match_score: 61,
