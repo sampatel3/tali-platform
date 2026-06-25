@@ -44,6 +44,7 @@ from ...schemas.role import (
     ApplicationDetailResponse,
     ApplicationEventResponse,
     ApplicationInterviewResponse,
+    ApplicationNoteCreate,
     ApplicationOutcomeUpdate,
     ApplicationResponse,
     ApplicationStageUpdate,
@@ -90,6 +91,7 @@ from ...services.fireflies_service import (
     normalized_transcript_bundle,
 )
 from ...services.application_events import on_application_created
+from ...services.application_notes import create_recruiter_note
 from ...services.cv_score_orchestrator import (
     enqueue_score,
     latest_score_status,
@@ -119,6 +121,7 @@ from .role_support import (
     role_has_job_spec,
 )
 from .pipeline_service import (
+    _event_to_payload,
     append_application_event,
     apply_legacy_status_update,
     ensure_pipeline_fields,
@@ -2063,6 +2066,40 @@ def get_application_events(
         limit=limit,
         offset=offset,
     )
+
+
+@router.post("/applications/{application_id}/notes", response_model=ApplicationEventResponse)
+def add_application_note(
+    application_id: int,
+    data: ApplicationNoteCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Drop a recruiter note on the candidate's timeline.
+
+    Works whether or not an assessment is linked (the legacy
+    ``/assessments/{id}/notes`` path dead-ended when none was). When
+    ``for_agent`` (the default) the note rides in the agent's
+    ``get_application`` payload as standing per-candidate guidance.
+    """
+    app = get_application(application_id, current_user.organization_id, db)
+    try:
+        event = create_recruiter_note(
+            db,
+            app=app,
+            note=data.note,
+            author=current_user,
+            for_agent=data.for_agent,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to save note")
+    db.refresh(event)
+    return _event_to_payload(event)
 
 
 @router.post("/applications/{application_id}/upload-cv", response_model=ApplicationCvUploadResponse)

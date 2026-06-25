@@ -384,6 +384,14 @@ class ApplicationEventResponse(BaseModel):
     created_at: datetime
 
 
+class ApplicationNoteCreate(BaseModel):
+    note: str = Field(min_length=1, max_length=5000)
+    # Default-visible to the recruiting agent: a per-candidate note is almost
+    # always guidance the agent should weigh ("already interviewed — not
+    # suitable"). Untick for pure team chatter the agent shouldn't read.
+    for_agent: bool = True
+
+
 class AssessmentFromApplicationCreate(BaseModel):
     task_id: int = Field(gt=0)
     duration_minutes: int = Field(default=30, ge=15, le=180)
