@@ -859,6 +859,99 @@ def test_manual_evaluation_rejects_invalid_decision_value(client):
     assert "decision must be one of" in resp.json()["detail"]
 
 
+def test_manual_evaluation_tracks_draft_then_submitted_lifecycle(client):
+    headers, _ = auth_headers(client)
+    rubric = {"correctness": {"weight": 1.0}}
+    task = create_task_via_api(client, headers, evaluation_rubric=rubric).json()
+    assessment = create_assessment_via_api(client, headers, task["id"]).json()
+    aid = assessment["id"]
+
+    # Save as a draft (working state).
+    draft = client.patch(
+        f"/api/v1/assessments/{aid}/manual-evaluation",
+        headers=headers,
+        json={
+            "status": "draft",
+            "decision": "hold",
+            "rationale": "Leaning hold, want a second opinion.",
+            "confidence": "medium",
+            "category_scores": {"correctness": {"score": "good", "evidence": ["Core tests pass"]}},
+        },
+    )
+    assert draft.status_code == 200, draft.text
+    d = draft.json()["manual_evaluation"]
+    assert d["status"] == "draft"
+    assert d["version"] == 1
+    assert d["updated_by"]["name"]  # author captured
+    assert d["submitted_at"] is None
+    assert [h["action"] for h in d["history"]] == ["saved_draft"]
+
+    # Submit the recorded decision, echoing the version we loaded.
+    submit = client.patch(
+        f"/api/v1/assessments/{aid}/manual-evaluation",
+        headers=headers,
+        json={
+            "status": "submitted",
+            "expected_version": 1,
+            "decision": "advance",
+            "rationale": "Advancing after review.",
+            "confidence": "high",
+            "category_scores": {"correctness": {"score": "excellent", "evidence": ["All tests pass"]}},
+        },
+    )
+    assert submit.status_code == 200, submit.text
+    s = submit.json()["manual_evaluation"]
+    assert s["status"] == "submitted"
+    assert s["version"] == 2
+    assert s["decision"] == "advance"
+    assert s["submitted_at"] is not None
+    assert [h["action"] for h in s["history"]] == ["saved_draft", "submitted"]
+
+    # Re-open and update the already-submitted decision.
+    update = client.patch(
+        f"/api/v1/assessments/{aid}/manual-evaluation",
+        headers=headers,
+        json={
+            "status": "submitted",
+            "expected_version": 2,
+            "decision": "reject",
+            "rationale": "New evidence changed the call.",
+            "confidence": "high",
+            "category_scores": {"correctness": {"score": "poor", "evidence": ["Regression found"]}},
+        },
+    )
+    assert update.status_code == 200, update.text
+    u = update.json()["manual_evaluation"]
+    assert u["version"] == 3
+    assert u["decision"] == "reject"
+    assert u["history"][-1]["action"] == "updated"
+
+
+def test_manual_evaluation_optimistic_lock_returns_409(client):
+    headers, _ = auth_headers(client)
+    rubric = {"correctness": {"weight": 1.0}}
+    task = create_task_via_api(client, headers, evaluation_rubric=rubric).json()
+    assessment = create_assessment_via_api(client, headers, task["id"]).json()
+    aid = assessment["id"]
+
+    first = client.patch(
+        f"/api/v1/assessments/{aid}/manual-evaluation",
+        headers=headers,
+        json={"status": "submitted", "decision": "advance", "rationale": "Go", "confidence": "high"},
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["version"] == 1
+
+    # A second editor still believes it is at version 0 → conflict.
+    stale = client.patch(
+        f"/api/v1/assessments/{aid}/manual-evaluation",
+        headers=headers,
+        json={"expected_version": 0, "decision": "reject", "rationale": "No", "confidence": "low"},
+    )
+    assert stale.status_code == 409, stale.text
+    assert "updated by someone else" in stale.json()["detail"].lower()
+
+
 def test_recruiter_report_pdf_is_client_facing_and_wrapped(client):
     env = setup_full_environment(client)
     assessment_id = env["assessment"]["id"]
