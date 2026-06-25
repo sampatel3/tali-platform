@@ -4,6 +4,19 @@ from sqlalchemy.sql import func
 
 from ..platform.database import Base
 
+# Role lifecycle status (P1 publish). 'draft' = not public; 'published' = live on
+# the careers site; 'closed'/'archived' = no longer accepting applications.
+ROLE_STATUS_DRAFT = "draft"
+ROLE_STATUS_PUBLISHED = "published"
+ROLE_STATUS_CLOSED = "closed"
+ROLE_STATUS_ARCHIVED = "archived"
+ROLE_STATUSES = (
+    ROLE_STATUS_DRAFT,
+    ROLE_STATUS_PUBLISHED,
+    ROLE_STATUS_CLOSED,
+    ROLE_STATUS_ARCHIVED,
+)
+
 role_tasks = Table(
     "role_tasks",
     Base.metadata,
@@ -17,6 +30,7 @@ class Role(Base):
     __tablename__ = "roles"
     __table_args__ = (
         UniqueConstraint("organization_id", "workable_job_id", name="uq_roles_org_workable_job"),
+        UniqueConstraint("organization_id", "slug", name="uq_roles_org_slug"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -24,6 +38,22 @@ class Role(Base):
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     source = Column(String, default="manual", nullable=False)
+    # ATS publish fields (P1) — promoted out of the workable_job_data JSON blob
+    # into first-class columns so careers pages + JobPosting JSON-LD + filtering
+    # can use them. Nullable; populated on create/publish + Workable import.
+    employment_type = Column(String, nullable=True)
+    workplace_type = Column(String, nullable=True)
+    location_city = Column(String, nullable=True)
+    location_country = Column(String, nullable=True)
+    department = Column(String, nullable=True)
+    salary_min = Column(Integer, nullable=True)
+    salary_max = Column(Integer, nullable=True)
+    salary_currency = Column(String, nullable=True)
+    salary_period = Column(String, nullable=True)
+    # Lifecycle status (see ROLE_STATUSES). New roles start 'draft'; publishing to
+    # the careers site flips to 'published' and assigns a unique per-org slug.
+    status = Column(String, nullable=False, server_default=ROLE_STATUS_DRAFT)
+    slug = Column(String, nullable=True)
     workable_job_id = Column(String, nullable=True, index=True)
     workable_job_data = Column(JSON, nullable=True)
     # Cached Workable recruitment pipeline (the ordered stage list) for this
