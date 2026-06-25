@@ -144,6 +144,49 @@ def finalize_timed_out_assessments(limit: int = 25):
 
 
 @celery_app.task
+def assessment_provisioning_healthcheck():
+    """Proactively verify the GitHub credential that assessment repo provisioning
+    depends on.
+
+    A 401 from GitHub silently blocks EVERY candidate from starting an assessment
+    — repo provisioning runs at both send and start, so an expired GITHUB_TOKEN
+    surfaces to candidates only as "Failed to initialize assessment repository"
+    and takes the funnel to zero with no other signal (the 2026-06-25 incident:
+    the token expired ~5 days before anyone noticed). This beat alerts loudly
+    (structured log + Sentry) so it can't recur silently.
+    """
+    from ..services.github_credentials import verify_github_credentials
+
+    result = verify_github_credentials(org=settings.GITHUB_ORG, token=settings.GITHUB_TOKEN)
+    if not result.get("ok"):
+        logger.error(
+            "assessment_provisioning_unhealthy: GitHub credential check failed "
+            "(status=%s org=%s) — candidates cannot start assessments until "
+            "GITHUB_TOKEN is rotated. detail=%s",
+            result.get("status_code"), settings.GITHUB_ORG, result.get("detail"),
+            extra={"event": "assessment_provisioning_unhealthy", "check": result},
+        )
+        try:  # surface to Sentry if configured (main.py inits it)
+            import sentry_sdk
+
+            sentry_sdk.capture_message(
+                f"Assessment provisioning DOWN: GitHub returned "
+                f"{result.get('status_code')} on org {settings.GITHUB_ORG} — "
+                f"GITHUB_TOKEN is invalid/expired; no candidate can start an "
+                f"assessment until it is rotated on all services.",
+                level="error",
+            )
+        except Exception:  # pragma: no cover — never let alerting break the run
+            pass
+    else:
+        logger.info(
+            "assessment_provisioning_healthcheck ok (org=%s mock=%s)",
+            settings.GITHUB_ORG, result.get("mock", False),
+        )
+    return result
+
+
+@celery_app.task
 def send_assessment_expiry_reminders():
     """Daily reminder: notify candidates whose pending assessments expire soon."""
     from datetime import datetime, timedelta, timezone
