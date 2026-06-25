@@ -62,6 +62,11 @@ export const roles = {
   updateApplication: (applicationId, data) => api.patch(`/applications/${applicationId}`, data),
   updateApplicationStage: (applicationId, data) => api.patch(`/applications/${applicationId}/stage`, data),
   updateApplicationOutcome: (applicationId, data) => api.patch(`/applications/${applicationId}/outcome`, data),
+  // Record/update a recruiter's manual decision (advance/hold/reject +
+  // rationale, confidence, next steps) on an application with no assessment
+  // linked. `data` carries { status, expected_version, decision, rationale,
+  // confidence, next_steps }. Idempotent upsert with optimistic locking.
+  updateApplicationDecision: (applicationId, data) => api.patch(`/applications/${applicationId}/manual-decision`, data),
   // Hand-back to Workable: pushes the candidate into the chosen Workable
   // stage. `data` is `{ target_stage: string, reason?: string }`. Used at
   // the end of the Tali pipeline (typically when stage === 'review').

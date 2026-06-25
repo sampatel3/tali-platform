@@ -21,6 +21,7 @@ from ...services.interview_support_service import (
     build_role_interview_pack_templates,
     refresh_application_interview_support,
 )
+from ...services.evaluation_result_service import normalize_stored_application_decision
 from ...services.pre_screening_service import pre_screen_snapshot, refresh_pre_screening_fields
 from ...services.workable_actions_service import workable_job_syncable
 from ...services.taali_scoring import (
@@ -1014,6 +1015,9 @@ def application_to_response(
         pipeline_external_drift=stage_external_drift(app),
         version=int(app.version or 1),
         notes=app.notes,
+        manual_decision=normalize_stored_application_decision(
+            getattr(app, "manual_decision", None)
+        ),
         candidate_email=(candidate.email if candidate else ""),
         candidate_name=(candidate.full_name if candidate else None),
         candidate_position=(candidate.position if candidate else None),

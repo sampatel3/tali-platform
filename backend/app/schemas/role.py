@@ -242,6 +242,11 @@ class ApplicationResponse(BaseModel):
     pipeline_external_drift: bool = False
     version: int = 1
     notes: Optional[str] = None
+    # Recruiter's manually recorded decision (advance/hold/reject + rationale,
+    # confidence, next steps) with draft/submitted lifecycle, version, author
+    # and history. Null until a decision is recorded. Used for the standing
+    # report's Evaluate surface when no assessment is linked.
+    manual_decision: Optional[dict[str, Any]] = None
     candidate_email: str
     candidate_name: Optional[str] = None
     candidate_position: Optional[str] = None

@@ -20,7 +20,7 @@ import { ScoreRing } from '../../shared/ui/ScoreRing';
 import { ScoreProvenance } from './ScoreProvenance';
 import { ErrorBoundary } from '../../shared/ui/ErrorBoundary';
 import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAssessmentToCandidateView } from './assessmentViewModels';
-import { AssessmentEvidencePanels, EvaluatePanel, InterviewTranscriptCapture } from './CandidateAssessmentDetailPanels';
+import { ApplicationDecisionPanel, AssessmentEvidencePanels, EvaluatePanel, InterviewTranscriptCapture } from './CandidateAssessmentDetailPanels';
 import { CandidateSnapshotCard } from './CandidateSnapshotCard';
 import {
   getErrorMessage,
@@ -54,7 +54,10 @@ const resolveAssessmentStatus = (application) => (
 const REPORT_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'assessment', label: 'Assessment', internalOnly: true, requiresAssessment: true },
-  { id: 'evaluate', label: 'Evaluate', internalOnly: true, requiresAssessment: true },
+  // Evaluate is always available to the recruiter (internalOnly hides it on
+  // shares): with an assessment it's the full rubric evaluation, without one
+  // it's a decision-only recorder against the application.
+  { id: 'evaluate', label: 'Evaluate', internalOnly: true },
   { id: 'cv', label: 'CV' },
   { id: 'prep', label: 'Interview prep', recruiterOnly: true },
   { id: 'notes', label: 'Notes & timeline', recruiterOnly: true },
@@ -1815,6 +1818,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 recruiterSummary={reportModel?.recruiterSummaryText || ''}
               />
             </ErrorBoundary>
+          ) : (!isShareRoute && application?.id) ? (
+            // No assessment linked — let the recruiter still record/update a
+            // decision against the application itself.
+            <ApplicationDecisionPanel
+              application={application}
+              rolesApi={rolesApi}
+              onSaved={(saved) => setApplication((prev) => (prev ? { ...prev, manual_decision: saved } : prev))}
+            />
           ) : (
             <div className="mc-notes-empty">Evaluation opens once a completed assessment is linked.</div>
           )}

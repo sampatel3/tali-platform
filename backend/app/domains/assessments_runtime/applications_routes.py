@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import asc, desc, func, or_
 from sqlalchemy.orm import Session, joinedload, selectinload
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from ...actions import advance_stage as advance_stage_action
 from ...actions.types import Actor
@@ -52,6 +52,11 @@ from ...schemas.role import (
     AssessmentRetakeCreate,
     FirefliesInterviewLinkCreate,
     ManualApplicationInterviewCreate,
+)
+from ...services.evaluation_result_service import (
+    author_from_user,
+    build_application_decision,
+    normalize_stored_application_decision,
 )
 from ...components.integrations.workable.service import WorkableRateLimitError, WorkableService
 from ...services.document_service import (
@@ -1256,6 +1261,82 @@ def update_application(
     # PATCH only touches stage/outcome/notes; scoring inputs unchanged,
     # so reuse the cached interview pack.
     return application_to_response(app, use_cached_score_summary=True)
+
+
+@router.patch("/applications/{application_id}/manual-decision")
+def update_application_manual_decision(
+    application_id: int,
+    body: Dict[str, Any] = Body(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Record/update a recruiter's manual decision on an application.
+
+    Mirrors the assessment-backed ``PATCH /assessments/{id}/manual-evaluation``
+    but persists against the application itself, so a candidate with no
+    assessment linked (e.g. rejected at CV stage) can still have a decision
+    recorded and updated. PATCH is an idempotent upsert; an optimistic
+    ``expected_version`` guard prevents two recruiters silently clobbering each
+    other's edit.
+    """
+    app = get_application(application_id, current_user.organization_id, db)
+
+    stored = app.manual_decision if isinstance(app.manual_decision, dict) else {}
+    stored_version = int(stored.get("version", 0) or 0)
+    expected_version = body.get("expected_version")
+    if expected_version is not None:
+        try:
+            expected_version_int = int(expected_version)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="expected_version must be an integer")
+        if expected_version_int != stored_version:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This decision was updated by someone else. "
+                    "Reload to see the latest before saving again."
+                ),
+            )
+
+    try:
+        decision = build_application_decision(
+            body=body,
+            author=author_from_user(current_user),
+            prior=stored,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    app.manual_decision = decision
+    # Surface the decision in the application timeline so manual updates are
+    # auditable alongside stage/outcome changes. Drafts are working state, so
+    # only a submitted (recorded) decision writes an event.
+    if decision.get("status") == "submitted":
+        append_application_event(
+            db,
+            app=app,
+            event_type="manual_decision_recorded",
+            actor_type="recruiter",
+            actor_id=current_user.id,
+            reason=(decision.get("rationale") or None),
+            metadata={
+                "decision": decision.get("decision"),
+                "confidence": decision.get("confidence"),
+                "version": decision.get("version"),
+            },
+        )
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to save manual decision")
+
+    normalized = normalize_stored_application_decision(app.manual_decision)
+    return {
+        "success": True,
+        "manual_decision": normalized,
+        "version": normalized.get("version", stored_version + 1),
+    }
 
 
 @router.get("/applications")
