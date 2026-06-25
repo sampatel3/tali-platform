@@ -1330,6 +1330,7 @@ export default function AssessmentPage({
 
           <AssessmentWorkspace
             className="mt-4"
+            staticAssistantPanelWidth={demoMode ? 800 : undefined}
             hasRepoStructure={hasRepoStructure}
             modifiedRepoPaths={modifiedRepoPaths}
             repoFileTree={repoFileTree}
