@@ -40,6 +40,12 @@ jobs:
         # head` (run on boot) crash-loop the deploy. Stdlib-only, so it
         # needs no pip install. Fix = add a merge revision.
         run: python scripts/check_alembic_single_head.py
+      - name: Backend file-size gate
+        # Backend mirror of the frontend architecture gate: API route files
+        # and service modules must stay <= 500 LOC unless allowlisted in
+        # scripts/check_file_sizes.py (the same gate tests/ asserts).
+        # Stdlib-only. Fix = split the file, don't grow the allowlist.
+        run: python scripts/check_file_sizes.py
 
   frontend:
     runs-on: ubuntu-latest
