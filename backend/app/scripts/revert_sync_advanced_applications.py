@@ -185,7 +185,13 @@ def revert_sync_advanced_applications(
                     "backfill": "revert_sync_advanced_applications",
                     "legacy_status_before": previous_status,
                 },
-                idempotency_key=f"backfill_revert_advanced:{app.id}",
+                # Run-scoped key: a candidate can be mis-advanced again (e.g.
+                # a later sync regression) and need re-reverting, so the event
+                # key must differ from a prior backfill's — else the unique
+                # (application_id, idempotency_key) constraint rolls back the
+                # whole batch. Date-stamped: same-day re-runs are idempotent
+                # because reverted rows stop matching the advanced+sync filter.
+                idempotency_key=f"backfill_revert_advanced:{app.id}:{now:%Y%m%d}",
             )
         )
         summary["reverted"] += 1
