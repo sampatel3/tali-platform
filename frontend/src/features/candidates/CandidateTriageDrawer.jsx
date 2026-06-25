@@ -370,11 +370,24 @@ export function CandidateTriageDrawer({
                     ));
                 })()}
               </ul>
-              {!application.score_summary.invite_tracking.email_status ? (
-                <div className="ctc-invite-track-note">
-                  No delivery or open events recorded for this invite yet.
-                </div>
-              ) : null}
+              {(() => {
+                const es = (application.score_summary.invite_tracking.email_status || '').toLowerCase();
+                if (es === 'failed') {
+                  return (
+                    <div className="ctc-invite-track-note is-danger">
+                      Invite could not be sent — resend it so the candidate receives the assessment.
+                    </div>
+                  );
+                }
+                if (!es) {
+                  return (
+                    <div className="ctc-invite-track-note">
+                      No delivery or open events recorded for this invite yet.
+                    </div>
+                  );
+                }
+                return null;
+              })()}
             </div>
           ) : null}
           <div className="ctc-cards">

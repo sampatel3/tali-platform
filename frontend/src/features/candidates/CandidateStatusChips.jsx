@@ -100,15 +100,22 @@ export function AssessmentInviteChip({ status, tracking, compact = false }) {
 
   // Delivery chip — only while the invite is the active concern, or on failure.
   const es = (t.email_status || '').toLowerCase();
-  const showDelivery = !s || s === 'pending' || s === 'in_progress' || es === 'bounced' || es === 'complained';
+  // 'failed' = the send itself never succeeded (e.g. Resend rate-limited a
+  // bulk-invite burst); 'bounced'/'complained' = accepted then rejected. All
+  // three mean the candidate never got the invite — surface them so a recruiter
+  // can resend instead of waiting on someone who never heard from us.
+  const isSendFailure = es === 'failed' || es === 'bounced' || es === 'complained';
+  const showDelivery = !s || s === 'pending' || s === 'in_progress' || isSendFailure;
   let deliv = null;
   if (showDelivery) {
-    if (es === 'bounced' || es === 'complained') {
-      deliv = {
-        cls: 'asmt-chip asmt-chip--bounced',
-        label: es === 'complained' ? 'Spam complaint' : 'Bounced',
-        title: t.bounced_at ? `Email ${es}: ${_fmtTs(t.bounced_at)}` : `Email ${es} — invite did not reach the candidate`,
-      };
+    if (isSendFailure) {
+      const failLabel = es === 'complained' ? 'Spam complaint' : es === 'failed' ? 'Not sent' : 'Bounced';
+      const failTitle = es === 'failed'
+        ? 'Invite could not be sent (email provider error) — resend it so the candidate gets the assessment'
+        : t.bounced_at
+          ? `Email ${es}: ${_fmtTs(t.bounced_at)}`
+          : `Email ${es} — invite did not reach the candidate`;
+      deliv = { cls: 'asmt-chip asmt-chip--bounced', label: failLabel, title: failTitle };
     } else if (t.opened_at || es === 'opened' || es === 'clicked') {
       deliv = { cls: 'asmt-chip asmt-chip--opened', label: 'Opened', title: t.opened_at ? `Email opened: ${_fmtTs(t.opened_at)}` : 'Email opened' };
     } else if (t.delivered_at || es === 'delivered') {
