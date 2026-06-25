@@ -41,8 +41,17 @@ def post_results_to_workable(self, access_token: str, subdomain: str, candidate_
 
 @celery_app.task
 def cleanup_expired_assessments():
-    """Periodic task: expire old pending assessments and close abandoned sandboxes."""
-    from datetime import datetime, timedelta, timezone
+    """Periodic hygiene: expire PENDING assessments whose invite window lapsed.
+
+    IN_PROGRESS assessments are deliberately NOT touched here. A candidate who
+    starts then walks away is captured + SCORED by ``finalize_timed_out_assessments``
+    (server-side timer enforcement) so their effort is never discarded. This task
+    used to mark stale IN_PROGRESS rows EXPIRED and throw the work away — e.g. a
+    candidate who coded for 72 minutes showed up to the recruiter as a blank
+    "expired" with no result. E2B sandboxes auto-expire on their own, so there is
+    nothing to reap here for IN_PROGRESS rows.
+    """
+    from datetime import datetime, timezone
     from sqlalchemy.orm import Session
     from ..platform.database import SessionLocal
     from ..models.assessment import Assessment, AssessmentStatus
@@ -60,23 +69,76 @@ def cleanup_expired_assessments():
             assessment.status = AssessmentStatus.EXPIRED
             count += 1
 
-        # Close abandoned in-progress sandboxes (over 2 hours)
-        stale_cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
-        stale = db.query(Assessment).filter(
-            Assessment.status == AssessmentStatus.IN_PROGRESS,
-            Assessment.started_at < stale_cutoff,
-        ).all()
-
-        for assessment in stale:
-            assessment.status = AssessmentStatus.EXPIRED
-            # E2B sandboxes auto-expire, but we mark assessments locally
-            count += 1
-
         db.commit()
-        logger.info(f"Cleaned up {count} expired/stale assessments")
+        logger.info(f"Cleaned up {count} expired pending assessments")
     except Exception as e:
         logger.error(f"Cleanup task failed: {e}")
         db.rollback()
+    finally:
+        db.close()
+
+
+@celery_app.task
+def finalize_timed_out_assessments(limit: int = 25):
+    """Server-side timer enforcement: capture + score IN_PROGRESS assessments
+    whose working timer has expired but whose candidate never submitted.
+
+    The in-app ``enforce_active_or_timeout`` gate is pull-based — it only fires on
+    a candidate request, so a candidate who works then closes the tab is never
+    finalized. Without this sweep their effort is lost (the row lingers IN_PROGRESS
+    and ``cleanup_expired_assessments`` used to discard it). Here we finalize each
+    timed-out row through the real submit pipeline so it reaches the recruiter as a
+    COMPLETED_DUE_TO_TIMEOUT result. Anthropic/E2B-heavy → routed to the ``scoring``
+    queue (see ``_TASK_ROUTES``). ``limit`` bounds per-tick work.
+    """
+    from sqlalchemy.orm import Session
+    from ..platform.database import SessionLocal
+    from ..models.assessment import Assessment, AssessmentStatus
+    from ..components.assessments.repository import time_remaining_seconds
+    from ..components.assessments.service import finalize_timed_out_assessment
+
+    db: Session = SessionLocal()
+    finalized = 0
+    scoring_failed = 0
+    skipped = 0
+    try:
+        rows = (
+            db.query(Assessment)
+            .filter(
+                Assessment.status == AssessmentStatus.IN_PROGRESS,
+                Assessment.is_voided.is_(False),
+                Assessment.is_demo.is_(False),
+                Assessment.started_at.isnot(None),
+            )
+            .order_by(Assessment.started_at.asc())
+            .limit(limit)
+            .all()
+        )
+        for assessment in rows:
+            # Timer math (pause-aware) lives in repository.time_remaining_seconds;
+            # only finalize rows whose working time is genuinely exhausted. A paused
+            # assessment keeps time on the clock and is left alone.
+            if time_remaining_seconds(assessment) > 0:
+                skipped += 1
+                continue
+            try:
+                result = finalize_timed_out_assessment(assessment, db)
+            except Exception:
+                logger.exception(
+                    "finalize_timed_out_assessments: crash assessment_id=%s", assessment.id
+                )
+                db.rollback()
+                scoring_failed += 1
+                continue
+            if result.get("status") == "finalized":
+                finalized += 1
+                if result.get("scoring_failed"):
+                    scoring_failed += 1
+        logger.info(
+            "Timed-out assessment finalize sweep: finalized=%d scoring_failed=%d skipped=%d",
+            finalized, scoring_failed, skipped,
+        )
+        return {"finalized": finalized, "scoring_failed": scoring_failed, "skipped": skipped}
     finally:
         db.close()
 
