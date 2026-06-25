@@ -73,6 +73,9 @@ class CandidateApplication(Base):
     # mapping in migration 120; kept in sync with pipeline_stage in the P0
     # migrate step. Lets analytics/automation group by ATS-generic stage kind.
     stage_kind = Column(String, nullable=True)
+    # Candidate answers to the role's screening questions ({question_id: answer}),
+    # captured at apply time. See ScreeningQuestion + screening_service.
+    screening_answers = Column(JSON, nullable=True)
     workable_candidate_id = Column(String, nullable=True, index=True)
     workable_stage = Column(String, nullable=True)
     # When Taali itself last wrote workable_stage (a recruiter advance / move).
