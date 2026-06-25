@@ -148,7 +148,7 @@ export const CandidateAiUsageTab = ({ candidate }) => {
                 </div>
 
                 <div className="bg-[var(--taali-purple-soft)] p-2 font-mono text-sm text-[var(--taali-text)]">
-                  {p.message || p.text}
+                  {p.message || p.text || p.content}
                 </div>
 
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">

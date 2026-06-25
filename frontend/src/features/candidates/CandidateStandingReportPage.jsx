@@ -30,6 +30,7 @@ import {
 } from './candidatesUiUtils';
 import {
   AI_SHOWCASE_APPLICATION,
+  AI_SHOWCASE_APPLICATION_EVENTS,
   AI_SHOWCASE_COMPLETED_ASSESSMENT,
 } from '../demo/productWalkthroughModels';
 
@@ -881,7 +882,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       setApplication(AI_SHOWCASE_APPLICATION);
       setCompletedAssessment(AI_SHOWCASE_COMPLETED_ASSESSMENT);
       setOrgData(null);
-      setApplicationEvents([]);
+      setApplicationEvents(AI_SHOWCASE_APPLICATION_EVENTS);
       setShareViewMode(null);
       setError('');
       setLoading(false);

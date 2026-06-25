@@ -395,6 +395,11 @@ export const AI_SHOWCASE_APPLICATION = {
       },
     ],
   },
+  workable_activity_log: [
+    { action: 'moved', stage: 'Assessment', body: '', created_at: '2026-04-19T15:31:00.000Z' },
+    { action: 'comment', stage: 'Assessment', body: 'Taali verified report attached — Strong Hire, 81 Taali score, 7/8 release-safety tests passing.', created_at: '2026-04-21T10:41:00.000Z' },
+    { action: 'moved', stage: 'Technical panel', body: '', created_at: '2026-04-21T14:21:00.000Z' },
+  ],
 };
 
 export const AI_SHOWCASE_COMPLETED_ASSESSMENT = {
@@ -416,6 +421,20 @@ export const AI_SHOWCASE_COMPLETED_ASSESSMENT = {
   tab_switch_count: 4,
   calibration_score: 8.1,
   prompt_fraud_flags: [],
+  time_to_first_prompt_seconds: 47,
+  prompt_analytics: {
+    per_prompt_scores: [
+      { clarity: 9, specificity: 9, efficiency: 9, word_count: 34, has_context: true, is_vague: false },
+      { clarity: 9, specificity: 9, efficiency: 9, word_count: 38, has_context: true, is_vague: false },
+      { clarity: 9, specificity: 8, efficiency: 9, word_count: 26, has_context: true, is_vague: false },
+      { clarity: 9, specificity: 8, efficiency: 9, word_count: 24, has_context: true, is_vague: false },
+      { clarity: 8, specificity: 8, efficiency: 9, word_count: 30, has_context: true, is_vague: false },
+      { clarity: 8, specificity: 8, efficiency: 9, word_count: 31, has_context: true, is_vague: false },
+      { clarity: 7, specificity: 5, efficiency: 8, word_count: 7, has_context: false, is_vague: false },
+      { clarity: 8, specificity: 7, efficiency: 8, word_count: 26, has_context: true, is_vague: false },
+      { clarity: 8, specificity: 7, efficiency: 8, word_count: 21, has_context: true, is_vague: false },
+    ],
+  },
   score_breakdown: {
     heuristic_summary:
       'Priya treats AI as a reviewer rather than an autopilot. The strongest signal across the 36-minute session is how she sequences risk: she opens the repo by reading RISKS.md and the launch checklist before touching any code, names the medium-confidence high-risk gating as the highest-blast-radius failure, and explicitly names what she will NOT ship past — even though the brief presents launch pressure.\n\nHer prompts to Claude are short, scoped, and load context deliberately. When the model suggested a broader retrieval refactor, she pushed back, scoped the change to a smaller patch set, and asked Claude to draft only the regression test for the failing case. She caught two unsafe defaults the model proposed (a silent fallback to cached completions on LLM failure; a default-allow on medium-confidence outputs) and rejected both with explicit reasoning.\n\nWritten communication is the one dimension where the signal is clearly weaker than the rest: her commit messages and the README patch are accurate but compressed; the handoff language for non-engineering stakeholders would need to be sharper before she could lead a regulated launch on her own. This is the single area worth probing in the loop.',
@@ -526,7 +545,20 @@ export const AI_SHOWCASE_COMPLETED_ASSESSMENT = {
     { index: 8, role: 'user', content: 'Draft the README patch describing what each of the three patches covers and what residual risk remains. Keep the language readable to a non-engineer.' },
     { index: 9, role: 'user', content: 'Name three things you would NOT ship past — even under launch pressure — given the current patch set.' },
   ],
+  timeline: [
+    { event_type: 'note', author: 'Maya Chen', text: 'Release-safety instincts on the work sample are exactly what the NHS rollout needs — she sequenced by blast radius and refused the default-allow on the high-risk path. Want the panel to probe how she frames residual risk for non-engineers.', timestamp: '2026-04-21T11:02:00.000Z' },
+    { event_type: 'note', author: 'Tom Driscoll', text: 'Agreed. CV evidence (Helix, 6.1% to 0.4% unsafe completions) lines up tightly with how she worked the task. Happy to advance to the technical panel.', timestamp: '2026-04-21T14:18:00.000Z' },
+  ],
 };
+
+// Audit-timeline events for the demo standing report (Notes & timeline tab).
+export const AI_SHOWCASE_APPLICATION_EVENTS = [
+  { id: 9101, event_type: 'application_received', created_at: '2026-04-19T09:12:00.000Z', metadata: {} },
+  { id: 9102, event_type: 'cv_scored', created_at: '2026-04-19T09:14:00.000Z', metadata: { role_fit_score: 78 } },
+  { id: 9103, event_type: 'assessment_invited', created_at: '2026-04-19T15:30:00.000Z', metadata: {}, description: 'GenAI Production Readiness Review' },
+  { id: 9104, event_type: 'assessment_completed', created_at: '2026-04-21T10:36:00.000Z', metadata: {}, description: 'Scored 84 / 100 · 7 of 8 release-safety tests passing' },
+  { id: 9105, event_type: 'advanced', created_at: '2026-04-21T14:20:00.000Z', metadata: {}, description: 'Advanced to technical panel' },
+];
 
 export const PRODUCT_WALKTHROUGH = {
   runtime: {
@@ -686,6 +718,7 @@ export const PRODUCT_WALKTHROUGH_TASK = {
 export const PRODUCT_WALKTHROUGH_START_DATA = {
   assessment_id: 9001,
   token: 'demo-product-walkthrough',
+  initial_selected_repo_path: 'intelligence/analyzer.py',
   candidate_name: 'Candidate walkthrough',
   organization_name: 'Taali demo',
   time_remaining: aiGenaiProductionReadinessTask.duration_minutes * 60,
