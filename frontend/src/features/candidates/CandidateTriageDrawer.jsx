@@ -372,7 +372,7 @@ export function CandidateTriageDrawer({
               </ul>
               {!application.score_summary.invite_tracking.email_status ? (
                 <div className="ctc-invite-track-note">
-                  Email delivery/open tracking shows here once the Resend webhook is configured.
+                  No delivery or open events recorded for this invite yet.
                 </div>
               ) : null}
             </div>
