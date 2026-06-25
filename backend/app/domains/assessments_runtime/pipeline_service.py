@@ -74,6 +74,16 @@ _RECRUITER_STAGE_TRANSITIONS = {
 _SYSTEM_STAGE_TRANSITIONS = {
     ("invited", "in_assessment"),
     ("in_assessment", "review"),
+    # Re-assessment: a candidate sitting in `review` (a prior attempt was
+    # submitted, or auto-finalized on timeout — see PR #698) who starts a
+    # freshly issued assessment is genuinely back `in_assessment`.
+    # `start_or_resume_assessment` is the only system caller that targets
+    # `in_assessment`, and it only fires this transition when a
+    # PENDING/never-started assessment is actually started — so landing them
+    # `in_assessment` is always correct. Without this edge the guard 409s and
+    # the candidate start endpoint surfaces a generic 500 ("Failed to start
+    # assessment session").
+    ("review", "in_assessment"),
 }
 _LEGACY_COMPAT_EDGES: dict[str, list[tuple[str, str]]] = {
     # Direct edges to "advanced" mirror the recruiter hand-back flow
