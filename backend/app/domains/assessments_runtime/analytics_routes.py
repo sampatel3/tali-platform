@@ -15,6 +15,12 @@ from ...domains.agentic._hub_shared import open_needs_input_filter, pending_filt
 from ...models.agent_decision import AgentDecision
 from ...models.agent_needs_input import AgentNeedsInput
 from ...models.assessment import Assessment, AssessmentStatus
+from ...components.scoring.assessment_metrics import (
+    completed_assessment_filter as _completed_assessment_filter,
+    is_completed as _is_completed,
+    percentile_rank as _percentile_rank,
+    status_value as _status_value,
+)
 from ...models.assessment_experiment import AssessmentExperiment
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
@@ -62,28 +68,6 @@ def _ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
     if getattr(dt, "tzinfo", None) is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
-
-
-def _status_value(assessment: Assessment) -> str:
-    return str(getattr(assessment.status, "value", assessment.status) or "").lower()
-
-
-def _is_completed(assessment: Assessment) -> bool:
-    return _status_value(assessment) in {
-        AssessmentStatus.COMPLETED.value,
-        AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT.value,
-    }
-
-
-def _completed_assessment_filter():
-    return and_(
-        Assessment.completed_at.isnot(None),
-        Assessment.is_voided.is_(False),
-        or_(
-            Assessment.status == AssessmentStatus.COMPLETED,
-            Assessment.completed_due_to_timeout.is_(True),
-        ),
-    )
 
 
 def _parse_filter_datetime(value: Optional[str], *, end_of_day: bool = False) -> Optional[datetime]:
@@ -202,13 +186,6 @@ def _percentile(sorted_values: Sequence[float], percentile: float) -> float:
     upper = min(lower + 1, len(sorted_values) - 1)
     weight = index - lower
     return float(sorted_values[lower] * (1 - weight) + sorted_values[upper] * weight)
-
-
-def _percentile_rank(values: Sequence[float], target: float) -> float:
-    if not values:
-        return 0.0
-    count = sum(1 for value in values if value <= target)
-    return round((count / len(values)) * 100.0, 1)
 
 
 def _now_ts() -> float:
