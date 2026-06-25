@@ -54,6 +54,11 @@ export const roles = {
     api.post(`/applications/${applicationId}/share-links`, { mode, expiry }),
   revokeShareLink: (linkId) => api.delete(`/share-links/${linkId}`),
   listApplicationEvents: (applicationId, params = {}) => api.get(`/applications/${applicationId}/events`, { params }),
+  // Drop a recruiter note on the candidate's timeline. Works with or without
+  // a linked assessment. `forAgent` (default true) makes the note visible to
+  // the recruiting agent as standing per-candidate guidance.
+  addApplicationNote: (applicationId, note, forAgent = true) =>
+    api.post(`/applications/${applicationId}/notes`, { note, for_agent: forAgent }),
   generateApplicationInterviewDebrief: (applicationId, data = {}) => api.post(`/applications/${applicationId}/interview-debrief`, data),
   downloadApplicationReport: (applicationId) => api.get(`/applications/${applicationId}/report.pdf`, { responseType: 'blob' }),
   downloadApplicationDocument: (applicationId, docType = 'cv', config = {}) =>
