@@ -551,6 +551,9 @@
      swapped in for print so the downloaded PDF shows the actual surfaces. */
   .surf-shot { display: none; }
   @media print {
+    /* Force the deck's dark slabs + colour accents to print even when the
+       browser's "Background graphics" toggle is off — they're essential. */
+    *, *::before, *::after { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
     .surf-frame iframe { display: none; }
     .surf-shot { display: block; flex: 1; width: 100%; min-height: 0; object-fit: cover; object-position: top center; }
   }
