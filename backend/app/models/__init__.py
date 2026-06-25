@@ -1,10 +1,22 @@
 from .user import User
-from .organization import Organization
+from .organization import (
+    SYNC_MODE_STANDALONE,
+    SYNC_MODE_TAALI_PRIMARY,
+    SYNC_MODE_WORKABLE_PRIMARY,
+    SYNC_MODES,
+    Organization,
+)
 from .assessment import Assessment, AssessmentStatus
 from .candidate import Candidate
 from .candidate_application import CandidateApplication
 from .candidate_application_event import CandidateApplicationEvent
 from .application_interview import ApplicationInterview
+from .pipeline_stage import (
+    CANONICAL_SEED_STAGES,
+    LEGACY_STAGE_KIND,
+    STAGE_KINDS,
+    PipelineStage,
+)
 from .role import Role, role_tasks
 from .org_criterion import (
     BUCKET_CONSTRAINT,
@@ -165,6 +177,14 @@ from .workable_webhook_outbox import (
 __all__ = [
     "User",
     "Organization",
+    "SYNC_MODE_STANDALONE",
+    "SYNC_MODE_WORKABLE_PRIMARY",
+    "SYNC_MODE_TAALI_PRIMARY",
+    "SYNC_MODES",
+    "PipelineStage",
+    "STAGE_KINDS",
+    "CANONICAL_SEED_STAGES",
+    "LEGACY_STAGE_KIND",
     "Assessment",
     "AssessmentStatus",
     "Candidate",

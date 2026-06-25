@@ -55,6 +55,11 @@ class CandidateApplication(Base):
     version = Column(Integer, default=1, nullable=False)
     notes = Column(Text, nullable=True)
     source = Column(String, default="manual", nullable=False)
+    # Denormalized coarse category of the current pipeline_stage (see
+    # PipelineStage.kind / STAGE_KINDS). Backfilled from the canonical stage
+    # mapping in migration 120; kept in sync with pipeline_stage in the P0
+    # migrate step. Lets analytics/automation group by ATS-generic stage kind.
+    stage_kind = Column(String, nullable=True)
     workable_candidate_id = Column(String, nullable=True, index=True)
     workable_stage = Column(String, nullable=True)
     # When Taali itself last wrote workable_stage (a recruiter advance / move).

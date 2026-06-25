@@ -3,6 +3,22 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from ..platform.database import Base
 
+# Per-org ATS posture (P-1/P0). Decides who owns the candidate funnel:
+#   standalone       — Taali owns the funnel; Workable disconnected. DEFAULT for
+#                      new orgs (matches the MVP_DISABLE_WORKABLE code default).
+#   workable_primary — Workable owns the funnel; Taali reads + writes back. The
+#                      current live tenant (deeplight-ai) runs in this mode.
+#   taali_primary    — Taali owns the funnel but mirrors writes back to Workable;
+#                      the transitional mode during a per-org cutover off Workable.
+SYNC_MODE_STANDALONE = "standalone"
+SYNC_MODE_WORKABLE_PRIMARY = "workable_primary"
+SYNC_MODE_TAALI_PRIMARY = "taali_primary"
+SYNC_MODES = (
+    SYNC_MODE_STANDALONE,
+    SYNC_MODE_WORKABLE_PRIMARY,
+    SYNC_MODE_TAALI_PRIMARY,
+)
+
 
 class Organization(Base):
     __tablename__ = "organizations"
@@ -14,6 +30,9 @@ class Organization(Base):
     workable_access_token = Column(String)
     workable_refresh_token = Column(String)
     workable_connected = Column(Boolean, default=False)
+    # See SYNC_MODE_* above. Backfilled from workable_connected (connected orgs
+    # -> workable_primary, else standalone) in migration 120.
+    sync_mode = Column(String, nullable=False, server_default=SYNC_MODE_STANDALONE)
     workable_config = Column(JSON)
     # Workable Assessments-Provider (marketplace add-on) per-org settings, e.g.
     # {"callback_auth_token": "...", "enabled": true}. Distinct from
@@ -75,6 +94,12 @@ class Organization(Base):
     users = relationship("User", back_populates="organization")
     assessments = relationship("Assessment", back_populates="organization")
     roles = relationship("Role", cascade="all, delete-orphan")
+    pipeline_stages = relationship(
+        "PipelineStage",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+        order_by="PipelineStage.position",
+    )
     criteria = relationship(
         "OrganizationCriterion",
         back_populates="organization",
