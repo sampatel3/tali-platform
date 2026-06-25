@@ -21,6 +21,7 @@ import {
   setDarkModePreference,
   subscribeThemePreference,
 } from '../../lib/themePreference';
+import { isPreviewNavSurface } from '../../lib/previewNav';
 import { TaaliTile } from '../ui/Branding';
 import { PageLink } from '../ui/PageLink';
 import { useAgentStatusOrg } from './AgentBar';
@@ -37,19 +38,6 @@ const NAV_TABS = [
   { id: 'tasks',    label: 'Tasks',    Icon: CheckSquare },
   { id: 'settings', label: 'Settings', Icon: SettingsIcon },
 ];
-
-// Preview surfaces — the public /demo and the pitch-deck iframes — render the
-// real app chrome but have no auth session. Clicking a nav item there escapes
-// to an auth-gated route and lands on the sign-in page. Lock the whole header
-// (logo, tabs, search, avatar, mobile trigger) to non-interactive on those
-// surfaces so the preview stays a preview. Page content below the header is
-// untouched and stays fully interactive (tabs, scrolling, the assessment, etc.).
-const isPreviewNavSurface = () => {
-  if (typeof window === 'undefined') return false;
-  const { pathname, search } = window.location;
-  if (pathname.startsWith('/showcase/') || pathname.startsWith('/c/')) return true;
-  return new URLSearchParams(search || '').get('showcase') === '1';
-};
 
 const pickUserName = (user) => {
   const direct = String(user?.full_name || user?.name || '').trim();
