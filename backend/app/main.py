@@ -285,6 +285,9 @@ from .domains.billing_webhooks.billing_routes import router as billing_router
 from .domains.candidates_documents.routes import router as candidates_router
 from .domains.assessments_runtime.roles_routes import router as roles_router
 from .domains.assessments_runtime.scoring_routes import router as scoring_router
+from .domains.assessments_runtime.careers_routes import (
+    router as careers_public_router,
+)
 from .domains.assessments_runtime.pipeline_stages_routes import (
     router as pipeline_stages_router,
 )
@@ -367,6 +370,7 @@ app.include_router(workable_provider_router)
 # any browser without auth and without exposing the API surface.
 app.include_router(share_links_public_router)
 app.include_router(top_reports_public_router)
+app.include_router(careers_public_router)
 
 # cv_match_v3.0 admin + override surface (gated server-side; flag controls runner)
 from .cv_matching.routes import (
