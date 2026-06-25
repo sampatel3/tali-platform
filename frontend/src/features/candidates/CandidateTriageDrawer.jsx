@@ -18,6 +18,7 @@ import {
   CandidateAvatar,
   WorkableScorePip,
 } from '../../shared/ui/RecruiterDesignPrimitives';
+import { isPostHandoverWorkableStage } from '../../shared/metrics';
 
 // Pipeline stages — exported because tests and parents still import the
 // list. The drawer itself no longer renders a segmented control for
@@ -473,6 +474,17 @@ export function CandidateTriageDrawer({
               <div className="ctc-card-sub">Closes the application</div>
             </button>
           </div>
+          {/* Reject is always allowed — even for a candidate the recruiter has
+              advanced in Workable — but a later-stage reject disqualifies them
+              in Workable, so warn clearly first. Advice, not a block. */}
+          {isRejectSelected && isPostHandoverWorkableStage(application?.workable_stage) ? (
+            <div className="ctc-reject-warning" role="alert">
+              <strong>Heads up —</strong> this candidate is in{' '}
+              <strong>{application?.workable_stage}</strong> in Workable
+              {application?.workable_candidate_id ? ', so rejecting will disqualify them there' : ''}.
+              You can still reject — just make sure that&apos;s intended.
+            </div>
+          ) : null}
           <div className="ctc-action-row">
             <a
               className="ctc-link"
