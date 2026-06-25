@@ -31,6 +31,7 @@ from .disqualification_reason import (
     DisqualificationReason,
 )
 from .screening_question import QUESTION_KINDS, ScreeningQuestion
+from .offer import OFFER_STATUSES, Offer, OfferApproval
 from .role import Role, role_tasks
 from .org_criterion import (
     BUCKET_CONSTRAINT,
@@ -205,6 +206,9 @@ __all__ = [
     "CANONICAL_DISQUALIFICATION_REASONS",
     "ScreeningQuestion",
     "QUESTION_KINDS",
+    "Offer",
+    "OfferApproval",
+    "OFFER_STATUSES",
     "Assessment",
     "AssessmentStatus",
     "Candidate",
