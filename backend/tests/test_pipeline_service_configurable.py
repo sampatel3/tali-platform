@@ -9,7 +9,10 @@ import pytest
 from fastapi import HTTPException
 
 from app.domains.assessments_runtime import pipeline_service
-from app.domains.assessments_runtime.pipeline_service import transition_stage
+from app.domains.assessments_runtime.pipeline_service import (
+    role_pipeline_counts,
+    transition_stage,
+)
 from app.domains.assessments_runtime.pipeline_stages_service import (
     ensure_org_stages_seeded,
 )
@@ -116,3 +119,29 @@ def test_flag_on_accepts_custom_stage(db, monkeypatch):
         db, app=app, to_stage="sourced", source="recruiter", actor_type="recruiter"
     )
     assert app.pipeline_stage == "sourced"
+
+
+def test_flag_on_funnel_buckets_custom_stage_by_kind(db, monkeypatch):
+    _enable_flag(monkeypatch)
+    org, app = _seed_app(db, stage="applied")
+    ensure_org_stages_seeded(db, org.id)
+    db.add(
+        PipelineStage(
+            organization_id=org.id,
+            slug="onsite",
+            name="Onsite",
+            kind="interview",
+            position=10,
+            is_default=False,
+            is_active=True,
+        )
+    )
+    db.flush()
+    transition_stage(
+        db, app=app, to_stage="onsite", source="recruiter", actor_type="recruiter"
+    )
+    db.flush()  # autoflush is off in the test session; persist before counting
+    counts = role_pipeline_counts(db, organization_id=org.id, role_id=app.role_id)
+    # 'interview'-kind custom stage buckets into the 'advanced' display bucket.
+    assert counts["advanced"] == 1
+    assert counts["applied"] == 0

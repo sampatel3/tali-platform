@@ -13,7 +13,7 @@ from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.role import Role
 from ...platform.config import settings
-from .pipeline_stages_service import resolve_stage_slugs
+from .pipeline_stages_service import resolve_org_stages, resolve_stage_slugs
 
 # An application is described by TWO independent axes:
 #
@@ -851,6 +851,36 @@ def funnel_bucket_for(stage_key: str, is_scored: bool) -> str | None:
     return None
 
 
+# Configurable stages (flag ON): bucket by the stage's KIND so custom stages map
+# onto the same 6 display buckets the FE expects (FUNNEL_BUCKETS). Flag-off keeps
+# the slug-based funnel_bucket_for above, unchanged.
+_KIND_TO_BUCKET = {
+    "sourced": "applied",
+    "applied": "applied",
+    "screening": "invited",
+    "assessment": "invited",
+    "review": "completed",
+    "interview": "advanced",
+    "offer": "advanced",
+    "hired": "advanced",
+}
+
+
+def funnel_bucket_for_kind(kind: str | None, is_scored: bool) -> str | None:
+    base = _KIND_TO_BUCKET.get(kind or "")
+    if base == "applied" and is_scored:
+        return "scored"
+    return base
+
+
+def _org_stage_kind_map(db: Session, organization_id: int) -> dict[str, str] | None:
+    """{slug: kind} for the org's configurable stages when the flag is on; None
+    when off (callers then bucket by the legacy slug mapping, unchanged)."""
+    if not settings.ATS_CONFIGURABLE_STAGES_ENABLED:
+        return None
+    return {s.slug: s.kind for s in resolve_org_stages(db, organization_id)}
+
+
 def role_pipeline_counts(
     db: Session,
     *,
@@ -885,11 +915,16 @@ def role_pipeline_counts(
         .all()
     )
     counts = {bucket: 0 for bucket in FUNNEL_BUCKETS}
+    kind_map = _org_stage_kind_map(db, organization_id)
     for stage, is_scored, is_post_handover, total in rows:
         if is_post_handover:
             counts["advanced"] += int(total or 0)
             continue
-        bucket = funnel_bucket_for(normalize_pipeline_key(stage), bool(is_scored))
+        stage_key = normalize_pipeline_key(stage)
+        if kind_map is not None:
+            bucket = funnel_bucket_for_kind(kind_map.get(stage_key), bool(is_scored))
+        else:
+            bucket = funnel_bucket_for(stage_key, bool(is_scored))
         if bucket:
             counts[bucket] += int(total or 0)
     # `rejected` is an application_outcome, orthogonal to pipeline_stage, so it is
@@ -993,6 +1028,7 @@ def role_pipeline_counts_bulk(
         )
         .all()
     )
+    kind_map = _org_stage_kind_map(db, organization_id)
     for role_id, stage, is_scored, is_post_handover, total in open_rows:
         bucket = counts.get(int(role_id))
         if bucket is None:
@@ -1000,7 +1036,11 @@ def role_pipeline_counts_bulk(
         if is_post_handover:
             bucket["advanced"] += int(total or 0)
             continue
-        key = funnel_bucket_for(normalize_pipeline_key(stage), bool(is_scored))
+        stage_key = normalize_pipeline_key(stage)
+        if kind_map is not None:
+            key = funnel_bucket_for_kind(kind_map.get(stage_key), bool(is_scored))
+        else:
+            key = funnel_bucket_for(stage_key, bool(is_scored))
         if key:
             bucket[key] += int(total or 0)
 
