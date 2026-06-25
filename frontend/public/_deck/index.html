@@ -61,8 +61,8 @@
 <!-- ───────────────────────────────────────────────────────────────────────
      Partner-pitch additions. Scoped here so the shared deck.css stays the
      reusable base; these classes only exist for this partnership deck.
-     Product mocks (assessment workspace, home/HITL hub, grounded search)
-     mirror the real signed-in app surfaces.
+     The product surfaces (slides 04-08) are LIVE iframes of the real
+     app routes — the same approach taali.ai/demo uses, no mock-ups.
      ──────────────────────────────────────────────────────────────────── -->
 <style id="partner-additions">
   /* Dark takeaway band under a slide's cards */
@@ -525,6 +525,33 @@
   .rp2-crit .p.met { color: #15a36a; background: color-mix(in oklab, #15a36a 14%, #fff); }
   .rp2-crit .p.part { color: #f59e0b; background: color-mix(in oklab, #f59e0b 16%, #fff); }
   .rp2-foot { margin-top: auto; font-family: var(--font-mono); font-size: 10px; color: #8b8595; }
+
+  /* ── Product surfaces — live iframes of the real app (mirrors taali.ai/demo) ── */
+  section[data-slide^="surf-"] { display: flex; flex-direction: column; }
+  .slide-head.surf-head { margin-bottom: 14px; flex: none; }
+  .surf-title { margin: 9px 0 0; font-family: var(--font-display); font-size: 35px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.1; color: var(--ink); max-width: 1500px; }
+  .surf-title em { color: var(--purple); font-style: normal; }
+  .surf { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 16px; }
+  .surf-frame { flex: 1; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: var(--bg-2); box-shadow: var(--shadow-lg); }
+  .surf-chrome { flex: none; display: flex; align-items: center; gap: 11px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--bg); }
+  .surf-chrome .dots { display: flex; gap: 6px; }
+  .surf-chrome .dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--amber); }
+  .surf-chrome .dots i:nth-child(1) { background: #f0606b; }
+  .surf-chrome .dots i:nth-child(3) { background: var(--green); }
+  .surf-url { font-family: var(--font-mono); font-size: 12.5px; letter-spacing: 0.01em; color: var(--ink-2); }
+  .surf-url .lock { color: var(--green); margin-right: 6px; font-size: 9px; vertical-align: 1px; }
+  .surf-badge { margin-left: auto; font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--purple); background: var(--purple-soft); border-radius: 999px; padding: 3px 12px; }
+  .surf-frame iframe { flex: 1; width: 100%; min-height: 0; border: 0; display: block; background: var(--bg-2); }
+  .surf-out { flex: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
+  .surf-out span { display: block; position: relative; padding-left: 19px; font-size: 13.5px; line-height: 1.46; color: var(--ink-2); }
+  .surf-out span::before { content: "→"; position: absolute; left: 0; top: 0; color: var(--purple); font-weight: 700; }
+  .surf-out b { color: var(--ink); font-weight: 600; }
+  /* iframes can't render in PDF/print export — show a graceful hint instead */
+  @media print {
+    .surf-frame iframe { display: none; }
+    .surf-frame { min-height: 460px; position: relative; }
+    .surf-frame::after { content: "▸ Live product surface — open the deck at taali.ai/deck to view"; position: absolute; inset: 46px 0 0; display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 15px; color: var(--mute); }
+  }
 </style>
 </head>
 <body>
@@ -599,7 +626,7 @@
     </div>
 
     <div class="slide-foot">
-      <span>02 / 09 · The shift</span>
+      <span>02 / 12 · The shift</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
@@ -647,153 +674,132 @@
     </div>
 
     <div class="slide-foot">
-      <span>03 / 09 · What Taali is</span>
+      <span>03 / 12 · What Taali is</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       04 · THE WORK SAMPLE (real assessment workspace — chat-centred)
+       04 · THE HUB — live product surface (iframe: /showcase/home)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="workspace" data-screen-label="04 The work sample">
-    <div class="slide-head">
-      <div class="eyebrow"><span class="num">04</span><span class="dot">·</span><span>Assessment → client report</span></div>
-      <h2 class="slide-title" style="font-size:54px;">The candidate does the work. <em>You send the client the report.</em></h2>
-      <div class="commentary">
-        <span><b>01</b> A real bank-GenAI safety task — failing tests to fix</span>
-        <span><b>02</b> They work WITH Claude — every move captured</span>
-        <span><b>03</b> The client gets a verified report, not a CV</span>
+  <section data-slide="surf-hub" data-screen-label="04 The Hub">
+    <div class="slide-head surf-head">
+      <div class="eyebrow"><span class="num">04</span><span class="dot">·</span><span>The product · live, not a mock-up</span></div>
+      <h2 class="surf-title">Mission control: steer the agent in plain English — <em>keep every call honest.</em></h2>
+    </div>
+    <div class="surf">
+      <div class="surf-frame">
+        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/home · your hiring Hub</span><span class="surf-badge">Live surface</span></div>
+        <iframe src="/showcase/home" title="Taali — the hiring Hub" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+      </div>
+      <div class="surf-out">
+        <span>Steer each role's agent in <b>plain English</b> — "cap salary at £90k", "drop the cut-off to 65" — it reasons, shows the impact, and asks before it spends.</span>
+        <span><b>Decision feed:</b> every advance, escalate &amp; pre-screen reject — reviewable and reversible. Your overrides become its training signal.</span>
+        <span><b>One rail</b> for every agent — pending counts, budgets, bulk-message many roles, approve the assessment tasks it drafts.</span>
       </div>
     </div>
-
-    <div class="s4-split">
-      <div class="pcard">
-        <div class="pcard-bar"><span class="glyph">t</span><span class="ttl">GenAI Production Readiness Review</span><span class="live">live</span><span class="r">AI Engineer · 27:14 left</span></div>
-        <div class="wp-body">
-          <div class="wp-repo">
-            <div class="wp-rh">Repository</div>
-            <div class="wp-f">README.md</div>
-            <div class="wp-f">RISKS.md</div>
-            <div class="wp-f act">review.py</div>
-            <div class="wp-f">analyzer.py</div>
-            <div class="wp-f">test_analyzer.py</div>
-            <div class="wp-fail">● 3 failing · 17 passing</div>
-          </div>
-          <div class="wp-chat">
-            <div class="wp-ch"><span class="cg">C</span><b>Claude</b> · live repo assistant</div>
-            <div class="wp-msg cand"><code>test_high_risk</code> fails — why does a 0.62-confidence high-risk action skip human review?</div>
-            <div class="wp-msg ai"><code>review.py</code> gates on confidence alone — <code>risk_class</code> is never checked. 0.62 clears the floor, so it skips review.</div>
-            <div class="wp-msg cand">Right — I'll gate on <code>risk_class</code> first, reject the default-allow fallback, then add a regression test.</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- The client report — what you actually send -->
-      <div class="pcard">
-        <div class="pcard-bar"><span class="glyph">t</span><span class="ttl">Candidate report</span><span class="r">client view ↗</span></div>
-        <div class="rp2">
-          <div class="rp2-rec">Recommendation</div>
-          <div class="rp2-verdict">Strong Hire</div>
-          <div class="rp2-rings">
-            <div class="rp2-ring"><span class="n">81</span><span class="l">Taali</span></div>
-            <div class="rp2-ring"><span class="n">78</span><span class="l">Role fit</span></div>
-            <div class="rp2-ring"><span class="n">84</span><span class="l">Assess</span></div>
-            <div class="rp2-ring"><span class="n">3/5</span><span class="l">Reqs</span></div>
-          </div>
-          <div class="rp2-sum">Strong product judgment and production-readiness rigour, with a mixed release-safety signal worth probing live. CV evidence aligns tightly with how she worked the task.</div>
-          <div class="rp2-cvh">CV match · 3 met · 2 partial</div>
-          <div class="rp2-crit"><span class="p met">MET</span>Owned a production GenAI release in a regulated domain</div>
-          <div class="rp2-crit"><span class="p met">MET</span>Eval-harness design + offline regression testing for prompts</div>
-          <div class="rp2-crit"><span class="p part">PARTIAL</span>Residual-risk comms to legal / compliance stakeholders</div>
-          <div class="rp2-foot">Scored 24 Jun 2026 · v2.1.0 · recruiter notes &amp; PII hidden</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="s4-cap"><b>Captured</b> across the session — every prompt · paste · edit · test run · time-to-first-prompt · browser focus · tab-switches → <b>scored</b> on 8 weighted signals → the <b>client report</b> on the right.</div>
-
     <div class="slide-foot">
-      <span>04 / 09 · Assessment → client report</span>
+      <span>04 / 12 · The Hub · live product</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       05 · HOME HUB (HITL) + SEARCH — the recruiter's surfaces
+       05 · AGENTIC TRIAGE — live product surface (iframe: /jobs)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="control" data-screen-label="05 Control & search">
-    <div class="slide-head">
-      <div class="eyebrow"><span class="num">05</span><span class="dot">·</span><span>The recruiter's seat</span></div>
-      <h2 class="slide-title" style="font-size:58px;">The agent does the work. <em>You make the calls — and find anyone in seconds.</em></h2>
+  <section data-slide="surf-triage" data-screen-label="05 Agentic triage">
+    <div class="slide-head surf-head">
+      <div class="eyebrow"><span class="num">05</span><span class="dot">·</span><span>The product · the agent on duty</span></div>
+      <h2 class="surf-title">The Jobs board the agent works against — <em>one agent per role, on a leash you set.</em></h2>
     </div>
-
-    <div class="s5-grid">
-      <!-- A · Agentic + human-in-the-loop -->
-      <div class="s5-col">
-        <div class="s5-head">
-          <span class="s5-badge">A</span>
-          <div class="s5-htext">
-            <div class="t">Agentic <em>+ human-in-the-loop</em></div>
-            <div class="d">Every advance &amp; reject waits for your sign-off.</div>
-          </div>
-        </div>
-        <div class="pcard">
-          <div class="pcard-bar"><span class="ao">AGENT ON</span><span class="ttl" style="margin-left:3px;">Senior AWS Platform Engineer</span><span class="r">1 of 98 awaiting you</span></div>
-          <div class="pbody">
-            <div class="dc-mid">
-              <div class="dc-verdict"><span class="dc-adv">▲ Advance</span><span class="dc-conf">agent 92% confident</span><span class="dc-needs" style="margin-left:auto;">NEEDS YOU</span></div>
-              <div class="dc-cand">
-                <span class="dc-av">PR</span>
-                <div><div class="dc-name">Priya Raman</div><div class="dc-csub">Senior AI Engineer · London</div></div>
-                <div class="dc-score">88<span>TAALI</span></div>
-              </div>
-              <div class="dc-reason">"Clears every must-have with room to spare; top-decile AI collaboration on the work sample. Two of three nice-to-haves met."</div>
-              <div class="dc-ev"><span>CV match <b>94</b></span><span>Assessment <b>88</b></span><span>Must-haves <b>6/6</b></span></div>
-              <div class="dc-trace">
-                <div class="dc-tracetag">Decision trace · 3 steps</div>
-                <div class="dc-step"><span class="d"></span>Pre-screened the CV — clears every must-have</div>
-                <div class="dc-step"><span class="d"></span>Scored the assessment — 88/100, top-decile AI collaboration</div>
-              </div>
-            </div>
-            <div class="dc-act"><span class="btn-primary">Approve</span><span class="btn-ghost">Override</span><span class="btn-ghost">Reject</span></div>
-          </div>
-        </div>
-        <div class="s5-notes">
-          <div class="s5-note"><span class="k">1</span><span>The agent brings <b>every call</b> — advance, reject, send-assessment — with its <b>confidence and full reasoning</b>.</span></div>
-          <div class="s5-note"><span class="k">2</span><span>You <b>send it, reject, skip — or send it back to teach</b> the agent. It never acts alone.</span></div>
-        </div>
+    <div class="surf">
+      <div class="surf-frame">
+        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/jobs · agent on duty</span><span class="surf-badge">Live surface</span></div>
+        <iframe src="/jobs?demo=1&amp;showcase=1" title="Taali — Jobs board" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
       </div>
-
-      <!-- B · Bespoke search → top 10 -->
-      <div class="s5-col">
-        <div class="s5-head">
-          <span class="s5-badge b">B</span>
-          <div class="s5-htext">
-            <div class="t">Bespoke <em>candidate search</em></div>
-            <div class="d">Find people for any requirement, in plain English.</div>
-          </div>
-        </div>
-        <div class="pcard">
-          <div class="pcard-bar"><span class="glyph">t</span><span class="ttl">Candidate search</span><span class="r">13 in pool</span></div>
-          <div class="sr2">
-            <div class="sr2-q"><span class="qi"></span>"Senior data engineer — payments, AWS, 80+ on the assessment"</div>
-            <div class="sr2-meta">Top 10 · ranked by Taali fit · grounded vs CV + notes</div>
-            <div class="sr2-row top"><span class="sr2-rank">1</span><span class="sr2-av">PR</span><div class="sr2-mid"><div class="sr2-name">Priya Raman</div><div class="sr2-sub">Senior Data Engineer · London</div></div><span class="sr2-sc">86</span></div>
-            <div class="sr2-ev"><span class="m">MET</span>Payments / ledger — <i>"owned reconciliation for a card processor, 4M+ daily txns"</i></div>
-            <div class="sr2-row"><span class="sr2-rank">2</span><span class="sr2-av">DO</span><div class="sr2-mid"><div class="sr2-name">Daniel Okafor</div><div class="sr2-sub">Data Engineer · Lagos</div></div><span class="sr2-sc">82</span></div>
-            <div class="sr2-row"><span class="sr2-rank">3</span><span class="sr2-av">SM</span><div class="sr2-mid"><div class="sr2-name">Sofia Marchetti</div><div class="sr2-sub">Data Platform Engineer · Milan</div></div><span class="sr2-sc">80</span></div>
-          </div>
-        </div>
-        <div class="s5-notes">
-          <div class="s5-note"><span class="k">1</span><span>Ask for any <b>bespoke requirement</b> — skills, salary, notice, domain, even "Taali score ≥ 60".</span></div>
-          <div class="s5-note"><span class="k">2</span><span>Get a <b>ranked top 10</b>, each criterion <b>met / partial</b> and grounded in quoted CV + notes.</span></div>
-          <div class="s5-note graph"><span class="k">↳</span><span>Maps the relationship graph of who worked where, too.</span></div>
-        </div>
+      <div class="surf-out">
+        <span>The <b>live agent bar</b> shows what each role's agent advanced, escalated, or pre-screen rejected in the last hour.</span>
+        <span>Every role carries its own <b>budget, autonomy dial &amp; decisions feed</b> — full autonomy on one, review-everything on the next.</span>
+        <span>Click into a role to see the <b>pipeline</b> the way your team will every morning.</span>
       </div>
     </div>
-
     <div class="slide-foot">
-      <span>05 / 09 · The recruiter's seat · human-in-the-loop</span>
+      <span>05 / 12 · Agentic triage · the agent on duty</span>
+      <span class="brand">taali<span class="p">.</span></span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       06 · AI ASSESSMENT — live product surface (iframe: /assessment/live)
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="surf-assess" data-screen-label="06 AI assessment">
+    <div class="slide-head surf-head">
+      <div class="eyebrow"><span class="num">06</span><span class="dot">·</span><span>The product · the work sample</span></div>
+      <h2 class="surf-title">The chat-first workspace the candidate drives — <em>pairing with AI is the work.</em></h2>
+    </div>
+    <div class="surf">
+      <div class="surf-frame">
+        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/assess · candidate workspace</span><span class="surf-badge">Live surface</span></div>
+        <iframe src="/assessment/live?demo=1&amp;showcase=1" title="Taali — AI assessment" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+      </div>
+      <div class="surf-out">
+        <span><b>Claude at the centre</b>, a real editor + sandboxed runtime alongside — we measure how they pair with AI, not whether they memorised syntax.</span>
+        <span>Every <b>prompt, paste &amp; edit captured</b> for replay — the transcript is the record.</span>
+        <span><b>No proctoring overlay</b> — no lockdown browser, no webcam. The work speaks for itself.</span>
+      </div>
+    </div>
+    <div class="slide-foot">
+      <span>06 / 12 · AI assessment · candidate workspace</span>
+      <span class="brand">taali<span class="p">.</span></span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       07 · STANDING REPORT — live product surface (iframe: /c/demo client view)
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="surf-report" data-screen-label="07 Standing report">
+    <div class="slide-head surf-head">
+      <div class="eyebrow"><span class="num">07</span><span class="dot">·</span><span>The product · what you send the client</span></div>
+      <h2 class="surf-title">The standing report your client opens — <em>every score links to the evidence.</em></h2>
+    </div>
+    <div class="surf">
+      <div class="surf-frame">
+        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/c/demo · candidate standing report</span><span class="surf-badge">Live surface</span></div>
+        <iframe src="/c/demo?view=client&amp;k=demo-token&amp;showcase=1" title="Taali — candidate standing report" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+      </div>
+      <div class="surf-out">
+        <span><b>Six evidence-linked axes</b>: systems design, code craft, reasoning under pressure, AI collaboration, release safety, communication.</span>
+        <span>Every score <b>links back</b> to the moment in the session it came from — defensible, not a black box.</span>
+        <span>A <b>shareable, expiring link</b> — no PDFs, no leaks. This is what you hand the client instead of a CV.</span>
+      </div>
+    </div>
+    <div class="slide-foot">
+      <span>07 / 12 · Standing report · the client view</span>
+      <span class="brand">taali<span class="p">.</span></span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       08 · CHAT & AGENTS — live product surface (iframe: /showcase/chat)
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="surf-chat" data-screen-label="08 Chat &amp; agents">
+    <div class="slide-head surf-head">
+      <div class="eyebrow"><span class="num">08</span><span class="dot">·</span><span>The product · find anyone, in plain English</span></div>
+      <h2 class="surf-title">Ask your whole pipeline anything — <em>or set a role's agent loose on it.</em></h2>
+    </div>
+    <div class="surf">
+      <div class="surf-frame">
+        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/chat · ask + per-role agents</span><span class="surf-badge">Live surface</span></div>
+        <iframe src="/showcase/chat" title="Taali — chat and agents" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+      </div>
+      <div class="surf-out">
+        <span>"Top 3 who've <b>owned a GenAI launch</b>, run Postgres in prod, and led a backend team" → a grounded shortlist, every verdict backed by a <b>verbatim CV quote</b>.</span>
+        <span><b>Ask mode</b> searches your whole pipeline; tool calls are visible — see what was queried, compare side-by-side, pull shortlists.</span>
+        <span><b>Agent mode</b> is per-role: it finds, reasons over the evidence, and acts — invite to assessment, adjust the cut-off — within budget.</span>
+      </div>
+    </div>
+    <div class="slide-foot">
+      <span>08 / 12 · Chat &amp; agents · find anyone</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
@@ -801,9 +807,9 @@
   <!-- ═══════════════════════════════════════════════════════════════════════
        06 · RUNS YOUR WHOLE DESK (pipeline — all live)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="pipeline" data-screen-label="06 End to end">
+  <section data-slide="pipeline" data-screen-label="09 End to end">
     <div class="slide-head">
-      <div class="eyebrow"><span class="num">06</span><span class="dot">·</span><span>End to end</span></div>
+      <div class="eyebrow"><span class="num">09</span><span class="dot">·</span><span>End to end</span></div>
       <h2 class="slide-title" style="font-size:56px;">Taali runs every stage of the desk. <em>Live in production today.</em></h2>
     </div>
 
@@ -917,7 +923,7 @@
     </div>
 
     <div class="slide-foot">
-      <span>06 / 09 · End to end · agent-led</span>
+      <span>09 / 12 · End to end · agent-led</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
@@ -925,9 +931,9 @@
   <!-- ═══════════════════════════════════════════════════════════════════════
        07 · WHY TAALI (wedge — true today)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="wedge" data-screen-label="07 Why Taali">
+  <section data-slide="wedge" data-screen-label="10 Why Taali">
     <div class="slide-head">
-      <div class="eyebrow"><span class="num">07</span><span class="dot">·</span><span>Why Taali</span></div>
+      <div class="eyebrow"><span class="num">10</span><span class="dot">·</span><span>Why Taali</span></div>
       <h2 class="slide-title">Built around the agent and the work sample — <em>not bolted onto a CV.</em></h2>
     </div>
 
@@ -1000,7 +1006,7 @@
     </div>
 
     <div class="slide-foot">
-      <span>07 / 09 · Why Taali</span>
+      <span>10 / 12 · Why Taali</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
@@ -1008,11 +1014,11 @@
   <!-- ═══════════════════════════════════════════════════════════════════════
        08 · PROOF (DeepLight — real numbers + correct positioning)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="proof" data-screen-label="08 Proof">
+  <section data-slide="proof" data-screen-label="11 Proof">
     <div class="tally-grid tg-tr"></div>
 
     <div class="slide-head">
-      <div class="eyebrow"><span class="num">08</span><span class="dot">·</span><span>Proof</span></div>
+      <div class="eyebrow"><span class="num">11</span><span class="dot">·</span><span>Proof</span></div>
       <h2 class="slide-title">Not a demo — it runs a <em>real hiring operation</em> every day.</h2>
     </div>
 
@@ -1053,7 +1059,7 @@
     </div>
 
     <div class="slide-foot">
-      <span>08 / 09 · Proof</span>
+      <span>11 / 12 · Proof</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
@@ -1061,11 +1067,11 @@
   <!-- ═══════════════════════════════════════════════════════════════════════
        09 · THE OFFERING (two ways it pays + credits + free pilot)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="offering" data-screen-label="09 The offering">
+  <section data-slide="offering" data-screen-label="12 The offering">
     <div class="tally-grid tg-br"></div>
 
     <div class="slide-head">
-      <div class="eyebrow"><span class="num">09</span><span class="dot">·</span><span>The offering</span></div>
+      <div class="eyebrow"><span class="num">12</span><span class="dot">·</span><span>The offering</span></div>
       <h2 class="slide-title" style="font-size:60px;">One platform. <em>Two ways it pays.</em></h2>
     </div>
 
@@ -1107,7 +1113,7 @@
     </div>
 
     <div class="slide-foot">
-      <span>09 / 09 · The offering · thank you</span>
+      <span>12 / 12 · The offering · thank you</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
