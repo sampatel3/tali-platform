@@ -8,6 +8,19 @@ export const trimOrUndefined = (value) => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
+// Generic text / collection normalizers shared by the candidate standing
+// report's CV sibling components (CvDocumentViewer, CvMatchReview,
+// PrepQuestionCard). Extracted from CandidateStandingReportPage so those
+// components can reuse them without importing back through the page module.
+export const asCleanText = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+
+export const asArray = (value) => (Array.isArray(value) ? value.filter(Boolean) : []);
+
+export const splitInlineList = (value) => String(value || '')
+  .split(/[,;|•\n]/)
+  .map((item) => asCleanText(item).replace(/^[-*]\s*/, ''))
+  .filter((item) => item && item.length <= 80);
+
 export const normalizeStatusKey = (value) => String(value || '')
   .trim()
   .toLowerCase()

@@ -26,11 +26,14 @@ const PAGE_FILE_PATTERN = /Page(Content)?\.(js|jsx|ts|tsx)$/;
 // instead of a split left main CI red. JobPipelinePage has now been split
 // (the job-spec parser/formatter → jobSpecFormatting.jsx and the Agent
 // settings tab → RoleAgentSettingsTab.jsx), dropping it to ~1.7k, so the
-// cap is restored to 2660 to keep the gate meaningful. Re-bumped 2660→2680
+// cap is restored to 2660 to keep the gate meaningful. Bumped 2660→2680
 // after #734 (integrity-aware scoring) + #737 grew CandidateStandingReportPage
-// to ~2679 inline, reddening main for every PR — same bump-now-split-later as
-// #538/#541 above; splitting that page back under the cap is tracked separately.
-const MAX_PAGE_LINES = 2680;
+// to ~2679 inline, reddening main for every PR — the same bump-now-split-later
+// as #538/#541 above. CandidateStandingReportPage has now been split as well
+// (the CV document viewer → CvDocumentViewer.jsx, the CV-match + integrity
+// readout → CvMatchReview.jsx, and the interview-prep card →
+// PrepQuestionCard.jsx), dropping it to ~1.9k, so the cap is restored to 2660.
+const MAX_PAGE_LINES = 2660;
 const DISALLOWED_IMPORT_PATTERNS = [
   /from\s+['"][^'"]*lib\/api(?:\.js)?['"]/g,
   /import\s*\(\s*['"][^'"]*lib\/api(?:\.js)?['"]\s*\)/g,
