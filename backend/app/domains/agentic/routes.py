@@ -314,13 +314,19 @@ def _decision_to_payload(
         )
 
     score_provenance = None
+    integrity = None
     if application is not None:
         try:
-            from ..assessments_runtime.role_support import _score_provenance
+            from ..assessments_runtime.role_support import (
+                _integrity_summary,
+                _score_provenance,
+            )
 
             score_provenance = _score_provenance(application)
+            integrity = _integrity_summary(application)
         except Exception:  # pragma: no cover — never fail the feed on provenance
             score_provenance = None
+            integrity = None
 
     return AgentDecisionPayload(
         id=int(decision.id),
@@ -344,7 +350,11 @@ def _decision_to_payload(
         candidate_email=getattr(candidate, "email", None) if candidate else None,
         role_name=getattr(role, "name", None) if role else None,
         taali_score=taali_score,
-        score_summary={"score_provenance": score_provenance} if score_provenance else None,
+        score_summary=(
+            {"score_provenance": score_provenance, "integrity": integrity}
+            if (score_provenance or integrity)
+            else None
+        ),
         workable_job_id=getattr(role, "workable_job_id", None) if role else None,
         is_stale=is_stale,
         staleness_reasons=staleness_reasons or [],

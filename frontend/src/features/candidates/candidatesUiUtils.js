@@ -8,6 +8,19 @@ export const trimOrUndefined = (value) => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
+// Generic text / collection normalizers shared by the candidate standing
+// report's CV sibling components (CvDocumentViewer, CvMatchReview,
+// PrepQuestionCard). Extracted from CandidateStandingReportPage so those
+// components can reuse them without importing back through the page module.
+export const asCleanText = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+
+export const asArray = (value) => (Array.isArray(value) ? value.filter(Boolean) : []);
+
+export const splitInlineList = (value) => String(value || '')
+  .split(/[,;|•\n]/)
+  .map((item) => asCleanText(item).replace(/^[-*]\s*/, ''))
+  .filter((item) => item && item.length <= 80);
+
 export const normalizeStatusKey = (value) => String(value || '')
   .trim()
   .toLowerCase()
@@ -199,6 +212,22 @@ export const renderPrimaryScoreCell = (application) => {
 // correctly during cutover. Pure functions; tested in candidatesUiUtils.test.js.
 // ---------------------------------------------------------------------------
 
+// The newer cv_match schema renamed `requirement`→`criterion_text` and
+// `requirement_id`→`criterion_id` (and moved evidence into `cv_quote` /
+// `screening_recommendation` / `interview_probe`). Backfill the legacy field
+// names so every downstream reader works for both schemas — without this an
+// undefined `requirement` flows into `item.requirement.toLowerCase()` and the
+// ErrorBoundary blanks the whole report (candidate 55112 / assessment 140).
+export const normalizeRequirementRow = (item) => {
+  if (!item || typeof item !== 'object') return item;
+  return {
+    ...item,
+    requirement: item.requirement || item.criterion_text || '',
+    requirement_id: item.requirement_id ?? item.criterion_id ?? '',
+    impact: item.impact || item.screening_recommendation || item.interview_probe || '',
+  };
+};
+
 export const resolveCvMatchDetails = ({
   application,
   completedAssessment,
@@ -212,7 +241,14 @@ export const resolveCvMatchDetails = ({
     || fallback
     || empty
   );
-  return candidate && typeof candidate === 'object' ? candidate : empty;
+  const resolved = candidate && typeof candidate === 'object' ? candidate : empty;
+  if (Array.isArray(resolved.requirements_assessment)) {
+    return {
+      ...resolved,
+      requirements_assessment: resolved.requirements_assessment.map(normalizeRequirementRow),
+    };
+  }
+  return resolved;
 };
 
 export const extractRequirementEvidence = (item) => {

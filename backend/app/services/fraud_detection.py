@@ -890,13 +890,26 @@ def detect_experience_inflation(
     starts: list[int] = []
     ends: list[int] = []
     for e in timeline or []:
+        # Accept BOTH shapes: the LLM snapshot timeline (``start_year`` /
+        # ``end_year`` ints) and raw parsed ``cv_sections.experience`` (``start`` /
+        # ``end`` date strings). The caller must feed the FULL CV history here, not
+        # the 5-capped snapshot timeline — dropping a candidate's oldest roles is
+        # exactly what manufactured a fake "claims 15, evidenced 9" gap for anyone
+        # with more than five employers.
         s = _attr(e, "start_year")
+        if not isinstance(s, int):
+            s = _first_year(_attr(e, "start"), _attr(e, "start_date"))
+        if not isinstance(s, int):
+            continue
         en = _attr(e, "end_year")
-        if _attr(e, "is_current") and not isinstance(en, int):
+        if not isinstance(en, int):
+            en = _first_year(_attr(e, "end"), _attr(e, "end_date"))
+        # Ongoing / unparseable end → the current year. Generous by design:
+        # widening the span only ever REDUCES false "inflation" flags.
+        if _attr(e, "is_current") or not isinstance(en, int):
             en = current
-        if isinstance(s, int):
-            starts.append(s)
-            ends.append(en if isinstance(en, int) and en >= s else s)
+        starts.append(s)
+        ends.append(en if en >= s else s)
     if not starts:
         return ExperienceInflationResult(False, years_claimed, 0.0, 0.0)
     span = float(max(ends) - min(starts))
@@ -998,9 +1011,12 @@ def aggregate_triangulation(integrity_signals: dict[str, Any] | None) -> dict[st
         soft.append("ungrounded_must_haves")
     if _get("jd_shingle").get("triggered"):
         soft.append("jd_mirroring")
-    wd = _get("workable_history_diff")
-    if wd.get("triggered") or (wd.get("issues")):
-        soft.append("workable_history_diff")
+    # NOTE: the CV↔Workable history diff is deliberately NOT counted here. In
+    # production it fired on ~54% of candidates (mostly "role on the CV but not in
+    # the Workable form", which is benign, plus noisy date matches), so it drowned
+    # the real signals and trained recruiters to ignore the panel. It stays
+    # computed (for a future, stricter name/date matcher) but neither warns nor
+    # moves the trust band until it earns its place back.
     if int(_get("unverified_employers").get("count") or 0) > 0:
         soft.append("unverified_employers")
     if _get("experience_inflation").get("triggered"):
@@ -1075,8 +1091,9 @@ def build_integrity_warnings(integrity_signals: dict[str, Any] | None) -> list[s
     if gr.get("ungrounded_match"):
         names = [n for n in (gr.get("ungrounded_requirements") or []) if n]
         n = len(names) or max(0, int(gr.get("met_must_haves") or 0) - int(gr.get("grounded_must_haves") or 0))
-        tail = f": {', '.join(names)}" if names else ""
-        out.append(f"Strong match but {n} must-have{'' if n == 1 else 's'} not evidenced in the CV{tail} — confirm these are real, not spec-tailoring.")
+        # Keep it short — the specific requirements already appear in the
+        # requirements list, so here we flag only the count + the meaning.
+        out.append(f"{n} must-have{'' if n == 1 else 's'} scored as met but with no supporting evidence in the CV — confirm they're genuine, not keyword-matching.")
 
     sh = _g("jd_shingle")
     if sh.get("triggered"):
@@ -1088,10 +1105,10 @@ def build_integrity_warnings(integrity_signals: dict[str, Any] | None) -> list[s
         tail = f": {names}" if names else ""
         out.append(f"{ue['count']} employer name{'' if int(ue['count']) == 1 else 's'} not found verbatim in the CV text{tail}.")
 
-    for issue in (_g("workable_history_diff").get("issues") or [])[:6]:
-        detail = issue.get("detail") if isinstance(issue, dict) else ""
-        if detail:
-            out.append(f"Workable mismatch — {detail}")
+    # The CV↔Workable history diff is intentionally not surfaced as a warning —
+    # see aggregate_triangulation for why (too noisy: ~54% fire rate, mostly
+    # benign "on the CV but not in the Workable form"). Revive only behind a
+    # stricter matcher.
 
     ei = _g("experience_inflation")
     if ei.get("triggered"):
@@ -1113,5 +1130,36 @@ def build_integrity_warnings(integrity_signals: dict[str, Any] | None) -> list[s
     ghc = _g("github")
     if ghc.get("status") == "not_found":
         out.append(f"The GitHub link on the CV doesn't resolve (github.com/{ghc.get('username')}) — confirm it's correct.")
+
+    return [str(s).strip() for s in out if str(s).strip()]
+
+
+def build_corroboration_notes(integrity_signals: dict[str, Any] | None) -> list[str]:
+    """Canonical POSITIVE cross-source corroborations — the counterpart to
+    ``build_integrity_warnings``. These are the checks we ran AND confirmed
+    against an independent source (the candidate's public GitHub, the collective
+    graph), so the recruiter sees what we verified, not only what we doubt. Same
+    "one place the wording lives" rule; the FE never re-derives them.
+    """
+    sig = integrity_signals if isinstance(integrity_signals, dict) else {}
+
+    def _g(k: str) -> dict[str, Any]:
+        v = sig.get(k)
+        return v if isinstance(v, dict) else {}
+
+    out: list[str] = []
+    gh = _g("github")
+    if gh.get("status") == "corroborated":
+        user = gh.get("username")
+        where = f" (github.com/{user})" if user else ""
+        skills = [str(s) for s in (gh.get("matched_skills") or []) if s]
+        if skills:
+            out.append(f"GitHub profile{where} backs up the CV — public repositories use {', '.join(skills[:4])}.")
+        else:
+            out.append(f"GitHub profile{where} matches the candidate named on the CV.")
+
+    gc = _g("graph_corroboration")
+    if gc.get("status") == "corroborated":
+        out.append("Claimed tech stack lines up with what other candidates from the same employers show.")
 
     return [str(s).strip() for s in out if str(s).strip()]

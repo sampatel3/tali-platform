@@ -13,13 +13,15 @@
 // metrics.js, JobPipelinePage.jsx and AgentsOverviewPanel.jsx. New surfaces
 // import from here; the existing ones can be repointed in a follow-up.
 
+// Values match the outcome wording shipped in CandidateDecisionStrip (#739) so
+// the verdict band and the strip never disagree.
 export const DECISION_LABELS_LONG = {
   send_assessment: 'Send assessment',
-  resend_assessment_invite: 'Resend assessment',
-  advance_to_interview: 'Advance to interview',
-  advance: 'Advance to interview',
+  resend_assessment_invite: 'Resend assessment invite',
+  advance_to_interview: 'Advance to next stage',
+  advance: 'Advance to next stage',
   reject: 'Reject',
-  skip_assessment_reject: 'Pre-screen reject',
+  skip_assessment_reject: 'Reject',
   escalate_low_confidence: 'Needs your review',
 };
 

@@ -160,6 +160,62 @@ def test_triangulation_records_corroborations():
     assert "github" in out["corroborations"]
 
 
+# ── De-noise: the experience-span fix + dropping the over-eager Workable diff ──
+def test_experience_inflation_uses_full_cv_history_not_capped_timeline():
+    # Real cv_sections.experience shape (date STRINGS, oldest roles grouped into
+    # one block back to 2010). A 15-year claim is corroborated by the ~16-year
+    # span, so it must NOT flag — the bug was computing the span from the 5-capped
+    # snapshot timeline, which dropped the old roles and faked a gap.
+    cv_exp = [
+        {"company": "Emirates", "start": "May 2022", "end": "Present"},
+        {"company": "GameIN", "start": "Jul 2021", "end": "May 2022"},
+        {"company": "RAKBANK", "start": "Nov 2020", "end": "Jun 2021"},
+        {"company": "IBM", "start": "Nov 2019", "end": "Oct 2020"},
+        {"company": "Algorythma", "start": "Jun 2017", "end": "Oct 2019"},
+        {"company": "Lamsa, Gametion, Big Leap Studios", "start": "2010", "end": "2017"},
+    ]
+    res = detect_experience_inflation(15.0, cv_exp, now_year=2026)
+    assert res.triggered is False
+    assert res.years_evidenced == 16.0
+
+
+def test_experience_inflation_still_flags_real_gap_with_string_dates():
+    # Same string shape, but the claim really is impossible vs the evidence.
+    cv_exp = [{"company": "A", "start": "2018", "end": "2022"}]
+    res = detect_experience_inflation(20.0, cv_exp, now_year=2026)
+    assert res.triggered is True
+
+
+def test_workable_history_diff_is_not_surfaced_or_scored():
+    from app.services.fraud_detection import build_integrity_warnings
+
+    sig = {
+        "workable_history_diff": {
+            "triggered": True,
+            "issues": [{"kind": "date_shift", "detail": "Acme: CV start 2018 vs Workable 2021"}],
+        },
+    }
+    # No recruiter warning, and it does not move the trust verdict.
+    assert build_integrity_warnings(sig) == []
+    tri = aggregate_triangulation(sig)
+    assert "workable_history_diff" not in tri["soft_disagreements"]
+    assert tri["verdict"] == "ok"
+
+
+def test_build_corroboration_notes_surfaces_positives_only():
+    from app.services.fraud_detection import build_corroboration_notes
+
+    assert build_corroboration_notes({}) == []
+    gh = build_corroboration_notes(
+        {"github": {"status": "corroborated", "username": "octocat", "matched_skills": ["python", "go"]}}
+    )
+    assert len(gh) == 1 and "github.com/octocat" in gh[0] and "python" in gh[0]
+    graph = build_corroboration_notes({"graph_corroboration": {"status": "corroborated"}})
+    assert len(graph) == 1
+    # A failed / anomalous check is a warning, never a corroboration.
+    assert build_corroboration_notes({"github": {"status": "not_found"}}) == []
+
+
 # ── Wave 4: PyPDF2 render-state scan (graceful) ─────────────────────────────
 def test_render_state_scan_graceful_on_junk():
     from app.services.document_hygiene import scan_pdf_render_state
