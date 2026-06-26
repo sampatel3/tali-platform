@@ -4,6 +4,8 @@
 
 **Status:** Design doc · decisions locked · **Date:** 2026-06-26 · **Owner:** Sam
 
+> **Note (scope):** this doc covers the **CV / match** engine. The separate **assessment** report shows one canonical scorecard — the **5 dimensions (the 4 Ds + Deliverable)**: Delegation, Description, Discernment, Diligence, Deliverable. See **[`SCORING_SCORECARD.md`](./SCORING_SCORECARD.md)**. (The "dimensions" the holistic CV scorer emits here are per-requirement CV grades, a different thing.)
+
 ---
 
 ## 1. The frame — one engine, 4 inputs → 3 outputs

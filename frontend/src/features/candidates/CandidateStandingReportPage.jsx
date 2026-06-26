@@ -6,6 +6,7 @@ import * as apiClient from '../../shared/api';
 import { viewShareLink } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import {
+  Badge,
   Button,
   Input,
   Panel,
@@ -18,9 +19,7 @@ import { OverrideModal } from '../home/OverrideModal';
 import { TeachModal } from '../home/TeachModal';
 import { DECISION_ACTIONS } from '../../shared/decisions/decisionActions';
 import { buildClientReportFilenameStem } from './clientReportUtils';
-import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
-import { readFluency4d } from '../../shared/assessment/fluency4d';
-import { RadarChart } from '../../shared/ui/RadarChart';
+import { computeScorecard } from '../../shared/assessment/fluency4d';
 import { ErrorBoundary } from '../../shared/ui/ErrorBoundary';
 import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAssessmentToCandidateView } from './assessmentViewModels';
 // ApplicationDecisionPanel intentionally NOT imported — PR3 retired the decision
@@ -49,6 +48,45 @@ const resolveAssessmentId = (application) => (
   || application?.valid_assessment_id
   || null
 );
+
+// The ACTUAL graded rubric dimensions — the EVIDENCE that hangs under the
+// 5-axis scorecard. Each is the authoritative per-criterion grade the backend
+// wrote to score_breakdown.rubric_grading.dimensions:
+//   { id, score (0–10), rating ('excellent'|'good'|'poor'), reasoning, … }.
+// Display-only; tolerant of a JSON-string score_breakdown.
+const readGradedRubricDimensions = (assessment) => {
+  let sb = assessment?.score_breakdown;
+  if (typeof sb === 'string') {
+    try {
+      sb = JSON.parse(sb);
+    } catch {
+      return [];
+    }
+  }
+  const dims = sb?.rubric_grading?.dimensions;
+  if (!Array.isArray(dims)) return [];
+  return dims
+    .map((d) => ({
+      id: String(d?.id || '').trim(),
+      // Stored 0–10; the scorecard bars are 0–100, so present ×10 here too.
+      score: Number.isFinite(Number(d?.score)) ? Number(d.score) : null,
+      rating: String(d?.rating || '').trim().toLowerCase(),
+      reasoning: String(d?.reasoning || '').trim(),
+    }))
+    .filter((d) => d.id);
+};
+
+// Turn a rubric dimension id ("design_decisions", "release_safety") into a
+// readable label without a hardcoded vocabulary — these ids are task-defined.
+const humanizeDimensionId = (id) => String(id || '')
+  .replace(/_/g, ' ')
+  .replace(/\b\w/g, (c) => c.toUpperCase());
+
+const RUBRIC_RATING_CLASS = {
+  excellent: 'success',
+  good: 'info',
+  poor: 'danger',
+};
 
 const resolveAssessmentStatus = (application) => (
   String(application?.score_summary?.assessment_status || application?.valid_assessment_status || '').toLowerCase()
@@ -1044,38 +1082,21 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         {/* HANDOFF v2 §5.1 / canvas cand-overview — Overview tab is:
             (1) hero band: ScoreRing | RECOMMENDATION + body | SIGNAL list,
             (2) two-up: STRONGEST SIGNAL · WORTH PROBING,
-            (3) DIMENSION SCORES — six rolled-up bars (0–100),
+            (3) SCORECARD — the 5 canonical axes (4 Ds + Deliverable), 0–100,
             (4) four evidence cards: AI USAGE · CODE & GIT · TIMELINE · DOCUMENTS.
             All scores render as integer "nn / 100" per HANDOFF v2 §6. */}
         {(() => {
-          const fluencyAxes = computeFluencyAxes(completedAssessment);
-          // Anthropic AI-Fluency 4 Ds rollup (additive; null until a task's
-          // rubric adopts the new lenses — see fluency4d.js / summarize_fluency_4d).
-          const fluency4d = readFluency4d(completedAssessment);
+          // THE canonical scorecard: the 5 axes (4 Ds + Deliverable), sourced
+          // rubric-first with a heuristic-column fallback. This is the only
+          // top-level scorecard on the page — the per-rubric dimensions and the
+          // ~30 heuristic metrics hang under it as evidence (see below).
+          const scorecard = computeScorecard(completedAssessment);
           const taaliScore = reportModel?.summaryModel?.taaliScore;
           const roleFitScoreVal = reportModel?.summaryModel?.roleFitScore;
           const assessmentScore = reportModel?.summaryModel?.assessmentScore;
           const recommendationLabel = reportModel?.recommendation?.label || 'Continue review';
           const reqMet = matchedRequirements.length;
           const reqTotal = matchedRequirements.length + missingRequirements.length;
-
-          // 6-dimension labels (long form, matches canvas DIMENSION SCORES)
-          const DIM_LONG_LABELS = {
-            sysdesign: 'Systems design',
-            codecraft: 'Code craft',
-            reasoning: 'Reasoning under pressure',
-            aicollab: 'AI collaboration',
-            release: 'Release safety',
-            communication: 'Communication',
-          };
-          const dimensions = fluencyAxes
-            ? fluencyAxes.map((axis) => ({
-                key: axis.k,
-                label: DIM_LONG_LABELS[axis.k] || axis.label,
-                value: Math.round(Number(axis.v || 0)),
-                hasSignal: axis.hasSignal,
-              }))
-            : [];
 
           return (
             <>
@@ -1118,45 +1139,17 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 onJumpToPrep={() => activateTab('prep')}
               />
 
-              {/* (3) Dimension scores — six bars */}
-              {dimensions.length ? (
+              {/* (3) Scorecard — the ONE canonical scorecard: the 5 axes
+                  (Anthropic's 4 Ds + Deliverable). Rubric-first with a
+                  heuristic-column fallback (see computeScorecard). Each axis is
+                  label + 0–100 bar + blurb tooltip; "—" when there's no signal.
+                  The per-rubric dimensions + ~30 heuristic metrics hang under
+                  this as evidence on the Assessment tab — not a rival scorecard. */}
+              {scorecard ? (
                 <div className="mc-overview-dimensions">
-                  <div className="mc-kicker">DIMENSION SCORES</div>
+                  <div className="mc-kicker">SCORECARD · THE 4 Ds + DELIVERABLE</div>
                   <div className="mc-overview-dimensions-grid">
-                    {dimensions.map((dim) => (
-                      <div key={dim.key} className="mc-overview-dim-row">
-                        <span className="mc-overview-dim-label">{dim.label}</span>
-                        <div className="mc-overview-dim-bar" aria-hidden="true">
-                          <i style={{ width: `${Math.max(0, Math.min(100, dim.value))}%` }} />
-                        </div>
-                        <span className="mc-overview-dim-score">
-                          {dim.hasSignal ? dim.value : '—'}
-                          {dim.hasSignal ? <span className="mc-overview-dim-suffix">/100</span> : null}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <div className="mc-overview-dimensions mc-overview-dimensions-empty">
-                  <div className="mc-kicker">DIMENSION SCORES</div>
-                  <p className="mc-overview-dim-empty">
-                    Six-dimension breakdown (Systems design, Code craft, Reasoning under pressure, AI
-                    collaboration, Release safety, Communication) appears once the candidate completes
-                    the assessment.
-                  </p>
-                </div>
-              )}
-
-              {/* (3b) AI Fluency — Anthropic's 4 Ds (+ Deliverable). Additive
-                  view derived from the rubric grades; renders only when the
-                  assessment carries the fluency_4d rollup. Axes with no signal
-                  yet (task hasn't adopted the lens) show "—". */}
-              {fluency4d ? (
-                <div className="mc-overview-dimensions">
-                  <div className="mc-kicker">AI FLUENCY · ANTHROPIC 4 Ds</div>
-                  <div className="mc-overview-dimensions-grid">
-                    {fluency4d.map((axis) => (
+                    {scorecard.map((axis) => (
                       <div key={axis.key} className="mc-overview-dim-row" title={axis.blurb}>
                         <span className="mc-overview-dim-label">{axis.label}</span>
                         <div className="mc-overview-dim-bar" aria-hidden="true">
@@ -1170,7 +1163,15 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     ))}
                   </div>
                 </div>
-              ) : null}
+              ) : (
+                <div className="mc-overview-dimensions mc-overview-dimensions-empty">
+                  <div className="mc-kicker">SCORECARD · THE 4 Ds + DELIVERABLE</div>
+                  <p className="mc-overview-dim-empty">
+                    The 5-dimension scorecard (Delegation, Description, Discernment, Diligence,
+                    Deliverable) appears once the candidate completes the assessment.
+                  </p>
+                </div>
+              )}
 
               {/* (4) Evidence row — four cards */}
               <div className="mc-overview-evidence">
@@ -1258,65 +1259,87 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               </button>
             </div>
           ) : null}
-          {(reportModel?.dimensionEntries || []).length > 0 ? (() => {
-            const dimCount = (reportModel?.dimensionEntries || []).length;
+          {/* EVIDENCE under the scorecard: the ACTUAL graded rubric criteria
+              (score_breakdown.rubric_grading.dimensions) — the authoritative
+              per-criterion grades the scorecard's 5 axes roll up from. This is
+              evidence, not a rival top-level scorecard. */}
+          {(() => {
+            const gradedDimensions = readGradedRubricDimensions(completedAssessment);
             const firstName = String(application?.candidate_name || '').trim().split(/\s+/)[0];
             const score = reportModel?.summaryModel?.assessmentScore;
             return (
-              <div className="abar abar-on abar-block" data-internal-only>
-                <span className="ab-spark"><Sparkles size={15} strokeWidth={2} /></span>
-                <span className="ab-label">Agent assessed</span>
-                <span className="ab-tick">
-                  {firstName
-                    ? `Scored ${dimCount} dimensions from ${firstName}’s work sample`
-                    : `Scored ${dimCount} dimensions from the work sample`}
-                </span>
-                <span className="ab-assess">
-                  <b>{score != null ? Math.round(score) : '—'}</b><span>/100</span>
-                </span>
-              </div>
-            );
-          })() : null}
-          <div className="two-col">
-            <div className={`panel${(reportModel?.dimensionEntries || []).length > 0 ? ' agent-scored' : ''}`}>
-              <h2>Scored <em>dimensions</em></h2>
-              <p className="sub">The assessment read separates delivery from how the candidate worked with AI.</p>
-              {(reportModel?.dimensionEntries || []).map((item) => (
-                <div key={item.key} className="dim">
-                  <div className="dim-row">
-                    <span className="dim-name">{item.label}</span>
-                    <span className="dim-score">{Math.round(Number(item.value || 0) * 10)} / 100</span>
+              <>
+                {gradedDimensions.length > 0 ? (
+                  <div className="abar abar-on abar-block" data-internal-only>
+                    <span className="ab-spark"><Sparkles size={15} strokeWidth={2} /></span>
+                    <span className="ab-label">Agent assessed</span>
+                    <span className="ab-tick">
+                      {firstName
+                        ? `Graded ${gradedDimensions.length} rubric criteria from ${firstName}’s work sample`
+                        : `Graded ${gradedDimensions.length} rubric criteria from the work sample`}
+                    </span>
+                    <span className="ab-assess">
+                      <b>{score != null ? Math.round(score) : '—'}</b><span>/100</span>
+                    </span>
                   </div>
-                  <div className="bar">
-                    <i style={{ width: `${Math.max(0, Math.min(100, Number(item.value || 0) * 10))}%` }} />
+                ) : null}
+                <div className="two-col">
+                  <div className={`panel${gradedDimensions.length > 0 ? ' agent-scored' : ''}`}>
+                    <h2>Evidence · graded <em>criteria</em></h2>
+                    <p className="sub">
+                      The authoritative per-criterion grades the 5-dimension scorecard (the 4 Ds +
+                      Deliverable) rolls up from.
+                    </p>
+                    {gradedDimensions.length > 0 ? gradedDimensions.map((item) => (
+                      <div key={item.id} className="dim">
+                        <div className="dim-row">
+                          <span className="dim-name">{humanizeDimensionId(item.id)}</span>
+                          <span className="dim-score">
+                            {item.score != null ? `${Math.round(item.score * 10)} / 100` : '—'}
+                          </span>
+                        </div>
+                        <div className="bar">
+                          <i style={{ width: `${Math.max(0, Math.min(100, Number(item.score || 0) * 10))}%` }} />
+                        </div>
+                        <p className="dim-note">
+                          {item.rating ? (
+                            <Badge variant={RUBRIC_RATING_CLASS[item.rating] || 'muted'} className="mr-2 font-mono text-[0.625rem] uppercase">
+                              {item.rating}
+                            </Badge>
+                          ) : null}
+                          {item.reasoning || 'Graded from the completed work sample and AI-collaboration trace.'}
+                        </p>
+                      </div>
+                    )) : (
+                      <p className="dim-note">
+                        Per-criterion rubric grades appear here once a rubric-scored assessment is completed.
+                      </p>
+                    )}
                   </div>
-                  <p className="dim-note">
-                    {item.description || `Signal from the completed work sample and AI-collaboration trace.`}
-                  </p>
-                </div>
-              ))}
-            </div>
-            <div className="panel">
-              <h2>Live <em>evidence</em></h2>
-              <p className="sub">Panel-safe highlights tied to the work sample, not generic screening copy.</p>
-              <div className="evi">
-                {[
-                  reportModel?.evidenceSections?.assessment,
-                  reportModel?.evidenceSections?.roleFit,
-                  reportModel?.evidenceSections?.integrity,
-                ].filter(Boolean).map((item, index) => (
-                  <div key={`${item.title || 'evidence'}-${index}`} className="ev">
-                    <div className="ico">{index + 1}</div>
-                    <div>
-                      <h4>{item.title || 'Evidence'}</h4>
-                      <p>{item.description || 'Evidence is attached to the candidate report.'}</p>
-                      <div className="tag">{item.label || 'Taali signal'}</div>
+                  <div className="panel">
+                    <h2>Live <em>evidence</em></h2>
+                    <p className="sub">Panel-safe highlights tied to the work sample, not generic screening copy.</p>
+                    <div className="evi">
+                      {[
+                        reportModel?.evidenceSections?.assessment,
+                        reportModel?.evidenceSections?.roleFit,
+                        reportModel?.evidenceSections?.integrity,
+                      ].filter(Boolean).map((item, index) => (
+                        <div key={`${item.title || 'evidence'}-${index}`} className="ev">
+                          <div className="ico">{index + 1}</div>
+                          <div>
+                            <h4>{item.title || 'Evidence'}</h4>
+                            <p>{item.description || 'Evidence is attached to the candidate report.'}</p>
+                            <div className="tag">{item.label || 'Taali signal'}</div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
-                ))}
-              </div>
-            </div>
-          </div>
+                </div>
+              </>
+            );
+          })()}
 
           {/* Full assessment evidence migrated from the legacy /assessments
               page: AI-usage analytics, code/git, and the prompt-by-prompt

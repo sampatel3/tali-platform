@@ -447,6 +447,29 @@ export const AI_SHOWCASE_COMPLETED_ASSESSMENT = {
       debugging_design: 8.5,
       written_communication: 7.8,
     },
+    // The ONE canonical scorecard — the 5 axes (Anthropic's 4 Ds + Deliverable).
+    // computeScorecard reads this rubric rollup first; the candidate standing
+    // report renders exactly these 5 bars.
+    rubric_grading: {
+      weighted_score_100: 84,
+      fully_graded: true,
+      fluency_4d: {
+        delegation: 82,
+        description: 86,
+        discernment: 88,
+        diligence: 80,
+        deliverable: 84,
+      },
+      // The graded rubric criteria — the evidence the 5 axes roll up from.
+      dimensions: [
+        { id: 'task_delivery', score: 8.4, rating: 'good', reasoning: 'Shipped the smallest safe patch set that closes the launch-blocking release-safety failures; 7/8 tests passing.' },
+        { id: 'design_decisions', score: 8.2, rating: 'good', reasoning: 'Sequenced the work by blast radius — read RISKS.md before touching code, named the medium-confidence high-risk gating as the highest-priority failure.' },
+        { id: 'prompt_quality', score: 8.6, rating: 'excellent', reasoning: 'Prompts to Claude are short, scoped, and load context deliberately rather than dumping the whole repo.' },
+        { id: 'output_judgement', score: 8.8, rating: 'excellent', reasoning: 'Caught two unsafe defaults the model proposed (silent cache fallback; default-allow on medium confidence) and rejected both with explicit reasoning.' },
+        { id: 'verification', score: 8.0, rating: 'good', reasoning: 'Wrote the regression test for the failing release-safety case before patching, and named the residual risk left out of scope.' },
+        { id: 'written_communication', score: 7.8, rating: 'good', reasoning: 'Commit messages and README patch are accurate but compressed; stakeholder hand-off language would need sharpening before leading a regulated launch solo.' },
+      ],
+    },
     score_components: {
       taali_score: 81,
       assessment_score: 84,

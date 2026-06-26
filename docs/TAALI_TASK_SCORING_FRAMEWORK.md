@@ -9,7 +9,9 @@
 
 This document is the single authoritative guide for designing TAALI assessment tasks. It is tightly coupled to the scoring engine (`scoring_core.py`, `analytics.py`, `rules.py`) so that every task design decision produces measurable hiring signal.
 
-The central premise: **a task that cannot produce differentiated scores across the 8 scoring categories is not generating signal — it is generating noise.** Every design decision in this document is traceable to a specific line in the scoring engine.
+The central premise: **a task that cannot produce differentiated scores across the heuristic scoring categories is not generating signal — it is generating noise.** Every design decision in this document is traceable to a specific line in the scoring engine.
+
+> **Canonical scorecard:** there is **one** top-level scorecard everywhere — the **5 dimensions (the 4 Ds + Deliverable)**: Delegation, Description, Discernment, Diligence, Deliverable. See **[`SCORING_SCORECARD.md`](./SCORING_SCORECARD.md)**. The 8 heuristic `category_scores` below and the per-task rubric dimensions are **evidence that rolls up under those 5 axes** — not a competing scorecard. (The weighted rubric score remains the authoritative `assessment_score`.)
 
 ---
 

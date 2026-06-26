@@ -74,7 +74,7 @@ const SHOWCASE_TABS = [
     why: {
       headline: 'The standing report your hiring manager opens.',
       outcomes: [
-        'Six evidence-linked axes: systems design, code craft, reasoning under pressure, AI collaboration, release safety, communication',
+        'Five evidence-linked axes — the 4 Ds + Deliverable: Delegation, Description, Discernment, Diligence, Deliverable',
         'Every score links back to the moment in the session it came from',
         'Shareable link, expiring, no PDFs, no leaks',
       ],

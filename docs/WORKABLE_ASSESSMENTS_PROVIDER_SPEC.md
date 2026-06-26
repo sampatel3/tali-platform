@@ -129,7 +129,7 @@ Return a short-lived candidate URL (reuse the assessment token link or a single-
 
 - `score` ← `Assessment.final_score` (or `taali_score` if exposing the role-blended number — **decision below**).
 - `summary` ← live recommendation label + evidence summary.
-- `details` ← `score_breakdown` / `cv_match_details` dimension scores.
+- `details` ← the canonical scorecard — the 5 dimensions (the 4 Ds + Deliverable; see [`SCORING_SCORECARD.md`](./SCORING_SCORECARD.md)) — plus its evidence from `score_breakdown` / `cv_match_details`.
 - `results_url` ← a `client`-mode share link (scrubbed of internal notes).
 - `attachments[0].url` ← presigned URL of the existing report PDF.
 

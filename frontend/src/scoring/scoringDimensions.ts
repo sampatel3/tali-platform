@@ -1,3 +1,14 @@
+// EVIDENCE-LAYER vocabulary — NOT a top-level scorecard.
+//
+// The one canonical scorecard is the 5 axes (the 4 Ds + Deliverable) in
+// `shared/assessment/fluency4d.js` (`computeScorecard`). These 8 canonical
+// dimensions are no longer shown as a rival scorecard; the module is retained
+// only to bucket/label the backend `category_scores` for the EVIDENCE surfaces
+// — the comparison radar (`ComparisonRadar` via `comparisonCategories.ts`),
+// the strongest/weakest-signal callouts, and the per-metric glossary
+// (`scoringGlossary.ts`). `normalizeScores` still merges legacy aliases into
+// these buckets for that evidence view. See docs/SCORING_SCORECARD.md.
+
 export type CanonicalId =
   | 'task_completion'
   | 'prompt_clarity'

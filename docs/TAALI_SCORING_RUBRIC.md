@@ -1,5 +1,7 @@
 # TAALI Scoring Rubric
 
+> **Report scorecard:** the candidate report shows **one** scorecard — the **5 dimensions (the 4 Ds + Deliverable)**: Delegation, Description, Discernment, Diligence, Deliverable (see **[`SCORING_SCORECARD.md`](./SCORING_SCORECARD.md)**). That scorecard is a *display* rollup of the rubric grades; the authoritative numbers (`TAALI`, `Role fit`, `Assessment`) defined below are unchanged.
+
 ## Purpose
 
 TAALI is the master overall candidate ranking score used to compare candidates for the same role.

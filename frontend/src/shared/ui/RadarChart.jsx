@@ -40,7 +40,7 @@ export const RadarChart = ({ values, max = 100, size = 260 }) => {
       height={size}
       viewBox={`0 0 ${size} ${size}`}
       role="img"
-      aria-label="Six-axis fluency radar"
+      aria-label="Scorecard radar"
       style={{ overflow: 'visible' }}
     >
       {[0.25, 0.5, 0.75, 1].map((s, i) => (

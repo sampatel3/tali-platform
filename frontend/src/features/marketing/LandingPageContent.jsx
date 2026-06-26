@@ -560,7 +560,7 @@ export const LandingPage = ({ onNavigate }) => {
               <p className="mt-5 text-[1rem] leading-[1.6] text-[var(--ink-2)]">
                 Every assessment opens a chat-first workspace — Claude at the centre, your repo, a real editor, and a live terminal around it — exactly the way engineers ship now.
                 Behind the scenes the runtime captures every prompt, paste, edit, file open, test run, and commit, time-stamped to the second.
-                Those traces feed a six-axis rubric — systems design, code craft, reasoning under pressure, AI collaboration, release safety, communication — so how a candidate works with AI is scored as a first-class dimension alongside craft.
+                Those traces feed one scorecard — five dimensions anchored on Anthropic&apos;s AI-Fluency framework: Delegation, Description, Discernment, Diligence, and the Deliverable itself — so how a candidate works with AI is scored as a first-class dimension alongside the result they ship.
               </p>
               <ul className="mt-7 flex flex-col gap-3.5">
                 {[
@@ -582,10 +582,11 @@ export const LandingPage = ({ onNavigate }) => {
               </ul>
             </div>
 
-            {/* Standing report — the six recruiter-facing axes the live
-                CandidateStandingReportPage renders (computeFluencyAxes rolls
-                the atomic backend scores into these six). Verdict uses the
-                production band vocabulary (Strong Hire ≥ 80). Mock scores. */}
+            {/* Standing report — the five recruiter-facing axes the live
+                CandidateStandingReportPage renders (computeScorecard rolls the
+                rubric grades — with a heuristic fallback — into these five: the
+                4 Ds + Deliverable). Verdict uses the production band vocabulary
+                (Strong Hire ≥ 80). Mock scores. */}
             <div className="overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
               <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3 font-[var(--font-mono)] text-[0.71875rem] text-[var(--mute)]">
                 <span>MAYA CHEN · CANDIDATE REPORT</span>
@@ -593,12 +594,11 @@ export const LandingPage = ({ onNavigate }) => {
               </div>
               <div className="space-y-4 px-5 py-6">
                 {[
-                  { label: 'Systems design', score: 86 },
-                  { label: 'Code craft', score: 88 },
-                  { label: 'Reasoning under pressure', score: 82 },
-                  { label: 'AI collaboration', score: 90 },
-                  { label: 'Release safety', score: 79 },
-                  { label: 'Communication', score: 84 },
+                  { label: 'Delegation', score: 86 },
+                  { label: 'Description', score: 88 },
+                  { label: 'Discernment', score: 90 },
+                  { label: 'Diligence', score: 82 },
+                  { label: 'Deliverable', score: 84 },
                 ].map(({ label, score }) => (
                   <div
                     key={label}

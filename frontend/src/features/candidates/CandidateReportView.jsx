@@ -107,6 +107,7 @@ export function CandidateReportView({
     summaryModel = {},
     roleFitModel = {},
     recommendation,
+    scorecard = [],
     dimensionEntries = [],
     recruiterSummaryText,
     strongestSignalTitle,
@@ -117,6 +118,7 @@ export function CandidateReportView({
     evidenceSections = {},
     candidateSnapshot = null,
     hasCompletedAssessment,
+    hasScorecard,
     hasDimensionSignal,
   } = model || {};
 
@@ -161,10 +163,10 @@ export function CandidateReportView({
               <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
-                    Dimension profile
+                    Criteria comparison
                   </div>
                   {hasDimensionSignal ? (
-                    <Badge variant="muted" className="font-mono text-[0.6875rem]">{dimensionEntries.length} dimensions</Badge>
+                    <Badge variant="muted" className="font-mono text-[0.6875rem]">{dimensionEntries.length} graded criteria</Badge>
                   ) : (
                     <Badge variant={hasCompletedAssessment ? 'warning' : 'muted'} className="font-mono text-[0.6875rem]">
                       {hasCompletedAssessment ? 'Signal pending' : 'Pre-assessment'}
@@ -191,34 +193,36 @@ export function CandidateReportView({
               <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
-                    Dimension scores
+                    Scorecard · the 4 Ds + Deliverable
                   </div>
                   {source ? (
                     <Badge variant={source.badgeVariant} className="font-mono text-[0.6875rem]">{source.label}</Badge>
                   ) : null}
                 </div>
-                {hasDimensionSignal ? (
+                {hasScorecard ? (
                   <div className="space-y-2 font-mono text-xs">
-                    {dimensionEntries.map((item) => (
-                      <div key={item.key} className="grid grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)_auto] items-center gap-3">
-                        <span className="min-w-0 leading-snug text-[var(--taali-muted)]">{item.label}</span>
+                    {scorecard.map((axis) => (
+                      <div key={axis.key} className="grid grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)_auto] items-center gap-3" title={axis.blurb}>
+                        <span className="min-w-0 leading-snug text-[var(--taali-muted)]">{axis.label}</span>
                         <div className="h-2 flex-1 overflow-hidden rounded-full bg-[var(--taali-border-subtle)]">
                           <div
                             className="h-full rounded-full"
                             style={{
-                              width: `${Math.min(100, Math.max(0, item.value * 10))}%`,
-                              backgroundColor: scoreBarColor(item.value),
+                              width: `${axis.hasSignal ? Math.min(100, Math.max(0, Math.round(axis.score))) : 0}%`,
+                              backgroundColor: axis.hasSignal ? scoreBarColor(axis.score / 10) : 'var(--taali-border-subtle)',
                             }}
                           />
                         </div>
-                        <span className="w-10 text-right text-[var(--taali-text)]">{Math.round(item.value * 10)}</span>
+                        <span className="w-10 text-right text-[var(--taali-text)]">
+                          {axis.hasSignal ? Math.round(axis.score) : '—'}
+                        </span>
                       </div>
                     ))}
                   </div>
                 ) : (
                   <p className="text-sm text-[var(--taali-muted)]">
                     {hasCompletedAssessment
-                      ? 'Assessment evidence is available, but dimension-level scoring has not been returned yet.'
+                      ? 'Assessment evidence is available, but the 5-dimension scorecard has not been returned yet.'
                       : 'Role fit is currently the main ranking signal until the candidate completes an assessment.'}
                   </p>
                 )}
