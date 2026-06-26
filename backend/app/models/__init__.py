@@ -6,6 +6,7 @@ from .candidate_application import CandidateApplication
 from .candidate_application_event import CandidateApplicationEvent
 from .application_interview import ApplicationInterview
 from .role import Role, role_tasks
+from .role_brief import BRIEF_SOURCES, BRIEF_STATUSES, RoleBrief
 from .org_criterion import (
     BUCKET_CONSTRAINT,
     BUCKET_MUST,
@@ -173,6 +174,9 @@ __all__ = [
     "ApplicationInterview",
     "Role",
     "role_tasks",
+    "RoleBrief",
+    "BRIEF_SOURCES",
+    "BRIEF_STATUSES",
     "RoleCriterion",
     "CRITERION_SOURCE_RECRUITER",
     "CRITERION_SOURCE_DERIVED",

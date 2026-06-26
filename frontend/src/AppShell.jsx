@@ -87,6 +87,9 @@ const CandidateStandingReportPage = lazy(() =>
 const JobsPage = lazy(() =>
   import('./features/jobs/JobsPage').then((m) => ({ default: m.JobsPage }))
 );
+const RequisitionsPage = lazy(() =>
+  import('./features/requisitions/RequisitionsPage').then((m) => ({ default: m.RequisitionsPage }))
+);
 const JobPipelinePage = lazy(() =>
   import('./features/jobs/JobPipelinePage').then((m) => ({ default: m.JobPipelinePage }))
 );
@@ -521,6 +524,18 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <JobsPage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
+      />
+
+      <Route
+        path="/requisitions"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <RequisitionsPage
               onNavigate={navigateToPage}
               NavComponent={DashboardNavWithMode}
             />
