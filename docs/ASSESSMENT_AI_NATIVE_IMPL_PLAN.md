@@ -15,10 +15,17 @@
 | PR-6 | 4 Ds rollup (`fluency_4d`), additive/derived | ✅ landed |
 | PR-7 | Surface the 4 Ds on the candidate report | ✅ landed (needs live authed-page verify) |
 | PR-8 | "Promote Description" + stale-wiring fix | ⏸️ stale-key is a harmless no-op on soon-superseded telemetry — skipped; Description-as-graded-dim folds into the gated task-enrichment step |
-| PR-9 | Planted-trap mechanic (hardest-to-game Discernment) | ⛔ not started — score-changing, do after PR-A shadow run |
-| PR-10/11/12 | Tier 2: model upgrade/choice, plan-mode + lookup, async defend | ⛔ not started — change live candidate behaviour/cost, want Sam's steer |
+| PR-9 | Planted-trap discernment grading (machinery) | ✅ landed (inert until a task declares `traps`) |
+| PR-10 | Per-task `agent_model` override | ✅ landed (default Haiku unchanged — no cost surprise) |
+| PR-11 | Plan-before-build nudge | ✅ landed. Controlled lookup tool ⛔ **deferred** (integrity: sandbox network is blocked by design — a curated lookup source needs explicit design) |
+| PR-12 | Async "explain & defend" | ⛔ **deferred** — needs the live assessment-runtime UI loop to author + verify |
 
-**The gated flips (need a PR-A shadow run on prod data + Sam's go, NOT done autonomously):** (1) turn `ASSESSMENT_GRADER_PROCESS_TRACE` on in prod; (2) add weighted Discernment/Diligence dimensions to flagship tasks (this is what actually populates those 4 Ds axes + scores the verification half). Until then the rollup honestly shows Delegation + Deliverable.
+**The gated flips (need a PR-A shadow run on prod data + Sam's go, NOT done autonomously):** (1) turn `ASSESSMENT_GRADER_PROCESS_TRACE` on in prod; (2) add weighted Discernment/Diligence dimensions (and `traps`) to flagship tasks — this is what actually populates those 4 Ds axes + scores the verification half. Until then the rollup honestly shows Delegation + Deliverable.
+
+**Deploy note:** task specs auto-sync from the JSON files into the DB **once per worker process, on the first `GET /tasks/` after a restart** (`_sync_template_task_specs_if_needed`, module-guarded; skipped for sqlite). So on deploy:
+- **Goes live automatically** (after first `/tasks/` load): **PR-4 EKS/AKS standardisation** — those two tasks switch to the interrogation opener + 6-dim rubric (their `technical_design`/`implementation_quality` move to the deliverable lens). This is the one **non-flag-gated scoring change**; it's a correctness alignment to the other 8 tasks and the two are ~zero-traffic, but flag it for sign-off.
+- **Live immediately:** PR-3 (tool-call cap removed) + PR-11 (plan nudge) in the candidate chat; the additive `fluency_4d` rollup on new gradings.
+- **Stays off:** PR-2 trace flag, PR-5 discernment/diligence lenses + PR-9 `traps` (inert until a task adopts them), PR-10 model override (no task sets it). The score-/cost flips remain gated on a PR-A shadow run + Sam's go.
 
 ---
 
