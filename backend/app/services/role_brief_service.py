@@ -38,6 +38,8 @@ _EDITABLE_FIELDS = frozenset(
         "salary_period",
         "openings",
         "target_start",
+        "client_id",
+        "client_rate",
         "must_haves",
         "preferred",
         "dealbreakers",

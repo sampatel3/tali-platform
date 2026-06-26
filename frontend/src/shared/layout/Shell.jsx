@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bell,
   Briefcase,
+  Building2,
   CheckSquare,
   ChevronDown,
   Home,
@@ -34,6 +35,7 @@ import { formatHeaderOrgLabel, normalizeHeaderOrgName } from './headerIdentity';
 const NAV_TABS = [
   { id: 'home',     label: 'Home',     Icon: Home },
   { id: 'jobs',     label: 'Jobs',     Icon: Briefcase },
+  { id: 'clients',  label: 'Clients',  Icon: Building2 },
   { id: 'chat',     label: 'Chat',     Icon: MessageSquare, badge: 'AI' },
   { id: 'tasks',    label: 'Tasks',    Icon: CheckSquare },
   { id: 'settings', label: 'Settings', Icon: SettingsIcon },
