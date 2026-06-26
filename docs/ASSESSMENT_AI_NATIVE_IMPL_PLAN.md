@@ -2,7 +2,23 @@
 
 **Date:** 2026-06-26
 **Decision locked:** Option A — keep the standardised, instrumented in-platform harness (the moat: consistent, automatable, defensible scoring); invest in process-visibility, scoring the verification half, and re-basing on Anthropic's AI Fluency 4 Ds. Companion: [`ASSESSMENT_AI_NATIVE_REVIEW.md`](./ASSESSMENT_AI_NATIVE_REVIEW.md).
-**Status:** PLAN — no code yet. Awaiting go to start Tier 0.
+**Status (2026-06-26):** Tier 0 + Tier 1 foundation LANDED on `claude/wizardly-meitner-52f336` (all behind flags / additive / gated — zero live-score change until shadow-validated). 140 backend tests + 6 vitest green.
+
+| PR | What | Status |
+|----|------|--------|
+| PR-1 | Capture agent tool results onto `ai_prompts` | ✅ landed |
+| PR-2 | Feed trace + git diff to grader (`ASSESSMENT_GRADER_PROCESS_TRACE`, default off) | ✅ landed (flag off) |
+| PR-3 | Drop the artificial 3-tool-call cap | ✅ landed |
+| PR-4 | EKS/AKS outliers → catalog standard (decision_points + interrogation + lenses) | ✅ landed |
+| PR-A | Shadow re-score harness | ✅ landed |
+| PR-5 | Discernment + Diligence grader lenses (machinery) | ✅ landed (inert until a task adopts them) |
+| PR-6 | 4 Ds rollup (`fluency_4d`), additive/derived | ✅ landed |
+| PR-7 | Surface the 4 Ds on the candidate report | ✅ landed (needs live authed-page verify) |
+| PR-8 | "Promote Description" + stale-wiring fix | ⏸️ stale-key is a harmless no-op on soon-superseded telemetry — skipped; Description-as-graded-dim folds into the gated task-enrichment step |
+| PR-9 | Planted-trap mechanic (hardest-to-game Discernment) | ⛔ not started — score-changing, do after PR-A shadow run |
+| PR-10/11/12 | Tier 2: model upgrade/choice, plan-mode + lookup, async defend | ⛔ not started — change live candidate behaviour/cost, want Sam's steer |
+
+**The gated flips (need a PR-A shadow run on prod data + Sam's go, NOT done autonomously):** (1) turn `ASSESSMENT_GRADER_PROCESS_TRACE` on in prod; (2) add weighted Discernment/Diligence dimensions to flagship tasks (this is what actually populates those 4 Ds axes + scores the verification half). Until then the rollup honestly shows Delegation + Deliverable.
 
 ---
 
