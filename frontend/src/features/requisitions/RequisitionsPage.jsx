@@ -11,7 +11,7 @@
 // ThinkingDots) — the one standard chat UI across Search, the Home dock and
 // the candidate workspace — and the global purple design tokens.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Copy, ExternalLink, FileText, Paperclip, Plus, RefreshCw, Rocket, X } from 'lucide-react';
+import { Check, Copy, ExternalLink, FileText, Paperclip, Plus, RefreshCw, Rocket, Share2, X } from 'lucide-react';
 
 import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
 import { requisitionApi } from './api';
@@ -78,6 +78,10 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const [publishing, setPublishing] = useState(false);
   // Transient "Copied" tick on the share-URL copy button.
   const [copied, setCopied] = useState(false);
+  // Minting / "Copied" tick for the client-intake link (the no-login link a
+  // consultancy recruiter sends to their client to describe the role).
+  const [clientLinking, setClientLinking] = useState(false);
+  const [clientCopied, setClientCopied] = useState(false);
   const [savingKey, setSavingKey] = useState(null);
   const [loadingBrief, setLoadingBrief] = useState(false);
   const [error, setError] = useState('');
@@ -418,8 +422,47 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     }
   }, [jobPageUrl]);
 
-  // Reset the transient "Copied" tick when switching requisitions.
-  useEffect(() => { setCopied(false); }, [selectedId]);
+  // ---- share with client (the no-login client-intake link) ----
+  // The serialized brief carries `client_link` ({ token, url } or null). Build
+  // the absolute /intake/:token URL the same way the job page does, so Copy/
+  // open work whether or not the backend hands back an absolute url.
+  const clientLink = brief?.client_link || null;
+  const clientLinkUrl = clientLink
+    ? (clientLink.url || (typeof window !== 'undefined' ? `${window.location.origin}/intake/${clientLink.token}` : `/intake/${clientLink.token}`))
+    : '';
+
+  // Mint the client-intake link on demand (idempotent on the backend), then
+  // fold it into the brief so the link + Copy reveal without a refetch.
+  const makeClientLink = useCallback(async () => {
+    if (!selectedId) return;
+    setClientLinking(true);
+    setError('');
+    try {
+      const res = await requisitionApi.clientLink(selectedId);
+      setBrief((prev) => ({
+        ...(prev || {}),
+        client_link: res?.token ? { token: res.token, url: res.url } : (prev?.client_link || null),
+      }));
+    } catch {
+      setError('Could not create the client link. Try again.');
+    } finally {
+      setClientLinking(false);
+    }
+  }, [selectedId]);
+
+  const copyClientUrl = useCallback(async () => {
+    if (!clientLinkUrl) return;
+    try {
+      await navigator.clipboard.writeText(clientLinkUrl);
+      setClientCopied(true);
+      setTimeout(() => setClientCopied(false), 1800);
+    } catch {
+      setError('Could not copy the link — select and copy it manually.');
+    }
+  }, [clientLinkUrl]);
+
+  // Reset the transient "Copied" ticks when switching requisitions.
+  useEffect(() => { setCopied(false); setClientCopied(false); }, [selectedId]);
 
   const published = Boolean(jobPage) || isPublished(brief?.status);
   const canSend = (composer.trim() || attachments.length > 0) && !turnInFlight;
@@ -488,42 +531,88 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     <span>{Math.max(0, Math.min(100, Number(brief.completeness) || 0))}% complete</span>
                   </div>
                 </div>
-                {jobPage ? (
-                  <div className="rq-published">
-                    <div className="rq-published-top">
-                      <span className="rq-published-flag"><Check size={15} /> Published</span>
-                      <a
-                        className="rq-published-url"
-                        href={jobPageUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title={jobPageUrl}
-                      >
-                        {jobPageUrl}
-                      </a>
+                <div className="rq-head-actions">
+                  {/* Share with client — the no-login intake link a
+                      consultancy recruiter sends to their client so the client
+                      describes the role to the same agent (economics hidden). */}
+                  {clientLink ? (
+                    <div className="rq-clientlink">
+                      <div className="rq-clientlink-top">
+                        <span className="rq-clientlink-flag"><Share2 size={14} /> Client link</span>
+                        <a
+                          className="rq-published-url"
+                          href={clientLinkUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={clientLinkUrl}
+                        >
+                          {clientLinkUrl}
+                        </a>
+                      </div>
+                      <div className="rq-published-actions">
+                        <span className="rq-clientlink-hint">Send this to your client — no login needed.</span>
+                        <button type="button" className="rq-btn-sm is-ghost" onClick={copyClientUrl}>
+                          {clientCopied ? <Check size={13} /> : <Copy size={13} />} {clientCopied ? 'Copied' : 'Copy'}
+                        </button>
+                        <a
+                          className="rq-btn-sm is-ghost"
+                          href={clientLinkUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          <ExternalLink size={13} /> Open
+                        </a>
+                      </div>
                     </div>
-                    <div className="rq-published-actions">
-                      <button type="button" className="rq-btn-sm is-ghost" onClick={copyJobUrl}>
-                        {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? 'Copied' : 'Copy'}
-                      </button>
-                      <a
-                        className="rq-btn-sm is-ghost"
-                        href={jobPageUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        <ExternalLink size={13} /> View job page
-                      </a>
-                      <button type="button" className="rq-btn-sm is-ghost" onClick={publish} disabled={publishing}>
-                        {publishing ? <span className="rq-spinner" /> : <RefreshCw size={13} />} Re-publish
-                      </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="rq-btn-sm is-ghost rq-share-btn"
+                      onClick={makeClientLink}
+                      disabled={clientLinking}
+                      title="Get a no-login link to send to your client"
+                    >
+                      {clientLinking ? <span className="rq-spinner" /> : <Share2 size={14} />} Share with client
+                    </button>
+                  )}
+
+                  {jobPage ? (
+                    <div className="rq-published">
+                      <div className="rq-published-top">
+                        <span className="rq-published-flag"><Check size={15} /> Published</span>
+                        <a
+                          className="rq-published-url"
+                          href={jobPageUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={jobPageUrl}
+                        >
+                          {jobPageUrl}
+                        </a>
+                      </div>
+                      <div className="rq-published-actions">
+                        <button type="button" className="rq-btn-sm is-ghost" onClick={copyJobUrl}>
+                          {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? 'Copied' : 'Copy'}
+                        </button>
+                        <a
+                          className="rq-btn-sm is-ghost"
+                          href={jobPageUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          <ExternalLink size={13} /> View job page
+                        </a>
+                        <button type="button" className="rq-btn-sm is-ghost" onClick={publish} disabled={publishing}>
+                          {publishing ? <span className="rq-spinner" /> : <RefreshCw size={13} />} Re-publish
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <button type="button" className="rq-publish-btn" onClick={publish} disabled={publishing}>
-                    {publishing ? <span className="rq-spinner" /> : <Rocket size={15} />} Publish job page
-                  </button>
-                )}
+                  ) : (
+                    <button type="button" className="rq-publish-btn" onClick={publish} disabled={publishing}>
+                      {publishing ? <span className="rq-spinner" /> : <Rocket size={15} />} Publish job page
+                    </button>
+                  )}
+                </div>
               </header>
 
               <RequisitionEconomics

@@ -399,6 +399,27 @@ def resolve_template(org: Optional[Organization]) -> dict[str, Any]:
     return template
 
 
+# The template section a consultancy CLIENT must never set — the consultancy
+# owns the economics. Dropped from the client-scoped intake so the agent never
+# asks about salary / pay period / bonus / equity.
+CLIENT_SCOPED_DROP_SECTIONS = frozenset({"compensation"})
+
+
+def client_scoped_template(template: dict[str, Any]) -> dict[str, Any]:
+    """A CLIENT-scoped view of a requisition template: the same template with the
+    ``compensation`` section removed (clients don't set pay — the consultancy
+    owns economics). Returns a shallow-copied template with a filtered
+    ``sections`` list; the original is never mutated. Drives both the
+    client-scoped gap engine/completeness and the questions the client-facing
+    agent asks."""
+    sections = [
+        s
+        for s in (template.get("sections") or [])
+        if s.get("key") not in CLIENT_SCOPED_DROP_SECTIONS
+    ]
+    return {**template, "sections": sections}
+
+
 def iter_fields(template: dict[str, Any]):
     """Yield ``(section, field)`` for every field in template (display order)."""
     for section in template.get("sections") or []:

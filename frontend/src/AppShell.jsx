@@ -93,6 +93,9 @@ const RequisitionsPage = lazy(() =>
 const PublicJobPage = lazy(() =>
   import('./features/jobpage/PublicJobPage').then((m) => ({ default: m.PublicJobPage }))
 );
+const ClientIntakePage = lazy(() =>
+  import('./features/clientintake/ClientIntakePage').then((m) => ({ default: m.ClientIntakePage }))
+);
 const ClientsPage = lazy(() =>
   import('./features/clients/ClientsPage').then((m) => ({ default: m.ClientsPage }))
 );
@@ -888,6 +891,21 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <PublicJobPage />
+          </Suspense>
+        )}
+      />
+
+      {/* Public, no-auth CLIENT INTAKE. A consultancy recruiter shares this
+          link with their client, who describes the role to the same
+          conversational agent (company/economics hidden). Like /job/:token and
+          /assess/:token, it renders WITHOUT a NavComponent and without a
+          recruiter session — every call goes through the unauthenticated
+          public intake endpoints. */}
+      <Route
+        path="/intake/:token"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <ClientIntakePage />
           </Suspense>
         )}
       />

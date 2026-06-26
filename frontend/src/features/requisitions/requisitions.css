@@ -232,6 +232,50 @@
 /* The View link is an <a> styled as a small button — keep it on the row. */
 a.rq-btn-sm { text-decoration: none; }
 
+/* Right-side header actions: the client-share control stacked above the
+   publish / published state, both right-aligned. */
+.rq-head-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+/* "Share with client" trigger — a ghost button with a subtle purple lean so it
+   reads as a distinct, friendly action next to Publish. */
+.rq-share-btn { border-color: color-mix(in oklab, var(--purple) 32%, var(--line)); color: var(--purple-2); }
+.rq-share-btn:hover { border-color: var(--purple); color: var(--purple-2); background: var(--purple-soft); }
+
+/* Revealed client-intake link block (mirrors the published-state layout). */
+.rq-clientlink {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+.rq-clientlink-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+}
+.rq-clientlink-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--purple-2);
+  white-space: nowrap;
+}
+.rq-clientlink-hint {
+  font-size: 0.6875rem;
+  color: var(--mute);
+  margin-right: 2px;
+}
+
 .rq-split {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);

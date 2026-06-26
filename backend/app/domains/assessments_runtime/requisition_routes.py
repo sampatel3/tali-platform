@@ -11,6 +11,7 @@ The org's spec template is read/written via ``/settings/requisition-template``.
 """
 from __future__ import annotations
 
+import secrets
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -53,6 +54,13 @@ def _job_page_url(token: str) -> str:
     """Public job-page URL. ``/job/{token}`` relative when FRONTEND_URL is empty."""
     base = (settings.FRONTEND_URL or "").rstrip("/")
     return f"{base}/job/{token}" if base else f"/job/{token}"
+
+
+def _client_intake_url(token: str) -> str:
+    """The no-login CLIENT INTAKE share URL. ``/intake/{token}`` relative when
+    FRONTEND_URL is empty."""
+    base = (settings.FRONTEND_URL or "").rstrip("/")
+    return f"{base}/intake/{token}" if base else f"/intake/{token}"
 
 # Multipart upload guards for the chat endpoint.
 _MAX_CHAT_FILES = 6
@@ -129,6 +137,12 @@ def _serialize_brief(brief: RoleBrief, org: Optional[Organization]) -> dict[str,
         }
         if page
         else None
+    )
+    # The scoped, no-login CLIENT INTAKE share link (None until the recruiter
+    # mints it). The token itself is the only secret — never any economics.
+    token = brief.client_intake_token
+    payload["client_link"] = (
+        {"token": token, "url": _client_intake_url(token)} if token else None
     )
     return payload
 
@@ -401,6 +415,30 @@ def publish_requisition(
         "status": page.status,
         "published_at": page.published_at.isoformat() if page.published_at else None,
     }
+
+
+@router.post("/requisitions/{brief_id}/client-link")
+def mint_client_link(
+    brief_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Mint (or return) the SCOPED, no-login CLIENT INTAKE share link.
+
+    For a consultancy: the recruiter sends this link to their CLIENT, who
+    describes the role via the same conversational agent (company/economics
+    layers hidden, no pay questions). Idempotent — the token is minted once
+    (``secrets.token_urlsafe(8)``) and reused on subsequent calls so a shared
+    link never goes stale.
+    """
+    brief = _get_brief(db, current_user.organization_id, brief_id)
+    if not brief.client_intake_token:
+        brief.client_intake_token = secrets.token_urlsafe(8)
+        db.add(brief)
+        db.commit()
+        db.refresh(brief)
+    token = brief.client_intake_token
+    return {"token": token, "url": _client_intake_url(token)}
 
 
 # --------------------------------------------------------------------------- #
