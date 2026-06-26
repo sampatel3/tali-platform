@@ -1122,8 +1122,10 @@ button.eng-badge-button:focus-visible {
   border-radius: 50%;
 }
 
+/* Requirement fit in the purple/grey scheme (design-language pass):
+   met = purple, gap = amber (caution), missing = grey. No traffic-lights. */
 .cv-rail .dot.ok {
-  background: var(--green);
+  background: var(--purple);
 }
 
 .cv-rail .dot.gap {
@@ -1131,7 +1133,7 @@ button.eng-badge-button:focus-visible {
 }
 
 .cv-rail .dot.bad {
-  background: var(--red);
+  background: var(--mute);
 }
 
 .cv-rail .rail-item {
@@ -1164,8 +1166,8 @@ button.eng-badge-button:focus-visible {
 }
 
 .cv-rail .rail-item.ok .ic {
-  color: var(--green);
-  background: color-mix(in oklab, var(--green) 16%, transparent);
+  color: var(--purple);
+  background: color-mix(in oklab, var(--purple) 16%, transparent);
 }
 
 .cv-rail .rail-item.gap .ic {
@@ -1174,8 +1176,8 @@ button.eng-badge-button:focus-visible {
 }
 
 .cv-rail .rail-item.bad .ic {
-  color: var(--red);
-  background: color-mix(in oklab, var(--red) 16%, transparent);
+  color: var(--mute);
+  background: color-mix(in oklab, var(--mute) 22%, transparent);
 }
 
 .cv-rail .rail-item .t,
