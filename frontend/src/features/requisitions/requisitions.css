@@ -607,3 +607,32 @@
   .rq-root { grid-template-columns: 1fr; }
   .rq-side { display: none; }
 }
+
+/* Multiple-choice quick replies — tappable options under the latest agent
+   turn so the recruiter can answer in one click instead of typing. */
+.rq-quick-replies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.rq-quick-chip {
+  appearance: none;
+  cursor: pointer;
+  border: 1px solid color-mix(in oklab, var(--purple) 32%, transparent);
+  background: var(--purple-soft);
+  color: var(--purple-2);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 7px 12px;
+  border-radius: 999px;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.rq-quick-chip:hover {
+  background: var(--purple);
+  color: var(--bg);
+  border-color: var(--purple);
+}
+.rq-quick-chip:disabled { opacity: 0.5; cursor: not-allowed; }

@@ -174,6 +174,14 @@ DEFAULT_REQUISITION_TEMPLATE: dict[str, Any] = {
                     "question": "How many are you hiring?",
                 },
                 {
+                    "key": "urgency",
+                    "label": "Hiring urgency",
+                    "type": "select",
+                    "required": True,
+                    "question": "How urgent is this hire?",
+                    "options": ["Low", "Normal", "High", "Urgent"],
+                },
+                {
                     "key": "target_start_date",
                     "label": "Target start date",
                     "type": "date",

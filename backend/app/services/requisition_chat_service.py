@@ -129,6 +129,10 @@ class ChatCapture(BaseModel):
 
     assistant_reply: str
     open_questions: Optional[list[str]] = None
+    # Up to ~6 short tappable answers to the question the reply asks — quick
+    # replies the recruiter clicks instead of typing. For select fields use the
+    # template options verbatim; otherwise offer the most likely answers.
+    suggested_replies: Optional[list[str]] = None
 
     # Standard RoleBrief columns (typed).
     title: Optional[str] = None
@@ -225,6 +229,42 @@ def compute_completeness(brief: RoleBrief, template: dict[str, Any]) -> int:
     if total == 0:
         return 100
     return round(100 * filled / total)
+
+
+def _field_by_key(template: dict[str, Any], key: str) -> Optional[dict[str, Any]]:
+    for _section, field in iter_fields(template):
+        if field.get("key") == key:
+            return field
+    return None
+
+
+def _first_required_field(template: dict[str, Any]) -> Optional[dict[str, Any]]:
+    for _section, field in iter_fields(template):
+        if field.get("required"):
+            return field
+    return None
+
+
+def _select_options(field: Optional[dict[str, Any]]) -> list[str]:
+    """The tappable options for a select field (else empty)."""
+    if field and field.get("type") == "select":
+        return [str(o) for o in (field.get("options") or []) if str(o).strip()][:6]
+    return []
+
+
+def _resolve_suggested_replies(
+    capture: "ChatCapture", brief: RoleBrief, template: dict[str, Any]
+) -> list[str]:
+    """Quick replies to offer with the agent's turn: what the model gave, else
+    the template options of the next required gap (so select questions are
+    always tappable even if the model forgets to populate them)."""
+    replies = [str(r).strip() for r in (capture.suggested_replies or []) if str(r).strip()]
+    if replies:
+        return replies[:6]
+    gaps = compute_gaps(brief, template)
+    if gaps:
+        return _select_options(_field_by_key(template, gaps[0]["key"]))
+    return []
 
 
 def opening_message(template: dict[str, Any]) -> str:
@@ -532,7 +572,13 @@ def build_chat_system_prompt(
         "and the 'custom' object for any other template keys). Then reply "
         "conversationally — warm, concise, fast — acknowledging what you got and "
         "asking about the focus gaps next (one or two at a time, never "
-        "interrogate). If the spec looks complete, say so and offer to publish."
+        "interrogate). ALWAYS keep momentum: every reply asks the next most "
+        "useful question, or — once the required spec is captured — says so and "
+        "offers to publish. ALWAYS set suggested_replies to up to 6 short, "
+        "tappable options for the question you ask: for select fields use the "
+        "template's options verbatim; for numbers, dates or free text offer the "
+        "most likely answers or sensible ranges (the recruiter can still type "
+        "anything)."
     )
 
 
@@ -547,7 +593,12 @@ def seed_opening_message(brief: RoleBrief, template: dict[str, Any]) -> None:
     """Set ``brief.messages`` to the single deterministic OPENING assistant turn.
     Mutates in place (does not flush)."""
     brief.messages = [
-        {"role": "assistant", "content": opening_message(template), "attachments": []}
+        {
+            "role": "assistant",
+            "content": opening_message(template),
+            "attachments": [],
+            "suggested_replies": _select_options(_first_required_field(template)),
+        }
     ]
 
 
@@ -618,7 +669,14 @@ def run_chat_turn(
         # Append the assistant reply to the transcript.
         reply = (result.value.assistant_reply or "").strip()
         brief.messages = list(brief.messages) + [
-            {"role": "assistant", "content": reply, "attachments": []}
+            {
+                "role": "assistant",
+                "content": reply,
+                "attachments": [],
+                "suggested_replies": _resolve_suggested_replies(
+                    result.value, brief, template
+                ),
+            }
         ]
         db.flush()
     return result

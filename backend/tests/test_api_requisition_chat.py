@@ -52,9 +52,12 @@ def test_chat_endpoint_multipart_applies_and_returns_contract(client, monkeypatc
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    # Top-level contract: brief / reply / messages / gaps.
-    assert set(body.keys()) == {"brief", "reply", "messages", "gaps"}
+    # Top-level contract: brief / reply / messages / gaps / suggested_replies.
+    assert set(body.keys()) == {"brief", "reply", "messages", "gaps", "suggested_replies"}
     assert body["reply"].startswith("Onsite or remote")
+    # The model gave no suggested_replies → deterministic fallback to the next
+    # select gap's options (workplace_type), surfaced as tappable quick replies.
+    assert body["suggested_replies"] == ["Onsite", "Hybrid", "Remote"]
     # Brief reflects the capture.
     assert body["brief"]["title"] == "Backend Engineer"
     assert body["brief"]["must_haves"] == ["Python"]

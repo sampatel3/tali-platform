@@ -238,11 +238,14 @@ async def chat_requisition(
     db.commit()
     db.refresh(brief)
     payload = _serialize_brief(brief, org)
+    messages = payload["messages"]
+    last = messages[-1] if messages else {}
     return {
         "brief": payload,
         "reply": (result.value.assistant_reply if result.value else "") or "",
-        "messages": payload["messages"],
+        "messages": messages,
         "gaps": payload["gaps"],
+        "suggested_replies": (last.get("suggested_replies") or []) if isinstance(last, dict) else [],
     }
 
 
