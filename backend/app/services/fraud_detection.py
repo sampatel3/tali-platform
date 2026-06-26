@@ -1075,8 +1075,9 @@ def build_integrity_warnings(integrity_signals: dict[str, Any] | None) -> list[s
     if gr.get("ungrounded_match"):
         names = [n for n in (gr.get("ungrounded_requirements") or []) if n]
         n = len(names) or max(0, int(gr.get("met_must_haves") or 0) - int(gr.get("grounded_must_haves") or 0))
-        tail = f": {', '.join(names)}" if names else ""
-        out.append(f"Strong match but {n} must-have{'' if n == 1 else 's'} not evidenced in the CV{tail} — confirm these are real, not spec-tailoring.")
+        # Keep it short — the specific requirements already appear in the
+        # requirements list, so here we flag only the count + the meaning.
+        out.append(f"{n} must-have{'' if n == 1 else 's'} scored as met but with no supporting evidence in the CV — confirm they're genuine, not keyword-matching.")
 
     sh = _g("jd_shingle")
     if sh.get("triggered"):
