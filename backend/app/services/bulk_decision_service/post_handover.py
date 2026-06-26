@@ -2,8 +2,11 @@
 
 The recruiter moved them into a post-handover Workable stage (Phone Screen /
 Technical / Final Interview / Offer); Taali still scores them. A reject verdict
-is surfaced in the reject queue (pulling them back from 'advanced' to review); a
-positive verdict reflects the hand-off. LOCAL only — never writes to Workable.
+is surfaced in the reject queue (pulling them back from 'advanced' to review)
+ONLY on a TERMINAL hand-off (Offer / Hired); mid-interview (phone / technical /
+final) a reject is deliberately DEFERRED — no card, left 'advanced' — so a live
+reject card can't strand them in 'review' once the reconcile discards it (#729).
+A positive verdict reflects the hand-off. LOCAL only — never writes to Workable.
 """
 from __future__ import annotations
 
@@ -40,9 +43,14 @@ def decide_post_handover(db: Session, *, app: CandidateApplication, role: Role) 
     into a post-handover Workable stage (Phone Screen / Technical / Final
     Interview / Offer). The recruiter advanced them; Taali still scores them:
 
-      * reject verdict  → surface it in the REJECT QUEUE — pull them back from
-        'advanced' to review (so the reject reads as a live card, not a footnote
-        on an advanced row) and queue the deterministic reject.
+      * reject verdict on a TERMINAL hand-off (offer / hired) → surface it in the
+        REJECT QUEUE — pull them back from 'advanced' to review (so the reject
+        reads as a live card, not a footnote on an advanced row) and queue the
+        deterministic reject.
+      * reject verdict mid-interview (phone / technical / final) → DEFER (return
+        ``None``, queue nothing, leave them 'advanced'): a live reject card on
+        someone in an active interview is the dangerous case and would strand
+        them in 'review' the moment it's discarded (#729).
       * advance verdict → return 'advance'; the caller reflects the hand-off
         ('advanced' on Taali).
 

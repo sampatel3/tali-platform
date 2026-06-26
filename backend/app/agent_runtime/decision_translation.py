@@ -22,7 +22,16 @@ _ENGINE_TO_PERSISTED: dict[str, str] = {
 # Verdicts that should produce a queued decision. ``skip`` / ``no_action``
 # / ``escalate_low_confidence`` are deliberately excluded — the bulk pass
 # leaves those to the LLM agent / recruiter.
-QUEUEABLE_VERDICTS = frozenset(_ENGINE_TO_PERSISTED)
+#
+# IMPORTANT: these are the engine VERBS — the *keys* of the map
+# (``queue_reject_decision``, ``auto_reject``, …) — NOT the resolved persisted
+# nouns (``reject``, …). Every caller guards with
+# ``verdict.decision_type in QUEUEABLE_VERDICTS`` on the RAW engine output and
+# translates only after, so the verb is what's tested. A role-fit reject emits
+# ``queue_reject_decision``, which IS a member and passes the guard. (Were this
+# the noun set instead, every ``queue_*_decision`` verb would miss and reject
+# verdicts would be silently dropped — so keep it keyed on the verbs.)
+QUEUEABLE_VERDICTS = frozenset(_ENGINE_TO_PERSISTED.keys())
 
 
 def resolve_persisted_decision_type(

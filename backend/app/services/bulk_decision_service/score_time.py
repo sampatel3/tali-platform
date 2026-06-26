@@ -78,13 +78,18 @@ def ensure_deterministic_decision(
         if getattr(app, "workable_disqualified_at", None) is not None:
             return None
         if is_post_handover_workable_stage(getattr(app, "workable_stage", None)):
-            # The recruiter is interviewing this candidate in Workable — DON'T
-            # withhold a decision (the old behaviour stranded them as "not yet
-            # decided"). Surface Taali's read as a HITL card via the post-handover
-            # second opinion: a below-bar verdict becomes a reject card ("you're
-            # interviewing someone I'd have passed on"); a positive verdict
-            # reflects the advance. Still HITL — the recruiter approves/overrides,
-            # never auto-applied. Lazy import: post_handover imports this package.
+            # The recruiter is interviewing this candidate in Workable — defer to
+            # Taali's post-handover SECOND OPINION rather than withholding a verdict
+            # outright (the old behaviour stranded them as "not yet decided"). That
+            # path is STAGE-AWARE (see decide_post_handover): a positive verdict
+            # reflects the advance; a below-bar verdict surfaces a reject card ONLY
+            # on a TERMINAL hand-off (offer / hired), and is deliberately DEFERRED
+            # (no card, left 'advanced') mid-interview (phone / technical / final) —
+            # #729: a live reject card there is the dangerous case and would strand
+            # them in 'review' once the reconcile discards it. So this may return
+            # None mid-interview. Still HITL throughout — the recruiter
+            # approves/overrides, never auto-applied. Lazy import: post_handover
+            # imports this package.
             from .post_handover import decide_post_handover
 
             return decide_post_handover(db, app=app, role=role)
