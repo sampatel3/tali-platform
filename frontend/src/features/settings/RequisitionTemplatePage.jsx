@@ -222,6 +222,7 @@ export const RequisitionTemplatePage = ({ onNavigate, NavComponent = null }) => 
   const { showToast } = useToast();
   const [sections, setSections] = useState([]);
   const [version, setVersion] = useState(1);
+  const [jdTemplate, setJdTemplate] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -230,6 +231,7 @@ export const RequisitionTemplatePage = ({ onNavigate, NavComponent = null }) => 
   const hydrate = useCallback((template) => {
     const tpl = template || {};
     setVersion(Number(tpl.version) || 1);
+    setJdTemplate(typeof tpl.jd_template === 'string' ? tpl.jd_template : '');
     setSections(
       (Array.isArray(tpl.sections) ? tpl.sections : []).map((s) => ({
         _id: uid('sec'),
@@ -285,9 +287,12 @@ export const RequisitionTemplatePage = ({ onNavigate, NavComponent = null }) => 
     i === si ? { ...s, fields: [...s.fields, { _id: uid('fld'), _keyTouched: false, ...blankField() }] } : s
   )));
 
-  // Strip client-only fields and validate before save.
+  // Strip client-only fields and validate before save. NOTE: jd_template must
+  // be sent alongside version + sections — the backend stores the whole
+  // template object, so omitting it here would WIPE the org's JD template.
   const serialize = useMemo(() => () => ({
     version,
+    jd_template: jdTemplate,
     sections: sections.map((s) => ({
       key: s.key || slugify(s.label),
       label: s.label,
@@ -303,7 +308,7 @@ export const RequisitionTemplatePage = ({ onNavigate, NavComponent = null }) => 
         return out;
       }),
     })),
-  }), [sections, version]);
+  }), [sections, version, jdTemplate]);
 
   const validate = (template) => {
     for (const s of template.sections) {
@@ -362,6 +367,36 @@ export const RequisitionTemplatePage = ({ onNavigate, NavComponent = null }) => 
           <>
             <div className="rqt-summary">
               {sections.length} section{sections.length === 1 ? '' : 's'} · {totalFields} field{totalFields === 1 ? '' : 's'}
+            </div>
+
+            {/* Job spec (JD) template — markdown with {{placeholder}} tokens,
+                filled live from the captured brief on the Requisitions page. */}
+            <div className="rqt-section rqt-jd">
+              <div className="rqt-jd-head">
+                <h2 className="rqt-jd-title">Job spec template</h2>
+                <p className="rqt-jd-sub">
+                  The job-description document shown live on the Requisitions page. Write it in markdown;
+                  the agent fills <code>{'{{placeholder}}'}</code> tokens from the captured brief as it goes.
+                </p>
+              </div>
+              <label className="field rqt-full">
+                <span className="k">Template (markdown)</span>
+                <textarea
+                  className="rqt-jd-textarea"
+                  rows={16}
+                  value={jdTemplate}
+                  placeholder={'# {{title}}\n\n{{summary}}\n\n## What you\'ll need\n{{must_haves}}'}
+                  onChange={(e) => setJdTemplate(e.target.value)}
+                  spellCheck={false}
+                />
+              </label>
+              <p className="rqt-jd-placeholders">
+                <strong>Placeholders:</strong>{' '}
+                {'{{title}}'}, {'{{summary}}'}, {'{{location}}'}, {'{{workplace_type}}'}, {'{{employment_type}}'},
+                {' '}{'{{seniority}}'}, {'{{openings}}'}, {'{{salary}}'}, {'{{urgency}}'}, {'{{must_haves}}'},
+                {' '}{'{{preferred}}'}, {'{{dealbreakers}}'}, {'{{success_profile}}'}, {'{{assessment_focus}}'},
+                {' '}{'{{evp}}'}
+              </p>
             </div>
 
             {sections.map((section, si) => (

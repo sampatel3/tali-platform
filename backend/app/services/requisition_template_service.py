@@ -84,8 +84,49 @@ def template_key_to_column(field_key: str) -> Optional[str]:
 # against — sections in display order; ``question`` is the natural prompt the
 # agent asks; ``required`` drives completeness + the gap engine; ``options``
 # is present only on ``select`` fields.
+# The default JOB-SPEC (JD) document the live panel renders. Markdown with
+# {{placeholders}} the frontend fills from the captured brief. The prose
+# sections (About us / Benefits / EEO) are boilerplate an org sets once; the
+# placeholders are populated on the fly as the conversation captures the spec.
+# Supported placeholders: title, summary, department, seniority, location,
+# workplace_type, employment_type, openings, salary, urgency, must_haves,
+# preferred, dealbreakers, success_profile, assessment_focus, evp.
+DEFAULT_JD_TEMPLATE = """# {{title}}
+
+{{summary}}
+
+**Details:** {{location}} · {{workplace_type}} · {{employment_type}} · {{seniority}}
+**Openings:** {{openings}} · **Compensation:** {{salary}} · **Urgency:** {{urgency}}
+
+## About the role
+{{summary}}
+
+## What we're looking for
+{{must_haves}}
+
+**Nice to have**
+{{preferred}}
+
+## What success looks like
+{{success_profile}}
+
+## Why join us
+{{evp}}
+
+## About us
+_Set your company description here in Settings → Requisition template — this boilerplate is reused on every job spec._
+
+## Benefits
+_Add your standard benefits and perks here._
+
+---
+_We're committed to an inclusive, accessible hiring process. Add your EEO / reasonable-adjustments statement here._
+"""
+
+
 DEFAULT_REQUISITION_TEMPLATE: dict[str, Any] = {
     "version": 1,
+    "jd_template": DEFAULT_JD_TEMPLATE,
     "sections": [
         {
             "key": "role_basics",
@@ -344,11 +385,18 @@ def resolve_template(org: Optional[Organization]) -> dict[str, Any]:
     """The template to capture against: the org's column override if present,
     else a deep copy of the built-in default (so callers never mutate the
     module-level constant)."""
+    template: Optional[dict[str, Any]] = None
     if org is not None:
         override = getattr(org, "requisition_spec_template", None)
         if override:
-            return override
-    return copy.deepcopy(DEFAULT_REQUISITION_TEMPLATE)
+            template = override
+    if template is None:
+        template = copy.deepcopy(DEFAULT_REQUISITION_TEMPLATE)
+    # Back-compat: older saved overrides may predate the JD template — always
+    # carry one so the live job-spec panel has something to render.
+    if not template.get("jd_template"):
+        template = {**template, "jd_template": DEFAULT_JD_TEMPLATE}
+    return template
 
 
 def iter_fields(template: dict[str, Any]):
@@ -425,6 +473,8 @@ def validate_template(template: Any) -> dict[str, Any]:
                     _fail(f"{where} is a select and must carry a non-empty 'options' list")
                 if not all(isinstance(o, str) for o in options):
                     _fail(f"{where}.options must all be strings")
+    if "jd_template" in template and not isinstance(template["jd_template"], str):
+        _fail("'jd_template' must be a string")
     return template
 
 

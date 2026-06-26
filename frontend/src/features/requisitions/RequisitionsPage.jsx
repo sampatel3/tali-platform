@@ -16,6 +16,7 @@ import { CheckCircle2, FileText, Paperclip, Plus, Rocket, X } from 'lucide-react
 import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
 import { requisitionApi } from './api';
 import { LiveBrief } from './LiveBrief';
+import { JobSpec } from './JobSpec';
 import './requisitions.css';
 
 const ACCEPT = '.txt,.vtt,.srt,.md,.pdf,image/*';
@@ -76,6 +77,9 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const [savingKey, setSavingKey] = useState(null);
   const [loadingBrief, setLoadingBrief] = useState(false);
   const [error, setError] = useState('');
+  // Right column: the live Job spec (JD) document by default, or the
+  // structured Brief.
+  const [rightTab, setRightTab] = useState('jobspec');
 
   const fileInputRef = useRef(null);
   const threadEndRef = useRef(null);
@@ -452,17 +456,41 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   </div>
                 </div>
 
-                {/* Live brief */}
-                {loadingBrief ? (
-                  <div className="rq-brief"><div className="rq-brief-scroll"><span className="rq-spinner" /></div></div>
-                ) : (
-                  <LiveBrief
-                    template={template}
-                    brief={brief}
-                    onSave={saveField}
-                    savingKey={savingKey}
-                  />
-                )}
+                {/* Right column — Job spec (live JD document) + Brief tabs */}
+                <div className="rq-right">
+                  <div className="rq-tabs" role="tablist" aria-label="Requisition detail">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={rightTab === 'jobspec'}
+                      className={`rq-tab${rightTab === 'jobspec' ? ' is-active' : ''}`}
+                      onClick={() => setRightTab('jobspec')}
+                    >
+                      Job spec
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={rightTab === 'brief'}
+                      className={`rq-tab${rightTab === 'brief' ? ' is-active' : ''}`}
+                      onClick={() => setRightTab('brief')}
+                    >
+                      Brief
+                    </button>
+                  </div>
+                  {loadingBrief ? (
+                    <div className="rq-brief"><div className="rq-brief-scroll"><span className="rq-spinner" /></div></div>
+                  ) : rightTab === 'jobspec' ? (
+                    <JobSpec template={template} brief={brief} />
+                  ) : (
+                    <LiveBrief
+                      template={template}
+                      brief={brief}
+                      onSave={saveField}
+                      savingKey={savingKey}
+                    />
+                  )}
+                </div>
               </div>
             </>
           )}
