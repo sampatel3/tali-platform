@@ -1079,6 +1079,35 @@ def application_to_response(
     )
 
 
+def _patch_live_assessment_summary(payload: dict[str, Any], app: CandidateApplication) -> None:
+    """Re-derive the live assessment id/status/tracking onto a cached score_summary.
+
+    ``score_summary_from_cache`` deliberately blanks ``assessment_id`` /
+    ``assessment_status`` / ``assessment_completed_at`` (and carries no invite
+    tracking). Any response built on the cached summary must therefore patch them
+    back from the already-selectinload'd assessments relationship — otherwise the
+    candidate-detail page cannot link the completed assessment ("No assessment is
+    linked yet", Evaluate tab) and the invited-tracker chip loses its delivery
+    status. Shared by BOTH the list serializer and ``application_detail_payload``
+    so the two can't drift — that drift (detail missing this patch) was the bug.
+    """
+    summary = payload.get("score_summary")
+    if not isinstance(summary, dict):
+        return
+    active = _active_assessments_for_application(app)
+    latest = active[0] if active else None
+    if latest is None:
+        return
+    completed = next((a for a in active if _is_completed_assessment(a)), None)
+    relevant = completed or latest
+    summary["assessment_id"] = int(relevant.id)
+    summary["assessment_status"] = _assessment_status_value(relevant)
+    summary["assessment_completed_at"] = (
+        getattr(completed, "completed_at", None) if completed is not None else None
+    )
+    summary["invite_tracking"] = _invite_tracking_payload(latest)
+
+
 def application_detail_payload(
     app: CandidateApplication,
     *,
@@ -1094,6 +1123,10 @@ def application_detail_payload(
     # orchestrator on every successful score and by interview webhooks.
     data = application_to_response(app, use_cached_score_summary=True)
     payload = data.model_dump()
+    # The cached score_summary blanks assessment_id/status, so the candidate page
+    # could not link the completed assessment (Evaluate tab showed "No assessment
+    # is linked yet"). Patch them live — same as the list route.
+    _patch_live_assessment_summary(payload, app)
     if include_cv_text:
         cv = (app.cv_text or "").strip()
         if not cv and app.candidate:
@@ -1260,22 +1293,10 @@ def application_list_payload(
         score_status=score_status,
     )
     payload = data.model_dump()
-    # The cached score_summary blanks out assessment status; the invited-
-    # candidate tracker chip needs it + invite delivery tracking. Recompute
-    # both from the already-selectinload'd assessments relationship (no extra
-    # query) so list rows show "Invited / Delivered / Opened / Bounced".
-    if isinstance(payload.get("score_summary"), dict):
-        active = _active_assessments_for_application(app)
-        latest = active[0] if active else None
-        if latest is not None:
-            completed = next((a for a in active if _is_completed_assessment(a)), None)
-            relevant = completed or latest
-            payload["score_summary"]["assessment_id"] = int(relevant.id)
-            payload["score_summary"]["assessment_status"] = _assessment_status_value(relevant)
-            payload["score_summary"]["assessment_completed_at"] = (
-                getattr(completed, "completed_at", None) if completed is not None else None
-            )
-            payload["score_summary"]["invite_tracking"] = _invite_tracking_payload(latest)
+    # Cached score_summary blanks assessment_id/status + invite tracking; patch
+    # them back from the live (selectinload'd) assessments so list rows show
+    # "Invited / Delivered / Opened / Bounced". Shared with the detail payload.
+    _patch_live_assessment_summary(payload, app)
     # Resolved by the list route in one batch query (see _pending_decision_map)
     # so the AGENT column shows a chip for every row that has a pending
     # decision, not just the first page of a capped decisions fetch.
