@@ -510,6 +510,15 @@ class Settings(BaseSettings):
     # built and tested behind a pluggable fetcher that returns None until wired.
     LINKEDIN_CORROBORATION_ENABLED: bool = False
 
+    # GitHub corroboration — cross-check the candidate's OWN GitHub URL (from the
+    # CV links / social_profiles) against their claimed stack via the FREE
+    # official GitHub API (no scraping, no provider). Corroborate-first: a
+    # language/stack match boosts confidence; a quiet/empty/mismatched account is
+    # NEUTRAL (private work is invisible — never a penalty, fairness-critical);
+    # only a URL that doesn't resolve is a soft flag. Auth reuses GITHUB_TOKEN
+    # for the 5000/hr rate limit (falls back to unauthenticated). Default OFF.
+    GITHUB_CORROBORATION_ENABLED: bool = False
+
     # The paid axes (graph + LinkedIn) run ASYNC + shortlist-gated, never on
     # every score: only for a candidate scoring at/above this AND already
     # triangulation-flagged (review/strong_review). Keeps a $0.05-0.30 LinkedIn

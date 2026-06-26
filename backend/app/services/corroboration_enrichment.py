@@ -32,7 +32,11 @@ def should_enrich(application: CandidateApplication) -> bool:
     worker."""
     from ..platform.config import settings
 
-    if not (settings.GRAPH_CORROBORATION_ENABLED or settings.LINKEDIN_CORROBORATION_ENABLED):
+    if not (
+        settings.GRAPH_CORROBORATION_ENABLED
+        or settings.LINKEDIN_CORROBORATION_ENABLED
+        or settings.GITHUB_CORROBORATION_ENABLED
+    ):
         return False
     score = getattr(application, "cv_match_score", None)
     if score is None or float(score) < float(settings.CORROBORATION_ENRICH_MIN_SCORE):
@@ -51,7 +55,7 @@ def enrich_corroboration(application: CandidateApplication, db: Session) -> dict
     axes disabled / no graph / no LinkedIn URL. Fail-open — never raises."""
     try:
         from ..platform.config import settings
-        from .external_corroboration import corroborate_linkedin
+        from .external_corroboration import corroborate_github, corroborate_linkedin
         from .fraud_detection import aggregate_triangulation
         from .graph_corroboration import corroborate_candidate_stack
 
@@ -80,6 +84,10 @@ def enrich_corroboration(application: CandidateApplication, db: Session) -> dict
         linkedin = corroborate_linkedin(cv_sections=cv_sections, social_profiles=social)
         if linkedin is not None:
             sig["linkedin"] = linkedin
+            changed = True
+        github = corroborate_github(cv_sections=cv_sections, social_profiles=social)
+        if github is not None:
+            sig["github"] = github
             changed = True
         if not changed:
             return None

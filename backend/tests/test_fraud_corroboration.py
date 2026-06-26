@@ -223,5 +223,58 @@ def test_should_enrich_requires_high_match_and_a_flag(monkeypatch):
 def test_enrich_corroboration_noop_when_disabled():
     from app.services.corroboration_enrichment import enrich_corroboration
 
-    # both axes disabled → graph/linkedin None → no change → returns before db use
+    # all axes disabled → graph/linkedin/github None → no change → before db use
     assert enrich_corroboration(_fake_app(80, "review"), db=None) is None
+
+
+# ── GitHub corroboration (free official API; corroborate-first, FP-safe) ─────
+def test_extract_github_username_from_links_and_social():
+    assert ec.extract_github_username({"links": ["see https://github.com/octocat"]}) == "octocat"
+    assert ec.extract_github_username(None, [{"url": "https://www.github.com/jane-doe"}]) == "jane-doe"
+    assert ec.extract_github_username({"links": ["https://github.com/orgs/acme"]}) is None  # reserved path
+    assert ec.extract_github_username({"links": ["https://gitlab.com/x"]}) is None
+
+
+def test_github_disabled_returns_none():
+    assert settings.GITHUB_CORROBORATION_ENABLED is False
+    assert ec.corroborate_github(cv_sections={"links": ["https://github.com/octocat"]}) is None
+
+
+def test_github_corroborated_when_language_matches_claimed_stack(monkeypatch):
+    monkeypatch.setattr(settings, "GITHUB_CORROBORATION_ENABLED", True)
+    prof = ec.GithubProfile(username="octocat", exists=True, created_year=2011,
+                            public_repos=20, languages=["python", "go"])
+    out = ec.corroborate_github(
+        cv_sections={"links": ["https://github.com/octocat"], "skills": ["Python", "SQL"]},
+        fetcher=lambda u: prof,
+    )
+    assert out["status"] == "corroborated"
+    assert "python" in out["matched_skills"]
+
+
+def test_github_not_found_url_is_soft_flag(monkeypatch):
+    monkeypatch.setattr(settings, "GITHUB_CORROBORATION_ENABLED", True)
+    out = ec.corroborate_github(
+        cv_sections={"links": ["https://github.com/ghost"], "skills": ["Python"]},
+        fetcher=lambda u: ec.GithubProfile(username="ghost", exists=False),
+    )
+    assert out["status"] == "not_found"
+
+
+def test_github_quiet_account_is_neutral_never_penalised(monkeypatch):
+    # Account exists but its public languages don't overlap the claimed stack —
+    # this is NOT fraud (private work is invisible). Must be no_signal, not a flag.
+    monkeypatch.setattr(settings, "GITHUB_CORROBORATION_ENABLED", True)
+    out = ec.corroborate_github(
+        cv_sections={"links": ["https://github.com/q"], "skills": ["Python"]},
+        fetcher=lambda u: ec.GithubProfile(username="q", exists=True, languages=["haskell"]),
+    )
+    assert out["status"] == "no_signal"
+
+
+def test_triangulation_github_axes():
+    nf = aggregate_triangulation({"github": {"status": "not_found"}})
+    assert "github_not_found" in nf["soft_disagreements"]
+    corr = aggregate_triangulation({"github": {"status": "corroborated"}})
+    assert "github" in corr["corroborations"]
+    assert corr["verdict"] == "ok"  # positive corroboration is not a disagreement

@@ -1018,6 +1018,11 @@ def aggregate_triangulation(integrity_signals: dict[str, Any] | None) -> dict[st
         soft.append("linkedin_mismatch")
     elif li.get("status") == "match":
         corroborations.append("linkedin")
+    gh = _get("github")
+    if gh.get("status") == "not_found":
+        soft.append("github_not_found")
+    elif gh.get("status") == "corroborated":
+        corroborations.append("github")
 
     # Verdict: deterministic artifact OR >=2 independent soft disagreements =
     # strong; exactly one soft = review (a question); none = ok.

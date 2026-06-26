@@ -512,6 +512,13 @@ const buildIntegrityFlags = (details) => {
     }
   }
 
+  // GitHub: only the "doesn't resolve" case is a concern (a match is positive
+  // corroboration, surfaced elsewhere; a quiet/empty account is never flagged).
+  const ghc = sig.github && typeof sig.github === 'object' ? sig.github : null;
+  if (ghc && ghc.status === 'not_found') {
+    flags.push(`The GitHub link on the CV doesn't resolve (github.com/${ghc.username}) — confirm it's correct.`);
+  }
+
   return flags.map((item) => String(item).trim()).filter(Boolean);
 };
 
