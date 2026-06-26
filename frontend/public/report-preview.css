@@ -123,7 +123,7 @@ button{font-family:inherit;cursor:pointer}
 /* pinned bar + tabs */
 .pin{position:sticky;top:60px;z-index:9;display:flex;align-items:center;gap:18px;padding:14px 28px;background:linear-gradient(180deg,var(--purple-tint),rgba(244,240,251,.9));border-top:1px solid var(--purple-soft);border-bottom:1px solid var(--purple-soft);backdrop-filter:blur(8px);flex-wrap:wrap}
 .pin .rec2{font-size:17px;font-weight:600}
-.tabs{display:flex;gap:26px;padding:0 28px;border-bottom:1px solid var(--line);background:var(--bg-2)}
+.tabs{display:flex;gap:26px;padding:0 28px;border-bottom:1px solid var(--line);background:transparent}
 .tab{font-size:14px;color:var(--mute);font-weight:500;padding:14px 0;border-bottom:2px solid transparent}
 .tab.on{color:var(--ink);border-bottom-color:var(--purple)}
 
@@ -259,13 +259,13 @@ button{font-family:inherit;cursor:pointer}
 .nav .avwrap{display:inline-flex;align-items:center;gap:3px;color:var(--mute)}
 
 /* agent-on recommendation slab + motion */
-.agent-rec{background:linear-gradient(160deg,#3a1d6e,#241147);border:1px solid rgba(196,165,253,.5);border-radius:16px;padding:16px 16px 15px;text-align:center;color:#efe9fb;margin-bottom:13px;animation:recglow 2.8s ease-in-out infinite}
-@keyframes recglow{0%,100%{box-shadow:0 6px 22px rgba(36,17,71,.30)}50%{box-shadow:0 0 0 4px rgba(124,92,221,.16),0 8px 30px rgba(124,92,221,.40)}}
+.agent-rec{background:linear-gradient(120deg,#3a1d6e,#6a3fb8,#2a1556,#4a2a8a,#3a1d6e);background-size:300% 300%;border:1px solid rgba(196,165,253,.55);border-radius:16px;padding:18px 16px;text-align:center;color:#efe9fb;margin-bottom:13px;animation:flow 7s ease-in-out infinite;box-shadow:0 8px 26px rgba(36,17,71,.32)}
+@keyframes flow{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
 .agent-rec .kl{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:#cbb8f6;display:inline-flex;align-items:center;gap:6px;justify-content:center}
 .agent-rec .spark{animation:sparkpulse 2.8s ease-in-out infinite}
 @keyframes sparkpulse{0%,100%{opacity:.6;transform:scale(1)}50%{opacity:1;transform:scale(1.18)}}
 .agent-rec .big{font-size:23px;font-weight:600;letter-spacing:-.01em;margin:6px 0 13px}
-.btn-rec{width:100%;background:#fff;color:#2a1854;border:none;border-radius:12px;padding:12px;font-size:14px;font-weight:600;font-family:inherit;display:inline-flex;align-items:center;justify-content:center;gap:7px;cursor:pointer;transition:.12s}
+.btn-rec{width:100%;background:#fff;color:#2a1854;border:none;border-radius:12px;padding:14px;font-size:16px;font-weight:600;font-family:inherit;display:inline-flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;transition:.12s;box-shadow:0 2px 12px rgba(0,0,0,.14)}
 .btn-rec:hover{background:#f1ecfb}
 
 /* recent roles — compact list */
@@ -292,4 +292,6 @@ button{font-family:inherit;cursor:pointer}
 .gcrit .gh{display:flex;align-items:center;gap:12px;margin-bottom:5px}
 .gcrit .gh b{font-weight:500;width:104px;flex:none}
 .gcrit .why{font-size:13px;color:var(--ink-2);line-height:1.5}
+.gcrit .dim{padding:0;margin-bottom:5px}
+.gcrit .dim .nm{width:118px}
 .tprom{font-weight:500;display:inline-block}
