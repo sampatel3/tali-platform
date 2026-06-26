@@ -66,6 +66,8 @@ Positive corroboration also feeds Prong 1: a claim corroborated by LinkedIn/grap
 
 ## 3. LinkedIn URL cross-check (new)
 
+> **Status (2026-06-26): DEFERRED — filed as a later feature.** The diff logic + pluggable fetcher are built but inert (`LINKEDIN_CORROBORATION_ENABLED` off) because LinkedIn needs a paid data provider (it blocks unauth fetches; Proxycurl is dead) — the only paid axis in the system. We chose to build **GitHub corroboration instead** (§3a) — free official API, no provider, no scraping, and we already hold the GitHub URL. Revisit LinkedIn when a customer specifically demands it; "later" = wire a provider + flip the flag.
+
 **Do the URL-provided version — it's easy and high-confidence; skip name-based discovery.** We usually already hold the exact profile URL: `cv_sections.links[]` (parsed from the CV) + Workable `social_profiles`. No identity-matching guesswork.
 
 - **Fetch** the public profile (provided URL only), extract employer / title / dates / tenure.
@@ -76,6 +78,15 @@ Positive corroboration also feeds Prong 1: a claim corroborated by LinkedIn/grap
 Placement: **async enrichment**. Files: new `services/external_corroboration.py`, reuse `cv_sections.links` + `candidate.social_profiles`; persist into `integrity_signals`.
 
 ---
+
+## 3a. GitHub corroboration (new — built instead of LinkedIn)
+
+Free, official, no provider, no scraping, no legal fight — and we already parse the GitHub URL into `cv_sections.links`. Fetch the candidate's OWN GitHub via the official API (`/users/{u}` + `/repos`, `GITHUB_TOKEN` for the 5000/hr limit), aggregate repo languages, and:
+- claimed skill shows up as a real repo language → **corroborated** (positive);
+- the GitHub URL doesn't resolve (404) → **not_found** (soft "confirm the link" flag);
+- account exists but is quiet / private / language-mismatched → **no_signal (NEUTRAL)**. **Fairness-critical:** public activity is invisible for private work and biased, so an empty/quiet GitHub is *never* a penalty — GitHub only corroborates positively or asks a question.
+
+Placement: async + shortlist-gated (same enrichment as the graph). Gated `GITHUB_CORROBORATION_ENABLED`. Files: `services/external_corroboration.py` (real httpx fetcher + `corroborate_github`); triangulation axis + FE surfacing wired.
 
 ## 4. Knowledge-graph collective corroboration (new — the moat)
 
