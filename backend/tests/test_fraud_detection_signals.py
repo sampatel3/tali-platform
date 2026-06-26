@@ -12,11 +12,22 @@ from app.services.document_hygiene import (
     scan_pdf_metadata,
 )
 from app.services.fraud_detection import (
+    apply_grounding_discount,
     build_supplementary_fraud_signals,
+    compute_grounding_coverage,
     detect_cv_copy_paste,
     detect_jd_shingle_similarity,
     diff_cv_vs_workable_history,
 )
+
+
+def _req(priority, status, requirement, quotes):
+    return {
+        "priority": priority,
+        "status": status,
+        "requirement": requirement,
+        "evidence_quotes": list(quotes),
+    }
 
 # A 45-word verbatim block — long enough to clear the 40-word dilution floor.
 _JD_BLOCK = (
@@ -164,3 +175,77 @@ def test_sanitize_respects_strip_flag():
 
 def test_scan_pdf_metadata_graceful_on_junk():
     assert scan_pdf_metadata(b"not a pdf")["checked"] is False
+
+
+# ── Prong 1: evidence-grounding coverage / ungrounded-match conjunction ──────
+def test_grounding_gamed_high_match_low_coverage_flags():
+    # 3 met must-haves, only 1 backed by a verbatim quote → spec-mirroring tell.
+    reqs = [
+        _req("must_have", "met", "Kafka", ["built Kafka pipelines at Acme"]),
+        _req("must_have", "met", "Kubernetes", []),  # claimed, no evidence
+        _req("must_have", "partially_met", "Spark", []),  # claimed, no evidence
+    ]
+    res = compute_grounding_coverage(reqs, 80.0, high_match_threshold=55.0, low_coverage_threshold=0.5, min_must_haves=2)
+    assert res.met_must_haves == 3
+    assert res.grounded_must_haves == 1
+    assert res.coverage < 0.5
+    assert res.ungrounded_match is True
+    assert set(res.ungrounded_requirements) == {"Kubernetes", "Spark"}
+
+
+def test_grounding_genuine_high_match_high_coverage_clean():
+    reqs = [
+        _req("must_have", "met", "Kafka", ["Kafka at Acme"]),
+        _req("must_have", "met", "Kubernetes", ["ran K8s clusters"]),
+        _req("must_have", "met", "Spark", ["Spark ETL jobs"]),
+    ]
+    res = compute_grounding_coverage(reqs, 80.0)
+    assert res.coverage == 1.0
+    assert res.ungrounded_match is False
+
+
+def test_grounding_high_match_alone_is_not_a_signal():
+    # Low coverage but match below the floor → never fires (high-match alone is never suspicious).
+    reqs = [
+        _req("must_have", "met", "Kafka", []),
+        _req("must_have", "met", "Kubernetes", []),
+    ]
+    res = compute_grounding_coverage(reqs, 40.0, high_match_threshold=55.0)
+    assert res.ungrounded_match is False
+
+
+def test_grounding_min_must_haves_guards_tiny_n():
+    reqs = [_req("must_have", "met", "Kafka", [])]  # only 1 met must-have
+    res = compute_grounding_coverage(reqs, 90.0, min_must_haves=2)
+    assert res.ungrounded_match is False
+
+
+def test_grounding_fails_open_with_no_must_haves():
+    reqs = [_req("nice_to_have", "met", "Docker", [])]
+    res = compute_grounding_coverage(reqs, 90.0)
+    assert res.coverage == 1.0
+    assert res.ungrounded_match is False
+
+
+def test_grounding_handles_enum_repr_strings():
+    reqs = [
+        _req("Priority.MUST_HAVE", "Status.MET", "Kafka", []),
+        _req("Priority.MUST_HAVE", "Status.PARTIALLY_MET", "Spark", []),
+        _req("Priority.MUST_HAVE", "Status.NOT_MET", "Go", []),  # not positive → excluded
+    ]
+    res = compute_grounding_coverage(reqs, 80.0)
+    assert res.met_must_haves == 2  # NOT_MET excluded
+    assert res.ungrounded_match is True
+
+
+def test_grounding_discount_is_bounded_and_proportional():
+    reqs = [_req("must_have", "met", "A", []), _req("must_have", "met", "B", [])]
+    res = compute_grounding_coverage(reqs, 80.0)  # coverage 0.0 → fully un-evidenced
+    new_score, discount = apply_grounding_discount(80.0, res, max_discount=15.0)
+    assert discount == 15.0  # capped
+    assert new_score == 65.0
+    # No discount when not an ungrounded_match.
+    clean = compute_grounding_coverage(
+        [_req("must_have", "met", "A", ["q"]), _req("must_have", "met", "B", ["q"])], 80.0
+    )
+    assert apply_grounding_discount(80.0, clean, max_discount=15.0) == (80.0, 0.0)

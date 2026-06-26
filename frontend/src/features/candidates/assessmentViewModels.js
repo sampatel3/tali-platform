@@ -466,6 +466,17 @@ const buildIntegrityFlags = (details) => {
     });
   }
 
+  // Prong 1: a strong match whose must-haves aren't backed by verbatim CV
+  // evidence — the spec-tailoring tell. A high match alone is never flagged.
+  const gr = sig.grounding && typeof sig.grounding === 'object' ? sig.grounding : null;
+  if (gr && gr.ungrounded_match) {
+    const names = Array.isArray(gr.ungrounded_requirements) ? gr.ungrounded_requirements.filter(Boolean) : [];
+    const n = names.length || Math.max(0, Number(gr.met_must_haves || 0) - Number(gr.grounded_must_haves || 0));
+    flags.push(
+      `Strong match but ${n} must-have${n === 1 ? '' : 's'} not evidenced in the CV${names.length ? `: ${names.join(', ')}` : ''} — confirm these are real, not spec-tailoring.`,
+    );
+  }
+
   return flags.map((item) => String(item).trim()).filter(Boolean);
 };
 

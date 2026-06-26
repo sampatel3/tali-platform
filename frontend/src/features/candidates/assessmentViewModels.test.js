@@ -69,6 +69,37 @@ describe('assessmentViewModels', () => {
     expect(model.integrityFlags).toEqual([]);
   });
 
+  it('surfaces ungrounded-match (spec-tailoring) from the grounding signal', () => {
+    const application = {
+      cv_match_score: 78,
+      cv_match_details: {
+        score_scale: '0-100',
+        integrity_signals: {
+          grounding: {
+            met_must_haves: 3,
+            grounded_must_haves: 1,
+            coverage: 0.33,
+            ungrounded_requirements: ['Kubernetes', 'Spark'],
+            ungrounded_match: true,
+          },
+        },
+      },
+    };
+    const model = buildRoleFitEvidenceModel({ application, completedAssessment: null });
+    const joined = model.integrityFlags.join(' | ');
+    expect(joined).toContain('Kubernetes');
+    expect(joined).toContain('spec-tailoring');
+  });
+
+  it('does not flag grounding when ungrounded_match is false', () => {
+    const application = {
+      cv_match_score: 78,
+      cv_match_details: { integrity_signals: { grounding: { ungrounded_match: false, coverage: 1.0 } } },
+    };
+    const model = buildRoleFitEvidenceModel({ application, completedAssessment: null });
+    expect(model.integrityFlags).toEqual([]);
+  });
+
   it('prefers completed assessment evidence over application CV-fit data', () => {
     const application = {
       cv_match_score: 61,

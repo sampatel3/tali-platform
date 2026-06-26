@@ -743,3 +743,110 @@ def build_supplementary_fraud_signals(
         pass
 
     return signals
+
+
+# ── Prong 1: evidence-grounding coverage (anti spec-gaming) ────────────────
+# A high CV↔spec match is ambiguous — genuinely qualified OR gamed-the-spec — so
+# it is NEVER, on its own, a fraud signal. The discriminator is GROUNDING: among
+# the role's MUST-HAVE requirements the model graded met/partial, the fraction
+# that retain a VERBATIM CV quote (after the holistic grounding pass drops
+# quotes that don't locate in the CV) vs a bare, spec-echoing assertion. The
+# conjunction `high match × LOW grounding coverage` is the gamed-suspect tell.
+# A genuine candidate's claims locate in the CV → high coverage → untouched; a
+# tailored CV's claims don't → low coverage → flagged (and optionally nudged).
+_POSITIVE_STATUSES = {"met", "partially_met", "partial"}
+
+
+def _enum_norm(v: Any) -> str:
+    """Normalise a pydantic enum / string to a bare lowercase token
+    ('Status.MET' or Status.MET or 'met' → 'met')."""
+    val = getattr(v, "value", None)
+    s = str(val if val is not None else v).strip().lower().replace(" ", "_")
+    return s.rsplit(".", 1)[-1] if "." in s else s
+
+
+@dataclass
+class GroundingCoverageResult:
+    met_must_haves: int
+    grounded_must_haves: int
+    coverage: float  # grounded / met must-haves; 1.0 when no met must-haves
+    ungrounded_requirements: list[str]  # met-but-unevidenced must-have texts
+    ungrounded_match: bool  # high match × low coverage conjunction
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "met_must_haves": self.met_must_haves,
+            "grounded_must_haves": self.grounded_must_haves,
+            "coverage": round(self.coverage, 3),
+            "ungrounded_requirements": self.ungrounded_requirements[:10],
+            "ungrounded_match": self.ungrounded_match,
+        }
+
+
+def compute_grounding_coverage(
+    requirements_assessment: Iterable[Any] | None,
+    overall_score: float | None,
+    *,
+    high_match_threshold: float = 55.0,
+    low_coverage_threshold: float = 0.5,
+    min_must_haves: int = 2,
+) -> GroundingCoverageResult:
+    """Grounding coverage over MUST-HAVE requirements graded met/partial.
+
+    A requirement is *grounded* when it retains a verbatim CV quote
+    (``evidence_quotes`` non-empty after the holistic grounding pass). Coverage
+    = grounded / met-must-haves. ``ungrounded_match`` fires ONLY on the
+    conjunction high-match × low-coverage with enough met must-haves to be
+    meaningful — never on a high match alone. Fails open (coverage 1.0, no flag)
+    when there are no met must-haves. Reads pydantic objects OR plain dicts.
+    """
+    met: list[Any] = [
+        ra
+        for ra in (requirements_assessment or [])
+        if "must" in _enum_norm(_attr(ra, "priority"))
+        and _enum_norm(_attr(ra, "status")) in _POSITIVE_STATUSES
+    ]
+    grounded = [ra for ra in met if _attr(ra, "evidence_quotes")]
+    ungrounded_names = [
+        n
+        for n in (
+            str(_attr(ra, "requirement") or "").strip()[:160]
+            for ra in met
+            if not _attr(ra, "evidence_quotes")
+        )
+        if n
+    ]
+    coverage = (len(grounded) / len(met)) if met else 1.0
+    ungrounded_match = bool(
+        overall_score is not None
+        and overall_score >= high_match_threshold
+        and len(met) >= min_must_haves
+        and coverage <= low_coverage_threshold
+    )
+    return GroundingCoverageResult(
+        met_must_haves=len(met),
+        grounded_must_haves=len(grounded),
+        coverage=coverage,
+        ungrounded_requirements=ungrounded_names,
+        ungrounded_match=ungrounded_match,
+    )
+
+
+def apply_grounding_discount(
+    score: float | None,
+    coverage: GroundingCoverageResult,
+    *,
+    max_discount: float,
+) -> tuple[float | None, float]:
+    """Bounded discount when a high match is driven by un-evidenced must-haves —
+    proportional to the un-evidenced fraction, capped at ``max_discount`` so a
+    terse-but-genuine CV is nudged + flagged, never single-handedly rejected.
+    Returns ``(adjusted_score, discount_applied)``; no-op unless
+    ``ungrounded_match``."""
+    if not coverage.ungrounded_match or score is None or max_discount <= 0:
+        return score, 0.0
+    ungrounded_fraction = max(0.0, min(1.0, 1.0 - coverage.coverage))
+    discount = round(min(max_discount, max_discount * ungrounded_fraction), 2)
+    if discount <= 0:
+        return score, 0.0
+    return max(0.0, round(score - discount, 2)), discount

@@ -472,6 +472,25 @@ class Settings(BaseSettings):
     # effect; default ON for recruiter visibility.
     FRAUD_WORKABLE_DIFF_ENABLED: bool = True
 
+    # ── Prong 1: evidence-grounded score integrity (anti spec-gaming) ────────
+    # A high CV↔spec match is ambiguous — genuinely-qualified OR gamed-the-spec.
+    # The discriminator is GROUNDING: among the role's MUST-HAVE requirements
+    # graded met/partial, what fraction carry a verbatim CV quote (vs a bare,
+    # spec-echoing assertion)? The conjunction `high match × LOW grounding`
+    # is the gamed-suspect signal. Computed + persisted on every holistic score;
+    # the bounded DISCOUNT is gated (default shadow) so it ships safely.
+    # ``high_match`` is the match floor above which low grounding is suspicious;
+    # ``low`` is the grounding-coverage ceiling that counts as "low"; we only
+    # evaluate when ``min_musthaves`` met must-haves exist (avoids tiny-n noise).
+    GROUNDING_COVERAGE_DISCOUNT_ENABLED: bool = False
+    GROUNDING_COVERAGE_HIGH_MATCH: float = 55.0
+    GROUNDING_COVERAGE_LOW: float = 0.5
+    GROUNDING_COVERAGE_MIN_MUSTHAVES: int = 2
+    # Cap on the discount (proportional to the un-evidenced fraction). Bounded so
+    # a terse-but-genuine CV — which legitimately quotes less — can never be
+    # single-handedly rejected on grounding alone; it nudges + flags for review.
+    GROUNDING_COVERAGE_MAX_DISCOUNT: float = 15.0
+
     # MVP feature flags (default to MVP-safe behavior).
     # Stripe is now the live payment processor for credit top-ups; default
     # changed True → False as part of the 2026-04-29 usage-pricing cutover.
