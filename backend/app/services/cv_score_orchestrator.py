@@ -1181,23 +1181,25 @@ def _augment_integrity_signals(
     snapshot, the candidate's Workable/social history AND the role JD all in
     scope, so both scoring engines surface them uniformly.
 
-    Layers (all flag-only, never change the score here): JD-shingle + CV↔Workable
-    diff + unverified employers (supplementary); years-vs-span inflation + tech
-    anachronism (CV-internal coherence); graph collective corroboration + the
-    LinkedIn URL diff (gated, fail-open); then a triangulation summary requiring
-    multiple independent disagreements before it reads as "strong_review".
+    Layers here are all **$0 / deterministic** and run on every score: JD-shingle
+    + CV↔Workable diff + unverified employers (supplementary); years-vs-span
+    inflation + tech anachronism (CV-internal coherence); then a triangulation
+    summary requiring multiple independent disagreements before "strong_review".
+
+    The **paid / slow** axes — graph collective corroboration and the LinkedIn
+    URL fetch — are deliberately NOT here. They run async + shortlist-gated in
+    ``corroboration_enrichment`` (a $0.05-0.30 LinkedIn fetch on every score
+    would be the wrong placement), and re-triangulate after they land.
     Best-effort — never raises into the scoring path, returns ``existing`` on
     any failure."""
     try:
         from ..platform.config import settings
-        from .external_corroboration import corroborate_linkedin
         from .fraud_detection import (
             aggregate_triangulation,
             build_supplementary_fraud_signals,
             detect_experience_inflation,
             detect_tech_anachronism,
         )
-        from .graph_corroboration import corroborate_candidate_stack
 
         cand = getattr(application, "candidate", None)
         cv_sections = (
@@ -1228,22 +1230,9 @@ def _augment_integrity_signals(
         if anach.triggered:
             merged["tech_anachronism"] = anach.to_dict()
 
-        # Cross-source corroboration (gated + fail-open: None when disabled / no
-        # graph / no LinkedIn URL — never a penalty for absence).
-        graph = corroborate_candidate_stack(
-            organization_id=getattr(application, "organization_id", None),
-            cv_sections=cv_sections,
-            min_observations=settings.GRAPH_CORROBORATION_MIN_OBSERVATIONS,
-        )
-        if graph is not None:
-            merged["graph_corroboration"] = graph
-        social = getattr(cand, "social_profiles", None) if cand is not None else None
-        linkedin = corroborate_linkedin(cv_sections=cv_sections, social_profiles=social)
-        if linkedin is not None:
-            merged["linkedin"] = linkedin
-
-        # Triangulate the whole picture — changes no score, adds the verdict the
-        # "verify before interview" panel reads.
+        # Triangulate the deterministic picture — changes no score, adds the
+        # verdict the "verify before interview" panel reads (and the gate the
+        # async enrichment keys off — only flagged high-matches get a paid fetch).
         merged["triangulation"] = aggregate_triangulation(merged)
         return merged or None
     except Exception:  # pragma: no cover — never break scoring on a flag

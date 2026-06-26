@@ -189,3 +189,39 @@ def test_render_state_scan_graceful_on_junk():
     from app.services.document_hygiene import scan_pdf_render_state
 
     assert scan_pdf_render_state(b"not a pdf")["checked"] is False
+
+
+# ── Async shortlist enrichment gating (graph + LinkedIn off the hot path) ────
+def _fake_app(score, verdict):
+    from types import SimpleNamespace
+
+    details = {"integrity_signals": {"triangulation": {"verdict": verdict}}} if verdict else {}
+    return SimpleNamespace(
+        id=1, cv_match_score=score, cv_match_details=details,
+        organization_id=1, candidate=None, cv_sections={},
+    )
+
+
+def test_should_enrich_false_when_both_axes_disabled():
+    from app.services.corroboration_enrichment import should_enrich
+
+    assert settings.GRAPH_CORROBORATION_ENABLED is False
+    assert settings.LINKEDIN_CORROBORATION_ENABLED is False
+    assert should_enrich(_fake_app(90, "strong_review")) is False
+
+
+def test_should_enrich_requires_high_match_and_a_flag(monkeypatch):
+    from app.services.corroboration_enrichment import should_enrich
+
+    monkeypatch.setattr(settings, "GRAPH_CORROBORATION_ENABLED", True)
+    assert should_enrich(_fake_app(80, "review")) is True  # match + flag
+    assert should_enrich(_fake_app(80, "ok")) is False  # match, no flag
+    assert should_enrich(_fake_app(80, None)) is False  # no triangulation
+    assert should_enrich(_fake_app(20, "strong_review")) is False  # flag, not a candidate
+
+
+def test_enrich_corroboration_noop_when_disabled():
+    from app.services.corroboration_enrichment import enrich_corroboration
+
+    # both axes disabled → graph/linkedin None → no change → returns before db use
+    assert enrich_corroboration(_fake_app(80, "review"), db=None) is None

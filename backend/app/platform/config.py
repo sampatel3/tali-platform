@@ -510,6 +510,16 @@ class Settings(BaseSettings):
     # built and tested behind a pluggable fetcher that returns None until wired.
     LINKEDIN_CORROBORATION_ENABLED: bool = False
 
+    # The paid axes (graph + LinkedIn) run ASYNC + shortlist-gated, never on
+    # every score: only for a candidate scoring at/above this AND already
+    # triangulation-flagged (review/strong_review). Keeps a $0.05-0.30 LinkedIn
+    # fetch to "resolve a flag on a real candidate", not a funnel-wide screen.
+    CORROBORATION_ENRICH_MIN_SCORE: float = 55.0
+    # Redis TTL (seconds) for the per-company graph stack distribution — it
+    # changes slowly, so cohort re-scores + the multi-employer loop reuse it
+    # instead of re-hitting Neo4j. 0 disables the cache.
+    GRAPH_COMPANY_STACK_CACHE_TTL: int = 21600  # 6h
+
     # MVP feature flags (default to MVP-safe behavior).
     # Stripe is now the live payment processor for credit top-ups; default
     # changed True → False as part of the 2026-04-29 usage-pricing cutover.

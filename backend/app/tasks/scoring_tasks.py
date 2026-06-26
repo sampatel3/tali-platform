@@ -178,6 +178,25 @@ def score_application_job(
                         application_id,
                     )
                     db.rollback()
+
+                # Paid/slow cross-source corroboration (graph + LinkedIn fetch)
+                # runs async + shortlist-gated — never on every score. Dispatch
+                # only for a plausible match that already carries a flag worth
+                # resolving (should_enrich re-checks on the worker); a $0.05-0.30
+                # LinkedIn fetch is spent to confirm/deny a flag, not to screen
+                # everyone. Best-effort — never blocks scoring.
+                try:
+                    from ..services.corroboration_enrichment import should_enrich
+
+                    if should_enrich(application):
+                        from .corroboration_tasks import enrich_corroboration_job
+
+                        enrich_corroboration_job.delay(application_id)
+                except Exception:  # pragma: no cover — defensive
+                    logger.debug(
+                        "corroboration enrich dispatch failed application_id=%s",
+                        application_id, exc_info=True,
+                    )
             return {
                 "status": job.status,
                 "application_id": application_id,
