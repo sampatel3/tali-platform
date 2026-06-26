@@ -120,3 +120,43 @@
   color: var(--mute);
   margin-bottom: 20px;
 }
+
+/* ============================================================
+   Flat settings (design-language pass).
+   De-card the section groupings: bordered subcards become
+   divider-separated flat sections, and the per-row toggle cards
+   collapse into one bordered list. Billing/summary stat cards,
+   the Workable connection card, and the danger zone keep their
+   card treatment (they earn the border). These rules override the
+   earlier .settings-* definitions (02-shell-nav / 03-settings-agent)
+   because 17 imports after them. JSX is unchanged.
+   ============================================================ */
+.settings-subcard {
+  border: none;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  padding: 22px 0 2px;
+}
+/* first section sits directly under the panel subtitle — no divider */
+.settings-panel > .settings-subcard:first-of-type {
+  border-top: none;
+  padding-top: 2px;
+}
+.settings-subcard.settings-top-gap { margin-top: 0; }
+
+/* one bordered toggle list instead of a card per row */
+.settings-toggle-list {
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.settings-toggle-list .settings-toggle-card {
+  border: none;
+  border-radius: 0;
+  border-top: 1px solid var(--line);
+}
+.settings-toggle-list .settings-toggle-card:first-child { border-top: none; }
+

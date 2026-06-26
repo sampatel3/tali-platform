@@ -1356,7 +1356,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 only LLM), api keys (no public API in v1). The agent tab
                 replaces the old scoring + assessment defaults with three
                 workspace-wide defaults inherited at role creation. */}
-            <div className="mc-settings-tabs" role="tablist" aria-label="Settings sections">
+            <div className="vtabs" role="tablist" aria-label="Settings sections">
               {[
                 { k: 'org', l: 'Organization' },
                 { k: 'members', l: 'Members' },
@@ -1375,7 +1375,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   type="button"
                   role="tab"
                   aria-selected={activeSection === tab.k}
-                  className={`mc-settings-tab ${activeSection === tab.k ? 'on' : ''}`.trim()}
+                  className={`vtab ${activeSection === tab.k ? 'on' : ''}`.trim()}
                   onClick={() => navigateToSection(tab.k)}
                 >
                   {tab.l}
