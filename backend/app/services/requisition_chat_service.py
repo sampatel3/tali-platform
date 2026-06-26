@@ -568,8 +568,11 @@ def build_chat_system_prompt(
         + "\n\nMost important gaps to close next:\n"
         + focus_lines
         + "\n\nFrom the user's message and any attached transcript/screenshot, "
-        "capture every field you can (use the typed fields for standard columns "
-        "and the 'custom' object for any other template keys). Then reply "
+        "capture every field you can — use the typed fields for standard columns "
+        "and the 'custom' object for any other template key (e.g. 'urgency'); "
+        "never skip a field just because it isn't a typed column. Salary is in "
+        "AED by default — don't ask about currency unless the recruiter raises "
+        "it. Then reply "
         "conversationally — warm, concise, fast — acknowledging what you got and "
         "asking about the focus gaps next (one or two at a time, never "
         "interrogate). ALWAYS keep momentum: every reply asks the next most "
@@ -639,7 +642,14 @@ def run_chat_turn(
     # 3. ONE metered, forced-tool-use LLM call (vision-capable).
     if client is None:
         client = get_metered_client(organization_id=brief.organization_id)
-    resolved_model = model or settings.resolved_claude_model
+    # Use the FAST chat model (CLAUDE_CHAT_MODEL = Haiku, ~5× faster round-trip)
+    # rather than resolved_claude_model — on prod the latter is the recruitment
+    # agent's Sonnet (reasoning quality), which made each intake turn feel slow.
+    resolved_model = (
+        model
+        or (settings.CLAUDE_CHAT_MODEL or "").strip()
+        or settings.resolved_claude_model
+    )
     system = build_chat_system_prompt(brief, template, focus)
     llm_messages = _history_for_llm(history_before)
     llm_messages.append(

@@ -149,6 +149,8 @@ def create_requisition(
         created_by_user_id=current_user.id,
         source_kind=data.source_kind,
     )
+    # Salary defaults to AED (UAE-based org) so the agent never asks currency.
+    brief.salary_currency = "AED"
     org = _org(db, current_user.organization_id)
     template = resolve_template(org)
     seed_opening_message(brief, template)
