@@ -826,11 +826,24 @@ const InvitedDetail = ({ candidate, roleNameById, onNavigate }) => {
             </li>
           ))}
         </ul>
-        {!t.email_status ? (
-          <div className="rq-invite-note">
-            No delivery or open events recorded for this invite yet.
-          </div>
-        ) : null}
+        {(() => {
+          const es = (t.email_status || '').toLowerCase();
+          if (es === 'failed') {
+            return (
+              <div className="rq-invite-note is-danger">
+                Invite could not be sent — resend it so the candidate receives the assessment.
+              </div>
+            );
+          }
+          if (!es) {
+            return (
+              <div className="rq-invite-note">
+                No delivery or open events recorded for this invite yet.
+              </div>
+            );
+          }
+          return null;
+        })()}
       </div>
     </section>
   );
