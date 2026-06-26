@@ -262,9 +262,11 @@
   pointer-events: none;
   transition: opacity 360ms ease;
 }
-.abar::before { background: linear-gradient(135deg, #3a1d6e 0%, #241147 100%); }
+/* ON fill = the signed-off flowing dark-purple gradient (design-language pass).
+   5 stops + 300% sizing so the animation drifts the colour across the bar. */
+.abar::before { background: linear-gradient(120deg, #3a1d6e, #6a3fb8, #2a1556, #4a2a8a, #3a1d6e); background-size: 300% 300%; }
 .abar::after  { background: color-mix(in oklab, var(--amber) 13%, var(--bg-2)); }
-.abar-on::before    { opacity: 1; }
+.abar-on::before    { opacity: 1; animation: abarFlow 7s ease-in-out infinite; }
 .abar-paused::after { opacity: 1; }
 .ab-spark {
   width: 30px;
@@ -357,6 +359,14 @@
 @keyframes abarPulse {
   0%, 100% { box-shadow: 0 6px 20px -8px rgba(58, 29, 110, .55), 0 0 0 0 rgba(196, 165, 253, 0); }
   50%      { box-shadow: 0 6px 22px -8px rgba(58, 29, 110, .7),  0 0 0 4px rgba(196, 165, 253, .13); }
+}
+@keyframes abarFlow {
+  0%, 100% { background-position: 0% 50%; }
+  50%      { background-position: 100% 50%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .abar-on { animation: none; }
+  .abar-on::before { animation: none; }
 }
 .abar-on .ab-spark { background: rgba(196, 165, 253, .24); border: 1px solid rgba(196, 165, 253, .5); color: #fff; }
 .abar-on .ab-spark .ab-pulse {
