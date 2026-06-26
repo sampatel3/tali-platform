@@ -16,6 +16,37 @@ export const asCleanText = (value) => String(value || '').replace(/\s+/g, ' ').t
 
 export const asArray = (value) => (Array.isArray(value) ? value.filter(Boolean) : []);
 
+// Each role requirement is graded 0-100 by cv_matching.graded ("how much of a
+// match"), and that grade is what the score actually uses. The met/partial/gap
+// band is derived from the grade here — NOT the coarse LLM status, which is set
+// by a separate pass and can disagree with the number (e.g. "met" with a grade
+// of 0). Bands follow the model's own anchors: 75+ a strong/full match, 35-74 a
+// partial, below 35 a gap. Falls back to the stored status only when a
+// requirement wasn't graded or is unassessable. Shared by CvMatchReview (the
+// requirement list) and the standing report (the matched/missing split + ring)
+// so both always agree.
+export const REQ_GRADE_MET_MIN = 75;
+export const REQ_GRADE_PARTIAL_MIN = 35;
+export const requirementGrade = (item) => {
+  const g = Number(item?.match_score);
+  return Number.isFinite(g) && g >= 0 ? g : null;
+};
+const reqStatusFallbackKey = (status) => {
+  const value = String(status || '').toLowerCase();
+  if (value === 'met') return 'met';
+  if (value === 'partially_met') return 'partially_met';
+  if (value === 'unknown') return 'unknown';
+  return 'missing';
+};
+export const reqGradeKey = (item) => {
+  if (item?.assessable === false) return 'unknown';
+  const g = requirementGrade(item);
+  if (g === null) return reqStatusFallbackKey(item?.status);
+  if (g >= REQ_GRADE_MET_MIN) return 'met';
+  if (g >= REQ_GRADE_PARTIAL_MIN) return 'partially_met';
+  return 'missing';
+};
+
 export const splitInlineList = (value) => String(value || '')
   .split(/[,;|•\n]/)
   .map((item) => asCleanText(item).replace(/^[-*]\s*/, ''))

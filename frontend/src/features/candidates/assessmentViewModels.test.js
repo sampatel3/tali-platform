@@ -71,7 +71,7 @@ describe('assessmentViewModels', () => {
     expect(model.integrityFlags).toEqual([]);
   });
 
-  it('surfaces ungrounded-match (spec-tailoring) from the grounding signal', () => {
+  it('does NOT surface grounding as an integrity flag (it lives in the per-requirement grade now)', () => {
     const application = {
       cv_match_score: 78,
       cv_match_details: {
@@ -88,11 +88,9 @@ describe('assessmentViewModels', () => {
       },
     };
     const model = buildRoleFitEvidenceModel({ application, completedAssessment: null });
-    const joined = model.integrityFlags.join(' | ');
-    // Canonical wording flags the count + meaning, not the requirement names
-    // (those already appear in the requirements list, so listing them duplicates).
-    expect(joined).toContain('2 must-haves scored as met');
-    expect(joined).toContain('keyword-matching');
+    // Un-evidenced "met" must-haves grade low in cv_matching.graded and that
+    // grade drives the score + shows per requirement — so no duplicate warning.
+    expect(model.integrityFlags).toEqual([]);
   });
 
   it('does not flag grounding when ungrounded_match is false', () => {

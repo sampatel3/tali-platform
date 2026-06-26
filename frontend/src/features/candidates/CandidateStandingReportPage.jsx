@@ -35,6 +35,7 @@ import { VerdictDetail } from './VerdictDetail';
 import { verdictLabel } from '../../shared/decisions/decisionLabels';
 import {
   getErrorMessage,
+  reqGradeKey,
   resolveCvMatchDetails,
 } from './candidatesUiUtils';
 import {
@@ -536,7 +537,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       ? cvMatchDetails.requirements_assessment
       : [];
     return sortRequirements(
-      requirements.filter((item) => String(item?.status || '').toLowerCase() === 'met')
+      requirements.filter((item) => reqGradeKey(item) === 'met')
     );
   }, [cvMatchDetails]);
   const missingRequirements = useMemo(() => {
@@ -544,7 +545,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       ? cvMatchDetails.requirements_assessment
       : [];
     return sortRequirements(
-      requirements.filter((item) => String(item?.status || '').toLowerCase() !== 'met')
+      requirements.filter((item) => reqGradeKey(item) !== 'met')
     );
   }, [cvMatchDetails]);
   const strengthItems = useMemo(() => {
