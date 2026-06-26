@@ -12,56 +12,62 @@
 <link rel="stylesheet" href="/report-preview.css">
 <style>
 .previewbar{background:#241147;color:#d9cdfa;font-family:'Geist Mono',monospace;font-size:11.5px;letter-spacing:.04em;text-align:center;padding:6px 12px}
-.hwrap{max-width:1360px;margin:0 auto;padding:26px 28px 60px}
-.agentbar{display:flex;align-items:center;gap:13px;background:linear-gradient(120deg,#3a1d6e,#6a3fb8,#2a1556,#4a2a8a,#3a1d6e);background-size:300% 300%;animation:flow 7s ease-in-out infinite;border:1px solid rgba(196,165,253,.5);border-radius:14px;padding:12px 17px;color:#efe9fb;margin-bottom:18px;box-shadow:0 6px 22px rgba(36,17,71,.28)}
+.hwrap{max-width:1480px;margin:0 auto;padding:24px 28px 60px}
+.agentbar{display:flex;align-items:center;gap:13px;background:linear-gradient(120deg,#3a1d6e,#6a3fb8,#2a1556,#4a2a8a,#3a1d6e);background-size:300% 300%;animation:flow 7s ease-in-out infinite;border:1px solid rgba(196,165,253,.5);border-radius:14px;padding:12px 17px;color:#efe9fb;margin-bottom:16px;box-shadow:0 6px 22px rgba(36,17,71,.28)}
 .agentbar .dot{width:9px;height:9px;border-radius:50%;background:#c4f17a;box-shadow:0 0 0 4px rgba(196,241,122,.22);animation:sparkpulse 2.4s ease-in-out infinite}
 .agentbar b{font-weight:600}
 .agentbar .budget{margin-left:auto;display:flex;align-items:center;gap:9px;font-size:12.5px}
-.agentbar .bbar{width:80px;height:6px;border-radius:4px;background:rgba(238,237,254,.22)}
-.agentbar .bbar i{display:block;height:100%;width:84%;border-radius:4px;background:#c4a5fd}
-.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px}
-.kpi{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-lg);padding:15px 18px}
-.kpi .k{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute)}
-.kpi .v{font-size:25px;font-weight:600;margin-top:4px;letter-spacing:-.02em}
-.kpi .v.attn{color:var(--purple-2)}
-.kpi .sub{font-size:12px;color:var(--mute);margin-top:3px}
-.funnel{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-lg);overflow:hidden;margin-bottom:22px}
-.fstage{flex:1;padding:13px 17px;border-right:1px solid var(--line)}
-.fstage:last-child{border-right:none}
-.fstage.term{background:var(--bg)}
-.fstage .fk{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--mute)}
-.fstage .fv{font-size:22px;font-weight:600;margin-top:3px}
-.fstage .gate{font-size:11.5px;color:var(--purple-2);margin-top:4px;font-weight:500}
-.cockpit{display:grid;grid-template-columns:300px minmax(0,1fr) 320px;gap:18px;align-items:start}
-.qfilter{display:flex;gap:5px;flex-wrap:wrap;padding:13px 14px;border-bottom:1px solid var(--line)}
-.ft{font-size:11.5px;color:var(--mute);padding:3px 9px;border-radius:99px}
-.ft.on{background:var(--purple-soft);color:var(--purple-2);font-weight:500}
-.qitem{display:flex;gap:11px;padding:12px 14px;border-top:1px solid var(--line);cursor:pointer;text-decoration:none;color:inherit}
-.qitem:first-of-type{border-top:none}
+.agentbar .bbar{width:80px;height:6px;border-radius:4px;background:rgba(238,237,254,.22)}.agentbar .bbar i{display:block;height:100%;width:84%;border-radius:4px;background:#c4a5fd}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:13px;margin-bottom:14px}
+.kpi{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:14px 17px}
+.kpi .k{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute)}
+.kpi .v{font-size:24px;font-weight:600;margin-top:3px}.kpi .v.attn{color:var(--purple-2)}
+.kpi .sub{font-size:11.5px;color:var(--mute);margin-top:2px}
+.funnel{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin-bottom:18px}
+.fstage{flex:1;padding:12px 15px;border-right:1px solid var(--line)}.fstage:last-child{border-right:none}.fstage.term{background:var(--bg)}
+.fstage .fk{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--mute)}
+.fstage .fv{font-size:21px;font-weight:600;margin-top:2px}
+.fchips{display:flex;flex-wrap:wrap;gap:4px;margin-top:7px;min-height:18px}
+.fchip{font-size:10px;border-radius:99px;padding:1px 7px;font-weight:500;white-space:nowrap}
+.fchip.act{background:var(--purple-soft);color:var(--purple-2)}.fchip.rej{background:var(--bg-3);color:var(--mute)}
+.cockpit{display:grid;grid-template-columns:204px 296px minmax(0,1fr) 300px;gap:16px;align-items:start}
+.panel-card{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.phead{padding:13px 14px;font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}
+/* agent rail */
+.aitem{display:block;padding:11px 14px;border-top:1px solid var(--line);cursor:pointer;text-decoration:none;color:inherit}.aitem:first-of-type{border-top:none}
+.aitem.on{background:var(--purple-tint);box-shadow:inset 3px 0 0 var(--purple)}
+.arow{display:flex;align-items:center;gap:8px}
+.ast{width:8px;height:8px;border-radius:50%;flex:none}.ast.a{background:var(--purple);box-shadow:0 0 0 3px var(--purple-soft)}.ast.p{background:var(--amber)}.ast.o{background:var(--line-2)}
+.arole{font-weight:500;font-size:13px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.aprev{font-size:11px;color:var(--mute);margin:3px 0 0 16px}
+.abadges{display:flex;gap:6px;margin:7px 0 0 16px}
+.abadge{font-size:10px;border-radius:99px;padding:1px 7px;background:var(--bg-3);color:var(--mute)}.abadge.q{background:var(--purple-soft);color:var(--purple-2)}
+.abud{height:4px;border-radius:3px;background:var(--bg-3);margin:7px 0 0 16px}.abud i{display:block;height:100%;border-radius:3px;background:var(--purple-lav)}
+/* queue */
+.qfilter{display:flex;gap:4px;flex-wrap:wrap;padding:11px 12px;border-bottom:1px solid var(--line)}
+.ft{font-size:11px;color:var(--mute);padding:3px 9px;border-radius:99px;cursor:pointer}.ft.on{background:var(--purple-soft);color:var(--purple-2);font-weight:500}
+.qitem{display:flex;gap:10px;padding:11px 13px;border-top:1px solid var(--line);cursor:pointer;text-decoration:none;color:inherit}.qitem:first-of-type{border-top:none}
 .qitem.on{background:var(--purple-tint);box-shadow:inset 3px 0 0 var(--purple)}
-.qav{width:32px;height:32px;border-radius:50%;background:var(--purple-soft);color:var(--purple-2);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex:none}
-.qmeta{flex:1;min-width:0}
-.qtop{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
-.qname{font-weight:500;font-size:13.5px}
-.qscore{font-size:15px;font-weight:600;color:var(--purple-2);flex:none}
-.qscore.lo{color:var(--mute)}
-.qsub{font-size:12px;color:var(--mute);margin:1px 0 5px}
-.vpill{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:500;border-radius:99px;padding:2px 9px;white-space:nowrap}
-.vpill.send{background:var(--purple-soft);color:var(--purple-2)}
-.vpill.rej{background:var(--bg-3);color:var(--mute)}
-.vpill.q{background:var(--amber-soft);color:var(--amber-ink)}
-.detail{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-lg);padding:20px 22px}
-.dtwo{display:grid;grid-template-columns:248px 1fr;gap:24px;align-items:start}
-.chat{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-lg);display:flex;flex-direction:column;height:560px;position:sticky;top:80px}
-.chat .chead{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;font-weight:500;font-size:14px}
-.chat .cbody{flex:1;padding:15px 16px;display:flex;flex-direction:column;gap:13px;overflow:auto}
-.msg{font-size:13px;line-height:1.5}
-.msg.user{align-self:flex-end;background:var(--ink);color:#fff;border-radius:14px;padding:9px 13px;max-width:88%}
+.qav{width:30px;height:30px;border-radius:50%;background:var(--purple-soft);color:var(--purple-2);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:11px;flex:none}
+.qmeta{flex:1;min-width:0}.qtop{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
+.qname{font-weight:500;font-size:13px}.qscore{font-size:14px;font-weight:600;color:var(--purple-2);flex:none}.qscore.lo{color:var(--mute)}
+.qsub{font-size:11.5px;color:var(--mute);margin:1px 0 5px}
+.vpill{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:500;border-radius:99px;padding:2px 8px;white-space:nowrap}
+.vpill.act{background:var(--purple-soft);color:var(--purple-2)}.vpill.rej{background:var(--bg-3);color:var(--mute)}.vpill.q{background:var(--amber-soft);color:var(--amber-ink)}
+/* detail */
+.detail{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px}
+/* chat */
+.chat{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);display:flex;flex-direction:column;height:600px;position:sticky;top:80px}
+.chead2{padding:12px 14px;border-bottom:1px solid var(--line)}
+.chead2 .r{font-weight:500;font-size:13.5px;display:flex;align-items:center;gap:7px}.chead2 .s{font-size:11px;color:var(--mute);margin:2px 0 0 22px}
+.cbody{flex:1;padding:14px;display:flex;flex-direction:column;gap:12px;overflow:auto}
+.msg{font-size:12.5px;line-height:1.5}
+.msg.user{align-self:flex-end;background:var(--ink);color:#fff;border-radius:14px;padding:8px 12px;max-width:88%}
 .msg.bot{align-self:flex-start;color:var(--ink-2);max-width:96%}
-.msg.bot .who{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--purple);margin-bottom:3px}
-.composer{padding:12px;border-top:1px solid var(--line)}
-.cfield{border:1px solid var(--line-2);border-radius:12px;padding:10px 13px;color:var(--mute);font-size:13px;display:flex;align-items:center;justify-content:space-between}
-@media (max-width:1100px){.cockpit{grid-template-columns:1fr}.chat{position:static;height:auto;min-height:360px}.dtwo{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr)}.funnel{flex-wrap:wrap}.fstage{flex:1 0 30%}}
+.msg.bot .who{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--purple);margin-bottom:3px}
+.composer{padding:11px;border-top:1px solid var(--line)}
+.cfield{border:1px solid var(--line-2);border-radius:11px;padding:9px 12px;color:var(--mute);font-size:12.5px;display:flex;align-items:center;justify-content:space-between}
+@media (max-width:1240px){.cockpit{grid-template-columns:1fr 1fr}.chat{position:static;height:auto;min-height:340px}.kpis{grid-template-columns:repeat(2,1fr)}.funnel{flex-wrap:wrap}.fstage{flex:1 0 30%}}
 </style>
 </head>
 <body>
@@ -82,10 +88,7 @@
 </nav>
 
 <div class="hwrap">
-  <div style="margin-bottom:16px">
-    <div class="crumb">Tuesday · 12 awaiting you · 4 active roles</div>
-    <div class="h1">Good morning, Priya</div>
-  </div>
+  <div style="margin-bottom:14px"><div class="crumb">Tuesday · 12 awaiting you · 4 active roles</div><div class="h1">Good morning, Priya</div></div>
 
   <div class="agentbar">
     <span class="dot"></span>
@@ -96,100 +99,106 @@
   <div class="kpis">
     <div class="kpi"><div class="k">Awaiting you</div><div class="v attn">12</div><div class="sub">3 questions · 9 decisions</div></div>
     <div class="kpi"><div class="k">Decisions today</div><div class="v">34</div><div class="sub">28 auto-applied</div></div>
-    <div class="kpi"><div class="k">Org budget · MTD</div><div class="v">$42<span style="font-size:15px;color:var(--mute)"> / 50</span></div><div class="sub">84% used</div></div>
+    <div class="kpi"><div class="k">Org budget · MTD</div><div class="v">$42<span style="font-size:14px;color:var(--mute)"> / 50</span></div><div class="sub">84% used</div></div>
     <div class="kpi"><div class="k">Override rate · 7d</div><div class="v">8%</div><div class="sub">you taught the agent 3×</div></div>
   </div>
 
   <div class="funnel">
-    <div class="fstage"><div class="fk">Applied</div><div class="fv">312</div></div>
-    <div class="fstage"><div class="fk">Scored</div><div class="fv">148</div><div class="gate">9 to decide</div></div>
-    <div class="fstage"><div class="fk">Invited</div><div class="fv">34</div><div class="gate">22 in progress</div></div>
-    <div class="fstage"><div class="fk">Completed</div><div class="fv">12</div><div class="gate">3 to review</div></div>
-    <div class="fstage"><div class="fk">Advanced</div><div class="fv">8</div></div>
-    <div class="fstage term"><div class="fk">Rejected</div><div class="fv">156</div></div>
+    <div class="fstage"><div class="fk">Applied</div><div class="fv">312</div><div class="fchips"><span class="fchip rej">auto-rejecting</span></div></div>
+    <div class="fstage"><div class="fk">Scored</div><div class="fv">148</div><div class="fchips"><span class="fchip act">5 send</span><span class="fchip act">3 advance</span><span class="fchip rej">1 reject</span></div></div>
+    <div class="fstage"><div class="fk">Invited</div><div class="fv">34</div><div class="fchips"><span class="fchip act">22 in progress</span></div></div>
+    <div class="fstage"><div class="fk">Completed</div><div class="fv">12</div><div class="fchips"><span class="fchip act">2 advance</span><span class="fchip rej">1 reject</span></div></div>
+    <div class="fstage"><div class="fk">Advanced</div><div class="fv">8</div><div class="fchips"></div></div>
+    <div class="fstage term"><div class="fk">Rejected</div><div class="fv">156</div><div class="fchips"></div></div>
   </div>
 
   <div class="cockpit">
 
-    <!-- QUEUE (narrow) -->
-    <div class="card" style="padding:0">
+    <!-- AGENT RAIL -->
+    <div class="panel-card">
+      <div class="phead">Your agents <a class="more" style="font-size:10px">All roles</a></div>
+      <a class="aitem on" href="#">
+        <div class="arow"><span class="ast a"></span><span class="arole">Senior AWS Platform Eng</span></div>
+        <div class="aprev">9 decisions waiting</div>
+        <div class="abadges"><span class="abadge q"><i class="ti ti-message"></i> 2</span><span class="abadge">9 to decide</span></div>
+        <div class="abud"><i style="width:84%"></i></div>
+      </a>
+      <a class="aitem" href="#">
+        <div class="arow"><span class="ast a"></span><span class="arole">Data Engineer</span></div>
+        <div class="aprev">Advanced Dana Okoro · 8m ago</div>
+        <div class="abadges"><span class="abadge q"><i class="ti ti-message"></i> 1</span><span class="abadge">3 to decide</span></div>
+        <div class="abud"><i style="width:61%"></i></div>
+      </a>
+      <a class="aitem" href="#">
+        <div class="arow"><span class="ast p"></span><span class="arole">ML Engineer</span></div>
+        <div class="aprev">Paused · monthly budget reached</div>
+        <div class="abadges"><span class="abadge q"><i class="ti ti-message"></i> 1</span></div>
+      </a>
+      <a class="aitem" href="#">
+        <div class="arow"><span class="ast a"></span><span class="arole">Backend Engineer</span></div>
+        <div class="aprev">Sent assessment to Sara H. · 1h</div>
+        <div class="abud"><i style="width:38%"></i></div>
+      </a>
+    </div>
+
+    <!-- QUEUE -->
+    <div class="panel-card">
       <div class="qfilter">
-        <span class="ft on">All 12</span><span class="ft">Scored 9</span><span class="ft">Completed 3</span><span class="ft">Questions 3</span><span class="ft">Sent 22</span>
+        <span class="ft on">All 12</span><span class="ft">Send</span><span class="ft">Advance</span><span class="ft">Reject</span><span class="ft">Questions</span>
       </div>
-      <a class="qitem on" href="#">
-        <span class="qav">AR</span>
-        <div class="qmeta"><div class="qtop"><span class="qname">Alex Rahman</span><span class="qscore">72</span></div><div class="qsub">Senior AWS Platform Eng · 1h</div><div><span class="vpill send"><i class="ti ti-send"></i> Send</span> <span class="chip amber" style="font-size:10.5px;padding:1px 7px"><i class="ti ti-flag ic-amber"></i> 8</span></div></div>
-      </a>
-      <a class="qitem" href="#">
-        <span class="qav">DO</span>
-        <div class="qmeta"><div class="qtop"><span class="qname">Dana Okoro</span><span class="qscore">83</span></div><div class="qsub">Data Engineer · 2h</div><div><span class="vpill send"><i class="ti ti-arrow-up-right"></i> Advance</span></div></div>
-      </a>
-      <a class="qitem" href="#">
-        <span class="qav" style="background:#FAC775;color:#633806">ML</span>
-        <div class="qmeta"><div class="qtop"><span class="qname">Marcus Lin</span></div><div class="qsub">ML Engineer · 1h</div><div><span class="vpill q"><i class="ti ti-help-circle"></i> Which seniority band?</span></div></div>
-      </a>
-      <a class="qitem" href="#">
-        <span class="qav">SH</span>
-        <div class="qmeta"><div class="qtop"><span class="qname">Sara Haddad</span><span class="qscore">64</span></div><div class="qsub">Backend Engineer · 3h</div><div><span class="vpill send"><i class="ti ti-send"></i> Send</span> <span class="chip amber" style="font-size:10.5px;padding:1px 7px"><i class="ti ti-flag ic-amber"></i> 2</span></div></div>
-      </a>
-      <a class="qitem" href="#">
-        <span class="qav" style="background:var(--bg-3);color:var(--mute)">RB</span>
-        <div class="qmeta"><div class="qtop"><span class="qname">Rohan Bhatt</span><span class="qscore lo">28</span></div><div class="qsub">Data Engineer · 5h</div><div><span class="vpill rej"><i class="ti ti-filter-x"></i> Pre-screen reject</span></div></div>
-      </a>
-      <div class="qitem" style="color:var(--mute);cursor:default;font-size:12.5px">Showing 5 of 12</div>
+      <a class="qitem on" href="#"><span class="qav">AR</span><div class="qmeta"><div class="qtop"><span class="qname">Alex Rahman</span><span class="qscore">72</span></div><div class="qsub">Senior AWS Platform Eng · 1h</div><div><span class="vpill act"><i class="ti ti-send"></i> Send</span> <span class="chip amber" style="font-size:10px;padding:1px 6px"><i class="ti ti-flag ic-amber"></i> 8</span></div></div></a>
+      <a class="qitem" href="#"><span class="qav">DO</span><div class="qmeta"><div class="qtop"><span class="qname">Dana Okoro</span><span class="qscore">83</span></div><div class="qsub">Data Engineer · 2h</div><div><span class="vpill act"><i class="ti ti-arrow-up-right"></i> Advance</span></div></div></a>
+      <a class="qitem" href="#"><span class="qav">YK</span><div class="qmeta"><div class="qtop"><span class="qname">Yusuf Karim</span><span class="qscore">88</span></div><div class="qsub">Backend Engineer · 2h</div><div><span class="vpill act"><i class="ti ti-arrow-up-right"></i> Advance</span></div></div></a>
+      <a class="qitem" href="#"><span class="qav" style="background:#FAC775;color:#633806">ML</span><div class="qmeta"><div class="qtop"><span class="qname">Marcus Lin</span></div><div class="qsub">ML Engineer · 1h</div><div><span class="vpill q"><i class="ti ti-help-circle"></i> Which seniority band?</span></div></div></a>
+      <a class="qitem" href="#"><span class="qav">SH</span><div class="qmeta"><div class="qtop"><span class="qname">Sara Haddad</span><span class="qscore">64</span></div><div class="qsub">Backend Engineer · 3h</div><div><span class="vpill act"><i class="ti ti-send"></i> Send</span> <span class="chip amber" style="font-size:10px;padding:1px 6px"><i class="ti ti-flag ic-amber"></i> 2</span></div></div></a>
+      <a class="qitem" href="#"><span class="qav" style="background:var(--bg-3);color:var(--mute)">LM</span><div class="qmeta"><div class="qtop"><span class="qname">Lena Moretti</span><span class="qscore lo">41</span></div><div class="qsub">Data Engineer · 4h</div><div><span class="vpill rej"><i class="ti ti-x"></i> Reject</span></div></div></a>
+      <a class="qitem" href="#"><span class="qav" style="background:var(--bg-3);color:var(--mute)">RB</span><div class="qmeta"><div class="qtop"><span class="qname">Rohan Bhatt</span><span class="qscore lo">28</span></div><div class="qsub">Data Engineer · 5h</div><div><span class="vpill rej"><i class="ti ti-filter-x"></i> Pre-screen reject</span></div></div></a>
+      <div class="qitem" style="color:var(--mute);cursor:default;font-size:12px">Showing 7 of 12</div>
     </div>
 
-    <!-- DETAIL (wide) -->
+    <!-- DETAIL -->
     <div class="detail">
-      <div class="dtwo">
-        <div>
-          <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
-            <div class="ring" style="width:56px;height:56px">
-              <svg width="56" height="56" viewBox="0 0 56 56"><circle cx="28" cy="28" r="23" fill="none" stroke="#e3dcf3" stroke-width="6"/><circle cx="28" cy="28" r="23" fill="none" stroke="#5e3aa8" stroke-width="6" stroke-linecap="round" stroke-dasharray="104 145" transform="rotate(-90 28 28)"/></svg>
-              <div class="num" style="font-size:18px">72</div>
-            </div>
-            <div><div style="font-weight:600;font-size:16px">Alex Rahman</div><div class="tert" style="font-size:12.5px">Senior AWS Platform Engineer · Dubai</div></div>
-          </div>
-          <div class="agent-rec" style="margin-bottom:12px">
-            <div class="kl"><i class="ti ti-sparkles spark"></i> Agent recommends</div>
-            <button class="btn-rec" style="font-size:15px;padding:12px"><i class="ti ti-send"></i> Send assessment</button>
-            <div class="conf">Confidence 100%</div>
-          </div>
-          <div style="text-align:center;margin-bottom:13px"><span class="chip amber"><i class="ti ti-flag ic-amber"></i> 8 flags · verify before deciding</span></div>
-          <div style="display:flex;gap:8px">
-            <button class="btn counter" style="flex:1;justify-content:center"><i class="ti ti-x ic"></i> Reject</button>
-            <button class="btn" style="flex:1;justify-content:center"><i class="ti ti-arrow-right ic"></i> Skip</button>
-          </div>
-          <button class="btn" style="width:100%;justify-content:center;margin-top:8px"><i class="ti ti-brain ic"></i> Teach</button>
-        </div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+        <div class="ring" style="width:54px;height:54px"><svg width="54" height="54" viewBox="0 0 54 54"><circle cx="27" cy="27" r="22" fill="none" stroke="#e3dcf3" stroke-width="6"/><circle cx="27" cy="27" r="22" fill="none" stroke="#5e3aa8" stroke-width="6" stroke-linecap="round" stroke-dasharray="100 138" transform="rotate(-90 27 27)"/></svg><div class="num" style="font-size:17px">72</div></div>
+        <div style="flex:1"><div style="font-weight:600;font-size:16px">Alex Rahman</div><div class="tert" style="font-size:12.5px">Senior AWS Platform Engineer · Dubai · 15 yrs</div></div>
+        <a href="/report-preview" class="btn sm"><i class="ti ti-file-text ic"></i> Full report</a>
+      </div>
 
-        <div>
-          <div class="kicker" style="margin-bottom:8px">Why this verdict</div>
-          <p class="reason" style="font-size:13.5px">Strong AWS, IaC and CI/CD with regulated-banking depth (PCI-DSS / NIST) — the platform-engineering requirements check out. But there's no demonstrated Bedrock or SageMaker, the role's core AI/ML requirement, and eight CV claims couldn't be corroborated. Role-fit clears the bar, but the gap and the claims are exactly what a work-sample resolves.</p>
+      <div class="agent-rec" style="margin-bottom:12px">
+        <div class="kl"><i class="ti ti-sparkles spark"></i> Agent recommends</div>
+        <button class="btn-rec" style="font-size:15px;padding:12px"><i class="ti ti-send"></i> Send assessment</button>
+        <div class="conf">Confidence 100%</div>
+      </div>
+      <div style="text-align:center;margin-bottom:13px"><span class="chip amber"><i class="ti ti-flag ic-amber"></i> 8 flags · verify before deciding</span></div>
 
-          <div class="kicker" style="margin:18px 0 10px">Requirements · 8 of 13</div>
-          <div class="dim" style="padding:4px 0"><span class="nm" style="width:200px;font-size:13px">Production AWS</span><span class="track"><span class="fill" style="width:94%"></span></span><span class="val">94</span></div>
-          <div class="dim" style="padding:4px 0"><span class="nm" style="width:200px;font-size:13px">Terraform / IaC</span><span class="track"><span class="fill" style="width:91%"></span></span><span class="val">91</span></div>
-          <div class="dim" style="padding:4px 0"><span class="nm" style="width:200px;font-size:13px">FinTech / banking</span><span class="track"><span class="fill" style="width:85%"></span></span><span class="val">85</span></div>
-          <div class="dim" style="padding:4px 0"><span class="nm" style="width:200px;font-size:13px">AWS Bedrock</span><span class="track"><span class="fill low" style="width:12%"></span></span><span class="val">12</span></div>
-          <div class="dim" style="padding:4px 0"><span class="nm" style="width:200px;font-size:13px">SageMaker / MLOps</span><span class="track"><span class="fill low" style="width:8%"></span></span><span class="val">8</span></div>
+      <div class="kicker" style="margin-bottom:7px">Why this verdict</div>
+      <p class="reason" style="font-size:13.5px;margin-bottom:16px">Strong AWS, IaC and CI/CD with regulated-banking depth (PCI-DSS / NIST) — the platform-engineering requirements check out. But there's no demonstrated Bedrock or SageMaker, the role's core AI/ML requirement, and eight CV claims couldn't be corroborated. Role-fit clears the bar, but the gap and the claims are exactly what a work-sample resolves.</p>
 
-          <a href="/report-preview" class="more" style="display:inline-block;margin-top:16px"><i class="ti ti-file-text"></i> Open full report →</a>
-        </div>
+      <div class="kicker" style="margin-bottom:9px">Requirements · 8 of 13</div>
+      <div class="dim" style="padding:4px 0"><span class="nm" style="width:170px;font-size:13px">Production AWS</span><span class="track"><span class="fill" style="width:94%"></span></span><span class="val">94</span></div>
+      <div class="dim" style="padding:4px 0"><span class="nm" style="width:170px;font-size:13px">Terraform / IaC</span><span class="track"><span class="fill" style="width:91%"></span></span><span class="val">91</span></div>
+      <div class="dim" style="padding:4px 0"><span class="nm" style="width:170px;font-size:13px">FinTech / banking</span><span class="track"><span class="fill" style="width:85%"></span></span><span class="val">85</span></div>
+      <div class="dim" style="padding:4px 0"><span class="nm" style="width:170px;font-size:13px">AWS Bedrock</span><span class="track"><span class="fill low" style="width:12%"></span></span><span class="val">12</span></div>
+      <div class="dim" style="padding:4px 0"><span class="nm" style="width:170px;font-size:13px">SageMaker / MLOps</span><span class="track"><span class="fill low" style="width:8%"></span></span><span class="val">8</span></div>
+
+      <div style="display:flex;gap:8px;margin-top:16px">
+        <button class="btn counter" style="flex:1;justify-content:center"><i class="ti ti-x ic"></i> Reject</button>
+        <button class="btn" style="flex:1;justify-content:center"><i class="ti ti-arrow-right ic"></i> Skip</button>
+        <button class="btn" style="flex:1;justify-content:center"><i class="ti ti-brain ic"></i> Teach</button>
       </div>
     </div>
 
-    <!-- AGENT CHAT -->
+    <!-- CHAT (per selected agent) -->
     <div class="chat">
-      <div class="chead"><i class="ti ti-sparkles" style="color:var(--purple)"></i> Ask your agent</div>
+      <div class="chead2"><div class="r"><i class="ti ti-sparkles" style="color:var(--purple)"></i> Senior AWS Platform Eng</div><div class="s">Agent on · $42 / $50 · 9 decisions</div></div>
       <div class="cbody">
-        <div class="msg bot"><div class="who">Agent</div>Morning — I advanced Dana Okoro, sent 3 assessments and auto-rejected 6 weak fits. 12 decisions are waiting for you.</div>
-        <div class="msg user">why did you reject the 6 data engineers?</div>
-        <div class="msg bot"><div class="who">Agent</div>All 6 scored below the role-fit cut (70). Kafka and Spark — the must-haves you set — weren't evidenced in any of them. Want me to show them, or loosen that rule?</div>
-        <div class="msg user">show me the top one</div>
-        <div class="msg bot"><div class="who">Agent</div>Rohan Bhatt, role-fit 28. Strong Airflow, but no streaming experience. <a class="clink" style="display:inline">Open report →</a></div>
+        <div class="msg bot"><div class="who">Agent</div>9 decisions are queued for this role. Alex Rahman is the strongest — I'd send an assessment to close the AI/ML gap.</div>
+        <div class="msg user">why not just advance him?</div>
+        <div class="msg bot"><div class="who">Agent</div>Role-fit is 72, but Bedrock and SageMaker — the core requirements — aren't evidenced, and 8 CV claims are unverified. An assessment de-risks both before you spend a panel slot.</div>
+        <div class="msg user">ok send it. also raise the budget to $80</div>
+        <div class="msg bot"><div class="who">Agent</div>Done — assessment sent, monthly cap raised to $80. ML Engineer will resume too (it was paused on budget).</div>
       </div>
-      <div class="composer"><div class="cfield"><span>Ask the agent, or tell it what to do…</span><i class="ti ti-send" style="color:var(--purple)"></i></div></div>
+      <div class="composer"><div class="cfield"><span>Message the Senior AWS agent…</span><i class="ti ti-send" style="color:var(--purple)"></i></div></div>
     </div>
 
   </div>
