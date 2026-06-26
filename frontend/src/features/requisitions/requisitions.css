@@ -679,6 +679,130 @@
   .rq-side { display: none; }
 }
 
+/* ============ Internal economics strip ============
+   Recruiter-internal client + rate + margin band on a requisition. NOT
+   candidate-facing — a distinct purple-tinted strip below the header, set
+   apart from the brief/job-spec so the recruiter reads it as "internal". */
+.rq-econ {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 18px;
+  padding: 11px 24px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in oklab, var(--purple) 5%, var(--bg-2));
+}
+.rq-econ-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--purple-soft);
+  color: var(--purple-2);
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.rq-econ-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.rq-econ-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+.rq-econ-clientpick,
+.rq-econ-newclient { display: flex; align-items: center; gap: 6px; }
+.rq-econ-select,
+.rq-econ-input {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg-2);
+  color: var(--ink);
+  font-size: 0.8125rem;
+  font-family: var(--font-sans);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.rq-econ-select { min-width: 160px; cursor: pointer; }
+.rq-econ-input { min-width: 150px; }
+.rq-econ-rate { width: 150px; min-width: 0; }
+.rq-econ-select:focus,
+.rq-econ-input:focus {
+  outline: 0;
+  border-color: var(--purple);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple) 15%, transparent);
+}
+.rq-econ-select:disabled,
+.rq-econ-input:disabled { background: var(--bg-3); color: var(--mute-2); cursor: not-allowed; }
+
+.rq-econ-newbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 11px;
+  border: 1px dashed color-mix(in oklab, var(--purple) 40%, var(--line));
+  border-radius: 9px;
+  background: transparent;
+  color: var(--purple-2);
+  font-size: 0.75rem;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s;
+}
+.rq-econ-newbtn:hover { background: var(--purple-soft); border-style: solid; }
+.rq-econ-newbtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.rq-econ-iconbtn {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.rq-econ-iconbtn:hover { border-color: var(--purple); color: var(--purple-2); }
+.rq-econ-iconbtn.is-primary { background: var(--purple); border-color: var(--purple); color: #fff; }
+.rq-econ-iconbtn.is-primary:hover { background: var(--purple-2); }
+.rq-econ-iconbtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Margin read-out — the headline internal figure. */
+.rq-econ-margin {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-left: auto;
+  align-items: flex-end;
+}
+.rq-econ-margin-val {
+  font-family: var(--font-display);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--purple-2);
+  white-space: nowrap;
+}
+.rq-econ-margin-val.is-empty { color: var(--mute-2); font-weight: 600; }
+.rq-econ-margin-pct { font-weight: 600; color: var(--purple); }
+.rq-econ-spin { align-self: center; color: var(--purple-2); }
+
+@media (max-width: 720px) {
+  .rq-econ-margin { margin-left: 0; align-items: flex-start; }
+}
+
 /* Multiple-choice quick replies — tappable options under the latest agent
    turn so the recruiter can answer in one click instead of typing. */
 .rq-quick-replies {

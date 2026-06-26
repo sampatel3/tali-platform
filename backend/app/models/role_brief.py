@@ -59,6 +59,15 @@ class RoleBrief(Base):
     status = Column(String, nullable=False, server_default=BRIEF_STATUS_DRAFT)
     source_kind = Column(String, nullable=True)
 
+    # --- Consultancy: the client this requisition is opened for + economics ---
+    # Null for direct (non-consultancy) hiring. ``client_rate`` is the annual
+    # rate billed to the client, in the brief's currency (AED by default);
+    # margin (client_rate - cost) is computed, never stored.
+    client_id = Column(
+        Integer, ForeignKey("clients.id"), nullable=True, index=True
+    )
+    client_rate = Column(Integer, nullable=True)
+
     # --- Job profile (structured, queryable) ---
     title = Column(String, nullable=True)
     summary = Column(Text, nullable=True)
@@ -113,3 +122,4 @@ class RoleBrief(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     role = relationship("Role")
+    client = relationship("Client")

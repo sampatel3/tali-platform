@@ -90,6 +90,9 @@ const JobsPage = lazy(() =>
 const RequisitionsPage = lazy(() =>
   import('./features/requisitions/RequisitionsPage').then((m) => ({ default: m.RequisitionsPage }))
 );
+const ClientsPage = lazy(() =>
+  import('./features/clients/ClientsPage').then((m) => ({ default: m.ClientsPage }))
+);
 const JobPipelinePage = lazy(() =>
   import('./features/jobs/JobPipelinePage').then((m) => ({ default: m.JobPipelinePage }))
 );
@@ -155,6 +158,8 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     '/dashboard',
     '/home',
     '/jobs',
+    '/requisitions',
+    '/clients',
     '/assessments',
     '/candidates',
     '/analytics',
@@ -539,6 +544,18 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <RequisitionsPage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
+      />
+
+      <Route
+        path="/clients"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <ClientsPage
               onNavigate={navigateToPage}
               NavComponent={DashboardNavWithMode}
             />
