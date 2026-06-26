@@ -21,6 +21,7 @@ import { ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
 
 import { AgentDecisionCard } from '../../shared/decisions/AgentDecisionCard';
 import { DECISION_ACTIONS, DEFAULT_ACTIONS } from '../../shared/decisions/decisionActions';
+import { isPostHandoverWorkableStage } from '../../shared/metrics';
 import '../../features/home/home.css';
 
 // Human label for the agent's recommendation, reusing the SAME action
@@ -47,6 +48,7 @@ const resolvedOutcomeLabel = (application) => {
 export const CandidateDecisionStrip = ({
   decision,
   application,
+  recommendation,
   busy,
   onApprove,
   onAlternative,
@@ -182,8 +184,24 @@ export const CandidateDecisionStrip = ({
     );
   }
 
-  // STATE 3 — nothing decided and nothing to decide yet (e.g. not scored).
-  // Muted hint, no fabricated actions.
+  // STATE 3 — no agent decision card. The deterministic verdict is emitted
+  // automatically the moment a candidate is scored (ensure_deterministic_decision,
+  // decoupled from the agent), so "scored + no card" has exactly two honest
+  // causes — never "score this candidate" for an already-scored one:
+  //  (a) NOT scored → genuinely nothing to decide; prompt to score.
+  //  (b) POST-HANDOVER → the policy DELIBERATELY abstains (won't auto-decide
+  //      someone a human is interviewing in Workable). Surface Taali's read +
+  //      say it's deferred to the recruiter.
+  //  (c) scored, not post-handover, still no card → the rare just-scored /
+  //      genuine-abstention tail; the verdict will materialise.
+  const isScored = application?.cv_match_score != null;
+  const recLabel = recommendation?.label && recommendation.label !== 'Continue review'
+    ? recommendation.label
+    : '';
+  const postHandover = isPostHandoverWorkableStage(application?.workable_stage);
+  const read = recLabel ? (
+    <>Taali&apos;s read: <strong style={{ color: 'var(--ink)' }}>{recLabel}</strong>. </>
+  ) : null;
   return (
     <div
       data-internal-only
@@ -203,7 +221,18 @@ export const CandidateDecisionStrip = ({
       }}
     >
       <Sparkles size={15} strokeWidth={2.2} aria-hidden="true" />
-      <span>No agent decision yet — score this candidate to get a recommendation.</span>
+      {!isScored ? (
+        <span>No agent decision yet — score this candidate to get a recommendation.</span>
+      ) : postHandover ? (
+        <span>
+          {read}
+          In <strong style={{ color: 'var(--ink)' }}>{application.workable_stage}</strong> in
+          Workable — Taali defers to you on candidates you&apos;re interviewing and won&apos;t
+          auto-decide them.
+        </span>
+      ) : (
+        <span>{read}Scored — the deterministic decision will appear here once it&apos;s computed.</span>
+      )}
     </div>
   );
 };

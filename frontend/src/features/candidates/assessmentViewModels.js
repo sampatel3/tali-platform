@@ -466,6 +466,46 @@ const buildIntegrityFlags = (details) => {
     });
   }
 
+  // Prong 1: a strong match whose must-haves aren't backed by verbatim CV
+  // evidence — the spec-tailoring tell. A high match alone is never flagged.
+  const gr = sig.grounding && typeof sig.grounding === 'object' ? sig.grounding : null;
+  if (gr && gr.ungrounded_match) {
+    const names = Array.isArray(gr.ungrounded_requirements) ? gr.ungrounded_requirements.filter(Boolean) : [];
+    const n = names.length || Math.max(0, Number(gr.met_must_haves || 0) - Number(gr.grounded_must_haves || 0));
+    flags.push(
+      `Strong match but ${n} must-have${n === 1 ? '' : 's'} not evidenced in the CV${names.length ? `: ${names.join(', ')}` : ''} — confirm these are real, not spec-tailoring.`,
+    );
+  }
+
+  // CV-internal coherence.
+  const ei = sig.experience_inflation && typeof sig.experience_inflation === 'object' ? sig.experience_inflation : null;
+  if (ei && ei.triggered) {
+    flags.push(`Claims ~${ei.years_claimed} years' experience but the career history spans only ~${ei.years_evidenced} years.`);
+  }
+  const ta = sig.tech_anachronism && typeof sig.tech_anachronism === 'object' ? sig.tech_anachronism : null;
+  if (ta && Array.isArray(ta.issues)) {
+    ta.issues.forEach((item) => {
+      if (item && item.tool) {
+        flags.push(`Lists "${item.tool}" in a role ending ${item.role_end}, before it existed (${item.release_year}).`);
+      }
+    });
+  }
+
+  // Cross-source corroboration (Prong 2).
+  const gc = sig.graph_corroboration && typeof sig.graph_corroboration === 'object' ? sig.graph_corroboration : null;
+  if (gc && gc.status === 'anomaly') {
+    const co = Array.isArray(gc.companies)
+      ? gc.companies.filter((c) => c && c.status === 'anomaly').map((c) => c.company).filter(Boolean)
+      : [];
+    flags.push(`Claimed tech stack is unlike what other candidates from ${co.length ? co.join(', ') : 'that employer'} show — verify it's genuine, not spec-tailoring.`);
+  }
+  // GitHub: only the "doesn't resolve" case is a concern (a match is positive
+  // corroboration, surfaced elsewhere; a quiet/empty account is never flagged).
+  const ghc = sig.github && typeof sig.github === 'object' ? sig.github : null;
+  if (ghc && ghc.status === 'not_found') {
+    flags.push(`The GitHub link on the CV doesn't resolve (github.com/${ghc.username}) — confirm it's correct.`);
+  }
+
   return flags.map((item) => String(item).trim()).filter(Boolean);
 };
 

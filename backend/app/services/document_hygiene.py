@@ -24,7 +24,7 @@ extraction), so it needs no renderer/OCR. Detection is always safe to run; the
 direct instruction to the model, so it can default on without harming a genuine
 CV. White-text **colour** detection (which needs a real PDF renderer such as
 PyMuPDF) and a render-vs-OCR diff are the documented follow-up — see
-``docs/CV_FRAUD_DETECTION_ROADMAP.md`` §5.
+``docs/CV_FRAUD_DETECTION_BUILD_DECISION.md`` (DOC-01).
 """
 
 from __future__ import annotations
@@ -230,6 +230,67 @@ def scan_pdf_metadata(pdf_bytes: bytes) -> dict[str, Any]:
             "checked": True,
             "keyword_count": len(kw_tokens),
             "metadata_keyword_stuffing": stuffed,
+        }
+    except Exception:  # pragma: no cover — never fail ingest on a hygiene scan
+        return {"checked": False}
+
+
+# ── Optional: invisible render-mode (Tr 3) scan via PyPDF2 content stream ───
+# Text drawn with render-mode 3 ("neither fill nor stroke" = invisible) is the
+# classic way to embed keyword-stuffing / prompt-injection that a human never
+# sees but the extractor pulls in. Detectable WITHOUT a renderer / new dep:
+# PyPDF2's ContentStream exposes the Tr operator (this corrects the earlier
+# "needs PyMuPDF" assumption). Best-effort + fail-open: ``{"checked": False}``
+# on any parse error. NOTE: scanned-PDF OCR underlays legitimately use Tr 3 —
+# callers should suppress when the page is image-backed.
+_INVISIBLE_TR_MODES = {3, 7}
+_SHOW_OPS = {b"Tj", b"TJ", b"'", b'"'}
+
+
+def _shown_text_len(operands: Any) -> int:
+    """Rough character count of a text-showing operator's operands (Tj/'/"" take
+    a string; TJ takes an array of strings + kerning numbers)."""
+    total = 0
+    for op in operands or []:
+        if isinstance(op, (bytes, str)):
+            total += len(op)
+        elif isinstance(op, list):
+            for el in op:
+                if isinstance(el, (bytes, str)):
+                    total += len(el)
+    return total
+
+
+def scan_pdf_render_state(pdf_bytes: bytes, *, max_pages: int = 10) -> dict[str, Any]:
+    """Flag text drawn under an invisible text-render mode (Tr 3/7). Returns
+    ``{checked, triggered, invisible_render_chars}``; ``{"checked": False}`` when
+    the content stream can't be parsed (fail-open)."""
+    try:
+        import io
+
+        from PyPDF2 import PdfReader
+        from PyPDF2.generic import ContentStream
+
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        invisible_chars = 0
+        for page in reader.pages[:max_pages]:
+            try:
+                cs = ContentStream(page.get_contents(), reader)
+            except Exception:
+                continue
+            mode = 0
+            for operands, operator in cs.operations:
+                if operator == b"Tr" and operands:
+                    try:
+                        mode = int(operands[0])
+                    except Exception:
+                        mode = 0
+                elif operator in _SHOW_OPS and mode in _INVISIBLE_TR_MODES:
+                    invisible_chars += _shown_text_len(operands)
+        return {
+            "checked": True,
+            "triggered": invisible_chars > 0,
+            "invisible_render_chars": invisible_chars,
         }
     except Exception:  # pragma: no cover — never fail ingest on a hygiene scan
         return {"checked": False}

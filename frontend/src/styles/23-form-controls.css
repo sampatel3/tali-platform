@@ -1,0 +1,413 @@
+/* ============================================================
+   23-form-controls.css — canonical form-control layer.
+
+   "Option C — crisp & structured": a single source of truth for how
+   every input, <select>, date field, textarea and the custom
+   SingleSelect/MultiSelect dropdowns look across the whole product.
+
+   Before this file the form layer was drastically underspecified:
+   `.taali-input/.taali-select/.taali-textarea` only set border + radius
+   + background (no padding, height, focus ring, placeholder colour or
+   hover), and the entire `.taali-select-*` shell (trigger, menu, icon,
+   chevron) had NO css at all — which is why the native chevron rendered
+   loose *below* the dropdown and text sat cramped against the border.
+
+   Imported last so it is the authoritative form layer. Two delivery
+   paths, one identical look:
+     • Enhanced primitives (TaaliPrimitives.jsx) — .taali-* classes with
+       a real segmented chevron / calendar "zone".
+     • Bare controls — element-level rules catch every `<select>` and
+       date input that never went through a primitive, so they match
+       automatically with zero per-file edits.
+
+   Design language (Option C):
+     • white fill, crisp 1px --line border, 10px radius
+     • the chevron / calendar icon lives in its own purple-tinted,
+       divider-led "segment" on the right edge (the signature touch)
+     • strong focus: --purple-2 border + 3px --taali-ring halo
+     • sentence-case is owned by the JSX labels; this file owns the box
+   ============================================================ */
+
+/* ── Shared field box ──────────────────────────────────────────────
+   The visual base every control shares. `select:not(.taali-select)`
+   and the date types are matched at element level so the ~26 bare
+   <select> usages and native datetime inputs inherit the look without
+   touching their files. Bespoke, class-driven inputs (chat composer,
+   search bar, etc.) are intentionally left to their own styles. */
+.taali-input,
+.taali-textarea,
+.taali-select,
+.taali-select-trigger,
+select:not(.taali-select),
+input[type="date"],
+input[type="datetime-local"],
+input[type="time"],
+input[type="month"],
+input[type="week"] {
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 12px;
+  font-family: var(--taali-font);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--ink);
+  background-color: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+/* Placeholder + value-placeholder share the muted ink. */
+.taali-input::placeholder,
+.taali-textarea::placeholder,
+select:not(.taali-select)::placeholder,
+input[type="date"]::placeholder,
+input[type="datetime-local"]::placeholder {
+  color: var(--mute);
+}
+
+/* Hover (only when not focused) warms the border toward purple — the
+   same affordance the legacy .ht-select had, now everywhere. */
+.taali-input:hover:not(:focus),
+.taali-textarea:hover:not(:focus),
+.taali-select:hover:not(:focus),
+.taali-select-trigger:hover:not(:focus-visible),
+select:not(.taali-select):hover:not(:focus),
+input[type="date"]:hover:not(:focus),
+input[type="datetime-local"]:hover:not(:focus),
+input[type="time"]:hover:not(:focus),
+input[type="month"]:hover:not(:focus),
+input[type="week"]:hover:not(:focus) {
+  border-color: color-mix(in oklab, var(--purple) 34%, var(--line));
+}
+
+/* Focus — the structured, branded halo. focus-visible on the trigger
+   button (so a mouse click doesn't ring it), focus on real inputs. */
+.taali-input:focus,
+.taali-textarea:focus,
+.taali-select:focus,
+select:not(.taali-select):focus,
+input[type="date"]:focus,
+input[type="datetime-local"]:focus,
+input[type="time"]:focus,
+input[type="month"]:focus,
+input[type="week"]:focus,
+.taali-select-trigger:focus-visible {
+  outline: none;
+  border-color: var(--purple-2);
+  box-shadow: 0 0 0 3px var(--taali-ring);
+}
+
+/* Disabled — same vocabulary for every control. */
+.taali-input:disabled,
+.taali-textarea:disabled,
+.taali-select:disabled,
+.taali-select-trigger:disabled,
+select:not(.taali-select):disabled,
+input[type="date"]:disabled,
+input[type="datetime-local"]:disabled,
+input[type="time"]:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background-color: color-mix(in oklab, var(--line) 22%, var(--bg-2));
+}
+
+/* ── Textarea ──────────────────────────────────────────────────────── */
+.taali-textarea,
+textarea:not([class]) {
+  min-height: 96px;
+  line-height: 1.55;
+  resize: vertical;
+}
+/* Bare classless textareas inherit the field box too. */
+textarea:not([class]) {
+  width: 100%;
+  padding: 10px 12px;
+  font-family: var(--taali-font);
+  font-size: 0.8125rem;
+  color: var(--ink);
+  background-color: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+textarea:not([class]):hover:not(:focus) {
+  border-color: color-mix(in oklab, var(--purple) 34%, var(--line));
+}
+textarea:not([class]):focus {
+  outline: none;
+  border-color: var(--purple-2);
+  box-shadow: 0 0 0 3px var(--taali-ring);
+}
+
+/* ── Native <select> — segmented chevron via background layers ───────
+   Bare selects have no icon element, so the segment is painted with
+   three background layers: chevron (top) over a divider line over the
+   purple-tinted zone. */
+select:not(.taali-select) {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  cursor: pointer;
+  padding-right: 46px;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235e3aa8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"),
+    linear-gradient(var(--line), var(--line)),
+    linear-gradient(var(--purple-soft), var(--purple-soft));
+  background-repeat: no-repeat, no-repeat, no-repeat;
+  background-position: right 13px center, right 34px center, right 0 center;
+  background-size: 12px 12px, 1px 100%, 34px 100%;
+}
+/* Hover/focus shouldn't drop the painted segment. */
+select:not(.taali-select):hover,
+select:not(.taali-select):focus {
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235e3aa8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"),
+    linear-gradient(var(--line), var(--line)),
+    linear-gradient(var(--purple-soft), var(--purple-soft));
+}
+select:not(.taali-select)::-ms-expand { display: none; }
+
+/* ── Native <select> via the Select primitive (.taali-select) ────────
+   Here the chevron is a real <svg> element (.taali-select-icon) inside
+   .taali-select-shell, so we build the segment as a positioned overlay
+   instead of a background. */
+.taali-select-shell {
+  position: relative;
+  width: 100%;
+}
+/* Compact, content-width shell for inline/toolbar selects and filter-chips
+   (via Select's `inline`/`bare` props) so they don't stretch to fill a flex
+   toolbar the way the default full-width form-field shell does. */
+.taali-select-shell-inline {
+  display: inline-flex;
+  width: auto;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.taali-select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  cursor: pointer;
+  padding-right: 46px;
+}
+.taali-select::-ms-expand { display: none; }
+.taali-select-icon {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  width: 34px;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  color: var(--purple);
+  background: var(--purple-soft);
+  border-left: 1px solid var(--line);
+  border-radius: 0 9px 9px 0;
+}
+
+/* ── Native date / time — crisp box + tinted calendar segment ────────
+   `appearance:none` would nuke the picker indicator in Chrome, so the
+   box stays native; we paint the segment with background layers and
+   nudge the OS calendar indicator into it. */
+input[type="date"],
+input[type="datetime-local"],
+input[type="time"],
+input[type="month"],
+input[type="week"] {
+  cursor: pointer;
+  padding-right: 44px;
+  background-image:
+    linear-gradient(var(--line), var(--line)),
+    linear-gradient(var(--purple-soft), var(--purple-soft));
+  background-repeat: no-repeat, no-repeat;
+  background-position: right 34px center, right 0 center;
+  background-size: 1px 100%, 34px 100%;
+}
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator,
+input[type="month"]::-webkit-calendar-picker-indicator,
+input[type="week"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  margin: 0;
+  padding: 0;
+  width: 14px;
+  height: 14px;
+  /* Recolour the OS glyph toward Taali purple. */
+  filter: invert(24%) sepia(34%) saturate(1600%) hue-rotate(238deg) brightness(72%) contrast(92%);
+}
+/* Keep the editable date text/spinners off the tinted zone. */
+input[type="date"]::-webkit-datetime-edit,
+input[type="datetime-local"]::-webkit-datetime-edit,
+input[type="time"]::-webkit-datetime-edit {
+  padding: 0;
+}
+
+/* ── SingleSelect / MultiSelect trigger button ───────────────────────
+   A button styled to read exactly like the native field, with the same
+   segmented chevron zone (.taali-select-chevron). */
+.taali-select-trigger {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0 0 0 12px;
+  overflow: hidden;
+  cursor: pointer;
+  text-align: left;
+}
+.taali-select-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 8px 0;
+}
+.taali-select-value-placeholder {
+  color: var(--mute);
+}
+.taali-select-chevron {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 34px;
+  display: grid;
+  place-items: center;
+  margin-left: 12px;
+  color: var(--purple);
+  background: var(--purple-soft);
+  border-left: 1px solid var(--line);
+  /* The open-state `rotate-180` class is applied to this zone in the JSX;
+     neutralise it here so the segment (and its divider) stays put, and
+     spin only the glyph below. */
+  transform: none !important;
+}
+.taali-select-chevron > svg {
+  transition: transform 0.15s ease;
+}
+.taali-select-chevron.rotate-180 > svg {
+  transform: rotate(180deg);
+}
+
+/* ── Portal menu (SingleSelect / MultiSelect) ────────────────────────
+   Crisp white card with a tight radius; selected rows take the
+   purple-tinted treatment with a check. */
+.taali-select-menu {
+  /* The floating-menu positioner supplies left/top/width as inline styles
+     relative to the viewport; without position:fixed those are ignored and
+     the portaled menu drops to the bottom of <body> in normal flow. */
+  position: fixed;
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--taali-shadow-soft);
+}
+.taali-select-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--taali-font);
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.taali-select-option:hover:not(:disabled),
+.taali-select-option:focus-visible {
+  outline: none;
+  background: color-mix(in oklab, var(--purple) 7%, var(--bg-2));
+}
+.taali-select-option > .truncate {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.taali-select-option svg {
+  flex: 0 0 auto;
+  color: var(--purple);
+}
+.taali-select-option-selected {
+  background: var(--purple-soft);
+  color: var(--purple-2);
+  font-weight: 500;
+}
+.taali-select-option-selected:hover:not(:disabled),
+.taali-select-option-selected:focus-visible {
+  background: color-mix(in oklab, var(--purple) 16%, var(--bg-2));
+}
+.taali-select-option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* MultiSelect "Select all / Clear all" header row. */
+.taali-multiselect-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 4px 6px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line-2);
+}
+.taali-multiselect-action {
+  border: 0;
+  background: transparent;
+  padding: 2px 6px;
+  border-radius: 6px;
+  color: var(--purple);
+  font-family: var(--taali-font);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.taali-multiselect-action:hover {
+  background: var(--purple-soft);
+}
+
+/* ── Bare / inline trigger variant ───────────────────────────────────
+   For filter-chips and compact inline controls (candidate-list filters,
+   the quick-ranking selector) that want the styled portal menu but NOT
+   the boxed field chrome: transparent, borderless, content-width, with a
+   small muted chevron instead of the purple segmented zone. Placed last
+   so it wins over the boxed `.taali-select-trigger` rules above. */
+.taali-select-trigger-bare {
+  width: auto;
+  min-height: 0;
+  padding: 4px 2px 4px 0;
+  border-color: transparent;
+  background: transparent;
+  border-radius: 8px;
+  font-size: 12px;
+  color: inherit;
+}
+.taali-select-trigger-bare:hover:not(:focus-visible) {
+  border-color: transparent;
+}
+.taali-select-trigger-bare:focus-visible {
+  border-color: transparent;
+  box-shadow: none;
+  outline: 2px solid var(--taali-ring);
+  outline-offset: 2px;
+}
+.taali-select-trigger-bare .taali-select-value {
+  padding: 0;
+}
+.taali-select-trigger-bare .taali-select-chevron {
+  width: auto;
+  align-self: center;
+  margin-left: 4px;
+  background: transparent;
+  border-left: none;
+  color: var(--mute);
+}

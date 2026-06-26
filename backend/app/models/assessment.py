@@ -174,4 +174,3 @@ class Assessment(Base):
     task = relationship("Task")
     role = relationship("Role", back_populates="assessments")
     application = relationship("CandidateApplication", back_populates="assessments")
-    sessions = relationship("AssessmentSession", back_populates="assessment")

@@ -30,11 +30,7 @@ vi.mock('../shared/api', () => ({
     startDemo: vi.fn(),
     start: vi.fn(),
     execute: vi.fn(),
-    terminalStatus: vi.fn(),
-    terminalStop: vi.fn().mockResolvedValue({ data: { success: true } }),
-    terminalWsUrl: vi.fn().mockReturnValue('ws://localhost/api/v1/assessments/321/terminal/ws?token=demo-token'),
-    claude: vi.fn(),
-    claudeRetry: vi.fn(),
+    claudeChat: vi.fn(),
     submit: vi.fn().mockResolvedValue({ data: { id: 321, status: 'completed' } }),
   },
   billing: { usage: vi.fn(), costs: vi.fn(), credits: vi.fn(), createCheckoutSession: vi.fn() },
@@ -159,7 +155,8 @@ describe('Demo flow redesign', () => {
     fireEvent.change(screen.getByLabelText(/^Position$/i), { target: { value: 'Engineering Manager' } });
     fireEvent.change(screen.getByLabelText(/^Work email$/i), { target: { value: 'jane@company.com' } });
     fireEvent.change(screen.getByLabelText(/^Company$/i), { target: { value: 'Acme' } });
-    fireEvent.change(screen.getByLabelText(/^Company size$/i), { target: { value: '51–200' } });
+    fireEvent.click(screen.getByLabelText(/^Company size$/i));
+    fireEvent.click(await screen.findByRole('option', { name: '51–200' }));
 
     fireEvent.click(screen.getByRole('button', { name: /Open walkthrough/i }));
 
@@ -210,7 +207,8 @@ describe('Demo flow redesign', () => {
     fireEvent.change(screen.getByLabelText(/^Full name$/i), { target: { value: 'Jane Doe' } });
     fireEvent.change(screen.getByLabelText(/^Work email$/i), { target: { value: 'jane@company.com' } });
     fireEvent.change(screen.getByLabelText(/^Company$/i), { target: { value: 'Acme' } });
-    fireEvent.change(screen.getByLabelText(/^Company size$/i), { target: { value: '51–200' } });
+    fireEvent.click(screen.getByLabelText(/^Company size$/i));
+    fireEvent.click(await screen.findByRole('option', { name: '51–200' }));
 
     fireEvent.click(screen.getByRole('button', { name: /Open walkthrough/i }));
 

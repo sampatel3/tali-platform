@@ -31,6 +31,10 @@ from .scoring_tasks import (
 # re-score task. Without this it NotRegistered's and the dispatched re-score
 # silently drops (same trap as the scoring imports above).
 from .pool_rescore_tasks import rescore_pool_against_requirement
+# Eager-import corroboration_tasks so the worker registers the async
+# (shortlist-gated) graph + GitHub enrichment job — same unregistered-drop
+# trap as scoring_tasks if skipped.
+from .corroboration_tasks import enrich_corroboration_job  # noqa: F401
 # Eager-import automation_tasks so Celery registers the event-driven
 # auto-tasks (interview focus, interview pack regen, auto-reject pre-
 # screen). Skipping this would leave them unregistered and silently

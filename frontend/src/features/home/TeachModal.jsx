@@ -50,10 +50,15 @@ const DIRECTIONS = [
   { id: 'under', l: 'Too low', d: 'Score should have been higher' },
 ];
 
-export const TeachModal = ({ decision, onClose, onSubmitted }) => {
+// ``defaultScope`` lets the caller set the initial teach scope. The home hub
+// reviews the agent's decision queue, where corrections are usually role-wide,
+// so it defaults to 'role'. The candidate report teaches about THIS person
+// ("rejected because XYZ"), so it passes 'decision' — per-candidate by default,
+// one click on the radios to escalate to role/org.
+export const TeachModal = ({ decision, onClose, onSubmitted, defaultScope = 'role' }) => {
   const [failureMode, setFailureMode] = useState('rubric_mismatch');
   const [correction, setCorrection] = useState('');
-  const [scope, setScope] = useState('role');
+  const [scope, setScope] = useState(defaultScope);
   // v2 fields — default to a sensible best-guess so the recruiter only has
   // to override when they actually know better.
   const [attributedTo, setAttributedTo] = useState('cv_scoring');

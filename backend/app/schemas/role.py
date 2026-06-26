@@ -390,6 +390,15 @@ class ApplicationNoteCreate(BaseModel):
     # always guidance the agent should weigh ("already interviewed — not
     # suitable"). Untick for pure team chatter the agent shouldn't read.
     for_agent: bool = True
+    # The "add info" surface stores three flavours of note through this one
+    # endpoint. ``note`` (the default) is the freeform note box; ``ranking``
+    # carries a 1–5 score + optional comment; ``link`` carries a URL + optional
+    # label. The structured bits ride in the event metadata so the FE can
+    # differentiate them and the agent-visible payload can read a readable form.
+    kind: Literal["note", "ranking", "link"] = "note"
+    ranking: Optional[int] = Field(default=None, ge=1, le=5)
+    link_url: Optional[str] = Field(default=None, max_length=2000)
+    link_label: Optional[str] = Field(default=None, max_length=200)
 
 
 class AssessmentFromApplicationCreate(BaseModel):

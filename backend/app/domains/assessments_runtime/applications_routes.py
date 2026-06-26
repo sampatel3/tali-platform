@@ -2090,6 +2090,10 @@ def add_application_note(
             note=data.note,
             author=current_user,
             for_agent=data.for_agent,
+            kind=data.kind,
+            ranking=data.ranking,
+            link_url=data.link_url,
+            link_label=data.link_label,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

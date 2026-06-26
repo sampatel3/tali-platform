@@ -651,7 +651,7 @@ describe('AssessmentsPage', () => {
     await waitFor(() => {
       const statusField = screen.getByText('Status', { selector: 'span' }).closest('label');
       expect(statusField).not.toBeNull();
-      expect(within(statusField).getByRole('combobox')).toBeInTheDocument();
+      expect(within(statusField).getByRole('button')).toBeInTheDocument();
     });
   });
 
@@ -659,12 +659,13 @@ describe('AssessmentsPage', () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
     renderAppAt('/assessments');
 
+    let statusTrigger;
     await waitFor(() => {
-      expect(screen.getByText('Filters')).toBeInTheDocument();
+      const field = screen.getByText('Status', { selector: 'span' }).closest('label');
+      statusTrigger = within(field).getByRole('button');
     });
-
-    const statusSelect = screen.getByDisplayValue('All statuses');
-    fireEvent.change(statusSelect, { target: { value: 'completed' } });
+    fireEvent.click(statusTrigger);
+    fireEvent.click(await screen.findByRole('option', { name: 'Completed' }));
 
     await waitFor(() => {
       // Should have been called again with status filter
@@ -688,12 +689,13 @@ describe('AssessmentsPage', () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
     renderAppAt('/assessments');
 
+    let roleTrigger;
     await waitFor(() => {
-      expect(screen.getByText('Filters')).toBeInTheDocument();
+      const field = screen.getByText('Role', { selector: 'span' }).closest('label');
+      roleTrigger = within(field).getByRole('button');
     });
-
-    const roleSelect = screen.getByDisplayValue('All roles');
-    fireEvent.change(roleSelect, { target: { value: '101' } });
+    fireEvent.click(roleTrigger);
+    fireEvent.click(await screen.findByRole('option', { name: 'Backend Engineer' }));
 
     await waitFor(() => {
       expect(assessmentsApi.list).toHaveBeenCalledWith(
@@ -759,14 +761,14 @@ describe('AssessmentsPage', () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
     renderAppAt('/assessments');
 
+    let taskTrigger;
     await waitFor(() => {
       const taskField = screen.getByText('Task', { selector: 'span' }).closest('label');
       expect(taskField).not.toBeNull();
-      expect(within(taskField).getByRole('combobox')).toBeInTheDocument();
+      taskTrigger = within(taskField).getByRole('button');
     });
-
-    const taskSelect = screen.getByDisplayValue('All tasks');
-    fireEvent.change(taskSelect, { target: { value: '10' } });
+    fireEvent.click(taskTrigger);
+    fireEvent.click(await screen.findByRole('option', { name: 'Async Debugging' }));
 
     await waitFor(() => {
       expect(assessmentsApi.list).toHaveBeenCalledWith(

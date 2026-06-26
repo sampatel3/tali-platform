@@ -109,6 +109,73 @@ def test_add_note_rejects_empty(client):
     assert resp_empty.status_code == 422, resp_empty.text
 
 
+def test_add_ranking_note_stores_kind_and_rides_in_agent_payload(client, db):
+    headers, _ = auth_headers(client)
+    app = _create_application(client, headers, candidate_email="ranking@example.com")
+    aid = app["id"]
+
+    resp = client.post(
+        f"/api/v1/applications/{aid}/notes",
+        headers=headers,
+        json={"note": "Solid but light on system design.", "kind": "ranking", "ranking": 4},
+    )
+    assert resp.status_code == 200, resp.text
+    event = resp.json()
+    assert event["event_type"] == "recruiter_note"
+    assert event["metadata"]["kind"] == "ranking"
+    assert event["metadata"]["ranking"] == 4
+    assert event["metadata"]["note"] == "Solid but light on system design."
+
+    # The agent reads a readable "Ranking: 4/5 — …" form.
+    agent_notes = _agent_recruiter_notes(db, aid)
+    assert any(
+        "Ranking: 4/5" in n["note"] and "system design" in n["note"] for n in agent_notes
+    )
+
+
+def test_add_link_note_stores_url_label_and_rides_in_agent_payload(client, db):
+    headers, _ = auth_headers(client)
+    app = _create_application(client, headers, candidate_email="link@example.com")
+    aid = app["id"]
+
+    resp = client.post(
+        f"/api/v1/applications/{aid}/notes",
+        headers=headers,
+        json={
+            "note": "Portfolio",
+            "kind": "link",
+            "link_url": "https://example.com/portfolio",
+            "link_label": "Portfolio",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    event = resp.json()
+    assert event["metadata"]["kind"] == "link"
+    assert event["metadata"]["link_url"] == "https://example.com/portfolio"
+    assert event["metadata"]["link_label"] == "Portfolio"
+
+    # The agent reads a readable "Link: <label> <url>" form.
+    agent_notes = _agent_recruiter_notes(db, aid)
+    assert any(
+        "Link:" in n["note"]
+        and "Portfolio" in n["note"]
+        and "https://example.com/portfolio" in n["note"]
+        for n in agent_notes
+    )
+
+
+def test_ranking_note_out_of_range_rejected(client):
+    headers, _ = auth_headers(client)
+    app = _create_application(client, headers, candidate_email="range@example.com")
+    # ranking must be 1–5 (schema ge=1, le=5).
+    resp = client.post(
+        f"/api/v1/applications/{app['id']}/notes",
+        headers=headers,
+        json={"note": "great", "kind": "ranking", "ranking": 9},
+    )
+    assert resp.status_code == 422, resp.text
+
+
 def test_add_note_is_org_scoped(client):
     headers_a, _ = auth_headers(client)
     headers_b, _ = auth_headers(client)

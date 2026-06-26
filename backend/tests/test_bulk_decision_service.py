@@ -296,6 +296,48 @@ def test_bulk_skips_post_handover_interview(db):
     assert _pending(db, role) == []  # NOT rejected
 
 
+def test_decide_post_handover_defers_mid_interview_reject(db):
+    """A reject-worthy candidate the recruiter is INTERVIEWING in Workable
+    (non-terminal post-handover) is deferred: decide_post_handover returns None,
+    does NOT pull advanced→review, and queues NO reject card — so they can never
+    be stranded in 'review' once that card is later discarded."""
+    from app.services.bulk_decision_service import decide_post_handover
+
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    app = _add_app(db, org, role, role_fit=20.0)  # below threshold → would reject
+    app.workable_stage = "Final Interview"
+    app.pipeline_stage = "advanced"
+    app.pipeline_stage_source = "sync"
+    db.commit()
+
+    result = decide_post_handover(db, app=app, role=role)
+    db.commit()
+
+    assert result is None  # deferred to the recruiter's live interview
+    assert app.pipeline_stage == "advanced"  # NOT pulled back to review
+    assert _pending(db, role) == []  # no reject card queued
+
+
+def test_decide_post_handover_terminal_reject_still_surfaces(db):
+    """A reject verdict on a TERMINAL hand-off (offer) is imminent enough to still
+    surface: pull back to review + queue the live reject card (unchanged)."""
+    from app.services.bulk_decision_service import decide_post_handover
+
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    app = _add_app(db, org, role, role_fit=20.0)
+    app.workable_stage = "Offer"
+    app.pipeline_stage = "advanced"
+    app.pipeline_stage_source = "sync"
+    db.commit()
+
+    result = decide_post_handover(db, app=app, role=role)
+    db.commit()
+
+    assert result == "reject"
+    assert app.pipeline_stage == "review"  # pulled back to host the live card
+    assert len(_pending(db, role)) == 1
+
+
 def test_bulk_excludes_processing_decision(db):
     """(b) A 'processing' decision (approved, writeback in flight/stuck) blocks
     a duplicate — the cohort must exclude the candidate, not re-decide."""

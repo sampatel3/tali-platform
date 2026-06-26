@@ -453,9 +453,118 @@ def synthesise_prior(
     }
 
 
+def company_tech_stack(
+    *, group_id: str, company: str, t: dt.datetime, limit: int = 40
+) -> dict[str, Any]:
+    """Collective tech-stack distribution for a company — the corroboration
+    'truth model'. Aggregates ``HAS_SKILL`` across every candidate who
+    ``WORKED_AT`` ``company`` (case-insensitive exact name match), as seen at
+    time ``t``. Returns
+    ``{company, total_candidates, skills: {skill_lower: candidate_count}}``.
+
+    Fail-open: ``total_candidates=0`` / empty ``skills`` when the graph is empty,
+    unconfigured, or the Cypher fails — callers MUST treat that as "no signal",
+    never "clean". ``total_candidates`` is the cold-start gate input.
+
+    Cached in Redis per (group_id, company, date) for
+    ``GRAPH_COMPANY_STACK_CACHE_TTL`` so cohort re-scores + the multi-employer
+    loop reuse the slowly-changing distribution instead of re-hitting Neo4j.
+    """
+    cache_key = _stack_cache_key(group_id, company, t)
+    if cache_key is not None:
+        cached = _stack_cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+    rows = _execute(
+        """
+        MATCH (c:Candidate {group_id: $group_id})-[w:WORKED_AT]->(co:Company)
+        WHERE toLower(co.name) = toLower($company)
+          AND (w.valid_from IS NULL OR w.valid_from <= $t)
+        WITH collect(DISTINCT c) AS cands
+        WITH cands, size(cands) AS total
+        UNWIND cands AS c
+        OPTIONAL MATCH (c)-[h:HAS_SKILL]->(s:Skill)
+        WHERE (h.valid_from IS NULL OR h.valid_from <= $t)
+        RETURN total AS total_candidates,
+               coalesce(s.name, s.skill_id) AS skill,
+               count(DISTINCT c) AS candidates_with_skill
+        ORDER BY candidates_with_skill DESC
+        """,
+        group_id=group_id,
+        company=company,
+        t=t,
+    )
+    total = 0
+    skills: dict[str, int] = {}
+    for r in rows:
+        total = int(r.get("total_candidates") or total or 0)
+        name = r.get("skill")
+        if name:
+            key = str(name).strip().lower()
+            if key:
+                skills[key] = int(r.get("candidates_with_skill") or 0)
+    if limit and len(skills) > limit:
+        skills = dict(sorted(skills.items(), key=lambda kv: kv[1], reverse=True)[:limit])
+    out = {"company": company, "total_candidates": total, "skills": skills}
+    if cache_key is not None and total > 0:
+        _stack_cache_set(cache_key, out)
+    return out
+
+
+def _stack_cache_key(group_id: str, company: str, t: dt.datetime) -> str | None:
+    from ..platform.config import settings
+
+    if int(getattr(settings, "GRAPH_COMPANY_STACK_CACHE_TTL", 0) or 0) <= 0:
+        return None
+    day = t.date().isoformat() if isinstance(t, dt.datetime) else str(t)[:10]
+    return f"graph:stack:{group_id}:{day}:{str(company).strip().lower()}"
+
+
+def _stack_redis():  # pragma: no cover — best-effort cache
+    try:
+        import redis
+
+        from ..platform.config import settings
+
+        return redis.Redis.from_url(
+            settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2
+        )
+    except Exception:
+        return None
+
+
+def _stack_cache_get(key: str) -> dict[str, Any] | None:  # pragma: no cover
+    r = _stack_redis()
+    if r is None:
+        return None
+    try:
+        import json
+
+        raw = r.get(key)
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+
+def _stack_cache_set(key: str, value: dict[str, Any]) -> None:  # pragma: no cover
+    r = _stack_redis()
+    if r is None:
+        return
+    try:
+        import json
+
+        from ..platform.config import settings
+
+        r.setex(key, int(settings.GRAPH_COMPANY_STACK_CACHE_TTL), json.dumps(value))
+    except Exception:
+        return
+
+
 __all__ = [
     "candidate_claimed_skills",
     "company_overlap_with_top_performers",
+    "company_tech_stack",
     "referrer_signal",
     "role_must_haves",
     "role_requirements_weighted",

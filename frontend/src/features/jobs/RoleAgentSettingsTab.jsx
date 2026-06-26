@@ -4,6 +4,7 @@ import { Check, Edit3, X } from 'lucide-react';
 import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 import RecruiterAnswersLog from './RecruiterAnswersLog';
 import RoleFeedbackNotes from './RoleFeedbackNotes';
+import { Select } from '../../shared/ui/TaaliPrimitives';
 
 // RoleAgentSettingsTab — merged Agent settings panel per HANDOFF v2 §4.3.
 // Hero banner with ON/OFF + CV scoring criteria editor + reject threshold +
@@ -183,8 +184,8 @@ const RoleAgentSettingsTab = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--ink)' }}>
               <span className="kicker mute">MODE</span>
-              <select
-                className="rq-select"
+              <Select
+                inline
                 value={thresholdMode}
                 onChange={(event) => onThresholdModeChange?.(event.target.value)}
                 aria-label="Threshold mode"
@@ -192,7 +193,7 @@ const RoleAgentSettingsTab = ({
               >
                 <option value="manual">Manual</option>
                 <option value="auto">Agent-managed (dynamic)</option>
-              </select>
+              </Select>
             </label>
             {thresholdMode === 'auto' && suggestedThreshold?.rationale ? (
               <span style={{ fontSize: 12, color: 'var(--mute)', flex: 1, minWidth: 0 }}>

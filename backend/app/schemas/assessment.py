@@ -197,18 +197,6 @@ class RepoFileSaveRequest(BaseModel):
     files: List[RepoFileSnapshotEntry] = Field(default_factory=list)
 
 
-class ClaudeRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=4000)
-    conversation_history: List[Dict[str, Any]] = []
-    code_context: Optional[str] = None  # Current editor content at time of prompt
-    selected_file_path: Optional[str] = Field(default=None, max_length=500)
-    repo_files: List[RepoFileSnapshotEntry] = Field(default_factory=list)
-    paste_detected: bool = False  # Whether prompt was pasted
-    browser_focused: bool = True  # Whether browser was in focus
-    time_since_assessment_start_ms: Optional[int] = None  # Time since assessment start in ms
-    time_since_last_prompt_ms: Optional[int] = None  # Time since previous prompt in ms
-
-
 class ClaudeChatRequest(BaseModel):
     """Request body for the new agentic ``/claude/chat`` endpoint.
 
