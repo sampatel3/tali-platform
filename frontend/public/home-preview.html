@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en" data-brand="taali">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Taali — home hub preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.30.0/dist/tabler-icons.min.css">
+<link rel="stylesheet" href="/report-preview.css">
+<style>
+.previewbar{background:#241147;color:#d9cdfa;font-family:'Geist Mono',monospace;font-size:11.5px;letter-spacing:.04em;text-align:center;padding:6px 12px}
+.agentbar{display:flex;align-items:center;gap:13px;background:linear-gradient(120deg,#3a1d6e,#6a3fb8,#2a1556,#4a2a8a,#3a1d6e);background-size:300% 300%;animation:flow 7s ease-in-out infinite;border:1px solid rgba(196,165,253,.5);border-radius:14px;padding:12px 17px;color:#efe9fb;margin-bottom:20px;box-shadow:0 6px 22px rgba(36,17,71,.28)}
+.agentbar .dot{width:9px;height:9px;border-radius:50%;background:#c4f17a;box-shadow:0 0 0 4px rgba(196,241,122,.22);animation:sparkpulse 2.4s ease-in-out infinite}
+.agentbar b{font-weight:600}
+.agentbar .budget{margin-left:auto;display:flex;align-items:center;gap:9px;font-size:12.5px}
+.agentbar .bbar{width:80px;height:6px;border-radius:4px;background:rgba(238,237,254,.22)}
+.agentbar .bbar i{display:block;height:100%;width:84%;border-radius:4px;background:#c4a5fd}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px}
+.kpi{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-lg);padding:16px 18px}
+.kpi .k{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute)}
+.kpi .v{font-size:26px;font-weight:600;margin-top:5px;letter-spacing:-.02em}
+.kpi .v.attn{color:var(--purple-2)}
+.kpi .sub{font-size:12px;color:var(--mute);margin-top:3px}
+.cockpit{display:grid;grid-template-columns:1fr 360px;gap:20px;align-items:start}
+.qhead{display:flex;align-items:center;justify-content:space-between;padding:15px 18px 13px}
+.qitem{display:flex;align-items:center;gap:13px;padding:13px 18px;border-top:1px solid var(--line);cursor:pointer;text-decoration:none;color:inherit}
+.qitem.on{background:var(--purple-tint);box-shadow:inset 3px 0 0 var(--purple)}
+.qav{width:36px;height:36px;border-radius:50%;background:var(--purple-soft);color:var(--purple-2);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:13px;flex:none}
+.qmeta{flex:1;min-width:0}
+.qname{font-weight:500;font-size:14px}
+.qsub{font-size:12.5px;color:var(--mute)}
+.qscore{font-size:17px;font-weight:600;color:var(--purple-2);width:30px;text-align:right;flex:none}
+.qscore.lo{color:var(--mute)}
+.vpill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:500;border-radius:99px;padding:3px 10px;white-space:nowrap}
+.vpill.send{background:var(--purple-soft);color:var(--purple-2)}
+.vpill.rej{background:var(--bg-3);color:var(--mute)}
+.vpill.q{background:var(--amber-soft);color:var(--amber-ink)}
+.ctx{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-lg);padding:18px;position:sticky;top:80px}
+.feed .fi{display:flex;align-items:flex-start;gap:11px;padding:11px 0;border-top:1px solid var(--line);font-size:13.5px}
+.feed .fi:first-of-type{border-top:none}
+.feed .fdot{width:8px;height:8px;border-radius:50%;margin-top:6px;flex:none}
+.feed b{font-weight:500}
+@media (max-width:980px){.cockpit{grid-template-columns:1fr}.ctx{position:static}.kpis{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+
+<div class="previewbar">Design preview · sample data, not live</div>
+
+<nav class="nav">
+  <span class="logo">taali<b>.</b></span>
+  <span class="nt on"><i class="ti ti-home"></i> Home <span class="mc-badge">12</span></span>
+  <span class="nt"><i class="ti ti-briefcase"></i> Jobs</span>
+  <span class="nt"><i class="ti ti-message-circle"></i> Chat <span class="mc-badge ai">AI</span></span>
+  <span class="nt"><i class="ti ti-checkbox"></i> Tasks</span>
+  <span class="nt"><i class="ti ti-settings"></i> Settings</span>
+  <span style="flex:1"></span>
+  <span class="pill">Search candidates, roles, tasks… <span class="kbd">⌘K</span></span>
+  <span class="ibtn"><i class="ti ti-bell"></i></span>
+  <span class="avwrap"><span class="sp">SP</span><i class="ti ti-chevron-down" style="font-size:14px"></i></span>
+</nav>
+
+<div class="wrap">
+  <div style="margin-bottom:18px">
+    <div class="crumb">Tuesday · 12 awaiting you · 4 active roles</div>
+    <div class="h1">Good morning, Priya</div>
+  </div>
+
+  <div class="agentbar">
+    <span class="dot"></span>
+    <span><b>Agent on</b> · working 4 roles · scoring, screening and queuing decisions for you</span>
+    <span class="budget">$42 / $50 this month <span class="bbar"><i></i></span></span>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="k">Awaiting you</div><div class="v attn">12</div><div class="sub">3 questions · 9 decisions</div></div>
+    <div class="kpi"><div class="k">Decisions today</div><div class="v">34</div><div class="sub">28 auto-applied</div></div>
+    <div class="kpi"><div class="k">Org budget · MTD</div><div class="v">$42<span style="font-size:15px;color:var(--mute)"> / 50</span></div><div class="sub">84% used</div></div>
+    <div class="kpi"><div class="k">Override rate · 7d</div><div class="v">8%</div><div class="sub">you taught the agent 3×</div></div>
+  </div>
+
+  <div class="cockpit">
+
+    <!-- QUEUE -->
+    <div class="card" style="padding:0">
+      <div class="qhead">
+        <div><span class="kicker">Awaiting your decision</span> <span class="tert" style="font-size:12px">· sorted by fit</span></div>
+        <button class="btn sm primary" style="box-shadow:none"><i class="ti ti-checks ic"></i> Approve 9 visible</button>
+      </div>
+
+      <a class="qitem on" href="/report-preview">
+        <span class="qav">AR</span>
+        <div class="qmeta"><div class="qname">Alex Rahman</div><div class="qsub">Senior AWS Platform Engineer · 1h</div></div>
+        <span class="vpill send"><i class="ti ti-send"></i> Send assessment</span>
+        <span class="chip amber" style="font-size:11px;padding:2px 8px"><i class="ti ti-flag ic-amber"></i> 8</span>
+        <span class="qscore">72</span>
+      </a>
+      <a class="qitem" href="#">
+        <span class="qav">DO</span>
+        <div class="qmeta"><div class="qname">Dana Okoro</div><div class="qsub">Data Engineer · 2h</div></div>
+        <span class="vpill send"><i class="ti ti-arrow-up-right"></i> Advance</span>
+        <span class="qscore">83</span>
+      </a>
+      <a class="qitem" href="#">
+        <span class="qav" style="background:#FAC775;color:#633806">ML</span>
+        <div class="qmeta"><div class="qname">Marcus Lin</div><div class="qsub">Which seniority band fits this role?</div></div>
+        <span class="vpill q"><i class="ti ti-help-circle"></i> Needs you</span>
+      </a>
+      <a class="qitem" href="#">
+        <span class="qav">SH</span>
+        <div class="qmeta"><div class="qname">Sara Haddad</div><div class="qsub">Backend Engineer · 3h</div></div>
+        <span class="vpill send"><i class="ti ti-send"></i> Send assessment</span>
+        <span class="chip amber" style="font-size:11px;padding:2px 8px"><i class="ti ti-flag ic-amber"></i> 2</span>
+        <span class="qscore">64</span>
+      </a>
+      <a class="qitem" href="#">
+        <span class="qav" style="background:var(--bg-3);color:var(--mute)">RB</span>
+        <div class="qmeta"><div class="qname">Rohan Bhatt</div><div class="qsub">Data Engineer · 5h</div></div>
+        <span class="vpill rej"><i class="ti ti-filter-x"></i> Pre-screen reject</span>
+        <span class="qscore lo">28</span>
+      </a>
+      <div class="qitem" style="color:var(--mute);cursor:default"><i class="ti ti-chevron-down" style="width:36px;text-align:center"></i><div class="qmeta" style="font-size:12.5px">Showing 5 of 12 · plus 22 assessments in progress</div></div>
+    </div>
+
+    <!-- CONTEXT (selected) -->
+    <div class="ctx">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+        <div class="ring" style="width:54px;height:54px">
+          <svg width="54" height="54" viewBox="0 0 54 54"><circle cx="27" cy="27" r="22" fill="none" stroke="#e3dcf3" stroke-width="6"/><circle cx="27" cy="27" r="22" fill="none" stroke="#5e3aa8" stroke-width="6" stroke-linecap="round" stroke-dasharray="100 138" transform="rotate(-90 27 27)"/></svg>
+          <div class="num" style="font-size:17px">72</div>
+        </div>
+        <div><div style="font-weight:600;font-size:15px">Alex Rahman</div><div class="tert" style="font-size:12.5px">Senior AWS Platform Engineer · Dubai</div></div>
+      </div>
+
+      <div class="agent-rec" style="margin-bottom:12px">
+        <div class="kl"><i class="ti ti-sparkles spark"></i> Agent recommends</div>
+        <button class="btn-rec" style="font-size:15px;padding:12px"><i class="ti ti-send"></i> Send assessment</button>
+        <div class="conf">Confidence 100%</div>
+      </div>
+      <div style="text-align:center;margin-bottom:12px"><span class="chip amber"><i class="ti ti-flag ic-amber"></i> 8 flags · verify before deciding</span></div>
+
+      <p class="reason" style="font-size:13px;margin-bottom:14px">Strong AWS / IaC / CI-CD with FinTech depth, but no Bedrock or SageMaker — the role's core AI/ML gap. An assessment resolves the gap and the unverified claims.</p>
+
+      <div style="display:flex;gap:8px">
+        <button class="btn counter" style="flex:1;justify-content:center"><i class="ti ti-x ic"></i> Reject</button>
+        <button class="btn" style="flex:1;justify-content:center"><i class="ti ti-brain ic"></i> Teach</button>
+      </div>
+      <a href="/report-preview" class="more" style="display:inline-block;margin-top:14px"><i class="ti ti-file-text"></i> Open full report →</a>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:20px">
+    <div class="kicker" style="margin-bottom:12px">Agent activity</div>
+    <div class="feed">
+      <div class="fi"><span class="fdot" style="background:var(--purple)"></span><span><b>Advanced Dana Okoro</b> to interview · Data Engineer — role-fit 83 ≥ 70. <span class="tert">8m ago</span></span></div>
+      <div class="fi"><span class="fdot" style="background:var(--mute)"></span><span><b>Auto-rejected 6 candidates</b> · Data Engineer pre-screen — all below the cut. <span class="tert">22m ago</span></span></div>
+      <div class="fi"><span class="fdot" style="background:var(--purple)"></span><span><b>Sent assessment</b> to Sara Haddad · Backend Engineer. <span class="tert">1h ago</span></span></div>
+      <div class="fi"><span class="fdot" style="background:var(--amber)"></span><span><b>Paused on a question</b> · Marcus Lin — needs a seniority steer. <span class="tert">1h ago</span></span></div>
+      <div class="fi"><span class="fdot" style="background:var(--mute)"></span><span><b>You taught the agent</b> · "treat Kafka as a must-have for Data Engineer." <span class="tert">3h ago</span></span></div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

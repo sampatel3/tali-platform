@@ -90,7 +90,7 @@ button{font-family:inherit;cursor:pointer}
 .dim{display:flex;align-items:center;gap:16px;padding:7px 0}
 .dim .nm{width:190px;color:var(--ink-2);font-size:14px}
 .dim .track{flex:1;height:8px;border-radius:6px;background:var(--bg-3);overflow:hidden}
-.dim .fill{height:100%;background:var(--purple);border-radius:6px}
+.dim .fill{display:block;height:100%;background:var(--purple);border-radius:6px}
 .dim .fill.low{background:var(--purple-lav)}
 .dim .val{width:46px;text-align:right;font-weight:500;font-variant-numeric:tabular-nums}
 .dim .val small{color:var(--mute);font-weight:400}
@@ -267,6 +267,7 @@ button{font-family:inherit;cursor:pointer}
 .agent-rec .big{font-size:23px;font-weight:600;letter-spacing:-.01em;margin:6px 0 13px}
 .btn-rec{width:100%;background:#fff;color:#2a1854;border:none;border-radius:12px;padding:14px;font-size:16px;font-weight:600;font-family:inherit;display:inline-flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;transition:.12s;box-shadow:0 2px 12px rgba(0,0,0,.14)}
 .btn-rec:hover{background:#f1ecfb}
+.agent-rec .conf{font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;color:#b4a0e6;margin-top:10px}
 
 /* recent roles — compact list */
 .rolelist{display:flex;flex-direction:column;gap:6px;font-size:13.5px}
