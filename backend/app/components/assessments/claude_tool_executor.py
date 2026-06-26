@@ -18,10 +18,9 @@ Design contract
   file, sandbox RPC error — turns into ``{"ok": False, "error": ...}``.
   Raising would force the caller to invent an error-result shape on the
   fly; doing it here keeps the surface consistent.
-- Path sanitization mirrors
-  :func:`app.domains.assessments_runtime.candidate_claude_routes._sanitize_repo_path`
-  exactly: empty rejects, absolute rejects, ``..``/``.`` parts reject,
-  backslash normalization, no escape from ``repo_root``.
+- Path sanitization (the canonical implementation): empty rejects,
+  absolute rejects, ``..``/``.`` parts reject, backslash normalization,
+  no escape from ``repo_root``.
 - The executor is stateless given the ``(e2b, sandbox, repo_root)``
   triple. No DB session, no org-scoped config. The caller owns sandbox
   lifecycle.
@@ -84,8 +83,7 @@ _RUN_COMMAND_OUTPUT_CAP = 8000
 def _sanitize_repo_path(path: str | None) -> str:
     """Normalize a repo-relative path or return ``""`` to signal reject.
 
-    Mirrors the helper in ``candidate_claude_routes`` byte-for-byte so the
-    Claude-side and tool-use side agree on what's traversable. Reject
+    The canonical repo-path sanitizer for the candidate sandbox. Reject
     rules (any one fires → return ``""``):
 
     - empty/whitespace-only input
