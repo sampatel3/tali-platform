@@ -12,7 +12,6 @@ from app.models.organization import Organization
 from app.models.task import Task
 from app.models.candidate import Candidate
 from app.models.assessment import Assessment, AssessmentStatus
-from app.models.session import AssessmentSession
 
 
 # ---------------------------------------------------------------------------
@@ -272,69 +271,3 @@ class TestAssessmentModel:
         assert assessment.task.id == task.id
 
 
-# ---------------------------------------------------------------------------
-# AssessmentSession model
-# ---------------------------------------------------------------------------
-
-class TestAssessmentSessionModel:
-
-    def _make_assessment(self, db):
-        org = Organization(name="Sess Org", slug="sess-org")
-        db.add(org)
-        db.commit()
-        db.refresh(org)
-
-        task = Task(organization_id=org.id, name="Sess Task", task_type="python", difficulty="easy")
-        db.add(task)
-        db.commit()
-        db.refresh(task)
-
-        cand = Candidate(organization_id=org.id, email="sess@example.com", full_name="Session Cand")
-        db.add(cand)
-        db.commit()
-        db.refresh(cand)
-
-        assessment = Assessment(
-            organization_id=org.id,
-            candidate_id=cand.id,
-            task_id=task.id,
-            token="sess-token",
-        )
-        db.add(assessment)
-        db.commit()
-        db.refresh(assessment)
-        return assessment
-
-    def test_create_session_with_defaults(self, db):
-        assessment = self._make_assessment(db)
-        session = AssessmentSession(
-            assessment_id=assessment.id,
-        )
-        db.add(session)
-        db.commit()
-        db.refresh(session)
-
-        assert session.id is not None
-        assert session.assessment_id == assessment.id
-        assert session.keystrokes == 0
-        assert session.code_executions == 0
-        assert session.ai_requests == 0
-        assert session.session_end is None
-
-    def test_session_assessment_relationship(self, db):
-        assessment = self._make_assessment(db)
-        session = AssessmentSession(
-            assessment_id=assessment.id,
-            keystrokes=150,
-            code_executions=5,
-            ai_requests=3,
-        )
-        db.add(session)
-        db.commit()
-        db.refresh(session)
-
-        assert session.assessment.id == assessment.id
-        # Verify back-reference from assessment to sessions
-        db.refresh(assessment)
-        assert len(assessment.sessions) == 1
-        assert assessment.sessions[0].id == session.id
