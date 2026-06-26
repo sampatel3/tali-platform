@@ -382,6 +382,7 @@ def _run_to_payload(run: AgentRun) -> AgentRunPayload:
 @router.get("/agent-decisions", response_model=list[AgentDecisionPayload])
 def list_agent_decisions(
     role_id: Optional[int] = Query(default=None),
+    application_id: Optional[int] = Query(default=None),
     status: str = Query(default="pending"),
     decision_type: Optional[str] = Query(default=None, alias="type"),
     q: Optional[str] = Query(default=None),
@@ -402,6 +403,10 @@ def list_agent_decisions(
     )
     if role_id is not None:
         query = query.filter(AgentDecision.role_id == int(role_id))
+    # Single-candidate lens: the candidate report fetches THIS application's
+    # decision(s) to surface the agent's recommendation in its header strip.
+    if application_id is not None:
+        query = query.filter(AgentDecision.application_id == int(application_id))
     if status != "all":
         if status == "pending":
             # The Hub queue shows actionable (pending) rows AND in-flight
