@@ -15,6 +15,7 @@ import {
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
+import { readFluency4d } from '../../shared/assessment/fluency4d';
 import { RadarChart } from '../../shared/ui/RadarChart';
 import { ScoreRing } from '../../shared/ui/ScoreRing';
 import { ScoreProvenance } from './ScoreProvenance';
@@ -1551,6 +1552,9 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             All scores render as integer "nn / 100" per HANDOFF v2 §6. */}
         {(() => {
           const fluencyAxes = computeFluencyAxes(completedAssessment);
+          // Anthropic AI-Fluency 4 Ds rollup (additive; null until a task's
+          // rubric adopts the new lenses — see fluency4d.js / summarize_fluency_4d).
+          const fluency4d = readFluency4d(completedAssessment);
           const taaliScore = reportModel?.summaryModel?.taaliScore;
           const roleFitScoreVal = reportModel?.summaryModel?.roleFitScore;
           const assessmentScore = reportModel?.summaryModel?.assessmentScore;
@@ -1649,6 +1653,30 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   </p>
                 </div>
               )}
+
+              {/* (3b) AI Fluency — Anthropic's 4 Ds (+ Deliverable). Additive
+                  view derived from the rubric grades; renders only when the
+                  assessment carries the fluency_4d rollup. Axes with no signal
+                  yet (task hasn't adopted the lens) show "—". */}
+              {fluency4d ? (
+                <div className="mc-overview-dimensions">
+                  <div className="mc-kicker">AI FLUENCY · ANTHROPIC 4 Ds</div>
+                  <div className="mc-overview-dimensions-grid">
+                    {fluency4d.map((axis) => (
+                      <div key={axis.key} className="mc-overview-dim-row" title={axis.blurb}>
+                        <span className="mc-overview-dim-label">{axis.label}</span>
+                        <div className="mc-overview-dim-bar" aria-hidden="true">
+                          <i style={{ width: `${axis.hasSignal ? Math.max(0, Math.min(100, Math.round(axis.score))) : 0}%` }} />
+                        </div>
+                        <span className="mc-overview-dim-score">
+                          {axis.hasSignal ? Math.round(axis.score) : '—'}
+                          {axis.hasSignal ? <span className="mc-overview-dim-suffix">/100</span> : null}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
 
               {/* (4) Evidence row — four cards */}
               <div className="mc-overview-evidence">
