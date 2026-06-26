@@ -32,7 +32,8 @@
   },
   "evaluation_rubric": {
     "situational_assessment": {
-      "weight": 0.22,
+      "weight": 0.18,
+      "lens": "decision",
       "criteria": {
         "excellent": "Reads RUNBOOK.md, diagnostics/cluster_status.md, diagnostics/audit_findings.md, and diagnostics/recent_pr.diff before editing. Identifies the three real problems (missing IAM policies, blocked 443 egress, outdated CNI add-on) and recognises the VPC route hypothesis as a red herring. Maps each symptom in the kubectl output to a specific Terraform resource.",
         "good": "Finds two of the three real problems but misses one — typically either the add-on version or the SG egress restriction.",
@@ -40,15 +41,21 @@
       }
     },
     "prioritisation_judgment": {
-      "weight": 0.2,
+      "weight": 0.15,
+      "lens": "decision",
       "criteria": {
         "excellent": "Restores pod scheduling first by re-adding AmazonEKSWorkerNodePolicy + AmazonEC2ContainerRegistryReadOnly and unblocking 443 egress; then bumps the CNI add-on. Defers any non-blocking cleanup. Calls out that there should be a tflint/OPA rule preventing this PR shape from ever merging.",
         "good": "Picks a sensible order but leaves the CNI version mismatch for 'later' even though pods can't initialise networking without it.",
         "poor": "Starts with cosmetic Terraform refactors or replaces the security group rules with overly-broad allowances (egress 0.0.0.0/0 on all ports) instead of fixing the targeted block."
       }
     },
+    "design_decisions_articulated": {
+      "weight": 0.25,
+      "grader": "interrogation_outcome"
+    },
     "technical_design": {
-      "weight": 0.22,
+      "weight": 0.18,
+      "lens": "deliverable",
       "criteria": {
         "excellent": "IAM fix re-attaches both managed policies (kubelet + ECR pulls) and keeps the existing CNI policy. SG fix permits TCP 443 egress to the control plane / ECR / STS endpoints without opening all ports. CNI add-on bumped to v1.15.x or newer (the minimum EKS 1.29 supports). Each change is the smallest credible fix.",
         "good": "Fixes IAM and SG correctly but picks a CNI version that is too aggressive (e.g. latest preview) without explaining why.",
@@ -56,7 +63,8 @@
       }
     },
     "implementation_quality": {
-      "weight": 0.18,
+      "weight": 0.12,
+      "lens": "deliverable",
       "criteria": {
         "excellent": "All four pytest files pass. Terraform is syntactically valid and parses with python-hcl2. No unrelated resources changed. Egress rule is targeted at 443/tcp.",
         "good": "Suite passes but with stylistic noise — for example unrelated formatting changes to resources that didn't need to be touched.",
@@ -64,7 +72,8 @@
       }
     },
     "communication_clarity": {
-      "weight": 0.18,
+      "weight": 0.12,
+      "lens": "decision",
       "criteria": {
         "excellent": "Hand-back is structured for the Head of Platform: which problems were real with the diagnostic that proved each, what was changed, what stays risky, and what CI rule would have caught the regression. Plain-language risk framing alongside the technical specifics.",
         "good": "Clear engineering summary but no proposed CI/policy backstop to prevent recurrence.",
@@ -162,6 +171,11 @@
         "rubric_dimension": "prioritisation_judgment"
       },
       {
+        "job_requirement": "Own the load-bearing remediation design calls under a deployment freeze (egress-rule shape, add-on version target) rather than delegating them to the agent.",
+        "task_artifact": "Chat transcript — the candidate must commit to the SG-egress fix shape and the CNI version target, naming the trade-off each carries.",
+        "rubric_dimension": "design_decisions_articulated"
+      },
+      {
         "job_requirement": "Maintain EKS managed-add-on version compatibility with the cluster control-plane version.",
         "task_artifact": "infra/addons.tf — aws-vpc-cni v1.14.1 must be bumped to v1.15.x+ for EKS 1.29; tests/test_addons.py asserts the minimum version",
         "rubric_dimension": "technical_design"
@@ -185,5 +199,47 @@
     "baseline_failures_meaningful": true,
     "rubric_matches_role": true,
     "timebox_realistic": true
-  }
+  },
+  "decision_points": [
+    {
+      "id": "egress_fix_shape",
+      "headline": "How to restore worker-node egress.",
+      "tension": "The PR replaced the node SG's all-egress rule with a block that denies 443. You have to restore connectivity to the control plane / ECR / STS under a deployment freeze, and the shape you pick trades operational simplicity against least-privilege.",
+      "options": [
+        {"label": "Restore broad egress", "summary": "re-add the original all-protocols egress to 0.0.0.0/0 — unblocks instantly, but it's the permissive posture the PR was trying to tighten"},
+        {"label": "Scoped 443/tcp egress", "summary": "add a targeted 443/tcp egress rule — least-privilege, but you must be sure it covers every endpoint the node needs (control plane, ECR, STS) or you page yourself again"}
+      ],
+      "ask": "Do you restore the broad all-egress rule to unblock fast, or add a scoped 443/tcp egress and accept the risk of missing an endpoint? Pick one and name the cost you're accepting — don't say 'do both'.",
+      "valid_commit": "names broad-egress OR scoped-443 with the specific cost (permissive posture vs. risk of an uncovered endpoint / maintenance burden), tied to the freeze context.",
+      "valid_reframes": [
+        "argues egress should be keyed to VPC endpoints / prefix lists rather than 0.0.0.0/0, and accepts the extra setup cost",
+        "proposes restoring broad egress NOW to unblock, then a follow-up to scope it down once out of the freeze — and says so explicitly"
+      ],
+      "anti_patterns": [
+        "opens 0.0.0.0/0 on ALL ports instead of restoring the prior rule or scoping to 443",
+        "answers 'do both' or 'whatever is safest' without naming the trade-off",
+        "asks Claude to decide the egress shape"
+      ]
+    },
+    {
+      "id": "cni_version_target",
+      "headline": "Which aws-vpc-cni version to land.",
+      "tension": "aws-vpc-cni v1.14.1 doesn't support the freshly-upgraded 1.29 control plane. You're under a freeze, so the version you jump to trades known-good stability against picking up the newest fixes.",
+      "options": [
+        {"label": "Minimum supported (v1.15.x)", "summary": "the conservative bump the EKS 1.29 compatibility matrix names as the floor — smallest change, well-vetted"},
+        {"label": "Latest available", "summary": "newest features and CVE fixes, but unvetted in this cluster and a bigger jump to make mid-incident"}
+      ],
+      "ask": "Do you bump to the minimum 1.29-supported v1.15.x, or jump straight to latest? Justify the version against the compatibility matrix and the change risk you're willing to take under a freeze.",
+      "valid_commit": "names a specific version target (minimum-supported vs latest) with a reason tied to the EKS 1.29 add-on compatibility matrix AND the change risk appropriate to a freeze.",
+      "valid_reframes": [
+        "argues for the minimum 1.15.x now to restore support with least change risk, and scheduling latest for a normal change window — naming that as the deliberate call",
+        "asks whether the add-on should be pinned exactly vs allowed to float, and resolves it"
+      ],
+      "anti_patterns": [
+        "picks 'latest' or a preview build with no justification",
+        "doesn't connect the version to the 1.29 compatibility matrix",
+        "asks Claude which version to use"
+      ]
+    }
+  ]
 }

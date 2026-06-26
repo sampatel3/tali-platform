@@ -77,6 +77,40 @@ _DEFAULT_AGENT_SDK_MODEL = "claude-haiku-4-5-20251001"
 # without ballooning cost.
 _HISTORY_MAX_MESSAGES = 20
 
+# Cap on a single captured tool RESULT on the ai_prompts record. Bash
+# stdout / file reads can be large; the grader + replay only need a
+# bounded excerpt, and the full artifact survives in git_evidence /
+# final_repo_state. Keeps the ai_prompts JSON column from ballooning.
+_MAX_TOOL_RESULT_CHARS = 2000
+
+
+def _stringify_tool_result(content: "str | list[dict] | None") -> str:
+    """Flatten a ``ToolResultBlock.content`` to a bounded plain string.
+
+    The SDK delivers a tool result either as a plain string or as a list
+    of content dicts (e.g. ``[{"type": "text", "text": "..."}]``). The
+    grader and the candidate-process replay only need a bounded textual
+    excerpt of what the agent observed.
+    """
+    if content is None:
+        text = ""
+    elif isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                parts.append(str(block.get("text") or block.get("content") or ""))
+            else:
+                parts.append(str(block))
+        text = "\n".join(p for p in parts if p)
+    else:
+        text = str(content)
+    text = text.strip()
+    if len(text) > _MAX_TOOL_RESULT_CHARS:
+        text = text[:_MAX_TOOL_RESULT_CHARS] + "\n... (truncated)"
+    return text
+
 
 class AgentSDKChatService:
     """Wraps ``claude_agent_sdk.query()`` for the assessment chat path.
@@ -251,7 +285,9 @@ class AgentSDKChatService:
             ClaudeAgentOptions,
             ResultMessage,
             TextBlock,
+            ToolResultBlock,
             ToolUseBlock,
+            UserMessage,
             query,
         )
 
@@ -311,6 +347,14 @@ class AgentSDKChatService:
         # 4. Drive the stream -------------------------------------------------
         content_parts: list[str] = []
         tool_calls: list[dict] = []
+        # Correlate tool RESULTS back onto their originating call by
+        # tool_use_id so scoring can see what the agent actually observed
+        # (process-visible grading), not just what it asked for. The SDK
+        # emits each result as a follow-up UserMessage AFTER the
+        # AssistantMessage that carried the tool-use block — so we mutate
+        # the already-appended call dict in place, and every return path
+        # below carries the merged result for free.
+        calls_by_id: dict[str, dict] = {}
         final: Optional[ResultMessage] = None
 
         try:
@@ -320,7 +364,18 @@ class AgentSDKChatService:
                         if isinstance(block, TextBlock):
                             content_parts.append(block.text)
                         elif isinstance(block, ToolUseBlock):
-                            tool_calls.append({"name": block.name, "input": block.input})
+                            call = {"name": block.name, "input": block.input}
+                            tool_calls.append(call)
+                            if block.id:
+                                calls_by_id[block.id] = call
+                elif isinstance(msg, UserMessage):
+                    blocks = msg.content if isinstance(msg.content, list) else []
+                    for block in blocks:
+                        if isinstance(block, ToolResultBlock):
+                            call = calls_by_id.get(block.tool_use_id)
+                            if call is not None:
+                                call["result"] = _stringify_tool_result(block.content)
+                                call["is_error"] = bool(block.is_error)
                 elif isinstance(msg, ResultMessage):
                     final = msg
         except Exception as exc:

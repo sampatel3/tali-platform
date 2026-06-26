@@ -757,6 +757,12 @@ def submit_assessment_impl(
                 task_scenario=task.scenario or "",
                 candidate_role=str(task.role or ""),
                 decision_points=decision_points_for_grader,
+                # PR-2: surface the agent's tool calls/results + git diff to the
+                # grader so it scores HOW the candidate worked, not just the
+                # message/response text. Flag-gated (default off) until shadow-
+                # validated — see docs/ASSESSMENT_AI_NATIVE_IMPL_PLAN.md.
+                include_process_trace=bool(settings_obj.ASSESSMENT_GRADER_PROCESS_TRACE),
+                git_evidence=(assessment.git_evidence or {}) if isinstance(assessment.git_evidence, dict) else {},
             )
             scorer = RubricScorer(
                 api_key=settings_obj.ANTHROPIC_API_KEY,

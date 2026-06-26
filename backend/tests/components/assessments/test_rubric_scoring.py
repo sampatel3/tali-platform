@@ -159,6 +159,77 @@ def test_artifacts_design_doc_truncates_long_docs():
     assert len(excerpt) < len(huge)
 
 
+# ---- PR-2: process-visible grading (trace + git diff) ----------------------
+
+
+def _trace_transcript():
+    return [
+        {
+            "message": "run the tests then fix the gate",
+            "response": "The gate hardcodes passed=True; fixed.",
+            "tool_calls_made": [
+                {"name": "mcp__sandbox__Bash", "input": {"command": "pytest -q"},
+                 "result": "2 failed, 7 passed", "is_error": False},
+                {"name": "mcp__sandbox__Edit", "input": {"path": "dq/gate.py"},
+                 "result": "could not find exact match", "is_error": True},
+            ],
+        },
+    ]
+
+
+def test_transcript_excerpt_omits_tool_trace_by_default():
+    """Default (flag off): the transcript is message/response only — no
+    behaviour change vs pre-PR-2, even when tool_calls_made is present."""
+    art = ScoringArtifacts(prompt_transcript=_trace_transcript())
+    excerpt = art.prompt_transcript_excerpt()
+    assert "[Candidate]: run the tests" in excerpt
+    assert "[Claude]: The gate hardcodes" in excerpt
+    assert "[Agent actions]" not in excerpt
+    assert "pytest -q" not in excerpt
+
+
+def test_transcript_excerpt_includes_tool_trace_when_enabled():
+    """With include_process_trace, each turn interleaves the agent's tool
+    calls + results (and an [error] flag) so the grader sees verification."""
+    art = ScoringArtifacts(prompt_transcript=_trace_transcript(), include_process_trace=True)
+    excerpt = art.prompt_transcript_excerpt()
+    assert "[Agent actions]" in excerpt
+    assert "Bash(pytest -q)" in excerpt
+    assert "→ 2 failed, 7 passed" in excerpt
+    assert "Edit(dq/gate.py)" in excerpt
+    assert "[error]" in excerpt  # the failed Edit
+
+
+def test_transcript_tool_result_excerpt_is_bounded():
+    huge = "z" * 5000
+    art = ScoringArtifacts(
+        prompt_transcript=[{
+            "message": "read it", "response": "ok",
+            "tool_calls_made": [{"name": "mcp__sandbox__Read", "input": {"path": "big.py"},
+                                 "result": huge, "is_error": False}],
+        }],
+        include_process_trace=True,
+    )
+    excerpt = art.prompt_transcript_excerpt()
+    # The 5000-char result is truncated to the per-line excerpt cap.
+    assert huge not in excerpt
+    assert "Read(big.py)" in excerpt
+
+
+def test_git_evidence_excerpt_gated_and_bounded():
+    ge = {"commits": "abc123 fix the gate", "diff_main": "d" * 10_000}
+    # Gated OFF by default.
+    assert ScoringArtifacts(git_evidence=ge).git_evidence_excerpt() == ""
+    # ON: commits + diff present, diff bounded with a marker.
+    on = ScoringArtifacts(git_evidence=ge, include_process_trace=True)
+    ex = on.git_evidence_excerpt()
+    assert "abc123 fix the gate" in ex
+    assert "diff truncated" in ex
+    assert len(ex) < 10_000
+    # ON but no evidence captured → empty.
+    assert ScoringArtifacts(include_process_trace=True).git_evidence_excerpt() == ""
+
+
 # ---- RubricScorer.grade_dimension ------------------------------------------
 
 

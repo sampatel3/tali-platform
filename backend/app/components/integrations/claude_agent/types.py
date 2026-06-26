@@ -24,9 +24,12 @@ class ChatTurn:
     - ``success`` is False whenever the SDK reported an error OR the
       pre-spend budget gate fired (in which case no SDK call was made
       and no ``UsageEvent`` was written).
-    - ``tool_calls_made`` is analytics-only; never shown to the
-      candidate. Each entry is ``{"name": "...", "input": {...}}`` —
-      the SDK's tool-use blocks, captured verbatim.
+    - ``tool_calls_made`` is never shown to the candidate. Each entry is
+      ``{"name", "input", "result", "is_error"}`` — the SDK's tool-use
+      block plus the correlated tool RESULT (bounded), so scoring can see
+      what the agent actually did AND observed, not just what it asked
+      for. ``result``/``is_error`` are absent for a call whose result
+      never arrived (e.g. the turn truncated at ``max_turns``).
     - ``total_cost_usd`` and the token counts here aggregate every
       internal Anthropic call the SDK made for this turn. They match
       the single ``UsageEvent`` row the service writes (tagged

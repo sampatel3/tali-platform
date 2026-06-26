@@ -66,6 +66,12 @@ _MAX_REPO_FILES = 20
 _MAX_DESIGN_DOC_CHARS = 8000
 _MAX_PROMPT_TRANSCRIPT_TURNS = 20
 _MAX_PROMPT_TURN_CHARS = 2000
+# Process-trace bounds (only applied when ``include_process_trace`` is set).
+_MAX_TOOL_CALLS_PER_TURN = 8
+_MAX_TOOL_TARGET_CHARS = 120
+_MAX_TOOL_RESULT_EXCERPT_CHARS = 600
+_MAX_GIT_DIFF_CHARS = 6000
+_MAX_GIT_COMMITS_CHARS = 1500
 
 
 @dataclass(frozen=True)
@@ -107,6 +113,16 @@ class ScoringArtifacts:
     # written onto each ai_prompts record to score the dimension
     # deterministically — no Anthropic call for this dim.
     decision_points: List[Dict[str, Any]] = field(default_factory=list)
+    # PR-2 (process-visible grading): when True, prompt_transcript_excerpt()
+    # interleaves each turn's agent tool calls + results, and
+    # git_evidence_excerpt() surfaces the committed diff — so the grader can
+    # read HOW the candidate drove the agent (verification, iteration), not
+    # just the message/response text. Gated by ASSESSMENT_GRADER_PROCESS_TRACE
+    # so the rollout is reversible + shadow-validatable before it moves live
+    # scores. git_evidence is assessment.git_evidence (head_sha, diff_main,
+    # commits, status_porcelain, ...).
+    include_process_trace: bool = False
+    git_evidence: Dict[str, Any] = field(default_factory=dict)
 
     def repo_files_excerpt(self) -> str:
         """Concatenated repo files for prompt embedding (bounded)."""
@@ -138,8 +154,63 @@ class ScoringArtifacts:
         for i, turn in enumerate(turns, 1):
             user = str(turn.get("message", "") or "")[:_MAX_PROMPT_TURN_CHARS]
             asst = str(turn.get("response", "") or "")[:_MAX_PROMPT_TURN_CHARS]
-            lines.append(f"### Turn {i}\n[Candidate]: {user}\n[Claude]: {asst}")
+            block = [f"### Turn {i}", f"[Candidate]: {user}"]
+            if self.include_process_trace:
+                tool_lines = self._render_tool_calls(turn.get("tool_calls_made") or [])
+                if tool_lines:
+                    block.append("[Agent actions]:")
+                    block.extend(tool_lines)
+            block.append(f"[Claude]: {asst}")
+            lines.append("\n".join(block))
         return "\n\n".join(lines)
+
+    @staticmethod
+    def _render_tool_calls(tool_calls: List[Dict[str, Any]]) -> List[str]:
+        """One bounded line per tool call: ``- Bash(pytest -q) → 2 failed``.
+
+        Shows what the agent did (tool + target) and what it OBSERVED (the
+        result excerpt + an error flag) so the grader can judge whether the
+        candidate verified the agent's work. Only rendered under
+        ``include_process_trace``.
+        """
+        out: List[str] = []
+        for call in tool_calls[:_MAX_TOOL_CALLS_PER_TURN]:
+            if not isinstance(call, dict):
+                continue
+            name = str(call.get("name", "")).split("__")[-1] or "tool"
+            inp = call.get("input")
+            target = ""
+            if isinstance(inp, dict):
+                target = str(inp.get("path") or inp.get("command") or inp.get("file_path") or "")
+            target = target.replace("\n", " ")[:_MAX_TOOL_TARGET_CHARS]
+            line = f"  - {name}({target})" if target else f"  - {name}"
+            if "result" in call:
+                flag = " [error]" if call.get("is_error") else ""
+                result = str(call.get("result") or "").replace("\n", " ")[:_MAX_TOOL_RESULT_EXCERPT_CHARS]
+                line += f"{flag} → {result}"
+            out.append(line)
+        extra = len(tool_calls) - _MAX_TOOL_CALLS_PER_TURN
+        if extra > 0:
+            out.append(f"  - … ({extra} more tool call(s))")
+        return out
+
+    def git_evidence_excerpt(self) -> str:
+        """Committed diff + commit log for the grader (bounded). Empty unless
+        ``include_process_trace`` is on and git evidence was captured."""
+        if not self.include_process_trace or not self.git_evidence:
+            return ""
+        ge = self.git_evidence if isinstance(self.git_evidence, dict) else {}
+        parts: List[str] = []
+        commits = str(ge.get("commits") or "").strip()
+        if commits:
+            parts.append("Commits (git log --oneline):\n" + commits[:_MAX_GIT_COMMITS_CHARS])
+        diff = str(ge.get("diff_main") or ge.get("diff") or "").strip()
+        if diff:
+            body = diff[:_MAX_GIT_DIFF_CHARS]
+            if len(diff) > _MAX_GIT_DIFF_CHARS:
+                body += "\n... (diff truncated)"
+            parts.append("Diff vs base:\n" + body)
+        return "\n\n".join(parts)
 
 
 @dataclass(frozen=True)
@@ -178,7 +249,9 @@ _GRADER_PREAMBLE = (
     "candidate works WITH an AI coding agent. You will receive: (1) the "
     "criterion's excellent / good / poor descriptors, (2) the submission "
     "artifacts (the final repo the candidate shipped, the chat transcript "
-    "with the agent), (3) the task scenario."
+    "with the agent — which, where available, interleaves the agent's tool "
+    "calls + results and the candidate's git diff so you can see how the work "
+    "was actually done), (3) the task scenario."
 )
 _GRADER_OUTPUT = (
     "\n\nChoose ONE rating tier ('excellent', 'good', or 'poor'), assign a "
@@ -247,25 +320,37 @@ def _build_user_prompt(
     poor = (criteria.get("poor") or "").strip() or "(not specified)"
     role = artifacts.candidate_role or "(unspecified role)"
     scenario = (artifacts.task_scenario or "(no scenario)").strip()
-    return (
-        f"Rubric dimension: **{dimension_id}**\n\n"
-        "Tier descriptors:\n"
-        f"- EXCELLENT (9-10): {excellent}\n"
-        f"- GOOD (5-8): {good}\n"
-        f"- POOR (0-4): {poor}\n\n"
-        f"Candidate role: {role}\n\n"
-        "Task scenario the candidate was given:\n"
-        f"{scenario}\n\n"
-        "Test runner outcome:\n"
-        f"{artifacts.test_results_summary or '(not provided)'}\n\n"
-        "Candidate's DESIGN.md (if any):\n"
-        f"{artifacts.design_doc_excerpt()}\n\n"
-        "Candidate's chat transcript with Claude:\n"
-        f"{artifacts.prompt_transcript_excerpt()}\n\n"
+    git_excerpt = artifacts.git_evidence_excerpt()
+    sections = [
+        f"Rubric dimension: **{dimension_id}**",
+        (
+            "Tier descriptors:\n"
+            f"- EXCELLENT (9-10): {excellent}\n"
+            f"- GOOD (5-8): {good}\n"
+            f"- POOR (0-4): {poor}"
+        ),
+        f"Candidate role: {role}",
+        f"Task scenario the candidate was given:\n{scenario}",
+        f"Test runner outcome:\n{artifacts.test_results_summary or '(not provided)'}",
+        f"Candidate's DESIGN.md (if any):\n{artifacts.design_doc_excerpt()}",
+        (
+            "Candidate's chat transcript with Claude (an [Agent actions] block, "
+            "when present, lists the agent's tool calls + results so you can "
+            "judge how the candidate steered and verified the work):\n"
+            f"{artifacts.prompt_transcript_excerpt()}"
+        ),
+    ]
+    if git_excerpt:
+        sections.append(
+            "Candidate's git history + diff (what they actually committed):\n"
+            f"{git_excerpt}"
+        )
+    sections.append(
         "Final repository state (candidate's submitted code):\n"
-        f"{artifacts.repo_files_excerpt()}\n\n"
-        "Grade this dimension now. Respond with the JSON shape only."
+        f"{artifacts.repo_files_excerpt()}"
     )
+    sections.append("Grade this dimension now. Respond with the JSON shape only.")
+    return "\n\n".join(sections)
 
 
 # ---- Scorer -----------------------------------------------------------------
