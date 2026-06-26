@@ -515,12 +515,14 @@ export const buildRoleFitEvidenceModel = ({ application, completedAssessment }) 
   const rationaleBullets = uniqueTrimmed(details.score_rationale_bullets, 6);
   const requirementsAssessment = Array.isArray(details.requirements_assessment)
     ? details.requirements_assessment
+      // Newer cv_match schema renamed requirement→criterion_text and moved
+      // evidence/impact into cv_quote / screening_recommendation. Read both.
       .map((item) => ({
-        requirement: String(item?.requirement || '').trim(),
-        priority: String(item?.priority || 'nice_to_have').toLowerCase(),
+        requirement: String(item?.requirement || item?.criterion_text || '').trim(),
+        priority: String(item?.priority || (item?.must_have ? 'must_have' : '') || 'nice_to_have').toLowerCase(),
         status: String(item?.status || 'unknown').toLowerCase(),
-        evidence: String(item?.evidence || '').trim(),
-        impact: String(item?.impact || '').trim(),
+        evidence: String(item?.evidence || item?.cv_quote || '').trim(),
+        impact: String(item?.impact || item?.screening_recommendation || item?.interview_probe || '').trim(),
       }))
       .filter((item) => item.requirement)
     : [];
