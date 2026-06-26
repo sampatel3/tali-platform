@@ -19,9 +19,7 @@
 .pcell .k{font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--mute);letter-spacing:.04em}
 .pcell .v{font-size:24px;font-weight:600;margin-top:4px;letter-spacing:-.02em}.pcell .v.attn{color:var(--purple-2)}
 .pcell .s{font-size:11px;color:var(--mute);margin-top:2px}
-/* tabs */
-.atabs{display:flex;gap:4px;border:1px solid var(--line-2);border-radius:11px;background:var(--bg-2);padding:3px;width:max-content;margin-bottom:18px;flex-wrap:wrap}
-.atab{font-size:13px;color:var(--mute);font-weight:500;padding:8px 15px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:7px}.atab.on{background:var(--purple);color:#fff}
+/* tabs — shared .vtabs/.vtab from report-preview.css */
 .panel{display:none}.panel.on{display:block}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
@@ -136,12 +134,12 @@
   </div>
 
   <!-- tabs -->
-  <div class="atabs">
-    <span class="atab on" data-p="outcomes"><i class="ti ti-trending-up"></i> Outcomes</span>
-    <span class="atab" data-p="fleet"><i class="ti ti-robot"></i> Agent fleet</span>
-    <span class="atab" data-p="teaching"><i class="ti ti-brain"></i> Teaching history</span>
-    <span class="atab" data-p="ab"><i class="ti ti-test-pipe"></i> A/B tasks</span>
-    <span class="atab" data-p="history"><i class="ti ti-history"></i> Decision log</span>
+  <div class="vtabs">
+    <span class="vtab on" data-p="outcomes"><i class="ti ti-trending-up"></i> Outcomes</span>
+    <span class="vtab" data-p="fleet"><i class="ti ti-robot"></i> Agent fleet</span>
+    <span class="vtab" data-p="teaching"><i class="ti ti-brain"></i> Teaching history</span>
+    <span class="vtab" data-p="ab"><i class="ti ti-test-pipe"></i> A/B tasks</span>
+    <span class="vtab" data-p="history"><i class="ti ti-history"></i> Decision log</span>
   </div>
 
   <!-- OUTCOMES -->
@@ -337,8 +335,8 @@
 </div>
 
 <script>
-document.querySelectorAll('.atab').forEach(t=>t.addEventListener('click',()=>{
-  document.querySelectorAll('.atab').forEach(x=>x.classList.remove('on'));
+document.querySelectorAll('.vtab').forEach(t=>t.addEventListener('click',()=>{
+  document.querySelectorAll('.vtab').forEach(x=>x.classList.remove('on'));
   document.querySelectorAll('.panel').forEach(x=>x.classList.remove('on'));
   t.classList.add('on');document.getElementById(t.dataset.p).classList.add('on');
 }));

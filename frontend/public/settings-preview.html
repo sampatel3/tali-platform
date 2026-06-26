@@ -13,68 +13,74 @@
 .previewbar{background:#241147;color:#d9cdfa;font-family:'Geist Mono',monospace;font-size:11.5px;letter-spacing:.04em;text-align:center;padding:6px 12px}
 .swrap{max-width:1080px;margin:0 auto;padding:24px 28px 60px}
 .wschip{font-size:12px;color:var(--mute);border:1px solid var(--line);border-radius:99px;padding:6px 14px;background:var(--bg-2)}.wschip b{color:var(--ink);font-weight:500}
-/* tab strip */
-.stabs{display:flex;gap:3px;background:var(--bg-2);border:1px solid var(--line);border-radius:99px;padding:4px;margin:18px 0;overflow-x:auto}
-.stab{font-size:13px;color:var(--mute);font-weight:500;padding:8px 15px;border-radius:99px;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:7px;flex:none}
-.stab.on{background:var(--ink);color:var(--bg)}
 .panel{display:none}.panel.on{display:block}
-.smain{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-lg);padding:26px 28px}
-.smain h2{font-size:21px;font-weight:600;letter-spacing:-.01em}.smain h2 em{color:var(--purple);font-style:normal}
-.smain .sub{font-size:13.5px;color:var(--mute);margin:4px 0 22px}
+/* one outer card per tab; flat sections inside */
+.smain{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-lg);padding:6px 30px 26px}
+.smain h2{font-size:21px;font-weight:600;letter-spacing:-.01em;margin-top:18px}.smain h2 em{color:var(--purple);font-style:normal}
+.smain .sub{font-size:13.5px;color:var(--mute);margin:4px 0 2px}
+.fsec{padding:22px 0;border-top:1px solid var(--line)}
+.fsec.first{border-top:none;padding-top:18px}
+.fsec .fh{font-size:14.5px;font-weight:600}
+.fsec .fsd{font-size:12.5px;color:var(--mute);margin:3px 0 14px}
 /* form */
-.rowform{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:18px}
-.fld{}.fld .k{font-size:12px;font-weight:500;display:block;margin-bottom:6px}.fld input,.fld textarea,.fld .selbox{width:100%;border:1px solid var(--line-2);border-radius:10px;padding:10px 13px;font-size:13.5px;font-family:inherit;background:var(--bg);color:var(--ink)}
+.rowform{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.fld .k{font-size:12px;font-weight:500;display:block;margin-bottom:6px}
+.fld input,.fld textarea,.fld .selbox{width:100%;border:1px solid var(--line-2);border-radius:10px;padding:10px 13px;font-size:13.5px;font-family:inherit;background:var(--bg);color:var(--ink)}
 .fld .selbox{display:flex;align-items:center;justify-content:space-between;cursor:pointer;color:var(--ink-2)}
-.fld textarea{min-height:88px;resize:vertical;line-height:1.5}
-.fld .hint{font-size:11.5px;color:var(--mute);margin-top:5px}
-.saverow{display:flex;align-items:center;justify-content:space-between;gap:14px;border-top:1px solid var(--line);padding-top:18px;margin-top:6px;font-size:12.5px;color:var(--mute)}
-.subcard{border:1px solid var(--line);border-radius:var(--radius);padding:17px 19px;margin-bottom:16px}
-.subcard .sh{display:flex;align-items:center;gap:9px;margin-bottom:5px}.subcard .si{width:28px;height:28px;border-radius:8px;background:var(--purple-soft);color:var(--purple-2);display:flex;align-items:center;justify-content:center;font-size:15px}
-.subcard .st{font-size:14.5px;font-weight:600}.subcard .sd{font-size:12.5px;color:var(--mute);margin-bottom:13px}
-/* chips */
-.cchips{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:6px}
+.fld textarea{min-height:96px;resize:vertical;line-height:1.5}
+.fld .hint{font-size:11.5px;color:var(--mute);margin-top:6px;display:inline-block}
+.saverow{display:flex;align-items:center;justify-content:space-between;gap:14px;border-top:1px solid var(--line);padding-top:18px;margin-top:22px;font-size:12.5px;color:var(--mute)}
+/* toggle / choice list — ONE bordered list with dividers (no card-per-row) */
+.tlist{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.trow{display:flex;align-items:flex-start;gap:14px;padding:14px 16px;border-top:1px solid var(--line);cursor:pointer}
+.trow:first-child{border-top:none}
+.trow .tg{flex:1}.trow .tg b{font-weight:500;font-size:13.5px}.trow .tg p{font-size:12px;color:var(--mute);margin-top:3px;line-height:1.5}
+.trow input[type=radio]{margin-top:3px;accent-color:var(--purple);width:16px;height:16px}
+.trow.sel{background:var(--purple-tint)}
+.sw{width:42px;height:23px;border-radius:99px;background:var(--bg-3);position:relative;flex:none;cursor:pointer;transition:.15s;margin-top:1px}
+.sw.on{background:var(--purple)}.sw::after{content:'';position:absolute;top:2px;left:2px;width:19px;height:19px;border-radius:50%;background:#fff;transition:.15s;box-shadow:0 1px 3px rgba(0,0,0,.2)}.sw.on::after{transform:translateX(19px)}
+/* criteria chips */
+.cchips{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:4px}
 .cchip{font-size:12px;background:var(--purple-soft);color:var(--purple-2);border-radius:99px;padding:5px 12px;display:inline-flex;align-items:center;gap:6px}.cchip .x{opacity:.6;cursor:pointer}
 .cchip.pref{background:var(--bg-3);color:var(--ink-2)}
 .cchip.add{background:var(--bg);color:var(--mute);border:1px dashed var(--line-2);cursor:pointer}
 .bucket{font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--mute);letter-spacing:.05em;margin:14px 0 8px}
-/* slider */
+/* range */
 .rng{width:100%;margin:8px 0 4px;accent-color:var(--purple)}.rngscale{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--mute)}
-/* toggle cards */
-.tcard{display:flex;align-items:flex-start;gap:14px;border:1px solid var(--line);border-radius:var(--radius);padding:14px 17px;margin-bottom:10px}
-.tcard .tg{flex:1}.tcard .tg b{font-weight:500;font-size:13.5px}.tcard .tg p{font-size:12px;color:var(--mute);margin-top:3px;line-height:1.5}
-.sw{width:42px;height:23px;border-radius:99px;background:var(--bg-3);position:relative;flex:none;cursor:pointer;transition:.15s;margin-top:2px}
-.sw.on{background:var(--purple)}.sw::after{content:'';position:absolute;top:2px;left:2px;width:19px;height:19px;border-radius:50%;background:#fff;transition:.15s;box-shadow:0 1px 3px rgba(0,0,0,.2)}.sw.on::after{transform:translateX(19px)}
-/* workable status */
-.wkstatus{display:flex;align-items:center;gap:13px;border:1px solid var(--line);border-radius:var(--radius);padding:15px 17px;margin-bottom:16px}
+/* scopes */
+.scopelist{display:flex;flex-direction:column;gap:11px}
+.scope{display:flex;align-items:flex-start;gap:11px;font-size:13px;cursor:pointer}.scope input{margin-top:2px;accent-color:var(--purple);width:16px;height:16px}.scope b{font-weight:500}.scope span{color:var(--mute);font-size:12px}
+/* workable status — kept as a card (a connected object) */
+.wkstatus{display:flex;align-items:center;gap:13px;border:1px solid var(--line);border-radius:var(--radius);padding:14px 17px;background:var(--bg)}
 .wklogo{width:34px;height:34px;border-radius:9px;background:#1a8754;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:17px;flex:none}
 .wkstatus .wt{font-weight:600;font-size:14px}.wkstatus .wm{font-size:12px;color:var(--mute);display:flex;gap:9px;flex-wrap:wrap;margin-top:3px;align-items:center}.wkdot{width:7px;height:7px;border-radius:50%;background:var(--green)}
 .wkstatus .sp{margin-left:auto;display:flex;gap:8px}
-.wmodes{display:grid;grid-template-columns:1fr 1fr;gap:13px;margin-bottom:16px}
-.wmode{border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;display:flex;align-items:flex-start;gap:13px}.wmode.on{border-color:var(--purple-lav);background:var(--purple-tint)}
-.wmode .wg{flex:1}.wmode b{font-weight:500;font-size:13.5px}.wmode p{font-size:11.5px;color:var(--mute);margin-top:3px;line-height:1.45}
-.scopelist{display:flex;flex-direction:column;gap:9px;margin:6px 0 14px}
-.scope{display:flex;align-items:flex-start;gap:11px;font-size:13px}.scope input{margin-top:3px;accent-color:var(--purple)}.scope b{font-weight:500}.scope span{color:var(--mute);font-size:12px}
-.dangercard{border:1px solid #e6c9c9;background:#fbf2f2;border-radius:var(--radius);padding:15px 17px;display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:6px}
+/* danger — kept as a card (safety separation) */
+.dangercard{border:1px solid #e6c9c9;background:#fbf2f2;border-radius:var(--radius);padding:15px 17px;display:flex;align-items:center;justify-content:space-between;gap:14px}
 .dangercard b{font-weight:500}.dangercard p{font-size:12px;color:#8a4658;margin-top:2px}
 .btn.danger{border-color:#d99;color:#a8475a;background:var(--bg-2)}.btn.danger:hover{background:#fbeef0;border-color:#c66}
-/* billing */
-.bsum{display:grid;grid-template-columns:repeat(3,1fr);gap:13px;margin-bottom:18px}
+/* billing / usage stat cards — kept (they ARE cards of data) */
+.bsum{display:grid;grid-template-columns:repeat(3,1fr);gap:13px}
 .bcard{border:1px solid var(--line);border-radius:var(--radius);padding:15px 17px}.bcard .k{font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--mute)}.bcard .v{font-size:22px;font-weight:600;margin-top:5px}.bcard .s{font-size:12px;color:var(--mute);margin-top:4px}.bcard .s a{color:var(--purple-2);font-weight:500}
-.packs{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px}
+.packs{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
 .pack{border:1px solid var(--line-2);border-radius:var(--radius);padding:15px;text-align:center;cursor:pointer}.pack:hover{border-color:var(--purple-lav);background:var(--purple-tint)}.pack .pamt{font-size:18px;font-weight:600}.pack .pbonus{font-size:11px;color:var(--purple-2);font-weight:500}.pack .pprice{font-size:13px;color:var(--mute);margin-top:5px}
 .utable{width:100%;border-collapse:collapse;font-size:12.5px}.utable th{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;color:var(--mute);text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);font-weight:500}.utable td{padding:9px 10px;border-bottom:1px solid var(--line)}.utable tr:last-child td{border-bottom:none}
+.statuschip{font-size:11px;border-radius:99px;padding:2px 9px;display:inline-flex;align-items:center;gap:4px}
+.statuschip.run{background:var(--purple-soft);color:var(--purple-2)}.statuschip.done{background:var(--bg-3);color:var(--ink-2)}.statuschip.warn{background:var(--amber-soft);color:var(--amber-ink)}
 /* members */
 .member{display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid var(--line)}.member:first-of-type{border-top:none}
 .mav{width:34px;height:34px;border-radius:50%;background:var(--purple-soft);color:var(--purple-2);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex:none}
 .member .mn{font-weight:500;font-size:13.5px}.member .me{font-size:12px;color:var(--mute)}
 .member .mchip{margin-left:auto;font-size:11px;border-radius:99px;padding:3px 11px;background:var(--purple-soft);color:var(--purple-2);font-weight:500}.member .mchip.inv{background:var(--bg-3);color:var(--mute)}
 /* usage chart */
-.ubars{display:flex;align-items:flex-end;gap:5px;height:130px;margin:12px 0}
+.ubars{display:flex;align-items:flex-end;gap:5px;height:130px;margin:6px 0 12px}
 .ubar{flex:1;display:flex;flex-direction:column-reverse;border-radius:4px 4px 0 0;overflow:hidden;min-height:4px}
 .useg{width:100%}.useg.s1{background:var(--purple)}.useg.s2{background:var(--purple-lav)}.useg.s3{background:var(--amber)}
-.ulegend{display:flex;gap:16px;font-size:11.5px;color:var(--mute);margin-top:8px}.ulegend .sw2{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:5px;vertical-align:middle}
-.callout{font-size:12px;color:var(--mute);border:1px dashed var(--line-2);border-radius:11px;padding:12px 14px;line-height:1.55;margin-top:8px}
-@media (max-width:720px){.rowform,.bsum,.wmodes,.packs{grid-template-columns:1fr}}
+.ulegend{display:flex;gap:16px;font-size:11.5px;color:var(--mute)}.ulegend .sw2{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:5px;vertical-align:middle}
+.callout{font-size:12px;color:var(--mute);border:1px dashed var(--line-2);border-radius:11px;padding:12px 14px;line-height:1.55;margin-top:18px}
+.statchips{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.gchip{background:var(--purple-soft);color:var(--purple-2);font-size:11.5px;border-radius:99px;padding:3px 11px;display:inline-flex;align-items:center;gap:5px}
+@media (max-width:720px){.rowform,.bsum,.packs{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -103,57 +109,65 @@
     <span class="wschip">Workspace · <b>Deeplight Talent</b></span>
   </div>
 
-  <div class="stabs">
-    <span class="stab" data-p="org"><i class="ti ti-building"></i> Organization</span>
-    <span class="stab" data-p="members"><i class="ti ti-users"></i> Members</span>
-    <span class="stab on" data-p="agent"><i class="ti ti-sparkles"></i> AI agent</span>
-    <span class="stab" data-p="workable"><i class="ti ti-plug"></i> Workable</span>
-    <span class="stab" data-p="email"><i class="ti ti-mail"></i> Email &amp; transcripts</span>
-    <span class="stab" data-p="notifs"><i class="ti ti-bell"></i> Notifications</span>
-    <span class="stab" data-p="billing"><i class="ti ti-credit-card"></i> Billing</span>
-    <span class="stab" data-p="usage"><i class="ti ti-chart-bar"></i> Usage</span>
-    <span class="stab" data-p="security"><i class="ti ti-shield-lock"></i> Security</span>
-    <span class="stab" data-p="dev"><i class="ti ti-key"></i> Developers</span>
-    <span class="stab" data-p="jobs"><i class="ti ti-server-cog"></i> Background jobs</span>
+  <div class="vtabs" style="margin-top:18px">
+    <span class="vtab" data-p="org"><i class="ti ti-building"></i> Organization</span>
+    <span class="vtab" data-p="members"><i class="ti ti-users"></i> Members</span>
+    <span class="vtab" data-p="agent"><i class="ti ti-sparkles"></i> AI agent</span>
+    <span class="vtab on" data-p="workable"><i class="ti ti-plug"></i> Workable</span>
+    <span class="vtab" data-p="email"><i class="ti ti-mail"></i> Email</span>
+    <span class="vtab" data-p="notifs"><i class="ti ti-bell"></i> Notifications</span>
+    <span class="vtab" data-p="billing"><i class="ti ti-credit-card"></i> Billing</span>
+    <span class="vtab" data-p="usage"><i class="ti ti-chart-bar"></i> Usage</span>
+    <span class="vtab" data-p="security"><i class="ti ti-shield-lock"></i> Security</span>
+    <span class="vtab" data-p="dev"><i class="ti ti-key"></i> Developers</span>
+    <span class="vtab" data-p="jobs"><i class="ti ti-server-cog"></i> Background jobs</span>
   </div>
 
   <!-- ORG -->
   <div class="panel" id="org"><div class="smain">
     <h2>Organization<em>.</em></h2><div class="sub">How your workspace shows up to candidates and panel members.</div>
-    <div class="rowform">
-      <div class="fld"><span class="k">Workspace name</span><input value="Deeplight Talent"></div>
-      <div class="fld"><span class="k">Primary domain</span><input value="deeplight.ae"></div>
-      <div class="fld"><span class="k">Candidate-facing brand</span><input value="Taali"></div>
-      <div class="fld"><span class="k">Locale</span><input value="English (US)"></div>
+    <div class="fsec first">
+      <div class="rowform">
+        <div class="fld"><span class="k">Workspace name</span><input value="Deeplight Talent"></div>
+        <div class="fld"><span class="k">Primary domain</span><input value="deeplight.ae"></div>
+        <div class="fld"><span class="k">Candidate-facing brand</span><input value="Taali"></div>
+        <div class="fld"><span class="k">Locale</span><input value="English (US)"></div>
+      </div>
     </div>
-    <div class="subcard"><div class="sh"><span class="st">Requisition template</span></div><div class="sd">The default structure new roles inherit for their job spec and criteria.</div><button class="btn sm">Edit requisition template →</button></div>
+    <div class="fsec">
+      <div class="fh">Requisition template</div><div class="fsd">The default structure new roles inherit for their job spec and criteria.</div>
+      <button class="btn sm">Edit requisition template →</button>
+    </div>
     <div class="saverow"><span>Changes apply across the workspace.</span><button class="btn sm primary">Save organization</button></div>
   </div></div>
 
   <!-- MEMBERS -->
   <div class="panel" id="members"><div class="smain">
     <h2>Members<em>.</em></h2><div class="sub">3 people in this workspace.</div>
-    <div class="rowform" style="grid-template-columns:1fr 1fr auto;align-items:end">
-      <div class="fld"><span class="k">Full name</span><input placeholder="Alex Weston"></div>
-      <div class="fld"><span class="k">Email</span><input placeholder="alex@company.com"></div>
-      <button class="btn sm primary" style="height:40px"><i class="ti ti-plus ic"></i> Invite member</button>
+    <div class="fsec first">
+      <div class="rowform" style="grid-template-columns:1fr 1fr auto;align-items:end">
+        <div class="fld"><span class="k">Full name</span><input placeholder="Alex Weston"></div>
+        <div class="fld"><span class="k">Email</span><input placeholder="alex@company.com"></div>
+        <button class="btn sm primary" style="height:40px"><i class="ti ti-plus ic"></i> Invite member</button>
+      </div>
+      <div style="margin-top:16px">
+        <div class="member"><span class="mav">SP</span><div><div class="mn">Sam Patel <span class="tert" style="font-weight:400">· you</span></div><div class="me">sam@deeplight.ae</div></div><span class="mchip">Owner</span></div>
+        <div class="member"><span class="mav">PR</span><div><div class="mn">Priya Ramesh</div><div class="me">priya@deeplight.ae</div></div><span class="mchip">Recruiter</span></div>
+        <div class="member"><span class="mav" style="background:var(--bg-3);color:var(--mute)">AW</span><div><div class="mn">Alex Weston</div><div class="me">alex@company.com</div></div><span class="mchip inv">Invited</span></div>
+      </div>
     </div>
-    <div style="margin-top:8px">
-      <div class="member"><span class="mav">SP</span><div><div class="mn">Sam Patel <span class="tert" style="font-weight:400">· you</span></div><div class="me">sam@deeplight.ae</div></div><span class="mchip">Owner</span></div>
-      <div class="member"><span class="mav">PR</span><div><div class="mn">Priya Ramesh</div><div class="me">priya@deeplight.ae</div></div><span class="mchip">Recruiter</span></div>
-      <div class="member"><span class="mav" style="background:var(--bg-3);color:var(--mute)">AW</span><div><div class="mn">Alex Weston</div><div class="me">alex@company.com</div></div><span class="mchip inv">Invited</span></div>
+    <div class="fsec">
+      <div class="fh">Access</div><div class="fsd">Limit who can join by email domain.</div>
+      <div class="fld" style="max-width:440px"><span class="k">Allowed email domains (comma separated)</span><input value="deeplight.ae"></div>
     </div>
-    <div class="subcard" style="margin-top:18px"><div class="sh"><span class="st">Access</span></div><div class="sd">Limit who can join by email domain.</div>
-      <div class="fld"><span class="k">Allowed email domains (comma separated)</span><input value="deeplight.ae"></div></div>
     <div class="saverow"><span>Invites are limited to deeplight.ae.</span><button class="btn sm primary">Save access settings</button></div>
   </div></div>
 
   <!-- AI AGENT -->
-  <div class="panel on" id="agent"><div class="smain">
+  <div class="panel" id="agent"><div class="smain">
     <h2>AI agent<em>.</em></h2><div class="sub">Workspace-wide defaults inherited by every new role. Per-role overrides on the role page always win.</div>
-    <div class="subcard">
-      <div class="sh"><span class="si"><i class="ti ti-list-check"></i></span><span class="st">Default role criteria</span></div>
-      <div class="sd">Copied into each new role. The agent scores candidates against these.</div>
+    <div class="fsec first">
+      <div class="fh">Default role criteria</div><div class="fsd">Copied into each new role. The agent scores candidates against these.</div>
       <div class="bucket">Must-haves</div>
       <div class="cchips"><span class="cchip">Production cloud experience <i class="ti ti-x x"></i></span><span class="cchip">5+ years <i class="ti ti-x x"></i></span><span class="cchip add"><i class="ti ti-plus"></i> Add</span></div>
       <div class="bucket">Preferred</div>
@@ -161,98 +175,137 @@
       <div class="bucket">Constraints</div>
       <div class="cchips"><span class="cchip pref">UAE / GCC work eligibility <i class="ti ti-x x"></i></span><span class="cchip add"><i class="ti ti-plus"></i> Add</span></div>
     </div>
-    <div class="rowform">
-      <div class="subcard" style="margin:0"><div class="sh"><span class="st">Default budget per role</span></div><div class="sd">Monthly cap each new agent starts with.</div><div class="fld"><input value="200" style="max-width:160px"></div><div class="fld"><span class="hint">USD / month · agent self-pauses at 80%</span></div></div>
-      <div class="subcard" style="margin:0"><div class="sh"><span class="st">Default score threshold</span></div><div class="sd">Reject below · assessment in the middle band.</div><input type="range" class="rng" min="0" max="100" value="55"><div class="rngscale"><span>0</span><span>50</span><span>100</span></div><div class="hint" style="margin-top:6px">Threshold <b style="color:var(--purple-2)">55/100</b> · 8 default criteria copied into each new role.</div></div>
+    <div class="fsec">
+      <div class="rowform">
+        <div>
+          <div class="fh">Default budget per role</div><div class="fsd">Monthly cap each new agent starts with.</div>
+          <div class="fld"><input value="200" style="max-width:160px"><span class="hint">USD / month · agent self-pauses at 80%</span></div>
+        </div>
+        <div>
+          <div class="fh">Default score threshold</div><div class="fsd">Reject below · assessment in the middle band.</div>
+          <input type="range" class="rng" min="0" max="100" value="55"><div class="rngscale"><span>0</span><span>50</span><span>100</span></div>
+          <span class="hint">Threshold <b style="color:var(--purple-2)">55/100</b> · 8 default criteria copied into each new role.</span>
+        </div>
+      </div>
     </div>
     <div class="saverow"><span>Criteria save as you add them. Budget &amp; threshold need a save click.</span><button class="btn sm primary">Save budget &amp; threshold</button></div>
   </div></div>
 
   <!-- WORKABLE -->
-  <div class="panel" id="workable"><div class="smain">
+  <div class="panel on" id="workable"><div class="smain">
     <h2>Workable<em>.</em></h2><div class="sub">Pull jobs and candidates from Workable, then write invite and outcome actions back.</div>
-    <div class="wkstatus">
-      <span class="wklogo">W</span>
-      <div><div class="wt">deeplight.workable.com</div><div class="wm"><span class="wkdot"></span> Healthy · Last sync 4m ago · Token: write-back · Next pull 11m</div></div>
-      <div class="sp"><button class="btn sm">Manage</button><button class="btn sm primary"><i class="ti ti-refresh ic"></i> Sync now</button></div>
+    <div class="fsec first">
+      <div class="wkstatus">
+        <span class="wklogo">W</span>
+        <div><div class="wt">deeplight.workable.com</div><div class="wm"><span class="wkdot"></span> Healthy · Last sync 4m ago · Token: write-back · Next pull 11m</div></div>
+        <div class="sp"><button class="btn sm">Manage</button><button class="btn sm primary"><i class="ti ti-refresh ic"></i> Sync now</button></div>
+      </div>
     </div>
-    <div class="wmodes">
-      <div class="wmode on"><div class="wg"><b>Two-way</b><p>Writes invites &amp; outcomes back to Workable. Requires the w_candidates scope.</p></div><div class="sw on"></div></div>
-      <div class="wmode"><div class="wg"><b>Read-only</b><p>Pulls jobs &amp; candidates; never writes back.</p></div><div class="sw"></div></div>
+    <div class="fsec">
+      <div class="fh">Sync mode</div><div class="fsd">How Taali writes back to Workable.</div>
+      <div class="tlist">
+        <label class="trow sel"><div class="tg"><b>Two-way</b><p>Writes invites &amp; outcomes back to Workable. Requires the w_candidates scope.</p></div><input type="radio" name="wkmode" checked></label>
+        <label class="trow"><div class="tg"><b>Read-only</b><p>Pulls jobs &amp; candidates; never writes back.</p></div><input type="radio" name="wkmode"></label>
+      </div>
     </div>
-    <div class="rowform">
-      <div class="fld"><span class="k">Default sync mode</span><div class="selbox">Full sync <i class="ti ti-chevron-down" style="color:var(--mute)"></i></div></div>
-      <div class="fld"><span class="k">Invite stage name</span><input value="Assessment invited"></div>
-      <div class="fld"><span class="k">Workable actor member</span><div class="selbox">Sam Patel <i class="ti ti-chevron-down" style="color:var(--mute)"></i></div></div>
-      <div class="fld"><span class="k">Default disqualification reason</span><div class="selbox">Did not meet requirements <i class="ti ti-chevron-down" style="color:var(--mute)"></i></div></div>
+    <div class="fsec">
+      <div class="rowform">
+        <div class="fld"><span class="k">Default sync mode</span><div class="selbox">Full sync <i class="ti ti-chevron-down" style="color:var(--mute)"></i></div></div>
+        <div class="fld"><span class="k">Invite stage name</span><input value="Assessment invited"></div>
+        <div class="fld"><span class="k">Workable actor member</span><div class="selbox">Sam Patel <i class="ti ti-chevron-down" style="color:var(--mute)"></i></div></div>
+        <div class="fld"><span class="k">Default disqualification reason</span><div class="selbox">Did not meet requirements <i class="ti ti-chevron-down" style="color:var(--mute)"></i></div></div>
+      </div>
     </div>
-    <div class="subcard"><div class="sh"><span class="st">Scopes</span></div>
+    <div class="fsec">
+      <div class="fh">Scopes</div><div class="fsd">Permissions granted to the Workable token.</div>
       <div class="scopelist">
         <label class="scope"><input type="checkbox" checked><div><b>r_jobs</b> <span>— read job postings &amp; metadata</span></div></label>
         <label class="scope"><input type="checkbox" checked><div><b>r_candidates</b> <span>— read candidate profiles &amp; CVs</span></div></label>
         <label class="scope"><input type="checkbox" checked><div><b>w_candidates</b> <span>— write invites, comments &amp; outcomes back</span></div></label>
       </div>
     </div>
-    <div class="tcard"><div class="tg"><b>Enable Workable auto-reject</b><p>Workspace kill-switch — when off, no reject is ever written back to Workable.</p></div><div class="sw on"></div></div>
+    <div class="fsec">
+      <div class="fh">Automation</div><div class="fsd">Workspace-level kill-switch for write-back.</div>
+      <div class="tlist">
+        <label class="trow"><div class="tg"><b>Enable Workable auto-reject</b><p>When off, no reject is ever written back to Workable — outcomes stay in Taali.</p></div><div class="sw on"></div></label>
+      </div>
+    </div>
     <div class="saverow"><span>Connected via API token · 3 scopes granted.</span><button class="btn sm primary">Save Workable settings</button></div>
-    <div class="dangercard"><div><b>Remove all Workable data</b><p>Deletes synced roles, candidates and the connection. Cannot be undone.</p></div><button class="btn sm danger">Remove data</button></div>
+    <div class="fsec">
+      <div class="dangercard"><div><b>Remove all Workable data</b><p>Deletes synced roles, candidates and the connection. Cannot be undone.</p></div><button class="btn sm danger">Remove data</button></div>
+    </div>
   </div></div>
 
   <!-- EMAIL -->
   <div class="panel" id="email"><div class="smain">
     <h2>Email &amp; transcripts<em>.</em></h2><div class="sub">Default candidate invite copy and Fireflies transcript ingestion.</div>
-    <div class="subcard"><div class="sh"><span class="si"><i class="ti ti-mail"></i></span><span class="st">Invite template</span></div><div class="sd">Supports {{candidate_name}} and {{assessment_link}}.</div>
+    <div class="fsec first">
+      <div class="fh">Invite template</div><div class="fsd">Supports {{candidate_name}} and {{assessment_link}}.</div>
       <div class="fld"><textarea>Hi {{candidate_name}},
 
 Thanks for applying. We'd love you to complete a short, practical assessment for the role: {{assessment_link}}
 
-It takes about 30 minutes and runs in your browser. Good luck!</textarea></div></div>
-    <div class="subcard"><div class="sh"><span class="si"><i class="ti ti-key"></i></span><span class="st">Fireflies transcript ingestion</span></div><div class="sd">Pull interview transcripts in automatically.</div>
-      <div class="rowform" style="margin-bottom:8px"><div class="fld"><span class="k">Owner email</span><input value="sam@deeplight.ae"></div><div class="fld"><span class="k">Mode</span><div class="selbox">Single recruiter-owned account <i class="ti ti-chevron-down" style="color:var(--mute)"></i></div></div></div>
-      <div style="display:flex;gap:8px;align-items:center"><span class="chip" style="background:var(--purple-soft);color:var(--purple-2);font-size:11.5px"><i class="ti ti-check"></i> API key configured</span><span class="chip" style="background:var(--purple-soft);color:var(--purple-2);font-size:11.5px"><i class="ti ti-check"></i> Webhook secret configured</span></div></div>
-    <div class="saverow"><span>Transcripts attach to the matching candidate automatically.</span><button class="btn sm primary">Save settings</button></div>
+It takes about 30 minutes and runs in your browser. Good luck!</textarea></div>
+    </div>
+    <div class="fsec">
+      <div class="fh">Fireflies transcript ingestion</div><div class="fsd">Pull interview transcripts in automatically and attach them to the matching candidate.</div>
+      <div class="rowform"><div class="fld"><span class="k">Owner email</span><input value="sam@deeplight.ae"></div><div class="fld"><span class="k">Mode</span><div class="selbox">Single recruiter-owned account <i class="ti ti-chevron-down" style="color:var(--mute)"></i></div></div></div>
+      <div class="statchips" style="margin-top:14px"><span class="gchip"><i class="ti ti-check"></i> API key configured</span><span class="gchip"><i class="ti ti-check"></i> Webhook secret configured</span></div>
+    </div>
+    <div class="saverow"><span></span><button class="btn sm primary">Save settings</button></div>
   </div></div>
 
   <!-- NOTIFICATIONS -->
   <div class="panel" id="notifs"><div class="smain">
     <h2>Notifications<em>.</em></h2><div class="sub">Choose which recruiter updates should reach this workspace.</div>
-    <div class="tcard"><div class="tg"><b>Candidate updates</b><p>When a candidate completes an assessment or changes stage.</p></div><div class="sw on"></div></div>
-    <div class="tcard"><div class="tg"><b>Daily digest</b><p>One morning summary of pending decisions and agent activity.</p></div><div class="sw on"></div></div>
-    <div class="tcard"><div class="tg"><b>Panel reminders</b><p>Nudges before scheduled interviews.</p></div><div class="sw"></div></div>
-    <div class="tcard"><div class="tg"><b>Sync failures</b><p>If a Workable or GitHub sync fails.</p></div><div class="sw on"></div></div>
-    <div class="tcard"><div class="tg"><b>Spend over budget</b><p>When a role approaches or exceeds its monthly cap.</p></div><div class="sw on"></div></div>
-    <div class="tcard"><div class="tg"><b>Agent paused</b><p>When an agent self-pauses for any reason.</p></div><div class="sw on"></div></div>
+    <div class="fsec first">
+      <div class="tlist">
+        <label class="trow"><div class="tg"><b>Candidate updates</b><p>When a candidate completes an assessment or changes stage.</p></div><div class="sw on"></div></label>
+        <label class="trow"><div class="tg"><b>Daily digest</b><p>One morning summary of pending decisions and agent activity.</p></div><div class="sw on"></div></label>
+        <label class="trow"><div class="tg"><b>Panel reminders</b><p>Nudges before scheduled interviews.</p></div><div class="sw"></div></label>
+        <label class="trow"><div class="tg"><b>Sync failures</b><p>If a Workable or GitHub sync fails.</p></div><div class="sw on"></div></label>
+        <label class="trow"><div class="tg"><b>Spend over budget</b><p>When a role approaches or exceeds its monthly cap.</p></div><div class="sw on"></div></label>
+        <label class="trow"><div class="tg"><b>Agent paused</b><p>When an agent self-pauses for any reason.</p></div><div class="sw on"></div></label>
+      </div>
+    </div>
     <div class="saverow"><span></span><button class="btn sm primary">Save notification settings</button></div>
   </div></div>
 
   <!-- BILLING -->
   <div class="panel" id="billing"><div class="smain">
     <h2>Billing<em>.</em></h2><div class="sub">Pay-as-you-go via Stripe. Card on file, monthly cap, and recent invoices.</div>
-    <div class="bsum">
-      <div class="bcard"><div class="k">Plan</div><div class="v">Pay-as-you-go</div><div class="s">billed per AI request</div></div>
-      <div class="bcard"><div class="k">Current balance</div><div class="v">$119.40</div><div class="s">credits remaining</div></div>
-      <div class="bcard"><div class="k">Card on file</div><div class="v" style="font-size:16px">•••• 4242</div><div class="s"><a>Manage in Stripe →</a></div></div>
+    <div class="fsec first">
+      <div class="bsum">
+        <div class="bcard"><div class="k">Plan</div><div class="v">Pay-as-you-go</div><div class="s">billed per AI request</div></div>
+        <div class="bcard"><div class="k">Current balance</div><div class="v">$119.40</div><div class="s">credits remaining</div></div>
+        <div class="bcard"><div class="k">Card on file</div><div class="v" style="font-size:16px">•••• 4242</div><div class="s"><a>Manage in Stripe →</a></div></div>
+      </div>
     </div>
-    <div class="subcard"><div class="sh"><span class="st">Monthly spend cap</span></div><div class="sd">A hard ceiling across all agents. Leave blank to disable.</div><div class="fld"><input value="180" style="max-width:160px"><span class="hint">USD / month</span></div></div>
-    <div class="bucket">Credit packs</div>
-    <div class="packs">
-      <div class="pack"><div class="pamt">$50</div><div class="pprice">→ $50 credit</div></div>
-      <div class="pack"><div class="pamt">$200</div><div class="pbonus">+10% bonus</div><div class="pprice">→ $220 credit</div></div>
-      <div class="pack"><div class="pamt">$500</div><div class="pbonus">+15% bonus</div><div class="pprice">→ $575 credit</div></div>
+    <div class="fsec"><div class="fh">Monthly spend cap</div><div class="fsd">A hard ceiling across all agents. Leave blank to disable.</div><div class="fld"><input value="180" style="max-width:160px"><span class="hint">USD / month</span></div></div>
+    <div class="fsec"><div class="fh">Credit packs</div><div class="fsd">Top up your balance — bonus credit on larger packs.</div>
+      <div class="packs">
+        <div class="pack"><div class="pamt">$50</div><div class="pprice">→ $50 credit</div></div>
+        <div class="pack"><div class="pamt">$200</div><div class="pbonus">+10% bonus</div><div class="pprice">→ $220 credit</div></div>
+        <div class="pack"><div class="pamt">$500</div><div class="pbonus">+15% bonus</div><div class="pprice">→ $575 credit</div></div>
+      </div>
     </div>
-    <div class="bucket">Recent invoices</div>
-    <table class="utable"><thead><tr><th>Date</th><th>Product</th><th>Cost</th></tr></thead><tbody>
-      <tr><td>Jun 24</td><td>Scoring &amp; matching</td><td>$18.20</td></tr>
-      <tr><td>Jun 22</td><td>Workspace AI</td><td>$9.10</td></tr>
-      <tr><td>Jun 20</td><td>Pre-screening</td><td>$4.60</td></tr>
-    </tbody></table>
+    <div class="fsec"><div class="fh">Recent invoices</div>
+      <table class="utable"><thead><tr><th>Date</th><th>Product</th><th>Cost</th></tr></thead><tbody>
+        <tr><td>Jun 24</td><td>Scoring &amp; matching</td><td>$18.20</td></tr>
+        <tr><td>Jun 22</td><td>Workspace AI</td><td>$9.10</td></tr>
+        <tr><td>Jun 20</td><td>Pre-screening</td><td>$4.60</td></tr>
+      </tbody></table>
+    </div>
   </div></div>
 
   <!-- USAGE -->
   <div class="panel" id="usage"><div class="smain">
     <h2>Usage<em>.</em></h2><div class="sub">Per-feature Claude spend, daily breakdowns, and reconciliation against Anthropic billing.</div>
-    <div class="bsum"><div class="bcard"><div class="k">Total spend</div><div class="v">$61.10</div><div class="s">trailing 30 days</div></div><div class="bcard"><div class="k">Billable AI requests</div><div class="v">4,182</div><div class="s">grouped by surface</div></div><div class="bcard"><div class="k">Top driver</div><div class="v" style="font-size:16px">Scoring &amp; matching</div><div class="s">43% of spend</div></div></div>
-    <div class="subcard"><div class="sh"><span class="st">Daily spend · by surface</span></div>
+    <div class="fsec first">
+      <div class="bsum"><div class="bcard"><div class="k">Total spend</div><div class="v">$61.10</div><div class="s">trailing 30 days</div></div><div class="bcard"><div class="k">Billable AI requests</div><div class="v">4,182</div><div class="s">grouped by surface</div></div><div class="bcard"><div class="k">Top driver</div><div class="v" style="font-size:16px">Scoring &amp; matching</div><div class="s">43% of spend</div></div></div>
+    </div>
+    <div class="fsec">
+      <div class="fh">Daily spend · by surface</div><div class="fsd">Trailing 30 days.</div>
       <div class="ubars">
         <div class="ubar"><div class="useg s1" style="height:40px"></div><div class="useg s2" style="height:22px"></div><div class="useg s3" style="height:10px"></div></div>
         <div class="ubar"><div class="useg s1" style="height:52px"></div><div class="useg s2" style="height:28px"></div><div class="useg s3" style="height:12px"></div></div>
@@ -270,51 +323,66 @@ It takes about 30 minutes and runs in your browser. Good luck!</textarea></div><
   <!-- SECURITY -->
   <div class="panel" id="security"><div class="smain">
     <h2>Security<em>.</em></h2><div class="sub">SAML SSO, two-factor authentication, and the audit log entry point.</div>
-    <div class="subcard"><div class="sh"><span class="st">SAML SSO</span></div>
-      <div class="rowform" style="margin-bottom:12px"><div class="fld"><span class="k">Identity provider</span><div class="selbox">Okta <i class="ti ti-chevron-down" style="color:var(--mute)"></i></div></div><div class="fld"><span class="k">SAML metadata URL</span><input placeholder="https://…/metadata"></div></div>
-      <div class="tcard"><div class="tg"><b>Enable SAML metadata</b></div><div class="sw"></div></div>
-      <div class="tcard"><div class="tg"><b>Enforce SSO</b><p>Require all members to sign in through your IdP.</p></div><div class="sw"></div></div></div>
-    <div class="tcard"><div class="tg"><b>Require 2FA for password login</b></div><div class="sw on"></div></div>
-    <div class="subcard" style="margin-top:16px"><div class="sh"><span class="st">Audit log</span></div><div class="sd">Every agent and recruiter action, immutable.</div><button class="btn sm">Open audit log →</button></div>
+    <div class="fsec first">
+      <div class="fh">SAML SSO</div><div class="fsd">Connect your identity provider.</div>
+      <div class="rowform"><div class="fld"><span class="k">Identity provider</span><div class="selbox">Okta <i class="ti ti-chevron-down" style="color:var(--mute)"></i></div></div><div class="fld"><span class="k">SAML metadata URL</span><input placeholder="https://…/metadata"></div></div>
+      <div class="tlist" style="margin-top:16px">
+        <label class="trow"><div class="tg"><b>Enable SAML metadata</b></div><div class="sw"></div></label>
+        <label class="trow"><div class="tg"><b>Enforce SSO</b><p>Require all members to sign in through your IdP.</p></div><div class="sw"></div></label>
+      </div>
+    </div>
+    <div class="fsec">
+      <div class="fh">Two-factor authentication</div>
+      <div class="tlist"><label class="trow"><div class="tg"><b>Require 2FA for password login</b></div><div class="sw on"></div></label></div>
+    </div>
+    <div class="fsec"><div class="fh">Audit log</div><div class="fsd">Every agent and recruiter action, immutable.</div><button class="btn sm">Open audit log →</button></div>
     <div class="saverow"><span></span><button class="btn sm primary">Save security settings</button></div>
   </div></div>
 
   <!-- DEVELOPERS -->
   <div class="panel" id="dev"><div class="smain">
     <h2>Developers<em>.</em></h2><div class="sub">API keys for the Taali public API. Test keys run against a sandbox.</div>
-    <div class="subcard"><div class="sh"><span class="st">Create an API key</span></div>
-      <div class="rowform" style="margin-bottom:10px"><div class="fld"><span class="k">Key name</span><input placeholder="CI pipeline"></div><div class="fld"><span class="k">Scopes</span><div class="cchips" style="margin-top:2px"><span class="cchip pref"><code>read:candidates</code></span><span class="cchip pref"><code>read:roles</code></span><span class="cchip add"><i class="ti ti-plus"></i></span></div></div></div>
-      <label class="scope" style="margin-bottom:10px"><input type="checkbox"><div><b>Test key</b> <span>— sandbox, tali_test_ prefix</span></div></label>
-      <button class="btn sm primary">Create key</button></div>
-    <div class="bucket">Active keys</div>
-    <table class="utable"><thead><tr><th>Name</th><th>Key</th><th>Scopes</th><th>Last used</th><th>Status</th><th></th></tr></thead><tbody>
-      <tr><td>CI pipeline</td><td style="font-family:var(--mono)">tali_a3f…</td><td>read:candidates</td><td>2h ago</td><td><span class="chip" style="background:var(--purple-soft);color:var(--purple-2);font-size:11px">active</span></td><td><button class="btn sm danger">Revoke</button></td></tr>
-      <tr><td>Sandbox test</td><td style="font-family:var(--mono)">tali_test_9b…</td><td>read:roles</td><td>—</td><td><span class="chip" style="background:var(--bg-3);color:var(--mute);font-size:11px">test</span></td><td><button class="btn sm danger">Revoke</button></td></tr>
-    </tbody></table>
+    <div class="fsec first">
+      <div class="fh">Create an API key</div><div class="fsd">Scope each key to the minimum it needs.</div>
+      <div class="rowform"><div class="fld"><span class="k">Key name</span><input placeholder="CI pipeline"></div><div class="fld"><span class="k">Scopes</span><div class="cchips" style="margin-top:2px"><span class="cchip pref"><code>read:candidates</code></span><span class="cchip pref"><code>read:roles</code></span><span class="cchip add"><i class="ti ti-plus"></i></span></div></div></div>
+      <label class="scope" style="margin-top:14px"><input type="checkbox"><div><b>Test key</b> <span>— sandbox, tali_test_ prefix</span></div></label>
+      <div style="margin-top:14px"><button class="btn sm primary">Create key</button></div>
+    </div>
+    <div class="fsec"><div class="fh">Active keys</div>
+      <table class="utable"><thead><tr><th>Name</th><th>Key</th><th>Scopes</th><th>Last used</th><th>Status</th><th></th></tr></thead><tbody>
+        <tr><td>CI pipeline</td><td style="font-family:var(--mono)">tali_a3f…</td><td>read:candidates</td><td>2h ago</td><td><span class="statuschip run">active</span></td><td><button class="btn sm danger">Revoke</button></td></tr>
+        <tr><td>Sandbox test</td><td style="font-family:var(--mono)">tali_test_9b…</td><td>read:roles</td><td>—</td><td><span class="statuschip done">test</span></td><td><button class="btn sm danger">Revoke</button></td></tr>
+      </tbody></table>
+    </div>
   </div></div>
 
   <!-- BACKGROUND JOBS -->
   <div class="panel" id="jobs"><div class="smain">
     <h2>Background jobs<em>.</em></h2><div class="sub">Recent runs across scoring, CV fetch, Workable sync, and graph sync. The live agent fleet now lives in <a style="color:var(--purple-2);font-weight:500">Analytics → Agent fleet</a>.</div>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><span class="tert" style="font-size:12px">Auto-refreshing every 5s · finished runs auto-clear after 30 min</span><button class="btn sm">Show all history</button></div>
-    <table class="utable"><thead><tr><th>Status</th><th>Type</th><th>Scope</th><th>Counters</th><th>Started</th><th></th></tr></thead><tbody>
-      <tr><td><span class="chip" style="background:var(--purple-soft);color:var(--purple-2);font-size:11px"><i class="ti ti-loader"></i> running</span></td><td>Scoring batch</td><td>Senior AWS</td><td>7 / 12</td><td class="tert">just now</td><td><button class="btn sm">Cancel</button></td></tr>
-      <tr><td><span class="chip" style="background:var(--bg-3);color:var(--ink-2);font-size:11px"><i class="ti ti-check"></i> completed</span></td><td>Workable sync</td><td>4 roles</td><td>7 new</td><td class="tert">4m ago</td><td></td></tr>
-      <tr><td><span class="chip" style="background:var(--bg-3);color:var(--ink-2);font-size:11px"><i class="ti ti-check"></i> completed</span></td><td>CV fetch</td><td>Data Eng</td><td>11 / 11</td><td class="tert">12m ago</td><td></td></tr>
-      <tr><td><span class="chip" style="background:var(--amber-soft);color:var(--amber-ink);font-size:11px"><i class="ti ti-alert-triangle"></i> retry</span></td><td>Graph sync</td><td>workspace</td><td>1 retry</td><td class="tert">18m ago</td><td></td></tr>
-    </tbody></table>
+    <div class="fsec first">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><span class="tert" style="font-size:12px">Auto-refreshing every 5s · finished runs auto-clear after 30 min</span><button class="btn sm">Show all history</button></div>
+      <table class="utable"><thead><tr><th>Status</th><th>Type</th><th>Scope</th><th>Counters</th><th>Started</th><th></th></tr></thead><tbody>
+        <tr><td><span class="statuschip run"><i class="ti ti-loader"></i> running</span></td><td>Scoring batch</td><td>Senior AWS</td><td>7 / 12</td><td class="tert">just now</td><td><button class="btn sm">Cancel</button></td></tr>
+        <tr><td><span class="statuschip done"><i class="ti ti-check"></i> completed</span></td><td>Workable sync</td><td>4 roles</td><td>7 new</td><td class="tert">4m ago</td><td></td></tr>
+        <tr><td><span class="statuschip done"><i class="ti ti-check"></i> completed</span></td><td>CV fetch</td><td>Data Eng</td><td>11 / 11</td><td class="tert">12m ago</td><td></td></tr>
+        <tr><td><span class="statuschip warn"><i class="ti ti-alert-triangle"></i> retry</span></td><td>Graph sync</td><td>workspace</td><td>1 retry</td><td class="tert">18m ago</td><td></td></tr>
+      </tbody></table>
+    </div>
   </div></div>
 
 </div>
 
 <script>
-document.querySelectorAll('.stab').forEach(t=>t.addEventListener('click',()=>{
-  document.querySelectorAll('.stab').forEach(x=>x.classList.remove('on'));
+document.querySelectorAll('.vtab').forEach(t=>t.addEventListener('click',()=>{
+  document.querySelectorAll('.vtab').forEach(x=>x.classList.remove('on'));
   document.querySelectorAll('.panel').forEach(x=>x.classList.remove('on'));
   t.classList.add('on');document.getElementById(t.dataset.p).classList.add('on');
 }));
-document.querySelectorAll('.sw').forEach(s=>s.addEventListener('click',()=>s.classList.toggle('on')));
-document.querySelectorAll('.wmode').forEach(m=>m.addEventListener('click',e=>{if(e.target.classList.contains('sw'))return;document.querySelectorAll('.wmode').forEach(x=>{x.classList.remove('on');x.querySelector('.sw').classList.remove('on')});m.classList.add('on');m.querySelector('.sw').classList.add('on')}));
+document.querySelectorAll('.sw').forEach(s=>s.addEventListener('click',e=>{e.preventDefault();s.classList.toggle('on')}));
+document.querySelectorAll('.trow input[type=radio]').forEach(r=>r.addEventListener('change',()=>{
+  document.querySelectorAll('input[name="'+r.name+'"]').forEach(x=>x.closest('.trow').classList.remove('sel'));
+  r.closest('.trow').classList.add('sel');
+}));
 </script>
 </body>
 </html>
