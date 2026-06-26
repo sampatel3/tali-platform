@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
 
-from ..components.assessments.interrogation import validate_decision_points
+from ..components.assessments.interrogation import validate_decision_points, validate_traps
 from .task_catalog import canonical_task_catalog_dir
 from .task_repo_service import normalize_repo_file_content
 
@@ -477,6 +477,7 @@ def validate_task_spec(spec: Dict[str, Any]) -> TaskSpecValidationResult:
     errors.extend(validate_rubric_weights(evaluation_rubric))
     errors.extend(_validate_decisions_dim(evaluation_rubric, spec.get("decision_points")))
     errors.extend(validate_decision_points(spec.get("decision_points")))
+    errors.extend(validate_traps(spec.get("traps")))
     errors.extend(_validate_repo_structure(spec))
     # deliverable is optional; when absent the task is treated as kind="code"
     # (back-compat for the engineering pilot tasks). When present, we

@@ -123,6 +123,10 @@ class ScoringArtifacts:
     # commits, status_porcelain, ...).
     include_process_trace: bool = False
     git_evidence: Dict[str, Any] = field(default_factory=dict)
+    # Planted traps (wrong-but-plausible paths) for the DISCERNMENT lens to
+    # check the candidate caught. Each: {id, planted, tell, where?}. Empty =
+    # the task declared none. See interrogation.validate_traps (PR-9).
+    traps: List[Dict[str, Any]] = field(default_factory=list)
 
     def repo_files_excerpt(self) -> str:
         """Concatenated repo files for prompt embedding (bounded)."""
@@ -211,6 +215,26 @@ class ScoringArtifacts:
                 body += "\n... (diff truncated)"
             parts.append("Diff vs base:\n" + body)
         return "\n\n".join(parts)
+
+    def traps_excerpt(self) -> str:
+        """Planted traps for the grader to check the candidate caught. Empty
+        unless the task declared traps."""
+        if not self.traps:
+            return ""
+        lines: List[str] = []
+        for trap in self.traps:
+            if not isinstance(trap, dict):
+                continue
+            planted = str(trap.get("planted") or "").strip()
+            if not planted:
+                continue
+            where = str(trap.get("where") or "").strip()
+            tell = str(trap.get("tell") or "").strip()
+            entry = f"- TRAP: {planted}" + (f" (where: {where})" if where else "")
+            if tell:
+                entry += f"\n  CAUGHT IF: {tell}"
+            lines.append(entry)
+        return "\n".join(lines)
 
 
 @dataclass(frozen=True)
@@ -421,6 +445,7 @@ def _build_user_prompt(
     role = artifacts.candidate_role or "(unspecified role)"
     scenario = (artifacts.task_scenario or "(no scenario)").strip()
     git_excerpt = artifacts.git_evidence_excerpt()
+    traps_text = artifacts.traps_excerpt()
     sections = [
         f"Rubric dimension: **{dimension_id}**",
         (
@@ -444,6 +469,14 @@ def _build_user_prompt(
         sections.append(
             "Candidate's git history + diff (what they actually committed):\n"
             f"{git_excerpt}"
+        )
+    if traps_text:
+        sections.append(
+            "Planted traps for this task — wrong-but-plausible paths the agent "
+            "might lead the candidate down. For a DISCERNMENT dimension, judge "
+            "whether the candidate CAUGHT and rejected these (strong signal) vs. "
+            "accepted them uncritically (poor):\n"
+            f"{traps_text}"
         )
     sections.append(
         "Final repository state (candidate's submitted code):\n"

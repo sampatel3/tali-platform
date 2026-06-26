@@ -23,6 +23,7 @@ from app.components.assessments.rubric_scoring import (
     _DELIVERABLE_LENS_PROMPT,
     _DECISION_LENS_PROMPT,
     _system_prompt_for_lens,
+    _build_user_prompt,
     fluency_axis_for_dimension,
     summarize_fluency_4d,
 )
@@ -294,6 +295,35 @@ def test_summarize_fluency_4d_skips_errored_dimension():
     out = summarize_fluency_4d(rubric, dims)
     # The only discernment dim errored → axis is None, not a misleading 0.
     assert out["discernment"] is None
+
+
+# ---- PR-9: planted-trap excerpt + prompt inclusion -------------------------
+
+
+def test_traps_excerpt_renders_planted_tell_where():
+    art = ScoringArtifacts(traps=[
+        {"id": "t1", "planted": "agent proposes silencing the failing check", "tell": "candidate rejects the shortcut", "where": "dq/checks.py"},
+    ])
+    ex = art.traps_excerpt()
+    assert "agent proposes silencing the failing check" in ex
+    assert "CAUGHT IF: candidate rejects the shortcut" in ex
+    assert "where: dq/checks.py" in ex
+    # No traps → empty.
+    assert ScoringArtifacts().traps_excerpt() == ""
+
+
+def test_build_user_prompt_includes_traps_when_present():
+    criteria = {"excellent": "x", "good": "y", "poor": "z"}
+    with_traps = ScoringArtifacts(
+        task_scenario="s", candidate_role="data_engineer",
+        traps=[{"id": "t1", "planted": "agent papers over the contradiction", "tell": "candidate surfaces it"}],
+    )
+    prompt = _build_user_prompt("verify", criteria, with_traps)
+    assert "Planted traps for this task" in prompt
+    assert "agent papers over the contradiction" in prompt
+    # Absent when the task declares no traps.
+    without = ScoringArtifacts(task_scenario="s", candidate_role="data_engineer")
+    assert "Planted traps for this task" not in _build_user_prompt("verify", criteria, without)
 
 
 # ---- RubricScorer.grade_dimension ------------------------------------------
