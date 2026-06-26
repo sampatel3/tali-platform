@@ -156,6 +156,33 @@ def test_mid_interview_keeps_legitimate_pending(db, monkeypatch):
     assert _has_pending(db, app) is True  # send_assessment card preserved
 
 
+def test_mid_interview_heals_agent_stranded_review(db, monkeypatch):
+    # A candidate an earlier agent reject second-opinion pulled advanced→review
+    # (source='agent'), whose reject card was then discarded because they're in a
+    # live interview, is STRANDED in 'review' looking decision-pending. The
+    # reconcile heals them back to 'advanced' — honest: being interviewed = handed
+    # off — rather than leaving them parked in review with no card.
+    _pin_verdict(monkeypatch, None)
+    _org, role, app = _seed(db, workable_stage="Final Interview", pipeline_stage="review")
+    app.pipeline_stage_source = "agent"
+    db.commit()
+    assert reconcile_post_handover_advanced(db, app=app, role=role) is True
+    db.commit()
+    assert app.pipeline_stage == "advanced"
+
+
+def test_mid_interview_does_not_heal_legit_system_review(db, monkeypatch):
+    # A genuine assessment-completion review (source='system') on a candidate also
+    # being interviewed in Workable is a REAL pending decision — never auto-heal it.
+    _pin_verdict(monkeypatch, None)
+    _org, role, app = _seed(db, workable_stage="Final Interview", pipeline_stage="review")
+    app.pipeline_stage_source = "system"
+    db.commit()
+    assert reconcile_post_handover_advanced(db, app=app, role=role) is False
+    db.commit()
+    assert app.pipeline_stage == "review"  # untouched
+
+
 # --- Verdict / guard cases (unchanged behaviour) -----------------------------
 
 def test_reject_verdict_is_not_advanced(db, monkeypatch):
