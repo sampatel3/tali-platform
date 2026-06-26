@@ -28,20 +28,15 @@
 .facts{display:flex;gap:28px;flex-wrap:wrap;font-size:12.5px;color:var(--mute);margin:-4px 0 16px;padding:0 2px}
 .facts .f b{color:var(--ink);font-weight:500}.facts .f .fk{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:2px}
 .facts .f.task b{color:var(--purple-2)}
-/* funnel board */
-.fb{border:1px solid var(--line);border-radius:var(--radius);background:var(--bg-2);overflow:hidden;margin-bottom:18px}
-.fbhead{display:flex;align-items:center;justify-content:space-between;padding:11px 15px;border-bottom:1px solid var(--line)}
-.fbhead .ttl{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute)}
-.fbhead .aw{font-size:11px;font-weight:600;color:var(--purple-2);background:var(--purple-soft);border-radius:99px;padding:2px 10px}
-.fbstages{display:flex}
-.fbstage{flex:1;padding:13px 13px;border-right:1px solid var(--line)}.fbstage:last-child{border-right:none}.fbstage.term{background:var(--bg)}.fbstage.out{border-left:2px solid var(--line-2)}
-.fbstage .fk{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;color:var(--mute)}
-.fbstage .fv{font-size:21px;font-weight:600;margin-top:2px}.fbstage.attn .fv{color:var(--purple-2)}.fbstage.term .fv{color:var(--mute)}
-.fbdrow{display:flex;border-top:1px solid var(--line);background:var(--purple-tint)}
-.fbdcell{flex:1;padding:8px 13px;border-right:1px solid var(--line-2);min-height:38px}.fbdcell:last-child{border-right:none}
-.fbchip{font-size:10px;font-weight:500;border-radius:99px;padding:2px 8px;display:inline-flex;align-items:center;gap:3px;margin:2px 3px 0 0;white-space:nowrap}
-.fbchip.send{background:var(--purple-soft);color:var(--purple-2)}.fbchip.adv{background:#e4ece6;color:#3f6b50}.fbchip.rej{background:var(--bg-3);color:var(--mute)}.fbchip.pend{background:#efe9f6;color:var(--ink-2);border:1px dashed var(--line-2)}.fbchip.pre{background:#f2e6e9;color:#8a4658}
-.fbdcell .out{font-size:9.5px;color:var(--mute)}
+/* funnel — the SAME component as the home hub (purple/grey, chips inline, no green/red) */
+.funnel{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin-bottom:18px}
+.fstage{flex:1;padding:11px 14px;border-right:1px solid var(--line)}.fstage:last-child{border-right:none}.fstage.term{background:var(--bg)}
+.fstage .fk{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;color:var(--mute)}
+.fstage .fv{font-size:19px;font-weight:600;margin-top:2px}.fstage.term .fv{color:var(--mute)}
+.fchips{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;min-height:16px}
+.fchip{font-size:9.5px;border-radius:99px;padding:1px 7px;font-weight:500;white-space:nowrap}
+.fchip.act{background:var(--purple-soft);color:var(--purple-2)}
+.fchip.rej{background:var(--bg-3);color:var(--mute)}
 /* tabs */
 .ptabs{display:flex;gap:4px;border:1px solid var(--line-2);border-radius:11px;background:var(--bg-2);padding:3px;width:max-content;margin-bottom:16px}
 .ptab{font-size:13px;color:var(--mute);font-weight:500;padding:8px 15px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:7px}
@@ -118,7 +113,7 @@
 .aside .abudv{font-size:19px;font-weight:600}.aside .abudv small{font-size:12px;color:var(--mute);font-weight:400}
 .aside .feat{display:flex;justify-content:space-between;font-size:12px;padding:4px 0;color:var(--ink-2)}.aside .feat b{font-weight:500}
 .savebar{display:flex;align-items:center;justify-content:space-between;gap:14px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:13px 17px;font-size:12.5px;color:var(--mute)}
-@media (max-width:1100px){.kanban{grid-template-columns:repeat(3,1fr)}.spec,.aset{grid-template-columns:1fr}.ckpis{grid-template-columns:repeat(2,1fr)}.fbstages,.fbdrow{flex-wrap:wrap}.fbstage,.fbdcell{flex:1 0 30%}}
+@media (max-width:1100px){.kanban{grid-template-columns:repeat(3,1fr)}.spec,.aset{grid-template-columns:1fr}.ckpis{grid-template-columns:repeat(2,1fr)}.funnel{flex-wrap:wrap}.fstage{flex:1 0 30%}}
 </style>
 </head>
 <body>
@@ -172,25 +167,14 @@
     <div class="f task"><span class="fk">Linked task</span><b>AWS Platform Build · A/B 2 tasks</b></div>
   </div>
 
-  <!-- funnel board with decision gates -->
-  <div class="fb">
-    <div class="fbhead"><span class="ttl">Pipeline · this role</span><span class="aw">9 awaiting you</span></div>
-    <div class="fbstages">
-      <div class="fbstage"><div class="fk">Applied</div><div class="fv">312</div></div>
-      <div class="fbstage attn"><div class="fk">Scored</div><div class="fv">148</div></div>
-      <div class="fbstage"><div class="fk">Invited</div><div class="fv">34</div></div>
-      <div class="fbstage attn"><div class="fk">Completed</div><div class="fv">12</div></div>
-      <div class="fbstage out"><div class="fk">Advanced</div><div class="fv">8</div></div>
-      <div class="fbstage term out"><div class="fk">Rejected</div><div class="fv">156</div></div>
-    </div>
-    <div class="fbdrow">
-      <div class="fbdcell"><span class="fbchip pre"><i class="ti ti-filter-x"></i> 4 pre-screen reject</span></div>
-      <div class="fbdcell"><span class="fbchip send"><i class="ti ti-send"></i> 5 send</span><span class="fbchip adv"><i class="ti ti-arrow-up-right"></i> 3 advance</span><span class="fbchip rej"><i class="ti ti-x"></i> 1 reject</span><span class="fbchip pend">2 not yet decided</span></div>
-      <div class="fbdcell"><span class="out">22 in progress</span></div>
-      <div class="fbdcell"><span class="fbchip adv"><i class="ti ti-arrow-up-right"></i> 2 advance</span><span class="fbchip rej"><i class="ti ti-x"></i> 1 reject</span></div>
-      <div class="fbdcell"><span class="out">with recruiter</span></div>
-      <div class="fbdcell"><span class="out">closed</span></div>
-    </div>
+  <!-- funnel — identical look to the home hub funnel -->
+  <div class="funnel">
+    <div class="fstage"><div class="fk">Applied</div><div class="fv">312</div><div class="fchips"><span class="fchip rej">4 pre-screen reject</span></div></div>
+    <div class="fstage"><div class="fk">Scored</div><div class="fv">148</div><div class="fchips"><span class="fchip act">5 send</span><span class="fchip act">3 advance</span><span class="fchip rej">1 reject</span></div></div>
+    <div class="fstage"><div class="fk">Invited</div><div class="fv">34</div><div class="fchips"><span class="fchip act">22 in progress</span></div></div>
+    <div class="fstage"><div class="fk">Completed</div><div class="fv">12</div><div class="fchips"><span class="fchip act">2 advance</span><span class="fchip rej">1 reject</span></div></div>
+    <div class="fstage"><div class="fk">Advanced</div><div class="fv">8</div><div class="fchips"><span class="tert" style="font-size:9.5px">with recruiter</span></div></div>
+    <div class="fstage term"><div class="fk">Rejected</div><div class="fv">156</div><div class="fchips"><span class="tert" style="font-size:9.5px">closed</span></div></div>
   </div>
 
   <!-- tabs -->
@@ -232,7 +216,7 @@
         <tr class="agentrow"><td><input type="checkbox"></td><td><div class="cn">Alex Rahman</div><div class="csub">Senior AWS Platform Engineer · alex.r@…</div></td><td><span class="scorepill mid">72</span></td><td><span class="stagepill">Scored</span></td><td><span class="stagepill">Sourced</span></td><td><span class="aiaction"><i class="ti ti-sparkles"></i> Send assessment</span></td><td class="tert">1h ago</td><td><a href="/report-preview" class="btn sm">View →</a></td></tr>
         <tr><td><input type="checkbox"></td><td><div class="cn">Priya Nair</div><div class="csub">Cloud Engineer · priya.n@…</div></td><td><span class="scorepill mid">64</span></td><td><span class="stagepill">Invited</span></td><td><span class="stagepill">Assessment invited</span></td><td class="tert">—</td><td class="tert">3h ago</td><td><a href="/report-preview" class="btn sm">View →</a></td></tr>
         <tr><td><input type="checkbox"></td><td><div class="cn">Marcus Lin</div><div class="csub">DevOps Engineer · marcus.l@…</div></td><td><span class="tert">Scoring…</span></td><td><span class="stagepill">Applied</span></td><td><span class="stagepill">Applied</span></td><td class="tert">—</td><td class="tert">just now</td><td><a href="/report-preview" class="btn sm">View →</a></td></tr>
-        <tr class="agentrow"><td><input type="checkbox"></td><td><div class="cn">Rohan Bhatt</div><div class="csub">Junior SRE · rohan.b@…</div></td><td><span class="scorepill lo">28</span></td><td><span class="stagepill">Scored</span></td><td><span class="stagepill is-disqualified" style="background:#f2e6e9;color:#8a4658">Disqualified</span></td><td><span class="aiaction"><i class="ti ti-filter-x"></i> Pre-screen reject</span></td><td class="tert">5h ago</td><td><a href="/report-preview" class="btn sm">View →</a></td></tr>
+        <tr class="agentrow"><td><input type="checkbox"></td><td><div class="cn">Rohan Bhatt</div><div class="csub">Junior SRE · rohan.b@…</div></td><td><span class="scorepill lo">28</span></td><td><span class="stagepill">Scored</span></td><td><span class="stagepill" style="background:var(--bg-3);color:var(--mute)">Disqualified</span></td><td><span class="aiaction"><i class="ti ti-filter-x"></i> Pre-screen reject</span></td><td class="tert">5h ago</td><td><a href="/report-preview" class="btn sm">View →</a></td></tr>
       </tbody>
     </table>
   </div>
