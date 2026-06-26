@@ -850,3 +850,188 @@ def apply_grounding_discount(
     if discount <= 0:
         return score, 0.0
     return max(0.0, round(score - discount, 2)), discount
+
+
+# ── Wave 4: CV-internal coherence (deterministic, flag-only) ────────────────
+@dataclass
+class ExperienceInflationResult:
+    triggered: bool
+    years_claimed: float | None
+    years_evidenced: float  # span: latest_end − earliest_start (generous)
+    gap: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "triggered": self.triggered,
+            "years_claimed": self.years_claimed,
+            "years_evidenced": self.years_evidenced,
+            "gap": round(self.gap, 1),
+        }
+
+
+def detect_experience_inflation(
+    years_claimed: float | None,
+    timeline: Iterable[Any] | None,
+    *,
+    tolerance_years: float = 2.0,
+    now_year: int | None = None,
+) -> ExperienceInflationResult:
+    """Flag a claimed total-experience figure that exceeds the candidate's whole
+    career *span* (latest end − earliest start) by more than ``tolerance_years``.
+
+    Deliberately uses the generous span (gaps included) as the evidenced figure,
+    so this only fires on the arithmetically impossible case — "15 years" when
+    the first job started 9 years ago — keeping false positives near zero. Career
+    breaks, parallel roles and rounding never trip it. Fail-open on missing data.
+    """
+    if years_claimed is None:
+        return ExperienceInflationResult(False, None, 0.0, 0.0)
+    current = now_year if now_year is not None else datetime.now(timezone.utc).year
+    starts: list[int] = []
+    ends: list[int] = []
+    for e in timeline or []:
+        s = _attr(e, "start_year")
+        en = _attr(e, "end_year")
+        if _attr(e, "is_current") and not isinstance(en, int):
+            en = current
+        if isinstance(s, int):
+            starts.append(s)
+            ends.append(en if isinstance(en, int) and en >= s else s)
+    if not starts:
+        return ExperienceInflationResult(False, years_claimed, 0.0, 0.0)
+    span = float(max(ends) - min(starts))
+    gap = float(years_claimed) - span
+    return ExperienceInflationResult(gap > tolerance_years, years_claimed, span, gap)
+
+
+# Curated tool → first-public-release year. Conservative, well-known tools only;
+# a tool claimed in a role that ENDED before the tool existed is a hard tell.
+_TOOL_RELEASE_YEAR: dict[str, int] = {
+    "go": 2009, "golang": 2009, "kafka": 2011, "docker": 2013, "react": 2013,
+    "reactjs": 2013, "databricks": 2013, "kubernetes": 2014, "k8s": 2014,
+    "spark": 2014, "terraform": 2014, "snowflake": 2014, "swift": 2014,
+    "vue": 2014, "vue.js": 2014, "rust": 2015, "tensorflow": 2015,
+    "airflow": 2015, "graphql": 2015, "pytorch": 2016, "kotlin": 2016,
+    "angular": 2016, "next.js": 2016, "nextjs": 2016, "svelte": 2016, "dbt": 2016,
+    "transformers": 2017, "kubeflow": 2017, "bert": 2018, "fastapi": 2018,
+    "deno": 2018, "langchain": 2022, "chatgpt": 2022, "gpt-4": 2023,
+}
+
+
+@dataclass
+class AnachronismResult:
+    issues: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def triggered(self) -> bool:
+        return bool(self.issues)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"triggered": self.triggered, "issues": self.issues[:8]}
+
+
+def detect_tech_anachronism(
+    experience_entries: Iterable[Any] | None,
+    *,
+    table: dict[str, int] | None = None,
+) -> AnachronismResult:
+    """Flag a tool named in an experience entry whose role ENDED before the tool
+    first existed (e.g. "Kubernetes" in a role that ended 2012). Deterministic,
+    near-zero FP — a tool literally cannot have been used before its release.
+    Word-boundary matching so "go" never matches "good"."""
+    tbl = table or _TOOL_RELEASE_YEAR
+    issues: list[dict[str, Any]] = []
+    for e in experience_entries or []:
+        end = _first_year(_attr(e, "end"), _attr(e, "end_year"))
+        if not isinstance(end, int):
+            continue
+        bullets = _attr(e, "bullets") or []
+        text = " ".join(
+            [str(_attr(e, "title") or "")]
+            + [str(b) for b in (bullets if isinstance(bullets, list) else [bullets])]
+        ).lower()
+        if not text.strip():
+            continue
+        for tool, year in tbl.items():
+            if end < year and re.search(
+                r"(?<![a-z0-9])" + re.escape(tool) + r"(?![a-z0-9])", text
+            ):
+                issues.append(
+                    {
+                        "tool": tool,
+                        "release_year": year,
+                        "role_end": end,
+                        "company": str(_attr(e, "company") or "")[:120],
+                    }
+                )
+        if len(issues) >= 8:
+            break
+    return AnachronismResult(issues)
+
+
+# ── Wave 4: triangulation aggregator ────────────────────────────────────────
+# The rule (CV_FRAUD_FUNNEL_DESIGN §2): require MULTIPLE independent
+# disagreements before it bites. One source disagreeing = a question (flag);
+# several, or a deterministic artifact, = action. Pure read over the assembled
+# ``integrity_signals`` dict — adds a ``triangulation`` summary, changes no score.
+def aggregate_triangulation(integrity_signals: dict[str, Any] | None) -> dict[str, Any]:
+    sig = integrity_signals if isinstance(integrity_signals, dict) else {}
+
+    def _get(key: str) -> dict[str, Any]:
+        v = sig.get(key)
+        return v if isinstance(v, dict) else {}
+
+    soft: list[str] = []  # independent disagreements (probabilistic)
+    corroborations: list[str] = []  # positive agreements
+    deterministic: list[str] = []  # artifacts that act on their own
+
+    # Deterministic artifacts (manipulation of the scorer / the file).
+    dh = _get("document_hygiene")
+    if dh.get("injection_detected") or dh.get("has_tag_chars"):
+        deterministic.append("hidden_text")
+    tl = _get("timeline")
+    if tl.get("triggered") or tl.get("issues"):
+        deterministic.append("impossible_timeline")
+
+    # Soft, independent corroboration axes.
+    if _get("grounding").get("ungrounded_match"):
+        soft.append("ungrounded_must_haves")
+    if _get("jd_shingle").get("triggered"):
+        soft.append("jd_mirroring")
+    wd = _get("workable_history_diff")
+    if wd.get("triggered") or (wd.get("issues")):
+        soft.append("workable_history_diff")
+    if int(_get("unverified_employers").get("count") or 0) > 0:
+        soft.append("unverified_employers")
+    if _get("experience_inflation").get("triggered"):
+        soft.append("experience_inflation")
+    if _get("tech_anachronism").get("triggered"):
+        soft.append("tech_anachronism")
+
+    gc = _get("graph_corroboration")
+    if gc.get("status") == "anomaly":
+        soft.append("graph_anomaly")
+    elif gc.get("status") == "corroborated":
+        corroborations.append("graph")
+    li = _get("linkedin")
+    if li.get("status") == "mismatch":
+        soft.append("linkedin_mismatch")
+    elif li.get("status") == "match":
+        corroborations.append("linkedin")
+
+    # Verdict: deterministic artifact OR >=2 independent soft disagreements =
+    # strong; exactly one soft = review (a question); none = ok.
+    if deterministic or len(soft) >= 2:
+        verdict = "strong_review"
+    elif len(soft) == 1:
+        verdict = "review"
+    else:
+        verdict = "ok"
+
+    return {
+        "verdict": verdict,
+        "soft_disagreements": soft,
+        "deterministic_artifacts": deterministic,
+        "corroborations": corroborations,
+        "disagreement_count": len(soft),
+    }

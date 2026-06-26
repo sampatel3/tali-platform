@@ -850,7 +850,8 @@ def _execute_scoring_v3(
     application.cv_match_score = output.role_fit_score
     details = output.model_dump(mode="json")
     details["integrity_signals"] = _augment_integrity_signals(
-        details.get("integrity_signals"), application, cv_text, job_spec_text
+        details.get("integrity_signals"), application, cv_text, job_spec_text,
+        snapshot=details.get("candidate_snapshot"),
     )
     application.cv_match_details = details
     application.cv_match_scored_at = datetime.now(timezone.utc)
@@ -1172,17 +1173,31 @@ def _augment_integrity_signals(
     application: CandidateApplication,
     cv_text: str,
     job_spec_text: str,
+    snapshot: dict | None = None,
 ) -> dict | None:
-    """Merge the flag-only supplementary fraud signals (JD shingle similarity,
-    CV↔Workable history diff, unverified-employer surfacing) into the score's
-    ``integrity_signals``. Computed here because this is the one place with the
-    CV text, the parsed ``cv_sections``, the candidate's Workable history AND
-    the role JD all in scope, so both scoring engines surface them uniformly.
+    """Merge the flag-only cross-source corroboration signals into the score's
+    ``integrity_signals`` and triangulate them. Computed here because this is the
+    one place with the CV text, the parsed ``cv_sections``, the candidate
+    snapshot, the candidate's Workable/social history AND the role JD all in
+    scope, so both scoring engines surface them uniformly.
+
+    Layers (all flag-only, never change the score here): JD-shingle + CV↔Workable
+    diff + unverified employers (supplementary); years-vs-span inflation + tech
+    anachronism (CV-internal coherence); graph collective corroboration + the
+    LinkedIn URL diff (gated, fail-open); then a triangulation summary requiring
+    multiple independent disagreements before it reads as "strong_review".
     Best-effort — never raises into the scoring path, returns ``existing`` on
     any failure."""
     try:
         from ..platform.config import settings
-        from .fraud_detection import build_supplementary_fraud_signals
+        from .external_corroboration import corroborate_linkedin
+        from .fraud_detection import (
+            aggregate_triangulation,
+            build_supplementary_fraud_signals,
+            detect_experience_inflation,
+            detect_tech_anachronism,
+        )
+        from .graph_corroboration import corroborate_candidate_stack
 
         cand = getattr(application, "candidate", None)
         cv_sections = (
@@ -1202,8 +1217,35 @@ def _augment_integrity_signals(
         )
         merged = dict(existing or {})
         merged.update(supp)
+
+        # CV-internal coherence (deterministic, flag-only).
+        snap = snapshot if isinstance(snapshot, dict) else {}
+        timeline = snap.get("timeline") or []
+        infl = detect_experience_inflation(snap.get("years_experience"), timeline)
+        if infl.triggered:
+            merged["experience_inflation"] = infl.to_dict()
+        anach = detect_tech_anachronism(cv_exp)
+        if anach.triggered:
+            merged["tech_anachronism"] = anach.to_dict()
+
+        # Cross-source corroboration (gated + fail-open: None when disabled / no
+        # graph / no LinkedIn URL — never a penalty for absence).
+        graph = corroborate_candidate_stack(
+            organization_id=getattr(application, "organization_id", None),
+            cv_sections=cv_sections,
+            min_observations=settings.GRAPH_CORROBORATION_MIN_OBSERVATIONS,
+        )
+        if graph is not None:
+            merged["graph_corroboration"] = graph
+        social = getattr(cand, "social_profiles", None) if cand is not None else None
+        linkedin = corroborate_linkedin(cv_sections=cv_sections, social_profiles=social)
+        if linkedin is not None:
+            merged["linkedin"] = linkedin
+
+        # Triangulate the whole picture — changes no score, adds the verdict the
+        # "verify before interview" panel reads.
+        merged["triangulation"] = aggregate_triangulation(merged)
         return merged or None
     except Exception:  # pragma: no cover — never break scoring on a flag
         logger.debug("supplementary fraud signals failed", exc_info=True)
         return existing
-    return True

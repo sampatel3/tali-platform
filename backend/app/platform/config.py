@@ -491,6 +491,25 @@ class Settings(BaseSettings):
     # single-handedly rejected on grounding alone; it nudges + flags for review.
     GROUNDING_COVERAGE_MAX_DISCOUNT: float = 15.0
 
+    # ── Prong 2: cross-source corroboration (flag-only, fail-open) ───────────
+    # Knowledge-graph collective corroboration — check a candidate's claimed
+    # (company, tech stack) against what other candidates we've seen associate
+    # with that company. Corroboration-first; the anomaly direction is a weak
+    # flag that only bites via triangulation. Cold-start: needs >= MIN
+    # independent candidates at a company before it trusts the distribution
+    # (the graph holds in-assessment/advanced candidates only → thin early).
+    # Default OFF; fail-open (no graph / no data → no signal).
+    GRAPH_CORROBORATION_ENABLED: bool = False
+    GRAPH_CORROBORATION_MIN_OBSERVATIONS: int = 5
+
+    # LinkedIn URL cross-check — diff the CV against the candidate's OWN public
+    # LinkedIn profile (the URL they gave us in the CV/Workable), never name-based
+    # discovery. Flag-only, never auto-reject (candidate controls both docs); no
+    # URL / no profile → fail open, no penalty. Default OFF — the fetch route
+    # (provider vs best-effort) is a separate ops decision; the diff logic is
+    # built and tested behind a pluggable fetcher that returns None until wired.
+    LINKEDIN_CORROBORATION_ENABLED: bool = False
+
     # MVP feature flags (default to MVP-safe behavior).
     # Stripe is now the live payment processor for credit top-ups; default
     # changed True → False as part of the 2026-04-29 usage-pricing cutover.

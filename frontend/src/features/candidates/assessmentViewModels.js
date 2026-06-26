@@ -477,6 +477,41 @@ const buildIntegrityFlags = (details) => {
     );
   }
 
+  // CV-internal coherence.
+  const ei = sig.experience_inflation && typeof sig.experience_inflation === 'object' ? sig.experience_inflation : null;
+  if (ei && ei.triggered) {
+    flags.push(`Claims ~${ei.years_claimed} years' experience but the career history spans only ~${ei.years_evidenced} years.`);
+  }
+  const ta = sig.tech_anachronism && typeof sig.tech_anachronism === 'object' ? sig.tech_anachronism : null;
+  if (ta && Array.isArray(ta.issues)) {
+    ta.issues.forEach((item) => {
+      if (item && item.tool) {
+        flags.push(`Lists "${item.tool}" in a role ending ${item.role_end}, before it existed (${item.release_year}).`);
+      }
+    });
+  }
+
+  // Cross-source corroboration (Prong 2).
+  const gc = sig.graph_corroboration && typeof sig.graph_corroboration === 'object' ? sig.graph_corroboration : null;
+  if (gc && gc.status === 'anomaly') {
+    const co = Array.isArray(gc.companies)
+      ? gc.companies.filter((c) => c && c.status === 'anomaly').map((c) => c.company).filter(Boolean)
+      : [];
+    flags.push(`Claimed tech stack is unlike what other candidates from ${co.length ? co.join(', ') : 'that employer'} show — verify it's genuine, not spec-tailoring.`);
+  }
+  const li = sig.linkedin && typeof sig.linkedin === 'object' ? sig.linkedin : null;
+  if (li && li.status === 'mismatch') {
+    const issues = li.diff && Array.isArray(li.diff.issues) ? li.diff.issues : [];
+    if (issues.length) {
+      issues.forEach((item) => {
+        const detail = String(item?.detail || '').trim();
+        if (detail) flags.push(`LinkedIn mismatch — ${detail}`);
+      });
+    } else {
+      flags.push('CV history does not match the linked LinkedIn profile — confirm in screening.');
+    }
+  }
+
   return flags.map((item) => String(item).trim()).filter(Boolean);
 };
 
