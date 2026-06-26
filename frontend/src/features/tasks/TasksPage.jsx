@@ -182,13 +182,13 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
             ))}
           </div>
           <div className="tasks-toolbar-actions">
-            <Select value={difficultyFilter} onChange={(event) => setDifficultyFilter(event.target.value)}>
+            <Select inline value={difficultyFilter} onChange={(event) => setDifficultyFilter(event.target.value)}>
               <option value="all">Difficulty · All</option>
               {difficultyOptions.map((option) => (
                 <option key={option} value={option}>{option}</option>
               ))}
             </Select>
-            <Select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+            <Select inline value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
               <option value="all">Type · All</option>
               {typeOptions.map((option) => (
                 <option key={option} value={option}>{option.replace(/_/g, ' ')}</option>

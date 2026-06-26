@@ -176,6 +176,15 @@ select:not(.taali-select)::-ms-expand { display: none; }
   position: relative;
   width: 100%;
 }
+/* Compact, content-width shell for inline/toolbar selects and filter-chips
+   (via Select's `inline`/`bare` props) so they don't stretch to fill a flex
+   toolbar the way the default full-width form-field shell does. */
+.taali-select-shell-inline {
+  display: inline-flex;
+  width: auto;
+  max-width: 100%;
+  vertical-align: middle;
+}
 .taali-select {
   -webkit-appearance: none;
   -moz-appearance: none;
@@ -286,6 +295,10 @@ input[type="time"]::-webkit-datetime-edit {
    Crisp white card with a tight radius; selected rows take the
    purple-tinted treatment with a check. */
 .taali-select-menu {
+  /* The floating-menu positioner supplies left/top/width as inline styles
+     relative to the viewport; without position:fixed those are ignored and
+     the portaled menu drops to the bottom of <body> in normal flow. */
+  position: fixed;
   overflow-y: auto;
   padding: 5px;
   background: var(--bg-2);
