@@ -664,14 +664,18 @@
   background: transparent;
 }
 
+/* Approve = the bold "agent on" dark-purple treatment (design-language pass) —
+   the recommended action wears the signature look, not a traffic-light green. */
 .rq-btn.rq-approve {
-  background: color-mix(in oklab, var(--green) 16%, var(--bg-2));
-  border-color: color-mix(in oklab, var(--green) 30%, var(--line));
-  color: var(--green);
+  background: linear-gradient(180deg, #3a1d6e, #241147);
+  border-color: rgba(196, 165, 253, 0.5);
+  color: #f1ecfb;
+  font-weight: 600;
+  box-shadow: 0 1px 14px rgba(94, 58, 168, 0.28);
 }
 
 .rq-btn.rq-approve:hover:not(:disabled) {
-  background: color-mix(in oklab, var(--green) 22%, var(--bg-2));
+  background: linear-gradient(180deg, #43227e, #2a1454);
 }
 
 .rq-btn.rq-override {
