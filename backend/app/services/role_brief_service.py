@@ -49,6 +49,8 @@ _EDITABLE_FIELDS = frozenset(
         "assessment_focus",
         "process",
         "evp",
+        "custom_fields",
+        "messages",
         "raw_input",
         "agent_state",
         "completeness",

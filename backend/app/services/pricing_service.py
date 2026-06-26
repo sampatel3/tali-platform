@@ -150,6 +150,8 @@ class Feature(str, Enum):
     FIT_MATCHING = "fit_matching"          # services/fit_matching_service
     GRAPH_SYNC = "graph_sync"              # candidate_graph (semantic search indexing)
     INTENT_PARSER = "intent_parser"        # sub_agents/intent_parser (recruiter intent-chip parse)
+    REQUISITION_INTAKE = "requisition_intake"  # requisition_intake_agent (single-shot brief extraction)
+    REQUISITION_INTAKE_CHAT = "requisition_intake_chat"  # requisition_chat_service (conversational intake turn)
     OTHER = "other"
 
 
@@ -289,6 +291,20 @@ _FEATURE_PRICING: dict[Feature, FeaturePricing] = {
         # scoring/pre-screen.
         feature=Feature.GRAPH_SYNC,
         markup_multiplier=Decimal("1.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.REQUISITION_INTAKE: FeaturePricing(
+        # Recruiter/hiring-manager-facing intake (single-shot brief extraction
+        # from notes/transcript/JD). Recruiter-facing AI → 2× like taali_chat.
+        feature=Feature.REQUISITION_INTAKE,
+        markup_multiplier=Decimal("2.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.REQUISITION_INTAKE_CHAT: FeaturePricing(
+        # Conversational requisition intake turn (chat with attachments). Same
+        # 2× shape as taali_chat/agent_chat — recruiter-facing AI.
+        feature=Feature.REQUISITION_INTAKE_CHAT,
+        markup_multiplier=Decimal("2.0"),
         cache_hit_multiplier=Decimal("0.10"),
     ),
     Feature.OTHER: FeaturePricing(
@@ -468,6 +484,8 @@ def estimate_reservation(feature: Feature | str) -> int:
         Feature.INTERVIEW_TECH: 4_000,
         Feature.FIT_MATCHING: 30_000,
         Feature.GRAPH_SYNC: 10_000,
+        Feature.REQUISITION_INTAKE: 12_000,       # ~$0.012 per single-shot extraction
+        Feature.REQUISITION_INTAKE_CHAT: 12_000,  # ~$0.012 per chat turn (vision-capable)
         Feature.OTHER: 5_000,
     }
     if isinstance(feature, str):

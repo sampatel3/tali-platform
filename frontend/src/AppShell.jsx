@@ -105,6 +105,9 @@ const BespokeTaskRequestPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import('./features/settings/SettingsPage').then((m) => ({ default: m.SettingsPage }))
 );
+const RequisitionTemplatePage = lazy(() =>
+  import('./features/settings/RequisitionTemplatePage').then((m) => ({ default: m.RequisitionTemplatePage }))
+);
 const DecisionPolicyPage = lazy(() =>
   import('./features/decision_policy/DecisionPolicyPage')
 );
@@ -777,6 +780,22 @@ function AppContent() {
       <Route
         path="/reporting"
         element={<Navigate replace to="/home" />}
+      />
+
+      {/* Requisition spec template editor. A dedicated page (not a tab in the
+          tabbed SettingsPage), so it gets a specific route ABOVE the
+          /settings/* splat — React Router ranks the static path higher, so it
+          wins over the catch-all. */}
+      <Route
+        path="/settings/requisition-template"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <RequisitionTemplatePage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
       />
 
       <Route

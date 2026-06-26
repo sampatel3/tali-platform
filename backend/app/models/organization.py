@@ -59,6 +59,10 @@ class Organization(Base):
     # notification. NULL means no cap configured.
     monthly_spend_cap_cents = Column(Integer, nullable=True)
     workspace_settings = Column(JSON, nullable=True)
+    # The org's canonical "complete requisition spec" definition that the
+    # conversational intake captures against. NULL means "use the built-in
+    # DEFAULT_REQUISITION_TEMPLATE" (see requisition_template_service).
+    requisition_spec_template = Column(JSON, nullable=True)
     scoring_policy = Column(JSON, nullable=True)
     ai_tooling_config = Column(JSON, nullable=True)
     notification_preferences = Column(JSON, nullable=True)

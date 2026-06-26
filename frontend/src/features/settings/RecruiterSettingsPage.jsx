@@ -1426,6 +1426,26 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       {workspaceSaving ? 'Saving...' : 'Save organization'}
                     </button>
                   </div>
+
+                  {/* Link out to the dedicated requisition-template editor (its
+                      own page, not a tab here). Defines what a complete
+                      requisition looks like — drives the live brief + the
+                      intake agent's questions. */}
+                  <div className="settings-subcard settings-top-gap">
+                    <div className="settings-subcard-head">
+                      <div>
+                        <h3>Requisition template</h3>
+                        <p>Define what a complete requisition spec looks like — comp, location, logistics, requirements, agent context. Drives the live brief and the questions the intake agent asks.</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      onClick={() => onNavigate?.('settings-requisition-template')}
+                    >
+                      Edit requisition template →
+                    </button>
+                  </div>
                 </SectionPanel>
               </div>
 

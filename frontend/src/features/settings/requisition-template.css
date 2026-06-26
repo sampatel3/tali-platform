@@ -1,0 +1,138 @@
+/* Settings → Requisition template editor. Composes the global form/btn/chip
+   classes + the rq-* styles; only the editor-specific layout lives here.
+   Class prefix: rqt- (requisition template). Purple accents only. */
+
+.rqt-summary {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mute);
+  margin-bottom: 16px;
+}
+
+.rqt-muted { color: var(--mute-2); font-size: 0.8125rem; }
+
+/* A section card */
+.rqt-section {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg, 22px);
+  padding: 20px 22px;
+  margin-bottom: 18px;
+  box-shadow: var(--shadow-sm);
+}
+.rqt-section-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--line-2);
+}
+.rqt-section-head-fields {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Fields inside a section */
+.rqt-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.rqt-field {
+  border: 1px solid var(--line-2);
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: var(--bg);
+}
+.rqt-field-grid {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr 1fr auto;
+  gap: 12px;
+  align-items: end;
+}
+.rqt-field-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  padding-bottom: 2px;
+}
+.rqt-req {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.78125rem;
+  color: var(--ink-2);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.rqt-req input { width: 15px; height: 15px; accent-color: var(--purple); cursor: pointer; }
+
+.rqt-full { margin-top: 12px; }
+.rqt-options { margin-top: 2px; }
+
+.rqt-row-btns { display: inline-flex; align-items: center; gap: 4px; }
+.rqt-icon-btn {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+  color: var(--mute);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.rqt-icon-btn:hover { border-color: var(--purple); color: var(--purple-2); }
+.rqt-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.rqt-icon-btn:disabled:hover { border-color: var(--line); color: var(--mute); }
+.rqt-icon-btn.is-danger:hover {
+  border-color: color-mix(in oklab, var(--red) 50%, var(--line));
+  color: var(--red-deep);
+  background: color-mix(in oklab, var(--red) 6%, var(--bg-2));
+}
+
+.rqt-add-field { margin-top: 14px; }
+
+.rqt-add-section {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  justify-content: center;
+  padding: 14px;
+  border: 1px dashed color-mix(in oklab, var(--purple) 40%, var(--line));
+  border-radius: var(--radius-lg, 22px);
+  background: color-mix(in oklab, var(--purple) 4%, var(--bg-2));
+  color: var(--purple-2);
+  font-size: 0.875rem;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.rqt-add-section:hover {
+  background: var(--purple-soft);
+  border-color: var(--purple);
+}
+
+.rqt-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 24px;
+}
+
+@media (max-width: 760px) {
+  .rqt-field-grid { grid-template-columns: 1fr; }
+  .rqt-section-head { flex-direction: column; align-items: stretch; }
+  .rqt-section-head-fields { grid-template-columns: 1fr; }
+  .rqt-field-controls { align-items: flex-start; }
+}

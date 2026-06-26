@@ -93,6 +93,8 @@ export const pathForPage = (page, options = {}) => {
       return '/settings/enterprise';
     case 'settings-preferences':
       return '/settings/preferences';
+    case 'settings-requisition-template':
+      return '/settings/requisition-template';
     case 'candidate-welcome':
       if (options.assessmentIdFromLink && options.assessmentToken) {
         return `/assessment/${options.assessmentIdFromLink}?token=${encodeURIComponent(options.assessmentToken)}`;

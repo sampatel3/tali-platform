@@ -90,6 +90,19 @@ class RoleBrief(Base):
     process = Column(JSON, nullable=True)  # {rounds, autonomy_level, urgency}
     evp = Column(JSON, nullable=True)  # selling points / tone for the JD + comms
 
+    # --- Org-template extension fields (keys with no RoleBrief column) ---
+    # The org's requisition spec template may add fields that don't map to a
+    # column (e.g. "visa_sponsorship"); the chat captures those here keyed by
+    # the template field key. Defaults to an empty dict so callers never get
+    # ``None`` back.
+    custom_fields = Column(JSON, nullable=False, server_default="{}", default=dict)
+
+    # --- Conversation transcript (the chat intake) ---
+    # The captured conversation: a list of
+    # ``{"role": "user"|"assistant", "content": str,
+    #    "attachments": [{"name": str, "kind": "image"|"transcript"|"file"}]}``.
+    messages = Column(JSON, nullable=False, server_default="[]", default=list)
+
     # --- Provenance / intake working state ---
     raw_input = Column(Text, nullable=True)  # transcript / pasted JD / notes
     agent_state = Column(JSON, nullable=True)  # intake agent memory + open questions
