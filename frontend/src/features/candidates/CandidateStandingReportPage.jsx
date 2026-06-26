@@ -17,13 +17,10 @@ import { CandidateDecisionStrip } from './CandidateDecisionStrip';
 import { OverrideModal } from '../home/OverrideModal';
 import { TeachModal } from '../home/TeachModal';
 import { DECISION_ACTIONS } from '../../shared/decisions/decisionActions';
-import { IntegrityFlags } from '../../shared/decisions/IntegrityFlags';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
 import { readFluency4d } from '../../shared/assessment/fluency4d';
 import { RadarChart } from '../../shared/ui/RadarChart';
-import { ScoreRing } from '../../shared/ui/ScoreRing';
-import { ScoreProvenance } from './ScoreProvenance';
 import { ErrorBoundary } from '../../shared/ui/ErrorBoundary';
 import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAssessmentToCandidateView } from './assessmentViewModels';
 // ApplicationDecisionPanel intentionally NOT imported — PR3 retired the decision
@@ -34,6 +31,9 @@ import { CandidateSnapshotCard } from './CandidateSnapshotCard';
 import { CvDocumentViewer } from './CvDocumentViewer';
 import { CvMatchReview } from './CvMatchReview';
 import { PrepQuestionCard } from './PrepQuestionCard';
+import { VerdictBand } from './VerdictBand';
+import { VerdictDetail } from './VerdictDetail';
+import { verdictLabel } from '../../shared/decisions/decisionLabels';
 import {
   getErrorMessage,
   resolveCvMatchDetails,
@@ -1088,37 +1088,26 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 </div>
               ) : null}
 
-              {/* (1) Recommendation card — copy + highlighted signal rings */}
-              <div className="mc-overview-hero">
-                <div className="mc-overview-hero-body">
-                  <div className="mc-kicker">RECOMMENDATION</div>
-                  <div className="mc-overview-hero-recommendation">{recommendationLabel}</div>
-                  <p className="mc-overview-hero-summary">
-                    {reportModel?.recruiterSummaryText
-                      || 'Recommendation copy will populate once role-fit and assessment evidence are scored.'}
-                  </p>
-                  {/* Trust readout, combined with the summary: the specific
-                      things to verify before deciding + the cross-source
-                      corroborations we confirmed. Same component as the agent
-                      decision card, reading the canonical score_summary.integrity. */}
-                  <IntegrityFlags
-                    integrity={application?.score_summary?.integrity}
-                    style={{ marginTop: 12 }}
-                  />
-                </div>
-                <div className="mc-overview-hero-rings">
-                  <ScoreRing score={Number(taaliScore) || 0} label="TAALI" size={120} />
-                  <ScoreRing score={Number(roleFitScoreVal) || 0} label="ROLE FIT" size={120} />
-                  <ScoreRing score={Number(assessmentScore) || 0} label="ASSESSMENT" size={120} />
-                  {reqTotal ? (
-                    <ScoreRing score={(reqMet / reqTotal) * 100} display={`${reqMet}/${reqTotal}`} label="REQUIREMENTS" size={120} />
-                  ) : null}
-                </div>
-                <ScoreProvenance
-                  provenance={application?.score_summary?.score_provenance}
-                  className="mc-overview-hero-provenance"
-                />
-              </div>
+              {/* (1) Verdict band — one canonical Taali ring + the agent's
+                  recommendation + the shared IntegrityFlags trust readout; the
+                  remaining scores demote to tiles (see VerdictBand.jsx). */}
+              <VerdictBand
+                taaliScore={taaliScore}
+                roleFitScore={roleFitScoreVal}
+                assessmentScore={assessmentScore}
+                reqMet={reqMet}
+                reqTotal={reqTotal}
+                recommendationLabel={verdictLabel(agentDecision) || recommendationLabel}
+                confidence={agentDecision?.confidence ?? null}
+                summaryText={reportModel?.recruiterSummaryText || ''}
+                integrity={application?.score_summary?.integrity || null}
+                provenance={application?.score_summary?.score_provenance}
+              />
+
+              {/* (1b) Why this verdict — deterministic decision trace (recruiter-only). */}
+              {!isClientView ? (
+                <VerdictDetail decision={agentDecision} />
+              ) : null}
 
               {/* (2) CV match review — full requirement breakdown, gaps first */}
               <CvMatchReview
