@@ -110,19 +110,21 @@
   border-color: color-mix(in oklab, var(--purple) 38%, var(--line));
 }
 
+/* Two-tone decision scheme (design-language pass): positive = purple,
+   terminal/negative = grey. No traffic-light green/red on decision chips. */
 .fb-dchip.is-advance {
-  color: color-mix(in oklab, var(--green, #15a36a) 78%, var(--ink));
-  border-color: color-mix(in oklab, var(--green, #15a36a) 42%, var(--line));
+  color: var(--purple-2, var(--purple));
+  border-color: color-mix(in oklab, var(--purple) 38%, var(--line));
 }
 
 .fb-dchip.is-reject {
-  color: color-mix(in oklab, var(--red, #ef4444) 80%, var(--ink));
-  border-color: color-mix(in oklab, var(--red, #ef4444) 40%, var(--line));
+  color: var(--ink-2);
+  border-color: color-mix(in oklab, var(--ink) 20%, var(--line));
 }
 
 .fb-dchip.is-prescreen {
-  color: color-mix(in oklab, var(--red-deep, #b91c1c) 82%, var(--ink));
-  border-color: color-mix(in oklab, var(--red-deep, #b91c1c) 44%, var(--line));
+  color: var(--ink-2);
+  border-color: color-mix(in oklab, var(--ink) 20%, var(--line));
 }
 
 /* "decision pending" — candidates the agent hasn't ruled on yet: muted, to sit
