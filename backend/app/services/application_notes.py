@@ -44,6 +44,29 @@ def _actor_name(author: User | None) -> str:
     return (getattr(author, "full_name", None) or getattr(author, "email", None) or "Recruiter")
 
 
+def _agent_readable_note(meta: dict[str, Any]) -> str:
+    """Render the agent-visible body for a note, structured-kind aware.
+
+    Plain notes read as-is. A ``ranking`` note prefixes the recruiter's score
+    ("Ranking: 4/5 — solid but light on X"); a ``link`` note renders the label
+    + URL ("Link: Portfolio — https://…"). This is what rides in the
+    ``recruiter_notes`` payload the agent reads as standing guidance.
+    """
+    body = str(meta.get("note") or "").strip()
+    kind = str(meta.get("kind") or "note").strip().lower()
+    if kind == "ranking":
+        ranking = meta.get("ranking")
+        prefix = f"Ranking: {ranking}/5" if ranking is not None else "Ranking"
+        return f"{prefix} — {body}" if body else prefix
+    if kind == "link":
+        url = str(meta.get("link_url") or "").strip()
+        label = str(meta.get("link_label") or "").strip()
+        parts = [p for p in (label, url) if p]
+        rendered = " ".join(parts) if parts else body
+        return f"Link: {rendered}".strip()
+    return body
+
+
 def create_recruiter_note(
     db: Session,
     *,
@@ -51,28 +74,61 @@ def create_recruiter_note(
     note: str,
     author: User | None = None,
     for_agent: bool = True,
+    kind: str = "note",
+    ranking: int | None = None,
+    link_url: str | None = None,
+    link_label: str | None = None,
     now: datetime | None = None,
 ) -> CandidateApplicationEvent:
     """Append a recruiter note to the application's event timeline.
 
     Does not commit — the caller owns the transaction. Raises ``ValueError``
-    on an empty note so the route can return a 400.
+    on an empty note (for the freeform/ranking kinds) or a missing URL (for
+    the ``link`` kind) so the route can return a 400.
+
+    ``kind`` selects the flavour stored in metadata: ``note`` (freeform),
+    ``ranking`` (1–5 + optional comment), or ``link`` (URL + optional label).
+    The structured bits ride in ``event_metadata`` so the FE can differentiate
+    them and :func:`recruiter_notes_for_agent` can read a readable form.
     """
+    kind = (kind or "note").strip().lower()
+    if kind not in ("note", "ranking", "link"):
+        kind = "note"
     cleaned = (note or "").strip()
-    if not cleaned:
+    cleaned_url = (link_url or "").strip()
+    cleaned_label = (link_label or "").strip()
+    # A link note is allowed to have an empty comment (the URL is the payload);
+    # everything else requires a non-empty note body.
+    if kind == "link":
+        if not cleaned_url:
+            raise ValueError("link_url is required")
+    elif not cleaned:
         raise ValueError("note is required")
+
+    meta: dict[str, Any] = {
+        "note": cleaned,
+        "actor_name": _actor_name(author),
+        "for_agent": bool(for_agent),
+        "kind": kind,
+    }
+    if kind == "ranking" and ranking is not None:
+        meta["ranking"] = int(ranking)
+    if kind == "link":
+        meta["link_url"] = cleaned_url
+        if cleaned_label:
+            meta["link_label"] = cleaned_label
+
+    # ``reason`` mirrors the agent-readable body so existing readers (the audit
+    # timeline, the events list, the org-scoping test that checks ``reason``)
+    # keep showing something sensible for the structured kinds too.
     row = CandidateApplicationEvent(
         application_id=app.id,
         organization_id=app.organization_id,
         event_type=RECRUITER_NOTE_EVENT,
         actor_type="recruiter",
         actor_id=int(getattr(author, "id", 0) or 0) or None,
-        reason=cleaned,
-        event_metadata={
-            "note": cleaned,
-            "actor_name": _actor_name(author),
-            "for_agent": bool(for_agent),
-        },
+        reason=_agent_readable_note(meta) or cleaned,
+        event_metadata=meta,
         created_at=now or datetime.now(timezone.utc),
     )
     db.add(row)
@@ -116,7 +172,10 @@ def recruiter_notes_for_agent(app: CandidateApplication) -> list[dict[str, Any]]
         meta = getattr(event, "event_metadata", None) or {}
         if meta.get("for_agent") is False:
             continue
-        body = str(meta.get("note") or getattr(event, "reason", "") or "").strip()
+        # Structured kinds (ranking / link) render a readable prefix so the
+        # agent reads "Ranking: 4/5 — …" / "Link: <label> <url>" rather than a
+        # bare comment. Plain notes fall back to the note body / reason.
+        body = (_agent_readable_note(meta) or str(getattr(event, "reason", "") or "")).strip()
         if not body:
             continue
         if len(body) > AGENT_VISIBLE_NOTE_BODY_CHARS:
