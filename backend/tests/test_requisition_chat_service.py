@@ -7,13 +7,16 @@ from app.services.requisition_chat_service import (
     ChatAttachment,
     ChatCapture,
     apply_capture,
+    build_chat_system_prompt,
     build_persisted_user_message,
     build_user_turn_content,
     compute_completeness,
     compute_gaps,
     opening_message,
+    recent_role_titles,
     run_chat_turn,
     seed_opening_message,
+    warm_start_fields,
 )
 from app.services.requisition_intake_agent import (
     WeightedPriority,
@@ -389,3 +392,115 @@ def test_run_chat_turn_failure_rolls_back_capture_but_keeps_user_message(db, mon
     assert b.title is None
     # The user message was still appended (the turn happened).
     assert b.messages[-1]["role"] == "user"
+
+
+# --------------------------------------------------------------------------- #
+# Warm-start: recency-biased prefill + recent-roles context
+# --------------------------------------------------------------------------- #
+def _org(db, **org_kw):
+    org = Organization(name="Acme", slug="acme", **org_kw)
+    db.add(org)
+    db.flush()
+    return org
+
+
+def test_warm_start_fields_takes_most_recent_non_empty_per_field(db):
+    org = _org(db)
+    # Oldest brief: has a city + workplace_type.
+    older = create_brief(db, organization_id=org.id)
+    update_brief_fields(
+        db, older,
+        location_city="Abu Dhabi", workplace_type="Onsite", department="Eng",
+    )
+    # Newer brief: a different city, no workplace_type, no department.
+    newer = create_brief(db, organization_id=org.id)
+    update_brief_fields(db, newer, location_city="Dubai", employment_type="Full-time")
+
+    fields = warm_start_fields(db, org.id)
+    # location_city: newest non-empty wins (Dubai over Abu Dhabi).
+    assert fields["location_city"] == "Dubai"
+    # workplace_type/department only set on the older brief → fall back to it.
+    assert fields["workplace_type"] == "Onsite"
+    assert fields["department"] == "Eng"
+    # employment_type only on the newer brief.
+    assert fields["employment_type"] == "Full-time"
+    # location_country was never set → omitted entirely (only resolved keys).
+    assert "location_country" not in fields
+
+
+def test_warm_start_fields_empty_when_no_prior_values(db):
+    org = _org(db)
+    create_brief(db, organization_id=org.id)  # blank brief, nothing to inherit
+    assert warm_start_fields(db, org.id) == {}
+
+
+def test_warm_start_fields_excludes_given_brief(db):
+    org = _org(db)
+    prior = create_brief(db, organization_id=org.id)
+    update_brief_fields(db, prior, location_city="Dubai")
+    current = create_brief(db, organization_id=org.id)
+    update_brief_fields(db, current, location_city="Riyadh")
+    # Excluding ``current`` falls back to the prior brief's value.
+    assert warm_start_fields(db, org.id, exclude_brief_id=current.id)["location_city"] == "Dubai"
+
+
+def test_warm_start_fields_scoped_to_org(db):
+    org_a = _org(db)
+    other = Organization(name="Other", slug="other")
+    db.add(other)
+    db.flush()
+    foreign = create_brief(db, organization_id=other.id)
+    update_brief_fields(db, foreign, location_city="London")
+    # A brief in another org must not bleed into org_a's warm-start.
+    assert warm_start_fields(db, org_a.id) == {}
+
+
+def test_recent_role_titles_newest_first_excludes_blank_and_current(db):
+    org = _org(db)
+    first = create_brief(db, organization_id=org.id)
+    update_brief_fields(db, first, title="Backend Engineer")
+    second = create_brief(db, organization_id=org.id)
+    update_brief_fields(db, second, title="Data Scientist")
+    blank = create_brief(db, organization_id=org.id)  # no title → skipped
+    current = create_brief(db, organization_id=org.id)
+    update_brief_fields(db, current, title="Product Manager")
+
+    titles = recent_role_titles(db, org.id, exclude_brief_id=current.id)
+    # Newest-first, blank skipped, current excluded.
+    assert titles == ["Data Scientist", "Backend Engineer"]
+    assert "Product Manager" not in titles
+
+
+def test_build_chat_system_prompt_includes_recent_roles_line(db):
+    b, _o = _brief(db)
+    prompt = build_chat_system_prompt(
+        b, resolve_template(_o), focus_gaps=[], recent_titles=["Backend Engineer", "Data Scientist"]
+    )
+    assert "For context, recent roles at this org: Backend Engineer, Data Scientist." in prompt
+
+
+def test_build_chat_system_prompt_omits_recent_roles_line_when_none(db):
+    b, _o = _brief(db)
+    prompt = build_chat_system_prompt(b, resolve_template(_o), focus_gaps=[], recent_titles=[])
+    assert "recent roles at this org" not in prompt
+
+
+def test_run_chat_turn_passes_recent_titles_into_system_prompt(db, monkeypatch):
+    org = _org(db)
+    prior = create_brief(db, organization_id=org.id)
+    update_brief_fields(db, prior, title="Staff Engineer")
+    current = create_brief(db, organization_id=org.id)
+    seed_opening_message(current, resolve_template(org))
+    db.flush()
+
+    seen = {}
+
+    def fake_generate_structured(client, **kwargs):
+        seen["system"] = kwargs["system"]
+        return StructuredResult(value=ChatCapture(assistant_reply="ok"), ok=True)
+
+    monkeypatch.setattr(chat, "generate_structured", fake_generate_structured)
+    run_chat_turn(db, current, message="hiring a new role", client=object(), model="m")
+    # The prior brief's title surfaces as warm-start context; the current brief
+    # (untitled) is excluded so it never lists itself.
+    assert "recent roles at this org: Staff Engineer." in seen["system"]

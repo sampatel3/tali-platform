@@ -29,6 +29,7 @@ from ...services.requisition_chat_service import (
     compute_gaps,
     run_chat_turn,
     seed_opening_message,
+    warm_start_fields,
 )
 from ...services.requisition_intake_agent import run_intake_extraction
 from ...services.requisition_template_service import (
@@ -100,6 +101,8 @@ def _serialize_brief(brief: RoleBrief, org: Optional[Organization]) -> dict[str,
     payload["messages"] = brief.messages or []
     payload["completeness"] = int(brief.completeness or 0)
     payload["gaps"] = compute_gaps(brief, template)
+    # Recruiter's hand-edited Job spec (stored in agent_state, not a column).
+    payload["jd_override"] = (brief.agent_state or {}).get("jd_override")
     # Consultancy: resolve the client name + compute margin (never stored).
     payload["client_name"] = brief.client.name if brief.client else None
     margin, margin_pct = compute_margin(
@@ -164,6 +167,16 @@ def create_requisition(
     brief.salary_currency = "AED"
     org = _org(db, current_user.organization_id)
     template = resolve_template(org)
+    # Warm-start: prefill location/workplace/employment/department from the org's
+    # most-recent specs (the agent/recruiter can still override). These count
+    # toward the live gap engine + completeness and are visible to the agent as
+    # already captured. ``completeness`` itself is (re)computed on the first chat
+    # turn — we don't seed it here, to keep a brand-new brief at 0% until the
+    # recruiter starts talking, matching the existing create contract.
+    for field, value in warm_start_fields(
+        db, current_user.organization_id, exclude_brief_id=brief.id
+    ).items():
+        setattr(brief, field, value)
     seed_opening_message(brief, template)
     db.flush()
     db.commit()
@@ -293,7 +306,20 @@ def update_requisition(
     """Recruiter edits to the brief (whitelisted fields, including
     ``custom_fields`` and the consultancy ``client_id`` / ``client_rate``)."""
     brief = _get_brief(db, current_user.organization_id, brief_id)
-    data = data or {}
+    data = dict(data or {})
+    # ``jd_override`` is the recruiter's hand-edited Job spec. It isn't a column —
+    # merge it into agent_state (preserving other keys like ``open_questions``);
+    # an empty string / null clears it. Pull it out so it doesn't flow through
+    # update_brief_fields as a column.
+    if "jd_override" in data:
+        raw = data.pop("jd_override")
+        override = (raw or "").strip() if isinstance(raw, str) else raw
+        state = dict(brief.agent_state or {})
+        if override:
+            state["jd_override"] = override
+        else:
+            state.pop("jd_override", None)
+        brief.agent_state = state
     # A client_id can only point at a client in the caller's org (no cross-org
     # assignment). ``None`` clears the link.
     if data.get("client_id") is not None:

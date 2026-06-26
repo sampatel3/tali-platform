@@ -397,6 +397,78 @@
 .rq-jobspec .tk-md em { color: var(--mute); }
 .rq-jobspec .tk-md hr { border: 0; border-top: 1px solid var(--line-2); margin: 1.5em 0; }
 
+/* Job-spec action bar — the Edit / Reset-to-auto controls + the "Edited"
+   badge sit above the rendered JD. A flex row so the badge hugs the left and
+   the buttons the right; when there's no badge the buttons stay right-aligned. */
+.rq-jobspec-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 28px;
+  margin-bottom: 14px;
+}
+.rq-jobspec-bar-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+.rq-jobspec-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+/* "Edited" badge — marks the JD as a manual override (purple, no red/amber). */
+.rq-jobspec-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--purple-soft);
+  color: var(--purple-2);
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Job-spec edit mode — a full-height monospace markdown editor that fills the
+   scroll shell, with its own sticky action bar. */
+.rq-jobspec-edit {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.rq-jobspec-textarea {
+  flex: 1;
+  width: 100%;
+  min-height: 360px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--bg-2);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  resize: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.rq-jobspec-textarea:focus {
+  outline: 0;
+  border-color: var(--purple);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple) 15%, transparent);
+}
+
 /* Completeness meter */
 .rq-meter {
   position: sticky;
