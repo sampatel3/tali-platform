@@ -37,11 +37,7 @@
 .fchip{font-size:9.5px;border-radius:99px;padding:1px 7px;font-weight:500;white-space:nowrap}
 .fchip.act{background:var(--purple-soft);color:var(--purple-2)}
 .fchip.rej{background:var(--bg-3);color:var(--mute)}
-/* tabs */
-.ptabs{display:flex;gap:4px;border:1px solid var(--line-2);border-radius:11px;background:var(--bg-2);padding:3px;width:max-content;margin-bottom:16px}
-.ptab{font-size:13px;color:var(--mute);font-weight:500;padding:8px 15px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:7px}
-.ptab.on{background:var(--purple);color:#fff}
-.ptab .ct{font-size:10.5px;opacity:.8}
+/* tabs — shared .vtabs/.vtab from report-preview.css */
 .panel{display:none}.panel.on{display:block}
 /* candidate KPIs */
 .ckpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:14px}
@@ -178,11 +174,11 @@
   </div>
 
   <!-- tabs -->
-  <div class="ptabs">
-    <span class="ptab on" data-p="cands"><i class="ti ti-table"></i> Candidates</span>
-    <span class="ptab" data-p="pipe"><i class="ti ti-layout-kanban"></i> Pipeline</span>
-    <span class="ptab" data-p="spec"><i class="ti ti-file-description"></i> Job spec</span>
-    <span class="ptab" data-p="settings"><i class="ti ti-adjustments"></i> Agent settings</span>
+  <div class="vtabs">
+    <span class="vtab on" data-p="cands"><i class="ti ti-table"></i> Candidates</span>
+    <span class="vtab" data-p="pipe"><i class="ti ti-layout-kanban"></i> Pipeline</span>
+    <span class="vtab" data-p="spec"><i class="ti ti-file-description"></i> Job spec</span>
+    <span class="vtab" data-p="settings"><i class="ti ti-adjustments"></i> Agent settings</span>
   </div>
 
   <!-- TAB: candidates -->
@@ -346,8 +342,8 @@
 </div>
 
 <script>
-document.querySelectorAll('.ptab').forEach(t=>t.addEventListener('click',()=>{
-  document.querySelectorAll('.ptab').forEach(x=>x.classList.remove('on'));
+document.querySelectorAll('.vtab').forEach(t=>t.addEventListener('click',()=>{
+  document.querySelectorAll('.vtab').forEach(x=>x.classList.remove('on'));
   document.querySelectorAll('.panel').forEach(x=>x.classList.remove('on'));
   t.classList.add('on');document.getElementById(t.dataset.p).classList.add('on');
 }));
