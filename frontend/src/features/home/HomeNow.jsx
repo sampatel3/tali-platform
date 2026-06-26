@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 
 import { agent as agentApi, organizations as orgsApi, roles as rolesApi } from '../../shared/api';
-import { AssessmentInviteChip } from '../candidates/CandidateStatusChips';
+import { AssessmentWorkflowStepper, AssessmentFunnelStrip } from '../candidates/AssessmentWorkflow';
 import { PIPELINE_FUNNEL_STAGES } from '../../shared/metrics';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { useToast } from '../../context/ToastContext';
@@ -356,6 +356,7 @@ const InvitedPanel = ({ candidates, loading, selectedId, onSelect, roleNameById 
           <span style={{ color: 'var(--purple)', marginLeft: 6 }}>{candidates.length}</span>
         </span>
       </div>
+      <AssessmentFunnelStrip candidates={candidates} />
       <div className="rq-split-list-body">
       {candidates.map((c) => {
         const ss = c.score_summary || {};
@@ -378,7 +379,7 @@ const InvitedPanel = ({ candidates, loading, selectedId, onSelect, roleNameById 
                 <ScoreChip score={ss.taali_score} size="sm" />
               </div>
               <div className="rq-invited-chips">
-                <AssessmentInviteChip status={ss.assessment_status} tracking={tracking} />
+                <AssessmentWorkflowStepper status={ss.assessment_status} tracking={tracking} />
               </div>
             </div>
             <span className="rq-invited-age">
@@ -437,7 +438,6 @@ const InvitedDetail = ({ candidate, roleNameById, onNavigate }) => {
           </div>
           <div className="rq-detail-links" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
             <RolePill roleName={roleName} roleId={candidate.role_id} />
-            <AssessmentInviteChip status={ss.assessment_status} tracking={t} />
           </div>
           <div className="rq-detail-links" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
             <DeepLinkRow
@@ -458,6 +458,10 @@ const InvitedDetail = ({ candidate, roleNameById, onNavigate }) => {
             <ScoreProvenance provenance={ss.score_provenance} density="full" />
           </div>
         ) : null}
+      </div>
+
+      <div className="aw-detail-block">
+        <AssessmentWorkflowStepper status={ss.assessment_status} tracking={t} labeled />
       </div>
 
       <div className="rq-invite-timeline">
