@@ -124,16 +124,35 @@ def test_noop_when_pending_already_exists(db):
     assert len(_pending(db, role)) == 1
 
 
-def test_surfaces_post_handover_as_decision(db):
-    """Post-handover candidates are no longer withheld — Taali's read is surfaced
-    as a HITL card via the second opinion (a below-bar verdict → reject:
-    "you're interviewing someone I'd have passed on"), instead of stranding them
-    as 'not yet decided'."""
+def test_post_handover_mid_interview_reject_deferred(db):
+    """Score-time routes a post-handover candidate through the second opinion
+    (decide_post_handover), which is STAGE-AWARE. A below-bar verdict on a
+    NON-terminal stage (the recruiter is mid-interview: phone / technical /
+    final) is DEFERRED — #729: a live reject card there is the dangerous case
+    ("don't reject someone in a live interview") and pulling them advanced→review
+    to host it would strand them once the reconcile discards it. So this returns
+    None and queues NO card, rather than stranding them as 'not yet decided'."""
     org, role = _seed_role(db, score_threshold=50)
-    app = _add_app(db, org, role, role_fit=30.0)
-    app.workable_stage = "Final Interview"
+    app = _add_app(db, org, role, role_fit=30.0)  # below bar → would reject
+    app.workable_stage = "Final Interview"  # non-terminal post-handover
     db.commit()
     out = bds.ensure_deterministic_decision(db, app=app, role=role)
+    db.commit()
+    assert out is None  # deferred to the recruiter's live interview
+    assert _pending(db, role) == []  # no reject card queued
+    assert db.query(UsageEvent).count() == 0  # still zero-LLM
+
+
+def test_post_handover_terminal_reject_surfaced(db):
+    """A below-bar verdict on a TERMINAL hand-off (offer / hired) is imminent
+    enough to surface: the score-time second opinion queues the live reject card
+    ("you're about to offer someone I'd have passed on"). Still HITL, zero-LLM."""
+    org, role = _seed_role(db, score_threshold=50)
+    app = _add_app(db, org, role, role_fit=30.0)
+    app.workable_stage = "Offer"  # terminal post-handover
+    db.commit()
+    out = bds.ensure_deterministic_decision(db, app=app, role=role)
+    db.commit()
     assert out == "reject"
     decs = _pending(db, role)
     assert len(decs) == 1
