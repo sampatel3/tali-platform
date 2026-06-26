@@ -11,13 +11,13 @@
 // ThinkingDots) — the one standard chat UI across Search, the Home dock and
 // the candidate workspace — and the global purple design tokens.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, FileText, Paperclip, Plus, Rocket, X } from 'lucide-react';
+import { Check, Copy, ExternalLink, FileText, Paperclip, Plus, RefreshCw, Rocket, X } from 'lucide-react';
 
 import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
 import { requisitionApi } from './api';
 import { clientApi } from '../clients/api';
 import { LiveBrief } from './LiveBrief';
-import { JobSpec } from './JobSpec';
+import { JobSpec, renderJobSpec } from './JobSpec';
 import { RequisitionEconomics } from './RequisitionEconomics';
 import './requisitions.css';
 
@@ -76,6 +76,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const [turnInFlight, setTurnInFlight] = useState(false);
   const [creating, setCreating] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  // Transient "Copied" tick on the share-URL copy button.
+  const [copied, setCopied] = useState(false);
   const [savingKey, setSavingKey] = useState(null);
   const [loadingBrief, setLoadingBrief] = useState(false);
   const [error, setError] = useState('');
@@ -364,22 +366,62 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   }, [selectedId, loadClients]);
 
   // ---- publish ----
+  // Snapshot the RENDERED JD (the recruiter's per-requisition override if set,
+  // else the live template-filled draft — the exact markdown shown in the Job
+  // spec panel) onto the public job page. Re-running refreshes that snapshot.
+  // The backend returns `job_page` ({ token, url, status, published_at }) on
+  // the serialized brief, which drives the published-state UI below.
   const publish = useCallback(async () => {
     if (!selectedId) return;
     setPublishing(true);
     setError('');
     try {
-      const res = await requisitionApi.publish(selectedId);
-      setBrief((prev) => ({ ...(prev || {}), ...(res || {}) }));
+      const jdMarkdown = (typeof brief?.jd_override === 'string' && brief.jd_override.trim() !== '')
+        ? brief.jd_override
+        : renderJobSpec(template, brief);
+      const res = await requisitionApi.publish(selectedId, jdMarkdown);
+      // The publish response carries the job_page fields (token/url/status/…);
+      // fold them into brief.job_page so the published state renders without a
+      // refetch, and lift status to keep the header chip in sync.
+      setBrief((prev) => ({
+        ...(prev || {}),
+        status: res?.status ?? prev?.status,
+        job_page: res?.token
+          ? { token: res.token, url: res.url, status: res.status, published_at: res.published_at }
+          : (prev?.job_page || null),
+      }));
       await loadList();
     } catch {
       setError('Publish failed — resolve any missing required fields and try again.');
     } finally {
       setPublishing(false);
     }
-  }, [selectedId, loadList]);
+  }, [selectedId, loadList, brief, template]);
 
-  const published = isPublished(brief?.status);
+  // The published job page (token/url/status/published_at) or null. Drives the
+  // header's published state on load and after a (re-)publish.
+  const jobPage = brief?.job_page || null;
+  // Prefer the backend-supplied absolute URL; fall back to building the
+  // /job/:token link off the current origin so Copy/View always work.
+  const jobPageUrl = jobPage
+    ? (jobPage.url || (typeof window !== 'undefined' ? `${window.location.origin}/job/${jobPage.token}` : `/job/${jobPage.token}`))
+    : '';
+
+  const copyJobUrl = useCallback(async () => {
+    if (!jobPageUrl) return;
+    try {
+      await navigator.clipboard.writeText(jobPageUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setError('Could not copy the link — select and copy it manually.');
+    }
+  }, [jobPageUrl]);
+
+  // Reset the transient "Copied" tick when switching requisitions.
+  useEffect(() => { setCopied(false); }, [selectedId]);
+
+  const published = Boolean(jobPage) || isPublished(brief?.status);
   const canSend = (composer.trim() || attachments.length > 0) && !turnInFlight;
   // Multiple-choice quick replies for the latest agent turn (tap instead of type).
   const lastMsg = messages.length ? messages[messages.length - 1] : null;
@@ -446,11 +488,40 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     <span>{Math.max(0, Math.min(100, Number(brief.completeness) || 0))}% complete</span>
                   </div>
                 </div>
-                {published ? (
-                  <span className="rq-published-flag"><CheckCircle2 size={16} /> Published to role</span>
+                {jobPage ? (
+                  <div className="rq-published">
+                    <div className="rq-published-top">
+                      <span className="rq-published-flag"><Check size={15} /> Published</span>
+                      <a
+                        className="rq-published-url"
+                        href={jobPageUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={jobPageUrl}
+                      >
+                        {jobPageUrl}
+                      </a>
+                    </div>
+                    <div className="rq-published-actions">
+                      <button type="button" className="rq-btn-sm is-ghost" onClick={copyJobUrl}>
+                        {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? 'Copied' : 'Copy'}
+                      </button>
+                      <a
+                        className="rq-btn-sm is-ghost"
+                        href={jobPageUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <ExternalLink size={13} /> View job page
+                      </a>
+                      <button type="button" className="rq-btn-sm is-ghost" onClick={publish} disabled={publishing}>
+                        {publishing ? <span className="rq-spinner" /> : <RefreshCw size={13} />} Re-publish
+                      </button>
+                    </div>
+                  </div>
                 ) : (
                   <button type="button" className="rq-publish-btn" onClick={publish} disabled={publishing}>
-                    {publishing ? <span className="rq-spinner" /> : <Rocket size={15} />} Publish → role
+                    {publishing ? <span className="rq-spinner" /> : <Rocket size={15} />} Publish job page
                   </button>
                 )}
               </header>

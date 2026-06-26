@@ -1,0 +1,69 @@
+/* Public careers-style job posting (/job/:token). Centered single-column
+   document on the global purple tokens — no recruiter chrome. Mirrors the
+   public Top-report page (TopReportPage.css) conventions. */
+.pjp-wrap {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 48px 20px 80px;
+  min-height: 100vh;
+  background: var(--bg, #fff);
+}
+.pjp-brand {
+  font-weight: 800;
+  font-size: 20px;
+  letter-spacing: -0.01em;
+  color: var(--ink, #1c1830);
+  margin-bottom: 28px;
+}
+.pjp-brand span {
+  color: var(--purple, #6d28d9);
+}
+.pjp-head {
+  margin-bottom: 28px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--line, #ece9f3);
+}
+.pjp-org {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--purple, #6d28d9);
+  margin: 0 0 8px;
+}
+.pjp-title {
+  font-family: var(--font-display, inherit);
+  font-size: 30px;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0;
+  color: var(--ink, #1c1830);
+}
+.pjp-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-top: 14px;
+}
+.pjp-meta-item {
+  font-size: 13.5px;
+  color: var(--muted, #6b6480);
+  position: relative;
+}
+/* Middot separators between meta items. */
+.pjp-meta-item:not(:last-child)::after {
+  content: '·';
+  position: absolute;
+  right: -9px;
+  color: var(--mute-2, #b8b2c8);
+}
+.pjp-body {
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--ink-2, #2a2640);
+}
+.pjp-muted {
+  font-size: 14px;
+  color: var(--muted, #6b6480);
+  padding: 48px 0;
+}

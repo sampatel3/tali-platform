@@ -197,6 +197,41 @@
   color: var(--purple-2);
 }
 
+/* Published state: shareable URL + Copy / View / Re-publish, right-aligned in
+   the requisition header. */
+.rq-published {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+.rq-published-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+}
+.rq-published-url {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--purple-2);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 340px;
+}
+.rq-published-url:hover { text-decoration: underline; }
+.rq-published-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* The View link is an <a> styled as a small button — keep it on the row. */
+a.rq-btn-sm { text-decoration: none; }
+
 .rq-split {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);

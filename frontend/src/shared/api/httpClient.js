@@ -21,6 +21,13 @@ export const viewShareLink = (token) =>
 export const viewTopReport = (token) =>
   axios.get(`${API_URL}/report/${encodeURIComponent(token)}`);
 
+// Public unauth job posting — the careers-style page a published requisition
+// links to. Lives UNDER /api/v1 (unlike the share/report endpoints), but we
+// still use a bare axios.get rather than the shared `api` instance so the
+// recruiter's JWT is never attached: anyone with the link can read it.
+export const viewPublicJob = (token) =>
+  axios.get(`${API_URL}/api/v1/public/job/${encodeURIComponent(token)}`);
+
 const isAuthEndpoint = (url = '') => (
   url.includes('/auth/jwt/login')
   || url.includes('/auth/register')
@@ -44,6 +51,7 @@ const isPublicPath = (pathname = '', search = '') => {
     || pathname.startsWith('/report/')
     || pathname.startsWith('/assess/')
     || pathname.startsWith('/assessment/')
+    || pathname.startsWith('/job/')
     || pathname.startsWith('/showcase/')) {
     return true;
   }

@@ -136,14 +136,18 @@ def test_open_job_count_reflects_non_applied_assigned_requisitions(client):
     listed = {c["id"]: c for c in client.get("/api/v1/clients", headers=headers).json()}
     assert listed[client_id]["open_job_count"] == 2
 
-    # Publishing b1 materializes it (status -> 'applied'); it stops being "open".
+    # Publishing b1 now creates a shareable PUBLIC job page (status 'open') and
+    # deliberately leaves the brief editable (status unchanged), so the
+    # requisition stays "open" and the count is unchanged.
     client.patch(f"/api/v1/requisitions/{b1}", json={"title": "Eng"}, headers=headers)
-    pub = client.post(f"/api/v1/requisitions/{b1}/publish", headers=headers)
+    pub = client.post(
+        f"/api/v1/requisitions/{b1}/publish", json={"jd_markdown": "# Eng"}, headers=headers
+    )
     assert pub.status_code == 200, pub.text
-    assert pub.json()["status"] == "applied"
+    assert pub.json()["status"] == "open"
 
     listed = {c["id"]: c for c in client.get("/api/v1/clients", headers=headers).json()}
-    assert listed[client_id]["open_job_count"] == 1
+    assert listed[client_id]["open_job_count"] == 2
 
 
 # --------------------------------------------------------------------------- #

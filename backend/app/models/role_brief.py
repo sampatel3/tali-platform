@@ -123,3 +123,11 @@ class RoleBrief(Base):
 
     role = relationship("Role")
     client = relationship("Client")
+    # The PUBLIC job page published from this brief (one-per-brief, None until
+    # the recruiter publishes). View-only: the page is written via
+    # ``publish_job_page`` (which sets brief_id directly), never through here.
+    job_page = relationship(
+        "JobPage",
+        uselist=False,
+        viewonly=True,
+    )
