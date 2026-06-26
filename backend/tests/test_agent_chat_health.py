@@ -101,9 +101,14 @@ def _app(
     assessment=None,
     engine="2.1.0",
     cv_match_score=None,
+    schema="v3",
 ):
     """One open application. ``assessment`` is {criterion_id: status} folded into
-    the stored requirements_assessment so the criterion scan can read it."""
+    the stored requirements_assessment so the criterion scan can read it.
+
+    ``schema`` selects the stored row shape: "v3" keys rows by
+    ``requirement_id = "crit_<id>"``; "v4" keys them by an integer
+    ``criterion_id`` (the newer cv_match_v4), with no ``requirement_id``."""
     cand = Candidate(
         organization_id=org.id, email=f"{name}-{id(db)}-{score}@x.test", full_name=name
     )
@@ -111,10 +116,18 @@ def _app(
     db.flush()
     details = {"engine_version": engine}
     if assessment:
-        details["requirements_assessment"] = [
-            {"requirement_id": f"crit_{cid}", "status": st, "reasoning": "r"}
-            for cid, st in assessment.items()
-        ]
+        if schema == "v4":
+            details["scoring_version"] = "cv_match_v4"
+            details["requirements_assessment"] = [
+                {"criterion_id": cid, "criterion_text": "c", "must_have": True,
+                 "status": st, "cv_quote": None, "interview_probe": "probe"}
+                for cid, st in assessment.items()
+            ]
+        else:
+            details["requirements_assessment"] = [
+                {"requirement_id": f"crit_{cid}", "status": st, "reasoning": "r"}
+                for cid, st in assessment.items()
+            ]
     app = CandidateApplication(
         organization_id=org.id,
         candidate_id=cand.id,
@@ -200,6 +213,28 @@ def test_dead_must_have_flagged(db):
     assert top["type"] == "dead_requirement"
     assert top["criterion_id"] == crit.id
     assert top["met"] == 1 and top["assessed"] == 10
+    assert top["severity"] == "high"
+
+
+def test_dead_must_have_flagged_on_cv_match_v4_rows(db):
+    """The role-health scan counts statuses via the shared ``_entry_for``. v4 rows
+    key on an integer ``criterion_id`` (no ``requirement_id``) — without v4
+    matching every candidate would count as ``not_assessed``, the pool would look
+    unassessed, and the dead-requirement finding would never fire."""
+    org = _org(db)
+    role = _role(db, org, threshold=70)
+    crit = _crit(db, role, text="Based in UAE", bucket="must")
+    for i in range(10):
+        status = "met" if i == 0 else "missing"
+        _app(db, org, role, score=80 if i % 2 == 0 else 60, name=f"V{i}",
+             assessment={crit.id: status}, schema="v4")
+    db.commit()
+
+    out = health.role_health_check(db, role)
+    top = out["top_finding"]
+    assert top["type"] == "dead_requirement"
+    assert top["criterion_id"] == crit.id
+    assert top["met"] == 1 and top["assessed"] == 10  # v4 rows were counted
     assert top["severity"] == "high"
 
 

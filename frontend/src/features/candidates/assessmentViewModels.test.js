@@ -100,6 +100,59 @@ describe('assessmentViewModels', () => {
     expect(model.integrityFlags).toEqual([]);
   });
 
+  it('reads cv_match_v4 requirement rows (criterion_text / cv_quote / must_have / screening_recommendation)', () => {
+    // The newer scoring pipeline renamed requirement→criterion_text,
+    // evidence→cv_quote, impact→screening_recommendation/interview_probe and
+    // priority→must_have. buildRoleFitEvidenceModel feeds every role-fit
+    // renderer (RoleFitEvidenceSections on the candidate page AND /assessments/:id
+    // via CandidateDetailSecondaryTabs), so it must read the new names or each
+    // requirement silently drops out of the panel.
+    const completedAssessment = {
+      status: 'completed',
+      cv_job_match_details: {
+        score_scale: '0-100',
+        requirements_assessment: [
+          {
+            criterion_id: 1,
+            criterion_text: 'Practical Lake Formation experience',
+            must_have: true,
+            status: 'missing',
+            cv_quote: null,
+            screening_recommendation: 'borderline',
+            interview_probe: 'Ask for a concrete Lake Formation permissions example.',
+          },
+          {
+            criterion_id: 2,
+            criterion_text: 'Expert-level Terraform',
+            must_have: false,
+            status: 'met',
+            cv_quote: 'Authored the org-wide Terraform module registry.',
+            screening_recommendation: 'advance',
+            interview_probe: '',
+          },
+        ],
+      },
+    };
+
+    const model = buildRoleFitEvidenceModel({ application: null, completedAssessment });
+    const reqs = model.requirementsAssessment;
+    expect(reqs).toHaveLength(2);
+    // No row drops out and none has an empty requirement label (the crash class).
+    expect(reqs.map((r) => r.requirement)).toEqual([
+      'Practical Lake Formation experience',
+      'Expert-level Terraform',
+    ]);
+    const gap = reqs.find((r) => r.requirement === 'Practical Lake Formation experience');
+    expect(gap.priority).toBe('must_have'); // from must_have:true
+    expect(gap.status).toBe('missing');
+    expect(gap.impact).toBe('borderline'); // from screening_recommendation
+    const strength = reqs.find((r) => r.requirement === 'Expert-level Terraform');
+    expect(strength.priority).toBe('nice_to_have'); // from must_have:false
+    expect(strength.evidence).toBe('Authored the org-wide Terraform module registry.'); // from cv_quote
+    // firstRequirementGap drives the "what to probe" card — must resolve to the gap.
+    expect(model.firstRequirementGap.requirement).toBe('Practical Lake Formation experience');
+  });
+
   it('prefers completed assessment evidence over application CV-fit data', () => {
     const application = {
       cv_match_score: 61,
