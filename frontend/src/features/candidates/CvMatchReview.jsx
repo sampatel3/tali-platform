@@ -6,19 +6,17 @@
 // page file under the frontend architecture line cap.
 import React from 'react';
 
-import { asArray, extractRequirementEvidence, extractRequirementKey } from './candidatesUiUtils';
+import {
+  asArray,
+  extractRequirementEvidence,
+  extractRequirementKey,
+  reqGradeKey,
+  requirementGrade,
+} from './candidatesUiUtils';
 
 // Status order for the unified requirement list: positives (met) first, then
 // partial, then unclear, with gaps last.
 const REQ_STATUS_RANK = { met: 0, partially_met: 1, unknown: 2, missing: 3 };
-
-const reqStatusKey = (status) => {
-  const value = String(status || '').toLowerCase();
-  if (value === 'met') return 'met';
-  if (value === 'partially_met') return 'partially_met';
-  if (value === 'unknown') return 'unknown';
-  return 'missing';
-};
 
 // Purple-forward, not traffic-light: "met" reads as brand purple so a strong
 // candidate isn't a wall of green ticks. Only true gaps go amber.
@@ -52,10 +50,10 @@ const CvMatchReview = ({
     ];
   // Stable sort keeps the existing recruiter-first / priority order within a status.
   const ordered = [...items].sort(
-    (a, b) => REQ_STATUS_RANK[reqStatusKey(a?.status)] - REQ_STATUS_RANK[reqStatusKey(b?.status)]
+    (a, b) => REQ_STATUS_RANK[reqGradeKey(a)] - REQ_STATUS_RANK[reqGradeKey(b)]
   );
   const counts = ordered.reduce((acc, item) => {
-    const key = reqStatusKey(item?.status);
+    const key = reqGradeKey(item);
     if (key === 'met') acc.met += 1;
     else if (key === 'partially_met') acc.partial += 1;
     else acc.missing += 1;
@@ -91,8 +89,9 @@ const CvMatchReview = ({
 
           <div className="cvm-list">
             {ordered.map((item, index) => {
-              const key = reqStatusKey(item?.status);
+              const key = reqGradeKey(item);
               const meta = REQ_STATUS_META[key] || REQ_STATUS_META.missing;
+              const grade = requirementGrade(item);
               const evidence = item?.impact
                 || extractRequirementEvidence(item)
                 || item?.evidence_quote
@@ -108,6 +107,23 @@ const CvMatchReview = ({
                     <div className="cvm-req-top">
                       <span className="cvm-req-name">{item.requirement || item.criterion_text || 'Requirement'}</span>
                       {isRecruiter ? <span className="cvm-tag">Recruiter</span> : null}
+                      {grade !== null ? (
+                        <span
+                          className="cvm-grade"
+                          title="Evidence-graded fit for this requirement (0-100) — this is what the score uses."
+                          style={{
+                            marginLeft: 'auto',
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: '0.75rem',
+                            fontWeight: 700,
+                            color: 'var(--ink)',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {grade}
+                          <span style={{ color: 'var(--mute)', fontWeight: 500 }}>/100</span>
+                        </span>
+                      ) : null}
                     </div>
                     <span className="cvm-ev">{evidence}</span>
                   </div>

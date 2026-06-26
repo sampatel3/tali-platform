@@ -464,16 +464,10 @@ const buildIntegrityFlags = (details) => {
   // the Workable form"), so it drowned the real signals. Mirrors the backend
   // (fraud_detection.build_integrity_warnings). Revive only behind a stricter matcher.
 
-  // Prong 1: a strong match whose must-haves aren't backed by verbatim CV
-  // evidence — the spec-tailoring tell. A high match alone is never flagged.
-  const gr = sig.grounding && typeof sig.grounding === 'object' ? sig.grounding : null;
-  if (gr && gr.ungrounded_match) {
-    const names = Array.isArray(gr.ungrounded_requirements) ? gr.ungrounded_requirements.filter(Boolean) : [];
-    const n = names.length || Math.max(0, Number(gr.met_must_haves || 0) - Number(gr.grounded_must_haves || 0));
-    flags.push(
-      `${n} must-have${n === 1 ? '' : 's'} scored as met but with no supporting evidence in the CV — confirm they're genuine, not keyword-matching.`,
-    );
-  }
+  // NOTE: grounding (un-evidenced "met" must-haves) is intentionally NOT a flag.
+  // Each requirement is graded 0-100 and that grade drives the score and is shown
+  // per requirement, so a thinly-evidenced "met" already grades low — a separate
+  // warning duplicated it. Mirrors the backend (fraud_detection).
 
   // CV-internal coherence.
   const ei = sig.experience_inflation && typeof sig.experience_inflation === 'object' ? sig.experience_inflation : null;

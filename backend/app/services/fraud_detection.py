@@ -1007,8 +1007,12 @@ def aggregate_triangulation(integrity_signals: dict[str, Any] | None) -> dict[st
         deterministic.append("impossible_timeline")
 
     # Soft, independent corroboration axes.
-    if _get("grounding").get("ungrounded_match"):
-        soft.append("ungrounded_must_haves")
+    # NOTE: grounding (must-haves scored "met" without verbatim CV evidence) is
+    # NOT counted here. Each requirement is already graded 0-100 by the focused
+    # ``cv_matching.graded`` pass, and that grade — which directly drives the
+    # score and is shown per requirement — already reflects weak evidence (a
+    # thinly-evidenced "met" grades low). A separate grounding warning beside it
+    # was redundant and confusing, so it's out of the integrity readout.
     if _get("jd_shingle").get("triggered"):
         soft.append("jd_mirroring")
     # NOTE: the CV↔Workable history diff is deliberately NOT counted here. In
@@ -1087,13 +1091,9 @@ def build_integrity_warnings(integrity_signals: dict[str, Any] | None) -> list[s
         if detail:
             out.append(f"Timeline: {detail}")
 
-    gr = _g("grounding")
-    if gr.get("ungrounded_match"):
-        names = [n for n in (gr.get("ungrounded_requirements") or []) if n]
-        n = len(names) or max(0, int(gr.get("met_must_haves") or 0) - int(gr.get("grounded_must_haves") or 0))
-        # Keep it short — the specific requirements already appear in the
-        # requirements list, so here we flag only the count + the meaning.
-        out.append(f"{n} must-have{'' if n == 1 else 's'} scored as met but with no supporting evidence in the CV — confirm they're genuine, not keyword-matching.")
+    # Grounding (un-evidenced "met" must-haves) is intentionally not a warning —
+    # see aggregate_triangulation: each requirement's 0-100 grade already encodes
+    # evidence strength and drives the score, so a separate warning duplicated it.
 
     sh = _g("jd_shingle")
     if sh.get("triggered"):
