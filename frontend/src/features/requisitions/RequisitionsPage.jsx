@@ -29,7 +29,7 @@ function List({ items }) {
   );
 }
 
-export default function RequisitionsPage() {
+export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const [briefs, setBriefs] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [brief, setBrief] = useState(null);
@@ -105,6 +105,8 @@ export default function RequisitionsPage() {
   const openQuestions = (brief && brief.agent_state && brief.agent_state.open_questions) || [];
 
   return (
+    <>
+      {NavComponent ? <NavComponent currentPage="requisitions" onNavigate={onNavigate} /> : null}
     <div className="req-page" style={{ display: 'flex', gap: 20, padding: 20 }}>
       <aside style={{ width: 260, flex: '0 0 auto' }}>
         <button className="req-btn" onClick={createReq} disabled={busy}>
@@ -189,8 +191,9 @@ export default function RequisitionsPage() {
         )}
       </main>
     </div>
+    </>
   );
-}
+};
 
 function salary(b) {
   if (!b.salary_min && !b.salary_max) return null;
