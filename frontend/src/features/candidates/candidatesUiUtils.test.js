@@ -71,7 +71,31 @@ import {
   resolveCvMatchDetails,
   extractRequirementEvidence,
   extractRequirementKey,
+  normalizeRequirementRow,
 } from './candidatesUiUtils';
+
+describe('normalizeRequirementRow (cv_match schema shim)', () => {
+  it('backfills requirement/requirement_id from the criterion_* schema', () => {
+    const out = normalizeRequirementRow({
+      criterion_text: 'Practical Lake Formation experience',
+      criterion_id: 'crit_3',
+      status: 'missing',
+      screening_recommendation: 'Probe live.',
+    });
+    expect(out.requirement).toBe('Practical Lake Formation experience');
+    expect(out.requirement_id).toBe('crit_3');
+    expect(out.impact).toBe('Probe live.');
+  });
+
+  it('leaves legacy rows untouched and never yields undefined requirement', () => {
+    const legacy = normalizeRequirementRow({ requirement: 'X', requirement_id: 'r1', status: 'met' });
+    expect(legacy.requirement).toBe('X');
+    // A row with neither field gets an empty string, never undefined — this is
+    // what stops `requirement.toLowerCase()` from throwing downstream.
+    expect(normalizeRequirementRow({ status: 'missing' }).requirement).toBe('');
+    expect(normalizeRequirementRow(null)).toBe(null);
+  });
+});
 
 describe('resolveCvMatchDetails', () => {
   it('prefers a completed-assessment snapshot when present', () => {
@@ -107,6 +131,21 @@ describe('resolveCvMatchDetails', () => {
   it('returns an empty object when nothing matches', () => {
     expect(resolveCvMatchDetails({})).toEqual({});
     expect(resolveCvMatchDetails()).toEqual({});
+  });
+
+  it('normalizes criterion_* requirement rows so no row has an undefined requirement', () => {
+    const result = resolveCvMatchDetails({
+      completedAssessment: {
+        cv_job_match_details: {
+          requirements_assessment: [
+            { criterion_text: 'Based in the UAE', criterion_id: 'crit_1', status: 'missing' },
+            { requirement: 'Legacy row', requirement_id: 'r2', status: 'met' },
+          ],
+        },
+      },
+    });
+    expect(result.requirements_assessment.map((r) => r.requirement)).toEqual(['Based in the UAE', 'Legacy row']);
+    for (const row of result.requirements_assessment) expect(typeof row.requirement).toBe('string');
   });
 });
 

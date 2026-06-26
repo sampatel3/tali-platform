@@ -817,7 +817,7 @@ const CvMatchReview = ({
                   </span>
                   <div className="cvm-req">
                     <div className="cvm-req-top">
-                      <span className="cvm-req-name">{item.requirement || item}</span>
+                      <span className="cvm-req-name">{item.requirement || item.criterion_text || 'Requirement'}</span>
                       {isRecruiter ? <span className="cvm-tag">Recruiter</span> : null}
                     </div>
                     <span className="cvm-ev">{evidence}</span>
@@ -1299,10 +1299,15 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       const bSt = STATUS_RANK[String(b?.status || '').toLowerCase()] ?? 3;
       return aSt - bSt;
     });
-    return ranked.slice(0, 3).map((item) => ({
-      title: item.requirement,
-      description: item.impact || item.reasoning || 'Validate this gap during the panel loop.',
-    }));
+    // Drop rows without requirement text — interviewQuestions calls
+    // item.title.toLowerCase() unguarded (crashed on candidate 55112/140).
+    return ranked
+      .filter((item) => item.requirement)
+      .slice(0, 3)
+      .map((item) => ({
+        title: item.requirement,
+        description: item.impact || item.reasoning || 'Validate this gap during the panel loop.',
+      }));
   }, [missingRequirements]);
   const interviewQuestions = useMemo(() => {
     const override = application?.interview_prep;
