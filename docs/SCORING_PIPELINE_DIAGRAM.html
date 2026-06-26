@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tali — End-to-end candidate scoring pipeline</title>
+<style>
+  body{margin:0;background:#fbfbfd;padding:32px 20px;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .page-h{max-width:760px;margin:0 auto 18px}
+  .page-h h1{font-size:19px;margin:0 0 4px;color:#1d2127}
+  .page-h p{font-size:13px;color:#6b7280;margin:0}
+  .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0}
+  .pipe-wrap{--spine:#6d4aff;--spine-bg:#f3f0ff;--spine-bd:#d9cffb;--adv:#5b6b7c;--adv-bg:#f4f6f8;--adv-bd:#d6dde4;--ink:var(--color-text-primary,#1d2127);--mut:var(--color-text-secondary,#6b7280);font-family:inherit;color:var(--ink);max-width:760px;margin:0 auto;font-size:13px;line-height:1.45}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin:0 0 12px;font-size:12px;color:var(--mut)}
+  .legend .lg{display:flex;align-items:center;gap:6px}
+  .sw{width:14px;height:14px;border-radius:4px;display:inline-block}
+  .sw.spine{background:var(--spine-bg);border:2px solid var(--spine)}
+  .sw.adv{background:var(--adv-bg);border:2px dashed var(--adv)}
+  .sw.art{background:#fff;border:1px solid var(--mut)}
+  .arts{display:flex;flex-wrap:wrap;gap:7px;justify-content:center;margin-bottom:4px}
+  .art{background:#fff;border:1px solid var(--adv-bd);border-radius:999px;padding:4px 11px;font-size:12px;font-weight:600;color:var(--ink)}
+  .art.dim{opacity:.5;border-style:dashed;font-weight:500}
+  .ax{text-align:center;color:var(--mut);font-size:11px;margin:2px 0 10px}
+  .card{border-radius:12px;padding:12px 14px;cursor:pointer;transition:transform .08s,box-shadow .08s}
+  .card:hover{transform:translateY(-1px);box-shadow:0 3px 12px rgba(20,20,40,.08)}
+  .card.spine{background:var(--spine-bg);border:2px solid var(--spine-bd)}
+  .card.adv{background:var(--adv-bg);border:2px dashed var(--adv-bd)}
+  .card.big{box-shadow:0 2px 0 var(--spine-bd)}
+  .card.out{background:#fff;border:1.5px solid var(--adv-bd);text-align:center;cursor:default}
+  .card.out.adv{background:var(--adv-bg);border-style:dashed}
+  .ch{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+  .ch h3{font-size:14px;margin:0;font-weight:700}
+  .ch h3 small{font-weight:500;color:var(--mut)}
+  .n{width:21px;height:21px;border-radius:6px;background:var(--spine);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+  .card.adv .n{background:var(--adv)}
+  .tag{margin-left:auto;font-size:10px;font-weight:700;letter-spacing:.04em;padding:3px 8px;border-radius:999px;text-transform:uppercase}
+  .tag.prep{background:#eceff3;color:var(--adv)}
+  .tag.gate{background:#fde9d6;color:#a85b17}
+  .tag.score{background:var(--spine);color:#fff}
+  .tag.auto{background:#e3dcff;color:var(--spine)}
+  .tag.advt{background:#e7edf2;color:var(--adv)}
+  .uses{font-size:11.5px;color:var(--mut);margin-bottom:6px}
+  .uses b{color:var(--ink);font-weight:600;text-transform:uppercase;letter-spacing:.03em;font-size:10px}
+  .card ul{margin:0;padding-left:17px}
+  .card li{margin:2px 0}
+  .card li.warn{color:#a85b17;font-weight:600;list-style:none;margin-left:-12px}
+  .card li.warn u{text-decoration-thickness:2px}
+  code{background:#fff;border:1px solid var(--adv-bd);border-radius:4px;padding:0 4px;font-size:11.5px}
+  .card.adv code{background:#fff}
+  .chg{background:var(--spine);color:#fff;font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:999px;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}
+  .live{background:#d8f5e3;color:#1c7a45;font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:999px;letter-spacing:.03em}
+  .arrow{text-align:center;color:var(--spine);font-size:13px;margin:5px 0}
+  .amut{color:var(--mut);font-size:11px;font-weight:600}
+  .splitarrow{display:flex;justify-content:space-between;align-items:center;color:var(--spine);font-weight:700;font-size:12px;margin:6px 4px}
+  .splitarrow .to-adv{color:var(--adv);font-weight:600}
+  .cols{display:flex;gap:14px;align-items:flex-start}
+  .col-left,.col-right{flex:1;min-width:0;display:flex;flex-direction:column}
+  .col-left .arrow,.col-right .arrow{margin:6px 0}
+  .foot{margin-top:14px;padding:11px 13px;background:var(--adv-bg);border:1px dashed var(--adv-bd);border-radius:10px;font-size:12px;color:var(--mut)}
+  .foot code,.foot b{color:var(--ink)}
+  @media(max-width:560px){.cols{flex-direction:column}}
+</style>
+</head>
+<body>
+<div class="page-h">
+  <h1>Tali — end-to-end candidate scoring pipeline</h1>
+  <p>Purple spine = the scoring engine (changes the score / decision). Slate = the integrity / fraud layer (advisory flags only).</p>
+</div>
+
+<div class="pipe-wrap">
+  <h2 class="sr-only">End-to-end candidate scoring pipeline for Tali: artefacts (CV, job spec, requirements, Workable, knowledge graph, GitHub) flow through ingest, a pre-screen gate, the holistic Sonnet score, a synchronous integrity layer, the deterministic decision, and an async corroboration step. The purple spine changes the score and decision; the slate integrity layer is advisory flags only.</h2>
+
+  <div class="legend">
+    <span class="lg"><i class="sw spine"></i>Scoring spine — changes the <b>score / decision</b></span>
+    <span class="lg"><i class="sw adv"></i>Integrity layer — <b>advisory flags</b> (no score/decision change today)</span>
+    <span class="lg"><i class="sw art"></i>Artefact / data source</span>
+  </div>
+
+  <!-- ARTEFACTS -->
+  <div class="arts">
+    <span class="art">📄 CV (PDF → cv_text → cv_sections)</span>
+    <span class="art">📋 Job spec (JD)</span>
+    <span class="art">✅ Requirements (criteria + derived)</span>
+    <span class="art">🗂️ Workable (answers, social, history)</span>
+    <span class="art">🕸️ Knowledge graph (Neo4j)</span>
+    <span class="art">🐙 GitHub API</span>
+    <span class="art dim">🌐 Internet search — not wired (deferred)</span>
+  </div>
+  <div class="ax">artefacts feed the stages below ↓</div>
+
+  <!-- STAGE 0 -->
+  <div class="card spine" onclick="sendPrompt('Explain the CV ingest + document hygiene stage in detail')">
+    <div class="ch"><span class="n">0</span><h3>Ingest &amp; hygiene</h3><span class="tag prep">prep</span></div>
+    <div class="uses"><b>uses</b> CV · Workable</div>
+    <ul>
+      <li>Parse CV → <code>cv_sections</code> (skills, experience, <b>links → GitHub URL</b>)</li>
+      <li>Grounding → <code>company_unverified</code> on employers</li>
+      <li><b>Document hygiene</b>: strip hidden-text / prompt-injection before any LLM <span class="live">LIVE</span></li>
+    </ul>
+  </div>
+  <div class="arrow">▼</div>
+
+  <!-- STAGE 1 -->
+  <div class="card spine" onclick="sendPrompt('Explain the pre-screen gate stage in detail')">
+    <div class="ch"><span class="n">1</span><h3>Pre-screen gate <small>· cheap Haiku</small></h3><span class="tag gate">GATE</span></div>
+    <div class="uses"><b>uses</b> CV · Job spec · Requirements · Workable answers</div>
+    <ul>
+      <li><b>Copy-paste</b> CV↔JD (deterministic) → <b>HARD CAP</b> if lifted <span class="chg">changes score</span></li>
+      <li>Haiku LLM screen → score vs <code>PRE_SCREEN_THRESHOLD (30)</code></li>
+      <li>Below threshold → <b>FILTERED — stops here</b>, no expensive score</li>
+    </ul>
+  </div>
+  <div class="arrow">▼ <span class="amut">survivors only</span></div>
+
+  <!-- STAGE 2 -->
+  <div class="card spine big" onclick="sendPrompt('Explain the holistic Sonnet scoring stage in detail')">
+    <div class="ch"><span class="n">2</span><h3>Holistic score <small>· Sonnet ×2</small></h3><span class="tag score">THE SCORE</span></div>
+    <div class="uses"><b>uses</b> CV (sanitised) · Job spec · derived Requirements · Workable</div>
+    <ul>
+      <li>Derive atomic requirements + core capability <small>(cached per JD)</small></li>
+      <li>Call 1 → calibrated <b><code>role_fit_score</code> 0–100</b></li>
+      <li>Call 2 → report: snapshot, dimensions, per-requirement grades + <b>Citations evidence</b></li>
+      <li><b>Integrity penalty</b> (timeline + unverified claims, bounded) <span class="chg">changes score</span> <span class="live">LIVE</span></li>
+    </ul>
+  </div>
+  <div class="splitarrow"><span>▼ score</span><span class="to-adv">└─ signals ─▶</span></div>
+
+  <!-- two columns: decision spine (left) + integrity advisory (right) -->
+  <div class="cols">
+    <div class="col-left">
+      <!-- decision -->
+      <div class="card spine" onclick="sendPrompt('Explain how the deterministic decision is computed')">
+        <div class="ch"><span class="n">3</span><h3>Decision</h3><span class="tag auto">AUTO</span></div>
+        <div class="uses"><b>uses</b> <code>role_fit_score</code> vs threshold</div>
+        <ul>
+          <li>Deterministic verdict → <b>Send / Hold / Reject</b></li>
+          <li class="warn">Reads the <b>score only</b> — <u>not</u> the integrity flags →</li>
+        </ul>
+      </div>
+      <div class="arrow">▼</div>
+      <div class="card out">
+        <div class="ch"><h3>🏁 Decision Hub</h3></div>
+        <div class="uses">recruiter acts on the verdict</div>
+      </div>
+    </div>
+
+    <div class="col-right">
+      <!-- sync integrity -->
+      <div class="card adv" onclick="sendPrompt('Explain the synchronous integrity layer and triangulation')">
+        <div class="ch"><span class="n">A</span><h3>Integrity layer <small>· $0 deterministic</small></h3><span class="tag advt">ADVISORY</span></div>
+        <div class="uses"><b>uses</b> score output · CV · Workable</div>
+        <ul>
+          <li>Grounding coverage (high match × low evidence = spec-gaming)</li>
+          <li>JD-mirroring · CV↔Workable diff · unverified employers</li>
+          <li>Coherence: years-vs-career-span · tech anachronism</li>
+          <li>→ <b>triangulation verdict</b> (ok / review / strong_review)</li>
+        </ul>
+      </div>
+      <div class="arrow">▼ <span class="amut">if score ≥ 55 AND flagged</span></div>
+      <!-- async enrichment -->
+      <div class="card adv" onclick="sendPrompt('Explain the async graph + GitHub corroboration enrichment')">
+        <div class="ch"><span class="n">B</span><h3>Async corroboration</h3><span class="tag advt">ADVISORY</span></div>
+        <div class="uses"><b>uses</b> 🕸️ Knowledge graph · 🐙 GitHub API</div>
+        <ul>
+          <li><b>Graph</b>: claimed stack vs what peers at that employer show</li>
+          <li><b>GitHub</b>: repo languages vs claimed skills</li>
+          <li>→ re-triangulate → updates flags <span class="live">ON</span></li>
+        </ul>
+      </div>
+      <div class="arrow">▼</div>
+      <div class="card out adv">
+        <div class="ch"><h3>🔎 "Verify before interview" panel</h3></div>
+        <div class="uses">flags shown to recruiter — does <b>not</b> auto-act</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">The integrity layer (right) runs <b>alongside</b> the score, never inside it. Today its flags inform a human; they don't move the <code>role_fit_score</code> or the auto-decision. The dashed link is the one we discussed wiring next (strong_review → Hold-for-review).</div>
+</div>
+
+<script>
+  // Standalone stub: in-chat this sends a follow-up; in the browser it's a no-op.
+  function sendPrompt(){}
+</script>
+</body>
+</html>

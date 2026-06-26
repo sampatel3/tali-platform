@@ -614,6 +614,28 @@ def _score_provenance(app: CandidateApplication) -> dict[str, Any]:
     }
 
 
+def _integrity_summary(app: CandidateApplication) -> dict[str, Any] | None:
+    """The trust band + canonical warnings that sit BESIDE the match score (the
+    "two readouts" model). Sourced from the CV-match integrity_signals; None when
+    nothing was computed. Surfaced in score_summary so every surface (report,
+    lists, kanban, decision hub) reads one canonical object."""
+    details = app.cv_match_details if isinstance(getattr(app, "cv_match_details", None), dict) else {}
+    sig = details.get("integrity_signals") if isinstance(details, dict) else None
+    if not isinstance(sig, dict):
+        return None
+    tri = sig.get("triangulation") if isinstance(sig.get("triangulation"), dict) else {}
+    warnings = [str(w) for w in (sig.get("warnings") or []) if str(w).strip()]
+    band = tri.get("trust_band")
+    if not band and not warnings:
+        return None
+    return {
+        "trust_band": band or "high",
+        "verdict": tri.get("verdict"),
+        "to_verify": int(tri.get("to_verify") or len(warnings)),
+        "warnings": warnings[:12],
+    }
+
+
 def _score_summary_from_active_assessments(
     app: CandidateApplication,
     active_assessments: list[Assessment],
@@ -662,6 +684,7 @@ def _score_summary_from_active_assessments(
         "cv_fit_score": cv_fit_score,
         "requirements_fit_score": requirements_fit_score,
         "score_provenance": _score_provenance(app),
+        "integrity": _integrity_summary(app),
         "role_fit_components": {
             "cv_fit_score": cv_fit_score,
             "requirements_fit_score": requirements_fit_score,
@@ -821,6 +844,7 @@ def score_summary_from_cache(app: CandidateApplication) -> dict[str, Any]:
         "cv_fit_score": cv_fit_score,
         "requirements_fit_score": requirements_fit_score,
         "score_provenance": _score_provenance(app),
+        "integrity": _integrity_summary(app),
         "role_fit_components": {
             "cv_fit_score": cv_fit_score,
             "requirements_fit_score": requirements_fit_score,

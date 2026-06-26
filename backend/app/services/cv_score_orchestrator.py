@@ -1196,6 +1196,7 @@ def _augment_integrity_signals(
         from ..platform.config import settings
         from .fraud_detection import (
             aggregate_triangulation,
+            build_integrity_warnings,
             build_supplementary_fraud_signals,
             detect_experience_inflation,
             detect_tech_anachronism,
@@ -1231,9 +1232,10 @@ def _augment_integrity_signals(
             merged["tech_anachronism"] = anach.to_dict()
 
         # Triangulate the deterministic picture — changes no score, adds the
-        # verdict the "verify before interview" panel reads (and the gate the
-        # async enrichment keys off — only flagged high-matches get a paid fetch).
+        # verdict + trust band the report reads (and the gate the async
+        # enrichment keys off — only flagged high-matches get an enrichment pass).
         merged["triangulation"] = aggregate_triangulation(merged)
+        merged["warnings"] = build_integrity_warnings(merged)
         return merged or None
     except Exception:  # pragma: no cover — never break scoring on a flag
         logger.debug("supplementary fraud signals failed", exc_info=True)

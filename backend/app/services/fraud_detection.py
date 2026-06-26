@@ -1028,10 +1028,90 @@ def aggregate_triangulation(integrity_signals: dict[str, Any] | None) -> dict[st
     else:
         verdict = "ok"
 
+    # Trust band — the recruiter-facing readout that sits BESIDE the match score
+    # (the "two readouts" model). It never lowers the match number itself; it
+    # summarises how much we trust the match is real. Categorical, not another
+    # 0-100 to interpret.
+    trust_band = {"strong_review": "low", "review": "medium", "ok": "high"}[verdict]
+
     return {
         "verdict": verdict,
+        "trust_band": trust_band,
+        "to_verify": len(deterministic) + len(soft),
         "soft_disagreements": soft,
         "deterministic_artifacts": deterministic,
         "corroborations": corroborations,
         "disagreement_count": len(soft),
     }
+
+
+def build_integrity_warnings(integrity_signals: dict[str, Any] | None) -> list[str]:
+    """Canonical, human-readable integrity / corroboration warnings — the ONE
+    place the wording lives. Consumed by the candidate report, the agent-decision
+    surfaces and the summary text (the FE no longer re-derives them). Deterministic
+    artifacts first, then probabilistic disagreements. Warns, never blocks.
+    """
+    sig = integrity_signals if isinstance(integrity_signals, dict) else {}
+
+    def _g(k: str) -> dict[str, Any]:
+        v = sig.get(k)
+        return v if isinstance(v, dict) else {}
+
+    out: list[str] = []
+    dh = _g("document_hygiene")
+    if dh.get("injection_detected"):
+        out.append("Hidden prompt-injection text aimed at the screener was found in the CV file (removed before scoring).")
+    elif dh.get("has_tag_chars"):
+        out.append("Invisible Unicode (Tags-block) characters were embedded in the CV file.")
+    elif int(dh.get("invisible_char_count") or 0) >= 8:
+        out.append(f"{dh['invisible_char_count']} invisible characters were embedded in the CV file.")
+
+    for issue in (_g("timeline").get("issues") or [])[:6]:
+        detail = (issue.get("detail") if isinstance(issue, dict) else str(issue)) or ""
+        if detail:
+            out.append(f"Timeline: {detail}")
+
+    gr = _g("grounding")
+    if gr.get("ungrounded_match"):
+        names = [n for n in (gr.get("ungrounded_requirements") or []) if n]
+        n = len(names) or max(0, int(gr.get("met_must_haves") or 0) - int(gr.get("grounded_must_haves") or 0))
+        tail = f": {', '.join(names)}" if names else ""
+        out.append(f"Strong match but {n} must-have{'' if n == 1 else 's'} not evidenced in the CV{tail} — confirm these are real, not spec-tailoring.")
+
+    sh = _g("jd_shingle")
+    if sh.get("triggered"):
+        out.append(f"CV closely mirrors the job description ({round((float(sh.get('similarity') or 0)) * 100)}% phrase overlap).")
+
+    ue = _g("unverified_employers")
+    if int(ue.get("count") or 0) > 0:
+        names = ", ".join(ue.get("companies") or [])
+        tail = f": {names}" if names else ""
+        out.append(f"{ue['count']} employer name{'' if int(ue['count']) == 1 else 's'} not found verbatim in the CV text{tail}.")
+
+    for issue in (_g("workable_history_diff").get("issues") or [])[:6]:
+        detail = issue.get("detail") if isinstance(issue, dict) else ""
+        if detail:
+            out.append(f"Workable mismatch — {detail}")
+
+    ei = _g("experience_inflation")
+    if ei.get("triggered"):
+        out.append(f"Claims ~{ei.get('years_claimed')} years' experience but the career history spans only ~{ei.get('years_evidenced')} years.")
+
+    for issue in (_g("tech_anachronism").get("issues") or [])[:6]:
+        if isinstance(issue, dict) and issue.get("tool"):
+            out.append(f'Lists "{issue["tool"]}" in a role ending {issue.get("role_end")}, before it existed ({issue.get("release_year")}).')
+
+    gc = _g("graph_corroboration")
+    if gc.get("status") == "anomaly":
+        cos = [
+            c.get("company") for c in (gc.get("companies") or [])
+            if isinstance(c, dict) and c.get("status") == "anomaly" and c.get("company")
+        ]
+        where = ", ".join(cos) if cos else "that employer"
+        out.append(f"Claimed tech stack is unlike what other candidates from {where} show — verify it's genuine, not spec-tailoring.")
+
+    ghc = _g("github")
+    if ghc.get("status") == "not_found":
+        out.append(f"The GitHub link on the CV doesn't resolve (github.com/{ghc.get('username')}) — confirm it's correct.")
+
+    return [str(s).strip() for s in out if str(s).strip()]

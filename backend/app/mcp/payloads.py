@@ -163,6 +163,14 @@ def application_detail(
     payload["cv_text_preview"] = (
         (cv_text[:500] + ("..." if len(cv_text) > 500 else "")) if cv_text else None
     )
+    # Integrity / corroboration — the trust band + canonical warnings so the
+    # agent weighs them when it deliberates (warns, never blocks; same strings
+    # the candidate report shows). E.g. "peers at {employer} don't show {skill}".
+    _sig = app.cv_match_details.get("integrity_signals") if isinstance(getattr(app, "cv_match_details", None), dict) else None
+    if isinstance(_sig, dict):
+        _tri = _sig.get("triangulation") if isinstance(_sig.get("triangulation"), dict) else {}
+        payload["integrity_trust_band"] = _tri.get("trust_band")
+        payload["integrity_warnings"] = [str(w) for w in (_sig.get("warnings") or []) if str(w).strip()][:12]
     return payload
 
 
