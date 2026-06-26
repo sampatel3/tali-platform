@@ -23,6 +23,7 @@ from .cv_match_override import CvMatchOverride
 from .cv_parse_cache import CvParseCache
 from .cv_score_cache import CvScoreCache
 from .prescreen_calibration_sample import PrescreenCalibrationSample
+from .pool_rescore_job import PoolRescoreJob
 from .cv_score_job import (
     CvScoreJob,
     SCORE_JOB_DONE,
@@ -187,6 +188,7 @@ __all__ = [
     "CvScoreCache",
     "PrescreenCalibrationSample",
     "CvScoreJob",
+    "PoolRescoreJob",
     "SCORE_JOB_PENDING",
     "SCORE_JOB_RUNNING",
     "SCORE_JOB_DONE",

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import './CandidateEvidenceCard.css';
+import PoolRescore from './PoolRescore';
 
 const QUOTE_CAP = 180;
 // Show at most this many verbatim quotes per criterion — enough to back the
@@ -283,6 +284,17 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
           </li>
         ))}
       </ol>
+
+      {isRediscovery &&
+      Array.isArray(data.rescore_candidate_ids) &&
+      data.rescore_candidate_ids.length ? (
+        <PoolRescore
+          requirementText={(spec && spec.query) || ''}
+          candidates={candidates.filter((c) =>
+            data.rescore_candidate_ids.includes(c.application_id),
+          )}
+        />
+      ) : null}
 
       {showReportLink && data.report_url ? (
         <a className="ev-report-link" href={data.report_url} target="_blank" rel="noreferrer">

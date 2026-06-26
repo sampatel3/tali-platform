@@ -42,6 +42,15 @@ export const roles = {
   listApplications: (roleId, params = {}) => api.get(`/roles/${roleId}/applications`, { params }),
   listPipeline: (roleId, params = {}) => api.get(`/roles/${roleId}/pipeline`, { params }),
   listApplicationsGlobal: (params = {}) => api.get('/applications', { params }),
+  // Talent-pool rediscovery (Phase B): start a bounded, cost-confirmed re-score
+  // of a shortlist against a NEW requirement, then poll it. Results are kept off
+  // the canonical role score.
+  startPoolRescore: (requirementText, applicationIds) =>
+    api.post('/candidates/pool-rescore', {
+      requirement_text: requirementText,
+      application_ids: applicationIds,
+    }),
+  getPoolRescore: (jobId) => api.get(`/candidates/pool-rescore/${jobId}`),
   getApplication: (applicationId, config = {}) => api.get(`/applications/${applicationId}`, config),
   // HANDOFF v2 §3 — multi-link share contract.
   // POST mints a new link with mode + expiry preset; GET lists all links
