@@ -20,18 +20,16 @@ import React, { useState } from 'react';
 import { ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
 
 import { AgentDecisionCard } from '../../shared/decisions/AgentDecisionCard';
-import { DECISION_ACTIONS, DEFAULT_ACTIONS } from '../../shared/decisions/decisionActions';
+import { verdictLabel } from '../../shared/decisions/decisionLabels';
 import { isPostHandoverWorkableStage } from '../../shared/metrics';
 import '../../features/home/home.css';
 
-// Human label for the agent's recommendation, reusing the SAME action
-// vocabulary the card + queue use so the strip and the expanded card never
-// disagree ("Send assessment", "Advance to next stage", "Approve", …).
-const recommendationLabel = (decision) => {
-  if (!decision) return '';
-  const spec = DECISION_ACTIONS[decision.decision_type] || DEFAULT_ACTIONS;
-  return spec.primaryLabel || 'Approve';
-};
+// The agent's recommendation phrased as a VERDICT ("Send assessment",
+// "Reject", "Pre-screen reject") via the shared naming lexicon — so the strip
+// reads "Agent recommends Reject", matching the verdict band on the report.
+// The expanded card's action button still says "Approve" (you approve the
+// agent's reject); verdict vs action are deliberately kept distinct.
+const recommendationLabel = (decision) => verdictLabel(decision);
 
 // Map a resolved application to a read-only outcome chip. Returns null when
 // the application isn't in a terminal/advanced state, so the caller can fall

@@ -22,8 +22,9 @@ import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
 import { readFluency4d } from '../../shared/assessment/fluency4d';
 import { RadarChart } from '../../shared/ui/RadarChart';
-import { ScoreRing } from '../../shared/ui/ScoreRing';
-import { ScoreProvenance } from './ScoreProvenance';
+import { VerdictBand } from './VerdictBand';
+import { VerdictDetail } from './VerdictDetail';
+import { verdictLabel } from '../../shared/decisions/decisionLabels';
 import { ErrorBoundary } from '../../shared/ui/ErrorBoundary';
 import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAssessmentToCandidateView } from './assessmentViewModels';
 // ApplicationDecisionPanel intentionally NOT imported — PR3 retired the decision
@@ -737,48 +738,12 @@ const CvMatchReview = ({
   const scoredAt = application?.cv_match_scored_at || application?.updated_at || null;
   const roleName = application?.role_name || application?.candidate_position || 'target role';
 
-  // Integrity & corroboration — the second readout beside the match score:
-  // the pre-screen fraud check, the integrity layer and graph+GitHub
-  // corroboration, summarised as a trust band + verbatim warnings. Never alters
-  // the score; it tells the recruiter how much to trust the match.
-  const integrity = application?.score_summary?.integrity || null;
-  const integrityBand = String(integrity?.trust_band || 'high');
-  const integrityBandMeta = {
-    high: { label: 'High trust', color: 'var(--purple)' },
-    medium: { label: 'Verify', color: 'var(--amber)' },
-    low: { label: 'Verify before advancing', color: 'var(--amber)' },
-  }[integrityBand] || { label: integrityBand, color: 'var(--muted)' };
-  const integrityWarnings = Array.isArray(integrity?.warnings) ? integrity.warnings : [];
+  // Integrity & corroboration was lifted out of this card into VerdictDetail
+  // (a first-class section under the verdict band) — the CV-match card is now
+  // purely the requirement breakdown.
 
   return (
     <section className="cv-rail cv-match-summary cv-match-review" aria-label="CV match summary">
-      {integrity ? (
-        <div
-          className="rail-card cvm-integrity"
-          style={{ marginBottom: 12, borderLeft: `3px solid ${integrityBandMeta.color}` }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div className="mc-kicker">INTEGRITY &amp; CORROBORATION</div>
-            <span
-              style={{
-                marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: integrityBandMeta.color,
-                border: `1px solid ${integrityBandMeta.color}`, borderRadius: 999, padding: '2px 10px',
-              }}
-            >
-              {integrityBandMeta.label}{integrity.to_verify ? ` · ${integrity.to_verify} to verify` : ''}
-            </span>
-          </div>
-          {integrityWarnings.length ? (
-            <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
-              {integrityWarnings.map((warning, index) => (
-                <li key={`integrity-${index}`} style={{ fontSize: 13, margin: '3px 0' }}>{warning}</li>
-              ))}
-            </ul>
-          ) : (
-            <div className="meta" style={{ marginTop: 6 }}>No integrity concerns — claims corroborate the CV.</div>
-          )}
-        </div>
-      ) : null}
       {total ? (
         <div className="rail-card cvm-body">
           <div className="cvm-head">
@@ -1837,29 +1802,31 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 </div>
               ) : null}
 
-              {/* (1) Recommendation card — copy + highlighted signal rings */}
-              <div className="mc-overview-hero">
-                <div className="mc-overview-hero-body">
-                  <div className="mc-kicker">RECOMMENDATION</div>
-                  <div className="mc-overview-hero-recommendation">{recommendationLabel}</div>
-                  <p className="mc-overview-hero-summary">
-                    {reportModel?.recruiterSummaryText
-                      || 'Recommendation copy will populate once role-fit and assessment evidence are scored.'}
-                  </p>
-                </div>
-                <div className="mc-overview-hero-rings">
-                  <ScoreRing score={Number(taaliScore) || 0} label="TAALI" size={120} />
-                  <ScoreRing score={Number(roleFitScoreVal) || 0} label="ROLE FIT" size={120} />
-                  <ScoreRing score={Number(assessmentScore) || 0} label="ASSESSMENT" size={120} />
-                  {reqTotal ? (
-                    <ScoreRing score={(reqMet / reqTotal) * 100} display={`${reqMet}/${reqTotal}`} label="REQUIREMENTS" size={120} />
-                  ) : null}
-                </div>
-                <ScoreProvenance
-                  provenance={application?.score_summary?.score_provenance}
-                  className="mc-overview-hero-provenance"
+              {/* (1) Verdict band — one canonical Taali ring + the agent's
+                  recommendation + the integrity/trust signal on the same line;
+                  the remaining scores demote to tiles (see VerdictBand.jsx). */}
+              <VerdictBand
+                taaliScore={taaliScore}
+                roleFitScore={roleFitScoreVal}
+                assessmentScore={assessmentScore}
+                reqMet={reqMet}
+                reqTotal={reqTotal}
+                recommendationLabel={verdictLabel(agentDecision) || recommendationLabel}
+                confidence={agentDecision?.confidence ?? null}
+                summaryText={reportModel?.recruiterSummaryText || ''}
+                integrity={application?.score_summary?.integrity || null}
+                provenance={application?.score_summary?.score_provenance}
+              />
+
+              {/* (1b) Why this verdict — agent reasoning + deterministic trace,
+                  then integrity as a first-class section (recruiter-only). */}
+              {!isClientView ? (
+                <VerdictDetail
+                  decision={agentDecision}
+                  integrity={application?.score_summary?.integrity || null}
+                  claimsToVerify={cvMatchDetails?.claims_to_verify}
                 />
-              </div>
+              ) : null}
 
               {/* (2) CV match review — full requirement breakdown, gaps first */}
               <CvMatchReview
