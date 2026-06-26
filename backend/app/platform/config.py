@@ -471,6 +471,55 @@ class Settings(BaseSettings):
     # effect; default ON for recruiter visibility.
     FRAUD_WORKABLE_DIFF_ENABLED: bool = True
 
+    # ── Prong 1: evidence-grounded score integrity (anti spec-gaming) ────────
+    # A high CV↔spec match is ambiguous — genuinely-qualified OR gamed-the-spec.
+    # The discriminator is GROUNDING: among the role's MUST-HAVE requirements
+    # graded met/partial, what fraction carry a verbatim CV quote (vs a bare,
+    # spec-echoing assertion)? The conjunction `high match × LOW grounding`
+    # is the gamed-suspect signal. Computed + persisted on every holistic score;
+    # the bounded DISCOUNT is gated (default shadow) so it ships safely.
+    # ``high_match`` is the match floor above which low grounding is suspicious;
+    # ``low`` is the grounding-coverage ceiling that counts as "low"; we only
+    # evaluate when ``min_musthaves`` met must-haves exist (avoids tiny-n noise).
+    GROUNDING_COVERAGE_DISCOUNT_ENABLED: bool = False
+    GROUNDING_COVERAGE_HIGH_MATCH: float = 55.0
+    GROUNDING_COVERAGE_LOW: float = 0.5
+    GROUNDING_COVERAGE_MIN_MUSTHAVES: int = 2
+    # Cap on the discount (proportional to the un-evidenced fraction). Bounded so
+    # a terse-but-genuine CV — which legitimately quotes less — can never be
+    # single-handedly rejected on grounding alone; it nudges + flags for review.
+    GROUNDING_COVERAGE_MAX_DISCOUNT: float = 15.0
+
+    # ── Prong 2: cross-source corroboration (flag-only, fail-open) ───────────
+    # Knowledge-graph collective corroboration — check a candidate's claimed
+    # (company, tech stack) against what other candidates we've seen associate
+    # with that company. Corroboration-first; the anomaly direction is a weak
+    # flag that only bites via triangulation. Cold-start: needs >= MIN
+    # independent candidates at a company before it trusts the distribution
+    # (the graph holds in-assessment/advanced candidates only → thin early).
+    # Default OFF; fail-open (no graph / no data → no signal).
+    GRAPH_CORROBORATION_ENABLED: bool = False
+    GRAPH_CORROBORATION_MIN_OBSERVATIONS: int = 5
+
+    # GitHub corroboration — cross-check the candidate's OWN GitHub URL (from the
+    # CV links / social_profiles) against their claimed stack via the FREE
+    # official GitHub API (no scraping, no provider). Corroborate-first: a
+    # language/stack match boosts confidence; a quiet/empty/mismatched account is
+    # NEUTRAL (private work is invisible — never a penalty, fairness-critical);
+    # only a URL that doesn't resolve is a soft flag. Auth reuses GITHUB_TOKEN
+    # for the 5000/hr rate limit (falls back to unauthenticated). Default OFF.
+    GITHUB_CORROBORATION_ENABLED: bool = False
+
+    # The slow cross-source axes (graph + GitHub fetch) run ASYNC + shortlist-
+    # gated, never on every score: only for a candidate scoring at/above this AND
+    # already triangulation-flagged (review/strong_review). Keeps enrichment to
+    # "resolve a flag on a real candidate", not a funnel-wide screen.
+    CORROBORATION_ENRICH_MIN_SCORE: float = 55.0
+    # Redis TTL (seconds) for the per-company graph stack distribution — it
+    # changes slowly, so cohort re-scores + the multi-employer loop reuse it
+    # instead of re-hitting Neo4j. 0 disables the cache.
+    GRAPH_COMPANY_STACK_CACHE_TTL: int = 21600  # 6h
+
     # MVP feature flags (default to MVP-safe behavior).
     # Stripe is now the live payment processor for credit top-ups; default
     # changed True → False as part of the 2026-04-29 usage-pricing cutover.

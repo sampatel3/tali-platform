@@ -39,8 +39,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..llm import MeteringContext, fuzzy_locate, generate_structured
 from .cache import compute_cache_key, get as _cache_get, set as _cache_set
 from ..services.fraud_detection import (
+    apply_grounding_discount,
     apply_integrity_penalty,
     build_integrity_signals_payload,
+    compute_grounding_coverage,
     compute_integrity_penalty,
     detect_timeline_inconsistencies,
 )
@@ -438,6 +440,7 @@ def run_holistic_match(
             f"{HOLISTIC_PROMPT_VERSION}+{HOLISTIC_ENGINE_VERSION}"
             f"{'+ip' if settings.HOLISTIC_INTEGRITY_PENALTY_ENABLED else ''}"
             f"{'+htcap' if settings.FRAUD_HIDDEN_TEXT_ACTION == 'cap' else ''}"
+            f"{'+gd' if settings.GROUNDING_COVERAGE_DISCOUNT_ENABLED else ''}"
         ),
         model_version=HOLISTIC_MODEL,
         workable_context=workable_context or "",
@@ -505,6 +508,43 @@ def run_holistic_match(
         _ground_quotes(out, cv)
     except Exception:  # pragma: no cover — never fail a score on grounding
         logger.warning("holistic grounding pass failed", exc_info=True)
+
+    # Prong 1 — evidence-grounded score integrity (anti spec-gaming). AFTER
+    # grounding drops un-locatable quotes, measure how much of the MUST-HAVE
+    # match is backed by verbatim CV evidence vs bare, spec-echoing assertions.
+    # `high match × low grounding coverage` is the gamed-suspect tell — a high
+    # match alone never is. Always computed + persisted; the bounded discount is
+    # gated (default shadow) and keyed into the cache so a flip re-scores.
+    coverage = compute_grounding_coverage(
+        out.requirements_assessment,
+        out.role_fit_score,
+        high_match_threshold=settings.GROUNDING_COVERAGE_HIGH_MATCH,
+        low_coverage_threshold=settings.GROUNDING_COVERAGE_LOW,
+        min_must_haves=settings.GROUNDING_COVERAGE_MIN_MUSTHAVES,
+    )
+    sig = dict(out.integrity_signals or {})
+    sig["grounding"] = coverage.to_dict()
+    discount = 0.0
+    new_score = out.role_fit_score
+    if settings.GROUNDING_COVERAGE_DISCOUNT_ENABLED:
+        new_score, discount = apply_grounding_discount(
+            out.role_fit_score, coverage, max_discount=settings.GROUNDING_COVERAGE_MAX_DISCOUNT
+        )
+    sig["grounding"]["discount_applied"] = discount
+    if discount > 0:
+        out = out.model_copy(
+            update={
+                "role_fit_score": new_score,
+                "cv_fit_score": new_score,
+                "requirements_match_score": new_score,
+                "skills_match_score": new_score,
+                "experience_relevance_score": new_score,
+                "integrity_signals": sig,
+            }
+        )
+    else:
+        out = out.model_copy(update={"integrity_signals": sig})
+
     _cache_set(cache_key, out)
     return out
 
