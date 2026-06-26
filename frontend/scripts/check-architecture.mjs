@@ -28,11 +28,13 @@ const PAGE_FILE_PATTERN = /Page(Content)?\.(js|jsx|ts|tsx)$/;
 // settings tab → RoleAgentSettingsTab.jsx), dropping it to ~1.7k, so the
 // cap is restored to 2660 to keep the gate meaningful. Bumped 2660→2680
 // after #734 (integrity-aware scoring) + #737 grew CandidateStandingReportPage
-// to ~2679 inline, reddening main for every PR — the same bump-now-split-later
-// as #538/#541 above. CandidateStandingReportPage has now been split as well
-// (the CV document viewer → CvDocumentViewer.jsx, the CV-match + integrity
-// readout → CvMatchReview.jsx, and the interview-prep card →
-// PrepQuestionCard.jsx), dropping it to ~1.9k, so the cap is restored to 2660.
+// to ~2679 inline, then 2680→2685 for the #741 cv_match schema shim
+// (criterion_* → requirement backfill, fixing the ErrorBoundary crash on the
+// newer requirement-row field names) — the same bump-now-split-later as
+// #538/#541 above. CandidateStandingReportPage has now been split (the CV
+// document viewer → CvDocumentViewer.jsx, the CV-match readout →
+// CvMatchReview.jsx, and the interview-prep card → PrepQuestionCard.jsx),
+// dropping it to ~1.9k, so the cap is restored to 2660.
 const MAX_PAGE_LINES = 2660;
 const DISALLOWED_IMPORT_PATTERNS = [
   /from\s+['"][^'"]*lib\/api(?:\.js)?['"]/g,

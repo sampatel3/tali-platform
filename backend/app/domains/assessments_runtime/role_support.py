@@ -623,23 +623,44 @@ def _integrity_summary(app: CandidateApplication) -> dict[str, Any] | None:
     sig = details.get("integrity_signals") if isinstance(details, dict) else None
     if not isinstance(sig, dict) or not sig:
         return None
-    # Band + warnings are derived live when the persisted signals predate them
-    # (candidates scored before this shipped), so the readout works retroactively
-    # without a re-score. Both are pure functions of the stored signals.
-    from ...services.fraud_detection import aggregate_triangulation, build_integrity_warnings
+    from ...services.fraud_detection import (
+        aggregate_triangulation,
+        build_corroboration_notes,
+        build_integrity_warnings,
+        detect_experience_inflation,
+    )
 
-    tri = sig.get("triangulation")
-    if not isinstance(tri, dict) or "trust_band" not in tri:
-        tri = aggregate_triangulation(sig)
-    warnings = sig.get("warnings")
-    if not isinstance(warnings, list):
-        warnings = build_integrity_warnings(sig)
-    warnings = [str(w) for w in (warnings or []) if str(w).strip()]
+    # Work on a copy — one stored signal is corrected before the readout is built.
+    sig = dict(sig)
+
+    # Recompute the years-vs-span "inflation" from the FULL parsed CV (cv_sections
+    # is a column on the application, so no extra query / N+1), overriding any
+    # stored value. The original computed the span from the snapshot timeline,
+    # which is capped at the 5 most-recent employers — so a candidate with >5 jobs
+    # had their oldest roles dropped and looked like they were inflating. When
+    # cv_sections is absent (older parse gap) the stored value is left as-is.
+    cv_sections = app.cv_sections if isinstance(getattr(app, "cv_sections", None), dict) else {}
+    cv_exp = cv_sections.get("experience") if isinstance(cv_sections, dict) else None
+    if cv_exp:
+        years_claimed = (details.get("candidate_snapshot") or {}).get("years_experience")
+        infl = detect_experience_inflation(years_claimed, cv_exp)
+        if infl.triggered:
+            sig["experience_inflation"] = infl.to_dict()
+        else:
+            sig.pop("experience_inflation", None)
+
+    # Always re-derive band + warnings + corroborations from the (corrected)
+    # signals rather than trusting the stored copies — so de-noising changes (e.g.
+    # dropping the over-eager Workable diff) apply retroactively, no re-score.
+    tri = aggregate_triangulation(sig)
+    warnings = [str(w) for w in build_integrity_warnings(sig) if str(w).strip()]
+    corroborations = [str(c) for c in build_corroboration_notes(sig) if str(c).strip()]
     return {
         "trust_band": tri.get("trust_band") or "high",
         "verdict": tri.get("verdict"),
         "to_verify": int(tri.get("to_verify") or len(warnings)),
         "warnings": warnings[:12],
+        "corroborations": corroborations[:6],
     }
 
 

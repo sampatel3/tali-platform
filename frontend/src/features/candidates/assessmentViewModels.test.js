@@ -54,11 +54,13 @@ describe('assessmentViewModels', () => {
     };
     const model = buildRoleFitEvidenceModel({ application, completedAssessment: null });
     const joined = model.integrityFlags.join(' | ');
-    expect(model.integrityFlags.length).toBe(4);
+    // The CV↔Workable history diff is intentionally NOT surfaced (too noisy in
+    // production), so the three remaining signals show and the Workable one does not.
+    expect(model.integrityFlags.length).toBe(3);
     expect(joined).toContain('prompt-injection');
     expect(joined).toContain('62% phrase overlap');
     expect(joined).toContain('Faketron');
-    expect(joined).toContain('Workable mismatch');
+    expect(joined).not.toContain('Workable mismatch');
   });
 
   it('returns no integrity flags when integrity_signals is absent', () => {
@@ -87,8 +89,10 @@ describe('assessmentViewModels', () => {
     };
     const model = buildRoleFitEvidenceModel({ application, completedAssessment: null });
     const joined = model.integrityFlags.join(' | ');
-    expect(joined).toContain('Kubernetes');
-    expect(joined).toContain('spec-tailoring');
+    // Canonical wording flags the count + meaning, not the requirement names
+    // (those already appear in the requirements list, so listing them duplicates).
+    expect(joined).toContain('2 must-haves scored as met');
+    expect(joined).toContain('keyword-matching');
   });
 
   it('does not flag grounding when ungrounded_match is false', () => {

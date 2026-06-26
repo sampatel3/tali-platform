@@ -20,17 +20,23 @@ import React, { useState } from 'react';
 import { ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
 
 import { AgentDecisionCard } from '../../shared/decisions/AgentDecisionCard';
-import { DECISION_ACTIONS, DEFAULT_ACTIONS } from '../../shared/decisions/decisionActions';
 import { isPostHandoverWorkableStage } from '../../shared/metrics';
 import '../../features/home/home.css';
 
-// Human label for the agent's recommendation, reusing the SAME action
-// vocabulary the card + queue use so the strip and the expanded card never
-// disagree ("Send assessment", "Advance to next stage", "Approve", …).
+// Human label for what the agent DECIDED — the outcome, not the button you
+// press to confirm it. (For a reject, the primary button is labelled "Approve"
+// = approve the rejection, which read as "Agent recommends Approve" on a reject
+// card. Show the decision instead: "Agent recommends Reject".)
+const DECISION_OUTCOME_LABEL = {
+  reject: 'Reject',
+  skip_assessment_reject: 'Reject',
+  send_assessment: 'Send assessment',
+  advance_to_interview: 'Advance to next stage',
+  resend_assessment_invite: 'Resend assessment invite',
+};
 const recommendationLabel = (decision) => {
   if (!decision) return '';
-  const spec = DECISION_ACTIONS[decision.decision_type] || DEFAULT_ACTIONS;
-  return spec.primaryLabel || 'Approve';
+  return DECISION_OUTCOME_LABEL[decision.decision_type] || 'Review';
 };
 
 // Map a resolved application to a read-only outcome chip. Returns null when

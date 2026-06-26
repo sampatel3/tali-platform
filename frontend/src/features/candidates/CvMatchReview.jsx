@@ -1,9 +1,9 @@
-// CvMatchReview — the requirement-by-requirement CV match readout plus the
-// integrity & corroboration (trust-band) panel for the candidate standing
-// report's Overview tab. Surfaces met / partial / gap coverage and the
-// integrity warnings beside the score, without ever altering the score.
-// Extracted verbatim from CandidateStandingReportPage.jsx to keep the page
-// file under the frontend architecture line cap.
+// CvMatchReview — the requirement-by-requirement CV match readout for the
+// candidate standing report's Overview tab. Surfaces met / partial / gap
+// coverage of the role requirements against the CV. (The integrity / trust-band
+// readout that used to sit here now renders via IntegrityFlags in the Overview
+// hero — see #739.) Extracted from CandidateStandingReportPage.jsx to keep the
+// page file under the frontend architecture line cap.
 import React from 'react';
 
 import { asArray, extractRequirementEvidence, extractRequirementKey } from './candidatesUiUtils';
@@ -66,48 +66,8 @@ const CvMatchReview = ({
   const scoredAt = application?.cv_match_scored_at || application?.updated_at || null;
   const roleName = application?.role_name || application?.candidate_position || 'target role';
 
-  // Integrity & corroboration — the second readout beside the match score:
-  // the pre-screen fraud check, the integrity layer and graph+GitHub
-  // corroboration, summarised as a trust band + verbatim warnings. Never alters
-  // the score; it tells the recruiter how much to trust the match.
-  const integrity = application?.score_summary?.integrity || null;
-  const integrityBand = String(integrity?.trust_band || 'high');
-  const integrityBandMeta = {
-    high: { label: 'High trust', color: 'var(--purple)' },
-    medium: { label: 'Verify', color: 'var(--amber)' },
-    low: { label: 'Verify before advancing', color: 'var(--amber)' },
-  }[integrityBand] || { label: integrityBand, color: 'var(--muted)' };
-  const integrityWarnings = Array.isArray(integrity?.warnings) ? integrity.warnings : [];
-
   return (
     <section className="cv-rail cv-match-summary cv-match-review" aria-label="CV match summary">
-      {integrity ? (
-        <div
-          className="rail-card cvm-integrity"
-          style={{ marginBottom: 12, borderLeft: `3px solid ${integrityBandMeta.color}` }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div className="mc-kicker">INTEGRITY &amp; CORROBORATION</div>
-            <span
-              style={{
-                marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: integrityBandMeta.color,
-                border: `1px solid ${integrityBandMeta.color}`, borderRadius: 999, padding: '2px 10px',
-              }}
-            >
-              {integrityBandMeta.label}{integrity.to_verify ? ` · ${integrity.to_verify} to verify` : ''}
-            </span>
-          </div>
-          {integrityWarnings.length ? (
-            <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
-              {integrityWarnings.map((warning, index) => (
-                <li key={`integrity-${index}`} style={{ fontSize: 13, margin: '3px 0' }}>{warning}</li>
-              ))}
-            </ul>
-          ) : (
-            <div className="meta" style={{ marginTop: 6 }}>No integrity concerns — claims corroborate the CV.</div>
-          )}
-        </div>
-      ) : null}
       {total ? (
         <div className="rail-card cvm-body">
           <div className="cvm-head">
@@ -146,7 +106,7 @@ const CvMatchReview = ({
                   </span>
                   <div className="cvm-req">
                     <div className="cvm-req-top">
-                      <span className="cvm-req-name">{item.requirement || item}</span>
+                      <span className="cvm-req-name">{item.requirement || item.criterion_text || 'Requirement'}</span>
                       {isRecruiter ? <span className="cvm-tag">Recruiter</span> : null}
                     </div>
                     <span className="cvm-ev">{evidence}</span>

@@ -17,6 +17,7 @@ import { CandidateDecisionStrip } from './CandidateDecisionStrip';
 import { OverrideModal } from '../home/OverrideModal';
 import { TeachModal } from '../home/TeachModal';
 import { DECISION_ACTIONS } from '../../shared/decisions/decisionActions';
+import { IntegrityFlags } from '../../shared/decisions/IntegrityFlags';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
 import { readFluency4d } from '../../shared/assessment/fluency4d';
@@ -544,10 +545,15 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       const bSt = STATUS_RANK[String(b?.status || '').toLowerCase()] ?? 3;
       return aSt - bSt;
     });
-    return ranked.slice(0, 3).map((item) => ({
-      title: item.requirement,
-      description: item.impact || item.reasoning || 'Validate this gap during the panel loop.',
-    }));
+    // Drop rows without requirement text — interviewQuestions calls
+    // item.title.toLowerCase() unguarded (crashed on candidate 55112/140).
+    return ranked
+      .filter((item) => item.requirement)
+      .slice(0, 3)
+      .map((item) => ({
+        title: item.requirement,
+        description: item.impact || item.reasoning || 'Validate this gap during the panel loop.',
+      }));
   }, [missingRequirements]);
   const interviewQuestions = useMemo(() => {
     const override = application?.interview_prep;
@@ -1091,6 +1097,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     {reportModel?.recruiterSummaryText
                       || 'Recommendation copy will populate once role-fit and assessment evidence are scored.'}
                   </p>
+                  {/* Trust readout, combined with the summary: the specific
+                      things to verify before deciding + the cross-source
+                      corroborations we confirmed. Same component as the agent
+                      decision card, reading the canonical score_summary.integrity. */}
+                  <IntegrityFlags
+                    integrity={application?.score_summary?.integrity}
+                    style={{ marginTop: 12 }}
+                  />
                 </div>
                 <div className="mc-overview-hero-rings">
                   <ScoreRing score={Number(taaliScore) || 0} label="TAALI" size={120} />
