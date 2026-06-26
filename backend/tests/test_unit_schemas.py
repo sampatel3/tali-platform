@@ -4,7 +4,7 @@ os.environ["DATABASE_URL"] = "sqlite:///./test.db"
 import pytest
 from pydantic import ValidationError
 from app.schemas.user import UserCreate, ResetPasswordRequest, TeamInviteRequest
-from app.schemas.assessment import AssessmentCreate, CodeExecutionRequest, ClaudeRequest, SubmitRequest
+from app.schemas.assessment import AssessmentCreate, CodeExecutionRequest, SubmitRequest
 from app.schemas.task import TaskCreate
 from app.schemas.candidate import CandidateCreate
 
@@ -358,40 +358,6 @@ class TestCodeExecutionRequest:
     def test_code_execution_request_above_max(self):
         with pytest.raises(ValidationError):
             CodeExecutionRequest(code="x" * 100001)
-
-
-# ---------------------------------------------------------------------------
-# ClaudeRequest
-# ---------------------------------------------------------------------------
-
-class TestClaudeRequest:
-    def test_valid_claude_request(self):
-        r = ClaudeRequest(message="Hello Claude")
-        assert r.message == "Hello Claude"
-        assert r.conversation_history == []
-        assert r.code_context is None
-        assert r.paste_detected is False
-        assert r.browser_focused is True
-        assert r.time_since_last_prompt_ms is None
-
-    def test_claude_request_message_empty(self):
-        with pytest.raises(ValidationError):
-            ClaudeRequest(message="")
-
-    def test_claude_request_message_max_boundary(self):
-        r = ClaudeRequest(message="m" * 4000)
-        assert len(r.message) == 4000
-
-    def test_claude_request_message_above_max(self):
-        with pytest.raises(ValidationError):
-            ClaudeRequest(message="m" * 4001)
-
-    def test_claude_request_with_conversation_history(self):
-        r = ClaudeRequest(
-            message="follow up",
-            conversation_history=[{"role": "user", "content": "hi"}],
-        )
-        assert len(r.conversation_history) == 1
 
 
 # ---------------------------------------------------------------------------

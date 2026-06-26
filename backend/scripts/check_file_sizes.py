@@ -32,7 +32,6 @@ ALLOWLIST: dict[str, str] = {
     "app/domains/assessments_runtime/analytics_routes.py": "Mission Control reporting summary aggregator",
     "app/domains/assessments_runtime/applications_routes.py": "applications API",
     "app/domains/assessments_runtime/candidate_runtime_routes.py": "candidate runtime API",
-    "app/domains/assessments_runtime/candidate_terminal_routes.py": "candidate terminal API",
     "app/domains/assessments_runtime/pipeline_service.py": "assessment runtime pipeline orchestration",
     "app/domains/assessments_runtime/roles_management_routes.py": "roles + job-spec upload API",
     "app/domains/billing_webhooks/billing_routes.py": "Stripe + credit-pack billing routes (TODO: split webhook handlers)",

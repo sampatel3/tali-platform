@@ -1,7 +1,6 @@
 from types import SimpleNamespace
 
-from app.domains.assessments_runtime import candidate_claude_routes, candidate_runtime_routes
-from app.schemas.assessment import ClaudeRequest, RepoFileSnapshotEntry
+from app.domains.assessments_runtime import candidate_runtime_routes
 
 
 def test_build_run_command_uses_pytest_for_test_files():
@@ -47,31 +46,3 @@ def test_normalize_runtime_repo_files_rejects_unsafe_paths():
     }
 
 
-def test_claude_prompt_includes_repo_excerpts_and_selected_file():
-    task = SimpleNamespace(
-        scenario="Debug the billing worker.",
-        description="",
-        repo_structure={
-            "files": {
-                "src/main.py": "print('repo file')\n",
-                "README.md": "# Demo repo\n",
-            }
-        },
-    )
-    data = ClaudeRequest(
-        message="What should I inspect?",
-        code_context="print('editor snapshot')",
-        selected_file_path="src/main.py",
-        repo_files=[
-            RepoFileSnapshotEntry(path="src/main.py", content="print('edited file')\n"),
-            RepoFileSnapshotEntry(path="tests/test_main.py", content="def test_ok():\n    assert True\n"),
-        ],
-    )
-
-    prompt = candidate_claude_routes._build_system_prompt(task, data)
-
-    assert "Selected file:\nsrc/main.py" in prompt
-    assert "=== src/main.py ===\nprint('edited file')" in prompt
-    assert "=== tests/test_main.py ===" in prompt
-    assert "Current editor snapshot:\nprint('editor snapshot')" in prompt
-    assert "# Demo repo" not in prompt
