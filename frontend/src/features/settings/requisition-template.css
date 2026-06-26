@@ -13,6 +13,53 @@
 
 .rqt-muted { color: var(--mute-2); font-size: 0.8125rem; }
 
+/* Job spec (JD) template editor — a card above the sections editor. */
+.rqt-jd-head { margin-bottom: 14px; }
+.rqt-jd-title {
+  margin: 0 0 4px;
+  font-family: var(--font-display);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.rqt-jd-sub {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--mute);
+}
+.rqt-jd-sub code,
+.rqt-jd-placeholders code {
+  font-family: var(--font-mono);
+  font-size: 0.8125em;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--purple-soft);
+  color: var(--purple-2);
+}
+.rqt-jd-textarea {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  resize: vertical;
+  min-height: 220px;
+  tab-size: 2;
+}
+.rqt-jd-placeholders {
+  margin: 10px 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  line-height: 1.8;
+  color: var(--mute);
+  word-spacing: 0.1em;
+}
+.rqt-jd-placeholders strong {
+  color: var(--ink-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 /* A section card */
 .rqt-section {
   background: var(--bg-2);
