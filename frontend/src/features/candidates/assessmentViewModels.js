@@ -458,13 +458,10 @@ const buildIntegrityFlags = (details) => {
     flags.push(`${ue.count} employer name${Number(ue.count) > 1 ? 's' : ''} not found verbatim in the CV text${names ? `: ${names}` : ''}.`);
   }
 
-  const wd = sig.workable_history_diff && typeof sig.workable_history_diff === 'object' ? sig.workable_history_diff : null;
-  if (wd && Array.isArray(wd.issues)) {
-    wd.issues.forEach((item) => {
-      const detail = String(item?.detail || '').trim();
-      if (detail) flags.push(`Workable mismatch — ${detail}`);
-    });
-  }
+  // NOTE: the CV↔Workable history diff is intentionally NOT surfaced — it fired
+  // on ~54% of candidates in production (mostly benign "role on the CV but not in
+  // the Workable form"), so it drowned the real signals. Mirrors the backend
+  // (fraud_detection.build_integrity_warnings). Revive only behind a stricter matcher.
 
   // Prong 1: a strong match whose must-haves aren't backed by verbatim CV
   // evidence — the spec-tailoring tell. A high match alone is never flagged.
@@ -473,7 +470,7 @@ const buildIntegrityFlags = (details) => {
     const names = Array.isArray(gr.ungrounded_requirements) ? gr.ungrounded_requirements.filter(Boolean) : [];
     const n = names.length || Math.max(0, Number(gr.met_must_haves || 0) - Number(gr.grounded_must_haves || 0));
     flags.push(
-      `Strong match but ${n} must-have${n === 1 ? '' : 's'} not evidenced in the CV${names.length ? `: ${names.join(', ')}` : ''} — confirm these are real, not spec-tailoring.`,
+      `${n} must-have${n === 1 ? '' : 's'} scored as met but with no supporting evidence in the CV — confirm they're genuine, not keyword-matching.`,
     );
   }
 
@@ -556,7 +553,11 @@ export const buildRoleFitEvidenceModel = ({ application, completedAssessment }) 
     timelineFlags: Array.isArray(details.timeline_flags)
       ? details.timeline_flags.map((item) => String(item || '').trim()).filter(Boolean)
       : [],
-    integrityFlags: buildIntegrityFlags(details),
+    // Prefer the server-canonical, de-noised warnings (score_summary.integrity);
+    // fall back to the local derivation only when score_summary is absent.
+    integrityFlags: Array.isArray(application?.score_summary?.integrity?.warnings)
+      ? application.score_summary.integrity.warnings
+      : buildIntegrityFlags(details),
     summaryText,
     hasAnyEvidence: Boolean(
       payload.roleFitScore != null
