@@ -5,6 +5,7 @@
     { "source": "/ai-native-hiring", "destination": "/ai-native-hiring.html" },
     { "source": "/ai-native-assessments", "destination": "/ai-native-assessments.html" },
     { "source": "/report-preview", "destination": "/report-preview.html" },
+    { "source": "/home-preview", "destination": "/home-preview.html" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
