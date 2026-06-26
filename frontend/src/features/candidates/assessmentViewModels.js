@@ -1,4 +1,5 @@
 import { getDimensionById, normalizeScores } from '../../scoring/scoringDimensions';
+import { computeScorecard } from '../../shared/assessment/fluency4d';
 import { formatScale100Score, normalizeScore } from '../../lib/scoreDisplay';
 
 export const COMPLETED_ASSESSMENT_STATUSES = new Set(['completed', 'completed_due_to_timeout']);
@@ -974,7 +975,13 @@ export const buildStandingCandidateReportModel = ({
 }) => {
   const summaryModel = buildAssessmentSummaryModel({ application, completedAssessment });
   const roleFitModel = buildRoleFitEvidenceModel({ application, completedAssessment });
+  // THE canonical scorecard — the 5 axes (4 Ds + Deliverable), rubric-first
+  // with a heuristic-column fallback. This is the only top-level scorecard.
+  const scorecard = computeScorecard(completedAssessment);
   const categoryScores = normalizeScores(summaryModel.categoryScores || {});
+  // Demoted to EVIDENCE: the per-dimension category scores still bucket real
+  // backend `category_scores` for the comparison radar (ComparisonRadar) and
+  // strongest/weakest-signal callouts — no longer a rival top-level scorecard.
   const dimensionEntries = Object.entries(categoryScores)
     .map(([key, value]) => ({
       key,
@@ -1036,6 +1043,7 @@ export const buildStandingCandidateReportModel = ({
     summaryModel,
     roleFitModel,
     recommendation,
+    scorecard,
     dimensionEntries,
     recruiterSummaryText,
     strongestSignalTitle,
@@ -1047,6 +1055,7 @@ export const buildStandingCandidateReportModel = ({
     firefliesModel,
     candidateSnapshot,
     hasCompletedAssessment: summaryModel.source.kind === 'assessment',
+    hasScorecard: Array.isArray(scorecard) && scorecard.length > 0,
     hasDimensionSignal: dimensionEntries.length > 0,
   };
 };

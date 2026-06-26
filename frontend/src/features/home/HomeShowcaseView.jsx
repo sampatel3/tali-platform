@@ -56,7 +56,7 @@ const INITIAL_FEED_ROWS = [
       cells: [
         { k: 'CV match', v: '94 / 100', good: true },
         { k: 'Assessment', v: '88 / 100', good: true },
-        { k: 'AI collaboration', v: 'Top 12%', good: true },
+        { k: 'Discernment', v: 'Top 12%', good: true },
         { k: 'Must-haves', v: '6 / 6', good: true },
       ],
       trace: [

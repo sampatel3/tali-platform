@@ -23,7 +23,7 @@ You must follow the TAALI_TASK_SCORING_FRAMEWORK.md (attached) in full.
 Pay particular attention to:
 - Part 2 (Signal Map): every task design decision must map to a scoring engine signal
 - Part 4 (Repository Design): diagnostics must contain specific IDs, error text, and .py function names
-- Part 5 (Rubric Engineering): 5 dimensions, unequal weights, observable criteria
+- Part 5 (Rubric Engineering): 5 *rubric* dimensions, unequal weights, observable criteria. (These per-task rubric dimensions are graded EVIDENCE — they roll up under the one canonical report scorecard, the 5 axes = the 4 Ds + Deliverable; see [`SCORING_SCORECARD.md`](./SCORING_SCORECARD.md). The two "5"s are unrelated.)
 - Part 7 (Quality Gates): run the signal audit checklist before producing the final JSON
 
 **Role:** [paste exact job title]
