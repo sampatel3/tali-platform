@@ -18,10 +18,12 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ...deps import get_current_user
+from ...models.client import Client
 from ...models.organization import Organization
 from ...models.role_brief import RoleBrief
 from ...models.user import User
 from ...platform.database import get_db
+from ...services.client_service import compute_margin
 from ...services.requisition_chat_service import (
     ChatAttachment,
     compute_gaps,
@@ -70,6 +72,8 @@ _BRIEF_FIELDS = (
     "salary_period",
     "openings",
     "target_start",
+    "client_id",
+    "client_rate",
     "must_haves",
     "preferred",
     "dealbreakers",
@@ -88,14 +92,21 @@ _BRIEF_FIELDS = (
 
 def _serialize_brief(brief: RoleBrief, org: Optional[Organization]) -> dict[str, Any]:
     """The full brief payload: every v1 field PLUS custom_fields, messages,
-    completeness (0-100), and the live ``gaps`` (required template fields still
-    empty)."""
+    completeness (0-100), the live ``gaps`` (required template fields still
+    empty), and the consultancy economics (client_name + margin/margin_pct)."""
     template = resolve_template(org)
     payload: dict[str, Any] = {k: getattr(brief, k, None) for k in _BRIEF_FIELDS}
     payload["custom_fields"] = brief.custom_fields or {}
     payload["messages"] = brief.messages or []
     payload["completeness"] = int(brief.completeness or 0)
     payload["gaps"] = compute_gaps(brief, template)
+    # Consultancy: resolve the client name + compute margin (never stored).
+    payload["client_name"] = brief.client.name if brief.client else None
+    margin, margin_pct = compute_margin(
+        brief.client_rate, brief.salary_min, brief.salary_max
+    )
+    payload["margin"] = margin
+    payload["margin_pct"] = margin_pct
     return payload
 
 
@@ -280,9 +291,23 @@ def update_requisition(
     current_user: User = Depends(get_current_user),
 ):
     """Recruiter edits to the brief (whitelisted fields, including
-    ``custom_fields``)."""
+    ``custom_fields`` and the consultancy ``client_id`` / ``client_rate``)."""
     brief = _get_brief(db, current_user.organization_id, brief_id)
-    update_brief_fields(db, brief, **(data or {}))
+    data = data or {}
+    # A client_id can only point at a client in the caller's org (no cross-org
+    # assignment). ``None`` clears the link.
+    if data.get("client_id") is not None:
+        client = (
+            db.query(Client)
+            .filter(
+                Client.id == data["client_id"],
+                Client.organization_id == current_user.organization_id,
+            )
+            .first()
+        )
+        if client is None:
+            raise HTTPException(status_code=404, detail="Client not found")
+    update_brief_fields(db, brief, **data)
     db.commit()
     db.refresh(brief)
     return _serialize_brief(brief, _org(db, current_user.organization_id))

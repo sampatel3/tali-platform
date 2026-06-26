@@ -1,0 +1,349 @@
+/* Clients — the consultancy's client directory.
+   In a consultancy, requisitions belong to CLIENTS. This page lists every
+   client with a prominent open-jobs count and a "new client" form; clicking
+   a client expands its requisitions. References the GLOBAL design tokens
+   (--ink, --bg, --purple, …) so it re-skins per brand. Light, purple-accented.
+   Class prefix: cl- (clients). */
+
+.cl-root {
+  min-height: calc(100vh - 96px);
+  min-height: calc(100dvh - 96px);
+  background: var(--bg);
+  border-top: 1px solid var(--line);
+  color: var(--ink);
+  font-family: var(--font-sans);
+}
+.cl-wrap {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+}
+
+/* ============ Header ============ */
+.cl-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.cl-head-titles { min-width: 0; }
+.cl-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.625rem;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  color: var(--ink);
+}
+.cl-subtitle {
+  margin: 6px 0 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--mute);
+}
+.cl-new-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--purple);
+  color: #fff;
+  font-size: 0.84375rem;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, transform 0.08s;
+}
+.cl-new-btn:hover { background: var(--purple-2); }
+.cl-new-btn:active { transform: translateY(1px); }
+.cl-new-btn:disabled { background: var(--line); color: var(--mute-2); cursor: not-allowed; }
+
+/* ============ New-client form ============ */
+.cl-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+  margin-bottom: 24px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--bg-2);
+}
+.cl-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  min-width: 180px;
+}
+.cl-field-label {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+.cl-input {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 0.84375rem;
+  font-family: var(--font-sans);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.cl-input:focus {
+  outline: 0;
+  border-color: var(--purple);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple) 15%, transparent);
+}
+
+/* ============ Client list ============ */
+.cl-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cl-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--bg-2);
+  overflow: hidden;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.cl-card.is-open { border-color: color-mix(in oklab, var(--purple) 30%, var(--line)); }
+.cl-card-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  text-align: left;
+  padding: 16px 18px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  transition: background 0.12s;
+}
+.cl-card-row:hover { background: var(--bg-3); }
+.cl-avatar {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 11px;
+  background: var(--purple-soft);
+  color: var(--purple-2);
+}
+.cl-card-main { flex: 1; min-width: 0; }
+.cl-card-name {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cl-card-contact {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 0.78125rem;
+  color: var(--mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cl-card-contact-sep { color: var(--line); }
+
+/* The prominent open-jobs count. */
+.cl-count {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+  padding: 6px 14px;
+  border-radius: 12px;
+  background: var(--purple-soft);
+}
+.cl-count-n {
+  font-family: var(--font-display);
+  font-size: 1.375rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--purple-2);
+}
+.cl-count-label {
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--purple-2);
+}
+.cl-count.is-zero { background: var(--bg-3); }
+.cl-count.is-zero .cl-count-n,
+.cl-count.is-zero .cl-count-label { color: var(--mute); }
+
+.cl-chevron {
+  flex-shrink: 0;
+  color: var(--mute-2);
+  transition: transform 0.18s;
+}
+.cl-chevron.is-open { transform: rotate(90deg); color: var(--purple-2); }
+
+.cl-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  color: var(--mute);
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Expanded detail — the client's requisitions. */
+.cl-detail {
+  border-top: 1px solid var(--line-2);
+  padding: 14px 18px 18px;
+  background: var(--bg);
+}
+.cl-detail-label {
+  margin: 0 0 10px;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+.cl-req-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cl-req {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: var(--bg-2);
+}
+.cl-req-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.84375rem;
+  font-weight: 500;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cl-req-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+.cl-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--purple);
+  flex-shrink: 0;
+}
+.cl-dot.is-published { background: var(--purple-2); }
+.cl-detail-empty {
+  padding: 4px 0;
+  font-size: 0.8125rem;
+  color: var(--mute);
+}
+
+/* ============ States ============ */
+.cl-empty {
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--mute);
+  border: 1px dashed var(--line);
+  border-radius: 16px;
+  background: var(--bg-2);
+}
+.cl-empty-glyph {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  margin: 0 auto 16px;
+  display: grid;
+  place-items: center;
+  background: var(--purple-soft);
+  color: var(--purple-2);
+}
+.cl-empty h2 {
+  margin: 0 0 6px;
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.cl-empty p { margin: 0; font-size: 0.875rem; line-height: 1.5; }
+
+.cl-error {
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in oklab, var(--red) 35%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--red) 8%, var(--bg-2));
+  color: var(--red-deep);
+  font-size: 0.8125rem;
+}
+.cl-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 0;
+  justify-content: center;
+  color: var(--mute);
+  font-size: 0.875rem;
+}
+
+.cl-spinner {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  border: 2px solid color-mix(in oklab, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: cl-spin 0.7s linear infinite;
+}
+@keyframes cl-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 640px) {
+  .cl-head { flex-direction: column; align-items: stretch; }
+  .cl-new-btn { justify-content: center; }
+}

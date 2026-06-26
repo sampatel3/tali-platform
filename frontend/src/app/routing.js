@@ -21,6 +21,8 @@ export const pathForPage = (page, options = {}) => {
       return '/jobs';
     case 'requisitions':
       return '/requisitions';
+    case 'clients':
+      return '/clients';
     case 'chat': {
       const base = options.chatConversationId
         ? `/chat/${encodeURIComponent(options.chatConversationId)}`

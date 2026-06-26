@@ -15,8 +15,10 @@ import { CheckCircle2, FileText, Paperclip, Plus, Rocket, X } from 'lucide-react
 
 import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
 import { requisitionApi } from './api';
+import { clientApi } from '../clients/api';
 import { LiveBrief } from './LiveBrief';
 import { JobSpec } from './JobSpec';
+import { RequisitionEconomics } from './RequisitionEconomics';
 import './requisitions.css';
 
 const ACCEPT = '.txt,.vtt,.srt,.md,.pdf,image/*';
@@ -77,6 +79,10 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const [savingKey, setSavingKey] = useState(null);
   const [loadingBrief, setLoadingBrief] = useState(false);
   const [error, setError] = useState('');
+  // Internal economics: the org's clients (for the assign dropdown) + the
+  // in-flight save flag for the client/rate strip.
+  const [clients, setClients] = useState([]);
+  const [savingEconomics, setSavingEconomics] = useState(false);
   // Right column: the live Job spec (JD) document by default, or the
   // structured Brief.
   const [rightTab, setRightTab] = useState('jobspec');
@@ -112,6 +118,19 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   }, []);
 
   useEffect(() => { void loadList(); }, [loadList]);
+
+  // Load the org's clients once for the assign dropdown (best-effort — the
+  // economics strip still renders, just without options, if this fails).
+  const loadClients = useCallback(async () => {
+    try {
+      const list = await clientApi.list();
+      setClients(Array.isArray(list) ? list : []);
+    } catch {
+      /* non-fatal */
+    }
+  }, []);
+
+  useEffect(() => { void loadClients(); }, [loadClients]);
 
   // Revoke any staged object URLs when the page unmounts.
   useEffect(() => () => {
@@ -275,6 +294,55 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     }
   }, [selectedId, loadList, brief]);
 
+  // ---- internal economics: assign a client / set the client rate ----
+  // Both go through the EXISTING requisitionApi.update — the serialized brief
+  // it returns now carries client_id/client_name/client_rate/margin/margin_pct,
+  // so merging the response keeps the margin read-out in sync after each save.
+  const saveEconomics = useCallback(async (payload) => {
+    if (!selectedId) return;
+    setSavingEconomics(true);
+    setError('');
+    try {
+      const updated = await requisitionApi.update(selectedId, payload);
+      setBrief((prev) => ({ ...(prev || {}), ...(updated || {}) }));
+    } catch {
+      setError('Could not save the client details. Try again.');
+    } finally {
+      setSavingEconomics(false);
+    }
+  }, [selectedId]);
+
+  const assignClient = useCallback((clientId) => {
+    // Empty selection clears the assignment. Coerce the <select>'s string value
+    // to a number so the backend FK gets an int, not a stringified id.
+    const cid = clientId === '' || clientId == null ? null : Number(clientId);
+    void saveEconomics({ client_id: Number.isNaN(cid) ? null : cid });
+  }, [saveEconomics]);
+
+  const setClientRate = useCallback((rate) => {
+    void saveEconomics({ client_rate: rate });
+  }, [saveEconomics]);
+
+  // Inline "+ New client" — create, refetch the list, then assign it here.
+  const createAndAssignClient = useCallback(async (clientName) => {
+    const name = String(clientName || '').trim();
+    if (!name || !selectedId) return;
+    setSavingEconomics(true);
+    setError('');
+    try {
+      const created = await clientApi.create({ name });
+      await loadClients();
+      if (created?.id != null) {
+        const updated = await requisitionApi.update(selectedId, { client_id: created.id });
+        setBrief((prev) => ({ ...(prev || {}), ...(updated || {}) }));
+      }
+    } catch {
+      setError('Could not create that client. Try again.');
+    } finally {
+      setSavingEconomics(false);
+    }
+  }, [selectedId, loadClients]);
+
   // ---- publish ----
   const publish = useCallback(async () => {
     if (!selectedId) return;
@@ -366,6 +434,15 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   </button>
                 )}
               </header>
+
+              <RequisitionEconomics
+                brief={brief}
+                clients={clients}
+                saving={savingEconomics}
+                onAssignClient={assignClient}
+                onSetClientRate={setClientRate}
+                onCreateClient={createAndAssignClient}
+              />
 
               {error ? <div className="rq-error">{error}</div> : null}
 

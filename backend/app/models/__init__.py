@@ -7,6 +7,12 @@ from .candidate_application_event import CandidateApplicationEvent
 from .application_interview import ApplicationInterview
 from .role import Role, role_tasks
 from .role_brief import BRIEF_SOURCES, BRIEF_STATUSES, RoleBrief
+from .client import (
+    CLIENT_STATUS_ACTIVE,
+    CLIENT_STATUS_ARCHIVED,
+    CLIENT_STATUSES,
+    Client,
+)
 from .org_criterion import (
     BUCKET_CONSTRAINT,
     BUCKET_MUST,
@@ -177,6 +183,10 @@ __all__ = [
     "RoleBrief",
     "BRIEF_SOURCES",
     "BRIEF_STATUSES",
+    "Client",
+    "CLIENT_STATUS_ACTIVE",
+    "CLIENT_STATUS_ARCHIVED",
+    "CLIENT_STATUSES",
     "RoleCriterion",
     "CRITERION_SOURCE_RECRUITER",
     "CRITERION_SOURCE_DERIVED",
