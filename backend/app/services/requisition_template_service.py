@@ -214,7 +214,7 @@ DEFAULT_REQUISITION_TEMPLATE: dict[str, Any] = {
                     "type": "select",
                     "required": True,
                     "question": "Which currency?",
-                    "options": ["GBP", "USD", "EUR", "AED", "SAR", "INR"],
+                    "options": ["AED", "USD", "GBP", "EUR", "SAR", "INR"],
                 },
                 {
                     "key": "salary_period",
