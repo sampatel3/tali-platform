@@ -13,6 +13,10 @@ import {
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
+import { CandidateDecisionStrip } from './CandidateDecisionStrip';
+import { OverrideModal } from '../home/OverrideModal';
+import { TeachModal } from '../home/TeachModal';
+import { DECISION_ACTIONS } from '../../shared/decisions/decisionActions';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
 import { readFluency4d } from '../../shared/assessment/fluency4d';
@@ -825,6 +829,16 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   // "client" (scrubbed external view) or "recruiter" (full report). Null
   // when not on a share route (recruiter is logged in and viewing /c/:id).
   const [shareViewMode, setShareViewMode] = useState(null);
+  // PR2 (decision-surface unification): the candidate's own pending agent
+  // decision, surfaced in the header strip with the SAME Approve / Override /
+  // Teach controls as the home hub. Recruiter-view only (the fetch + render
+  // are both gated on !isClientView && !isInterviewView below).
+  const [agentDecision, setAgentDecision] = useState(null);
+  const [decisionBusy, setDecisionBusy] = useState(false);
+  // Modal targets — mirrors HomeNow's teachFor / alternativeFor. ``alternativeFor``
+  // drives OverrideModal for both overrides AND the primary-advance confirm.
+  const [teachFor, setTeachFor] = useState(null);
+  const [alternativeFor, setAlternativeFor] = useState(null);
 
   const routeApplicationKey = String(applicationId || '').trim();
   const sharedRouteToken = String(routeShareToken || '').trim();
@@ -933,7 +947,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       );
       const canUseInternalApis = !isShareRoute;
 
-      const [assessmentRes, orgRes, eventsRes] = await Promise.all([
+      const [assessmentRes, orgRes, eventsRes, decisionRes] = await Promise.all([
         canUseInternalApis && hasCompletedAssessment && assessmentsApi?.get
           ? assessmentsApi.get(Number(assessmentId))
           : Promise.resolve(null),
@@ -943,10 +957,19 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         canUseInternalApis && rolesApi?.listApplicationEvents && nextApplication?.id
           ? rolesApi.listApplicationEvents(nextApplication.id)
           : Promise.resolve(null),
+        // The candidate's own pending agent decision for the header strip.
+        // Recruiter-view only (canUseInternalApis ⇒ non-share route). A
+        // failure here must not blank the report, so swallow it to null.
+        canUseInternalApis && apiClient.agent?.listDecisions && nextApplication?.id
+          ? apiClient.agent
+              .listDecisions({ application_id: nextApplication.id, status: 'pending', limit: 1 })
+              .catch(() => null)
+          : Promise.resolve(null),
       ]);
 
       setCompletedAssessment(assessmentRes?.data || null);
       setOrgData(orgRes?.data || null);
+      setAgentDecision(Array.isArray(decisionRes?.data) ? (decisionRes.data[0] || null) : null);
       // Recruiter shares can't call the auth-only /events endpoint, so the
       // backend embeds the audit timeline in the share payload instead.
       const sharedEvents = Array.isArray(nextApplication?.application_events)
@@ -971,6 +994,92 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       setLoading(false);
     }
   }, [assessmentsApi, isShareRoute, numericApplicationId, organizationsApi, rolesApi, routeApplicationKey, sharedRouteToken, showToast]);
+
+  // Refetch JUST the candidate's pending decision (after an approve / override /
+  // teach) without reloading the whole report. Recruiter-view only.
+  const loadAgentDecision = useCallback(async () => {
+    if (isShareRoute || !apiClient.agent?.listDecisions || !numericApplicationId) return;
+    try {
+      const res = await apiClient.agent.listDecisions({
+        application_id: numericApplicationId,
+        status: 'pending',
+        limit: 1,
+      });
+      setAgentDecision(Array.isArray(res?.data) ? (res.data[0] || null) : null);
+    } catch {
+      // A refetch failure shouldn't surface — the strip just keeps its
+      // last-known state until the next full report load reconciles it.
+    }
+  }, [isShareRoute, numericApplicationId]);
+
+  // 409 decision_stale — same shape HomeNow keys its stale messaging on.
+  const isDecisionStaleError = useCallback((err) => {
+    const detail = err?.response?.data?.detail;
+    const code = typeof detail === 'object' && detail !== null ? detail.code : detail;
+    return err?.response?.status === 409 && code === 'decision_stale';
+  }, []);
+
+  // Approve — mirrors HomeNow.handleApprove. Decision types whose action spec
+  // carries a ``primary`` (i.e. advance_to_interview) open OverrideModal in
+  // approve mode so the recruiter picks the Workable stage; everything else
+  // approves the recommendation directly. No optimistic queue mechanics here —
+  // there's a single decision on this page, not a queue to advance through.
+  const handleDecisionApprove = useCallback(async (decision) => {
+    if (!decision) return;
+    const spec = DECISION_ACTIONS[decision.decision_type];
+    if (spec?.primary) {
+      setAlternativeFor({ decision, alternative: spec.primary });
+      return;
+    }
+    setDecisionBusy(true);
+    try {
+      await apiClient.agent.approveDecision(decision.id, {}, { force: Boolean(decision.is_stale) });
+      showToast('Approved.', 'success');
+      await Promise.all([loadAgentDecision(), loadStandingReport()]);
+    } catch (err) {
+      if (isDecisionStaleError(err)) {
+        showToast("This decision's inputs changed — re-evaluate to refresh it.", 'warning');
+      } else {
+        showToast(getErrorMessage(err, "Couldn't approve this decision."), 'error');
+      }
+    } finally {
+      setDecisionBusy(false);
+    }
+  }, [isDecisionStaleError, loadAgentDecision, loadStandingReport, showToast]);
+
+  // Override — open OverrideModal for the chosen alternative (the POST happens
+  // inside the modal once the recruiter fills in the required "why").
+  const handleDecisionAlternative = useCallback((decision, alternative) => {
+    setAlternativeFor({ decision, alternative });
+  }, []);
+
+  const handleDecisionSnooze = useCallback(async (decision) => {
+    if (!decision) return;
+    setDecisionBusy(true);
+    try {
+      await apiClient.agent.snoozeDecision(decision.id);
+      showToast('Snoozed for 1h.', 'success');
+      await loadAgentDecision();
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Snooze failed'), 'error');
+    } finally {
+      setDecisionBusy(false);
+    }
+  }, [loadAgentDecision, showToast]);
+
+  const handleDecisionReEvaluate = useCallback(async (decision) => {
+    if (!decision) return;
+    setDecisionBusy(true);
+    try {
+      await apiClient.agent.reEvaluateDecision(decision.id);
+      showToast('Re-evaluating with fresh inputs…', 'success');
+      await Promise.all([loadAgentDecision(), loadStandingReport()]);
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Re-evaluate failed'), 'error');
+    } finally {
+      setDecisionBusy(false);
+    }
+  }, [loadAgentDecision, loadStandingReport, showToast]);
 
   useEffect(() => {
     void loadStandingReport();
@@ -1460,6 +1569,24 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             </>
           ) : null}
         />
+      ) : null}
+      {/* Decision strip — the agent's recommendation for THIS candidate with
+          the same Approve / Override / Teach controls as the home hub.
+          Recruiter-view only (hidden on every share link). */}
+      {!isClientView && !isInterviewView ? (
+        <div className="page" style={{ paddingTop: 0, paddingBottom: 0 }}>
+          <CandidateDecisionStrip
+            decision={agentDecision}
+            application={application}
+            busy={decisionBusy}
+            onApprove={handleDecisionApprove}
+            onAlternative={handleDecisionAlternative}
+            onReEvaluate={handleDecisionReEvaluate}
+            onSnooze={handleDecisionSnooze}
+            onTeach={(d) => setTeachFor(d)}
+            onNavigate={onNavigate}
+          />
+        </div>
       ) : null}
       <div className="page">
         {isInterviewView ? (
@@ -2259,6 +2386,41 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           })()}
         </div>
       </div>
+
+      {/* Decision modals — mirror HomeNow's wiring. Rendered at the page root
+          so the strip's Override / Teach actions open the SAME flows as the
+          home hub. On submit, refetch the candidate's decision + reload the
+          report so the strip reflects the new state. */}
+      {teachFor ? (
+        <TeachModal
+          decision={teachFor}
+          onClose={() => setTeachFor(null)}
+          onSubmitted={async () => {
+            showToast('Feedback recorded. Decision returned to the queue.', 'success');
+            await Promise.all([loadAgentDecision(), loadStandingReport()]);
+          }}
+        />
+      ) : null}
+
+      {alternativeFor ? (
+        <OverrideModal
+          decision={alternativeFor.decision}
+          alternative={alternativeFor.alternative}
+          // The candidate report doesn't carry the per-shortcode Workable-stage
+          // map the home hub lazy-loads; pass the application's own stage list
+          // when present, else [] (OverrideModal advances on the internal stage
+          // when there are no Workable stages to pick).
+          workableStages={application?.workable_stages || []}
+          onClose={() => setAlternativeFor(null)}
+          onSubmitted={async () => {
+            showToast(
+              `${alternativeFor.alternative.confirmLabel || 'Decision'} dispatched.`,
+              'success',
+            );
+            await Promise.all([loadAgentDecision(), loadStandingReport()]);
+          }}
+        />
+      ) : null}
     </div>
   );
 };
