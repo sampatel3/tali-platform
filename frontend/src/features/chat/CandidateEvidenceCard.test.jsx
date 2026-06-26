@@ -93,6 +93,46 @@ test('a "Taali score >= N" criterion the candidate misses renders as Not met', (
   expect(screen.getByText(/below the ≥ 90 threshold/)).toBeInTheDocument();
 });
 
+test('rediscovery mode shows the requirement-fit framing and screened/capped disclosure', () => {
+  render(
+    <CandidateEvidenceCard
+      data={{
+        mode: 'rediscovery',
+        total_matched: 523,
+        screened: 30,
+        capped: true,
+        shown: 1,
+        spec: {},
+        candidates: [
+          {
+            application_id: 1,
+            rank: 1,
+            candidate_name: 'Saurabh Zambare',
+            taali_score: 78,
+            criteria: [
+              {
+                criterion: 'banking domain experience',
+                status: 'met',
+                grounded: true,
+                evidence: [{ quote: 'Senior Data Engineer at ENBD', source: 'cv' }],
+                note: '',
+              },
+            ],
+          },
+        ],
+      }}
+    />,
+  );
+  expect(screen.getByText(/Rediscovery/)).toBeInTheDocument();
+  expect(screen.getByText(/ranked by fit to your requirement/)).toBeInTheDocument();
+  // Honest disclosure of what was deep-checked vs the whole scored pool.
+  expect(screen.getByText(/deep-checked 30 of 523 scored/)).toBeInTheDocument();
+  expect(screen.getByText(/refine to narrow/)).toBeInTheDocument();
+  // The grounded verdict + the candidate's score still render.
+  expect(screen.getByText('Met')).toBeInTheDocument();
+  expect(screen.getByText('Taali 78')).toBeInTheDocument();
+});
+
 test('an ERROR criterion shows "couldn’t verify" — NOT the false no-evidence line', () => {
   // The Saurabh bug: a failed/timed-out check must never read as a data gap.
   render(

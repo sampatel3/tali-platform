@@ -498,6 +498,57 @@ def find_top_candidates(
     return result
 
 
+def screen_pool_against_requirement(
+    db: Session,
+    user: User,
+    *,
+    requirement_text: str,
+    limit: int = 20,
+    role_id: int | None = None,
+) -> dict[str, Any]:
+    """Rediscovery: screen the WHOLE already-scored candidate pool against a NEW
+    free-text requirement.
+
+    Where ``find_top_candidates`` returns a shortlist of the CURRENT pipeline
+    ranked by each candidate's existing score, this casts a new requirement
+    across the org's entire scored history — reusing each candidate's stored
+    per-criterion evidence for free where it overlaps, grounding the most
+    promising with verbatim CV citations, and ranking by fit to THIS
+    requirement (not the stale score). Returns the same grounded
+    ``candidates`` payload plus ``screened`` / ``capped`` / per-candidate
+    ``coverage`` and ``rescore_candidate_ids`` (those a full re-score clarifies).
+    """
+    from ..candidate_search.top_candidates import (
+        screen_pool_against_requirement as _engine,
+    )
+
+    text = (requirement_text or "").strip()
+    if not text:
+        raise ValueError("requirement_text must be non-empty")
+
+    # The scored history to rediscover from: every candidate with a stored CV
+    # match, EXCEPT those already hired (placed). Unlike find_top_candidates we
+    # deliberately do NOT restrict to the current open pipeline — a candidate
+    # rejected for or advanced on ANOTHER role may be exactly who fits this new
+    # requirement (the whole point of rediscovery). NULL outcome reads as open.
+    base = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == user.organization_id,
+        CandidateApplication.deleted_at.is_(None),
+        CandidateApplication.cv_match_details.isnot(None),
+        func.coalesce(CandidateApplication.application_outcome, "open") != "hired",
+    )
+    if role_id is not None:
+        base = base.filter(CandidateApplication.role_id == int(role_id))
+
+    return _engine(
+        db=db,
+        organization_id=int(user.organization_id),
+        requirement=text,
+        base_query=base,
+        limit=int(limit),
+    )
+
+
 def graph_search_candidates(
     db: Session,
     user: User,

@@ -25,6 +25,7 @@ SIZE_LIMIT = 500
 # expanding this list. Value = why it's still here.
 ALLOWLIST: dict[str, str] = {
     "app/components/assessments/service.py": "assessment orchestration",
+    "app/components/integrations/claude_agent/service.py": "assessment interrogation service; 552 LOC after #716, pending split",
     "app/components/integrations/workable/sync_service.py": "Workable sync flow",
     "app/components/integrations/workable/service.py": "legacy Workable integration service",
     "app/domains/agentic/routes.py": "agent decisions queue + status + run-now (cohesive surface, 7 LOC over)",

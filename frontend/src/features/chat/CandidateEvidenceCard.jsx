@@ -178,17 +178,33 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
   const excluded = data.excluded || {};
   const hidden = excluded.not_met_total || 0;
   const hiddenBy = Array.isArray(excluded.by_criterion) ? excluded.by_criterion : [];
+  // Rediscovery mode (screen_pool_against_requirement): screened the scored
+  // history against a NEW requirement, ranked by fit to THAT (not the role
+  // score) — the header says so, and a bounded window was deep-checked.
+  const isRediscovery = data.mode === 'rediscovery';
+  const screened = data.screened;
+  const capped = !!data.capped;
 
   return (
     <div className="ev-card">
       <div className="ev-head">
         <div className="ev-title">
-          Top {shown}
+          {isRediscovery ? `Rediscovery · ${shown} shown` : `Top ${shown}`}
           {spec.echo ? <span className="ev-echo"> · {spec.echo}</span> : null}
         </div>
         <div className="ev-meta">
-          ranked by {rankLabel}
-          {typeof data.total_matched === 'number' ? ` · ${data.total_matched} in pool` : ''}
+          {isRediscovery ? 'ranked by fit to your requirement' : `ranked by ${rankLabel}`}
+          {isRediscovery
+            ? screened
+              ? ` · deep-checked ${screened} of ${data.total_matched} scored${
+                  capped ? ', refine to narrow' : ''
+                }`
+              : typeof data.total_matched === 'number'
+              ? ` · ${data.total_matched} scored in pool`
+              : ''
+            : typeof data.total_matched === 'number'
+            ? ` · ${data.total_matched} in pool`
+            : ''}
           {data.evidence_model ? ' · grounded vs CV + notes' : ''}
         </div>
       </div>

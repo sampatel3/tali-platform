@@ -192,6 +192,54 @@ def test_find_top_candidates_pool_is_scored_and_not_below_threshold(db):
 
 
 # ---------------------------------------------------------------------------
+# screen_pool_against_requirement (rediscovery)
+# ---------------------------------------------------------------------------
+
+
+def test_screen_pool_handler_scopes_scored_nonhired(db):
+    """Rediscovery casts over the scored HISTORY: every candidate with a stored
+    CV match EXCEPT those already hired — unlike find_top it does NOT restrict
+    to the open pipeline (a candidate scored for another role is fair game)."""
+    user, org = _make_user_and_org(db)
+    role = Role(organization_id=org.id, name="Backend", source="manual")
+    db.add(role)
+    db.commit()
+
+    scored = _make_app(db, org_id=org.id, role=role, candidate_name="Scored",
+                       email="s@x.test", taali=80.0)
+    scored.cv_match_details = {"requirements_assessment": []}
+    unscored = _make_app(db, org_id=org.id, role=role, candidate_name="Unscored",
+                         email="u@x.test")  # cv_match_details stays None
+    hired = _make_app(db, org_id=org.id, role=role, candidate_name="Hired",
+                      email="h@x.test", taali=90.0)
+    hired.cv_match_details = {"requirements_assessment": []}
+    hired.application_outcome = "hired"
+    db.commit()
+
+    captured = {}
+
+    def _fake_engine(*, db, organization_id, requirement, base_query, limit):
+        captured["ids"] = {a.id for a in base_query.all()}
+        return {"mode": "rediscovery", "candidates": []}
+
+    with patch(
+        "app.candidate_search.top_candidates.screen_pool_against_requirement",
+        _fake_engine,
+    ):
+        handlers.screen_pool_against_requirement(db, user, requirement_text="banking")
+
+    assert scored.id in captured["ids"]
+    assert unscored.id not in captured["ids"]  # not scored → excluded
+    assert hired.id not in captured["ids"]      # already placed → excluded
+
+
+def test_screen_pool_handler_rejects_empty_requirement(db):
+    user, _org = _make_user_and_org(db)
+    with pytest.raises(ValueError, match="non-empty"):
+        handlers.screen_pool_against_requirement(db, user, requirement_text="  ")
+
+
+# ---------------------------------------------------------------------------
 # _graph_topology — referential-integrity guard
 # ---------------------------------------------------------------------------
 
