@@ -17,7 +17,6 @@ from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.task import Task
 from ...components.integrations.e2b.service import E2BService
-from ...components.integrations.claude.service import ClaudeService
 from ...services.document_service import process_document_upload
 from ...services.assessment_repository_service import AssessmentRepositoryService
 from ...services.credit_ledger_service import append_credit_ledger_entry
@@ -1089,7 +1088,6 @@ def submit_assessment(
         db,
         settings_obj=settings,
         e2b_service_cls=E2BService,
-        claude_service_cls=ClaudeService,
         workspace_repo_root_fn=_workspace_repo_root,
         collect_git_evidence_fn=_collect_git_evidence_from_sandbox,
     )

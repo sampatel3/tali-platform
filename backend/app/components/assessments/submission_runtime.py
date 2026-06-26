@@ -331,7 +331,6 @@ def submit_assessment_impl(
     *,
     settings_obj: Any,
     e2b_service_cls: Type[Any],
-    claude_service_cls: Type[Any],
     workspace_repo_root_fn: Callable[[Task], str],
     collect_git_evidence_fn: Callable[[Any, str], Dict[str, Any]],
 ) -> Dict[str, Any]:
@@ -470,77 +469,50 @@ def submit_assessment_impl(
     prompt_analysis: Dict[str, Any] = {"success": False, "scores": {}, "per_prompt_scores": [], "fraud_flags": []}
     heuristics = compute_all_heuristics(assessment, prompts)
 
-    if settings_obj.MVP_DISABLE_CLAUDE_SCORING:
-        length_stats = heuristics.get("prompt_length_stats", {}) or {}
-        code_delta = heuristics.get("code_delta", {}) or {}
-        token_eff = heuristics.get("token_efficiency", {}) or {}
-        self_corr = heuristics.get("self_correction_rate", {}) or {}
-        ttfp = heuristics.get("time_to_first_prompt", {}) or {}
-        copy_paste = heuristics.get("copy_paste_detection", {}) or {}
+    # Heuristic scoring — the only path now. Populates the radar's atomic
+    # *_score columns and is the authoritative assessment score for tasks
+    # with no evaluation_rubric (RubricScorer overrides it when a rubric is
+    # present). The legacy LLM analyze_code_quality/analyze_prompt_session
+    # branch (gated by MVP_DISABLE_CLAUDE_SCORING) was removed — its output
+    # was computed but never persisted to any scored column.
+    length_stats = heuristics.get("prompt_length_stats", {}) or {}
+    code_delta = heuristics.get("code_delta", {}) or {}
+    token_eff = heuristics.get("token_efficiency", {}) or {}
+    self_corr = heuristics.get("self_correction_rate", {}) or {}
+    ttfp = heuristics.get("time_to_first_prompt", {}) or {}
+    copy_paste = heuristics.get("copy_paste_detection", {}) or {}
 
-        avg_words = length_stats.get("avg_words") or 0
-        prompt_quality_score = max(0.0, min(10.0, 10.0 - (abs(avg_words - 80) / 12.0)))
-        prompt_efficiency_score = max(0.0, min(10.0, (token_eff.get("solve_rate", 0) * 10.0)))
-        independence_score = 5.0
-        if ttfp.get("value") is not None:
-            first_prompt_seconds = max(0, int(ttfp.get("value") or 0))
-            independence_score = max(0.0, min(10.0, min(first_prompt_seconds, 600) / 60.0))
-        context_utilization_score = max(
-            0.0,
-            min(10.0, float(code_delta.get("utilization_rate", 0) or 0) * 10.0),
-        )
-        design_thinking_score = prompt_quality_score
-        debugging_strategy_score = max(0.0, min(10.0, float((self_corr.get("rate") or 0)) * 10.0))
-        written_communication_score = prompt_quality_score
-        learning_velocity_score = prompt_quality_score
-        error_recovery_score_val = debugging_strategy_score
-        requirement_comprehension_score = prompt_quality_score
-        code_quality_score = 5.0
-        ai_scores = {
-            "prompt_clarity": round(prompt_quality_score, 2),
-            "prompt_efficiency": round(prompt_efficiency_score, 2),
-            "independence": round(independence_score, 2),
-            "context_utilization": round(context_utilization_score, 2),
-            "design_thinking": round(design_thinking_score, 2),
-            "debugging_strategy": round(debugging_strategy_score, 2),
-            "written_communication": round(written_communication_score, 2),
-            "learning_velocity": round(learning_velocity_score, 2),
-            "error_recovery": round(error_recovery_score_val, 2),
-            "requirement_comprehension": round(requirement_comprehension_score, 2),
-        }
-        prompt_analysis["fraud_flags"] = copy_paste.get("flags", []) or []
-    else:
-        claude = claude_service_cls(settings_obj.ANTHROPIC_API_KEY)
-        try:
-            quality = _retry_transient(lambda: claude.analyze_code_quality(final_code))
-        except Exception:
-            logger.exception(
-                "Code-quality scoring failed after retries assessment_id=%s", assessment.id
-            )
-            quality = {"success": False, "analysis": None}
-            assessment.scoring_partial = True
-        code_quality_score = 5.0
-        if quality.get("success") and quality.get("analysis"):
-            try:
-                analysis = json.loads(quality["analysis"])
-                cqs = analysis.get("overall_score")
-                if cqs is not None:
-                    code_quality_score = float(cqs)
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        task_desc = task.description or task.name or ""
-        if prompts:
-            try:
-                prompt_analysis = _retry_transient(
-                    lambda: claude.analyze_prompt_session(prompts, task_desc)
-                )
-            except Exception:
-                logger.exception(
-                    "Prompt-session scoring failed after retries assessment_id=%s", assessment.id
-                )
-                assessment.scoring_partial = True
-        ai_scores = prompt_analysis.get("scores", {})
+    avg_words = length_stats.get("avg_words") or 0
+    prompt_quality_score = max(0.0, min(10.0, 10.0 - (abs(avg_words - 80) / 12.0)))
+    prompt_efficiency_score = max(0.0, min(10.0, (token_eff.get("solve_rate", 0) * 10.0)))
+    independence_score = 5.0
+    if ttfp.get("value") is not None:
+        first_prompt_seconds = max(0, int(ttfp.get("value") or 0))
+        independence_score = max(0.0, min(10.0, min(first_prompt_seconds, 600) / 60.0))
+    context_utilization_score = max(
+        0.0,
+        min(10.0, float(code_delta.get("utilization_rate", 0) or 0) * 10.0),
+    )
+    design_thinking_score = prompt_quality_score
+    debugging_strategy_score = max(0.0, min(10.0, float((self_corr.get("rate") or 0)) * 10.0))
+    written_communication_score = prompt_quality_score
+    learning_velocity_score = prompt_quality_score
+    error_recovery_score_val = debugging_strategy_score
+    requirement_comprehension_score = prompt_quality_score
+    code_quality_score = 5.0
+    ai_scores = {
+        "prompt_clarity": round(prompt_quality_score, 2),
+        "prompt_efficiency": round(prompt_efficiency_score, 2),
+        "independence": round(independence_score, 2),
+        "context_utilization": round(context_utilization_score, 2),
+        "design_thinking": round(design_thinking_score, 2),
+        "debugging_strategy": round(debugging_strategy_score, 2),
+        "written_communication": round(written_communication_score, 2),
+        "learning_velocity": round(learning_velocity_score, 2),
+        "error_recovery": round(error_recovery_score_val, 2),
+        "requirement_comprehension": round(requirement_comprehension_score, 2),
+    }
+    prompt_analysis["fraud_flags"] = copy_paste.get("flags", []) or []
 
     # --- 3. CV-Job fit matching (single Claude call — done first so it feeds into scoring) ---
     scoring_errors = []
@@ -762,11 +734,10 @@ def submit_assessment_impl(
                 task_scenario=task.scenario or "",
                 candidate_role=str(task.role or ""),
                 decision_points=decision_points_for_grader,
-                # PR-2: surface the agent's tool calls/results + git diff to the
-                # grader so it scores HOW the candidate worked, not just the
-                # message/response text. Flag-gated (default off) until shadow-
-                # validated — see docs/ASSESSMENT_AI_NATIVE_IMPL_PLAN.md.
-                include_process_trace=bool(settings_obj.ASSESSMENT_GRADER_PROCESS_TRACE),
+                # Process-visible grading is always on now: the grader sees the
+                # agent's tool calls/results + git diff (ScoringArtifacts
+                # defaults include_process_trace=True), so it scores HOW the
+                # candidate worked, not just the message/response text.
                 git_evidence=(assessment.git_evidence or {}) if isinstance(assessment.git_evidence, dict) else {},
                 traps=traps_for_grader,
             )
