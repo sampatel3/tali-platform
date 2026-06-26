@@ -294,6 +294,7 @@ from .domains.share_links import (
     router as share_links_router,
 )
 from .domains.top_reports.routes import public_router as top_reports_public_router
+from .domains.assessments_runtime.pool_rescore_routes import router as pool_rescore_router
 
 # FastAPI-Users auth routers
 app.include_router(
@@ -323,6 +324,7 @@ app.include_router(
 )
 
 app.include_router(assessments_router, prefix="/api/v1")
+app.include_router(pool_rescore_router, prefix="/api/v1")
 app.include_router(organizations_router, prefix="/api/v1")
 app.include_router(org_criteria_router, prefix="/api/v1")
 app.include_router(users_router, prefix="/api/v1")
