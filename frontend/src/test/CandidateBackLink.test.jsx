@@ -86,6 +86,18 @@ vi.mock('../shared/api', () => ({
     downloadApplicationReport: vi.fn(),
   },
   team: { list: vi.fn().mockResolvedValue({ data: [] }), invite: vi.fn() },
+  // The standing report fetches the candidate's pending agent decision for the
+  // header strip (apiClient.agent.listDecisions) during its load effect, and
+  // wires the decision-strip actions to the other agent methods. Vitest throws
+  // on access to an undeclared export of a mocked module, so the optional chain
+  // (apiClient.agent?.listDecisions) would *throw* rather than no-op without
+  // this — failing the load and stranding the page on its error state.
+  agent: {
+    listDecisions: vi.fn().mockResolvedValue({ data: [] }),
+    approveDecision: vi.fn(),
+    snoozeDecision: vi.fn(),
+    reEvaluateDecision: vi.fn(),
+  },
   default: {
     interceptors: {
       request: { use: vi.fn() },
