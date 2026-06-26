@@ -1,31 +1,65 @@
-// AI-native Requisition — recruiter page.
+// AI-native Requisition — the recruiter intake surface.
 //
-// VERIFICATION STATUS: written from the codebase's api.js + React conventions but
-// NOT yet run through the FE toolchain or routed into the app shell. Wire it into
-// the page renderer + run the dev server / vitest before the PR merges (it must
-// not ship to prod unverified). Styling is intentionally minimal — align to the
-// design system during the verification pass.
-import React, { useEffect, useState } from 'react';
+// This is a CHAT AGENT, not a form. Split-view: the conversation on the left
+// (the agent drives it; the recruiter talks / pastes / drops a transcript /
+// screenshots a JD), and a live brief on the right that fills in as the agent
+// extracts fields. The brief is rendered FROM the org's requisition spec
+// template, and every field is click-to-edit so the recruiter can refine fast
+// without chatting.
+//
+// Reuses the SHARED CHAT KIT (ChatComposer / ChatMessage / ChatMarkdown /
+// ThinkingDots) — the one standard chat UI across Search, the Home dock and
+// the candidate workspace — and the global purple design tokens.
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { CheckCircle2, FileText, Paperclip, Plus, Rocket, X } from 'lucide-react';
 
+import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
 import { requisitionApi } from './api';
+import { LiveBrief } from './LiveBrief';
+import './requisitions.css';
 
-const LAYER_LISTS = [
-  ['must_haves', 'Must-haves'],
-  ['preferred', 'Preferred'],
-  ['dealbreakers', 'Dealbreakers'],
-  ['tradeoffs', 'Trade-offs'],
-  ['assessment_focus', 'What to assess'],
-  ['evp', 'Selling points'],
-];
+const ACCEPT = '.txt,.vtt,.srt,.md,.pdf,image/*';
+const isImage = (file) => Boolean(file && (file.type || '').startsWith('image/'));
 
-function List({ items }) {
-  if (!items || !items.length) return <span className="req-muted">—</span>;
+// One staged attachment = the File + a stable id + (for images) an object URL
+// for the thumbnail preview. We revoke the URL when the chip is removed / sent.
+let attachSeq = 0;
+const stageFile = (file) => ({
+  id: `att_${Date.now()}_${attachSeq++}`,
+  file,
+  url: isImage(file) ? URL.createObjectURL(file) : null,
+});
+
+const statusLabel = (status) => String(status || 'draft').replace(/_/g, ' ');
+const isPublished = (status) => String(status || '').toLowerCase() === 'published';
+
+// One conversation turn rendered with the shared message bubbles. Assistant
+// turns render Markdown; user turns show their text plus any attachment chips.
+function Turn({ msg }) {
+  const attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
+  if (msg.role === 'user') {
+    return (
+      <div className="tk-msg-user-wrap">
+        <div className="tk-msg-user">
+          {msg.content}
+          {attachments.length > 0 ? (
+            <div className="rq-attach-row" style={{ marginTop: msg.content ? 8 : 0, marginBottom: 0 }}>
+              {attachments.map((a, i) => (
+                <span key={i} className="rq-attach-chip" style={{ background: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.2)', color: '#fff' }}>
+                  <span className="rq-attach-glyph"><FileText size={13} /></span>
+                  <span className="rq-attach-name">{a.name}</span>
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
   return (
-    <ul className="req-list">
-      {items.map((it, i) => (
-        <li key={i}>{typeof it === 'string' ? it : JSON.stringify(it)}</li>
-      ))}
-    </ul>
+    <ChatMessage role="assistant">
+      <ChatMarkdown>{msg.content}</ChatMarkdown>
+    </ChatMessage>
   );
 }
 
@@ -33,188 +67,377 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const [briefs, setBriefs] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [brief, setBrief] = useState(null);
-  const [input, setInput] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [template, setTemplate] = useState(null);
+  const [composer, setComposer] = useState('');
+  const [attachments, setAttachments] = useState([]);
+  const [turnInFlight, setTurnInFlight] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [savingKey, setSavingKey] = useState(null);
+  const [loadingBrief, setLoadingBrief] = useState(false);
   const [error, setError] = useState('');
 
-  const loadList = async () => {
-    try {
-      setBriefs(await requisitionApi.list());
-    } catch (e) {
-      setError('Could not load requisitions.');
-    }
-  };
+  const fileInputRef = useRef(null);
+  const threadEndRef = useRef(null);
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
 
+  const messages = useMemo(() => (Array.isArray(brief?.messages) ? brief.messages : []), [brief]);
+
+  // Load the org template once + the requisition list on mount.
   useEffect(() => {
-    loadList();
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await requisitionApi.getTemplate();
+        if (!cancelled) setTemplate(res?.template || null);
+      } catch {
+        if (!cancelled) setTemplate(null);
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
-  const select = async (id) => {
+  const loadList = useCallback(async () => {
+    try {
+      const list = await requisitionApi.list();
+      setBriefs(Array.isArray(list) ? list : []);
+    } catch {
+      setError('Could not load requisitions.');
+    }
+  }, []);
+
+  useEffect(() => { void loadList(); }, [loadList]);
+
+  // Revoke any staged object URLs when the page unmounts.
+  useEffect(() => () => {
+    attachmentsRef.current.forEach((a) => a.url && URL.revokeObjectURL(a.url));
+  }, []);
+
+  // Keep the thread pinned to the latest turn.
+  useEffect(() => {
+    threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages, turnInFlight]);
+
+  const clearAttachments = useCallback(() => {
+    attachmentsRef.current.forEach((a) => a.url && URL.revokeObjectURL(a.url));
+    setAttachments([]);
+  }, []);
+
+  const select = useCallback(async (id) => {
+    if (id === selectedId) return;
     setSelectedId(id);
     setError('');
+    setComposer('');
+    clearAttachments();
+    setLoadingBrief(true);
     try {
       setBrief(await requisitionApi.get(id));
-    } catch (e) {
+    } catch {
       setError('Could not load this requisition.');
+      setBrief(null);
+    } finally {
+      setLoadingBrief(false);
     }
-  };
+  }, [selectedId, clearAttachments]);
 
-  const createReq = async () => {
-    setBusy(true);
+  const createReq = useCallback(async () => {
+    setCreating(true);
     setError('');
     try {
       const created = await requisitionApi.create();
       await loadList();
-      await select(created.id);
-      setInput('');
-    } catch (e) {
+      // create() returns the serialized brief (with the opening assistant
+      // message) directly — adopt it without a second round-trip.
+      setSelectedId(created.id);
+      setBrief(created);
+      setComposer('');
+      clearAttachments();
+    } catch {
       setError('Could not create a requisition.');
     } finally {
-      setBusy(false);
+      setCreating(false);
     }
-  };
+  }, [loadList, clearAttachments]);
 
-  const runIntake = async () => {
-    if (!selectedId || !input.trim()) return;
-    setBusy(true);
+  // ---- attachments ----
+  const addFiles = useCallback((files) => {
+    const staged = Array.from(files || []).filter(Boolean).map(stageFile);
+    if (staged.length) setAttachments((prev) => [...prev, ...staged]);
+  }, []);
+
+  const onFilePick = useCallback((e) => {
+    addFiles(e.target.files);
+    e.target.value = ''; // allow re-picking the same file
+  }, [addFiles]);
+
+  const removeAttachment = useCallback((id) => {
+    setAttachments((prev) => {
+      const found = prev.find((a) => a.id === id);
+      if (found?.url) URL.revokeObjectURL(found.url);
+      return prev.filter((a) => a.id !== id);
+    });
+  }, []);
+
+  // Paste-to-attach: pull image blobs off the clipboard onto the composer.
+  const onPaste = useCallback((e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const imgs = [];
+    for (const item of items) {
+      if (item.kind === 'file' && (item.type || '').startsWith('image/')) {
+        const f = item.getAsFile();
+        if (f) imgs.push(f);
+      }
+    }
+    if (imgs.length) {
+      e.preventDefault(); // don't also paste the image's text/path into the box
+      addFiles(imgs);
+    }
+  }, [addFiles]);
+
+  // ---- send a turn ----
+  const sendTurn = useCallback(async () => {
+    if (!selectedId || turnInFlight) return;
+    const message = composer.trim();
+    const files = attachments.map((a) => a.file);
+    // Allow sending with attachments and an empty message.
+    if (!message && files.length === 0) return;
+
+    setTurnInFlight(true);
     setError('');
-    try {
-      const updated = await requisitionApi.runIntake(selectedId, input.trim());
-      setBrief(updated);
-    } catch (e) {
-      setError('Intake failed — the agent could not extract a brief. Try again.');
-    } finally {
-      setBusy(false);
-    }
-  };
 
-  const publish = async () => {
+    // Optimistic echo so the recruiter's turn shows immediately.
+    const echo = {
+      role: 'user',
+      content: message,
+      attachments: attachments.map((a) => ({ name: a.file.name, kind: isImage(a.file) ? 'image' : 'file' })),
+    };
+    setBrief((prev) => (prev ? { ...prev, messages: [...(prev.messages || []), echo] } : prev));
+    setComposer('');
+    clearAttachments();
+
+    try {
+      const res = await requisitionApi.chat(selectedId, { message, files });
+      // The response is authoritative for the brief + the full message log.
+      setBrief((prev) => ({
+        ...(prev || {}),
+        ...(res.brief || {}),
+        messages: res.messages || res.brief?.messages || (prev?.messages ?? []),
+        gaps: res.gaps ?? res.brief?.gaps ?? prev?.gaps,
+      }));
+      void loadList(); // title / completeness may have changed in the sidebar
+    } catch {
+      setError('The agent could not process that turn. Your message is preserved above — try again.');
+    } finally {
+      setTurnInFlight(false);
+    }
+  }, [selectedId, turnInFlight, composer, attachments, clearAttachments, loadList]);
+
+  // ChatComposer's onSubmit only fires with non-empty text; we also need an
+  // attachments-only send, so the composer's submit defers to sendTurn and we
+  // expose a separate send affordance for the empty-text + attachments case.
+  const onComposerSubmit = useCallback(() => { void sendTurn(); }, [sendTurn]);
+
+  // ---- click-to-edit a brief field ----
+  const saveField = useCallback(async (key, value, isCustom) => {
     if (!selectedId) return;
-    setBusy(true);
+    setSavingKey(key);
+    try {
+      // Custom fields share one JSON dict, so merge rather than replace —
+      // sending just { [key]: value } would wipe sibling custom fields.
+      // Column fields PATCH directly.
+      const payload = isCustom
+        ? { custom_fields: { ...(brief?.custom_fields || {}), [key]: value } }
+        : { [key]: value };
+      const updated = await requisitionApi.update(selectedId, payload);
+      setBrief((prev) => ({ ...(prev || {}), ...(updated || {}) }));
+      void loadList();
+    } catch {
+      setError('Could not save that field. Try again.');
+    } finally {
+      setSavingKey(null);
+    }
+  }, [selectedId, loadList, brief]);
+
+  // ---- publish ----
+  const publish = useCallback(async () => {
+    if (!selectedId) return;
+    setPublishing(true);
     setError('');
     try {
-      await requisitionApi.publish(selectedId);
-      await select(selectedId);
-    } catch (e) {
-      setError('Publish failed.');
+      const res = await requisitionApi.publish(selectedId);
+      setBrief((prev) => ({ ...(prev || {}), ...(res || {}) }));
+      await loadList();
+    } catch {
+      setError('Publish failed — resolve any missing required fields and try again.');
     } finally {
-      setBusy(false);
+      setPublishing(false);
     }
-  };
+  }, [selectedId, loadList]);
 
-  const openQuestions = (brief && brief.agent_state && brief.agent_state.open_questions) || [];
+  const published = isPublished(brief?.status);
+  const canSend = (composer.trim() || attachments.length > 0) && !turnInFlight;
 
   return (
     <>
       {NavComponent ? <NavComponent currentPage="requisitions" onNavigate={onNavigate} /> : null}
-    <div className="req-page" style={{ display: 'flex', gap: 20, padding: 20 }}>
-      <aside style={{ width: 260, flex: '0 0 auto' }}>
-        <button className="req-btn" onClick={createReq} disabled={busy}>
-          + New requisition
-        </button>
-        <ul className="req-sidelist" style={{ listStyle: 'none', padding: 0, marginTop: 12 }}>
-          {briefs.map((b) => (
-            <li key={b.id}>
-              <button
-                onClick={() => select(b.id)}
-                style={{
-                  display: 'block', width: '100%', textAlign: 'left', padding: '8px 10px',
-                  borderRadius: 8, border: '1px solid #e7e9ee', marginBottom: 6,
-                  background: b.id === selectedId ? '#ede9fe' : 'transparent', cursor: 'pointer',
-                }}
-              >
-                <strong>{b.title || 'Untitled requisition'}</strong>
-                <div className="req-muted" style={{ fontSize: 12 }}>
-                  {b.status} · {b.completeness != null ? `${b.completeness}% complete` : 'not started'}
-                </div>
-              </button>
-            </li>
-          ))}
-        </ul>
-      </aside>
-
-      <main style={{ flex: 1, minWidth: 0 }}>
-        {error && <div className="req-error" style={{ color: '#b91c1c', marginBottom: 12 }}>{error}</div>}
-        {!brief && <div className="req-muted">Create a requisition, then paste a hiring-manager transcript or notes and let the agent draft the brief.</div>}
-
-        {brief && (
-          <div>
-            <h2 style={{ marginTop: 0 }}>{brief.title || 'Untitled requisition'}</h2>
-            <div className="req-muted" style={{ marginBottom: 12 }}>
-              {brief.status}
-              {brief.completeness != null ? ` · ${brief.completeness}% complete` : ''}
-            </div>
-
-            <section style={{ marginBottom: 16 }}>
-              <label style={{ fontWeight: 600 }}>Hiring-manager input (transcript / notes / JD)</label>
-              <textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                rows={5}
-                placeholder="Paste the kickoff-call transcript or your notes…"
-                style={{ width: '100%', marginTop: 6, padding: 10, borderRadius: 8, border: '1px solid #e7e9ee' }}
-              />
-              <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
-                <button className="req-btn" onClick={runIntake} disabled={busy || !input.trim()}>
-                  {busy ? 'Working…' : 'Run intake (agent fills the brief)'}
-                </button>
-                <button className="req-btn" onClick={publish} disabled={busy}>
-                  Publish → role
-                </button>
-              </div>
-            </section>
-
-            {openQuestions.length > 0 && (
-              <section style={{ marginBottom: 16, padding: 12, background: '#fff7ed', borderRadius: 8 }}>
-                <strong>The agent still wants to know:</strong>
-                <List items={openQuestions} />
-              </section>
-            )}
-
-            <section className="req-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-              <Field label="Summary" value={brief.summary} />
-              <Field label="Department" value={brief.department} />
-              <Field label="Location" value={[brief.location_city, brief.location_country].filter(Boolean).join(', ')} />
-              <Field label="Workplace" value={brief.workplace_type} />
-              <Field label="Employment" value={brief.employment_type} />
-              <Field label="Seniority" value={brief.seniority} />
-              <Field label="Openings" value={brief.openings} />
-              <Field label="Salary" value={salary(brief)} />
-              <Field label="Success profile" value={brief.success_profile} wide />
-              {LAYER_LISTS.map(([key, label]) => (
-                <Block key={key} label={label}><List items={brief[key]} /></Block>
-              ))}
-              <Block label="Priorities"><List items={(brief.priorities || []).map((p) => `${p.factor}${p.weight ? ` (${p.weight})` : ''}`)} /></Block>
-              <Block label="Calibration"><List items={(brief.calibration_exemplars || []).map((e) => `${e.kind}: ${e.description}`)} /></Block>
-            </section>
+      <div className="rq-root">
+        {/* Sidebar — the requisition list */}
+        <aside className="rq-side">
+          <div className="rq-side-head">
+            <button type="button" className="rq-new-btn" onClick={createReq} disabled={creating}>
+              {creating ? <span className="rq-spinner" /> : <Plus size={15} />} New requisition
+            </button>
           </div>
-        )}
-      </main>
-    </div>
+          <ul className="rq-side-list">
+            {briefs.length === 0 ? (
+              <li className="rq-side-empty">No requisitions yet. Start one and tell the agent about the role.</li>
+            ) : (
+              briefs.map((b) => (
+                <li key={b.id}>
+                  <button
+                    type="button"
+                    className={`rq-side-item${b.id === selectedId ? ' is-active' : ''}`}
+                    onClick={() => select(b.id)}
+                  >
+                    <span className="rq-side-title">{b.title || 'Untitled requisition'}</span>
+                    <span className="rq-side-meta">
+                      <span className={`rq-dot ${isPublished(b.status) ? 'is-published' : 'is-open'}`} />
+                      {statusLabel(b.status)}
+                      {b.completeness != null ? ` · ${b.completeness}%` : ''}
+                    </span>
+                  </button>
+                </li>
+              ))
+            )}
+          </ul>
+        </aside>
+
+        {/* Main — header + the two columns */}
+        <div className="rq-main">
+          {!brief ? (
+            <div className="rq-blank">
+              <div className="rq-blank-card">
+                <div className="rq-blank-glyph"><FileText size={22} /></div>
+                <h2>Draft a requisition with the agent</h2>
+                <p>
+                  Start a new requisition, then tell the agent about the role — talk it through,
+                  paste a kickoff-call transcript, or screenshot a JD. The brief fills in beside
+                  the conversation as you go.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <>
+              <header className="rq-main-head">
+                <div className="rq-main-head-titles">
+                  <h1 className="rq-main-title">{brief.title || 'Untitled requisition'}</h1>
+                  <div className="rq-main-sub">
+                    <span className="rq-status-chip">{statusLabel(brief.status)}</span>
+                    <span>{Math.max(0, Math.min(100, Number(brief.completeness) || 0))}% complete</span>
+                  </div>
+                </div>
+                {published ? (
+                  <span className="rq-published-flag"><CheckCircle2 size={16} /> Published to role</span>
+                ) : (
+                  <button type="button" className="rq-publish-btn" onClick={publish} disabled={publishing}>
+                    {publishing ? <span className="rq-spinner" /> : <Rocket size={15} />} Publish → role
+                  </button>
+                )}
+              </header>
+
+              {error ? <div className="rq-error">{error}</div> : null}
+
+              <div className="rq-split">
+                {/* Conversation */}
+                <div className="rq-convo">
+                  <div className="rq-thread">
+                    {messages.map((m, i) => <Turn key={i} msg={m} />)}
+                    {turnInFlight ? (
+                      <ChatMessage role="assistant"><ThinkingDots label="thinking…" /></ChatMessage>
+                    ) : null}
+                    <div ref={threadEndRef} />
+                  </div>
+
+                  <div className="rq-composer-wrap">
+                    {attachments.length > 0 ? (
+                      <div className="rq-attach-row">
+                        {attachments.map((a) => (
+                          <span key={a.id} className="rq-attach-chip">
+                            {a.url ? (
+                              <img className="rq-attach-thumb" src={a.url} alt={a.file.name} />
+                            ) : (
+                              <span className="rq-attach-glyph"><FileText size={14} /></span>
+                            )}
+                            <span className="rq-attach-name">{a.file.name}</span>
+                            <button type="button" className="rq-attach-x" aria-label={`Remove ${a.file.name}`} onClick={() => removeAttachment(a.id)}>
+                              <X size={13} />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    <div className="rq-composer-tools">
+                      <button
+                        type="button"
+                        className="rq-attach-btn"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={turnInFlight}
+                      >
+                        <Paperclip size={14} /> Attach
+                      </button>
+                      <span className="rq-attach-hint">transcript or JD screenshot · or paste an image</span>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept={ACCEPT}
+                        multiple
+                        hidden
+                        onChange={onFilePick}
+                      />
+                    </div>
+
+                    <ChatComposer
+                      value={composer}
+                      onChange={setComposer}
+                      onSubmit={onComposerSubmit}
+                      onPaste={onPaste}
+                      placeholder="Tell the agent about the role, or answer its question…"
+                      busy={turnInFlight}
+                    />
+
+                    {/* Attachments-only send (the composer's own send is
+                        disabled on empty text). */}
+                    {composer.trim() === '' && attachments.length > 0 ? (
+                      <div style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end' }}>
+                        <button type="button" className="rq-btn-sm is-primary" onClick={() => sendTurn()} disabled={!canSend}>
+                          {turnInFlight ? <span className="rq-spinner" /> : null} Send {attachments.length} attachment{attachments.length === 1 ? '' : 's'}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+
+                {/* Live brief */}
+                {loadingBrief ? (
+                  <div className="rq-brief"><div className="rq-brief-scroll"><span className="rq-spinner" /></div></div>
+                ) : (
+                  <LiveBrief
+                    template={template}
+                    brief={brief}
+                    onSave={saveField}
+                    savingKey={savingKey}
+                  />
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
     </>
   );
 };
 
-function salary(b) {
-  if (!b.salary_min && !b.salary_max) return null;
-  const cur = b.salary_currency || '';
-  return `${cur} ${b.salary_min || ''}${b.salary_max ? `–${b.salary_max}` : ''} ${b.salary_period || ''}`.trim();
-}
-
-function Field({ label, value, wide }) {
-  return (
-    <div style={wide ? { gridColumn: '1 / -1' } : undefined}>
-      <div className="req-muted" style={{ fontSize: 12, fontWeight: 600 }}>{label}</div>
-      <div>{value || <span className="req-muted">—</span>}</div>
-    </div>
-  );
-}
-
-function Block({ label, children }) {
-  return (
-    <div style={{ gridColumn: '1 / -1' }}>
-      <div className="req-muted" style={{ fontSize: 12, fontWeight: 600 }}>{label}</div>
-      {children}
-    </div>
-  );
-}
+export default RequisitionsPage;

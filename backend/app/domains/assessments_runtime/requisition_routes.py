@@ -1,23 +1,39 @@
-"""Requisition API (recruiter, JWT) — drive the AI-native intake.
+"""Requisition API (recruiter, JWT) — drive the AI-native conversational intake.
 
-Create a requisition, run the intake agent over pasted notes / a transcript / a
-JD (it fills the full hiring brief), review/edit, then publish (materialize to a
-role). The no-login conversational hiring-manager surface is a separate public
-router; this is the authed recruiter path that's testable immediately.
+Create a requisition (which seeds an opening assistant message), then *talk* to
+the intake agent (``POST /requisitions/{id}/chat``, multipart so the recruiter
+can attach a kickoff-call transcript or a screenshot) — it captures the full
+hiring spec against the org's requisition template. Review/edit, then publish
+(materialize to a role).
+
+Keeps the legacy single-shot ``POST /requisitions/{id}/intake`` for back-compat.
+The org's spec template is read/written via ``/settings/requisition-template``.
 """
 from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ...deps import get_current_user
+from ...models.organization import Organization
 from ...models.role_brief import RoleBrief
 from ...models.user import User
 from ...platform.database import get_db
+from ...services.requisition_chat_service import (
+    ChatAttachment,
+    compute_gaps,
+    run_chat_turn,
+    seed_opening_message,
+)
 from ...services.requisition_intake_agent import run_intake_extraction
+from ...services.requisition_template_service import (
+    get_template_for_org,
+    resolve_template,
+    set_template_for_org,
+)
 from ...services.role_brief_service import (
     create_brief,
     materialize_brief_to_role,
@@ -27,50 +43,60 @@ from ...services.role_brief_service import (
 
 router = APIRouter(tags=["Requisitions"])
 
-
-class BriefOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    role_id: Optional[int] = None
-    status: str
-    source_kind: Optional[str] = None
-    title: Optional[str] = None
-    summary: Optional[str] = None
-    department: Optional[str] = None
-    location_city: Optional[str] = None
-    location_country: Optional[str] = None
-    workplace_type: Optional[str] = None
-    employment_type: Optional[str] = None
-    seniority: Optional[str] = None
-    salary_min: Optional[int] = None
-    salary_max: Optional[int] = None
-    salary_currency: Optional[str] = None
-    salary_period: Optional[str] = None
-    openings: Optional[int] = None
-    target_start: Optional[str] = None
-    must_haves: Optional[list] = None
-    preferred: Optional[list] = None
-    dealbreakers: Optional[list] = None
-    success_profile: Optional[str] = None
-    priorities: Optional[list] = None
-    tradeoffs: Optional[list] = None
-    calibration_exemplars: Optional[list] = None
-    sourcing_signals: Optional[dict] = None
-    assessment_focus: Optional[list] = None
-    process: Optional[dict] = None
-    evp: Optional[list] = None
-    agent_state: Optional[dict] = None
-    completeness: Optional[int] = None
+# Multipart upload guards for the chat endpoint.
+_MAX_CHAT_FILES = 6
+_MAX_CHAT_FILE_BYTES = 15 * 1024 * 1024  # 15 MB per file
 
 
-class CreateRequisition(BaseModel):
-    source_kind: Optional[str] = None
+# --------------------------------------------------------------------------- #
+# Serialization
+# --------------------------------------------------------------------------- #
+_BRIEF_FIELDS = (
+    "id",
+    "role_id",
+    "status",
+    "source_kind",
+    "title",
+    "summary",
+    "department",
+    "location_city",
+    "location_country",
+    "workplace_type",
+    "employment_type",
+    "seniority",
+    "salary_min",
+    "salary_max",
+    "salary_currency",
+    "salary_period",
+    "openings",
+    "target_start",
+    "must_haves",
+    "preferred",
+    "dealbreakers",
+    "success_profile",
+    "priorities",
+    "tradeoffs",
+    "calibration_exemplars",
+    "sourcing_signals",
+    "assessment_focus",
+    "process",
+    "evp",
+    "agent_state",
+    "completeness",
+)
 
 
-class IntakeInput(BaseModel):
-    input: str
-    source_kind: Optional[str] = None
+def _serialize_brief(brief: RoleBrief, org: Optional[Organization]) -> dict[str, Any]:
+    """The full brief payload: every v1 field PLUS custom_fields, messages,
+    completeness (0-100), and the live ``gaps`` (required template fields still
+    empty)."""
+    template = resolve_template(org)
+    payload: dict[str, Any] = {k: getattr(brief, k, None) for k in _BRIEF_FIELDS}
+    payload["custom_fields"] = brief.custom_fields or {}
+    payload["messages"] = brief.messages or []
+    payload["completeness"] = int(brief.completeness or 0)
+    payload["gaps"] = compute_gaps(brief, template)
+    return payload
 
 
 def _get_brief(db: Session, organization_id: int, brief_id: int) -> RoleBrief:
@@ -84,54 +110,151 @@ def _get_brief(db: Session, organization_id: int, brief_id: int) -> RoleBrief:
     return brief
 
 
-@router.post("/requisitions", response_model=BriefOut, status_code=201)
+def _org(db: Session, organization_id: int) -> Optional[Organization]:
+    return (
+        db.query(Organization).filter(Organization.id == organization_id).first()
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Request bodies
+# --------------------------------------------------------------------------- #
+class CreateRequisition(BaseModel):
+    source_kind: Optional[str] = None
+
+
+class IntakeInput(BaseModel):
+    input: str
+    source_kind: Optional[str] = None
+
+
+class TemplatePut(BaseModel):
+    template: dict[str, Any]
+
+
+# --------------------------------------------------------------------------- #
+# CRUD + intake
+# --------------------------------------------------------------------------- #
+@router.post("/requisitions", status_code=201)
 def create_requisition(
     data: CreateRequisition,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Create a requisition and seed the OPENING assistant message (greeting +
+    the first required question from the org's template)."""
     brief = create_brief(
         db,
         organization_id=current_user.organization_id,
         created_by_user_id=current_user.id,
         source_kind=data.source_kind,
     )
+    org = _org(db, current_user.organization_id)
+    template = resolve_template(org)
+    seed_opening_message(brief, template)
+    db.flush()
     db.commit()
     db.refresh(brief)
-    return brief
+    return _serialize_brief(brief, org)
 
 
-@router.get("/requisitions", response_model=list[BriefOut])
+@router.get("/requisitions")
 def list_requisitions(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return (
+    org = _org(db, current_user.organization_id)
+    briefs = (
         db.query(RoleBrief)
         .filter(RoleBrief.organization_id == current_user.organization_id)
         .order_by(RoleBrief.id.desc())
         .all()
     )
+    return [_serialize_brief(b, org) for b in briefs]
 
 
-@router.get("/requisitions/{brief_id}", response_model=BriefOut)
+@router.get("/requisitions/{brief_id}")
 def get_requisition(
     brief_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return _get_brief(db, current_user.organization_id, brief_id)
+    brief = _get_brief(db, current_user.organization_id, brief_id)
+    return _serialize_brief(brief, _org(db, current_user.organization_id))
 
 
-@router.post("/requisitions/{brief_id}/intake", response_model=BriefOut)
+@router.post("/requisitions/{brief_id}/chat")
+async def chat_requisition(
+    brief_id: int,
+    message: str = Form(""),
+    files: list[UploadFile] = File(default=[]),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Run ONE conversational intake turn. Multipart: ``message`` (may be empty
+    if only files are attached) + ``files`` (transcripts / screenshots / PDFs).
+    The agent captures field values against the org template and replies."""
+    brief = _get_brief(db, current_user.organization_id, brief_id)
+
+    message = message or ""
+    files = files or []
+    if not message.strip() and not files:
+        raise HTTPException(status_code=422, detail="Provide a message or at least one file")
+    if len(files) > _MAX_CHAT_FILES:
+        raise HTTPException(
+            status_code=422, detail=f"At most {_MAX_CHAT_FILES} files per turn"
+        )
+
+    attachments: list[ChatAttachment] = []
+    for upload in files:
+        content = await upload.read()
+        if len(content) > _MAX_CHAT_FILE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"{upload.filename or 'file'} exceeds the 15 MB per-file limit",
+            )
+        attachments.append(
+            ChatAttachment(
+                name=(upload.filename or "attachment"),
+                content_type=upload.content_type,
+                content=content,
+            )
+        )
+
+    org = _org(db, current_user.organization_id)
+    template = resolve_template(org)
+    result = run_chat_turn(
+        db,
+        brief,
+        message=message,
+        attachments=attachments,
+        template=template,
+    )
+    if not result.ok:
+        db.rollback()
+        raise HTTPException(
+            status_code=502, detail=f"Intake chat failed: {result.error_reason}"
+        )
+    db.commit()
+    db.refresh(brief)
+    payload = _serialize_brief(brief, org)
+    return {
+        "brief": payload,
+        "reply": (result.value.assistant_reply if result.value else "") or "",
+        "messages": payload["messages"],
+        "gaps": payload["gaps"],
+    }
+
+
+@router.post("/requisitions/{brief_id}/intake")
 def run_requisition_intake(
     brief_id: int,
     data: IntakeInput,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Run the intake agent over the input (notes / transcript / JD); it fills the
-    brief. Calls Claude (metered)."""
+    """Legacy single-shot intake over pasted notes / transcript / JD (kept for
+    back-compat). Prefer ``/chat``. Calls Claude (metered)."""
     brief = _get_brief(db, current_user.organization_id, brief_id)
     result = run_intake_extraction(db, brief, data.input, source_kind=data.source_kind)
     if not result.ok:
@@ -141,25 +264,26 @@ def run_requisition_intake(
         )
     db.commit()
     db.refresh(brief)
-    return brief
+    return _serialize_brief(brief, _org(db, current_user.organization_id))
 
 
-@router.patch("/requisitions/{brief_id}", response_model=BriefOut)
+@router.patch("/requisitions/{brief_id}")
 def update_requisition(
     brief_id: int,
     data: dict[str, Any],
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Recruiter edits to the agent-drafted brief (whitelisted fields)."""
+    """Recruiter edits to the brief (whitelisted fields, including
+    ``custom_fields``)."""
     brief = _get_brief(db, current_user.organization_id, brief_id)
     update_brief_fields(db, brief, **(data or {}))
     db.commit()
     db.refresh(brief)
-    return brief
+    return _serialize_brief(brief, _org(db, current_user.organization_id))
 
 
-@router.post("/requisitions/{brief_id}/submit", response_model=BriefOut)
+@router.post("/requisitions/{brief_id}/submit")
 def submit_requisition(
     brief_id: int,
     db: Session = Depends(get_db),
@@ -169,7 +293,7 @@ def submit_requisition(
     submit_brief(db, brief)
     db.commit()
     db.refresh(brief)
-    return brief
+    return _serialize_brief(brief, _org(db, current_user.organization_id))
 
 
 @router.post("/requisitions/{brief_id}/publish")
@@ -183,3 +307,34 @@ def publish_requisition(
     role = materialize_brief_to_role(db, brief)
     db.commit()
     return {"role_id": role.id, "brief_id": brief.id, "status": brief.status}
+
+
+# --------------------------------------------------------------------------- #
+# Settings: the org's requisition spec template
+# --------------------------------------------------------------------------- #
+@router.get("/settings/requisition-template")
+def get_requisition_template(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The org's requisition spec template (its override, else the built-in
+    default)."""
+    org = _org(db, current_user.organization_id)
+    if org is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    return {"template": get_template_for_org(org)}
+
+
+@router.put("/settings/requisition-template")
+def put_requisition_template(
+    data: TemplatePut,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Validate + save the org's requisition spec template."""
+    org = _org(db, current_user.organization_id)
+    if org is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    saved = set_template_for_org(db, org, data.template)
+    db.commit()
+    return {"template": saved}
