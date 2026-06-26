@@ -34,6 +34,7 @@ import {
   TypeBadge,
 } from '../../features/home/atoms';
 import { ScoreProvenance } from '../../features/candidates/ScoreProvenance';
+import { IntegrityFlags } from './IntegrityFlags';
 import { DECISION_ACTIONS, DEFAULT_ACTIONS } from './decisionActions';
 import '../../features/home/home.css';
 
@@ -122,26 +123,10 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
         {decision.reasoning}
       </p>
 
-      {(() => {
-        // Integrity flags shown right under the summary — short, specific things
-        // to verify before deciding (copy-paste, hidden text, unevidenced
-        // must-haves, employer/date mismatches, graph/GitHub corroboration).
-        const integrity = decision?.score_summary?.integrity;
-        const flags = Array.isArray(integrity?.warnings) ? integrity.warnings : [];
-        if (!flags.length) return null;
-        return (
-          <div style={{ margin: '0 0 14px', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--amber)', background: 'color-mix(in oklab, var(--amber) 8%, transparent)', maxWidth: 760 }}>
-            <div style={{ fontSize: '0.6875rem', fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--amber)', marginBottom: 6 }}>
-              Verify before deciding{integrity?.trust_band ? ` · ${integrity.trust_band} trust` : ''}
-            </div>
-            <ul style={{ margin: 0, paddingLeft: 18 }}>
-              {flags.map((flag, index) => (
-                <li key={`flag-${index}`} style={{ fontSize: '0.8125rem', color: 'var(--ink)', margin: '3px 0', lineHeight: 1.45 }}>{flag}</li>
-              ))}
-            </ul>
-          </div>
-        );
-      })()}
+      {/* Trust readout right under the summary — the specific things to verify
+          and the cross-source corroborations we confirmed. Same component the
+          candidate report renders, so the wording is identical everywhere. */}
+      <IntegrityFlags integrity={decision?.score_summary?.integrity} style={{ margin: '0 0 14px' }} />
 
       {isStale && (decision.status === 'pending' || decision.status === 'reverted_for_feedback') ? (
         <div className="rq-stale-banner" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 14px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: '0.8125rem', fontWeight: 500 }}>

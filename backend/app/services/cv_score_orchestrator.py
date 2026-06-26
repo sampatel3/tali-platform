@@ -1224,7 +1224,14 @@ def _augment_integrity_signals(
         # CV-internal coherence (deterministic, flag-only).
         snap = snapshot if isinstance(snapshot, dict) else {}
         timeline = snap.get("timeline") or []
-        infl = detect_experience_inflation(snap.get("years_experience"), timeline)
+        # Feed the FULL parsed CV history alongside the snapshot timeline (which
+        # is capped at the 5 most-recent employers). Without the full list a
+        # candidate with >5 jobs has their oldest roles dropped, so the evidenced
+        # span looks short and they're wrongly flagged for "inflating" their years.
+        infl = detect_experience_inflation(
+            snap.get("years_experience"),
+            list(timeline) + list(cv_exp or []),
+        )
         if infl.triggered:
             merged["experience_inflation"] = infl.to_dict()
         anach = detect_tech_anachronism(cv_exp)
