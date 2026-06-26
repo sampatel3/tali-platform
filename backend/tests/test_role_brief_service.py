@@ -2,7 +2,13 @@
 import pytest
 from fastapi import HTTPException
 
-from app.models import Organization
+from app.models import (
+    BUCKET_CONSTRAINT,
+    BUCKET_MUST,
+    BUCKET_PREFERRED,
+    Organization,
+    RoleCriterion,
+)
 from app.services.role_brief_service import (
     create_brief,
     materialize_brief_to_role,
@@ -69,3 +75,28 @@ def test_applied_brief_is_locked_then_rematerializes_same_role(db):
     assert e.value.status_code == 409
     r2 = materialize_brief_to_role(db, b)
     assert r1.id == r2.id
+
+
+def test_materialize_creates_criteria_by_bucket(db):
+    b = create_brief(db, organization_id=_org(db).id)
+    update_brief_fields(
+        db, b, title="Eng",
+        must_haves=["Python", "Postgres"],
+        preferred=["AWS"],
+        dealbreakers=["Must be onsite"],
+    )
+    role = materialize_brief_to_role(db, b)
+    crits = {
+        (c.text, c.bucket, c.must_have)
+        for c in db.query(RoleCriterion).filter(RoleCriterion.role_id == role.id)
+    }
+    assert ("Python", BUCKET_MUST, True) in crits
+    assert ("Postgres", BUCKET_MUST, True) in crits
+    assert ("AWS", BUCKET_PREFERRED, False) in crits
+    assert ("Must be onsite", BUCKET_CONSTRAINT, False) in crits
+    # idempotent: re-publishing does not duplicate criteria
+    materialize_brief_to_role(db, b)
+    assert (
+        db.query(RoleCriterion).filter(RoleCriterion.role_id == role.id).count() == 4
+    )
+

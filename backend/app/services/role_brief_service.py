@@ -10,7 +10,9 @@ from __future__ import annotations
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from ..models.org_criterion import BUCKET_CONSTRAINT, BUCKET_MUST, BUCKET_PREFERRED
 from ..models.role import Role
+from ..models.role_criterion import CRITERION_SOURCE_RECRUITER, RoleCriterion
 from ..models.role_brief import (
     BRIEF_SOURCES,
     BRIEF_STATUS_APPLIED,
@@ -97,6 +99,51 @@ def submit_brief(db: Session, brief: RoleBrief) -> RoleBrief:
     return brief
 
 
+def _criterion_text(item) -> str:
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        return str(item.get("text") or item.get("label") or "").strip()
+    return str(item).strip()
+
+
+def _materialize_criteria(db: Session, brief: RoleBrief, role: Role) -> None:
+    """Create role_criterion rows from the brief's must_haves / preferred /
+    dealbreakers (-> must / preferred / constraint buckets) so the published role
+    is immediately scoreable. Idempotent: skips if the role already has criteria,
+    so re-publishing never duplicates. (Dealbreakers also become knockout
+    questions once screening_questions reaches prod.)"""
+    has_any = (
+        db.query(RoleCriterion.id)
+        .filter(RoleCriterion.role_id == role.id, RoleCriterion.deleted_at.is_(None))
+        .first()
+    )
+    if has_any:
+        return
+    ordering = 0
+    for items, bucket, must in (
+        (brief.must_haves, BUCKET_MUST, True),
+        (brief.preferred, BUCKET_PREFERRED, False),
+        (brief.dealbreakers, BUCKET_CONSTRAINT, False),
+    ):
+        for item in items or []:
+            text = _criterion_text(item)
+            if not text:
+                continue
+            db.add(
+                RoleCriterion(
+                    role_id=role.id,
+                    text=text,
+                    bucket=bucket,
+                    must_have=must,
+                    source=CRITERION_SOURCE_RECRUITER,
+                    ordering=ordering,
+                )
+            )
+            ordering += 1
+    db.flush()
+
+
 def materialize_brief_to_role(db: Session, brief: RoleBrief) -> Role:
     """Create (or update) the role this brief describes and mark the brief
     applied. Name + description now; role_criterion + knockout materialization is
@@ -122,6 +169,7 @@ def materialize_brief_to_role(db: Session, brief: RoleBrief) -> Role:
         role.name = brief.title
     if brief.summary:
         role.description = brief.summary
+    _materialize_criteria(db, brief, role)
     brief.status = BRIEF_STATUS_APPLIED
     db.flush()
     return role
