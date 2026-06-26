@@ -19,9 +19,11 @@ from sqlalchemy.orm import Session
 
 from ...deps import get_current_user
 from ...models.client import Client
+from ...models.job_page import JobPage
 from ...models.organization import Organization
 from ...models.role_brief import RoleBrief
 from ...models.user import User
+from ...platform.config import settings
 from ...platform.database import get_db
 from ...services.client_service import compute_margin
 from ...services.requisition_chat_service import (
@@ -39,12 +41,18 @@ from ...services.requisition_template_service import (
 )
 from ...services.role_brief_service import (
     create_brief,
-    materialize_brief_to_role,
+    publish_job_page,
     submit_brief,
     update_brief_fields,
 )
 
 router = APIRouter(tags=["Requisitions"])
+
+
+def _job_page_url(token: str) -> str:
+    """Public job-page URL. ``/job/{token}`` relative when FRONTEND_URL is empty."""
+    base = (settings.FRONTEND_URL or "").rstrip("/")
+    return f"{base}/job/{token}" if base else f"/job/{token}"
 
 # Multipart upload guards for the chat endpoint.
 _MAX_CHAT_FILES = 6
@@ -110,6 +118,18 @@ def _serialize_brief(brief: RoleBrief, org: Optional[Organization]) -> dict[str,
     )
     payload["margin"] = margin
     payload["margin_pct"] = margin_pct
+    # The brief's published PUBLIC job page (None until first published).
+    page = brief.job_page
+    payload["job_page"] = (
+        {
+            "token": page.token,
+            "url": _job_page_url(page.token),
+            "status": page.status,
+            "published_at": page.published_at.isoformat() if page.published_at else None,
+        }
+        if page
+        else None
+    )
     return payload
 
 
@@ -144,6 +164,10 @@ class IntakeInput(BaseModel):
 
 class TemplatePut(BaseModel):
     template: dict[str, Any]
+
+
+class PublishRequisition(BaseModel):
+    jd_markdown: str = ""
 
 
 # --------------------------------------------------------------------------- #
@@ -355,14 +379,28 @@ def submit_requisition(
 @router.post("/requisitions/{brief_id}/publish")
 def publish_requisition(
     brief_id: int,
+    data: PublishRequisition,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Materialize the brief onto a role (creates/updates the role)."""
+    """Publish the brief as a shareable PUBLIC job page.
+
+    Takes the FE-rendered ``jd_markdown`` and snapshots the brief's public-safe
+    fields onto a JobPage (idempotent — one per brief; re-publish refreshes it
+    and reuses the token). Does NOT materialize an internal role and does NOT
+    change the brief's status, so the brief stays editable for a re-publish.
+    """
     brief = _get_brief(db, current_user.organization_id, brief_id)
-    role = materialize_brief_to_role(db, brief)
+    page = publish_job_page(db, brief, jd_markdown=data.jd_markdown)
     db.commit()
-    return {"role_id": role.id, "brief_id": brief.id, "status": brief.status}
+    db.refresh(page)
+    return {
+        "job_page_id": page.id,
+        "token": page.token,
+        "url": _job_page_url(page.token),
+        "status": page.status,
+        "published_at": page.published_at.isoformat() if page.published_at else None,
+    }
 
 
 # --------------------------------------------------------------------------- #

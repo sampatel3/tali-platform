@@ -8,7 +8,7 @@
 // drives every subsequent turn (text + attachments) as multipart/form-data.
 // A live brief — rendered from the org's requisition spec template — fills in
 // beside the conversation as the agent extracts fields.
-import api from '../../shared/api/httpClient';
+import api, { viewPublicJob } from '../../shared/api/httpClient';
 
 const BASE = '/requisitions';
 
@@ -51,8 +51,13 @@ export const requisitionApi = {
   // `custom_fields` (e.g. `{ custom_fields: { relocation_support: 'yes' } }`).
   update: (id, fields) => api.patch(`${BASE}/${id}`, fields).then((r) => r.data),
 
-  // Publish the brief into a live role.
-  publish: (id) => api.post(`${BASE}/${id}/publish`).then((r) => r.data),
+  // Publish the brief: snapshots the rendered JD markdown onto a public job
+  // page (and provisions the live role behind it). `jdMarkdown` is the fully
+  // rendered job description — the recruiter's per-requisition override if set,
+  // else the template-filled draft (see RequisitionsPage). Returns
+  // `{ job_page_id, token, url, status, published_at }`; re-calling re-snapshots.
+  publish: (id, jdMarkdown) =>
+    api.post(`${BASE}/${id}/publish`, { jd_markdown: jdMarkdown }).then((r) => r.data),
 
   // The org's canonical requisition spec template — drives BOTH the live
   // brief panel and the settings editor. Returns `{ template }`; the backend
@@ -62,6 +67,16 @@ export const requisitionApi = {
   // Persist an edited spec template for the org.
   saveTemplate: (template) =>
     api.put('/settings/requisition-template', { template }).then((r) => r.data),
+};
+
+// Public, UNAUTHENTICATED job-posting client — used by the careers-style
+// /job/:token page. The recruiter's JWT must never be attached here (the
+// underlying helper uses a bare axios call, not the auth-interceptor instance),
+// so the link works for anyone. Returns the public job payload
+// `{ title, jd_markdown, location, workplace_type, employment_type, seniority,
+//    salary_min, salary_max, salary_currency, status, organization_name }`.
+export const publicJobApi = {
+  get: (token) => viewPublicJob(token).then((r) => r.data),
 };
 
 export default requisitionApi;

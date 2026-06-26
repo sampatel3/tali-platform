@@ -114,13 +114,21 @@ const hasOverride = (brief) => {
   return typeof o === 'string' && o.trim() !== '';
 };
 
+// Render the org's JD template against a brief into a substituted markdown
+// string — the same template-filled draft the recruiter sees in this panel,
+// exported as a pure function so other surfaces (e.g. the Publish handler that
+// snapshots the rendered JD onto the public job page) can produce identical
+// output without mounting <JobSpec>. Returns '' when there's no template.
+export const renderJobSpec = (template, brief) => {
+  const tpl = template?.jd_template;
+  if (!tpl) return '';
+  return substitute(tpl, brief);
+};
+
 export function JobSpec({ template, brief, onSaveOverride, savingOverride = false }) {
-  // The template-filled draft (live, derived from the brief).
-  const autoMarkdown = useMemo(() => {
-    const tpl = template?.jd_template;
-    if (!tpl) return '';
-    return substitute(tpl, brief);
-  }, [template, brief]);
+  // The template-filled draft (live, derived from the brief). Shares the same
+  // pure renderer the Publish handler uses, so the panel and the snapshot match.
+  const autoMarkdown = useMemo(() => renderJobSpec(template, brief), [template, brief]);
 
   const override = hasOverride(brief) ? brief.jd_override : null;
   // What's actually shown in view mode: the override if present, else the draft.
