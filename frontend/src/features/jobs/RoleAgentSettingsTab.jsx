@@ -185,6 +185,7 @@ const RoleAgentSettingsTab = ({
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--ink)' }}>
               <span className="kicker mute">MODE</span>
               <Select
+                inline
                 value={thresholdMode}
                 onChange={(event) => onThresholdModeChange?.(event.target.value)}
                 aria-label="Threshold mode"

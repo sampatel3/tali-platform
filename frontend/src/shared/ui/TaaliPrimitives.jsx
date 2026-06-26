@@ -244,6 +244,7 @@ export const Select = ({
   disabled = false,
   placeholder,
   bare = false,
+  inline = false,
   triggerClassName = '',
   'aria-label': ariaLabel,
 }) => {
@@ -258,6 +259,10 @@ export const Select = ({
     <SingleSelect
       className={className}
       triggerClassName={cx(bare ? 'taali-select-trigger-bare' : '', triggerClassName)}
+      // `bare` (inline filter-chips) and `inline` (compact toolbar selects)
+      // both want a content-width shell so they don't stretch to fill a flex
+      // toolbar; form-field selects keep the default full-width shell.
+      shellClassName={(bare || inline) ? 'taali-select-shell-inline' : ''}
       options={options}
       value={value}
       disabled={disabled}
@@ -385,7 +390,9 @@ export const MultiSelect = ({
         <span className={cx('taali-select-value', !selectedValues.length ? 'taali-select-value-placeholder' : '')}>
           {_multiSelectSummary(selectedValues, normalizedOptions, emptyLabel)}
         </span>
-        <ChevronDown size={16} className={cx('taali-select-chevron', open ? 'rotate-180' : '')} aria-hidden />
+        <span className={cx('taali-select-chevron', open ? 'rotate-180' : '')} aria-hidden>
+          <ChevronDown size={16} />
+        </span>
       </button>
       {open && resolvedMenuStyle && typeof document !== 'undefined'
         ? createPortal(
@@ -463,6 +470,7 @@ export const SingleSelect = ({
   renderOption,
   renderValue,
   triggerClassName = '',
+  shellClassName = '',
 }) => {
   const controlId = useId();
   const rootRef = useRef(null);
@@ -573,7 +581,7 @@ export const SingleSelect = ({
   };
 
   return (
-    <div ref={rootRef} className="taali-select-shell">
+    <div ref={rootRef} className={cx('taali-select-shell', shellClassName)}>
       <button
         ref={triggerRef}
         type="button"
@@ -598,7 +606,9 @@ export const SingleSelect = ({
             ? (typeof renderValue === 'function' ? renderValue(currentOption.raw) : currentOption.label)
             : placeholder}
         </span>
-        <ChevronDown size={16} className={cx('taali-select-chevron', open ? 'rotate-180' : '')} aria-hidden />
+        <span className={cx('taali-select-chevron', open ? 'rotate-180' : '')} aria-hidden>
+          <ChevronDown size={16} />
+        </span>
       </button>
       {open && resolvedMenuStyle && typeof document !== 'undefined'
         ? createPortal(

@@ -122,7 +122,7 @@ export const HomeExperiments = ({ roleId, dateFrom }) => {
       <div className="hm-controls">
         <label className="hm-rolefilter">
           <span className="kicker">Experiment</span>
-          <Select value={experimentId} onChange={(e) => setExperimentId(e.target.value)}>
+          <Select inline value={experimentId} onChange={(e) => setExperimentId(e.target.value)}>
             {experiments.map((e) => (
               <option key={e.id} value={e.id}>{e.name} · {e.status}</option>
             ))}

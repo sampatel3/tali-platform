@@ -142,7 +142,7 @@ export const HomeMonitoring = ({
           <div className="hm-controls">
             <label className="hm-rolefilter">
               <span className="kicker">Role</span>
-              <Select value={roleId} onChange={(e) => setRoleId(e.target.value)}>
+              <Select inline value={roleId} onChange={(e) => setRoleId(e.target.value)}>
                 <option value="">All roles</option>
                 {rolesBreakdown.map((r) => (
                   <option key={r.role_id} value={r.role_id}>{r.name}</option>

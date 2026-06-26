@@ -36,7 +36,7 @@ export default function SignalsDashboard() {
         <h2>Disagreement signals</h2>
         <label>
           Window:&nbsp;
-          <Select value={days} onChange={(e) => setDays(Number(e.target.value))}>
+          <Select inline value={days} onChange={(e) => setDays(Number(e.target.value))}>
             <option value={7}>7 days</option>
             <option value={30}>30 days</option>
             <option value={90}>90 days</option>

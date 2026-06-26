@@ -93,6 +93,7 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
     <div className="rq-toolbar-l">
       <span className="kicker mute" style={{ marginRight: 8 }}>ROLE</span>
       <Select
+        inline
         value={filters.role_id || ''}
         onChange={(e) => setFilters((f) => ({ ...f, role_id: e.target.value || null }))}
         aria-label="Select a role to scope the view"
