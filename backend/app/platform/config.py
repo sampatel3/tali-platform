@@ -510,6 +510,19 @@ class Settings(BaseSettings):
     # for the 5000/hr rate limit (falls back to unauthenticated). Default OFF.
     GITHUB_CORROBORATION_ENABLED: bool = False
 
+    # Graph OUTCOME priors → Match score (P4, decision 3) — SHADOW ONLY for now.
+    # Distinct from graph *anomaly* corroboration (warn-only): this is the
+    # positive "profiles like this from this company tend to succeed" prior
+    # (skill→outcome / top-performer overlap, via the graph_priors synthesis).
+    # When enabled it COMPUTES + PERSISTS the would-be bounded nudge
+    # (integrity_signals.graph_outcome_prior) for shadow review — it does NOT
+    # apply it to the score. Applying requires the autoresearch bias gate + a
+    # clean shadow-data review (see docs/TALI_SCORING_ENGINE_DESIGN.md §4/§9).
+    # Default OFF; fail-open (no graph / cold-start → no prior).
+    GRAPH_OUTCOME_PRIOR_ENABLED: bool = False
+    # Hard cap on the nudge so a prior can never override the actual match.
+    GRAPH_OUTCOME_PRIOR_MAX_NUDGE: float = 5.0
+
     # The slow cross-source axes (graph + GitHub fetch) run ASYNC + shortlist-
     # gated, never on every score: only for a candidate scoring at/above this AND
     # already triangulation-flagged (review/strong_review). Keeps enrichment to

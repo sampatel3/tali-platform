@@ -126,6 +126,31 @@ def test_triangulation_deterministic_artifact_is_strong():
     assert "hidden_text" in out["deterministic_artifacts"]
 
 
+def test_trust_band_maps_from_verdict():
+    assert aggregate_triangulation({})["trust_band"] == "high"
+    assert aggregate_triangulation({"jd_shingle": {"triggered": True}})["trust_band"] == "medium"
+    two = aggregate_triangulation({"jd_shingle": {"triggered": True}, "unverified_employers": {"count": 1}})
+    assert two["trust_band"] == "low"
+    assert two["to_verify"] == 2
+    det = aggregate_triangulation({"document_hygiene": {"injection_detected": True}})
+    assert det["trust_band"] == "low"
+
+
+def test_build_integrity_warnings_canonical_strings():
+    from app.services.fraud_detection import build_integrity_warnings
+
+    assert build_integrity_warnings({}) == []
+    w = build_integrity_warnings({
+        "github": {"status": "not_found", "username": "ghost"},
+        "graph_corroboration": {"status": "anomaly", "companies": [{"status": "anomaly", "company": "BigBank"}]},
+        "experience_inflation": {"triggered": True, "years_claimed": 18, "years_evidenced": 6},
+    })
+    joined = " ".join(w)
+    assert "github.com/ghost" in joined
+    assert "BigBank" in joined
+    assert "18 years" in joined
+
+
 def test_triangulation_records_corroborations():
     out = aggregate_triangulation({
         "graph_corroboration": {"status": "anomaly"},
@@ -229,3 +254,31 @@ def test_triangulation_github_axes():
     corr = aggregate_triangulation({"github": {"status": "corroborated"}})
     assert "github" in corr["corroborations"]
     assert corr["verdict"] == "ok"  # positive corroboration is not a disagreement
+
+
+# ── P4: graph outcome prior nudge (SHADOW — never applies) ───────────────────
+def test_outcome_prior_nudge_bounds_and_confidence_scaling():
+    from app.services.graph_outcome_prior import outcome_prior_nudge
+
+    assert outcome_prior_nudge(1.0, 1.0, max_nudge=5.0) == 5.0  # max advance, full conf
+    assert outcome_prior_nudge(0.0, 1.0, max_nudge=5.0) == -5.0  # min advance
+    assert outcome_prior_nudge(0.5, 1.0, max_nudge=5.0) == 0.0  # neutral
+    assert outcome_prior_nudge(1.0, 0.5, max_nudge=5.0) == 2.5  # half confidence halves it
+    assert abs(outcome_prior_nudge(1.0, 1.0, max_nudge=3.0)) <= 3.0  # respects the cap
+    assert outcome_prior_nudge("bad", None, max_nudge=5.0) == 0.0  # fail-safe
+
+
+def test_outcome_prior_shadow_is_never_applied():
+    from app.services.graph_outcome_prior import build_outcome_prior_shadow
+
+    assert build_outcome_prior_shadow(None, max_nudge=5.0) is None
+    out = build_outcome_prior_shadow({"p_advance": 0.8, "confidence": 0.6}, max_nudge=5.0)
+    assert out["applied"] is False  # SHADOW — the whole point
+    assert out["would_be_nudge"] == 1.8  # (0.8-0.5)*2*0.6*5
+
+
+def test_outcome_prior_fetch_fails_open():
+    from app.services.graph_outcome_prior import fetch_outcome_prior
+
+    # No graph configured / shadow not activated → None, never raises.
+    assert fetch_outcome_prior(object(), None) is None

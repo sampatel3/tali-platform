@@ -34,6 +34,7 @@ def should_enrich(application: CandidateApplication) -> bool:
     if not (
         settings.GRAPH_CORROBORATION_ENABLED
         or settings.GITHUB_CORROBORATION_ENABLED
+        or settings.GRAPH_OUTCOME_PRIOR_ENABLED
     ):
         return False
     score = getattr(application, "cv_match_score", None)
@@ -54,7 +55,7 @@ def enrich_corroboration(application: CandidateApplication, db: Session) -> dict
     try:
         from ..platform.config import settings
         from .external_corroboration import corroborate_github
-        from .fraud_detection import aggregate_triangulation
+        from .fraud_detection import aggregate_triangulation, build_integrity_warnings
         from .graph_corroboration import corroborate_candidate_stack
 
         details = getattr(application, "cv_match_details", None)
@@ -83,10 +84,23 @@ def enrich_corroboration(application: CandidateApplication, db: Session) -> dict
         if github is not None:
             sig["github"] = github
             changed = True
+        # P4 SHADOW: graph outcome prior → would-be Match nudge, persisted for
+        # review only (applied: False). Never touches the score here.
+        if settings.GRAPH_OUTCOME_PRIOR_ENABLED:
+            from .graph_outcome_prior import build_outcome_prior_shadow, fetch_outcome_prior
+
+            prior = build_outcome_prior_shadow(
+                fetch_outcome_prior(application, db),
+                max_nudge=settings.GRAPH_OUTCOME_PRIOR_MAX_NUDGE,
+            )
+            if prior is not None:
+                sig["graph_outcome_prior"] = prior
+                changed = True
         if not changed:
             return None
 
         sig["triangulation"] = aggregate_triangulation(sig)
+        sig["warnings"] = build_integrity_warnings(sig)
         # Reassign the whole JSON blob so SQLAlchemy detects the mutation.
         new_details = dict(details)
         new_details["integrity_signals"] = sig

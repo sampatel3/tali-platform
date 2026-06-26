@@ -27,10 +27,6 @@ from .scoring_tasks import (
     batch_score_role,
     score_application_job,
 )
-# Eager-import pool_rescore_tasks so the worker registers the rediscovery
-# re-score task. Without this it NotRegistered's and the dispatched re-score
-# silently drops (same trap as the scoring imports above).
-from .pool_rescore_tasks import rescore_pool_against_requirement
 # Eager-import corroboration_tasks so the worker registers the async
 # (shortlist-gated) graph + GitHub enrichment job — same unregistered-drop
 # trap as scoring_tasks if skipped.
