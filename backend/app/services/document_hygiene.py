@@ -24,7 +24,7 @@ extraction), so it needs no renderer/OCR. Detection is always safe to run; the
 direct instruction to the model, so it can default on without harming a genuine
 CV. White-text **colour** detection (which needs a real PDF renderer such as
 PyMuPDF) and a render-vs-OCR diff are the documented follow-up — see
-``docs/CV_FRAUD_DETECTION_ROADMAP.md`` §5.
+``docs/CV_FRAUD_DETECTION_BUILD_DECISION.md`` (DOC-01).
 """
 
 from __future__ import annotations

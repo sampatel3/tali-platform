@@ -1186,10 +1186,10 @@ def _augment_integrity_signals(
     inflation + tech anachronism (CV-internal coherence); then a triangulation
     summary requiring multiple independent disagreements before "strong_review".
 
-    The **paid / slow** axes — graph collective corroboration and the LinkedIn
-    URL fetch — are deliberately NOT here. They run async + shortlist-gated in
-    ``corroboration_enrichment`` (a $0.05-0.30 LinkedIn fetch on every score
-    would be the wrong placement), and re-triangulate after they land.
+    The **slow** axes — graph collective corroboration and the GitHub URL
+    fetch — are deliberately NOT here. They run async + shortlist-gated in
+    ``corroboration_enrichment`` (fetching on every score would be the wrong
+    placement), and re-triangulate after they land.
     Best-effort — never raises into the scoring path, returns ``existing`` on
     any failure."""
     try:

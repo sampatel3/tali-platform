@@ -1013,11 +1013,6 @@ def aggregate_triangulation(integrity_signals: dict[str, Any] | None) -> dict[st
         soft.append("graph_anomaly")
     elif gc.get("status") == "corroborated":
         corroborations.append("graph")
-    li = _get("linkedin")
-    if li.get("status") == "mismatch":
-        soft.append("linkedin_mismatch")
-    elif li.get("status") == "match":
-        corroborations.append("linkedin")
     gh = _get("github")
     if gh.get("status") == "not_found":
         soft.append("github_not_found")

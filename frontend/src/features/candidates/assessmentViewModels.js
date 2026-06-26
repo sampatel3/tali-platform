@@ -499,19 +499,6 @@ const buildIntegrityFlags = (details) => {
       : [];
     flags.push(`Claimed tech stack is unlike what other candidates from ${co.length ? co.join(', ') : 'that employer'} show — verify it's genuine, not spec-tailoring.`);
   }
-  const li = sig.linkedin && typeof sig.linkedin === 'object' ? sig.linkedin : null;
-  if (li && li.status === 'mismatch') {
-    const issues = li.diff && Array.isArray(li.diff.issues) ? li.diff.issues : [];
-    if (issues.length) {
-      issues.forEach((item) => {
-        const detail = String(item?.detail || '').trim();
-        if (detail) flags.push(`LinkedIn mismatch — ${detail}`);
-      });
-    } else {
-      flags.push('CV history does not match the linked LinkedIn profile — confirm in screening.');
-    }
-  }
-
   // GitHub: only the "doesn't resolve" case is a concern (a match is positive
   // corroboration, surfaced elsewhere; a quiet/empty account is never flagged).
   const ghc = sig.github && typeof sig.github === 'object' ? sig.github : null;

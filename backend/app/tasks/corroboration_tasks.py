@@ -1,6 +1,6 @@
 """Async cross-source corroboration enrichment (shortlist-gated).
 
-Runs the paid/slow corroboration axes (graph + LinkedIn fetch) off the scoring
+Runs the slow corroboration axes (graph + GitHub fetch) off the scoring
 hot path, only for shortlist candidates. Dispatched post-score-commit by
 ``scoring_tasks.score_application_job``; the gate is re-checked here so a stale
 enqueue is a cheap no-op.

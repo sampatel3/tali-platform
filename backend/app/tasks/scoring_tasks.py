@@ -179,12 +179,12 @@ def score_application_job(
                     )
                     db.rollback()
 
-                # Paid/slow cross-source corroboration (graph + LinkedIn fetch)
-                # runs async + shortlist-gated — never on every score. Dispatch
-                # only for a plausible match that already carries a flag worth
-                # resolving (should_enrich re-checks on the worker); a $0.05-0.30
-                # LinkedIn fetch is spent to confirm/deny a flag, not to screen
-                # everyone. Best-effort — never blocks scoring.
+                # Slow cross-source corroboration (graph + GitHub fetch) runs
+                # async + shortlist-gated — never on every score. Dispatch only
+                # for a plausible match that already carries a flag worth
+                # resolving (should_enrich re-checks on the worker); the fetch is
+                # spent to confirm/deny a flag, not to screen everyone.
+                # Best-effort — never blocks scoring.
                 try:
                     from ..services.corroboration_enrichment import should_enrich
 

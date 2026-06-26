@@ -1,14 +1,13 @@
 """Async, shortlist-gated cross-source corroboration enrichment.
 
-The PAID / SLOW corroboration axes — graph collective corroboration (Neo4j
-queries) and the LinkedIn URL fetch (a $0.05-0.30 provider call) — must NOT run
-on every score. They run here, off the scoring hot path, ONLY for a candidate
-who is BOTH a plausible match (``cv_match_score >= CORROBORATION_ENRICH_MIN_SCORE``)
-AND already carries a deterministic flag (triangulation verdict ``review`` /
-``strong_review``). That is the "pay to resolve a real question, on a real
-candidate" placement: spend the LinkedIn dollar to confirm/deny a flag, never
-to screen everyone. Volume is low by construction (high-match × already-flagged),
-so the effective spend is a small fraction of running it funnel-wide.
+The SLOW corroboration axes — graph collective corroboration (Neo4j queries) and
+the GitHub URL fetch — must NOT run on every score. They run here, off the
+scoring hot path, ONLY for a candidate who is BOTH a plausible match
+(``cv_match_score >= CORROBORATION_ENRICH_MIN_SCORE``) AND already carries a
+deterministic flag (triangulation verdict ``review`` / ``strong_review``). That
+is the "resolve a real question, on a real candidate" placement — confirm/deny a
+flag, never screen everyone. Volume is low by construction (high-match ×
+already-flagged), so the load is a small fraction of running it funnel-wide.
 """
 
 from __future__ import annotations
@@ -34,7 +33,6 @@ def should_enrich(application: CandidateApplication) -> bool:
 
     if not (
         settings.GRAPH_CORROBORATION_ENABLED
-        or settings.LINKEDIN_CORROBORATION_ENABLED
         or settings.GITHUB_CORROBORATION_ENABLED
     ):
         return False
@@ -49,13 +47,13 @@ def should_enrich(application: CandidateApplication) -> bool:
 
 
 def enrich_corroboration(application: CandidateApplication, db: Session) -> dict[str, Any] | None:
-    """Compute the gated graph + LinkedIn corroboration for one application,
+    """Compute the gated graph + GitHub corroboration for one application,
     merge into ``cv_match_details.integrity_signals``, re-triangulate, persist.
     Returns the updated triangulation, or ``None`` when nothing changed / both
-    axes disabled / no graph / no LinkedIn URL. Fail-open — never raises."""
+    axes disabled / no graph / no GitHub URL. Fail-open — never raises."""
     try:
         from ..platform.config import settings
-        from .external_corroboration import corroborate_github, corroborate_linkedin
+        from .external_corroboration import corroborate_github
         from .fraud_detection import aggregate_triangulation
         from .graph_corroboration import corroborate_candidate_stack
 
@@ -81,10 +79,6 @@ def enrich_corroboration(application: CandidateApplication, db: Session) -> dict
             sig["graph_corroboration"] = graph
             changed = True
         social = getattr(cand, "social_profiles", None) if cand is not None else None
-        linkedin = corroborate_linkedin(cv_sections=cv_sections, social_profiles=social)
-        if linkedin is not None:
-            sig["linkedin"] = linkedin
-            changed = True
         github = corroborate_github(cv_sections=cv_sections, social_profiles=social)
         if github is not None:
             sig["github"] = github

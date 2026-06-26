@@ -2,7 +2,7 @@
 
 **Status:** Build-decision doc · **Date:** 2026-06-26 · **Owner:** Sam
 
-> Supersedes the build-plan in `CV_FRAUD_DETECTION_ROADMAP.md`. Produced by a 9-agent cost/value/placement analysis (83 levers + 6 from an adversarial completeness critic). Reconciles against what shipped in #700.
+> The comprehensive lever catalog behind the fraud work; the funnel-specific build spec that was actually implemented is `CV_FRAUD_FUNNEL_DESIGN.md`. Produced by a 9-agent cost/value/placement analysis (83 levers + 6 from an adversarial completeness critic). Reconciles against what shipped in #700.
 
 **Bottom line up front.** Taali has already shipped the expensive-to-get-right core (hidden-text hygiene, copy-paste hard cap, timeline sanity, claims integrity, CV↔Workable diff, unverified-employer grounding). The remaining high-leverage wins are almost all **$0, deterministic, and ride data already in the row** — and the single biggest blind spot is that **the assessment's `git_evidence` (collected for every submission) is analysed by nothing**. Lead with that. Treat the entire "External public data / KYC" category as defer-or-ignore: it is dollars-per-candidate, MENA-coverage-poor, and mostly fairness-loaded for a signal that can only ever flag, not gate.
 

@@ -502,14 +502,6 @@ class Settings(BaseSettings):
     GRAPH_CORROBORATION_ENABLED: bool = False
     GRAPH_CORROBORATION_MIN_OBSERVATIONS: int = 5
 
-    # LinkedIn URL cross-check — diff the CV against the candidate's OWN public
-    # LinkedIn profile (the URL they gave us in the CV/Workable), never name-based
-    # discovery. Flag-only, never auto-reject (candidate controls both docs); no
-    # URL / no profile → fail open, no penalty. Default OFF — the fetch route
-    # (provider vs best-effort) is a separate ops decision; the diff logic is
-    # built and tested behind a pluggable fetcher that returns None until wired.
-    LINKEDIN_CORROBORATION_ENABLED: bool = False
-
     # GitHub corroboration — cross-check the candidate's OWN GitHub URL (from the
     # CV links / social_profiles) against their claimed stack via the FREE
     # official GitHub API (no scraping, no provider). Corroborate-first: a
@@ -519,10 +511,10 @@ class Settings(BaseSettings):
     # for the 5000/hr rate limit (falls back to unauthenticated). Default OFF.
     GITHUB_CORROBORATION_ENABLED: bool = False
 
-    # The paid axes (graph + LinkedIn) run ASYNC + shortlist-gated, never on
-    # every score: only for a candidate scoring at/above this AND already
-    # triangulation-flagged (review/strong_review). Keeps a $0.05-0.30 LinkedIn
-    # fetch to "resolve a flag on a real candidate", not a funnel-wide screen.
+    # The slow cross-source axes (graph + GitHub fetch) run ASYNC + shortlist-
+    # gated, never on every score: only for a candidate scoring at/above this AND
+    # already triangulation-flagged (review/strong_review). Keeps enrichment to
+    # "resolve a flag on a real candidate", not a funnel-wide screen.
     CORROBORATION_ENRICH_MIN_SCORE: float = 55.0
     # Redis TTL (seconds) for the per-company graph stack distribution — it
     # changes slowly, so cohort re-scores + the multi-employer loop reuse it

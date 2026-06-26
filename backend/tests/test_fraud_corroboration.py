@@ -1,5 +1,5 @@
 """Prong-2 cross-source corroboration (Waves 2-4): graph collective
-corroboration, LinkedIn URL diff, CV-internal coherence (years-vs-span +
+corroboration, GitHub cross-check, CV-internal coherence (years-vs-span +
 anachronism), and the triangulation aggregator.
 """
 
@@ -58,55 +58,6 @@ def test_graph_disabled_entry_returns_none():
     ) is None
 
 
-# ── Wave 3: LinkedIn URL cross-check ────────────────────────────────────────
-def test_extract_linkedin_url_from_social_and_links():
-    assert ec.extract_linkedin_url(
-        None, [{"type": "linkedin", "url": "https://www.linkedin.com/in/jane"}]
-    ) == "https://www.linkedin.com/in/jane"
-    got = ec.extract_linkedin_url({"links": ["see https://linkedin.com/in/bob here"]}, None)
-    assert got == "https://linkedin.com/in/bob"
-    assert ec.extract_linkedin_url({"links": ["https://github.com/x"]}, []) is None
-
-
-def test_linkedin_disabled_returns_none():
-    assert settings.LINKEDIN_CORROBORATION_ENABLED is False
-    assert ec.corroborate_linkedin(cv_sections={"links": ["https://linkedin.com/in/x"]}) is None
-
-
-def test_linkedin_match_and_mismatch_with_wired_fetcher(monkeypatch):
-    monkeypatch.setattr(settings, "LINKEDIN_CORROBORATION_ENABLED", True)
-    profile = ec.LinkedInProfile(
-        url="x", experience=[{"company": "Acme", "start": "2019", "end": "2022"}]
-    )
-    ec.set_linkedin_fetcher(lambda url: profile)
-    try:
-        match = ec.corroborate_linkedin(
-            cv_sections={
-                "experience": [{"company": "Acme Corp", "start": "2019", "end": "2022"}],
-                "links": ["https://linkedin.com/in/jane"],
-            }
-        )
-        assert match["status"] == "match"
-        mismatch = ec.corroborate_linkedin(
-            cv_sections={
-                "experience": [{"company": "Ghostco", "start": "2019", "end": "2022"}],
-                "links": ["https://linkedin.com/in/jane"],
-            }
-        )
-        assert mismatch["status"] == "mismatch"
-    finally:
-        ec.set_linkedin_fetcher(None)
-
-
-def test_linkedin_no_url_fails_open(monkeypatch):
-    monkeypatch.setattr(settings, "LINKEDIN_CORROBORATION_ENABLED", True)
-    ec.set_linkedin_fetcher(lambda url: ec.LinkedInProfile(url=url, experience=[{"company": "X"}]))
-    try:
-        assert ec.corroborate_linkedin(cv_sections={"experience": [{"company": "X"}]}) is None
-    finally:
-        ec.set_linkedin_fetcher(None)
-
-
 # ── Wave 4: CV-internal coherence ───────────────────────────────────────────
 def test_experience_inflation_flags_impossible_total():
     # Claims 18 years but the whole career spans 2016-2022 (6 years).
@@ -151,7 +102,7 @@ def test_tech_anachronism_no_false_positive_in_era_or_substring():
 def test_triangulation_ok_with_no_disagreements():
     assert aggregate_triangulation({})["verdict"] == "ok"
     assert aggregate_triangulation({"graph_corroboration": {"status": "corroborated"},
-                                    "linkedin": {"status": "match"}})["verdict"] == "ok"
+                                    "github": {"status": "corroborated"}})["verdict"] == "ok"
 
 
 def test_triangulation_single_soft_is_review():
@@ -178,10 +129,10 @@ def test_triangulation_deterministic_artifact_is_strong():
 def test_triangulation_records_corroborations():
     out = aggregate_triangulation({
         "graph_corroboration": {"status": "anomaly"},
-        "linkedin": {"status": "match"},
+        "github": {"status": "corroborated"},
     })
     assert "graph_anomaly" in out["soft_disagreements"]
-    assert "linkedin" in out["corroborations"]
+    assert "github" in out["corroborations"]
 
 
 # ── Wave 4: PyPDF2 render-state scan (graceful) ─────────────────────────────
@@ -191,7 +142,7 @@ def test_render_state_scan_graceful_on_junk():
     assert scan_pdf_render_state(b"not a pdf")["checked"] is False
 
 
-# ── Async shortlist enrichment gating (graph + LinkedIn off the hot path) ────
+# ── Async shortlist enrichment gating (graph + GitHub off the hot path) ──────
 def _fake_app(score, verdict):
     from types import SimpleNamespace
 
@@ -206,7 +157,7 @@ def test_should_enrich_false_when_both_axes_disabled():
     from app.services.corroboration_enrichment import should_enrich
 
     assert settings.GRAPH_CORROBORATION_ENABLED is False
-    assert settings.LINKEDIN_CORROBORATION_ENABLED is False
+    assert settings.GITHUB_CORROBORATION_ENABLED is False
     assert should_enrich(_fake_app(90, "strong_review")) is False
 
 
@@ -223,7 +174,7 @@ def test_should_enrich_requires_high_match_and_a_flag(monkeypatch):
 def test_enrich_corroboration_noop_when_disabled():
     from app.services.corroboration_enrichment import enrich_corroboration
 
-    # all axes disabled → graph/linkedin/github None → no change → before db use
+    # all axes disabled → graph/github None → no change → before db use
     assert enrich_corroboration(_fake_app(80, "review"), db=None) is None
 
 
