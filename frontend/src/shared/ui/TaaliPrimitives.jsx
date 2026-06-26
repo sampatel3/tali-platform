@@ -221,23 +221,52 @@ const useFloatingMenuStyle = (open, triggerRef) => {
   return style;
 };
 
+const _optionText = (node) => {
+  const c = node?.props?.children;
+  if (typeof c === 'string' || typeof c === 'number') return String(c);
+  if (Array.isArray(c)) {
+    return c.map((part) => (typeof part === 'string' || typeof part === 'number' ? part : '')).join('');
+  }
+  return String(node?.props?.value ?? '');
+};
+
+// `Select` keeps the familiar native-<select> API — a `value`, an
+// `onChange` that receives an event with `target.value`, and `<option>`
+// children — but renders the styled, cross-browser portal menu instead of
+// the OS popup, so the *open* state matches the design system everywhere
+// (not just the closed control). It is a thin adapter over <SingleSelect/>
+// (defined below); existing call sites need no changes.
 export const Select = ({
   className = '',
   children,
+  value,
+  onChange,
   disabled = false,
-  ...props
+  placeholder,
+  bare = false,
+  triggerClassName = '',
+  'aria-label': ariaLabel,
 }) => {
+  const options = React.Children.toArray(children)
+    .filter((child) => React.isValidElement(child) && child.type === 'option')
+    .map((child) => ({
+      value: child.props.value,
+      label: _optionText(child),
+      disabled: Boolean(child.props.disabled),
+    }));
   return (
-    <div className="taali-select-shell">
-      <select
-        className={cx('taali-select', className)}
-        disabled={disabled}
-        {...props}
-      >
-        {children}
-      </select>
-      <ChevronDown size={16} className="taali-select-icon" aria-hidden />
-    </div>
+    <SingleSelect
+      className={className}
+      triggerClassName={cx(bare ? 'taali-select-trigger-bare' : '', triggerClassName)}
+      options={options}
+      value={value}
+      disabled={disabled}
+      placeholder={placeholder}
+      ariaLabel={ariaLabel}
+      onChange={(next) => {
+        if (typeof onChange === 'function') onChange({ target: { value: next } });
+      }}
+    />
   );
 };
 

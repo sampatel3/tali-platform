@@ -6,6 +6,7 @@
 // opens TeachModal which POSTs /agent/feedback.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Select } from '../../shared/ui/TaaliPrimitives';
 import {
   ArrowRight,
   Check,
@@ -91,8 +92,7 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
   <div className="rq-toolbar">
     <div className="rq-toolbar-l">
       <span className="kicker mute" style={{ marginRight: 8 }}>ROLE</span>
-      <select
-        className="rq-select"
+      <Select
         value={filters.role_id || ''}
         onChange={(e) => setFilters((f) => ({ ...f, role_id: e.target.value || null }))}
         aria-label="Select a role to scope the view"
@@ -101,7 +101,7 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
         {roles.map((r) => (
           <option key={r.role_id} value={r.role_id} title={r.name}>{r.name || r.short_name}</option>
         ))}
-      </select>
+      </Select>
       <div className="rq-tabset" role="group" aria-label="Filter by decision type">
         {TYPE_OPTIONS.map((o) => (
           <button

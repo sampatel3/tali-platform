@@ -6,6 +6,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
 import { analytics as analyticsApi } from '../../shared/api';
+import { Select } from '../../shared/ui/TaaliPrimitives';
 
 const fmtPct = (rate) => (rate == null ? '—' : `${Math.round(rate * 100)}%`);
 const fmtRate = (count, rate, denom) =>
@@ -121,11 +122,11 @@ export const HomeExperiments = ({ roleId, dateFrom }) => {
       <div className="hm-controls">
         <label className="hm-rolefilter">
           <span className="kicker">Experiment</span>
-          <select className="ht-select" value={experimentId} onChange={(e) => setExperimentId(e.target.value)}>
+          <Select value={experimentId} onChange={(e) => setExperimentId(e.target.value)}>
             {experiments.map((e) => (
               <option key={e.id} value={e.id}>{e.name} · {e.status}</option>
             ))}
-          </select>
+          </Select>
         </label>
       </div>
 

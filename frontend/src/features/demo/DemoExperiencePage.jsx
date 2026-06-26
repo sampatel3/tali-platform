@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 
 import { assessments as assessmentsApi } from '../../shared/api';
 import { CandidateMiniNav, MarketingNav } from '../../shared/layout/TaaliLayout';
+import { Select } from '../../shared/ui/TaaliPrimitives';
 import { PRODUCT_WALKTHROUGH_TASK } from './productWalkthroughModels';
 
 const initialForm = {
@@ -307,20 +308,20 @@ export const DemoExperiencePage = ({ onNavigate }) => {
                   </label>
                   <label className="field">
                     <span className="k">Company size</span>
-                    <select value={form.companySize} onChange={updateField('companySize')}>
-                      <option value="">Select...</option>
+                    <Select value={form.companySize} onChange={updateField('companySize')} placeholder="Select…">
+                      <option value="">Select…</option>
                       {companySizeOptions.map((option) => (
                         <option key={option} value={option}>{option}</option>
                       ))}
-                    </select>
+                    </Select>
                   </label>
                   <label className="field">
                     <span className="k">Track</span>
-                    <select value={form.assessmentTrack} onChange={updateField('assessmentTrack')}>
+                    <Select value={form.assessmentTrack} onChange={updateField('assessmentTrack')}>
                       {assessmentTracks.map((option) => (
                         <option key={option} value={option}>{option}</option>
                       ))}
-                    </select>
+                    </Select>
                   </label>
                 </div>
 

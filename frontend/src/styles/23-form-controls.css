@@ -361,3 +361,40 @@ input[type="time"]::-webkit-datetime-edit {
 .taali-multiselect-action:hover {
   background: var(--purple-soft);
 }
+
+/* ── Bare / inline trigger variant ───────────────────────────────────
+   For filter-chips and compact inline controls (candidate-list filters,
+   the quick-ranking selector) that want the styled portal menu but NOT
+   the boxed field chrome: transparent, borderless, content-width, with a
+   small muted chevron instead of the purple segmented zone. Placed last
+   so it wins over the boxed `.taali-select-trigger` rules above. */
+.taali-select-trigger-bare {
+  width: auto;
+  min-height: 0;
+  padding: 4px 2px 4px 0;
+  border-color: transparent;
+  background: transparent;
+  border-radius: 8px;
+  font-size: 12px;
+  color: inherit;
+}
+.taali-select-trigger-bare:hover:not(:focus-visible) {
+  border-color: transparent;
+}
+.taali-select-trigger-bare:focus-visible {
+  border-color: transparent;
+  box-shadow: none;
+  outline: 2px solid var(--taali-ring);
+  outline-offset: 2px;
+}
+.taali-select-trigger-bare .taali-select-value {
+  padding: 0;
+}
+.taali-select-trigger-bare .taali-select-chevron {
+  width: auto;
+  align-self: center;
+  margin-left: 4px;
+  background: transparent;
+  border-left: none;
+  color: var(--mute);
+}

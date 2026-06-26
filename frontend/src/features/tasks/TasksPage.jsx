@@ -5,7 +5,7 @@ import { useParams } from 'react-router-dom';
 import { useToast } from '../../context/ToastContext';
 import { tasks as tasksApi } from '../../shared/api';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
-import { Spinner } from '../../shared/ui/TaaliPrimitives';
+import { Select, Spinner } from '../../shared/ui/TaaliPrimitives';
 import { GeneratedDraftsPanel } from './GeneratedDraftsPanel';
 
 const AssessmentPage = lazy(() => import('../assessment_runtime/AssessmentPage'));
@@ -182,18 +182,18 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
             ))}
           </div>
           <div className="tasks-toolbar-actions">
-            <select value={difficultyFilter} onChange={(event) => setDifficultyFilter(event.target.value)}>
+            <Select value={difficultyFilter} onChange={(event) => setDifficultyFilter(event.target.value)}>
               <option value="all">Difficulty · All</option>
               {difficultyOptions.map((option) => (
                 <option key={option} value={option}>{option}</option>
               ))}
-            </select>
-            <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+            </Select>
+            <Select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
               <option value="all">Type · All</option>
               {typeOptions.map((option) => (
                 <option key={option} value={option}>{option.replace(/_/g, ' ')}</option>
               ))}
-            </select>
+            </Select>
             <label className="relative flex-1">
               <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--mute)]" />
               <input

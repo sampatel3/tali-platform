@@ -14,6 +14,7 @@ import { AgentHeader } from '../../shared/layout/AgentHeader';
 import {
   Button,
   Panel,
+  Select,
   Sheet,
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
@@ -1688,13 +1689,13 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   <div className="row-form settings-top-gap">
                     <label className="field">
                       <span className="k">Default sync mode</span>
-                      <select
+                      <Select
                         value={workableForm.defaultSyncMode}
                         onChange={(event) => setWorkableForm((prev) => ({ ...prev, defaultSyncMode: event.target.value }))}
                       >
                         <option value="full">Full sync</option>
                         <option value="metadata">Metadata sync</option>
-                      </select>
+                      </Select>
                     </label>
                     <div className="field" style={{ gridColumn: '1 / -1' }}>
                       <span className="k">Sync schedule</span>
@@ -1716,7 +1717,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     </label>
                     <label className="field">
                       <span className="k">Workable actor member</span>
-                      <select
+                      <Select
                         value={workableForm.workableActorMemberId}
                         onChange={(event) => setWorkableForm((prev) => ({ ...prev, workableActorMemberId: event.target.value }))}
                       >
@@ -1726,11 +1727,11 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                           if (!memberId) return null;
                           return <option key={memberId} value={memberId}>{workableMemberLabel(member)}</option>;
                         })}
-                      </select>
+                      </Select>
                     </label>
                     <label className="field">
                       <span className="k">Default disqualification reason</span>
-                      <select
+                      <Select
                         value={workableForm.workableDisqualifyReasonId}
                         onChange={(event) => setWorkableForm((prev) => ({ ...prev, workableDisqualifyReasonId: event.target.value }))}
                       >
@@ -1740,7 +1741,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                           if (!reasonId) return null;
                           return <option key={reasonId} value={reasonId}>{workableReasonLabel(reason)}</option>;
                         })}
-                      </select>
+                      </Select>
                       {!workableReasonsLoading && workableReasons.length === 0 && (
                         <span className="settings-inline-note">
                           No disqualification reasons found in Workable. Add one in Workable&nbsp;Settings &rarr; Recruiting &rarr; Disqualification reasons (and attach a &ldquo;Disqualification message&rdquo; automated action), then refresh this page.
@@ -2036,13 +2037,13 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       </label>
                       <label className="field">
                         <span className="k">Mode</span>
-                        <select
+                        <Select
                           value={firefliesForm.singleAccountMode ? 'single_account' : 'shared'}
                           onChange={(event) => setFirefliesForm((prev) => ({ ...prev, singleAccountMode: event.target.value !== 'shared' }))}
                         >
                           <option value="single_account">Single recruiter-owned account</option>
                           <option value="shared">Shared / multi-account</option>
-                        </select>
+                        </Select>
                       </label>
                       <label className="field">
                         <span className="k">API key</span>
