@@ -18,6 +18,13 @@ from app.components.assessments.rubric_scoring import (
     RubricResult,
     RubricScorer,
     ScoringArtifacts,
+    _DISCERNMENT_LENS_PROMPT,
+    _DILIGENCE_LENS_PROMPT,
+    _DELIVERABLE_LENS_PROMPT,
+    _DECISION_LENS_PROMPT,
+    _system_prompt_for_lens,
+    fluency_axis_for_dimension,
+    summarize_fluency_4d,
 )
 
 
@@ -228,6 +235,65 @@ def test_git_evidence_excerpt_gated_and_bounded():
     assert len(ex) < 10_000
     # ON but no evidence captured → empty.
     assert ScoringArtifacts(include_process_trace=True).git_evidence_excerpt() == ""
+
+
+# ---- PR-5/PR-6: discernment/diligence lenses + 4-D fluency rollup -----------
+
+
+def test_system_prompt_for_lens_routes_all_lenses():
+    assert _system_prompt_for_lens("deliverable") is _DELIVERABLE_LENS_PROMPT
+    assert _system_prompt_for_lens("discernment") is _DISCERNMENT_LENS_PROMPT
+    assert _system_prompt_for_lens("diligence") is _DILIGENCE_LENS_PROMPT
+    assert _system_prompt_for_lens("decision") is _DECISION_LENS_PROMPT
+    # Unknown / unset → decision-leaning back-compat default.
+    assert _system_prompt_for_lens(None) is _DECISION_LENS_PROMPT
+    assert _system_prompt_for_lens("nonsense") is _DECISION_LENS_PROMPT
+
+
+def test_fluency_axis_for_dimension_mapping():
+    # interrogation_outcome grader → delegation (decision ownership)
+    assert fluency_axis_for_dimension({"grader": "interrogation_outcome"}) == "delegation"
+    # lens routing
+    assert fluency_axis_for_dimension({"lens": "deliverable"}) == "deliverable"
+    assert fluency_axis_for_dimension({"lens": "discernment"}) == "discernment"
+    assert fluency_axis_for_dimension({"lens": "diligence"}) == "diligence"
+    assert fluency_axis_for_dimension({"lens": "decision"}) == "delegation"
+    # explicit fluency tag wins over lens
+    assert fluency_axis_for_dimension({"lens": "decision", "fluency": "description"}) == "description"
+    # unset / junk → delegation default
+    assert fluency_axis_for_dimension({}) == "delegation"
+    assert fluency_axis_for_dimension("notadict") == "delegation"
+
+
+def test_summarize_fluency_4d_weighted_rollup():
+    rubric = {
+        "design_decisions_articulated": {"grader": "interrogation_outcome", "weight": 0.4},
+        "contract_correctness": {"lens": "deliverable", "weight": 0.3},
+        "verify": {"lens": "discernment", "weight": 0.3},
+    }
+    dims = [
+        DimensionGrade(dimension_id="design_decisions_articulated", score=8.0, rating="good", reasoning="ok", weight=0.4),
+        DimensionGrade(dimension_id="contract_correctness", score=6.0, rating="good", reasoning="ok", weight=0.3),
+        DimensionGrade(dimension_id="verify", score=9.0, rating="excellent", reasoning="ok", weight=0.3),
+    ]
+    out = summarize_fluency_4d(rubric, dims)
+    assert out["delegation"] == 80.0
+    assert out["deliverable"] == 60.0
+    assert out["discernment"] == 90.0
+    # Axes with no contributing dimension → None (no signal).
+    assert out["description"] is None
+    assert out["diligence"] is None
+
+
+def test_summarize_fluency_4d_skips_errored_dimension():
+    rubric = {"verify": {"lens": "discernment", "weight": 1.0}}
+    dims = [
+        DimensionGrade(dimension_id="verify", score=0.0, rating="poor", reasoning="grader failed",
+                       weight=1.0, error="network blip"),
+    ]
+    out = summarize_fluency_4d(rubric, dims)
+    # The only discernment dim errored → axis is None, not a misleading 0.
+    assert out["discernment"] is None
 
 
 # ---- RubricScorer.grade_dimension ------------------------------------------

@@ -62,7 +62,7 @@ _DEFAULT_DELIVERABLE_KIND = "code"
 # delegation (judgment from the transcript); "deliverable" credits the shipped
 # artifact regardless of who typed it. LLM-criteria dims should declare one;
 # interrogation_outcome dims are inherently decision-lens and don't.
-_SUPPORTED_LENSES = frozenset({"decision", "deliverable"})
+_SUPPORTED_LENSES = frozenset({"decision", "deliverable", "discernment", "diligence"})
 
 
 def validate_deliverable(deliverable: Any, repo_files: Dict[str, str]) -> List[str]:

@@ -715,7 +715,7 @@ def submit_assessment_impl(
     rubric_breakdown: Dict[str, Any] = {}
     if task.evaluation_rubric and settings_obj.ANTHROPIC_API_KEY:
         try:
-            from .rubric_scoring import RubricScorer, ScoringArtifacts
+            from .rubric_scoring import RubricScorer, ScoringArtifacts, summarize_fluency_4d
 
             # Build artifacts from the actual submission state. Prefer the
             # real sandbox repo (where the agent-SDK path wrote the code);
@@ -796,6 +796,10 @@ def submit_assessment_impl(
                         for d in rubric_result.dimensions
                     ],
                     "heuristic_score_for_comparison": old_score,
+                    # Anthropic AI Fluency "4 Ds" rollup (Delegation / Description
+                    # / Discernment / Diligence) + Deliverable. Derived from the
+                    # same dimension grades; additive, does NOT change the score.
+                    "fluency_4d": summarize_fluency_4d(task.evaluation_rubric, rubric_result.dimensions),
                 }
                 logger.info(
                     "RubricScorer applied assessment=%s heuristic=%.2f rubric=%.2f failed=%s",
