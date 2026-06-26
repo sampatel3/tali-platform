@@ -2598,6 +2598,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       {teachFor ? (
         <TeachModal
           decision={teachFor}
+          defaultScope="decision"
           onClose={() => setTeachFor(null)}
           onSubmitted={async () => {
             showToast('Feedback recorded. Decision returned to the queue.', 'success');
