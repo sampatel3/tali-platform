@@ -77,11 +77,10 @@ const MessageRow = ({ entry }) => {
 /**
  * HTTP-based Claude chat for the candidate-facing assessment runtime.
  *
- * Leaf C of the terminal-removal refactor — replaces the WebSocket-on-
- * PTY chat surface with a plain HTTP request/response loop against the
- * agentic backend route at
+ * The only candidate-facing assistant surface — a plain HTTP
+ * request/response loop against the agentic backend route at
  *   POST /api/v1/assessments/{id}/claude/chat
- * mounted behind the `__TAALI_AGENTIC_CHAT__` runtime flag.
+ * (the legacy WebSocket-on-PTY terminal chat was removed).
  *
  * Props:
  *   - assessmentId: numeric/string assessment id

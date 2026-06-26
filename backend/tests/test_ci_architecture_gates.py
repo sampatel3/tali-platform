@@ -219,13 +219,11 @@ def test_no_bare_anthropic_client_construction() -> None:
     factory + adapter files = invisible spend = the
     73% reconciliation gap that surfaced on 2026-05-20.
 
-    The four approved sites that construct the bare SDK client are:
+    The approved sites that construct the bare SDK client are:
     - ``app/services/claude_client_resolver.py`` (the factory itself,
       wraps it on the way out)
     - ``app/services/metered_anthropic_client.py`` (defines the wrapper,
       needs the bare class for typing)
-    - ``app/components/integrations/claude/service.py`` (constructs +
-      immediately hands to the wrapper inside the same file)
     - ``app/components/integrations/anthropic_admin/*`` (admin API,
       not the billable inference API)
 
@@ -236,7 +234,6 @@ def test_no_bare_anthropic_client_construction() -> None:
     approved = {
         "app/services/claude_client_resolver.py",
         "app/services/metered_anthropic_client.py",
-        "app/components/integrations/claude/service.py",
     }
     # Admin API client lives under anthropic_admin/* — uses a different
     # SDK surface (admin endpoints), not billable inference. Allow the

@@ -113,15 +113,15 @@ class ScoringArtifacts:
     # written onto each ai_prompts record to score the dimension
     # deterministically — no Anthropic call for this dim.
     decision_points: List[Dict[str, Any]] = field(default_factory=list)
-    # PR-2 (process-visible grading): when True, prompt_transcript_excerpt()
+    # Process-visible grading (now the only path): prompt_transcript_excerpt()
     # interleaves each turn's agent tool calls + results, and
-    # git_evidence_excerpt() surfaces the committed diff — so the grader can
-    # read HOW the candidate drove the agent (verification, iteration), not
-    # just the message/response text. Gated by ASSESSMENT_GRADER_PROCESS_TRACE
-    # so the rollout is reversible + shadow-validatable before it moves live
-    # scores. git_evidence is assessment.git_evidence (head_sha, diff_main,
-    # commits, status_porcelain, ...).
-    include_process_trace: bool = False
+    # git_evidence_excerpt() surfaces the committed diff — so the grader reads
+    # HOW the candidate drove the agent (verification, iteration), not just the
+    # message/response text. Defaults True (live). Retained as a knob ONLY so
+    # scripts/shadow_rescore_assessments.py can force it off for a before/after
+    # comparison; production never sets it. git_evidence is
+    # assessment.git_evidence (head_sha, diff_main, commits, ...).
+    include_process_trace: bool = True
     git_evidence: Dict[str, Any] = field(default_factory=dict)
     # Planted traps (wrong-but-plausible paths) for the DISCERNMENT lens to
     # check the candidate caught. Each: {id, planted, tell, where?}. Empty =
@@ -358,11 +358,6 @@ _DILIGENCE_LENS_PROMPT = (
     "shipped on the agent's say-so, scores POOR here even if it happened to work."
     + _GRADER_OUTPUT
 )
-
-# Back-compat default for any dimension that doesn't declare a lens (treated
-# as decision-leaning, the historical behaviour).
-_SYSTEM_PROMPT = _DECISION_LENS_PROMPT
-
 
 def _system_prompt_for_lens(lens: Optional[str]) -> str:
     key = (lens or "").strip().lower()

@@ -2,15 +2,10 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from ...components.integrations.claude.service import ClaudeService
 from ...components.integrations.e2b.service import E2BService
 from ...components.integrations.workable.service import WorkableService
 from ...components.notifications.email_client import EmailService
 from ...platform.config import settings
-
-
-class ClaudeAdapter(Protocol):
-    def chat(self, messages: list, system: str | None = None) -> dict: ...
 
 
 class SandboxAdapter(Protocol):
@@ -31,18 +26,6 @@ class EmailAdapter(Protocol):
 
 class StripeAdapter(Protocol):
     def create_customer(self, email: str, name: str) -> dict: ...
-
-
-def build_claude_adapter(*, organization_id: int, feature: str = "assessment") -> ClaudeService:
-    """Build a ClaudeService bound to an org so every Anthropic call is
-    metered. Required keyword arg ``organization_id`` prevents callers
-    from accidentally constructing an unattributed client (the
-    pre-metering default that produced a 73% reconciliation gap)."""
-    return ClaudeService(
-        settings.ANTHROPIC_API_KEY,
-        organization_id=int(organization_id),
-        feature=feature,
-    )
 
 
 def build_sandbox_adapter() -> E2BService:

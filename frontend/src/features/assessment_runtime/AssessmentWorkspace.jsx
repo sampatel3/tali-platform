@@ -6,101 +6,13 @@ import {
   ChevronUp,
   FileText,
   Folder,
-  MessageSquare,
   Plus,
-  TerminalSquare,
   X,
 } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
 
 import { AssessmentClaudeChat } from './AssessmentClaudeChat';
-import { useAgenticClaudeChat } from './featureFlags';
 
 const LazyCodeEditor = lazy(() => import('../../components/assessment/CodeEditor'));
-const LazyAssessmentTerminal = lazy(() =>
-  import('./AssessmentTerminal').then((module) => ({ default: module.AssessmentTerminal }))
-);
-
-const CLAUDE_INTERNAL_TOOL_TAGS = new Set([
-  'read_file',
-  'read_many_files',
-  'list_dir',
-  'glob_search',
-  'grep_search',
-  'search_files',
-  'run_command',
-  'open_file',
-]);
-
-const CLAUDE_MARKDOWN_COMPONENTS = {
-  p: ({ children }) => (
-    <p className="whitespace-pre-line text-[0.84375rem] leading-6 text-[var(--ink-2)] [&:not(:first-child)]:mt-3">
-      {children}
-    </p>
-  ),
-  ul: ({ children }) => (
-    <ul className="mt-3 list-disc space-y-2 pl-5 text-[0.84375rem] leading-6 text-[var(--ink-2)]">
-      {children}
-    </ul>
-  ),
-  ol: ({ children }) => (
-    <ol className="mt-3 list-decimal space-y-2 pl-5 text-[0.84375rem] leading-6 text-[var(--ink-2)]">
-      {children}
-    </ol>
-  ),
-  li: ({ children }) => <li className="pl-1 marker:text-[var(--purple)]">{children}</li>,
-  strong: ({ children }) => <strong className="font-semibold text-[var(--ink)]">{children}</strong>,
-  em: ({ children }) => <em className="italic text-[var(--ink-2)]">{children}</em>,
-  code: ({ children, className, ...props }) => {
-    const isBlock = typeof className === 'string' && className.length > 0;
-    if (isBlock) {
-      return (
-        <code className={className} {...props}>
-          {children}
-        </code>
-      );
-    }
-    return (
-      <code className="rounded-md bg-[var(--purple-soft)] px-1.5 py-0.5 font-mono text-[0.88em] text-[var(--purple-2)]" {...props}>
-        {children}
-      </code>
-    );
-  },
-  pre: ({ children }) => (
-    <pre className="mt-3 overflow-x-auto rounded-[12px] border border-[var(--line)] bg-[var(--bg)] p-3 font-mono text-[0.75rem] leading-6 text-[var(--ink-2)]">
-      {children}
-    </pre>
-  ),
-};
-
-function sanitizeClaudeMessage(content) {
-  const raw = String(content || '').trim();
-  if (!raw) return '';
-
-  const toolNotes = [];
-  const cleaned = raw
-    .replace(/<([a-z_][a-z0-9_]*)>\s*([\s\S]*?)<\/\1>/gi, (fullMatch, rawTag, body) => {
-      const tag = String(rawTag || '').trim().toLowerCase();
-      if (!CLAUDE_INTERNAL_TOOL_TAGS.has(tag)) {
-        return fullMatch;
-      }
-      const paths = Array.from(String(body || '').matchAll(/<path>\s*([\s\S]*?)\s*<\/path>/gi))
-        .map((match) => String(match[1] || '').trim())
-        .filter(Boolean);
-      if (paths.length > 0) {
-        const summary = paths.slice(0, 3).join(', ');
-        toolNotes.push(`Reviewing: ${summary}${paths.length > 3 ? `, +${paths.length - 3} more` : ''}`);
-      }
-      return '';
-    })
-    .replace(/^\s*<\/?[a-z_][a-z0-9_]*>\s*$/gim, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-
-  if (cleaned) return cleaned;
-  if (toolNotes.length > 0) return toolNotes.join('\n');
-  return raw;
-}
 
 class RuntimeSurfaceBoundary extends React.Component {
   constructor(props) {
@@ -143,12 +55,10 @@ const EditorFallback = ({
   onEditorChange,
   onExecute,
   onSave,
-  onOpenTerminal,
   editorLanguage,
   editorFilename,
   isTimerPaused,
   saving = false,
-  showTerminalAction = false,
   onRetry = null,
 }) => (
   <div className="flex h-full flex-col bg-[var(--bg-2)]">
@@ -169,17 +79,6 @@ const EditorFallback = ({
         >
           {saving ? 'Saving...' : 'Save'}
         </button>
-        {showTerminalAction ? (
-          <button
-            type="button"
-            onClick={onOpenTerminal}
-            disabled={isTimerPaused}
-            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--ink-2)] transition-colors hover:border-[var(--purple)] hover:text-[var(--purple)] disabled:opacity-50"
-          >
-            <TerminalSquare size={12} />
-            Run tests
-          </button>
-        ) : null}
         <button
           type="button"
           onClick={() => onExecute?.(editorContent ?? assessmentStarterCode ?? '')}
@@ -218,37 +117,6 @@ const EditorLoadingFallback = () => (
   <div className="flex h-full items-center justify-center bg-[var(--bg-2)] p-6">
     <div className="rounded-[12px] border border-[var(--line)] bg-[var(--bg)] px-4 py-3 font-mono text-[0.75rem] text-[var(--mute)]">
       Loading editor...
-    </div>
-  </div>
-);
-
-const TerminalFallback = ({ onRetry = null } = {}) => (
-  <div className="flex h-full flex-col bg-[var(--ink)] text-[var(--taali-inverse-text)]">
-    <div className="border-b border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] px-4 py-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--purple-soft)]">Claude Code CLI</div>
-        {onRetry ? (
-          <button
-            type="button"
-            onClick={onRetry}
-            className="rounded-full border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--taali-inverse-text)_5%,transparent)] px-3 py-1 font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)] transition-colors hover:border-[var(--purple)] hover:text-[var(--purple)]"
-          >
-            Retry
-          </button>
-        ) : null}
-      </div>
-      <div className="mt-1 text-[0.75rem] text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)]">Terminal preview is unavailable in this browser.</div>
-    </div>
-    <div className="p-4 font-mono text-[0.75rem] leading-6 text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)]">
-      Continue with the editor and Claude chat, or switch browsers to open the live terminal.
-    </div>
-  </div>
-);
-
-const TerminalLoadingFallback = () => (
-  <div className="flex h-full items-center justify-center bg-[var(--ink)] p-4">
-    <div className="rounded-[12px] border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--ink)_82%,var(--purple))] px-4 py-3 font-mono text-[0.75rem] text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)]">
-      Loading terminal...
     </div>
   </div>
 );
@@ -296,48 +164,6 @@ const RuntimeOutputPanel = ({ output, executing, onClose }) => (
   </div>
 );
 
-const TerminalDockPanel = ({
-  terminalConnected,
-  terminalRestarting,
-  onRestartTerminal,
-  onClose,
-  children,
-}) => (
-  <div className="flex min-h-[13.75rem] flex-col overflow-hidden rounded-[16px] border border-[var(--line)] bg-[var(--ink)] text-[var(--taali-inverse-text)]">
-    <div className="flex items-center justify-between gap-3 border-b border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] px-4 py-3">
-      <div>
-        <div className="font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--purple-soft)]">Terminal</div>
-        <div className="mt-1 text-[0.75rem] text-[color-mix(in_oklab,var(--taali-inverse-text)_60%,transparent)]">
-          {terminalConnected ? 'Connected to the live workspace' : 'Connecting to the live workspace'}
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        {typeof onRestartTerminal === 'function' ? (
-          <button
-            type="button"
-            onClick={onRestartTerminal}
-            disabled={terminalRestarting}
-            className="rounded-full border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--taali-inverse-text)_5%,transparent)] px-3 py-1.5 text-[0.6875rem] font-medium text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)] transition-colors hover:border-[color-mix(in_oklab,var(--taali-inverse-text)_20%,transparent)] hover:text-[var(--taali-inverse-text)] disabled:opacity-50"
-          >
-            {terminalRestarting ? 'Restarting...' : 'Restart terminal'}
-          </button>
-        ) : null}
-        <button
-          type="button"
-          onClick={onClose}
-          className="inline-flex items-center gap-1 rounded-full border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--taali-inverse-text)_5%,transparent)] px-3 py-1.5 text-[0.6875rem] font-medium text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)] transition-colors hover:border-[color-mix(in_oklab,var(--taali-inverse-text)_20%,transparent)] hover:text-[var(--taali-inverse-text)]"
-        >
-          Collapse
-          <ChevronDown size={12} />
-        </button>
-      </div>
-    </div>
-    <div className="min-h-0 flex-1">
-      {children}
-    </div>
-  </div>
-);
-
 export const AssessmentWorkspace = ({
   className = '',
   hasRepoStructure,
@@ -363,34 +189,16 @@ export const AssessmentWorkspace = ({
   editorLanguage,
   editorFilename,
   isTimerPaused,
-  showTerminal,
   assistantPanelCollapsed = false,
   onToggleAssistantPanel,
-  terminalPanelOpen,
-  onToggleTerminal,
   outputPanelOpen = false,
   onToggleOutput,
-  terminalConnected,
-  terminalEvents,
-  onTerminalInput,
-  onTerminalResize,
-  onRestartTerminal,
-  showRestartTerminal = true,
-  terminalRestarting = false,
   output,
   executing,
-  claudeConversation,
-  claudePrompt,
-  onClaudePromptChange,
-  onClaudePromptSubmit,
-  onClaudePromptPaste,
-  claudePromptSending = false,
-  claudePromptSlow = false,
   claudePromptDisabled = false,
-  // Agentic chat (leaf C of the terminal-removal refactor): only used
-  // when the runtime feature flag `__TAALI_AGENTIC_CHAT__` is on. The
-  // legacy WebSocket-on-PTY chat path above stays wired so we can
-  // toggle back without a rebuild while the backend route lands.
+  // Agentic chat: the only candidate-facing assistant path. Talks to the
+  // backend over HTTP via assessments.claudeChat (self-contained inside
+  // AssessmentClaudeChat); no PTY/WebSocket terminal involved.
   assessmentId,
   assessmentToken,
   claudeBudget,
@@ -409,7 +217,6 @@ export const AssessmentWorkspace = ({
   // Read-only demo: lock chat sending (transcript is pre-seeded, no backend).
   chatLocked = false,
 }) => {
-  const agenticChatEnabled = useAgenticClaudeChat();
   const modifiedPathSet = useMemo(
     () => new Set(Array.isArray(modifiedRepoPaths) ? modifiedRepoPaths : []),
     [modifiedRepoPaths],
@@ -422,15 +229,11 @@ export const AssessmentWorkspace = ({
     () => repoEntries.reduce((total, [, paths]) => total + paths.length, 0),
     [repoEntries],
   );
-  // When the agentic Claude chat is on (the default post-#394), the legacy
-  // PTY-backed terminal panel is dead weight — the new chat already does
-  // everything the terminal did, via tool-use against the live sandbox. Drop
-  // the bottom-dock Terminal tab entirely for that path. Keep the Output
-  // panel (Run / Run tests) untouched.
-  const terminalSurfaceEnabled = Boolean(showTerminal) && !agenticChatEnabled;
+  // The agentic Claude chat does everything the legacy PTY terminal did
+  // (via tool-use against the live sandbox), so the only bottom-dock
+  // surface is the Run output panel.
   const showOutputPanel = Boolean(outputPanelOpen || executing);
-  const showTerminalPanel = Boolean(terminalSurfaceEnabled && terminalPanelOpen);
-  const showDock = showOutputPanel || showTerminalPanel;
+  const showDock = showOutputPanel;
 
   // Resizable assistant panel. Default widened from 380→600 (2026-06-01)
   // to reflect the chat-first work model: candidates increasingly drive
@@ -542,12 +345,6 @@ export const AssessmentWorkspace = ({
     hasRepoStructure,
     repoPanelCollapsed,
   ]);
-
-  const handleOpenTerminal = () => {
-    if (terminalSurfaceEnabled && !showTerminalPanel) {
-      onToggleTerminal?.();
-    }
-  };
 
   return (
     <section
@@ -737,141 +534,26 @@ export const AssessmentWorkspace = ({
                     <div className="min-w-0">
                       <div className="truncate text-[0.75rem] font-semibold text-[var(--ink)]">Claude</div>
                       <div className="truncate font-mono text-[0.5625rem] uppercase tracking-[0.08em] text-[var(--mute)]">
-                        {showTerminal ? 'Live repo assistant' : 'Chat guidance'}
+                        Live repo assistant
                       </div>
                     </div>
                   </div>
                 </div>
-
-                {showTerminal ? (
-                  <div className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-[0.59375rem] uppercase tracking-[0.06em] ${
-                    terminalConnected
-                      ? 'border-[var(--line)] bg-[var(--bg)] text-[var(--green)]'
-                      : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)]'
-                  }`}>
-                    <span className={`h-[0.3125rem] w-[0.3125rem] rounded-full ${terminalConnected ? 'bg-[var(--green)]' : 'bg-[var(--mute-2)]'}`} />
-                    {terminalConnected ? 'Terminal ready' : 'Terminal idle'}
-                  </div>
-                ) : null}
               </div>
 
-              {agenticChatEnabled ? (
-                <div className="min-h-0 flex-1 px-4 py-4">
-                  <AssessmentClaudeChat
-                    assessmentId={assessmentId}
-                    token={assessmentToken}
-                    selectedFilePath={selectedFilePath}
-                    codeContext={codeContext}
-                    claudeBudget={claudeBudget}
-                    onBudgetUpdate={onClaudeBudgetUpdate}
-                    disabled={claudePromptDisabled}
-                    initialAiPrompts={initialAiPrompts}
-                    locked={chatLocked}
-                  />
-                </div>
-              ) : (
-                <>
-                  <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
-                    <div className="space-y-4">
-                      {(claudeConversation || []).map((entry, index) => {
-                        const isUser = String(entry?.role || '').toLowerCase() === 'user';
-                        const messageContent = sanitizeClaudeMessage(entry?.content || '');
-                        const turnLabel = `turn ${index + 1}`;
-
-                        return (
-                          <div key={`${entry?.role || 'message'}-${index}`} className={`text-[0.84375rem] ${isUser ? 'text-right' : ''}`}>
-                            <div className={`mb-2 flex gap-2 font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[var(--mute)] ${isUser ? 'justify-end' : 'justify-start'}`}>
-                              <span>{isUser ? 'You' : 'Claude'}</span>
-                              <span>{turnLabel}</span>
-                            </div>
-                            <div className={`inline-block max-w-[92%] rounded-[14px] px-4 py-3 text-left ${
-                              isUser
-                                ? 'rounded-tr-[4px] bg-[var(--purple)] text-white'
-                                : 'rounded-tl-[4px] border border-[var(--line)] bg-[var(--bg-2)] text-[var(--ink-2)]'
-                            }`}>
-                              {isUser ? (
-                                <p className="whitespace-pre-wrap leading-6 text-inherit">{messageContent}</p>
-                              ) : (
-                                <ReactMarkdown components={CLAUDE_MARKDOWN_COMPONENTS}>
-                                  {messageContent}
-                                </ReactMarkdown>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-
-                      {claudePromptSending ? (
-                        <div className="text-[0.84375rem]">
-                          <div className="mb-2 flex gap-2 font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[var(--mute)]">
-                            <span>Claude</span>
-                            <span>drafting</span>
-                          </div>
-                          <div className="inline-block max-w-[92%] rounded-[14px] rounded-tl-[4px] border border-[var(--line)] bg-[var(--bg-2)] px-4 py-3 text-left">
-                            {claudePromptSlow ? (
-                              <div className="space-y-2">
-                                <div className="font-medium text-[var(--ink)]">Still working in the live repo session...</div>
-                                <div className="text-[0.8125rem] leading-6 text-[var(--mute)]">
-                                  Open the terminal dock to inspect progress, or restart the terminal if it looks stuck.
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="animate-pulse text-[var(--mute)]">Thinking...</div>
-                            )}
-                          </div>
-                        </div>
-                      ) : null}
-
-                      {!(claudeConversation || []).length ? (
-                        <div className="rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] px-4 py-4 text-[0.8125rem] leading-6 text-[var(--mute)]">
-                          Ask Claude to inspect the live repo, explain a failure, or suggest the smallest safe patch path before you edit.
-                          {showTerminal ? (
-                            <div className="mt-2 inline-flex items-center gap-2 font-mono text-[0.6875rem] uppercase tracking-[0.08em] text-[var(--purple)]">
-                              <TerminalSquare size={12} />
-                              Terminal lives in the bottom dock.
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <div className="border-t border-[var(--line)] bg-[var(--bg-2)] px-4 py-4">
-                    <div className="rounded-[14px] border border-[var(--line)] bg-[var(--bg)] px-3 py-3 transition-colors focus-within:border-[var(--purple)]">
-                      <textarea
-                        value={claudePrompt}
-                        onChange={(event) => onClaudePromptChange?.(event.target.value)}
-                        onPaste={() => onClaudePromptPaste?.()}
-                        onKeyDown={(event) => {
-                          if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-                            event.preventDefault();
-                            if (String(claudePrompt || '').trim()) {
-                              onClaudePromptSubmit?.();
-                            }
-                          }
-                        }}
-                        placeholder="Ask Claude, attach files with @, run a tool with /…"
-                        disabled={claudePromptDisabled || claudePromptSending}
-                        className="min-h-[4rem] w-full resize-none border-0 bg-transparent text-[0.84375rem] leading-6 text-[var(--ink)] outline-none placeholder:text-[var(--mute)] disabled:opacity-60"
-                      />
-                      <div className="mt-2 flex items-center justify-between gap-3">
-                        <div className="font-mono text-[0.65625rem] uppercase tracking-[0.06em] text-[var(--mute)]">
-                          Cmd/Ctrl + Enter to send
-                        </div>
-                        <button
-                          type="button"
-                          onClick={onClaudePromptSubmit}
-                          disabled={claudePromptDisabled || claudePromptSending || !String(claudePrompt || '').trim()}
-                          className="inline-flex items-center gap-2 rounded-full bg-[var(--ink)] px-3 py-1.5 text-[0.78125rem] font-medium text-[var(--bg)] transition-colors hover:bg-[var(--purple)] disabled:opacity-50"
-                        >
-                          <MessageSquare size={13} />
-                          Send
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </>
-              )}
+              <div className="min-h-0 flex-1 px-4 py-4">
+                <AssessmentClaudeChat
+                  assessmentId={assessmentId}
+                  token={assessmentToken}
+                  selectedFilePath={selectedFilePath}
+                  codeContext={codeContext}
+                  claudeBudget={claudeBudget}
+                  onBudgetUpdate={onClaudeBudgetUpdate}
+                  disabled={claudePromptDisabled}
+                  initialAiPrompts={initialAiPrompts}
+                  locked={chatLocked}
+                />
+              </div>
             </div>
           </aside>
 
@@ -915,12 +597,10 @@ export const AssessmentWorkspace = ({
                         onEditorChange={onEditorChange}
                         onExecute={onExecute}
                         onSave={onSave}
-                        onOpenTerminal={handleOpenTerminal}
                         editorLanguage={editorLanguage}
                         editorFilename={editorFilename}
                         isTimerPaused={isTimerPaused}
                         saving={savingRepoFile}
-                        showTerminalAction={showTerminal}
                         onRetry={retry}
                       />
                     )}
@@ -932,13 +612,11 @@ export const AssessmentWorkspace = ({
                         onChange={onEditorChange}
                         onExecute={onExecute}
                         onSave={onSave}
-                        onOpenTerminal={handleOpenTerminal}
                         saving={savingRepoFile}
                         language={editorLanguage}
                         filename={editorFilename}
                         disabled={isTimerPaused}
                         lightMode={lightMode}
-                        showTerminalAction={showTerminal}
                       />
                     </Suspense>
                   </RuntimeSurfaceBoundary>
@@ -956,9 +634,7 @@ export const AssessmentWorkspace = ({
             <div>
               <div className="font-mono text-[0.65625rem] uppercase tracking-[0.12em] text-[var(--mute)]">Workspace dock</div>
               <div className="mt-1 text-[0.75rem] text-[var(--mute)]">
-                {terminalSurfaceEnabled
-                  ? 'Open the output pane after each run, or use the terminal for repo commands and tests.'
-                  : 'Open the output pane to see results from Run and Run tests.'}
+                Open the output pane to see results from Run.
               </div>
             </div>
 
@@ -970,42 +646,11 @@ export const AssessmentWorkspace = ({
               >
                 Output
               </DockToggleButton>
-              {terminalSurfaceEnabled ? (
-                <DockToggleButton
-                  active={showTerminalPanel}
-                  icon={showTerminalPanel ? <ChevronUp size={12} /> : <TerminalSquare size={12} />}
-                  onClick={() => onToggleTerminal?.()}
-                >
-                  Terminal
-                </DockToggleButton>
-              ) : null}
             </div>
           </div>
 
           {showDock ? (
-            <div className={`mt-3 grid gap-3 ${showOutputPanel && showTerminalPanel ? 'xl:grid-cols-2' : ''}`}>
-              {showTerminalPanel ? (
-                <TerminalDockPanel
-                  terminalConnected={terminalConnected}
-                  terminalRestarting={terminalRestarting}
-                  onRestartTerminal={showRestartTerminal ? onRestartTerminal : undefined}
-                  onClose={() => onToggleTerminal?.()}
-                >
-                  <RuntimeSurfaceBoundary fallback={({ retry }) => <TerminalFallback onRetry={retry} />}>
-                    <Suspense fallback={<TerminalLoadingFallback />}>
-                      <LazyAssessmentTerminal
-                        events={terminalEvents}
-                        connected={terminalConnected}
-                        disabled={isTimerPaused}
-                        onInput={onTerminalInput}
-                        onResize={onTerminalResize}
-                        lightMode={lightMode}
-                      />
-                    </Suspense>
-                  </RuntimeSurfaceBoundary>
-                </TerminalDockPanel>
-              ) : null}
-
+            <div className="mt-3 grid gap-3">
               {showOutputPanel ? (
                 <RuntimeOutputPanel
                   output={output}

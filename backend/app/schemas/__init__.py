@@ -4,7 +4,6 @@ from .assessment import (
     AssessmentResponse,
     AssessmentStart,
     CodeExecutionRequest,
-    ClaudeRequest,
     SubmitRequest,
 )
 from .organization import OrgResponse, OrgUpdate, WorkableConnect
@@ -19,7 +18,6 @@ __all__ = [
     "AssessmentResponse",
     "AssessmentStart",
     "CodeExecutionRequest",
-    "ClaudeRequest",
     "SubmitRequest",
     "OrgResponse",
     "OrgUpdate",
