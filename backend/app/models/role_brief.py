@@ -67,6 +67,12 @@ class RoleBrief(Base):
         Integer, ForeignKey("clients.id"), nullable=True, index=True
     )
     client_rate = Column(Integer, nullable=True)
+    # Unguessable token for the SCOPED, no-login CLIENT INTAKE share link: the
+    # recruiter sends it to their client, who describes the role via the same
+    # conversational agent (company/economics layers hidden, no pay questions).
+    # Null until minted; minted once and reused. Served with NO auth at
+    # ``/api/v1/public/intake/{token}``.
+    client_intake_token = Column(String, nullable=True, unique=True, index=True)
 
     # --- Job profile (structured, queryable) ---
     title = Column(String, nullable=True)
@@ -123,3 +129,11 @@ class RoleBrief(Base):
 
     role = relationship("Role")
     client = relationship("Client")
+    # The PUBLIC job page published from this brief (one-per-brief, None until
+    # the recruiter publishes). View-only: the page is written via
+    # ``publish_job_page`` (which sets brief_id directly), never through here.
+    job_page = relationship(
+        "JobPage",
+        uselist=False,
+        viewonly=True,
+    )

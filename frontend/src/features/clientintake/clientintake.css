@@ -1,0 +1,427 @@
+/* Public client intake (/intake/:token). A no-login, friendly surface where a
+   consultancy's client briefs the role to the same conversational agent — chat
+   on the left, a live "Role so far" read-out + Submit on the right. Composes
+   the shared chat kit (tk-* classes) and the GLOBAL purple design tokens so it
+   re-skins per brand; it never redefines a chat component. Class prefix: ci-
+   (client intake). Light, centered, generous. */
+
+.ci-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--bg, #fff);
+  color: var(--ink, #1c1830);
+  font-family: var(--font-sans);
+}
+
+/* Centered page column — wide enough for the two-pane layout, capped so it
+   reads like a document on big screens. */
+.ci-page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 40px 24px 72px;
+}
+
+/* ============ Header ============ */
+.ci-brand {
+  font-weight: 800;
+  font-size: 20px;
+  letter-spacing: -0.01em;
+  color: var(--ink, #1c1830);
+}
+.ci-brand span { color: var(--purple, #6d28d9); }
+
+.ci-head {
+  margin-bottom: 24px;
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--line, #ece9f3);
+}
+.ci-head .ci-brand { margin-bottom: 22px; }
+.ci-org {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--purple-2, #6d28d9);
+  margin: 0 0 8px;
+}
+.ci-title {
+  font-family: var(--font-display, inherit);
+  font-size: 28px;
+  line-height: 1.18;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0;
+  color: var(--ink, #1c1830);
+}
+.ci-lede {
+  margin: 12px 0 0;
+  max-width: 60ch;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--muted, #6b6480);
+}
+
+/* ============ Split: conversation + side ============ */
+.ci-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
+  gap: 28px;
+  align-items: start;
+}
+
+/* ============ Conversation column ============ */
+.ci-convo {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ci-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  /* Cap the thread height on tall screens so the composer stays reachable; it
+     scrolls internally past that. */
+  max-height: min(58vh, 560px);
+  overflow-y: auto;
+  padding: 4px 4px 8px;
+}
+.ci-composer-wrap {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-2, #f1f5f9);
+}
+
+/* Attachment chips above the composer (mirrors the recruiter intake). */
+.ci-attach-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.ci-attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-2);
+  font-size: 0.78125rem;
+  color: var(--ink-2);
+  max-width: 220px;
+}
+.ci-attach-thumb {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+}
+.ci-attach-glyph {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: var(--purple-soft);
+  color: var(--purple-2);
+  flex-shrink: 0;
+}
+.ci-attach-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ci-attach-x {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--mute);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ci-attach-x:hover { background: var(--bg-3); color: var(--ink); }
+
+.ci-composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.ci-attach-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--ink-2);
+  font-size: 0.78125rem;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.ci-attach-btn:hover { border-color: var(--purple); color: var(--purple-2); }
+.ci-attach-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.ci-attach-hint {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.04em;
+  color: var(--mute-2);
+}
+
+.ci-send-attachments {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Tappable multiple-choice quick replies under the latest agent turn. */
+.ci-quick-replies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.ci-quick-chip {
+  appearance: none;
+  cursor: pointer;
+  border: 1px solid color-mix(in oklab, var(--purple) 32%, transparent);
+  background: var(--purple-soft);
+  color: var(--purple-2);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 7px 12px;
+  border-radius: 999px;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.ci-quick-chip:hover {
+  background: var(--purple);
+  color: var(--bg);
+  border-color: var(--purple);
+}
+.ci-quick-chip:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ============ Side column — Role so far + Submit ============ */
+.ci-side {
+  position: sticky;
+  top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.ci-panel {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--bg-2);
+  overflow: hidden;
+}
+.ci-panel-scroll {
+  max-height: min(52vh, 480px);
+  overflow-y: auto;
+  padding: 18px 18px 20px;
+}
+.ci-panel-empty {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--mute-2);
+}
+
+/* Completeness meter (reuses the requisitions meter vocabulary). */
+.ci-meter { margin-bottom: 16px; }
+.ci-meter-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.ci-meter-label {
+  font-family: var(--font-mono);
+  font-size: 0.65625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+.ci-meter-pct {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--purple-2);
+}
+.ci-meter-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+.ci-meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--purple) 0%, var(--purple-2) 100%);
+  transition: width 0.4s ease;
+}
+.ci-gaps-line {
+  margin-top: 9px;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--mute);
+}
+.ci-gaps-line strong { color: var(--purple-2); font-weight: 600; }
+
+/* Captured field rows. */
+.ci-fields { margin: 0; display: flex; flex-direction: column; gap: 0; }
+.ci-field {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line-2);
+}
+.ci-field:last-child { border-bottom: 0; padding-bottom: 0; }
+.ci-field-label {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+  margin-bottom: 4px;
+}
+.ci-field-value {
+  margin: 0;
+  font-size: 0.84375rem;
+  line-height: 1.5;
+  color: var(--ink);
+  word-break: break-word;
+}
+.ci-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ci-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--purple-soft);
+  color: var(--purple-2);
+  font-size: 0.78125rem;
+}
+
+/* Submit bar. */
+.ci-submit-bar {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: color-mix(in oklab, var(--purple) 5%, var(--bg-2));
+  padding: 16px 18px;
+}
+.ci-submit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 11px 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--purple);
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: background 0.15s, transform 0.08s;
+}
+.ci-submit-btn:hover { background: var(--purple-2); }
+.ci-submit-btn:active { transform: translateY(1px); }
+.ci-submit-btn:disabled { background: var(--line); color: var(--mute-2); cursor: not-allowed; }
+.ci-submit-hint {
+  margin: 10px 0 0;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--mute);
+  text-align: center;
+}
+
+/* Small button (attachments-only send). */
+.ci-btn-sm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  border-radius: 999px;
+  font-size: 0.78125rem;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.ci-btn-sm.is-primary { background: var(--purple); color: #fff; border: 0; }
+.ci-btn-sm.is-primary:hover { background: var(--purple-2); }
+.ci-btn-sm.is-primary:disabled { background: var(--line); color: var(--mute-2); cursor: not-allowed; }
+
+/* ============ Error + loading / 404 / done states ============ */
+.ci-error {
+  margin: 12px 0 0;
+  padding: 11px 13px;
+  border: 1px solid color-mix(in oklab, var(--red) 35%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--red) 8%, var(--bg-2));
+  color: var(--red-deep);
+  font-size: 0.8125rem;
+}
+
+.ci-state {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 72px 24px;
+  text-align: center;
+}
+.ci-state .ci-brand { margin-bottom: 28px; }
+.ci-state-title {
+  font-family: var(--font-display, inherit);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 10px;
+  color: var(--ink);
+}
+.ci-muted {
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--muted, #6b6480);
+  margin: 0;
+}
+.ci-done-glyph {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  margin: 0 auto 20px;
+  display: grid;
+  place-items: center;
+  background: var(--purple);
+  color: #fff;
+}
+
+.ci-spinner {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  border: 2px solid color-mix(in oklab, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: ci-spin 0.7s linear infinite;
+}
+@keyframes ci-spin { to { transform: rotate(360deg); } }
+
+/* Narrow viewports: stack the side panel under the conversation. */
+@media (max-width: 920px) {
+  .ci-split { grid-template-columns: 1fr; gap: 20px; }
+  .ci-side { position: static; }
+  .ci-thread { max-height: none; }
+}

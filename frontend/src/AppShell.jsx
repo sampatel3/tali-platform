@@ -90,6 +90,12 @@ const JobsPage = lazy(() =>
 const RequisitionsPage = lazy(() =>
   import('./features/requisitions/RequisitionsPage').then((m) => ({ default: m.RequisitionsPage }))
 );
+const PublicJobPage = lazy(() =>
+  import('./features/jobpage/PublicJobPage').then((m) => ({ default: m.PublicJobPage }))
+);
+const ClientIntakePage = lazy(() =>
+  import('./features/clientintake/ClientIntakePage').then((m) => ({ default: m.ClientIntakePage }))
+);
 const ClientsPage = lazy(() =>
   import('./features/clients/ClientsPage').then((m) => ({ default: m.ClientsPage }))
 );
@@ -874,6 +880,36 @@ function AppContent() {
       />
 
       <Route path="/assess/:token" element={<CandidateWelcomeRoute />} />
+
+      {/* Public, no-auth careers-style job posting. The shareable link a
+          published requisition produces. Like /assess/:token, it renders
+          WITHOUT a NavComponent and without a recruiter session — the page
+          fetches its snapshot through the unauthenticated public job
+          endpoint. */}
+      <Route
+        path="/job/:token"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <PublicJobPage />
+          </Suspense>
+        )}
+      />
+
+      {/* Public, no-auth CLIENT INTAKE. A consultancy recruiter shares this
+          link with their client, who describes the role to the same
+          conversational agent (company/economics hidden). Like /job/:token and
+          /assess/:token, it renders WITHOUT a NavComponent and without a
+          recruiter session — every call goes through the unauthenticated
+          public intake endpoints. */}
+      <Route
+        path="/intake/:token"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <ClientIntakePage />
+          </Suspense>
+        )}
+      />
+
       <Route path="/assessment/:assessmentId" element={<CandidateWelcomeWithIdRoute />} />
       <Route path="/assessment/live" element={<AssessmentLiveRoute />} />
 

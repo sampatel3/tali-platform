@@ -1,4 +1,5 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Pencil, RotateCcw } from 'lucide-react';
 
 // The live Job spec (JD) panel — the recruiter-facing job-description DOCUMENT.
 //
@@ -9,6 +10,12 @@ import React, { useMemo } from 'react';
 // reuses the shared chat-kit markdown renderer so the JD reads like every
 // other rendered-markdown surface. Lives inside the same .rq-brief scroll
 // shell as the Brief panel.
+//
+// The recruiter can also OVERRIDE the auto-generated JD per requisition: when
+// `brief.jd_override` is a non-empty string we render that verbatim instead of
+// the template-filled draft (an "Edited" badge marks it). "Edit" opens a
+// full-height markdown editor seeded with the current rendered text; "Reset to
+// auto" clears the override and reverts to the live template-filled draft.
 import { ChatMarkdown } from '../../shared/chat';
 
 // Markdown shown in place of an empty / missing value so gaps are visible in
@@ -101,24 +108,133 @@ const substitute = (templateStr, brief) => {
   });
 };
 
-export function JobSpec({ template, brief }) {
-  const jdMarkdown = useMemo(() => {
-    const tpl = template?.jd_template;
-    if (!tpl) return '';
-    return substitute(tpl, brief);
-  }, [template, brief]);
+// A non-empty override string?
+const hasOverride = (brief) => {
+  const o = brief?.jd_override;
+  return typeof o === 'string' && o.trim() !== '';
+};
+
+// Render the org's JD template against a brief into a substituted markdown
+// string — the same template-filled draft the recruiter sees in this panel,
+// exported as a pure function so other surfaces (e.g. the Publish handler that
+// snapshots the rendered JD onto the public job page) can produce identical
+// output without mounting <JobSpec>. Returns '' when there's no template.
+export const renderJobSpec = (template, brief) => {
+  const tpl = template?.jd_template;
+  if (!tpl) return '';
+  return substitute(tpl, brief);
+};
+
+export function JobSpec({ template, brief, onSaveOverride, savingOverride = false }) {
+  // The template-filled draft (live, derived from the brief). Shares the same
+  // pure renderer the Publish handler uses, so the panel and the snapshot match.
+  const autoMarkdown = useMemo(() => renderJobSpec(template, brief), [template, brief]);
+
+  const override = hasOverride(brief) ? brief.jd_override : null;
+  // What's actually shown in view mode: the override if present, else the draft.
+  const displayMarkdown = override != null ? override : autoMarkdown;
+  const editable = typeof onSaveOverride === 'function';
+
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  // Leave edit mode whenever we switch requisitions (the brief identity
+  // changes) so a stale draft can't bleed across documents.
+  useEffect(() => { setEditing(false); }, [brief?.id]);
+
+  const startEdit = () => {
+    // Seed with the current rendered markdown — the override if set, else the
+    // template-filled draft (so editing "starts from" what's on screen).
+    setDraft(displayMarkdown);
+    setEditing(true);
+  };
+
+  const saveEdit = async () => {
+    if (savingOverride) return;
+    await onSaveOverride(draft);
+    setEditing(false);
+  };
+
+  const resetToAuto = async () => {
+    if (savingOverride) return;
+    await onSaveOverride(null);
+    setEditing(false);
+  };
+
+  const empty = !editing && displayMarkdown.trim() === '';
 
   return (
     <div className="rq-brief">
       <div className="rq-brief-scroll">
-        {jdMarkdown.trim() === '' ? (
+        {editing ? (
+          <div className="rq-jobspec-edit">
+            <div className="rq-jobspec-bar">
+              <span className="rq-jobspec-bar-label">Editing job spec — markdown</span>
+              <div className="rq-jobspec-bar-actions">
+                <button
+                  type="button"
+                  className="rq-btn-sm is-ghost"
+                  onClick={() => setEditing(false)}
+                  disabled={savingOverride}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="rq-btn-sm is-primary"
+                  onClick={saveEdit}
+                  disabled={savingOverride}
+                >
+                  {savingOverride ? <span className="rq-spinner" /> : null} Save
+                </button>
+              </div>
+            </div>
+            <textarea
+              className="rq-jobspec-textarea"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              spellCheck={false}
+              autoFocus
+              aria-label="Job spec markdown"
+            />
+          </div>
+        ) : empty ? (
           <div className="rq-side-empty">
             No job-spec template configured. Set one up in Settings → Requisition template.
           </div>
         ) : (
-          <div className="rq-jobspec">
-            <ChatMarkdown>{jdMarkdown}</ChatMarkdown>
-          </div>
+          <>
+            {editable ? (
+              <div className="rq-jobspec-bar">
+                <div className="rq-jobspec-bar-label">
+                  {override != null ? <span className="rq-jobspec-badge">Edited</span> : null}
+                </div>
+                <div className="rq-jobspec-bar-actions">
+                  {override != null ? (
+                    <button
+                      type="button"
+                      className="rq-btn-sm is-ghost"
+                      onClick={resetToAuto}
+                      disabled={savingOverride}
+                    >
+                      {savingOverride ? <span className="rq-spinner" /> : <RotateCcw size={13} />} Reset to auto
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="rq-btn-sm is-ghost"
+                    onClick={startEdit}
+                    disabled={savingOverride}
+                  >
+                    <Pencil size={13} /> Edit
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            <div className="rq-jobspec">
+              <ChatMarkdown>{displayMarkdown}</ChatMarkdown>
+            </div>
+          </>
         )}
       </div>
     </div>

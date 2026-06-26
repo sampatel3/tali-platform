@@ -11,6 +11,7 @@ The org's spec template is read/written via ``/settings/requisition-template``.
 """
 from __future__ import annotations
 
+import secrets
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -19,9 +20,11 @@ from sqlalchemy.orm import Session
 
 from ...deps import get_current_user
 from ...models.client import Client
+from ...models.job_page import JobPage
 from ...models.organization import Organization
 from ...models.role_brief import RoleBrief
 from ...models.user import User
+from ...platform.config import settings
 from ...platform.database import get_db
 from ...services.client_service import compute_margin
 from ...services.requisition_chat_service import (
@@ -29,6 +32,7 @@ from ...services.requisition_chat_service import (
     compute_gaps,
     run_chat_turn,
     seed_opening_message,
+    warm_start_fields,
 )
 from ...services.requisition_intake_agent import run_intake_extraction
 from ...services.requisition_template_service import (
@@ -38,12 +42,25 @@ from ...services.requisition_template_service import (
 )
 from ...services.role_brief_service import (
     create_brief,
-    materialize_brief_to_role,
+    publish_job_page,
     submit_brief,
     update_brief_fields,
 )
 
 router = APIRouter(tags=["Requisitions"])
+
+
+def _job_page_url(token: str) -> str:
+    """Public job-page URL. ``/job/{token}`` relative when FRONTEND_URL is empty."""
+    base = (settings.FRONTEND_URL or "").rstrip("/")
+    return f"{base}/job/{token}" if base else f"/job/{token}"
+
+
+def _client_intake_url(token: str) -> str:
+    """The no-login CLIENT INTAKE share URL. ``/intake/{token}`` relative when
+    FRONTEND_URL is empty."""
+    base = (settings.FRONTEND_URL or "").rstrip("/")
+    return f"{base}/intake/{token}" if base else f"/intake/{token}"
 
 # Multipart upload guards for the chat endpoint.
 _MAX_CHAT_FILES = 6
@@ -100,6 +117,8 @@ def _serialize_brief(brief: RoleBrief, org: Optional[Organization]) -> dict[str,
     payload["messages"] = brief.messages or []
     payload["completeness"] = int(brief.completeness or 0)
     payload["gaps"] = compute_gaps(brief, template)
+    # Recruiter's hand-edited Job spec (stored in agent_state, not a column).
+    payload["jd_override"] = (brief.agent_state or {}).get("jd_override")
     # Consultancy: resolve the client name + compute margin (never stored).
     payload["client_name"] = brief.client.name if brief.client else None
     margin, margin_pct = compute_margin(
@@ -107,6 +126,24 @@ def _serialize_brief(brief: RoleBrief, org: Optional[Organization]) -> dict[str,
     )
     payload["margin"] = margin
     payload["margin_pct"] = margin_pct
+    # The brief's published PUBLIC job page (None until first published).
+    page = brief.job_page
+    payload["job_page"] = (
+        {
+            "token": page.token,
+            "url": _job_page_url(page.token),
+            "status": page.status,
+            "published_at": page.published_at.isoformat() if page.published_at else None,
+        }
+        if page
+        else None
+    )
+    # The scoped, no-login CLIENT INTAKE share link (None until the recruiter
+    # mints it). The token itself is the only secret — never any economics.
+    token = brief.client_intake_token
+    payload["client_link"] = (
+        {"token": token, "url": _client_intake_url(token)} if token else None
+    )
     return payload
 
 
@@ -143,6 +180,10 @@ class TemplatePut(BaseModel):
     template: dict[str, Any]
 
 
+class PublishRequisition(BaseModel):
+    jd_markdown: str = ""
+
+
 # --------------------------------------------------------------------------- #
 # CRUD + intake
 # --------------------------------------------------------------------------- #
@@ -164,6 +205,16 @@ def create_requisition(
     brief.salary_currency = "AED"
     org = _org(db, current_user.organization_id)
     template = resolve_template(org)
+    # Warm-start: prefill location/workplace/employment/department from the org's
+    # most-recent specs (the agent/recruiter can still override). These count
+    # toward the live gap engine + completeness and are visible to the agent as
+    # already captured. ``completeness`` itself is (re)computed on the first chat
+    # turn — we don't seed it here, to keep a brand-new brief at 0% until the
+    # recruiter starts talking, matching the existing create contract.
+    for field, value in warm_start_fields(
+        db, current_user.organization_id, exclude_brief_id=brief.id
+    ).items():
+        setattr(brief, field, value)
     seed_opening_message(brief, template)
     db.flush()
     db.commit()
@@ -293,7 +344,20 @@ def update_requisition(
     """Recruiter edits to the brief (whitelisted fields, including
     ``custom_fields`` and the consultancy ``client_id`` / ``client_rate``)."""
     brief = _get_brief(db, current_user.organization_id, brief_id)
-    data = data or {}
+    data = dict(data or {})
+    # ``jd_override`` is the recruiter's hand-edited Job spec. It isn't a column —
+    # merge it into agent_state (preserving other keys like ``open_questions``);
+    # an empty string / null clears it. Pull it out so it doesn't flow through
+    # update_brief_fields as a column.
+    if "jd_override" in data:
+        raw = data.pop("jd_override")
+        override = (raw or "").strip() if isinstance(raw, str) else raw
+        state = dict(brief.agent_state or {})
+        if override:
+            state["jd_override"] = override
+        else:
+            state.pop("jd_override", None)
+        brief.agent_state = state
     # A client_id can only point at a client in the caller's org (no cross-org
     # assignment). ``None`` clears the link.
     if data.get("client_id") is not None:
@@ -329,14 +393,52 @@ def submit_requisition(
 @router.post("/requisitions/{brief_id}/publish")
 def publish_requisition(
     brief_id: int,
+    data: PublishRequisition,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Materialize the brief onto a role (creates/updates the role)."""
+    """Publish the brief as a shareable PUBLIC job page.
+
+    Takes the FE-rendered ``jd_markdown`` and snapshots the brief's public-safe
+    fields onto a JobPage (idempotent — one per brief; re-publish refreshes it
+    and reuses the token). Does NOT materialize an internal role and does NOT
+    change the brief's status, so the brief stays editable for a re-publish.
+    """
     brief = _get_brief(db, current_user.organization_id, brief_id)
-    role = materialize_brief_to_role(db, brief)
+    page = publish_job_page(db, brief, jd_markdown=data.jd_markdown)
     db.commit()
-    return {"role_id": role.id, "brief_id": brief.id, "status": brief.status}
+    db.refresh(page)
+    return {
+        "job_page_id": page.id,
+        "token": page.token,
+        "url": _job_page_url(page.token),
+        "status": page.status,
+        "published_at": page.published_at.isoformat() if page.published_at else None,
+    }
+
+
+@router.post("/requisitions/{brief_id}/client-link")
+def mint_client_link(
+    brief_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Mint (or return) the SCOPED, no-login CLIENT INTAKE share link.
+
+    For a consultancy: the recruiter sends this link to their CLIENT, who
+    describes the role via the same conversational agent (company/economics
+    layers hidden, no pay questions). Idempotent — the token is minted once
+    (``secrets.token_urlsafe(8)``) and reused on subsequent calls so a shared
+    link never goes stale.
+    """
+    brief = _get_brief(db, current_user.organization_id, brief_id)
+    if not brief.client_intake_token:
+        brief.client_intake_token = secrets.token_urlsafe(8)
+        db.add(brief)
+        db.commit()
+        db.refresh(brief)
+    token = brief.client_intake_token
+    return {"token": token, "url": _client_intake_url(token)}
 
 
 # --------------------------------------------------------------------------- #

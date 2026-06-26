@@ -197,6 +197,85 @@
   color: var(--purple-2);
 }
 
+/* Published state: shareable URL + Copy / View / Re-publish, right-aligned in
+   the requisition header. */
+.rq-published {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+.rq-published-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+}
+.rq-published-url {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--purple-2);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 340px;
+}
+.rq-published-url:hover { text-decoration: underline; }
+.rq-published-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* The View link is an <a> styled as a small button — keep it on the row. */
+a.rq-btn-sm { text-decoration: none; }
+
+/* Right-side header actions: the client-share control stacked above the
+   publish / published state, both right-aligned. */
+.rq-head-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+/* "Share with client" trigger — a ghost button with a subtle purple lean so it
+   reads as a distinct, friendly action next to Publish. */
+.rq-share-btn { border-color: color-mix(in oklab, var(--purple) 32%, var(--line)); color: var(--purple-2); }
+.rq-share-btn:hover { border-color: var(--purple); color: var(--purple-2); background: var(--purple-soft); }
+
+/* Revealed client-intake link block (mirrors the published-state layout). */
+.rq-clientlink {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+.rq-clientlink-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+}
+.rq-clientlink-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--purple-2);
+  white-space: nowrap;
+}
+.rq-clientlink-hint {
+  font-size: 0.6875rem;
+  color: var(--mute);
+  margin-right: 2px;
+}
+
 .rq-split {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);
@@ -396,6 +475,78 @@
 .rq-jobspec .tk-md li { margin: 0.3em 0; }
 .rq-jobspec .tk-md em { color: var(--mute); }
 .rq-jobspec .tk-md hr { border: 0; border-top: 1px solid var(--line-2); margin: 1.5em 0; }
+
+/* Job-spec action bar — the Edit / Reset-to-auto controls + the "Edited"
+   badge sit above the rendered JD. A flex row so the badge hugs the left and
+   the buttons the right; when there's no badge the buttons stay right-aligned. */
+.rq-jobspec-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 28px;
+  margin-bottom: 14px;
+}
+.rq-jobspec-bar-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+.rq-jobspec-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+/* "Edited" badge — marks the JD as a manual override (purple, no red/amber). */
+.rq-jobspec-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--purple-soft);
+  color: var(--purple-2);
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Job-spec edit mode — a full-height monospace markdown editor that fills the
+   scroll shell, with its own sticky action bar. */
+.rq-jobspec-edit {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.rq-jobspec-textarea {
+  flex: 1;
+  width: 100%;
+  min-height: 360px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--bg-2);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  resize: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.rq-jobspec-textarea:focus {
+  outline: 0;
+  border-color: var(--purple);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple) 15%, transparent);
+}
 
 /* Completeness meter */
 .rq-meter {

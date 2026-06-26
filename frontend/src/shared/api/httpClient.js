@@ -21,6 +21,45 @@ export const viewShareLink = (token) =>
 export const viewTopReport = (token) =>
   axios.get(`${API_URL}/report/${encodeURIComponent(token)}`);
 
+// Public unauth job posting — the careers-style page a published requisition
+// links to. Lives UNDER /api/v1 (unlike the share/report endpoints), but we
+// still use a bare axios.get rather than the shared `api` instance so the
+// recruiter's JWT is never attached: anyone with the link can read it.
+export const viewPublicJob = (token) =>
+  axios.get(`${API_URL}/api/v1/public/job/${encodeURIComponent(token)}`);
+
+// ---- Public, no-auth CLIENT INTAKE (a consultancy's client describing the
+// role via the conversational agent) ----
+//
+// Same JWT-free pattern as viewPublicJob: a consultancy recruiter shares the
+// /intake/:token link with their client, who talks to the SAME agent with all
+// company/economics fields hidden. Bare axios so the recruiter's token is never
+// attached — anyone with the link can use it.
+const intakeBase = (token) =>
+  `${API_URL}/api/v1/public/intake/${encodeURIComponent(token)}`;
+
+// Snapshot the intake conversation + captured ROLE fields.
+// Returns `{ organization_name, messages, captured, gaps, completeness, status }`.
+export const viewClientIntake = (token) => axios.get(intakeBase(token));
+
+// One conversational turn from the client — `message` text plus optional File
+// attachments — as multipart/form-data (mirrors requisitionApi.chat). Returns
+// `{ reply, messages, captured, gaps, suggested_replies }`.
+export const sendClientIntakeChat = (token, { message = '', files = [] } = {}) => {
+  const form = new FormData();
+  form.append('message', message ?? '');
+  (files || []).forEach((file) => {
+    if (file) form.append('files', file);
+  });
+  return axios.post(`${intakeBase(token)}/chat`, form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+};
+
+// Submit the captured brief back to the consultancy. Returns `{ ok, status }`.
+export const submitClientIntake = (token) =>
+  axios.post(`${intakeBase(token)}/submit`);
+
 const isAuthEndpoint = (url = '') => (
   url.includes('/auth/jwt/login')
   || url.includes('/auth/register')
@@ -44,6 +83,8 @@ const isPublicPath = (pathname = '', search = '') => {
     || pathname.startsWith('/report/')
     || pathname.startsWith('/assess/')
     || pathname.startsWith('/assessment/')
+    || pathname.startsWith('/job/')
+    || pathname.startsWith('/intake/')
     || pathname.startsWith('/showcase/')) {
     return true;
   }

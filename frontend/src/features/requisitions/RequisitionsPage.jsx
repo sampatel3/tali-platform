@@ -11,13 +11,13 @@
 // ThinkingDots) — the one standard chat UI across Search, the Home dock and
 // the candidate workspace — and the global purple design tokens.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, FileText, Paperclip, Plus, Rocket, X } from 'lucide-react';
+import { Check, Copy, ExternalLink, FileText, Paperclip, Plus, RefreshCw, Rocket, Share2, X } from 'lucide-react';
 
 import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
 import { requisitionApi } from './api';
 import { clientApi } from '../clients/api';
 import { LiveBrief } from './LiveBrief';
-import { JobSpec } from './JobSpec';
+import { JobSpec, renderJobSpec } from './JobSpec';
 import { RequisitionEconomics } from './RequisitionEconomics';
 import './requisitions.css';
 
@@ -76,6 +76,12 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const [turnInFlight, setTurnInFlight] = useState(false);
   const [creating, setCreating] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  // Transient "Copied" tick on the share-URL copy button.
+  const [copied, setCopied] = useState(false);
+  // Minting / "Copied" tick for the client-intake link (the no-login link a
+  // consultancy recruiter sends to their client to describe the role).
+  const [clientLinking, setClientLinking] = useState(false);
+  const [clientCopied, setClientCopied] = useState(false);
   const [savingKey, setSavingKey] = useState(null);
   const [loadingBrief, setLoadingBrief] = useState(false);
   const [error, setError] = useState('');
@@ -83,6 +89,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   // in-flight save flag for the client/rate strip.
   const [clients, setClients] = useState([]);
   const [savingEconomics, setSavingEconomics] = useState(false);
+  // In-flight flag for the per-requisition Job-spec (JD) override save.
+  const [savingOverride, setSavingOverride] = useState(false);
   // Right column: the live Job spec (JD) document by default, or the
   // structured Brief.
   const [rightTab, setRightTab] = useState('jobspec');
@@ -312,6 +320,24 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     }
   }, [selectedId]);
 
+  // ---- per-requisition Job spec (JD) override ----
+  // Same shape as the economics save: PATCH jd_override (a string to set the
+  // override, or null to clear it → revert to the template-filled draft) and
+  // merge the returned brief so `brief.jd_override` updates in place.
+  const saveOverride = useCallback(async (textOrNull) => {
+    if (!selectedId) return;
+    setSavingOverride(true);
+    setError('');
+    try {
+      const updated = await requisitionApi.update(selectedId, { jd_override: textOrNull });
+      setBrief((prev) => ({ ...(prev || {}), ...(updated || {}) }));
+    } catch {
+      setError('Could not save the job spec. Try again.');
+    } finally {
+      setSavingOverride(false);
+    }
+  }, [selectedId]);
+
   const assignClient = useCallback((clientId) => {
     // Empty selection clears the assignment. Coerce the <select>'s string value
     // to a number so the backend FK gets an int, not a stringified id.
@@ -344,22 +370,101 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   }, [selectedId, loadClients]);
 
   // ---- publish ----
+  // Snapshot the RENDERED JD (the recruiter's per-requisition override if set,
+  // else the live template-filled draft — the exact markdown shown in the Job
+  // spec panel) onto the public job page. Re-running refreshes that snapshot.
+  // The backend returns `job_page` ({ token, url, status, published_at }) on
+  // the serialized brief, which drives the published-state UI below.
   const publish = useCallback(async () => {
     if (!selectedId) return;
     setPublishing(true);
     setError('');
     try {
-      const res = await requisitionApi.publish(selectedId);
-      setBrief((prev) => ({ ...(prev || {}), ...(res || {}) }));
+      const jdMarkdown = (typeof brief?.jd_override === 'string' && brief.jd_override.trim() !== '')
+        ? brief.jd_override
+        : renderJobSpec(template, brief);
+      const res = await requisitionApi.publish(selectedId, jdMarkdown);
+      // The publish response carries the job_page fields (token/url/status/…);
+      // fold them into brief.job_page so the published state renders without a
+      // refetch, and lift status to keep the header chip in sync.
+      setBrief((prev) => ({
+        ...(prev || {}),
+        status: res?.status ?? prev?.status,
+        job_page: res?.token
+          ? { token: res.token, url: res.url, status: res.status, published_at: res.published_at }
+          : (prev?.job_page || null),
+      }));
       await loadList();
     } catch {
       setError('Publish failed — resolve any missing required fields and try again.');
     } finally {
       setPublishing(false);
     }
-  }, [selectedId, loadList]);
+  }, [selectedId, loadList, brief, template]);
 
-  const published = isPublished(brief?.status);
+  // The published job page (token/url/status/published_at) or null. Drives the
+  // header's published state on load and after a (re-)publish.
+  const jobPage = brief?.job_page || null;
+  // Prefer the backend-supplied absolute URL; fall back to building the
+  // /job/:token link off the current origin so Copy/View always work.
+  const jobPageUrl = jobPage
+    ? (jobPage.url || (typeof window !== 'undefined' ? `${window.location.origin}/job/${jobPage.token}` : `/job/${jobPage.token}`))
+    : '';
+
+  const copyJobUrl = useCallback(async () => {
+    if (!jobPageUrl) return;
+    try {
+      await navigator.clipboard.writeText(jobPageUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setError('Could not copy the link — select and copy it manually.');
+    }
+  }, [jobPageUrl]);
+
+  // ---- share with client (the no-login client-intake link) ----
+  // The serialized brief carries `client_link` ({ token, url } or null). Build
+  // the absolute /intake/:token URL the same way the job page does, so Copy/
+  // open work whether or not the backend hands back an absolute url.
+  const clientLink = brief?.client_link || null;
+  const clientLinkUrl = clientLink
+    ? (clientLink.url || (typeof window !== 'undefined' ? `${window.location.origin}/intake/${clientLink.token}` : `/intake/${clientLink.token}`))
+    : '';
+
+  // Mint the client-intake link on demand (idempotent on the backend), then
+  // fold it into the brief so the link + Copy reveal without a refetch.
+  const makeClientLink = useCallback(async () => {
+    if (!selectedId) return;
+    setClientLinking(true);
+    setError('');
+    try {
+      const res = await requisitionApi.clientLink(selectedId);
+      setBrief((prev) => ({
+        ...(prev || {}),
+        client_link: res?.token ? { token: res.token, url: res.url } : (prev?.client_link || null),
+      }));
+    } catch {
+      setError('Could not create the client link. Try again.');
+    } finally {
+      setClientLinking(false);
+    }
+  }, [selectedId]);
+
+  const copyClientUrl = useCallback(async () => {
+    if (!clientLinkUrl) return;
+    try {
+      await navigator.clipboard.writeText(clientLinkUrl);
+      setClientCopied(true);
+      setTimeout(() => setClientCopied(false), 1800);
+    } catch {
+      setError('Could not copy the link — select and copy it manually.');
+    }
+  }, [clientLinkUrl]);
+
+  // Reset the transient "Copied" ticks when switching requisitions.
+  useEffect(() => { setCopied(false); setClientCopied(false); }, [selectedId]);
+
+  const published = Boolean(jobPage) || isPublished(brief?.status);
   const canSend = (composer.trim() || attachments.length > 0) && !turnInFlight;
   // Multiple-choice quick replies for the latest agent turn (tap instead of type).
   const lastMsg = messages.length ? messages[messages.length - 1] : null;
@@ -426,13 +531,88 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     <span>{Math.max(0, Math.min(100, Number(brief.completeness) || 0))}% complete</span>
                   </div>
                 </div>
-                {published ? (
-                  <span className="rq-published-flag"><CheckCircle2 size={16} /> Published to role</span>
-                ) : (
-                  <button type="button" className="rq-publish-btn" onClick={publish} disabled={publishing}>
-                    {publishing ? <span className="rq-spinner" /> : <Rocket size={15} />} Publish → role
-                  </button>
-                )}
+                <div className="rq-head-actions">
+                  {/* Share with client — the no-login intake link a
+                      consultancy recruiter sends to their client so the client
+                      describes the role to the same agent (economics hidden). */}
+                  {clientLink ? (
+                    <div className="rq-clientlink">
+                      <div className="rq-clientlink-top">
+                        <span className="rq-clientlink-flag"><Share2 size={14} /> Client link</span>
+                        <a
+                          className="rq-published-url"
+                          href={clientLinkUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={clientLinkUrl}
+                        >
+                          {clientLinkUrl}
+                        </a>
+                      </div>
+                      <div className="rq-published-actions">
+                        <span className="rq-clientlink-hint">Send this to your client — no login needed.</span>
+                        <button type="button" className="rq-btn-sm is-ghost" onClick={copyClientUrl}>
+                          {clientCopied ? <Check size={13} /> : <Copy size={13} />} {clientCopied ? 'Copied' : 'Copy'}
+                        </button>
+                        <a
+                          className="rq-btn-sm is-ghost"
+                          href={clientLinkUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          <ExternalLink size={13} /> Open
+                        </a>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="rq-btn-sm is-ghost rq-share-btn"
+                      onClick={makeClientLink}
+                      disabled={clientLinking}
+                      title="Get a no-login link to send to your client"
+                    >
+                      {clientLinking ? <span className="rq-spinner" /> : <Share2 size={14} />} Share with client
+                    </button>
+                  )}
+
+                  {jobPage ? (
+                    <div className="rq-published">
+                      <div className="rq-published-top">
+                        <span className="rq-published-flag"><Check size={15} /> Published</span>
+                        <a
+                          className="rq-published-url"
+                          href={jobPageUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={jobPageUrl}
+                        >
+                          {jobPageUrl}
+                        </a>
+                      </div>
+                      <div className="rq-published-actions">
+                        <button type="button" className="rq-btn-sm is-ghost" onClick={copyJobUrl}>
+                          {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? 'Copied' : 'Copy'}
+                        </button>
+                        <a
+                          className="rq-btn-sm is-ghost"
+                          href={jobPageUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          <ExternalLink size={13} /> View job page
+                        </a>
+                        <button type="button" className="rq-btn-sm is-ghost" onClick={publish} disabled={publishing}>
+                          {publishing ? <span className="rq-spinner" /> : <RefreshCw size={13} />} Re-publish
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button type="button" className="rq-publish-btn" onClick={publish} disabled={publishing}>
+                      {publishing ? <span className="rq-spinner" /> : <Rocket size={15} />} Publish job page
+                    </button>
+                  )}
+                </div>
               </header>
 
               <RequisitionEconomics
@@ -558,7 +738,12 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   {loadingBrief ? (
                     <div className="rq-brief"><div className="rq-brief-scroll"><span className="rq-spinner" /></div></div>
                   ) : rightTab === 'jobspec' ? (
-                    <JobSpec template={template} brief={brief} />
+                    <JobSpec
+                      template={template}
+                      brief={brief}
+                      onSaveOverride={saveOverride}
+                      savingOverride={savingOverride}
+                    />
                   ) : (
                     <LiveBrief
                       template={template}

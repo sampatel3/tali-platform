@@ -7,9 +7,13 @@ NOT commit — the caller owns the transaction.
 """
 from __future__ import annotations
 
+import secrets
+from datetime import datetime, timezone
+
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from ..models.job_page import JOB_PAGE_STATUS_OPEN, JobPage
 from ..models.org_criterion import BUCKET_CONSTRAINT, BUCKET_MUST, BUCKET_PREFERRED
 from ..models.role import Role
 from ..models.role_criterion import CRITERION_SOURCE_RECRUITER, RoleCriterion
@@ -177,3 +181,56 @@ def materialize_brief_to_role(db: Session, brief: RoleBrief) -> Role:
     brief.status = BRIEF_STATUS_APPLIED
     db.flush()
     return role
+
+
+def _brief_location(brief: RoleBrief) -> str | None:
+    """Public location string: "City, Country" from the brief's parts. Omits a
+    missing half (so just a city or just a country still renders), returns None
+    when neither is set."""
+    parts = [
+        (brief.location_city or "").strip(),
+        (brief.location_country or "").strip(),
+    ]
+    joined = ", ".join(p for p in parts if p)
+    return joined or None
+
+
+def publish_job_page(db: Session, brief: RoleBrief, *, jd_markdown: str) -> JobPage:
+    """Create or refresh the PUBLIC job page for this brief and return it.
+
+    Idempotent — one JobPage per ``brief_id``. The first publish mints an
+    unguessable ``token`` (the public address); a re-publish reuses it and just
+    refreshes the snapshot. Only PUBLIC-safe fields are copied — NEVER the
+    consultancy ``client_id`` / ``client_rate`` / margin. The brief's own
+    ``status`` is deliberately left untouched so it stays editable for re-publish
+    (unlike ``materialize_brief_to_role``). Flushes but does not commit.
+    """
+    page = (
+        db.query(JobPage)
+        .filter(
+            JobPage.brief_id == brief.id,
+            JobPage.organization_id == brief.organization_id,
+        )
+        .first()
+    )
+    if page is None:
+        page = JobPage(
+            organization_id=brief.organization_id,
+            brief_id=brief.id,
+            token=secrets.token_urlsafe(8),
+        )
+        db.add(page)
+
+    page.jd_markdown = jd_markdown
+    page.title = brief.title
+    page.location = _brief_location(brief)
+    page.workplace_type = brief.workplace_type
+    page.employment_type = brief.employment_type
+    page.seniority = brief.seniority
+    page.salary_min = brief.salary_min
+    page.salary_max = brief.salary_max
+    page.salary_currency = brief.salary_currency
+    page.status = JOB_PAGE_STATUS_OPEN
+    page.published_at = datetime.now(timezone.utc)
+    db.flush()
+    return page

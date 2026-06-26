@@ -13,6 +13,12 @@ from .client import (
     CLIENT_STATUSES,
     Client,
 )
+from .job_page import (
+    JOB_PAGE_STATUS_CLOSED,
+    JOB_PAGE_STATUS_OPEN,
+    JOB_PAGE_STATUSES,
+    JobPage,
+)
 from .org_criterion import (
     BUCKET_CONSTRAINT,
     BUCKET_MUST,
@@ -187,6 +193,10 @@ __all__ = [
     "CLIENT_STATUS_ACTIVE",
     "CLIENT_STATUS_ARCHIVED",
     "CLIENT_STATUSES",
+    "JobPage",
+    "JOB_PAGE_STATUS_OPEN",
+    "JOB_PAGE_STATUS_CLOSED",
+    "JOB_PAGE_STATUSES",
     "RoleCriterion",
     "CRITERION_SOURCE_RECRUITER",
     "CRITERION_SOURCE_DERIVED",
