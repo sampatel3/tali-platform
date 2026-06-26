@@ -47,6 +47,7 @@ const resolvedOutcomeLabel = (application) => {
 export const CandidateDecisionStrip = ({
   decision,
   application,
+  recommendation,
   busy,
   onApprove,
   onAlternative,
@@ -182,8 +183,15 @@ export const CandidateDecisionStrip = ({
     );
   }
 
-  // STATE 3 — nothing decided and nothing to decide yet (e.g. not scored).
-  // Muted hint, no fabricated actions.
+  // STATE 3 — no agent decision card. Two very different cases:
+  //  (a) NOT scored → genuinely nothing to decide; prompt to score.
+  //  (b) SCORED but no decision (the agent is paused / off for this role, so the
+  //      deterministic policy hasn't emitted a card yet) → DON'T say "score
+  //      this candidate" (it's scored). Surface Taali's read instead.
+  const isScored = application?.cv_match_score != null;
+  const recLabel = recommendation?.label && recommendation.label !== 'Continue review'
+    ? recommendation.label
+    : '';
   return (
     <div
       data-internal-only
@@ -203,7 +211,17 @@ export const CandidateDecisionStrip = ({
       }}
     >
       <Sparkles size={15} strokeWidth={2.2} aria-hidden="true" />
-      <span>No agent decision yet — score this candidate to get a recommendation.</span>
+      {isScored ? (
+        <span>
+          {recLabel ? (
+            <>Taali&apos;s read: <strong style={{ color: 'var(--ink)' }}>{recLabel}</strong>. </>
+          ) : null}
+          Scored, but no agent decision is recorded yet — the agent hasn&apos;t ruled on this
+          candidate (it&apos;s paused or off for this role).
+        </span>
+      ) : (
+        <span>No agent decision yet — score this candidate to get a recommendation.</span>
+      )}
     </div>
   );
 };

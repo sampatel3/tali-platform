@@ -1655,6 +1655,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           <CandidateDecisionStrip
             decision={agentDecision}
             application={application}
+            recommendation={reportModel?.recommendation}
             busy={decisionBusy}
             onApprove={handleDecisionApprove}
             onAlternative={handleDecisionAlternative}
