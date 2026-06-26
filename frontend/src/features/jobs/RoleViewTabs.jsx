@@ -33,14 +33,16 @@ export const RoleViewTabs = ({ activeView }) => {
     return qs ? `${location.pathname}?${qs}` : location.pathname;
   };
   return (
-    <div className="sub-tabs sub-tabs-sticky">
-      <div className="seg">
-        {TABS.map((tab) => (
-          <Link key={tab.id} to={hrefFor(tab.id)} className={activeView === tab.id ? 'active' : ''}>
-            {tab.label}
-          </Link>
-        ))}
-      </div>
+    <div className="sub-tabs-sticky vtabs">
+      {TABS.map((tab) => (
+        <Link
+          key={tab.id}
+          to={hrefFor(tab.id)}
+          className={`vtab ${activeView === tab.id ? 'on' : ''}`.trim()}
+        >
+          {tab.label}
+        </Link>
+      ))}
     </div>
   );
 };
