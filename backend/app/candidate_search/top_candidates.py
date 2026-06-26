@@ -603,8 +603,12 @@ def _candidate_payload(
     out = application_summary(app)
     out["rank"] = rank
     out["criteria"] = [v.to_dict() for v in verdicts]
+    # Empty verdicts (the grounding-unavailable degrade path) must NOT read as
+    # "all met" — all() of an empty list is True. None = "not assessed".
     out["meets_all_criteria"] = (
-        all(v.status == "met" and v.grounded for v in verdicts) if has_criteria else None
+        all(v.status == "met" and v.grounded for v in verdicts)
+        if (has_criteria and verdicts)
+        else None
     )
     # Prefer the scoring pipeline's candidate report summary (a fit verdict +
     # detail); fall back to a synthesised blurb when a candidate wasn't scored.
@@ -1010,16 +1014,31 @@ def screen_pool_against_requirement(
             },
         )
 
-    # 3. Ground a bounded WINDOW of the scored history (structural matches first,
-    #    then score) against the new requirement, via the cached Citations pass.
+    # 3. Ground a bounded WINDOW of the scored history against the new requirement
+    #    via the cached Citations pass. WHICH candidates fall in the window:
+    #    structural matches first when the requirement carries a hard filter;
+    #    otherwise (a purely-qualitative ask) seed by RECENCY, NOT the stale role
+    #    score — score-seeding biases rediscovery toward already-high-scorers and
+    #    buries exactly the under-scored fits the feature exists to surface.
     window_size = min(pool_count, SCREEN_GROUND_WINDOW)
+    seed_attr = score_attr if matcher_ids else CandidateApplication.created_at
     apps = _load_candidates(
         base_query,
         matcher_ids=matcher_ids,
-        score_attr=score_attr,
+        score_attr=seed_attr,
         size=max(window_size, limit),
     )
-    apps.sort(key=_rank_key, reverse=True)
+    if matcher_ids:
+        apps.sort(key=_rank_key, reverse=True)
+    else:
+        # Recency order; compare datetimes only (uniform tz from the column),
+        # undated rows last — a score-neutral window seed.
+        dated = sorted(
+            (a for a in apps if a.created_at is not None),
+            key=lambda a: a.created_at,
+            reverse=True,
+        )
+        apps = dated + [a for a in apps if a.created_at is None]
     grounded = _ground_window(
         apps[:window_size], criteria=criteria, client=client, organization_id=organization_id
     )
