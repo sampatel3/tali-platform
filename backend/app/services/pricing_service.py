@@ -152,6 +152,7 @@ class Feature(str, Enum):
     INTENT_PARSER = "intent_parser"        # sub_agents/intent_parser (recruiter intent-chip parse)
     REQUISITION_INTAKE = "requisition_intake"  # requisition_intake_agent (single-shot brief extraction)
     REQUISITION_INTAKE_CHAT = "requisition_intake_chat"  # requisition_chat_service (conversational intake turn)
+    REQUISITION_CLIENT_INTAKE = "requisition_client_intake"  # client_intake (no-login client-scoped intake turn)
     OTHER = "other"
 
 
@@ -304,6 +305,14 @@ _FEATURE_PRICING: dict[Feature, FeaturePricing] = {
         # Conversational requisition intake turn (chat with attachments). Same
         # 2× shape as taali_chat/agent_chat — recruiter-facing AI.
         feature=Feature.REQUISITION_INTAKE_CHAT,
+        markup_multiplier=Decimal("2.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.REQUISITION_CLIENT_INTAKE: FeaturePricing(
+        # No-login CLIENT-scoped intake turn (the consultancy's client describes
+        # the role via the shared link). Same 2× shape as the recruiter intake
+        # chat — same AI work, just a client-scoped prompt + hidden economics.
+        feature=Feature.REQUISITION_CLIENT_INTAKE,
         markup_multiplier=Decimal("2.0"),
         cache_hit_multiplier=Decimal("0.10"),
     ),
@@ -486,6 +495,7 @@ def estimate_reservation(feature: Feature | str) -> int:
         Feature.GRAPH_SYNC: 10_000,
         Feature.REQUISITION_INTAKE: 12_000,       # ~$0.012 per single-shot extraction
         Feature.REQUISITION_INTAKE_CHAT: 12_000,  # ~$0.012 per chat turn (vision-capable)
+        Feature.REQUISITION_CLIENT_INTAKE: 12_000,  # ~$0.012 per client-scoped chat turn
         Feature.OTHER: 5_000,
     }
     if isinstance(feature, str):

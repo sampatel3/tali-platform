@@ -377,6 +377,12 @@ from .domains.job_pages import public_router as job_pages_public_router  # noqa:
 
 app.include_router(job_pages_public_router)
 
+# Public client intake: GET/POST /api/v1/public/intake/{token} (no auth) — the
+# scoped share link a consultancy sends to its client to describe the role.
+from .domains.client_intake import public_router as client_intake_public_router  # noqa: E402
+
+app.include_router(client_intake_public_router)
+
 # cv_match_v3.0 admin + override surface (gated server-side; flag controls runner)
 from .cv_matching.routes import (
     admin_router as cv_match_admin_router,
