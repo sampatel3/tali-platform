@@ -49,6 +49,10 @@ _TASK_ROUTES = {
     # Pre-screen reject shadow-scoring is Anthropic-heavy — keep it off the
     # default queue too.
     "app.tasks.calibration_tasks.sample_prescreen_for_calibration": {"queue": "scoring"},
+    # Timed-out assessment finalize runs the full submit/scoring pipeline per row
+    # (Anthropic + E2B) — keep it off the default queue so it can't starve agent
+    # ticks / Workable sync.
+    "app.tasks.assessment_tasks.finalize_timed_out_assessments": {"queue": "scoring"},
 }
 
 celery_app.conf.update(
@@ -121,6 +125,24 @@ celery_app.conf.update(
         # well within the 2h staleness cutoff for our ≤60-min assessments.
         "cleanup-expired-assessments-every-30-minutes": {
             "task": "app.tasks.assessment_tasks.cleanup_expired_assessments",
+            "schedule": 1800.0,
+        },
+        # Server-side timer enforcement: finalize + SCORE assessments whose working
+        # timer expired but the candidate never submitted (closed the tab). The
+        # in-app enforce_active_or_timeout gate is pull-based and never fires for a
+        # walk-away, so without this their work is lost. 15 min keeps the lag from
+        # timer-expiry-to-result short. Anthropic/E2B-heavy → scoring queue.
+        "finalize-timed-out-assessments-every-15-minutes": {
+            "task": "app.tasks.assessment_tasks.finalize_timed_out_assessments",
+            "schedule": 900.0,
+        },
+        # Watchdog for the GitHub credential that assessment repo provisioning
+        # depends on. An expired token returns 401 and silently blocks every
+        # candidate from starting an assessment (repo init fails at send + start)
+        # — the 2026-06-25 zero-traction incident. Alerts on failure (log + Sentry)
+        # so it surfaces in minutes, not days. Light call → default queue.
+        "assessment-provisioning-healthcheck-every-30-minutes": {
+            "task": "app.tasks.assessment_tasks.assessment_provisioning_healthcheck",
             "schedule": 1800.0,
         },
         # Anthropic billing reconciliation. Pulls the last 48h so

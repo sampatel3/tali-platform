@@ -190,6 +190,43 @@ TAALI_CHAT_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "screen_pool_against_requirement",
+        "description": (
+            "REDISCOVERY across the WHOLE scored history. Use when the recruiter "
+            "has a NEW requirement or role and wants to find who — among ALL "
+            "candidates ever scored, INCLUDING ones scored for OTHER roles whose "
+            "existing score says nothing about this requirement — fits it. "
+            "Unlike find_top_candidates (a top-N shortlist of the current "
+            "pipeline ranked by existing score), this (1) reuses each "
+            "candidate's stored per-criterion evidence for FREE where the new "
+            "requirement overlaps what they were already assessed on, (2) "
+            "grounds the most promising with verbatim CV citations, and (3) "
+            "ranks by fit to THIS requirement, not the stale score. Returns "
+            "grounded `candidates` (each with `criteria[].status` + "
+            "`evidence[].quote`), how many were `screened` (and whether the "
+            "pool was `capped`), and `rescore_candidate_ids` (those a full "
+            "re-score would clarify). Choose THIS over find_top_candidates / "
+            "nl_search_candidates whenever the ask is 'who in my existing/"
+            "already-scored candidates fits this NEW requirement'. Cite quotes; "
+            "never add a fact that isn't in the evidence."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "requirement_text": {
+                    "type": "string",
+                    "description": "The new requirement / mini job-spec to screen against.",
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+                "role_id": {
+                    "type": ["integer", "null"],
+                    "description": "Restrict the scored history to one role; omit for org-wide.",
+                },
+            },
+            "required": ["requirement_text"],
+        },
+    },
+    {
         "name": "nl_search_candidates",
         "description": (
             "Semantic / natural-language candidate search. Parses the query "
@@ -326,6 +363,7 @@ _HANDLER_BY_NAME: dict[str, Callable[..., Any]] = {
     "get_candidate": handlers.get_candidate,
     "compare_applications": handlers.compare_applications,
     "find_top_candidates": handlers.find_top_candidates,
+    "screen_pool_against_requirement": handlers.screen_pool_against_requirement,
     "nl_search_candidates": handlers.nl_search_candidates,
     "graph_search_candidates": handlers.graph_search_candidates,
     "get_candidate_cv": handlers.get_candidate_cv,

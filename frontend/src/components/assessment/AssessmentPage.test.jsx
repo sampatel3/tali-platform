@@ -5,20 +5,15 @@ import AssessmentPage from '../../features/assessment_runtime/AssessmentPage';
 
 const mockExecute = vi.fn();
 const mockSubmit = vi.fn();
-const mockTerminalStatus = vi.fn();
-const mockTerminalStop = vi.fn();
-const mockClaude = vi.fn();
 const mockSaveRepoFile = vi.fn();
+const mockClaudeChat = vi.fn();
 
 vi.mock('../../shared/api', () => ({
   assessments: {
     start: vi.fn(),
     execute: (...args) => mockExecute(...args),
     saveRepoFile: (...args) => mockSaveRepoFile(...args),
-    terminalStatus: (...args) => mockTerminalStatus(...args),
-    terminalStop: (...args) => mockTerminalStop(...args),
-    claude: (...args) => mockClaude(...args),
-    terminalWsUrl: (id, token) => `ws://localhost/api/v1/assessments/${id}/terminal/ws?token=${token}`,
+    claudeChat: (...args) => mockClaudeChat(...args),
     submit: (...args) => mockSubmit(...args),
   },
 }));
@@ -36,73 +31,18 @@ vi.mock('../../components/assessment/CodeEditor', () => ({
   },
 }));
 
-vi.mock('../../features/assessment_runtime/AssessmentTerminal', () => ({
-  AssessmentTerminal: ({ statusText }) => (
-    <div data-testid="assessment-terminal">
-      terminal:{statusText}
-    </div>
-  ),
-}));
-
-const createMockWebSocketClass = (sentMessages = []) => class MockWebSocket {
-  static OPEN = 1;
-  static instances = [];
-
-  constructor() {
-    this.readyState = MockWebSocket.OPEN;
-    MockWebSocket.instances.push(this);
-    setTimeout(() => {
-      this.onopen?.();
-    }, 0);
-  }
-
-  send(data) {
-    sentMessages.push(JSON.parse(data));
-  }
-
-  emit(payload) {
-    this.onmessage?.({ data: JSON.stringify(payload) });
-  }
-
-  close() {
-    this.readyState = 3;
-    this.onclose?.();
-  }
-};
-
-describe('AssessmentPage tracking metadata', () => {
-  const originalWebSocket = global.WebSocket;
-
+describe('AssessmentPage live agentic runtime', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // This suite exercises the legacy terminal-backed runtime (manual Run/Save,
-    // terminal websocket, prompt-based Claude transport, run-output dock). PR
-    // #394 made the agentic Claude chat the default (useAgenticClaudeChat()
-    // returns true unless window.__TAALI_AGENTIC_CHAT__ === false), which hides
-    // that legacy surface. The legacy runtime still ships behind the documented
-    // escape-hatch flag, so pin it off here to keep exercising the path these
-    // tests were written for. (Agentic-chat coverage is tracked separately.)
-    window.__TAALI_AGENTIC_CHAT__ = false;
     mockExecute.mockResolvedValue({ data: { success: true, stdout: '', stderr: '', error: null, results: [] } });
     mockSaveRepoFile.mockResolvedValue({ data: { success: true } });
-    mockTerminalStatus.mockResolvedValue({ data: { state: 'running' } });
-    mockTerminalStop.mockResolvedValue({ data: { success: true } });
     mockSubmit.mockResolvedValue({ data: { success: true } });
-    mockClaude.mockResolvedValue({ data: { success: true, content: 'ok' } });
+    mockClaudeChat.mockResolvedValue({ data: { success: true, content: 'ok' } });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    // Default benign WebSocket mock for every test. Without this, AssessmentPage
-    // calls `new WebSocket('ws://localhost/...')` against Node 20's undici, which
-    // doesn't accept the property-based `onerror` API and emits
-    // `InvalidArgumentError: invalid onError method` after the test tears down,
-    // turning CI red even though all assertions pass. Tests that need to
-    // capture sent messages override this with createMockWebSocketClass().
-    global.WebSocket = createMockWebSocketClass();
   });
 
   afterEach(() => {
-    global.WebSocket = originalWebSocket;
     vi.useRealTimers();
-    delete window.__TAALI_AGENTIC_CHAT__;
   });
 
   it('sends submit tab_switch_count metadata', async () => {
@@ -141,7 +81,7 @@ describe('AssessmentPage tracking metadata', () => {
     expect(mockSubmit.mock.calls[0][3]).toMatchObject({ tab_switch_count: 1 });
   });
 
-  it('shows only a simple submitted confirmation in demo task preview mode', async () => {
+  it('disables submission in demo task preview mode', async () => {
     const startData = {
       assessment_id: 26,
       token: null,
@@ -156,19 +96,30 @@ describe('AssessmentPage tracking metadata', () => {
     render(<AssessmentPage startData={startData} demoMode />);
 
     expect(await screen.findByText('Assessment brief')).toBeInTheDocument();
+
+    // PR #707 made the demo / showcase preview read-only: a viewer (or the
+    // pitch deck) must never be able to submit the walkthrough assessment and
+    // flip the surface to the "Task submitted" screen. The top-bar Submit is
+    // disabled + tooltipped, and handleSubmit no-ops in demoMode — so neither
+    // Submit control can open the confirm dialog, hit the API, or reveal the
+    // submitted screen.
+    const submitButtons = screen.getAllByRole('button', { name: 'Submit' });
+    const topBarSubmit = submitButtons[0];
+    expect(topBarSubmit).toBeDisabled();
+    expect(topBarSubmit).toHaveAttribute(
+      'title',
+      'Preview — submission is disabled in the demo',
+    );
+
+    // Clicking either Submit control is inert in demo mode.
     await act(async () => {
-      fireEvent.click(screen.getAllByRole('button', { name: 'Submit' })[0]);
-    });
-    await screen.findByRole('dialog');
-    await act(async () => {
-      fireEvent.click(screen.getAllByRole('button', { name: 'Submit' }).at(-1));
+      submitButtons.forEach((button) => fireEvent.click(button));
     });
 
-    expect(await screen.findByRole('heading', { name: /Task submitted/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Close/ })).toBeInTheDocument();
-    expect(screen.queryByText(/TAALI Demo Results/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Your TAALI profile/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Try another demo/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: /Task submitted/i }),
+    ).not.toBeInTheDocument();
     expect(mockSubmit).not.toHaveBeenCalled();
   });
 
@@ -238,7 +189,6 @@ describe('AssessmentPage tracking metadata', () => {
       assessment_id: 14,
       token: 'tok4',
       time_remaining: 1200,
-      ai_mode: 'claude_cli_terminal',
       clone_command: 'git clone --branch assessment/14 mock://repo',
       task: {
         name: 'Instruction task',
@@ -302,49 +252,72 @@ describe('AssessmentPage tracking metadata', () => {
     expect(screen.queryByText(/What to validate/i)).not.toBeInTheDocument();
   });
 
-  it('renders terminal toggle in Claude CLI mode and initializes websocket', async () => {
-    const sentMessages = [];
-    const MockWebSocket = createMockWebSocketClass(sentMessages);
-    global.WebSocket = MockWebSocket;
-
+  it('mounts the agentic Claude chat as the only assistant surface', async () => {
     const startData = {
       assessment_id: 21,
-      token: 'tok-terminal',
+      token: 'tok-chat',
       time_remaining: 1200,
-      ai_mode: 'claude_cli_terminal',
-      terminal_mode: true,
-      terminal_capabilities: {
-        permission_mode: 'default',
-      },
       task: {
-        name: 'CLI mode task',
+        name: 'Chat-only task',
         starter_code: 'print("start")',
         duration_minutes: 30,
       },
     };
 
-    render(<AssessmentPage token="tok-terminal" startData={startData} />);
+    render(<AssessmentPage token="tok-chat" startData={startData} />);
 
-    const showTerminalButton = await screen.findByRole('button', { name: /^Terminal$/ });
-    expect(showTerminalButton).toBeInTheDocument();
+    // The agentic HTTP chat is mounted; there is no terminal toggle or
+    // terminal surface anymore.
+    expect(await screen.findByTestId('assessment-claude-chat')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Terminal$/ })).not.toBeInTheDocument();
     expect(screen.queryByTestId('assessment-terminal')).not.toBeInTheDocument();
-    await act(async () => {
-      fireEvent.click(showTerminalButton);
-    });
-    expect(await screen.findByTestId('assessment-terminal')).toBeInTheDocument();
+    // Output dock toggle (the only remaining workspace dock surface) is present.
     expect(screen.getByText(/Workspace dock/i)).toBeInTheDocument();
-    expect(screen.queryByText('send-claude')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Output$/i })).toBeInTheDocument();
+  });
 
+  it('sends an agentic chat prompt over the HTTP claudeChat transport', async () => {
+    const startData = {
+      assessment_id: 27,
+      token: 'tok-claude-repo',
+      time_remaining: 1200,
+      task: {
+        name: 'Claude repo task',
+        duration_minutes: 30,
+        repo_structure: {
+          files: {
+            'src/main.py': 'print("hi")',
+            'README.md': '# Demo repo',
+          },
+        },
+      },
+    };
+
+    mockClaudeChat.mockResolvedValueOnce({
+      data: { content: 'Start with `src/main.py`, then read `README.md` for task context.' },
+    });
+
+    render(<AssessmentPage token="tok-claude-repo" startData={startData} />);
+
+    // Select src/main.py so it is the file Claude receives as the active file.
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /^Collapse$/ }));
-    });
-    await waitFor(() => {
-      expect(screen.queryByTestId('assessment-terminal')).not.toBeInTheDocument();
+      fireEvent.click(await screen.findByRole('button', { name: /^main\.py$/i }));
     });
 
-    await waitFor(() => {
-      expect(sentMessages.some((message) => message.type === 'init')).toBe(true);
+    const promptInput = await screen.findByPlaceholderText(/Ask Claude to inspect the repo/i);
+    fireEvent.change(promptInput, { target: { value: 'What files matter?' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Send/i }));
     });
+
+    await waitFor(() => expect(mockClaudeChat).toHaveBeenCalledTimes(1));
+    expect(mockClaudeChat.mock.calls[0][0]).toBe(27);
+    expect(mockClaudeChat.mock.calls[0][1]).toMatchObject({
+      message: 'What files matter?',
+      selected_file_path: 'src/main.py',
+    });
+
+    expect(await screen.findByText(/Start with/i)).toBeInTheDocument();
   });
 
   it('shows a clear success message when run finishes without stdout or stderr', async () => {
@@ -352,7 +325,6 @@ describe('AssessmentPage tracking metadata', () => {
       assessment_id: 22,
       token: 'tok-run-output',
       time_remaining: 1200,
-      ai_mode: 'claude_cli_terminal',
       task: {
         name: 'Run output task',
         duration_minutes: 30,
@@ -393,127 +365,6 @@ describe('AssessmentPage tracking metadata', () => {
       repo_files: [{ path: 'src/main.py', content: 'answer = 42' }],
     });
     expect(await screen.findByText(/Code executed successfully\. No stdout\/stderr was produced\./i)).toBeInTheDocument();
-  });
-
-  it('routes Ask Claude through the terminal transport and mirrors the response back into chat', async () => {
-    const sentMessages = [];
-    const MockWebSocket = createMockWebSocketClass(sentMessages);
-    global.WebSocket = MockWebSocket;
-
-    const startData = {
-      assessment_id: 27,
-      token: 'tok-claude-repo',
-      time_remaining: 1200,
-      task: {
-        name: 'Claude repo task',
-        duration_minutes: 30,
-        repo_structure: {
-          files: {
-            'src/main.py': 'print("hi")',
-            'README.md': '# Demo repo',
-          },
-        },
-      },
-    };
-
-    render(<AssessmentPage token="tok-claude-repo" startData={startData} />);
-
-    // The claude_prompt only goes over the wire once the terminal websocket is
-    // open, so wait for the init handshake before sending.
-    await waitFor(() => {
-      expect(sentMessages.some((message) => message.type === 'init')).toBe(true);
-    });
-
-    // Select src/main.py so it is the file Claude receives as the active file.
-    await act(async () => {
-      fireEvent.click(await screen.findByRole('button', { name: /^main\.py$/i }));
-    });
-
-    const promptInput = screen.getByPlaceholderText(/Ask Claude, attach files with @, run a tool with \//i);
-    fireEvent.change(promptInput, { target: { value: 'What files matter?' } });
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Send/i }));
-    });
-
-    await waitFor(() => expect(mockSaveRepoFile).toHaveBeenCalledTimes(1));
-    // Claude prompt path now syncs the FULL in-browser snapshot (not just the
-    // selected file) so Claude in the live terminal sees edits to every file.
-    expect(mockSaveRepoFile.mock.calls[0][1]).toMatchObject({
-      files: [
-        { path: 'README.md', content: '# Demo repo' },
-        { path: 'src/main.py', content: 'print("hi")' },
-      ],
-    });
-    await waitFor(() => {
-      expect(sentMessages.some((message) => (
-        message.type === 'claude_prompt'
-        && message.message === 'What files matter?'
-        && message.selected_file_path === 'src/main.py'
-      ))).toBe(true);
-    });
-    expect(mockClaude).not.toHaveBeenCalled();
-
-    const ws = MockWebSocket.instances.at(-1);
-    await act(async () => {
-      ws.emit({
-        type: 'claude_chat_done',
-        request_id: sentMessages.find((message) => message.type === 'claude_prompt')?.request_id,
-        content: 'Start with `src/main.py`, then read `README.md` for task context.',
-      });
-    });
-
-    expect(await screen.findByText(/Start with/i)).toBeInTheDocument();
-    // `src/main.py` now appears both in the editor header (the file is open) and
-    // as inline code in Claude's reply — assert the reply's code reference.
-    expect(
-      screen.getAllByText('src/main.py').some((node) => node.tagName === 'CODE'),
-    ).toBe(true);
-  }, 15000);
-
-  it('surfaces a clear error if terminal-backed Claude stalls too long', async () => {
-    vi.useFakeTimers();
-    const sentMessages = [];
-    const MockWebSocket = createMockWebSocketClass(sentMessages);
-    global.WebSocket = MockWebSocket;
-
-    const startData = {
-      assessment_id: 30,
-      token: 'tok-claude-stall',
-      time_remaining: 1200,
-      ai_mode: 'claude_cli_terminal',
-      terminal_mode: true,
-      terminal_capabilities: {
-        permission_mode: 'default',
-      },
-      task: {
-        name: 'Claude stall task',
-        duration_minutes: 30,
-        repo_structure: {
-          files: {
-            'src/main.py': 'print("hi")',
-          },
-        },
-      },
-    };
-
-    render(<AssessmentPage token="tok-claude-stall" startData={startData} />);
-
-    const promptInput = screen.getByPlaceholderText(/Ask Claude, attach files with @, run a tool with \//i);
-    fireEvent.change(promptInput, { target: { value: 'Can you run the tests?' } });
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Send/i }));
-      vi.advanceTimersByTime(1);
-    });
-
-    await act(async () => {
-      vi.advanceTimersByTime(10000);
-    });
-    expect(screen.getByText(/Still working in the live repo session/i)).toBeInTheDocument();
-
-    await act(async () => {
-      vi.advanceTimersByTime(110000);
-    });
-    expect(screen.getByText(/Claude is still working on this/i)).toBeInTheDocument();
   });
 
   it('creates a new repo file and saves it into the live workspace', async () => {
@@ -563,7 +414,6 @@ describe('AssessmentPage tracking metadata', () => {
       assessment_id: 26,
       token: 'tok-run-error',
       time_remaining: 1200,
-      ai_mode: 'claude_cli_terminal',
       task: {
         name: 'Run error task',
         duration_minutes: 30,
@@ -602,97 +452,6 @@ describe('AssessmentPage tracking metadata', () => {
     expect(screen.getByText(/Traceback \(most recent call last\)/i)).toBeInTheDocument();
   });
 
-  it('initializes terminal websocket in demo mode when Claude CLI mode is enabled', async () => {
-    const sentMessages = [];
-    const MockWebSocket = createMockWebSocketClass(sentMessages);
-    global.WebSocket = MockWebSocket;
-
-    const startData = {
-      assessment_id: 22,
-      token: 'tok-terminal-demo',
-      time_remaining: 1200,
-      ai_mode: 'claude_cli_terminal',
-      terminal_mode: true,
-      terminal_capabilities: {
-        permission_mode: 'default',
-      },
-      task: {
-        name: 'Demo CLI mode task',
-        starter_code: 'print("start")',
-        duration_minutes: 30,
-      },
-    };
-
-    render(<AssessmentPage token="tok-terminal-demo" startData={startData} demoMode />);
-
-    expect(await screen.findByRole('button', { name: /^Terminal$/ })).toBeInTheDocument();
-    expect(screen.queryByTestId('assessment-terminal')).not.toBeInTheDocument();
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /^Terminal$/ }));
-    });
-    expect(await screen.findByTestId('assessment-terminal')).toBeInTheDocument();
-    expect(screen.getByText(/Workspace dock/i)).toBeInTheDocument();
-    expect(screen.queryByText('send-claude')).not.toBeInTheDocument();
-
-    await waitFor(() => {
-      expect(sentMessages.some((message) => message.type === 'init')).toBe(true);
-    });
-  });
-
-  it('restarts the terminal session from the runtime header', async () => {
-    const sentMessages = [];
-    class MockWebSocket {
-      static OPEN = 1;
-
-      constructor() {
-        this.readyState = MockWebSocket.OPEN;
-        setTimeout(() => {
-          this.onopen?.();
-        }, 0);
-      }
-
-      send(data) {
-        sentMessages.push(JSON.parse(data));
-      }
-
-      close() {
-        this.readyState = 3;
-        this.onclose?.();
-      }
-    }
-    global.WebSocket = MockWebSocket;
-
-    const startData = {
-      assessment_id: 29,
-      token: 'tok-terminal-restart',
-      time_remaining: 1200,
-      ai_mode: 'claude_cli_terminal',
-      terminal_mode: true,
-      terminal_capabilities: {
-        permission_mode: 'default',
-      },
-      task: {
-        name: 'Restartable terminal task',
-        starter_code: 'print("start")',
-        duration_minutes: 30,
-      },
-    };
-
-    render(<AssessmentPage token="tok-terminal-restart" startData={startData} />);
-
-    fireEvent.click(await screen.findByRole('button', { name: /^Terminal$/ }));
-    expect(await screen.findByRole('button', { name: /Restart terminal/i })).toBeInTheDocument();
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Restart terminal/i }));
-    });
-
-    await waitFor(() => expect(mockTerminalStop).toHaveBeenCalledTimes(1));
-    await waitFor(() => {
-      expect(sentMessages.filter((message) => message.type === 'init').length).toBeGreaterThanOrEqual(2);
-    });
-  });
-
   it('shows budget exhausted alert when Claude budget is depleted', async () => {
     const startData = {
       assessment_id: 19,
@@ -718,11 +477,7 @@ describe('AssessmentPage tracking metadata', () => {
     expect(await screen.findByText(/Claude budget exhausted for this task/i)).toBeInTheDocument();
   });
 
-  it('updates Claude credit display after prompt response', async () => {
-    const sentMessages = [];
-    const MockWebSocket = createMockWebSocketClass(sentMessages);
-    global.WebSocket = MockWebSocket;
-
+  it('updates Claude credit display after an agentic chat response', async () => {
     const startData = {
       assessment_id: 23,
       token: 'tok-claude-budget',
@@ -742,22 +497,8 @@ describe('AssessmentPage tracking metadata', () => {
       },
     };
 
-    render(<AssessmentPage token="tok-claude-budget" startData={startData} />);
-
-    expect(await screen.findByText(/\$1\.00 of \$1\.00/i)).toBeInTheDocument();
-
-    const promptInput = screen.getByPlaceholderText(/Ask Claude, attach files with @, run a tool with \//i);
-    fireEvent.change(promptInput, { target: { value: 'Help me debug' } });
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Send/i }));
-    });
-
-    const ws = MockWebSocket.instances.at(-1);
-    const requestId = sentMessages.find((message) => message.type === 'claude_prompt')?.request_id;
-    await act(async () => {
-      ws.emit({
-        type: 'claude_chat_done',
-        request_id: requestId,
+    mockClaudeChat.mockResolvedValueOnce({
+      data: {
         content: 'Use stronger filtering.',
         claude_budget: {
           enabled: true,
@@ -767,108 +508,21 @@ describe('AssessmentPage tracking metadata', () => {
           tokens_used: 1000,
           is_exhausted: false,
         },
-      });
+      },
     });
 
+    render(<AssessmentPage token="tok-claude-budget" startData={startData} />);
+
+    expect(await screen.findByText(/\$1\.00 of \$1\.00/i)).toBeInTheDocument();
+
+    const promptInput = await screen.findByPlaceholderText(/Ask Claude to inspect the repo/i);
+    fireEvent.change(promptInput, { target: { value: 'Help me debug' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Send/i }));
+    });
+
+    await waitFor(() => expect(mockClaudeChat).toHaveBeenCalledTimes(1));
     expect(await screen.findByText(/\$0\.75 of \$1\.00/i)).toBeInTheDocument();
-  });
-
-  it('shows higher precision Claude credit when prompt spend is below one cent', async () => {
-    const sentMessages = [];
-    const MockWebSocket = createMockWebSocketClass(sentMessages);
-    global.WebSocket = MockWebSocket;
-
-    const startData = {
-      assessment_id: 24,
-      token: 'tok-claude-precision',
-      time_remaining: 1200,
-      claude_budget: {
-        enabled: true,
-        limit_usd: 1,
-        used_usd: 0,
-        remaining_usd: 1,
-        tokens_used: 0,
-        is_exhausted: false,
-      },
-      task: {
-        name: 'Budget precision task',
-        starter_code: 'print("start")',
-        duration_minutes: 30,
-      },
-    };
-
-    render(<AssessmentPage token="tok-claude-precision" startData={startData} />);
-
-    const promptInput = screen.getByPlaceholderText(/Ask Claude, attach files with @, run a tool with \//i);
-    fireEvent.change(promptInput, { target: { value: 'Help me debug' } });
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Send/i }));
-    });
-
-    const ws = MockWebSocket.instances.at(-1);
-    const requestId = sentMessages.find((message) => message.type === 'claude_prompt')?.request_id;
-    await act(async () => {
-      ws.emit({
-        type: 'claude_chat_done',
-        request_id: requestId,
-        content: 'Use the stack trace to narrow the failing branch.',
-        claude_budget: {
-          enabled: true,
-          limit_usd: 1,
-          used_usd: 0.0016,
-          remaining_usd: 0.9984,
-          tokens_used: 620,
-          is_exhausted: false,
-        },
-      });
-    });
-
-    expect(await screen.findByText(/\$0\.9984 of \$1\.00/i)).toBeInTheDocument();
-  });
-
-  it('strips leaked Claude tool markup from chat responses before rendering', async () => {
-    const sentMessages = [];
-    const MockWebSocket = createMockWebSocketClass(sentMessages);
-    global.WebSocket = MockWebSocket;
-
-    const startData = {
-      assessment_id: 25,
-      token: 'tok-claude-sanitize',
-      time_remaining: 1200,
-      task: {
-        name: 'Claude sanitize task',
-        starter_code: 'print("start")',
-        duration_minutes: 30,
-      },
-    };
-
-    render(<AssessmentPage token="tok-claude-sanitize" startData={startData} />);
-
-    const promptInput = screen.getByPlaceholderText(/Ask Claude, attach files with @, run a tool with \//i);
-    fireEvent.change(promptInput, { target: { value: 'Help me debug' } });
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Send/i }));
-    });
-
-    const ws = MockWebSocket.instances.at(-1);
-    const requestId = sentMessages.find((message) => message.type === 'claude_prompt')?.request_id;
-    await act(async () => {
-      ws.emit({
-        type: 'claude_chat_done',
-        request_id: requestId,
-        content: [
-          "Let me start by understanding the situation. I'll review the key files first.",
-          '',
-          '<read_file>',
-          '<path>diagnostics/audit_findings.md</path>',
-          '</read_file>',
-        ].join('\n'),
-      });
-    });
-
-    expect(await screen.findByText(/Let me start by understanding the situation/i)).toBeInTheDocument();
-    expect(screen.queryByText(/<read_file>/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/diagnostics\/audit_findings\.md/i)).not.toBeInTheDocument();
   });
 
   it('defaults the assessment runtime to light mode', async () => {

@@ -17,7 +17,6 @@ from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.task import Task
 from ...components.integrations.e2b.service import E2BService
-from ...components.integrations.claude.service import ClaudeService
 from ...services.document_service import process_document_upload
 from ...services.assessment_repository_service import AssessmentRepositoryService
 from ...services.credit_ledger_service import append_credit_ledger_entry
@@ -536,6 +535,68 @@ def enforce_active_or_timeout(assessment: Assessment, db: Session) -> None:
     raise HTTPException(status_code=409, detail="Assessment time expired and was auto-submitted")
 
 
+def finalize_timed_out_assessment(assessment: Assessment, db: Session) -> Dict[str, Any]:
+    """Capture + score an IN_PROGRESS assessment whose working timer has expired
+    but whose candidate never submitted (closed the tab / walked away).
+
+    This is the server-side backstop for ``enforce_active_or_timeout``, which is
+    *pull-based*: it only finalizes when the candidate makes another request. A
+    candidate who works then abandons therefore leaves the row IN_PROGRESS until a
+    reaper marks it EXPIRED — historically *discarding the work*. Here we run the
+    real submit pipeline so the effort is captured, scored (best-effort — the E2B
+    sandbox may have lapsed), and surfaced to the recruiter as a
+    COMPLETED_DUE_TO_TIMEOUT result instead of vanishing.
+
+    Mirrors the recruiter Rescore path (``rescore_assessment``): the submit
+    pipeline's atomic claim flips the row terminal BEFORE any sandbox call, so even
+    if scoring hard-fails the assessment still ends terminal (never re-discovered,
+    never discarded) with ``scoring_failed`` set for a later manual rescore.
+
+    Idempotent: a row already taken to a terminal state (e.g. by a racing
+    candidate submit) is skipped.
+    """
+    if assessment.status != AssessmentStatus.IN_PROGRESS:
+        return {"status": "skipped", "reason": "not_in_progress", "assessment_id": assessment.id}
+
+    task = db.query(Task).filter(Task.id == assessment.task_id).first()
+    final_code = resume_code_for_assessment(assessment, (getattr(task, "starter_code", "") or ""))
+
+    scoring_failed = False
+    try:
+        submit_assessment(assessment, final_code, int(assessment.tab_switch_count or 0), db)
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            # A racing candidate submit won the atomic claim — their real
+            # submission stands; don't relabel it as a timeout.
+            db.rollback()
+            return {"status": "already_submitted", "assessment_id": assessment.id}
+        db.rollback()
+        scoring_failed = True
+        logger.warning(
+            "Timed-out finalize: scoring failed assessment_id=%s detail=%s",
+            assessment.id, getattr(exc, "detail", exc),
+        )
+    except Exception:
+        db.rollback()
+        scoring_failed = True
+        logger.exception("Timed-out finalize: scoring crashed assessment_id=%s", assessment.id)
+
+    # Relabel terminal as the (more honest) timeout completion. submit set
+    # COMPLETED on the happy path and the atomic claim set it on most failures;
+    # force it here too so a pre-claim failure is never left in limbo/discarded.
+    assessment.status = AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+    assessment.completed_due_to_timeout = True
+    if not assessment.completed_at:
+        assessment.completed_at = utcnow()
+    if scoring_failed:
+        assessment.scoring_failed = True
+    append_assessment_timeline_event(
+        assessment, "auto_submit_timeout_sweep", {"scoring_failed": scoring_failed}
+    )
+    db.commit()
+    return {"status": "finalized", "assessment_id": assessment.id, "scoring_failed": scoring_failed}
+
+
 def enforce_not_paused(assessment: Assessment) -> None:
     if getattr(assessment, "is_timer_paused", False):
         raise HTTPException(
@@ -1027,7 +1088,6 @@ def submit_assessment(
         db,
         settings_obj=settings,
         e2b_service_cls=E2BService,
-        claude_service_cls=ClaudeService,
         workspace_repo_root_fn=_workspace_repo_root,
         collect_git_evidence_fn=_collect_git_evidence_from_sandbox,
     )

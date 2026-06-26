@@ -18,6 +18,14 @@ from app.components.assessments.rubric_scoring import (
     RubricResult,
     RubricScorer,
     ScoringArtifacts,
+    _DISCERNMENT_LENS_PROMPT,
+    _DILIGENCE_LENS_PROMPT,
+    _DELIVERABLE_LENS_PROMPT,
+    _DECISION_LENS_PROMPT,
+    _system_prompt_for_lens,
+    _build_user_prompt,
+    fluency_axis_for_dimension,
+    summarize_fluency_4d,
 )
 
 
@@ -157,6 +165,165 @@ def test_artifacts_design_doc_truncates_long_docs():
     excerpt = art.design_doc_excerpt()
     assert "truncated" in excerpt
     assert len(excerpt) < len(huge)
+
+
+# ---- PR-2: process-visible grading (trace + git diff) ----------------------
+
+
+def _trace_transcript():
+    return [
+        {
+            "message": "run the tests then fix the gate",
+            "response": "The gate hardcodes passed=True; fixed.",
+            "tool_calls_made": [
+                {"name": "mcp__sandbox__Bash", "input": {"command": "pytest -q"},
+                 "result": "2 failed, 7 passed", "is_error": False},
+                {"name": "mcp__sandbox__Edit", "input": {"path": "dq/gate.py"},
+                 "result": "could not find exact match", "is_error": True},
+            ],
+        },
+    ]
+
+
+def test_transcript_excerpt_includes_tool_trace_by_default():
+    """Process trace is the default now: each turn interleaves the agent's
+    tool calls + results (and an [error] flag) so the grader sees verification."""
+    art = ScoringArtifacts(prompt_transcript=_trace_transcript())
+    excerpt = art.prompt_transcript_excerpt()
+    assert "[Candidate]: run the tests" in excerpt
+    assert "[Claude]: The gate hardcodes" in excerpt
+    assert "[Agent actions]" in excerpt
+    assert "Bash(pytest -q)" in excerpt
+    assert "→ 2 failed, 7 passed" in excerpt
+    assert "Edit(dq/gate.py)" in excerpt
+    assert "[error]" in excerpt  # the failed Edit
+
+
+def test_transcript_excerpt_force_off_omits_trace():
+    """The include_process_trace knob can still force message/response-only —
+    used by scripts/shadow_rescore_assessments.py for a before/after compare."""
+    art = ScoringArtifacts(prompt_transcript=_trace_transcript(), include_process_trace=False)
+    excerpt = art.prompt_transcript_excerpt()
+    assert "[Candidate]: run the tests" in excerpt
+    assert "[Agent actions]" not in excerpt
+    assert "pytest -q" not in excerpt
+
+
+def test_transcript_tool_result_excerpt_is_bounded():
+    huge = "z" * 5000
+    art = ScoringArtifacts(
+        prompt_transcript=[{
+            "message": "read it", "response": "ok",
+            "tool_calls_made": [{"name": "mcp__sandbox__Read", "input": {"path": "big.py"},
+                                 "result": huge, "is_error": False}],
+        }],
+        include_process_trace=True,
+    )
+    excerpt = art.prompt_transcript_excerpt()
+    # The 5000-char result is truncated to the per-line excerpt cap.
+    assert huge not in excerpt
+    assert "Read(big.py)" in excerpt
+
+
+def test_git_evidence_excerpt_rendered_by_default_and_bounded():
+    ge = {"commits": "abc123 fix the gate", "diff_main": "d" * 10_000}
+    # Default (process trace on): commits + diff present, diff bounded.
+    ex = ScoringArtifacts(git_evidence=ge).git_evidence_excerpt()
+    assert "abc123 fix the gate" in ex
+    assert "diff truncated" in ex
+    assert len(ex) < 10_000
+    # The force-off knob still suppresses it (shadow harness before/after).
+    assert ScoringArtifacts(git_evidence=ge, include_process_trace=False).git_evidence_excerpt() == ""
+    # No evidence captured → empty.
+    assert ScoringArtifacts().git_evidence_excerpt() == ""
+
+
+# ---- PR-5/PR-6: discernment/diligence lenses + 4-D fluency rollup -----------
+
+
+def test_system_prompt_for_lens_routes_all_lenses():
+    assert _system_prompt_for_lens("deliverable") is _DELIVERABLE_LENS_PROMPT
+    assert _system_prompt_for_lens("discernment") is _DISCERNMENT_LENS_PROMPT
+    assert _system_prompt_for_lens("diligence") is _DILIGENCE_LENS_PROMPT
+    assert _system_prompt_for_lens("decision") is _DECISION_LENS_PROMPT
+    # Unknown / unset → decision-leaning back-compat default.
+    assert _system_prompt_for_lens(None) is _DECISION_LENS_PROMPT
+    assert _system_prompt_for_lens("nonsense") is _DECISION_LENS_PROMPT
+
+
+def test_fluency_axis_for_dimension_mapping():
+    # interrogation_outcome grader → delegation (decision ownership)
+    assert fluency_axis_for_dimension({"grader": "interrogation_outcome"}) == "delegation"
+    # lens routing
+    assert fluency_axis_for_dimension({"lens": "deliverable"}) == "deliverable"
+    assert fluency_axis_for_dimension({"lens": "discernment"}) == "discernment"
+    assert fluency_axis_for_dimension({"lens": "diligence"}) == "diligence"
+    assert fluency_axis_for_dimension({"lens": "decision"}) == "delegation"
+    # explicit fluency tag wins over lens
+    assert fluency_axis_for_dimension({"lens": "decision", "fluency": "description"}) == "description"
+    # unset / junk → delegation default
+    assert fluency_axis_for_dimension({}) == "delegation"
+    assert fluency_axis_for_dimension("notadict") == "delegation"
+
+
+def test_summarize_fluency_4d_weighted_rollup():
+    rubric = {
+        "design_decisions_articulated": {"grader": "interrogation_outcome", "weight": 0.4},
+        "contract_correctness": {"lens": "deliverable", "weight": 0.3},
+        "verify": {"lens": "discernment", "weight": 0.3},
+    }
+    dims = [
+        DimensionGrade(dimension_id="design_decisions_articulated", score=8.0, rating="good", reasoning="ok", weight=0.4),
+        DimensionGrade(dimension_id="contract_correctness", score=6.0, rating="good", reasoning="ok", weight=0.3),
+        DimensionGrade(dimension_id="verify", score=9.0, rating="excellent", reasoning="ok", weight=0.3),
+    ]
+    out = summarize_fluency_4d(rubric, dims)
+    assert out["delegation"] == 80.0
+    assert out["deliverable"] == 60.0
+    assert out["discernment"] == 90.0
+    # Axes with no contributing dimension → None (no signal).
+    assert out["description"] is None
+    assert out["diligence"] is None
+
+
+def test_summarize_fluency_4d_skips_errored_dimension():
+    rubric = {"verify": {"lens": "discernment", "weight": 1.0}}
+    dims = [
+        DimensionGrade(dimension_id="verify", score=0.0, rating="poor", reasoning="grader failed",
+                       weight=1.0, error="network blip"),
+    ]
+    out = summarize_fluency_4d(rubric, dims)
+    # The only discernment dim errored → axis is None, not a misleading 0.
+    assert out["discernment"] is None
+
+
+# ---- PR-9: planted-trap excerpt + prompt inclusion -------------------------
+
+
+def test_traps_excerpt_renders_planted_tell_where():
+    art = ScoringArtifacts(traps=[
+        {"id": "t1", "planted": "agent proposes silencing the failing check", "tell": "candidate rejects the shortcut", "where": "dq/checks.py"},
+    ])
+    ex = art.traps_excerpt()
+    assert "agent proposes silencing the failing check" in ex
+    assert "CAUGHT IF: candidate rejects the shortcut" in ex
+    assert "where: dq/checks.py" in ex
+    # No traps → empty.
+    assert ScoringArtifacts().traps_excerpt() == ""
+
+
+def test_build_user_prompt_includes_traps_when_present():
+    criteria = {"excellent": "x", "good": "y", "poor": "z"}
+    with_traps = ScoringArtifacts(
+        task_scenario="s", candidate_role="data_engineer",
+        traps=[{"id": "t1", "planted": "agent papers over the contradiction", "tell": "candidate surfaces it"}],
+    )
+    prompt = _build_user_prompt("verify", criteria, with_traps)
+    assert "Planted traps for this task" in prompt
+    assert "agent papers over the contradiction" in prompt
+    # Absent when the task declares no traps.
+    without = ScoringArtifacts(task_scenario="s", candidate_role="data_engineer")
+    assert "Planted traps for this task" not in _build_user_prompt("verify", criteria, without)
 
 
 # ---- RubricScorer.grade_dimension ------------------------------------------

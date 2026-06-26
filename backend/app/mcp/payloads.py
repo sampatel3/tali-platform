@@ -145,6 +145,13 @@ def application_detail(
     payload["score_cached_at"] = _isoformat(app.score_cached_at)
     payload["auto_reject_reason"] = app.auto_reject_reason
     payload["notes"] = app.notes
+    # Per-candidate recruiter notes flagged for the agent ("already
+    # interviewed — not suitable", "lacks the technical depth"). Standing
+    # guidance the recruiter wrote about THIS candidate; weigh it like the
+    # role-level recruiter feedback that rides in the system prompt.
+    from ..services.application_notes import recruiter_notes_for_agent
+
+    payload["recruiter_notes"] = recruiter_notes_for_agent(app)
     payload["cv_filename"] = app.cv_filename or (
         app.candidate.cv_filename if app.candidate else None
     )

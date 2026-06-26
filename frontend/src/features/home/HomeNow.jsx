@@ -8,16 +8,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
-  Brain,
   Check,
   Eye,
   FileText,
   Inbox,
   ListChecks,
   RefreshCw,
-  Repeat,
   Search,
-  Send,
   X,
 } from 'lucide-react';
 
@@ -30,7 +27,6 @@ import { pathForPage } from '../../app/routing';
 import { ScoreRing } from '../../shared/ui/ScoreRing';
 import {
   Avatar,
-  ConfBar,
   DeepLinkRow,
   formatRelativeAge,
   initialsFrom,
@@ -43,6 +39,8 @@ import { OverrideModal, advanceableWorkableStages } from './OverrideModal';
 import { ActivityFeed } from './ActivityFeed';
 import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import AgentNeedsInputCard from '../jobs/AgentNeedsInputCard';
+import { AgentDecisionCard } from '../../shared/decisions/AgentDecisionCard';
+import { DECISION_ACTIONS, DEFAULT_ACTIONS } from '../../shared/decisions/decisionActions';
 
 
 // The backend returns 409 with a structured detail ({code, message, ...}) when
@@ -66,154 +64,11 @@ const apiErrorMessage = (err, fallback = 'Something went wrong') => {
 };
 
 
-// Type-aware action set. Each decision_type maps to:
-//   - primary: the agent's recommendation, fires immediately on click
-//     (no confirmation modal).
-//   - alternatives: destructive alternative actions the recruiter can
-//     pick. Each opens OverrideModal with required "why" textarea, then
-//     dispatches via /agent-decisions/{id}/override with the action id.
-//
-// Plus the two universals — Send back & teach (TeachModal) and Snooze
-// 1h (immediate, no modal) — rendered after the type-specific buttons.
-const DECISION_ACTIONS = {
-  send_assessment: {
-    primaryLabel: 'Send assessment',
-    primaryIcon: Send,
-    alternatives: [
-      {
-        action: 'reject',
-        label: 'Reject',
-        icon: X,
-        kicker: 'REJECT CANDIDATE',
-        headline: 'Reject {name}?',
-        body: 'This will disqualify them in Workable and send the rejection email. Cannot be undone from this screen.',
-        confirmLabel: 'Reject',
-        confirmClass: 'rq-override',
-        placeholder: 'e.g. Missing AWS Glue experience confirmed by the recruiter screen',
-      },
-      {
-        action: 'skip_assessment_advance',
-        label: 'Skip & advance',
-        icon: ArrowRight,
-        kicker: 'SKIP ASSESSMENT',
-        headline: 'Skip the assessment and move {name} to the advance queue?',
-        body: "Skips the assessment email and queues them as an advance. You'll pick the Workable stage when you approve the advance from the queue — nothing posts to Workable yet.",
-        confirmLabel: 'Move to advance queue',
-        confirmClass: 'rq-approve',
-        placeholder: 'e.g. Internal referral — pre-vetted, no need for an assessment',
-      },
-    ],
-  },
-  advance_to_interview: {
-    primaryLabel: 'Advance to next stage',
-    primaryIcon: ArrowRight,
-    // The primary "Advance" no longer fires immediately — it opens the
-    // shared OverrideModal in ``approve`` mode so the recruiter picks the
-    // target Workable stage (and can add an optional note). This matches
-    // the candidate-drawer flow on the Jobs page.
-    primary: {
-      mode: 'approve',
-      kicker: 'ADVANCE',
-      headline: 'Advance {name} to the next stage?',
-      body: 'Pick the Workable stage to move them into. A short summary + 30-day report link is posted to Workable.',
-      confirmLabel: 'Advance',
-      confirmClass: 'rq-approve',
-      placeholder: 'Optional note for the audit trail',
-      requireStagePick: true,
-    },
-    alternatives: [
-      {
-        action: 'reject',
-        label: 'Reject',
-        icon: X,
-        kicker: 'REJECT CANDIDATE',
-        headline: 'Reject {name}?',
-        body: 'This will disqualify them in Workable and send the rejection email.',
-        confirmLabel: 'Reject',
-        confirmClass: 'rq-override',
-      },
-    ],
-  },
-  reject: {
-    // Primary = approve the agent's reject (fires immediately). Labeled
-    // "Approve" to match the bulk action and avoid colliding with the
-    // REJECT type badge — the recruiter is approving a decision, not
-    // independently rejecting. Outcome is conveyed by the badge + body.
-    primaryLabel: 'Approve',
-    alternatives: [
-      {
-        action: 'send_assessment',
-        label: 'Send assessment',
-        icon: Send,
-        kicker: 'OVERRIDE TO SEND',
-        headline: 'Send the assessment to {name} instead?',
-        body: "Dispatches the assessment invite. The agent will recalibrate based on your reason.",
-        confirmLabel: 'Send assessment',
-        confirmClass: 'rq-approve',
-      },
-      {
-        action: 'advance',
-        label: 'Advance instead',
-        icon: ArrowRight,
-        kicker: 'OVERRIDE TO ADVANCE',
-        headline: 'Advance {name} instead?',
-        body: "Pick the Workable stage to move them into. Skips the rejection email.",
-        confirmLabel: 'Advance',
-        confirmClass: 'rq-approve',
-        requireStagePick: true,
-      },
-    ],
-  },
-  skip_assessment_reject: {
-    // No inline overrides for pre-screen reject. The agent has flagged
-    // the CV as not worth assessing (often fraud / hard-constraint
-    // failures like salary mismatch caught from Workable answers); a
-    // one-click "Send assessment anyway" trains recruiters to ignore
-    // the cost-protection signal and drains assessment credits on
-    // candidates that shouldn't be tested. If the recruiter disagrees,
-    // the right path is ``Send back & teach`` — that produces a
-    // learning signal and re-runs the agent with the new context. The
-    // universals (teach + snooze) are appended by the renderer.
-    // Primary = approve the agent's reject; labeled "Approve" to match the
-    // bulk action and the REJECT (PRE-SCREEN) badge carries the outcome.
-    primaryLabel: 'Approve',
-    alternatives: [],
-  },
-  resend_assessment_invite: {
-    primaryLabel: 'Resend invite',
-    primaryIcon: Repeat,
-    alternatives: [
-      {
-        action: 'reject',
-        label: 'Reject',
-        icon: X,
-        kicker: 'REJECT CANDIDATE',
-        headline: 'Reject {name}?',
-        body: 'This will disqualify them in Workable and send the rejection email.',
-        confirmLabel: 'Reject',
-        confirmClass: 'rq-override',
-      },
-      {
-        action: 'skip_assessment_advance',
-        label: 'Skip & advance',
-        icon: ArrowRight,
-        kicker: 'SKIP ASSESSMENT',
-        headline: 'Skip the assessment and move {name} to the advance queue?',
-        body: "Skips resending the invite and queues them as an advance. You'll pick the Workable stage when you approve the advance from the queue — nothing posts to Workable yet.",
-        confirmLabel: 'Move to advance queue',
-        confirmClass: 'rq-approve',
-      },
-    ],
-  },
-};
-
-// Fallback for any decision_type not mapped above (e.g. legacy or
-// escalate_low_confidence). Single generic Approve + the universals.
-const DEFAULT_ACTIONS = {
-  primaryLabel: 'Approve',
-  primaryIcon: Check,
-  alternatives: [],
-};
+// DECISION_ACTIONS (type-aware action set) + DEFAULT_ACTIONS now live in the
+// shared module ../../shared/decisions/decisionActions so the reusable
+// <AgentDecisionCard> and this queue share one action vocabulary. Imported
+// above; ``handleApprove`` reads DECISION_ACTIONS to open the advance-confirm
+// modal for advance_to_interview.
 
 // Everything in the queue is pending (history lives in Monitoring → History),
 // so there's no status filter — only the standing "needs re-eval" warning chip
@@ -464,222 +319,10 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
   );
 };
 
-// Exported so the public demo showcase (HomeShowcaseView) can render the
-// exact same decision-detail + action bar the recruiter sees on /home,
-// wired to mock handlers instead of the live API.
-export const DecisionDetail = ({ decision, onApprove, onAlternative, onTeach, onSnooze, onNavigate, onReEvaluate, busy }) => {
-  if (!decision) {
-    return (
-      <section className="rq-hybrid-detail">
-        <div className="home-empty">Select a pending decision from the queue to inspect it here.</div>
-      </section>
-    );
-  }
-  const evidence = Array.isArray(decision.evidence?.cells) ? decision.evidence.cells : [];
-  const trace = Array.isArray(decision.evidence?.trace) ? decision.evidence.trace : [];
-  const isStale = Boolean(decision.is_stale);
-  const stalenessSummary = decision.staleness_summary;
-  // Old-model staleness reads differently from an input change — the inputs
-  // didn't move, the scoring engine did. Re-evaluate here re-scores on the
-  // current engine rather than just re-running the agent.
-  const stalenessReasons = Array.isArray(decision.staleness_reasons) ? decision.staleness_reasons : [];
-  const staleEngineOnly = stalenessReasons.length > 0 && stalenessReasons.every((r) => r === 'engine_outdated');
-
-  return (
-    <section className="rq-hybrid-detail">
-      <div className="rq-split-detail-head">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <TypeBadge type={decision.decision_type} />
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.6875rem', color: 'var(--mute)', letterSpacing: '.06em' }}>
-            D-{decision.id} · {formatRelativeAge(decision.created_at)} ago
-          </span>
-          {decision.status === 'pending' ? (
-            <span className="rq-stream-pendpill">NEEDS YOU</span>
-          ) : decision.status === 'reverted_for_feedback' ? (
-            <span className="rq-stream-teachpill">+ FEEDBACK</span>
-          ) : null}
-        </div>
-        {decision.confidence != null ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span className="kicker mute">CONFIDENCE</span>
-            <ConfBar value={decision.confidence} />
-          </div>
-        ) : null}
-      </div>
-
-      <div className="rq-detail-identity" style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 14 }}>
-        <Avatar initials={initialsFrom(decision.candidate_name)} size={48} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <h2 className="home-title-md" style={{ margin: 0, lineHeight: 1.2, overflowWrap: 'anywhere' }}>
-            <a
-              href={pathForPage('candidate-report', { candidateApplicationId: decision.application_id, fromHome: true })}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="rq-inline-link"
-              style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', textAlign: 'left', textDecoration: 'none' }}
-              title="Open candidate report in a new tab"
-            >
-              {decision.candidate_name || `Application #${decision.application_id}`}
-            </a>
-          </h2>
-          <div style={{ fontSize: '0.8125rem', color: 'var(--mute)', marginTop: 2 }}>
-            {decision.candidate_email || ''}
-          </div>
-          {/* Deep-links sit on their own line below the email so a long name
-              can never collide with them. */}
-          <div className="rq-detail-links" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
-            <DeepLinkRow
-              Icon={FileText}
-              label="Open candidate report"
-              href={pathForPage('candidate-report', { candidateApplicationId: decision.application_id, fromHome: true })}
-            />
-            <DeepLinkRow
-              Icon={Eye}
-              label="Open job pipeline"
-              onClick={() => onNavigate?.('job-pipeline', { roleId: decision.role_id })}
-            />
-          </div>
-        </div>
-        {decision.taali_score != null ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-            <ScoreRing score={decision.taali_score} size={72} label="TALI" />
-            <ScoreProvenance provenance={decision?.score_summary?.score_provenance} density="full" />
-          </div>
-        ) : null}
-      </div>
-
-      <p style={{ margin: '0 0 14px', fontSize: '0.875rem', color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: 760 }}>
-        {decision.reasoning}
-      </p>
-
-      {isStale && (decision.status === 'pending' || decision.status === 'reverted_for_feedback') ? (
-        <div className="rq-stale-banner" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 14px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: '0.8125rem', fontWeight: 500 }}>
-          <RefreshCw size={14} strokeWidth={2} aria-hidden="true" />
-          <span>
-            {staleEngineOnly
-              ? 'This score is from an older model. Re-evaluate to re-score on the current engine.'
-              : `Inputs changed since this was decided${stalenessSummary ? ` · ${stalenessSummary}` : ''}. Re-evaluate before approving.`}
-          </span>
-        </div>
-      ) : null}
-
-      {/* A pending decision with a resolution_note was returned to the queue
-          (the action couldn't complete — e.g. the role has no assessment task).
-          Surface the reason so the recruiter doesn't blindly re-approve into the
-          same failure; a fresh pending decision has no note. */}
-      {decision.status === 'pending' && decision.resolution_note ? (
-        <div className="rq-returned-banner" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, margin: '0 0 14px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: '0.8125rem', fontWeight: 500, lineHeight: 1.45 }}>
-          <Inbox size={14} strokeWidth={2} aria-hidden="true" style={{ marginTop: 1, flexShrink: 0 }} />
-          <span>{decision.resolution_note}</span>
-        </div>
-      ) : null}
-
-      {evidence.length > 0 ? (
-        <div className="rq-evidence-grid">
-          {evidence.map((e, i) => (
-            <div key={i} className="rq-ev-cell">
-              <div className="rq-ev-k">{e.k || e.label}</div>
-              <div className="rq-ev-v" style={{ color: e.good === true ? 'var(--green)' : e.good === false ? 'var(--red)' : 'var(--ink)' }}>
-                {e.v ?? e.value}
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      {trace.length > 0 ? (
-        <div className="rq-trace" style={{ marginTop: 14 }}>
-          <div className="rq-trace-head">
-            <span className="kicker">DECISION TRACE · {trace.length} EVENTS</span>
-          </div>
-          <ol className="rq-trace-list">
-            {trace.map((s, i) => (
-              <li key={i}>
-                <span className={`rq-trace-dot rq-trace-${s.who || 'agent'}`} />
-                <div>
-                  <div className="rq-trace-t">
-                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.625rem', color: 'var(--mute)', letterSpacing: '.08em', marginRight: 8, textTransform: 'uppercase' }}>{s.who || 'agent'}</span>
-                    {s.t || s.title}
-                  </div>
-                  {s.m || s.message ? <div className="rq-trace-m">{s.m || s.message}</div> : null}
-                </div>
-              </li>
-            ))}
-          </ol>
-        </div>
-      ) : null}
-
-      {decision.status === 'pending' || decision.status === 'reverted_for_feedback' ? (
-        (() => {
-          const spec = DECISION_ACTIONS[decision.decision_type] || DEFAULT_ACTIONS;
-          const PrimaryIcon = spec.primaryIcon || Check;
-          return (
-            <div className="rq-action-bar">
-              <div className="rq-action-l">
-                {isStale && onReEvaluate ? (
-                  <button
-                    type="button"
-                    className="rq-btn rq-approve"
-                    onClick={() => onReEvaluate(decision)}
-                    disabled={busy}
-                  >
-                    <RefreshCw size={14} strokeWidth={2.4} aria-hidden="true" />
-                    Re-evaluate
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  className={`rq-btn ${spec.primaryClass || 'rq-approve'}`}
-                  onClick={() => onApprove(decision)}
-                  disabled={busy}
-                  title={
-                    staleEngineOnly
-                      ? 'Scored by an older model — this approves the old score as-is. Re-evaluate to re-score first.'
-                      : isStale
-                        ? 'Inputs changed since this was decided — this acts on them anyway. Re-evaluate first to refresh.'
-                        : undefined
-                  }
-                >
-                  <PrimaryIcon size={14} strokeWidth={2.4} aria-hidden="true" />
-                  {spec.primaryLabel}
-                </button>
-                {(spec.alternatives || []).map((alt) => {
-                  const AltIcon = alt.icon || X;
-                  return (
-                    <button
-                      key={alt.action}
-                      type="button"
-                      className="rq-btn rq-override"
-                      onClick={() => onAlternative(decision, alt)}
-                      disabled={busy}
-                      title={alt.body}
-                    >
-                      <AltIcon size={14} strokeWidth={2} aria-hidden="true" />
-                      {alt.label}
-                    </button>
-                  );
-                })}
-                <button type="button" className="rq-btn rq-teach" onClick={() => onTeach(decision)} disabled={busy}>
-                  <Brain size={14} strokeWidth={2} aria-hidden="true" />
-                  Send back &amp; teach
-                </button>
-              </div>
-              <button type="button" className="rq-btn rq-defer" onClick={() => onSnooze(decision)} disabled={busy}>
-                Snooze 1h
-              </button>
-            </div>
-          );
-        })()
-      ) : (
-        <div className="home-empty" style={{ marginTop: 12 }}>
-          {decision.status === 'approved' ? 'Approved — actions are read-only.'
-            : decision.status === 'overridden' ? 'Overridden — actions are read-only.'
-              : `Decision is ${decision.status}.`}
-        </div>
-      )}
-    </section>
-  );
-};
+// The decision detail + action bar moved to the reusable
+// ../../shared/decisions/AgentDecisionCard. Re-exported here under its old name
+// so existing importers (HomeShowcaseView) keep working unchanged.
+export { AgentDecisionCard as DecisionDetail } from '../../shared/decisions/AgentDecisionCard';
 
 
 // Invited-candidate tracker — the Home "Assessment pending" view. A split view
@@ -826,11 +469,24 @@ const InvitedDetail = ({ candidate, roleNameById, onNavigate }) => {
             </li>
           ))}
         </ul>
-        {!t.email_status ? (
-          <div className="rq-invite-note">
-            Email delivery/open tracking lights up once the Resend webhook is configured.
-          </div>
-        ) : null}
+        {(() => {
+          const es = (t.email_status || '').toLowerCase();
+          if (es === 'failed') {
+            return (
+              <div className="rq-invite-note is-danger">
+                Invite could not be sent — resend it so the candidate receives the assessment.
+              </div>
+            );
+          }
+          if (!es) {
+            return (
+              <div className="rq-invite-note">
+                No delivery or open events recorded for this invite yet.
+              </div>
+            );
+          }
+          return null;
+        })()}
       </div>
     </section>
   );
@@ -1386,7 +1042,7 @@ export const HomeNow = ({
               staleOnly={staleOnly}
             />
             <div className="rq-hybrid-right">
-              <DecisionDetail
+              <AgentDecisionCard
                 decision={selected}
                 busy={busyId === selected?.id}
                 onApprove={handleApprove}

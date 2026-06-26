@@ -483,6 +483,27 @@
   color: var(--mute);
 }
 
+.mc-notes-agent-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--mute);
+  cursor: pointer;
+}
+
+.mc-notes-agent-toggle input {
+  margin-top: 2px;
+  accent-color: var(--purple);
+  cursor: pointer;
+}
+
+.mc-notes-agent-toggle input:disabled {
+  cursor: not-allowed;
+}
+
 .mc-notes-input-actions {
   display: flex;
   justify-content: flex-end;

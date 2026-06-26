@@ -50,7 +50,6 @@ from .assessment_experiment import (
     AssessmentExperiment,
     AssessmentExperimentArm,
 )
-from .session import AssessmentSession
 from .billing_credit_ledger import BillingCreditLedger
 from .usage_event import UsageEvent
 from .claude_call_log import ClaudeCallLog
@@ -209,7 +208,6 @@ __all__ = [
     "ASSIGNMENT_METHOD_SINGLE_TASK_DEFAULT",
     "ASSIGNMENT_METHOD_NO_EXPERIMENT",
     "ASSIGNMENT_METHODS",
-    "AssessmentSession",
     "BillingCreditLedger",
     "UsageEvent",
     "ClaudeCallLog",

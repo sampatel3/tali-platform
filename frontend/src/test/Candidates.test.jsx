@@ -73,6 +73,8 @@ vi.mock('../shared/api', () => ({
     uploadApplicationCv: vi.fn(),
     createAssessment: vi.fn(),
     retakeAssessment: vi.fn(),
+    addApplicationNote: vi.fn().mockResolvedValue({ data: {} }),
+    listApplicationEvents: vi.fn().mockResolvedValue({ data: [] }),
   },
   team: { list: vi.fn(), invite: vi.fn() },
   default: {

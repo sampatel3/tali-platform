@@ -64,41 +64,21 @@ def test_no_duplicate_endpoint_signatures_across_domains() -> None:
 
 
 def test_file_size_guard_for_api_and_service_paths() -> None:
-    size_limit = 500
-    allowlist: dict[str, str] = {
-        "app/components/assessments/service.py": "assessment orchestration",
-        "app/components/integrations/workable/sync_service.py": "Workable sync flow",
-        "app/components/integrations/workable/service.py": "legacy Workable integration service",
-        "app/domains/agentic/routes.py": "agent decisions queue + status + run-now (cohesive surface, 7 LOC over)",
-        "app/domains/assessments_runtime/analytics_routes.py": "Mission Control reporting summary aggregator",
-        "app/domains/assessments_runtime/applications_routes.py": "applications API",
-        "app/domains/assessments_runtime/candidate_runtime_routes.py": "candidate runtime API",
-        "app/domains/assessments_runtime/candidate_terminal_routes.py": "candidate terminal API",
-        "app/domains/assessments_runtime/pipeline_service.py": "assessment runtime pipeline orchestration",
-        "app/domains/assessments_runtime/roles_management_routes.py": "roles + job-spec upload API",
-        "app/domains/billing_webhooks/billing_routes.py": "Stripe + credit-pack billing routes (TODO: split webhook handlers)",
-        "app/domains/workable_sync/routes.py": "legacy Workable sync API",
-        "app/services/fit_matching_service.py": "CV-to-role fit scoring pipeline",
-        "app/services/interview_support_service.py": "interview pack builder (1 LOC over after chip-helper extraction)",
-    }
+    # The policy (limit + scope + allowlist) lives in
+    # scripts/check_file_sizes.py, which CI runs directly. This test asserts
+    # the same gate from the suite so a local `pytest` run still catches it.
+    import importlib.util
 
-    target_files = set(_python_files(PROJECT_ROOT / "app" / "api" / "v1"))
-    target_files.update((PROJECT_ROOT / "app").rglob("*service.py"))
-    target_files.update((PROJECT_ROOT / "app" / "domains").rglob("*routes.py"))
+    script = PROJECT_ROOT / "scripts" / "check_file_sizes.py"
+    spec = importlib.util.spec_from_file_location("check_file_sizes", script)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
 
-    violations: list[str] = []
-    for path in sorted(target_files):
-        rel = path.relative_to(PROJECT_ROOT).as_posix()
-        lines = sum(1 for _ in path.open("r", encoding="utf-8"))
-        if lines <= size_limit:
-            continue
-        if rel in allowlist:
-            continue
-        violations.append(f"{rel} ({lines} LOC)")
-
+    violations = module.find_violations()
     assert not violations, (
-        f"API/service paths must stay <= {size_limit} LOC unless explicitly allowlisted. "
-        f"Violations: {violations}"
+        f"API/service paths must stay <= {module.SIZE_LIMIT} LOC unless allowlisted "
+        f"in scripts/check_file_sizes.py. Violations: {violations}"
     )
 
 
@@ -239,13 +219,11 @@ def test_no_bare_anthropic_client_construction() -> None:
     factory + adapter files = invisible spend = the
     73% reconciliation gap that surfaced on 2026-05-20.
 
-    The four approved sites that construct the bare SDK client are:
+    The approved sites that construct the bare SDK client are:
     - ``app/services/claude_client_resolver.py`` (the factory itself,
       wraps it on the way out)
     - ``app/services/metered_anthropic_client.py`` (defines the wrapper,
       needs the bare class for typing)
-    - ``app/components/integrations/claude/service.py`` (constructs +
-      immediately hands to the wrapper inside the same file)
     - ``app/components/integrations/anthropic_admin/*`` (admin API,
       not the billable inference API)
 
@@ -256,7 +234,6 @@ def test_no_bare_anthropic_client_construction() -> None:
     approved = {
         "app/services/claude_client_resolver.py",
         "app/services/metered_anthropic_client.py",
-        "app/components/integrations/claude/service.py",
     }
     # Admin API client lives under anthropic_admin/* — uses a different
     # SDK surface (admin endpoints), not billable inference. Allow the

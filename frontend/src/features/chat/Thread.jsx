@@ -12,7 +12,10 @@ const ToolResultRender = ({ part }) => {
   // hydrated applications) and an inline graph (the underlying nodes +
   // edges from Graphiti) — they're complementary views of the same hit.
   if (!part.result) return null;
-  if (part.toolName === 'find_top_candidates') {
+  if (
+    part.toolName === 'find_top_candidates' ||
+    part.toolName === 'screen_pool_against_requirement'
+  ) {
     return <CandidateEvidenceCard data={part.result} />;
   }
   if (part.toolName === 'compare_applications') {

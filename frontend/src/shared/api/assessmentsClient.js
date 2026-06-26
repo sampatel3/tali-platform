@@ -1,12 +1,5 @@
 import api from './httpClient';
 
-const buildTerminalWsUrl = (assessmentId) => {
-  const rawApi = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
-  const origin = rawApi || (typeof window !== 'undefined' ? window.location.origin : '');
-  const wsOrigin = origin.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
-  return `${wsOrigin}/api/v1/assessments/${assessmentId}/terminal/ws`;
-};
-
 export const assessments = {
   list: (params = {}) => api.get('/assessments/', { params }),
   get: (id) => api.get(`/assessments/${id}`),
@@ -23,27 +16,13 @@ export const assessments = {
     api.post(`/assessments/${id}/repo-file`, payload, {
       headers: { 'X-Assessment-Token': assessmentToken },
     }),
-  terminalStatus: (id, assessmentToken) =>
-    api.get(`/assessments/${id}/terminal/status`, {
-      headers: { 'X-Assessment-Token': assessmentToken },
-    }),
-  terminalStop: (id, assessmentToken) =>
-    api.post(`/assessments/${id}/terminal/stop`, {}, {
-      headers: { 'X-Assessment-Token': assessmentToken },
-    }),
-  claude: (id, payload, assessmentToken) =>
-    api.post(`/assessments/${id}/claude`, payload, {
-      headers: { 'X-Assessment-Token': assessmentToken },
-    }),
-  // New HTTP-based Claude chat that talks to the agentic backend
-  // route. Lives alongside `claude` (the legacy non-tool helper) while
-  // the terminal-removal refactor lands; the route rewrite in a later
-  // PR will decide which helper survives.
+  // HTTP-based agentic Claude chat — the only candidate-facing assistant
+  // transport (the legacy PTY terminal + non-tool `claude` helper were
+  // removed alongside their backend routes).
   claudeChat: (assessmentId, payload, assessmentToken) =>
     api.post(`/assessments/${assessmentId}/claude/chat`, payload, {
       headers: { 'X-Assessment-Token': assessmentToken },
     }),
-  terminalWsUrl: (id /*, assessmentToken */) => buildTerminalWsUrl(id),
   submit: (id, payloadOrFinalCode, assessmentToken, metadata = {}) =>
     api.post(
       `/assessments/${id}/submit`,

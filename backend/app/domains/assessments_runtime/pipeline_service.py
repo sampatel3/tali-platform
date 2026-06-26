@@ -59,6 +59,26 @@ POST_HANDOVER_WORKABLE_STAGES = frozenset({
     "hired",
 })
 
+# The subset of post-handover stages that are POSITIVE TERMINAL hand-offs — the
+# recruiter has effectively decided (an offer is out, or they're hired). Only
+# these freeze the candidate on Taali via the positive-advance path (transition
+# to the `advanced` stage, which trips the A6 freeze in role_support.is_resolved).
+# A mid-interview stage (phone / technical / final) is NOT terminal: the
+# candidate could still wash out, so Taali keeps them in-funnel and decidable
+# rather than freezing them. The broader POST_HANDOVER set still governs the
+# "don't auto-reject someone a human is interviewing" guard + the funnel display
+# bucketing.
+#
+# NB: distinct from ``workable/sync_service.py``'s ``TERMINAL_STAGES``, which is
+# the all-terminal set (NEGATIVE rejected/disqualified/withdrawn + positive
+# offer/hired) used to detect "candidate is done, skip enrichment / capture
+# outcome". Negatives never reach this advance gate — they land via
+# transition_outcome (outcome != 'open'), which the reconcile excludes upfront.
+TERMINAL_WORKABLE_STAGES = frozenset({
+    "offer", "offer_extended", "offer_accepted",
+    "hired",
+})
+
 _RECRUITER_STAGE_TRANSITIONS = {
     ("applied", "invited"),
     ("review", "invited"),
@@ -74,6 +94,16 @@ _RECRUITER_STAGE_TRANSITIONS = {
 _SYSTEM_STAGE_TRANSITIONS = {
     ("invited", "in_assessment"),
     ("in_assessment", "review"),
+    # Re-assessment: a candidate sitting in `review` (a prior attempt was
+    # submitted, or auto-finalized on timeout — see PR #698) who starts a
+    # freshly issued assessment is genuinely back `in_assessment`.
+    # `start_or_resume_assessment` is the only system caller that targets
+    # `in_assessment`, and it only fires this transition when a
+    # PENDING/never-started assessment is actually started — so landing them
+    # `in_assessment` is always correct. Without this edge the guard 409s and
+    # the candidate start endpoint surfaces a generic 500 ("Failed to start
+    # assessment session").
+    ("review", "in_assessment"),
 }
 _LEGACY_COMPAT_EDGES: dict[str, list[tuple[str, str]]] = {
     # Direct edges to "advanced" mirror the recruiter hand-back flow
@@ -106,6 +136,15 @@ def is_post_handover_workable_stage(value: str | None) -> bool:
     honour the same rule, even though it never runs the agent prompt.
     """
     return normalize_pipeline_key(value) in POST_HANDOVER_WORKABLE_STAGES
+
+
+def is_terminal_workable_stage(value: str | None) -> bool:
+    """True when the Workable stage is a TERMINAL hand-off (offer / hired) —
+    the recruiter has effectively decided. Only these freeze the candidate on
+    Taali (advance to `advanced`). Mid-interview post-handover stages are NOT
+    terminal: they stay decidable. Always a subset of post-handover stages.
+    """
+    return normalize_pipeline_key(value) in TERMINAL_WORKABLE_STAGES
 
 
 def _not_post_handover_sql():
@@ -549,18 +588,24 @@ def reconcile_post_handover_advanced(
 
     When a recruiter moves a candidate forward in Workable directly (Phone
     Screen / Technical / Final Interview / Offer … — a post-handover stage),
-    Taali still gives its deterministic SECOND OPINION rather than blanket-
-    advancing:
+    Taali gives its deterministic SECOND OPINION and reconciles, but it only
+    FREEZES the candidate (transition to ``advanced``, which trips the A6
+    freeze) for a TERMINAL hand-off:
 
       * Taali would REJECT → surface it in the reject queue (don't advance) —
         "you're interviewing someone I'd have passed on."
-      * Taali would ADVANCE (or it's unscored / undecidable) → reflect the
-        hand-off as ``advanced`` so they don't strand as ``applied``, and
-        discard any now-stale pending decision.
+      * Workable stage is TERMINAL (offer / hired) → reflect the hand-off as
+        ``advanced`` (Taali's job is done) and discard every now-moot pending
+        decision.
+      * Workable stage is MID-INTERVIEW (phone / technical / final) → do NOT
+        freeze. The candidate could still wash out, so Taali keeps them in
+        their current stage — decidable, agent still live — but discards any
+        stale pending REJECT card (a "reject" on someone in a live interview is
+        the dangerous case), while leaving legitimate advance/send cards alone.
 
     LOCAL only — Workable already has them in that stage, so it writes NOTHING
     back. Idempotent. Does NOT commit — the caller owns the transaction. Returns
-    True iff it advanced the candidate.
+    True iff it advanced (froze) the candidate.
     """
     if app is None:
         return False
@@ -583,6 +628,57 @@ def reconcile_post_handover_advanced(
         if action in ("reject", "skip_assessment_reject"):
             return False  # surfaced in the reject queue; do NOT advance
 
+    terminal = is_terminal_workable_stage(getattr(app, "workable_stage", None))
+
+    # Lazy import: pre_screen_decision_emitter imports this module.
+    from ...services.pre_screen_decision_emitter import (
+        discard_pending_decisions_for_app,
+    )
+
+    if not terminal:
+        # Mid-interview: stay decidable (no freeze). But a reject card queued
+        # before the recruiter moved them into a live interview is now stale and
+        # dangerous — discard only those, leaving advance/send cards untouched so
+        # the agent can still act on a candidate who may yet wash out.
+        try:
+            discard_pending_decisions_for_app(
+                db,
+                application_id=int(app.id),
+                reason=f"superseded: interviewing in Workable ({app.workable_stage})",
+                decision_types=("reject", "skip_assessment_reject"),
+            )
+        except Exception:  # pragma: no cover — never block the reconcile
+            import logging
+
+            logging.getLogger("taali.pipeline_service").exception(
+                "post-handover reject discard failed (application_id=%s)", app.id,
+            )
+
+        # Heal a candidate STRANDED in 'review' by an earlier agent reject
+        # second-opinion (the advanced→review pull-back, source='agent'). Now that
+        # the reject card is gone, they'd otherwise sit in 'review' looking like
+        # they await a Taali decision — when in truth they're being interviewed in
+        # Workable. Reflect that honestly as 'advanced' (handed off). Genuine
+        # assessment-completion review is source='system' and is left untouched.
+        if (
+            normalize_pipeline_stage(app.pipeline_stage) == "review"
+            and normalize_pipeline_key(app.pipeline_stage_source) == "agent"
+        ):
+            transition_stage(
+                db,
+                app=app,
+                to_stage="advanced",
+                source="sync",
+                actor_type="sync",
+                reason=(
+                    f"Reflecting Workable interview hand-off ({app.workable_stage}); "
+                    "cleared stale Taali reject second-opinion"
+                ),
+                idempotency_key=f"posthandover_heal_advanced:{app.id}",
+            )
+            return True
+        return False
+
     if normalize_pipeline_stage(app.pipeline_stage) == "advanced":
         return False
 
@@ -595,13 +691,9 @@ def reconcile_post_handover_advanced(
         reason=f"Advanced in Workable ({app.workable_stage}) — reflecting the hand-off on Taali",
         idempotency_key=f"workable_handover_advance:{app.id}",
     )
-    # A decision queued before the Workable move is moot — the candidate is past
-    # Taali's hand-off. Discard quietly so no stale reject/advance card lingers.
+    # A terminal hand-off freezes the candidate, so every queued decision is moot
+    # — discard quietly so no stale reject/advance card lingers.
     try:
-        from ...services.pre_screen_decision_emitter import (
-            discard_pending_decisions_for_app,
-        )
-
         discard_pending_decisions_for_app(
             db,
             application_id=int(app.id),

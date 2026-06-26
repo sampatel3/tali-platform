@@ -13,13 +13,21 @@ import {
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
+import { CandidateDecisionStrip } from './CandidateDecisionStrip';
+import { OverrideModal } from '../home/OverrideModal';
+import { TeachModal } from '../home/TeachModal';
+import { DECISION_ACTIONS } from '../../shared/decisions/decisionActions';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
+import { readFluency4d } from '../../shared/assessment/fluency4d';
 import { RadarChart } from '../../shared/ui/RadarChart';
 import { ScoreRing } from '../../shared/ui/ScoreRing';
 import { ScoreProvenance } from './ScoreProvenance';
 import { ErrorBoundary } from '../../shared/ui/ErrorBoundary';
 import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAssessmentToCandidateView } from './assessmentViewModels';
+// ApplicationDecisionPanel intentionally NOT imported — PR3 retired the decision
+// recorder from the report body; the candidate's decision lives on the header
+// strip (CandidateDecisionStrip). The component file is kept for reference.
 import { AssessmentEvidencePanels, EvaluatePanel, InterviewTranscriptCapture } from './CandidateAssessmentDetailPanels';
 import { CandidateSnapshotCard } from './CandidateSnapshotCard';
 import {
@@ -53,11 +61,17 @@ const resolveAssessmentStatus = (application) => (
 //                   external client shares.
 const REPORT_TABS = [
   { id: 'overview', label: 'Overview' },
+  // PR3 (decision-surface unification): the standalone Evaluate tab is retired.
+  // The candidate's DECISION lives on the report header (CandidateDecisionStrip,
+  // PR2), and the Evaluate tab's assessment EVIDENCE (criteria ratings, manual
+  // rubric, strengths/improvements, chat log) now renders inside this Assessment
+  // pane via <EvaluatePanel hideDecision />.
   { id: 'assessment', label: 'Assessment', internalOnly: true, requiresAssessment: true },
-  { id: 'evaluate', label: 'Evaluate', internalOnly: true, requiresAssessment: true },
   { id: 'cv', label: 'CV' },
   { id: 'prep', label: 'Interview prep', recruiterOnly: true },
-  { id: 'notes', label: 'Notes & timeline', recruiterOnly: true },
+  // "Notes & context" is the unified add-info surface: freeform notes, the
+  // interview transcript capture, and ranking / link quick-adds.
+  { id: 'notes', label: 'Notes & context', recruiterOnly: true },
 ];
 
 const INTERNAL_TABS = new Set(REPORT_TABS.filter((tab) => tab.internalOnly).map((tab) => tab.id));
@@ -808,15 +822,39 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   // "Copying…" label. '' when idle, 'recruiter' or 'client' when busy.
   const [sharingMode, setSharingMode] = useState('');
   const [applicationEvents, setApplicationEvents] = useState([]);
-  // Notes & timeline tab — local note draft + a tick that lets us refetch
+  // Notes & context tab — local note draft + a tick that lets us refetch
   // the events feed after a successful save without a full page reload.
   const [noteDraft, setNoteDraft] = useState('');
   const [savingNote, setSavingNote] = useState(false);
+  // Per-candidate notes default to agent-visible — they're almost always
+  // guidance the agent should weigh ("already interviewed — not suitable").
+  // Untick for pure team chatter the agent shouldn't read.
+  const [noteForAgent, setNoteForAgent] = useState(true);
   const [eventsRefetchTick, setEventsRefetchTick] = useState(0);
+  // PR3 add-info quick-adds, stored via the same note endpoint with a `kind`:
+  //   ranking — a 1–5 score + optional comment (kind: 'ranking')
+  //   link    — a URL + optional label          (kind: 'link')
+  // Both default to agent-visible alongside the freeform note box.
+  const [rankingValue, setRankingValue] = useState('');
+  const [rankingComment, setRankingComment] = useState('');
+  const [savingRanking, setSavingRanking] = useState(false);
+  const [linkUrl, setLinkUrl] = useState('');
+  const [linkLabel, setLinkLabel] = useState('');
+  const [savingLink, setSavingLink] = useState(false);
   // View mode received from the backend when loaded via /share/:token —
   // "client" (scrubbed external view) or "recruiter" (full report). Null
   // when not on a share route (recruiter is logged in and viewing /c/:id).
   const [shareViewMode, setShareViewMode] = useState(null);
+  // PR2 (decision-surface unification): the candidate's own pending agent
+  // decision, surfaced in the header strip with the SAME Approve / Override /
+  // Teach controls as the home hub. Recruiter-view only (the fetch + render
+  // are both gated on !isClientView && !isInterviewView below).
+  const [agentDecision, setAgentDecision] = useState(null);
+  const [decisionBusy, setDecisionBusy] = useState(false);
+  // Modal targets — mirrors HomeNow's teachFor / alternativeFor. ``alternativeFor``
+  // drives OverrideModal for both overrides AND the primary-advance confirm.
+  const [teachFor, setTeachFor] = useState(null);
+  const [alternativeFor, setAlternativeFor] = useState(null);
 
   const routeApplicationKey = String(applicationId || '').trim();
   const sharedRouteToken = String(routeShareToken || '').trim();
@@ -925,7 +963,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       );
       const canUseInternalApis = !isShareRoute;
 
-      const [assessmentRes, orgRes, eventsRes] = await Promise.all([
+      const [assessmentRes, orgRes, eventsRes, decisionRes] = await Promise.all([
         canUseInternalApis && hasCompletedAssessment && assessmentsApi?.get
           ? assessmentsApi.get(Number(assessmentId))
           : Promise.resolve(null),
@@ -935,10 +973,19 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         canUseInternalApis && rolesApi?.listApplicationEvents && nextApplication?.id
           ? rolesApi.listApplicationEvents(nextApplication.id)
           : Promise.resolve(null),
+        // The candidate's own pending agent decision for the header strip.
+        // Recruiter-view only (canUseInternalApis ⇒ non-share route). A
+        // failure here must not blank the report, so swallow it to null.
+        canUseInternalApis && apiClient.agent?.listDecisions && nextApplication?.id
+          ? apiClient.agent
+              .listDecisions({ application_id: nextApplication.id, status: 'pending', limit: 1 })
+              .catch(() => null)
+          : Promise.resolve(null),
       ]);
 
       setCompletedAssessment(assessmentRes?.data || null);
       setOrgData(orgRes?.data || null);
+      setAgentDecision(Array.isArray(decisionRes?.data) ? (decisionRes.data[0] || null) : null);
       // Recruiter shares can't call the auth-only /events endpoint, so the
       // backend embeds the audit timeline in the share payload instead.
       const sharedEvents = Array.isArray(nextApplication?.application_events)
@@ -963,6 +1010,92 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       setLoading(false);
     }
   }, [assessmentsApi, isShareRoute, numericApplicationId, organizationsApi, rolesApi, routeApplicationKey, sharedRouteToken, showToast]);
+
+  // Refetch JUST the candidate's pending decision (after an approve / override /
+  // teach) without reloading the whole report. Recruiter-view only.
+  const loadAgentDecision = useCallback(async () => {
+    if (isShareRoute || !apiClient.agent?.listDecisions || !numericApplicationId) return;
+    try {
+      const res = await apiClient.agent.listDecisions({
+        application_id: numericApplicationId,
+        status: 'pending',
+        limit: 1,
+      });
+      setAgentDecision(Array.isArray(res?.data) ? (res.data[0] || null) : null);
+    } catch {
+      // A refetch failure shouldn't surface — the strip just keeps its
+      // last-known state until the next full report load reconciles it.
+    }
+  }, [isShareRoute, numericApplicationId]);
+
+  // 409 decision_stale — same shape HomeNow keys its stale messaging on.
+  const isDecisionStaleError = useCallback((err) => {
+    const detail = err?.response?.data?.detail;
+    const code = typeof detail === 'object' && detail !== null ? detail.code : detail;
+    return err?.response?.status === 409 && code === 'decision_stale';
+  }, []);
+
+  // Approve — mirrors HomeNow.handleApprove. Decision types whose action spec
+  // carries a ``primary`` (i.e. advance_to_interview) open OverrideModal in
+  // approve mode so the recruiter picks the Workable stage; everything else
+  // approves the recommendation directly. No optimistic queue mechanics here —
+  // there's a single decision on this page, not a queue to advance through.
+  const handleDecisionApprove = useCallback(async (decision) => {
+    if (!decision) return;
+    const spec = DECISION_ACTIONS[decision.decision_type];
+    if (spec?.primary) {
+      setAlternativeFor({ decision, alternative: spec.primary });
+      return;
+    }
+    setDecisionBusy(true);
+    try {
+      await apiClient.agent.approveDecision(decision.id, {}, { force: Boolean(decision.is_stale) });
+      showToast('Approved.', 'success');
+      await Promise.all([loadAgentDecision(), loadStandingReport()]);
+    } catch (err) {
+      if (isDecisionStaleError(err)) {
+        showToast("This decision's inputs changed — re-evaluate to refresh it.", 'warning');
+      } else {
+        showToast(getErrorMessage(err, "Couldn't approve this decision."), 'error');
+      }
+    } finally {
+      setDecisionBusy(false);
+    }
+  }, [isDecisionStaleError, loadAgentDecision, loadStandingReport, showToast]);
+
+  // Override — open OverrideModal for the chosen alternative (the POST happens
+  // inside the modal once the recruiter fills in the required "why").
+  const handleDecisionAlternative = useCallback((decision, alternative) => {
+    setAlternativeFor({ decision, alternative });
+  }, []);
+
+  const handleDecisionSnooze = useCallback(async (decision) => {
+    if (!decision) return;
+    setDecisionBusy(true);
+    try {
+      await apiClient.agent.snoozeDecision(decision.id);
+      showToast('Snoozed for 1h.', 'success');
+      await loadAgentDecision();
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Snooze failed'), 'error');
+    } finally {
+      setDecisionBusy(false);
+    }
+  }, [loadAgentDecision, showToast]);
+
+  const handleDecisionReEvaluate = useCallback(async (decision) => {
+    if (!decision) return;
+    setDecisionBusy(true);
+    try {
+      await apiClient.agent.reEvaluateDecision(decision.id);
+      showToast('Re-evaluating with fresh inputs…', 'success');
+      await Promise.all([loadAgentDecision(), loadStandingReport()]);
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Re-evaluate failed'), 'error');
+    } finally {
+      setDecisionBusy(false);
+    }
+  }, [loadAgentDecision, loadStandingReport, showToast]);
 
   useEffect(() => {
     void loadStandingReport();
@@ -1206,29 +1339,101 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   // through ShareModal → the share_links table → the public /share/:token
   // SPA route.
 
-  // Save a recruiter note. We persist via assessmentsApi.addNote when an
-  // assessment is linked (it writes a `recruiter_note` event to the
-  // application timeline); we degrade to a toast otherwise. After save
-  // we bump eventsRefetchTick so the timeline picks up the new event.
+  // Save a recruiter note as a `recruiter_note` event on the application
+  // timeline — works with or without a linked assessment (the legacy
+  // assessment-timeline path dead-ended when none was linked). When
+  // `noteForAgent` the note rides in the agent's get_application payload as
+  // standing per-candidate guidance. We fall back to the assessment-note
+  // endpoint only if there's no application id. After save we bump
+  // eventsRefetchTick so the timeline picks up the new event.
   const handleSaveNote = useCallback(async () => {
     const note = noteDraft.trim();
     if (!note) return;
-    if (!assessmentId || !assessmentsApi?.addNote) {
-      showToast('Notes are saved against the linked assessment — none is linked yet.', 'info');
+    const appId = application?.id;
+    if (!appId && !(assessmentId && assessmentsApi?.addNote)) {
+      showToast('Could not save the note — no candidate record is linked yet.', 'info');
       return;
     }
     setSavingNote(true);
     try {
-      await assessmentsApi.addNote(assessmentId, note);
+      if (appId && rolesApi?.addApplicationNote) {
+        await rolesApi.addApplicationNote(appId, note, noteForAgent);
+      } else {
+        await assessmentsApi.addNote(assessmentId, note);
+      }
       setNoteDraft('');
       setEventsRefetchTick((prev) => prev + 1);
-      showToast('Note added to the timeline.', 'success');
+      showToast(
+        noteForAgent ? 'Note saved — your hiring agent will see it.' : 'Note added to the timeline.',
+        'success',
+      );
     } catch (err) {
       showToast(getErrorMessage(err, 'Failed to add note.'), 'error');
     } finally {
       setSavingNote(false);
     }
-  }, [assessmentId, assessmentsApi, noteDraft, showToast]);
+  }, [application?.id, rolesApi, assessmentId, assessmentsApi, noteDraft, noteForAgent, showToast]);
+
+  // Ranking quick-add — a 1–5 score + optional comment, stored as a `ranking`
+  // note via the same endpoint (kind: 'ranking'). Requires an application id
+  // (the structured-kind endpoint is application-scoped) and a chosen score.
+  const handleSaveRanking = useCallback(async () => {
+    const appId = application?.id;
+    const score = Number(rankingValue);
+    if (!appId || !rolesApi?.addApplicationNote) return;
+    if (!Number.isFinite(score) || score < 1 || score > 5) {
+      showToast('Pick a 1–5 ranking first.', 'info');
+      return;
+    }
+    const comment = rankingComment.trim();
+    setSavingRanking(true);
+    try {
+      // The note body doubles as the human-readable `reason`; the agent-facing
+      // payload renders "Ranking: N/5 — …" from the structured metadata.
+      await rolesApi.addApplicationNote(appId, comment || `Ranking ${score}/5`, noteForAgent, {
+        kind: 'ranking',
+        ranking: score,
+      });
+      setRankingValue('');
+      setRankingComment('');
+      setEventsRefetchTick((prev) => prev + 1);
+      showToast('Ranking added.', 'success');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to add ranking.'), 'error');
+    } finally {
+      setSavingRanking(false);
+    }
+  }, [application?.id, rolesApi, rankingValue, rankingComment, noteForAgent, showToast]);
+
+  // Link quick-add — a URL + optional label, stored as a `link` note
+  // (kind: 'link'). The note body is the label (or URL) so it's readable in the
+  // timeline; the structured url/label ride in metadata for the clickable render.
+  const handleSaveLink = useCallback(async () => {
+    const appId = application?.id;
+    const url = linkUrl.trim();
+    if (!appId || !rolesApi?.addApplicationNote) return;
+    if (!url) {
+      showToast('Enter a URL to add a link.', 'info');
+      return;
+    }
+    const label = linkLabel.trim();
+    setSavingLink(true);
+    try {
+      await rolesApi.addApplicationNote(appId, label || url, noteForAgent, {
+        kind: 'link',
+        link_url: url,
+        link_label: label || undefined,
+      });
+      setLinkUrl('');
+      setLinkLabel('');
+      setEventsRefetchTick((prev) => prev + 1);
+      showToast('Link added.', 'success');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to add link.'), 'error');
+    } finally {
+      setSavingLink(false);
+    }
+  }, [application?.id, rolesApi, linkUrl, linkLabel, noteForAgent, showToast]);
 
   // One-click share: mint a fresh 7-day share-link of the requested mode
   // and copy the URL to the clipboard. Replaces the previous ShareModal
@@ -1442,6 +1647,25 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           ) : null}
         />
       ) : null}
+      {/* Decision strip — the agent's recommendation for THIS candidate with
+          the same Approve / Override / Teach controls as the home hub.
+          Recruiter-view only (hidden on every share link). */}
+      {!isClientView && !isInterviewView ? (
+        <div className="page" style={{ paddingTop: 0, paddingBottom: 0 }}>
+          <CandidateDecisionStrip
+            decision={agentDecision}
+            application={application}
+            recommendation={reportModel?.recommendation}
+            busy={decisionBusy}
+            onApprove={handleDecisionApprove}
+            onAlternative={handleDecisionAlternative}
+            onReEvaluate={handleDecisionReEvaluate}
+            onSnooze={handleDecisionSnooze}
+            onTeach={(d) => setTeachFor(d)}
+            onNavigate={onNavigate}
+          />
+        </div>
+      ) : null}
       <div className="page">
         {isInterviewView ? (
           <div className="iv-banner">
@@ -1533,6 +1757,9 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             All scores render as integer "nn / 100" per HANDOFF v2 §6. */}
         {(() => {
           const fluencyAxes = computeFluencyAxes(completedAssessment);
+          // Anthropic AI-Fluency 4 Ds rollup (additive; null until a task's
+          // rubric adopts the new lenses — see fluency4d.js / summarize_fluency_4d).
+          const fluency4d = readFluency4d(completedAssessment);
           const taaliScore = reportModel?.summaryModel?.taaliScore;
           const roleFitScoreVal = reportModel?.summaryModel?.roleFitScore;
           const assessmentScore = reportModel?.summaryModel?.assessmentScore;
@@ -1631,6 +1858,30 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   </p>
                 </div>
               )}
+
+              {/* (3b) AI Fluency — Anthropic's 4 Ds (+ Deliverable). Additive
+                  view derived from the rubric grades; renders only when the
+                  assessment carries the fluency_4d rollup. Axes with no signal
+                  yet (task hasn't adopted the lens) show "—". */}
+              {fluency4d ? (
+                <div className="mc-overview-dimensions">
+                  <div className="mc-kicker">AI FLUENCY · ANTHROPIC 4 Ds</div>
+                  <div className="mc-overview-dimensions-grid">
+                    {fluency4d.map((axis) => (
+                      <div key={axis.key} className="mc-overview-dim-row" title={axis.blurb}>
+                        <span className="mc-overview-dim-label">{axis.label}</span>
+                        <div className="mc-overview-dim-bar" aria-hidden="true">
+                          <i style={{ width: `${axis.hasSignal ? Math.max(0, Math.min(100, Math.round(axis.score))) : 0}%` }} />
+                        </div>
+                        <span className="mc-overview-dim-score">
+                          {axis.hasSignal ? Math.round(axis.score) : '—'}
+                          {axis.hasSignal ? <span className="mc-overview-dim-suffix">/100</span> : null}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
 
               {/* (4) Evidence row — four cards */}
               <div className="mc-overview-evidence">
@@ -1793,9 +2044,12 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               <AssessmentEvidencePanels candidate={candidateView} />
             </ErrorBoundary>
           ) : null}
-        </div>
 
-        <div className={`pane ${activeTab === 'evaluate' ? 'active' : ''}`} data-p="evaluate" data-internal-only>
+          {/* Assessment-evaluation evidence migrated from the retired Evaluate
+              tab (PR3): role-criteria ratings, the manual excellent/good/poor
+              rubric, strengths / improvements, and the chat-log evidence. The
+              DECISION recorder is intentionally dropped (`hideDecision`) — the
+              candidate's decision lives on the header strip now. */}
           {candidateView ? (
             <ErrorBoundary
               fallback={
@@ -1805,19 +2059,21 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 </div>
               }
             >
-              <EvaluatePanel
-                candidate={candidateView}
-                evaluationRubric={evaluationRubric}
-                assessmentId={assessmentId}
-                assessmentsApi={assessmentsApi}
-                roleFitCriteria={reportModel?.roleFitModel?.requirementsAssessment || []}
-                recommendation={reportModel?.recommendation}
-                recruiterSummary={reportModel?.recruiterSummaryText || ''}
-              />
+              <section className="report-assessment-rubric mt-4" data-internal-only>
+                <div className="mc-kicker">ASSESSMENT EVALUATION</div>
+                <EvaluatePanel
+                  candidate={candidateView}
+                  evaluationRubric={evaluationRubric}
+                  assessmentId={assessmentId}
+                  assessmentsApi={assessmentsApi}
+                  roleFitCriteria={reportModel?.roleFitModel?.requirementsAssessment || []}
+                  recommendation={reportModel?.recommendation}
+                  recruiterSummary={reportModel?.recruiterSummaryText || ''}
+                  hideDecision
+                />
+              </section>
             </ErrorBoundary>
-          ) : (
-            <div className="mc-notes-empty">Evaluation opens once a completed assessment is linked.</div>
-          )}
+          ) : null}
         </div>
 
         <div className={`pane ${activeTab === 'cv' ? 'active' : ''}`} data-p="cv">
@@ -1913,32 +2169,22 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               ))}
             </div>
           </div>
-
-          {/* Screening transcript capture (Fireflies link / manual paste),
-              migrated from the legacy /assessments page. Recruiter-only —
-              not mounted on unauth share routes (it calls authed APIs). */}
-          {!isShareRoute ? (
-            <div className="mc-prep-stage" data-internal-only>
-              <div className="mc-kicker">SCREENING TRANSCRIPT</div>
-              <InterviewTranscriptCapture
-                application={application}
-                firefliesConnected={Boolean(orgData?.fireflies_config?.connected)}
-                rolesApi={rolesApi}
-                onRefresh={loadStandingReport}
-              />
-            </div>
-          ) : null}
+          {/* Interview transcript capture moved to the "Notes & context" tab
+              (PR3) — it's add-info, not prep reference material. */}
         </div>
 
         <div className={`pane ${activeTab === 'notes' ? 'active' : ''}`} data-p="notes" data-internal-only={isClientView ? '' : undefined}>
-          {/* HANDOFF v2 §5.1 / canvas cand-notes — Notes & timeline is:
-              (1) HIRING TEAM NOTES column — note cards (who · role · time + body)
-                  with a dashed-border textarea + "Add note" CTA at the bottom
+          {/* HANDOFF v2 §5.1 / canvas cand-notes — "Notes & context" is the
+              unified add-info surface (PR3):
+              (1) HIRING TEAM NOTES column — note cards (who · role · time + body),
+                  the freeform note box + agent-visible toggle, the ranking and
+                  link quick-adds, and the interview-transcript capture.
               (2) AUDIT TIMELINE column — vertical line + colored dots,
                   each event has TIME · title · description.
-              We synthesize "hiring team notes" from `recruiter_note` events
-              on the application timeline; saving a new note pushes a
-              recruiter_note event via assessmentsApi.addNote and bumps
+              We synthesize "hiring team notes" from `recruiter_note` events on
+              the application timeline; freeform notes + the ranking/link
+              quick-adds all save via rolesApi.addApplicationNote (a
+              `recruiter_note` event, optionally carrying a `kind`) and bump
               eventsRefetchTick so the timeline reloads. */}
           {(() => {
             // Recruiter notes are persisted by POST /assessments/{id}/notes,
@@ -1978,13 +2224,28 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   || type === 'note_added'
                   || (event?.metadata && typeof event.metadata.note === 'string' && event.metadata.note.trim());
               })
-              .map((event) => ({
-                key: `evt-note-${event.id || event.created_at}`,
-                who: event?.actor_name || event?.metadata?.actor_name || 'Recruiter',
-                role: event?.actor_role || event?.metadata?.actor_role || 'Hiring team',
-                time: event?.created_at,
-                body: event?.metadata?.note || event?.reason || event?.description || '',
-              }))
+              .map((event) => {
+                const meta = event?.metadata || {};
+                const kind = String(meta.kind || 'note').toLowerCase();
+                const linkUrlMeta = String(meta.link_url || '').trim();
+                const linkLabelMeta = String(meta.link_label || '').trim();
+                // A link note may have an empty comment — fall back to the
+                // label, then the URL, so the card always shows something.
+                const body = kind === 'link'
+                  ? (String(meta.note || '').trim() || linkLabelMeta || linkUrlMeta)
+                  : (meta.note || event?.reason || event?.description || '');
+                return {
+                  key: `evt-note-${event.id || event.created_at}`,
+                  who: event?.actor_name || meta.actor_name || 'Recruiter',
+                  role: event?.actor_role || meta.actor_role || 'Hiring team',
+                  time: event?.created_at,
+                  body,
+                  kind,
+                  ranking: meta.ranking != null ? Number(meta.ranking) : null,
+                  linkUrl: linkUrlMeta,
+                  linkLabel: linkLabelMeta,
+                };
+              })
               .filter((note) => note.body && note.body.trim());
             // Newest first across both sources.
             const recruiterNotes = [...timelineNotes, ...eventNotes].sort((a, b) => {
@@ -2039,47 +2300,186 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     <div className="mc-notes-empty">
                       {isInterviewView
                         ? 'No hiring team notes yet.'
-                        : "No hiring team notes yet. Drop a private note to the team below — it'll land in the audit timeline on the right."}
+                        : 'No notes yet. Drop a note below — tell the hiring agent what it should know (e.g. “already interviewed, not suitable”). It lands in the audit timeline too.'}
                     </div>
                   ) : (
-                    recruiterNotes.map((note) => (
-                      <div key={note.key} className="mc-notes-card">
-                        <div className="mc-notes-card-head">
-                          <span className="mc-notes-card-who">
-                            {note.who}
-                            <span className="mc-notes-card-role"> · {note.role}</span>
-                          </span>
-                          <span className="mc-notes-card-time">{fmtRelative(note.time)}</span>
+                    recruiterNotes.map((note) => {
+                      const isRanking = note.kind === 'ranking' && Number.isFinite(note.ranking);
+                      const isLink = note.kind === 'link' && note.linkUrl;
+                      return (
+                        <div key={note.key} className="mc-notes-card" data-kind={note.kind || 'note'}>
+                          <div className="mc-notes-card-head">
+                            <span className="mc-notes-card-who">
+                              {note.who}
+                              <span className="mc-notes-card-role"> · {note.role}</span>
+                            </span>
+                            <span className="mc-notes-card-time">{fmtRelative(note.time)}</span>
+                          </div>
+                          <div className="mc-notes-card-body">
+                            {isRanking ? (
+                              <span
+                                className="mc-notes-rank"
+                                style={{ color: 'var(--purple)', fontWeight: 600, marginRight: 6 }}
+                                title={`Ranked ${note.ranking} out of 5`}
+                              >
+                                ★ {note.ranking}/5
+                              </span>
+                            ) : null}
+                            {isLink ? (
+                              <a
+                                href={note.linkUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mc-notes-link"
+                                style={{ color: 'var(--purple)', textDecoration: 'underline' }}
+                              >
+                                {note.linkLabel || note.body || note.linkUrl}
+                              </a>
+                            ) : (
+                              // For ranking, the body is the optional comment;
+                              // don't repeat it if it was only the auto label.
+                              (isRanking && note.body === `Ranking ${note.ranking}/5`)
+                                ? null
+                                : note.body
+                            )}
+                          </div>
                         </div>
-                        <div className="mc-notes-card-body">{note.body}</div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                   {/* Adding notes hits an auth-only endpoint, so the input is
-                      recruiter-app only — share recipients see notes read-only. */}
-                  {isInterviewView ? null : (
+                      recruiter-app only — share recipients see notes read-only.
+                      Notes save against the application, so they work with or
+                      without a linked assessment. */}
+                  {isInterviewView ? null : (() => {
+                    const canAddNote = Boolean(application?.id || assessmentId);
+                    return (
                     <div className="mc-notes-input">
                       <textarea
                         value={noteDraft}
                         onChange={(event) => setNoteDraft(event.target.value)}
-                        placeholder={assessmentId
-                          ? 'Add a note for the hiring team…'
-                          : 'Notes are saved against the linked assessment — link one to enable.'}
-                        disabled={!assessmentId || savingNote}
+                        placeholder={canAddNote
+                          ? 'Add a note on this candidate — e.g. “already interviewed, not suitable” or “lacks the technical depth”…'
+                          : 'Notes open once this candidate has an application record.'}
+                        disabled={!canAddNote || savingNote}
                         rows={3}
                       />
+                      <label className="mc-notes-agent-toggle">
+                        <input
+                          type="checkbox"
+                          checked={noteForAgent}
+                          onChange={(event) => setNoteForAgent(event.target.checked)}
+                          disabled={!canAddNote || savingNote}
+                        />
+                        <span>Visible to the hiring agent — it’ll weigh this as standing guidance on this candidate.</span>
+                      </label>
                       <div className="mc-notes-input-actions">
                         <button
                           type="button"
                           className="btn btn-purple btn-sm"
                           onClick={handleSaveNote}
-                          disabled={!assessmentId || savingNote || !noteDraft.trim()}
+                          disabled={!canAddNote || savingNote || !noteDraft.trim()}
                         >
                           {savingNote ? 'Adding…' : 'Add note'}
                         </button>
                       </div>
                     </div>
-                  )}
+                    );
+                  })()}
+
+                  {/* Add-info quick-adds (PR3): a 1–5 ranking and an external
+                      link, both stored via the note endpoint with a `kind` and
+                      visible to the agent alongside freeform notes. These need
+                      a real application id (the structured-kind endpoint is
+                      application-scoped), so they're hidden on share routes and
+                      when no application record exists. */}
+                  {!isInterviewView && application?.id ? (
+                    <div className="mc-notes-addinfo" style={{ marginTop: 14, display: 'grid', gap: 12 }}>
+                      <div className="mc-notes-input">
+                        <div className="mc-kicker" style={{ marginBottom: 6 }}>QUICK RANKING</div>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <select
+                            value={rankingValue}
+                            onChange={(event) => setRankingValue(event.target.value)}
+                            disabled={savingRanking}
+                            aria-label="Ranking out of 5"
+                            style={{ maxWidth: 120 }}
+                          >
+                            <option value="">★ Rank…</option>
+                            <option value="1">★ 1/5</option>
+                            <option value="2">★ 2/5</option>
+                            <option value="3">★ 3/5</option>
+                            <option value="4">★ 4/5</option>
+                            <option value="5">★ 5/5</option>
+                          </select>
+                          <input
+                            type="text"
+                            value={rankingComment}
+                            onChange={(event) => setRankingComment(event.target.value)}
+                            placeholder="Optional comment (why this ranking)…"
+                            disabled={savingRanking}
+                            style={{ flex: 1, minWidth: 180 }}
+                          />
+                        </div>
+                        <div className="mc-notes-input-actions">
+                          <button
+                            type="button"
+                            className="btn btn-outline btn-sm"
+                            onClick={handleSaveRanking}
+                            disabled={savingRanking || !rankingValue}
+                          >
+                            {savingRanking ? 'Adding…' : 'Add ranking'}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="mc-notes-input">
+                        <div className="mc-kicker" style={{ marginBottom: 6 }}>ADD A LINK</div>
+                        <div style={{ display: 'grid', gap: 8 }}>
+                          <input
+                            type="url"
+                            value={linkUrl}
+                            onChange={(event) => setLinkUrl(event.target.value)}
+                            placeholder="https://… (portfolio, GitHub, reference)"
+                            disabled={savingLink}
+                          />
+                          <input
+                            type="text"
+                            value={linkLabel}
+                            onChange={(event) => setLinkLabel(event.target.value)}
+                            placeholder="Optional label (e.g. “Portfolio”)"
+                            disabled={savingLink}
+                          />
+                        </div>
+                        <div className="mc-notes-input-actions">
+                          <button
+                            type="button"
+                            className="btn btn-outline btn-sm"
+                            onClick={handleSaveLink}
+                            disabled={savingLink || !linkUrl.trim()}
+                          >
+                            {savingLink ? 'Adding…' : 'Add link'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* Interview transcript capture (Fireflies link / manual
+                      paste), moved here from the Prep tab (PR3) — it's add-info,
+                      not prep reference. Recruiter-only: it calls authed APIs, so
+                      it's not mounted on unauth share routes. */}
+                  {!isShareRoute ? (
+                    <div className="mc-notes-input" data-internal-only style={{ marginTop: 14 }}>
+                      <div className="mc-kicker" style={{ marginBottom: 6 }}>INTERVIEW TRANSCRIPT</div>
+                      <InterviewTranscriptCapture
+                        application={application}
+                        firefliesConnected={Boolean(orgData?.fireflies_config?.connected)}
+                        rolesApi={rolesApi}
+                        onRefresh={loadStandingReport}
+                      />
+                    </div>
+                  ) : null}
 
                   {workableComments.length > 0 ? (
                     <>
@@ -2191,6 +2591,42 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           })()}
         </div>
       </div>
+
+      {/* Decision modals — mirror HomeNow's wiring. Rendered at the page root
+          so the strip's Override / Teach actions open the SAME flows as the
+          home hub. On submit, refetch the candidate's decision + reload the
+          report so the strip reflects the new state. */}
+      {teachFor ? (
+        <TeachModal
+          decision={teachFor}
+          defaultScope="decision"
+          onClose={() => setTeachFor(null)}
+          onSubmitted={async () => {
+            showToast('Feedback recorded. Decision returned to the queue.', 'success');
+            await Promise.all([loadAgentDecision(), loadStandingReport()]);
+          }}
+        />
+      ) : null}
+
+      {alternativeFor ? (
+        <OverrideModal
+          decision={alternativeFor.decision}
+          alternative={alternativeFor.alternative}
+          // The candidate report doesn't carry the per-shortcode Workable-stage
+          // map the home hub lazy-loads; pass the application's own stage list
+          // when present, else [] (OverrideModal advances on the internal stage
+          // when there are no Workable stages to pick).
+          workableStages={application?.workable_stages || []}
+          onClose={() => setAlternativeFor(null)}
+          onSubmitted={async () => {
+            showToast(
+              `${alternativeFor.alternative.confirmLabel || 'Decision'} dispatched.`,
+              'success',
+            );
+            await Promise.all([loadAgentDecision(), loadStandingReport()]);
+          }}
+        />
+      ) : null}
     </div>
   );
 };

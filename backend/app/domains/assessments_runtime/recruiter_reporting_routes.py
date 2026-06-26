@@ -20,6 +20,7 @@ from ...services.candidate_feedback_engine import (
     build_interview_debrief_payload,
 )
 from ...services.evaluation_result_service import (
+    author_from_user,
     build_evaluation_result,
     normalize_stored_evaluation_result,
 )
@@ -143,12 +144,12 @@ def update_manual_evaluation(
             completed_due_to_timeout=bool(getattr(assessment, "completed_due_to_timeout", False)),
             evaluation_rubric=rubric,
             body=body,
+            author=author_from_user(current_user),
+            prior=stored_eval,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    if isinstance(evaluation_result, dict):
-        evaluation_result["version"] = stored_version + 1
     assessment.manual_evaluation = evaluation_result
     try:
         db.commit()
@@ -165,7 +166,7 @@ def update_manual_evaluation(
         "success": True,
         "manual_evaluation": normalized,
         "evaluation_result": normalized,
-        "version": stored_version + 1,
+        "version": normalized.get("version", stored_version + 1),
     }
 
 

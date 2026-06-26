@@ -99,12 +99,56 @@ const resolveOptionalPercent = (value) => {
   return Math.max(0, Math.min(100, Math.round(numeric)));
 };
 
-const resolvePipelineCardFooterStatus = (application) => {
+// Raw pipeline_stage → a clean, consistently-cased label. PIPELINE_STAGE_ORDER is
+// keyed by FUNNEL buckets (scored/completed), so it can't label the raw stages
+// in_assessment/review — this does, and never leaves a value lower-cased.
+const PIPELINE_STAGE_LABELS = {
+  applied: 'Applied',
+  invited: 'Invited',
+  in_assessment: 'In assessment',
+  review: 'Review',
+  advanced: 'Advanced',
+};
+const formatStageLabel = (stage) => (
+  PIPELINE_STAGE_LABELS[stage]
+  || (stage ? stage.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()) : '—')
+);
+
+// Humanize a REAL agent decision's recommendation enum. Only ever called with an
+// actual AgentDecision.recommendation — the UI must NEVER fabricate one from a
+// score band (that reads as a real, actionable decision when it isn't).
+const DECISION_LABELS = {
+  advance_to_interview: 'Advance to interview',
+  send_assessment: 'Send assessment',
+  resend_assessment_invite: 'Resend invite',
+  reject: 'Reject',
+  skip_assessment_reject: 'Reject',
+  escalate_low_confidence: 'Needs your review',
+};
+const formatDecisionLabel = (recommendation) => {
+  const key = String(recommendation || '').toLowerCase();
+  if (!key) return null;
+  return DECISION_LABELS[key] || key.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+};
+
+// The "what's actually needed" lens — complementary to the funnel stage, and
+// HONEST about whether a decision is genuinely pending. 'Decision ready' shows
+// ONLY when a real agent decision is queued; a completed assessment with none
+// reads as 'Completed — your decision' (a human call); a candidate the recruiter
+// is interviewing in Workable reads as 'With recruiter'.
+const resolvePipelineCardFooterStatus = (application, pendingDecision = null) => {
   const stage = String(application?.pipeline_stage || '').toLowerCase();
+  const outcome = String(application?.application_outcome || '').toLowerCase();
+  if (outcome === 'rejected') return 'Rejected';
+  if (outcome === 'hired') return 'Hired';
   if (stage === 'applied') return 'Not invited';
   if (stage === 'invited') return 'Awaiting start';
   if (stage === 'in_assessment') return 'Assessment live';
-  if (stage === 'review') return 'Decision';
+  if (stage === 'advanced') return 'With recruiter';
+  if (stage === 'review') {
+    if (pendingDecision) return 'Decision ready';
+    return resolveAssessmentId(application) ? 'Completed — your decision' : 'With recruiter';
+  }
   return resolveAssessmentId(application) ? 'Assessment linked' : 'No task yet';
 };
 
@@ -1270,19 +1314,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         ? Math.round(Number(compositeRaw))
                         : null;
                       const isLive = String(application?.pipeline_stage || '').toLowerCase() === 'in_assessment';
-                      const isReview = stage.key === 'review';
+                      // 'review'-stage candidates bucket into the 'completed' column.
+                      const isReview = stage.key === 'completed';
                       // Approve/Override act ONLY on the freshly-polled map, not
                       // the per-row snapshot (which can go stale and expose
                       // actions against an already-resolved decision).
                       const pendingDecision = pendingAgentDecisions[application?.id] || null;
                       const decisionResolving = pendingDecision?.id != null
                         && resolvingDecisionId === pendingDecision.id;
-                      const decisionVerb = pendingDecision?.recommendation
-                        || (compositeScore != null && compositeScore >= 75
-                          ? 'Advance to interview'
-                          : compositeScore != null && compositeScore < 50
-                            ? 'Reject'
-                            : 'Awaiting decision');
                       return (
                         <a
                           key={application.id}
@@ -1318,45 +1357,43 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                             provenance={application?.score_summary?.score_provenance}
                             density="pill"
                           />
-                          {isReview ? (
+                          {pendingDecision ? (
                             <div className="cc-agent">
                               <div className="cc-agent-glyph" aria-hidden="true">
                                 <Sparkles size={11} strokeWidth={2} />
                               </div>
                               <div className="cc-agent-body">
-                                <div className="cc-agent-action">{decisionVerb}</div>
+                                <div className="cc-agent-action">{formatDecisionLabel(pendingDecision.recommendation)}</div>
                                 <div className="cc-agent-why">
-                                  {pendingDecision?.reasoning
-                                    || resolvePipelineCardFooterStatus(application)}
+                                  {pendingDecision.reasoning
+                                    || resolvePipelineCardFooterStatus(application, pendingDecision)}
                                 </div>
-                                {pendingDecision ? (
-                                  <div className="cc-agent-actions">
-                                    <button
-                                      type="button"
-                                      className="btn btn-purple btn-xs"
-                                      onClick={(event) => {
-                                        event.preventDefault();
-                                        event.stopPropagation();
-                                        void handleApproveDecision(pendingDecision.id);
-                                      }}
-                                      disabled={decisionResolving}
-                                    >
-                                      {decisionResolving ? '…' : 'Approve'}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="btn btn-outline btn-xs"
-                                      onClick={(event) => {
-                                        event.preventDefault();
-                                        event.stopPropagation();
-                                        void handleOverrideDecision(pendingDecision.id);
-                                      }}
-                                      disabled={decisionResolving}
-                                    >
-                                      Override
-                                    </button>
-                                  </div>
-                                ) : null}
+                                <div className="cc-agent-actions">
+                                  <button
+                                    type="button"
+                                    className="btn btn-purple btn-xs"
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      void handleApproveDecision(pendingDecision.id);
+                                    }}
+                                    disabled={decisionResolving}
+                                  >
+                                    {decisionResolving ? '…' : 'Approve'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-outline btn-xs"
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      void handleOverrideDecision(pendingDecision.id);
+                                    }}
+                                    disabled={decisionResolving}
+                                  >
+                                    Override
+                                  </button>
+                                </div>
                               </div>
                             </div>
                           ) : null}
@@ -1671,7 +1708,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         </th>
                         <th>Stage</th>
                         <th>Workable</th>
-                        <th>Status</th>
                         <th>Agent</th>
                         <th aria-sort={tableSortField === 'last_updated' ? (tableSortBy === 'asc' ? 'ascending' : 'descending') : 'none'}>
                           <button type="button" className="ctable-sort" onClick={() => handleTableSort('last_updated')} aria-label="Sort by last updated" title="Sort by last updated">Last updated{tableSortField === 'last_updated' ? <span className="ctable-sort-arrow">{tableSortBy === 'asc' ? '↑' : '↓'}</span> : null}</button>
@@ -1689,17 +1725,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         // compositeRaw == null guard: Number(null) === 0 IS finite — without this, unscored renders as a literal "0" pill instead of "—".
                         const score = compositeRaw != null && Number.isFinite(Number(compositeRaw)) ? Math.round(Number(compositeRaw)) : null;
                         const scoreClass = score == null ? '' : score >= 80 ? 'hi' : score >= 60 ? 'mid' : 'lo';
-                        const stageLabel = (PIPELINE_STAGE_ORDER.find((s) => s.key === stage)?.label) || (stage ? stage.replace(/_/g, ' ') : '—');
-                        const statusText = resolvePipelineCardFooterStatus(application);
+                        const stageLabel = formatStageLabel(stage);
                         // Use only the freshly-polled map, not the per-row
                         // snapshot — the snapshot isn't refreshed by the poll,
                         // so it keeps showing a decision after it's resolved.
                         const pendingDecision = pendingAgentDecisions[application?.id] || null;
-                        const agentLabel = pendingDecision?.recommendation
-                          || (stage === 'review' && score != null && score >= 75 ? 'Advance recommended'
-                            : stage === 'review' && score != null && score < 50 ? 'Reject recommended'
-                            : null);
-                        const isAgentRow = Boolean(agentLabel) && stage === 'review';
+                        // Show ONLY a real, queued agent decision — never a
+                        // score-band guess dressed up as a recommendation.
+                        const agentLabel = pendingDecision ? formatDecisionLabel(pendingDecision.recommendation) : null;
+                        const isAgentRow = Boolean(pendingDecision);
                         const isTriageRow = (
                           triageApplication
                           && Number(triageApplication.id) === Number(application.id)
@@ -1734,7 +1768,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                                 <span className="stage-pill">{stageLabel}</span>
                               </td>
                               <td>{application?.workable_disqualified ? (<span className="stage-pill is-disqualified" title={application?.workable_stage ? `Disqualified in Workable (was: ${formatStatusLabel(application.workable_stage)})` : 'Disqualified in Workable'}>Disqualified</span>) : application?.workable_stage ? (<span className="stage-pill" title="Current stage in Workable">{formatStatusLabel(application.workable_stage)}</span>) : (<span className="ctable-em">—</span>)}</td>
-                              <td className="ctable-status">{statusText}</td>
                               <td>
                                 {agentLabel ? (
                                   <span className="ai-action">
@@ -1761,7 +1794,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                             </tr>
                             {isTriageRow ? (
                               <tr className="ctable-triage-row">
-                                <td colSpan={9} className="ctable-triage-cell">
+                                <td colSpan={8} className="ctable-triage-cell">
                                   <CandidateTriageDrawer {...triageDrawerProps} />
                                 </td>
                               </tr>

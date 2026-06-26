@@ -128,7 +128,7 @@ const POST_HANDOVER_WORKABLE_STAGES = new Set([
   'assessment', 'offer', 'offer_extended', 'offer_accepted', 'hired',
 ]);
 
-const isPostHandoverWorkableStage = (value) =>
+export const isPostHandoverWorkableStage = (value) =>
   POST_HANDOVER_WORKABLE_STAGES.has(
     String(value || '').trim().toLowerCase().replace(/-/g, '_').replace(/ /g, '_'),
   );

@@ -2,6 +2,8 @@ from .celery_app import celery_app
 from .assessment_tasks import (
     post_results_to_workable,
     cleanup_expired_assessments,
+    finalize_timed_out_assessments,
+    assessment_provisioning_healthcheck,
     sync_workable_jobs,
     sync_starred_roles,
     sync_agent_mode_roles,

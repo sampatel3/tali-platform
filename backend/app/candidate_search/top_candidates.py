@@ -603,8 +603,12 @@ def _candidate_payload(
     out = application_summary(app)
     out["rank"] = rank
     out["criteria"] = [v.to_dict() for v in verdicts]
+    # Empty verdicts (the grounding-unavailable degrade path) must NOT read as
+    # "all met" — all() of an empty list is True. None = "not assessed".
     out["meets_all_criteria"] = (
-        all(v.status == "met" and v.grounded for v in verdicts) if has_criteria else None
+        all(v.status == "met" and v.grounded for v in verdicts)
+        if (has_criteria and verdicts)
+        else None
     )
     # Prefer the scoring pipeline's candidate report summary (a fit verdict +
     # detail); fall back to a synthesised blurb when a candidate wasn't scored.
@@ -852,4 +856,239 @@ def find_top_candidates(
             ],
         },
         "evidence_model": _ge.GROUNDING_MODEL,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Rediscovery: screen the WHOLE already-scored pool against a NEW requirement.
+#
+# ``find_top_candidates`` shortlists the CURRENT pipeline, ranked by each
+# candidate's existing score. Rediscovery is the inverse: a new requirement
+# arrives for *similar* profiles and the recruiter wants who — across everyone
+# ever scored, INCLUDING people scored for OTHER roles whose old score says
+# nothing about THIS requirement — fits it. Same grounded machinery, retargeted
+# at the scored history (the caller scopes ``base_query``) with a wider grounding
+# window, ranked by fit to the NEW requirement (grounded met/partial — NOT the
+# stale score). A bounded window is deep-checked via the cached Citations pass;
+# we report how many were screened vs the pool (``capped``) and hand back
+# ``rescore_candidate_ids`` for the opt-in Sonnet re-score that produces a true
+# comparable score against the requirement.
+# ---------------------------------------------------------------------------
+
+# How many of the scored history get the grounded (Haiku, cache-backed) deep
+# check in one pass. Wider than the top-N window — rediscovery wants breadth —
+# but bounded for cost + the GROUND_BATCH_DEADLINE_S wall-clock. The structural
+# recall biases WHICH candidates land in the window, so a strong fit for the new
+# requirement is checked even when their old-role score was low.
+SCREEN_GROUND_WINDOW = 30
+DEFAULT_SCREEN_LIMIT = 20
+MAX_SCREEN_LIMIT = 50
+
+
+def screen_pool_against_requirement(
+    *,
+    db: Session,
+    organization_id: int,
+    requirement: str,
+    base_query,
+    limit: int = DEFAULT_SCREEN_LIMIT,
+    parser_client=None,
+    evidence_client=None,
+) -> dict[str, Any]:
+    """Screen the already-scored pool (``base_query``) against a NEW free-text
+    requirement.
+
+    Returns the same grounded ``candidate_evidence`` payload as
+    ``find_top_candidates`` — ranked by fit to THIS requirement, tagged
+    ``mode="rediscovery"`` — plus ``screened`` / ``capped`` (how many of the
+    pool were deep-checked) and ``rescore_candidate_ids`` (the shortlist to
+    re-score against the requirement for a true comparable score).
+
+    ``base_query`` MUST already be org-scoped + ``deleted_at IS NULL`` and
+    SHOULD be restricted to scored candidates (``cv_match_details IS NOT NULL``).
+    Never raises — degrades to a ranked list with warnings.
+    """
+    from .runner import run_search  # local import keeps graph deps lazy
+
+    limit = max(1, min(int(limit), MAX_SCREEN_LIMIT))
+    score_col = SCORE_FIELDS["taali"]
+    score_attr = getattr(CandidateApplication, score_col)
+
+    # 1. Parse → population + qualitative criteria. Structural guesses only BIAS
+    #    which candidates get grounded first; they never exclude.
+    result = run_search(
+        db=db,
+        organization_id=organization_id,
+        nl_query=requirement,
+        base_query=base_query,
+        rerank_enabled=False,
+        include_subgraph=False,
+        parser_client=parser_client,
+        defer_qualitative=True,
+    )
+    parsed = result.parsed_filter
+    criteria = _collect_criteria(parsed)
+    matcher_ids = set(result.application_ids or []) if _has_structural(parsed) else None
+    pool_count = _pool_count(base_query)
+
+    base_payload = {
+        "spec": _build_spec(parsed, query=requirement, rank_by="taali", criteria=criteria),
+        "mode": "rediscovery",
+        "total_matched": pool_count,
+        "structural_matches": len(matcher_ids) if matcher_ids is not None else None,
+        "warnings": [w.model_dump(mode="json") for w in result.warnings],
+        "rank_by": "taali",
+    }
+
+    def _rank_key(a):
+        return (
+            bool(matcher_ids) and a.id in matcher_ids,
+            getattr(a, score_col) is not None,
+            getattr(a, score_col) or float("-inf"),
+        )
+
+    def _degrade(apps, *, warning):
+        """Rank by existing fit (no grounding) and return — used when the
+        requirement has no qualitative criteria or grounding is unavailable."""
+        apps.sort(key=_rank_key, reverse=True)
+        shown = [
+            _candidate_payload(a, rank=i, verdicts=[], has_criteria=bool(criteria))
+            for i, a in enumerate(apps[:limit], start=1)
+        ]
+        return {
+            **base_payload,
+            "screened": 0,
+            "capped": pool_count > len(shown),
+            "screen_cap": SCREEN_GROUND_WINDOW,
+            "evaluated": 0,
+            "shown": len(shown),
+            "candidates": shown,
+            "excluded": {"not_met_total": 0, "by_criterion": []},
+            "evidence_model": None,
+            "rescore_candidate_ids": [int(c["application_id"]) for c in shown],
+            "warnings": base_payload["warnings"] + [warning],
+        }
+
+    # No qualitative criteria → nothing to ground; rank the recall by fit.
+    if not criteria:
+        # Structural-only ask (e.g. a bare skill like "Python"): the requirement
+        # IS the structural filter, so HARD-restrict to the matches. matcher_ids
+        # is only an ordering bias inside _load_candidates, so without this a
+        # short match list gets padded with high-scoring candidates that don't
+        # match the requirement at all — surfacing unrelated people as finds.
+        pool = base_query if matcher_ids is None else base_query.filter(
+            CandidateApplication.id.in_(matcher_ids)
+        )
+        apps = _load_candidates(
+            pool, matcher_ids=matcher_ids, score_attr=score_attr, size=limit
+        )
+        return _degrade(
+            apps,
+            warning={
+                "code": "no_criteria",
+                "message": "No qualitative criteria parsed from the requirement; "
+                "ranked by existing fit.",
+            },
+        )
+
+    # 2. Grounding client.
+    client = evidence_client
+    if client is None:
+        try:
+            from ..services.claude_client_resolver import get_metered_client
+
+            client = get_metered_client(organization_id=organization_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("rediscovery grounding client init failed: %s", exc)
+
+    if client is None:
+        apps = _load_candidates(
+            base_query, matcher_ids=matcher_ids, score_attr=score_attr, size=limit
+        )
+        return _degrade(
+            apps,
+            warning={
+                "code": "rerank_skipped",
+                "message": "Grounding unavailable; ranked by existing fit, not "
+                "screened against the requirement.",
+            },
+        )
+
+    # 3. Ground a bounded WINDOW of the scored history against the new requirement
+    #    via the cached Citations pass. WHICH candidates fall in the window:
+    #    structural matches first when the requirement carries a hard filter;
+    #    otherwise (a purely-qualitative ask) seed by RECENCY, NOT the stale role
+    #    score — score-seeding biases rediscovery toward already-high-scorers and
+    #    buries exactly the under-scored fits the feature exists to surface.
+    window_size = min(pool_count, SCREEN_GROUND_WINDOW)
+    seed_attr = score_attr if matcher_ids else CandidateApplication.created_at
+    apps = _load_candidates(
+        base_query,
+        matcher_ids=matcher_ids,
+        score_attr=seed_attr,
+        size=max(window_size, limit),
+    )
+    if matcher_ids:
+        apps.sort(key=_rank_key, reverse=True)
+    else:
+        # Recency order; compare datetimes only (uniform tz from the column),
+        # undated rows last — a score-neutral window seed.
+        dated = sorted(
+            (a for a in apps if a.created_at is not None),
+            key=lambda a: a.created_at,
+            reverse=True,
+        )
+        apps = dated + [a for a in apps if a.created_at is None]
+    grounded = _ground_window(
+        apps[:window_size], criteria=criteria, client=client, organization_id=organization_id
+    )
+
+    # 4. Hide hard-constraint failures (salary over cap, …); rank the rest by fit
+    #    to the NEW requirement (grounded met → partial → structural → score).
+    survivors: list[tuple[CandidateApplication, list[CriterionVerdict]]] = []
+    excluded_not_met = 0
+    by_criterion: dict[str, int] = {}
+    for app, verdicts in grounded:
+        failed = [
+            v for v in verdicts if v.status == "not_met" and _is_constraint(v.criterion)
+        ]
+        if failed:
+            excluded_not_met += 1
+            for v in failed:
+                by_criterion[v.criterion] = by_criterion.get(v.criterion, 0) + 1
+            continue
+        survivors.append((app, verdicts))
+
+    def _signal_key(item):
+        app, verdicts = item
+        met = sum(1 for v in verdicts if v.status == "met" and v.grounded)
+        partial = sum(1 for v in verdicts if v.status == "partially_met" and v.grounded)
+        matched = bool(matcher_ids) and app.id in matcher_ids
+        fit = getattr(app, score_col)
+        return (met, partial, matched, fit if fit is not None else float("-inf"))
+
+    survivors.sort(key=_signal_key, reverse=True)
+    shown = [
+        _candidate_payload(app, rank=i, verdicts=verdicts, has_criteria=True)
+        for i, (app, verdicts) in enumerate(survivors[:limit], start=1)
+    ]
+
+    # 5. Assemble. ``rescore_candidate_ids`` = the shortlist worth a true Sonnet
+    #    score against the requirement (the opt-in, bounded re-score step).
+    return {
+        **base_payload,
+        "screened": len(grounded),
+        "capped": pool_count > len(grounded),
+        "screen_cap": SCREEN_GROUND_WINDOW,
+        "evaluated": len(grounded),
+        "shown": len(shown),
+        "candidates": shown,
+        "excluded": {
+            "not_met_total": excluded_not_met,
+            "by_criterion": [
+                {"criterion": c, "count": n} for c, n in by_criterion.items()
+            ],
+        },
+        "evidence_model": _ge.GROUNDING_MODEL,
+        "rescore_candidate_ids": [int(c["application_id"]) for c in shown],
     }

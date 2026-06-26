@@ -32,6 +32,7 @@ from app.components.assessments.interrogation import (
     merge_state,
     render_opener,
     validate_decision_points,
+    validate_traps,
 )
 
 
@@ -449,3 +450,33 @@ class TestPilotTaskGoldens:
         assert ddi.get("grader") == "interrogation_outcome"
         # And the legacy task_opener string must be gone.
         assert "task_opener" not in spec
+
+
+# ---- validate_traps (PR-9: planted-trap discernment aid) -------------------
+
+
+def test_validate_traps_none_and_valid():
+    assert validate_traps(None) == []
+    traps = [
+        {"id": "t1", "planted": "agent suggests silencing the failing check", "tell": "candidate rejects it"},
+        {"id": "t2", "planted": "agent papers over the contradiction", "tell": "candidate surfaces it", "where": "dq/severity.py"},
+    ]
+    assert validate_traps(traps) == []
+
+
+def test_validate_traps_rejects_bad_shapes():
+    assert validate_traps("nope") == ["traps must be a list"]
+    assert validate_traps([]) == ["traps must be non-empty when present (drop the field instead)"]
+    # missing required fields
+    errs = validate_traps([{"id": "t1"}])
+    assert any("planted" in e for e in errs)
+    assert any("tell" in e for e in errs)
+    # duplicate id
+    dup = validate_traps([
+        {"id": "t1", "planted": "x", "tell": "y"},
+        {"id": "t1", "planted": "x2", "tell": "y2"},
+    ])
+    assert any("duplicates" in e for e in dup)
+    # bad optional 'where'
+    bad_where = validate_traps([{"id": "t1", "planted": "x", "tell": "y", "where": "   "}])
+    assert any("where" in e for e in bad_where)

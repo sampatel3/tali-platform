@@ -7,7 +7,10 @@ const appShellPath = path.join(srcRoot, 'App.jsx');
 const featureRoot = path.join(srcRoot, 'features');
 
 const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx']);
-const PAGE_FILE_PATTERN = /Page\.(js|jsx|ts|tsx)$/;
+// Matches `*Page.jsx` AND `*PageContent.jsx` — the latter so a page can't
+// dodge the cap by renaming its body to `…PageContent.jsx` behind a one-line
+// `…Page.jsx` re-export (which is exactly how CandidatesDirectory grew).
+const PAGE_FILE_PATTERN = /Page(Content)?\.(js|jsx|ts|tsx)$/;
 // Hard cap on `*Page.jsx` line counts. The v3 Mission Control redesign
 // pushed several pages well past the original 500-line gate because the
 // canvas hero / dimension grids / evidence cards live inline. The cap

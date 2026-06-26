@@ -201,6 +201,30 @@ describe('JobPipelinePage', () => {
     });
   });
 
+  it('never invents an agent recommendation from the score when no decision is queued', async () => {
+    // Regression: a review-stage candidate scoring < 50 with NO queued agent
+    // decision must not show a "Reject recommended" badge. That score-band guess
+    // reads as a real, actionable decision when there is nothing behind it.
+    apiClient.roles.listApplications.mockResolvedValue({ data: [{
+      id: 9, candidate_id: 99,
+      candidate_name: 'Lowscore Lee', candidate_email: 'lee@example.com',
+      pipeline_stage: 'review', application_outcome: 'open',
+      taali_score: 31, status: 'completed',
+      created_at: '2026-04-26T01:00:00Z', updated_at: '2026-04-26T01:00:00Z',
+      score_summary: { taali_score: 31, assessment_id: 91 },
+    }] });
+    renderPipeline();
+
+    const row = (await screen.findByText('Lowscore Lee')).closest('tr');
+    expect(row).toBeTruthy();
+    // No fabricated recommendation anywhere in the row.
+    expect(within(row).queryByText(/recommended/i)).not.toBeInTheDocument();
+    expect(within(row).queryByText(/^Reject$/)).not.toBeInTheDocument();
+    // And the stage label is cleanly cased, not the raw lowercase enum.
+    expect(within(row).getByText('Review')).toBeInTheDocument();
+    expect(within(row).queryByText('review')).not.toBeInTheDocument();
+  });
+
   it('opens the triage drawer when a kanban card is clicked', async () => {
     const onNavigate = vi.fn();
     renderPipeline({ onNavigate });

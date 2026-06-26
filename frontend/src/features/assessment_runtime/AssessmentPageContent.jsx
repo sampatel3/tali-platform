@@ -20,11 +20,6 @@ import {
 } from './assessmentRuntimeHelpers';
 
 const ASSESSMENT_THEME_STORAGE_KEY = 'taali_assessment_theme';
-const CLAUDE_PROMPT_SLOW_MS = 10000;
-// Realistic upper bound for Claude Code's first prompt in a fresh PTY session
-// (cold-start + tool discovery + multi-step repo exploration easily takes 60–90 s).
-// Was 45 s — caused legitimate late responses to be silently dropped.
-const CLAUDE_PROMPT_STALL_MS = 120000;
 
 const readAssessmentLightModePreference = () => {
   if (typeof window === 'undefined') return true;
@@ -197,37 +192,16 @@ export default function AssessmentPage({
   const [newRepoFilePath, setNewRepoFilePath] = useState('');
   const [demoRunCount, setDemoRunCount] = useState(0);
   const [demoSaveCount, setDemoSaveCount] = useState(0);
-  const [demoPromptMessages, setDemoPromptMessages] = useState([]);
-  const [terminalEvents, setTerminalEvents] = useState([]);
-  const [terminalConnected, setTerminalConnected] = useState(false);
-  const [terminalRestarting, setTerminalRestarting] = useState(false);
-  const [terminalPanelOpen, setTerminalPanelOpen] = useState(false);
   const [outputPanelOpen, setOutputPanelOpen] = useState(false);
-  const [terminalSessionNonce, setTerminalSessionNonce] = useState(0);
   const [assessmentLightMode, setAssessmentLightMode] = useState(readAssessmentLightModePreference);
-  const [claudePrompt, setClaudePrompt] = useState('');
-  const [claudePromptPasted, setClaudePromptPasted] = useState(false);
-  const [claudePromptSending, setClaudePromptSending] = useState(false);
-  const [claudePromptSlow, setClaudePromptSlow] = useState(false);
-  const [claudeConversation, setClaudeConversation] = useState([]);
   const [repoPanelCollapsed, setRepoPanelCollapsed] = useState(false);
   const [assistantPanelCollapsed, setAssistantPanelCollapsed] = useState(false);
   const [collapsedRepoDirs, setCollapsedRepoDirs] = useState({});
   const codeRef = useRef("");
   const contextWindowRef = useRef(null);
   const timerRef = useRef(null);
-  const terminalWsRef = useRef(null);
-  const terminalReconnectTimerRef = useRef(null);
-  const terminalEventSeqRef = useRef(0);
-  const terminalManualCloseRef = useRef(false);
-  const assessmentStartedAtRef = useRef(null);
-  const lastPromptSentAtRef = useRef(null);
   const milestoneFlagsRef = useRef({ halfway: false, warning80: false, warning90: false });
   const milestoneTimerRef = useRef(null);
-  const pendingClaudeRequestIdRef = useRef(null);
-  const ignoredClaudeRequestIdsRef = useRef(new Set());
-  const claudePromptSlowTimerRef = useRef(null);
-  const claudePromptStallTimerRef = useRef(null);
   // Always points at the latest handleSubmit so the timer interval doesn't
   // capture a stale closure when handleSubmit's deps change mid-assessment.
   const handleSubmitRef = useRef(null);
@@ -247,71 +221,13 @@ export default function AssessmentPage({
     }, 7000);
   }, []);
 
-  const clearClaudePromptTimers = useCallback(() => {
-    if (claudePromptSlowTimerRef.current) {
-      clearTimeout(claudePromptSlowTimerRef.current);
-      claudePromptSlowTimerRef.current = null;
-    }
-    if (claudePromptStallTimerRef.current) {
-      clearTimeout(claudePromptStallTimerRef.current);
-      claudePromptStallTimerRef.current = null;
-    }
-    setClaudePromptSlow(false);
-  }, []);
-
-  const startClaudePromptTimers = useCallback((requestId) => {
-    clearClaudePromptTimers();
-    claudePromptSlowTimerRef.current = setTimeout(() => {
-      if (pendingClaudeRequestIdRef.current === requestId) {
-        setClaudePromptSlow(true);
-      }
-    }, CLAUDE_PROMPT_SLOW_MS);
-    claudePromptStallTimerRef.current = setTimeout(() => {
-      // Critical: do NOT mark the requestId as ignored, do NOT clear
-      // ``pendingClaudeRequestIdRef``, do NOT flip ``claudePromptSending`` off.
-      // Doing any of those at this point causes the genuine response — when it
-      // finally arrives — to be silently dropped by the ``claude_chat_done``
-      // handler below. The fix is to surface a non-blocking note in the
-      // conversation and keep waiting; the candidate can click Restart
-      // terminal if they genuinely believe it's wedged.
-      if (pendingClaudeRequestIdRef.current !== requestId) {
-        return;
-      }
-      setClaudeConversation((prev) => {
-        const next = [
-          ...prev,
-          {
-            role: 'assistant',
-            content: 'Claude is still working on this — it can take a minute or two on the first prompt. The answer will appear here when it arrives. Click Restart terminal if it really seems stuck.',
-          },
-        ];
-        return next.slice(-30);
-      });
-    }, CLAUDE_PROMPT_STALL_MS);
-  }, [clearClaudePromptTimers]);
-
   useEffect(() => {
     setSubmitted(false);
     setDemoRunCount(0);
     setDemoSaveCount(0);
-    setDemoPromptMessages([]);
-    setTerminalEvents([]);
-    setTerminalConnected(false);
-    setTerminalRestarting(false);
-    setTerminalPanelOpen(false);
     setOutputPanelOpen(false);
-    setTerminalSessionNonce(0);
-    setClaudePrompt('');
-    setClaudePromptPasted(false);
-    setClaudePromptSending(false);
-    setClaudePromptSlow(false);
-    setClaudeConversation([]);
     setRepoPanelCollapsed(false);
     setAssistantPanelCollapsed(false);
-    pendingClaudeRequestIdRef.current = null;
-    ignoredClaudeRequestIdsRef.current.clear();
-    clearClaudePromptTimers();
-    lastPromptSentAtRef.current = null;
     milestoneFlagsRef.current = { halfway: false, warning80: false, warning90: false };
     setTimeMilestoneNotice(null);
     setSubmittedAtIso(null);
@@ -338,7 +254,6 @@ export default function AssessmentPage({
       setIsTimerPaused(Boolean(normalized.is_timer_paused));
       setPauseReason(normalized.pause_reason || null);
       setClaudeBudget(normalized.claude_budget || null);
-      assessmentStartedAtRef.current = Date.now() - Math.max(0, (((normalized.duration_minutes || 30) * 60) - (normalized.time_remaining || 0)) * 1000);
       setLoading(false);
       return;
     }
@@ -354,7 +269,6 @@ export default function AssessmentPage({
       setIsTimerPaused(false);
       setPauseReason(null);
       setClaudeBudget(taskData.claude_budget || null);
-      assessmentStartedAtRef.current = Date.now();
       setLoading(false);
       return;
     }
@@ -379,7 +293,6 @@ export default function AssessmentPage({
         setIsTimerPaused(Boolean(normalized.is_timer_paused));
         setPauseReason(normalized.pause_reason || null);
         setClaudeBudget(normalized.claude_budget || null);
-        assessmentStartedAtRef.current = Date.now() - Math.max(0, (((normalized.duration_minutes || 30) * 60) - (normalized.time_remaining || 0)) * 1000);
       } catch (err) {
         setOutput(`Error starting assessment: ${err.message}`);
       } finally {
@@ -387,16 +300,15 @@ export default function AssessmentPage({
       }
     };
     startAssessment();
-  }, [token, taskData, startData, clearClaudePromptTimers]);
+  }, [token, taskData, startData]);
 
   useEffect(() => {
     return () => {
       if (milestoneTimerRef.current) {
         clearTimeout(milestoneTimerRef.current);
       }
-      clearClaudePromptTimers();
     };
-  }, [clearClaudePromptTimers]);
+  }, []);
 
   useEffect(() => {
     if (loading || submitted || timeLeft <= 0 || isTimerPaused) return;
@@ -520,8 +432,6 @@ export default function AssessmentPage({
       .map((fileEntry) => fileEntry.path);
   }, [initialRepoFiles, repoFiles]);
   const hasRepoStructure = repoFiles.length > 0;
-  const aiMode = assessment?.ai_mode || 'claude_cli_terminal';
-  const showTerminal = aiMode === 'claude_cli_terminal';
   // ``task.role`` is a DB enum slug (``data_engineer``); render it as
   // a human title for the candidate-facing meta line. Sam called this
   // out on assessment 79 (2026-05-26).
@@ -556,10 +466,6 @@ export default function AssessmentPage({
     if (typeof window === 'undefined') return;
     persistAssessmentLightModePreference(assessmentLightMode);
   }, [assessmentLightMode]);
-
-  useEffect(() => {
-    setTerminalPanelOpen(false);
-  }, [showTerminal]);
 
   useEffect(() => {
     if (executing) {
@@ -645,258 +551,9 @@ export default function AssessmentPage({
     setNewRepoFilePath('');
   }, []);
 
-  const appendTerminalEvent = useCallback((event) => {
-    terminalEventSeqRef.current += 1;
-    setTerminalEvents((prev) => [
-      ...prev,
-      { id: terminalEventSeqRef.current, ...event },
-    ]);
-  }, []);
-
-  const sendTerminalPayload = useCallback((payload) => {
-    const ws = terminalWsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-    try {
-      ws.send(JSON.stringify(payload));
-      return true;
-    } catch {
-      return false;
-    }
-  }, []);
-
-  const handleTerminalInput = useCallback((data) => {
-    sendTerminalPayload({ type: 'input', data });
-  }, [sendTerminalPayload]);
-
-  const handleTerminalResize = useCallback((rows, cols) => {
-    sendTerminalPayload({ type: 'resize', rows, cols });
-  }, [sendTerminalPayload]);
-
-  const handleRestartTerminal = useCallback(async () => {
-    const id = assessment?.id || assessmentId;
-    if (!id || terminalRestarting) return;
-    // Confirm with the candidate before discarding an in-flight Claude prompt.
-    if (pendingClaudeRequestIdRef.current) {
-      const proceed = typeof window !== 'undefined'
-        ? window.confirm('A Claude prompt is still running. Restarting the terminal will cancel it. Continue?')
-        : true;
-      if (!proceed) return;
-    }
-    setTerminalRestarting(true);
-    setTerminalConnected(false);
-    setTerminalEvents([]);
-    if (pendingClaudeRequestIdRef.current) {
-      const staleRequestId = pendingClaudeRequestIdRef.current;
-      pendingClaudeRequestIdRef.current = null;
-      ignoredClaudeRequestIdsRef.current.add(staleRequestId);
-      clearClaudePromptTimers();
-      setClaudePromptSending(false);
-      setClaudeConversation((prev) => {
-        const next = [...prev, { role: 'assistant', content: `[Error] Claude request ${staleRequestId} was interrupted by a terminal restart.` }];
-        return next.slice(-30);
-      });
-    }
-    try {
-      await assessments.terminalStop(id, assessmentTokenForApi);
-    } catch (err) {
-      const detail = err?.response?.data?.detail || err?.message || 'Failed to stop terminal.';
-      appendTerminalEvent({ type: 'error', message: String(detail) });
-    } finally {
-      setTerminalSessionNonce((prev) => prev + 1);
-      setTerminalRestarting(false);
-    }
-  }, [assessment, assessmentId, assessmentTokenForApi, terminalRestarting, appendTerminalEvent, clearClaudePromptTimers]);
-
-  const handleToggleTerminalPanel = useCallback(() => {
-    setTerminalPanelOpen((prev) => !prev);
-  }, []);
-
   const handleToggleOutputPanel = useCallback(() => {
     setOutputPanelOpen((prev) => !prev);
   }, []);
-
-  useEffect(() => {
-    // Demo sessions use the same terminal transport; do not skip websocket init in demo mode.
-    if (!showTerminal || loading || submitted || isTimerPaused) return undefined;
-    const id = assessment?.id || assessmentId;
-    if (!id || !assessmentTokenForApi) return undefined;
-
-    let disposed = false;
-    let reconnectAttempts = 0;
-    let heartbeatInterval = null;
-    terminalManualCloseRef.current = false;
-
-    const scheduleReconnect = () => {
-      if (disposed || terminalManualCloseRef.current || submitted) return;
-      reconnectAttempts += 1;
-      const waitMs = Math.min(1000 * (2 ** reconnectAttempts), 8000);
-      terminalReconnectTimerRef.current = setTimeout(() => {
-        connect();
-      }, waitMs);
-    };
-
-    const clearHeartbeat = () => {
-      if (heartbeatInterval) {
-        clearInterval(heartbeatInterval);
-        heartbeatInterval = null;
-      }
-    };
-
-    const connect = () => {
-      if (disposed) return;
-      const wsUrl = assessments.terminalWsUrl(id);
-      const ws = new WebSocket(wsUrl);
-      terminalWsRef.current = ws;
-
-      ws.onopen = () => {
-        if (disposed) return;
-        reconnectAttempts = 0;
-        setTerminalConnected(true);
-        // Send the assessment token in the init frame so it never appears in
-        // proxy/CDN access logs (URLs do, WebSocket frame bodies don't).
-        ws.send(JSON.stringify({ type: 'init', token: assessmentTokenForApi }));
-        clearHeartbeat();
-        heartbeatInterval = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'heartbeat' }));
-          }
-        }, 15000);
-      };
-
-      ws.onmessage = (event) => {
-        if (disposed) return;
-        let payload = null;
-        try {
-          payload = JSON.parse(event.data);
-        } catch {
-          return;
-        }
-        if (!payload || typeof payload !== 'object') return;
-
-        if (payload.type === 'ready') {
-          if (payload?.claude_budget && typeof payload.claude_budget === 'object') {
-            setClaudeBudget(payload.claude_budget);
-          }
-          return;
-        }
-
-        if (payload.type === 'status') {
-          // Intentionally not rendered to candidates to keep terminal output clean.
-          return;
-        }
-
-        if (payload.type === 'output') {
-          appendTerminalEvent({
-            type: 'output',
-            data: String(payload.data || ''),
-            stream: payload.stream || 'pty',
-          });
-          return;
-        }
-
-        if (payload.type === 'claude_chat_started') {
-          return;
-        }
-
-        if (payload.type === 'claude_chat_done') {
-          const requestId = String(payload.request_id || '');
-          if (ignoredClaudeRequestIdsRef.current.has(requestId)) {
-            ignoredClaudeRequestIdsRef.current.delete(requestId);
-            if (payload?.claude_budget && typeof payload.claude_budget === 'object') {
-              setClaudeBudget(payload.claude_budget);
-            }
-            return;
-          }
-          if (!pendingClaudeRequestIdRef.current || pendingClaudeRequestIdRef.current === requestId) {
-            pendingClaudeRequestIdRef.current = null;
-            clearClaudePromptTimers();
-            setClaudePromptSending(false);
-          }
-          if (payload?.claude_budget && typeof payload.claude_budget === 'object') {
-            setClaudeBudget(payload.claude_budget);
-          }
-          const reply = String(payload.content || '').trim() || 'Claude completed without returning a visible response.';
-          setClaudeConversation((prev) => {
-            const next = [...prev, { role: 'assistant', content: reply }];
-            return next.slice(-30);
-          });
-          return;
-        }
-
-        if (payload.type === 'claude_chat_error') {
-          const requestId = String(payload.request_id || '');
-          if (ignoredClaudeRequestIdsRef.current.has(requestId)) {
-            ignoredClaudeRequestIdsRef.current.delete(requestId);
-            return;
-          }
-          if (!pendingClaudeRequestIdRef.current || pendingClaudeRequestIdRef.current === requestId) {
-            pendingClaudeRequestIdRef.current = null;
-            clearClaudePromptTimers();
-            setClaudePromptSending(false);
-          }
-          const message = String(payload.message || 'Claude prompt failed.');
-          setClaudeConversation((prev) => {
-            const next = [...prev, { role: 'assistant', content: `[Error] ${message}` }];
-            return next.slice(-30);
-          });
-          return;
-        }
-
-        if (payload.type === 'error') {
-          const message = String(payload.message || 'Terminal error');
-          if (payload?.claude_budget && typeof payload.claude_budget === 'object') {
-            setClaudeBudget(payload.claude_budget);
-          }
-          appendTerminalEvent({ type: 'error', message });
-          return;
-        }
-
-        if (payload.type === 'exit') {
-          appendTerminalEvent({ type: 'exit', message: 'Terminal exited.' });
-        }
-      };
-
-      ws.onerror = () => {};
-
-      ws.onclose = () => {
-        if (disposed) return;
-        setTerminalConnected(false);
-        clearHeartbeat();
-        scheduleReconnect();
-      };
-    };
-
-    connect();
-
-    return () => {
-      disposed = true;
-      clearHeartbeat();
-      clearTimeout(terminalReconnectTimerRef.current);
-      terminalReconnectTimerRef.current = null;
-      terminalManualCloseRef.current = true;
-      clearClaudePromptTimers();
-      if (terminalWsRef.current) {
-        try {
-          terminalWsRef.current.close();
-        } catch {
-          // noop
-        }
-      }
-      terminalWsRef.current = null;
-    };
-  }, [
-    showTerminal,
-    demoMode,
-    loading,
-    submitted,
-    isTimerPaused,
-    assessment,
-    assessmentId,
-    assessmentTokenForApi,
-    appendTerminalEvent,
-    terminalSessionNonce,
-    clearClaudePromptTimers,
-  ]);
 
   const handleExecute = useCallback(
     async (code) => {
@@ -993,8 +650,8 @@ export default function AssessmentPage({
   }, [buildRepoSnapshot, selectedRepoPath, assessment, assessmentId, assessmentTokenForApi]);
 
   // Sync the entire in-browser repo snapshot (every modified file) to the
-  // sandbox. Used before sending Claude prompts in the terminal flow so Claude
-  // sees the candidate's latest edits to non-selected files too.
+  // sandbox. Used by the pre-timeout snapshot push so the captured git diff
+  // reflects the candidate's latest edits to every file, not just the open one.
   const syncAllRepoFilesToWorkspace = useCallback(async (code) => {
     codeRef.current = code;
     const repoSnapshot = buildRepoSnapshot(code);
@@ -1029,130 +686,15 @@ export default function AssessmentPage({
     await syncSelectedRepoFileToWorkspace(code, { announceSuccess: true });
   }, [demoMode, syncSelectedRepoFileToWorkspace]);
 
-  const handleClaudePromptSubmit = useCallback(async () => {
-    const message = String(claudePrompt || '').trim();
-    if (!message || claudePromptSending) return;
-    if (isTimerPaused) {
-      setOutput("Assessment is paused. Retry Claude before sending prompts.");
-      return;
-    }
-    const id = assessment?.id || assessmentId;
-    if (!id || !assessmentTokenForApi) return;
-
-    setClaudePromptSending(true);
-    setClaudePrompt('');
-    setClaudePromptPasted(false);
-    const nowMs = Date.now();
-    const timeSinceAssessmentStartMs = assessmentStartedAtRef.current != null
-      ? Math.max(0, nowMs - assessmentStartedAtRef.current)
-      : null;
-    const timeSinceLastPromptMs = lastPromptSentAtRef.current != null
-      ? Math.max(0, nowMs - lastPromptSentAtRef.current)
-      : null;
-    lastPromptSentAtRef.current = nowMs;
-    setClaudeConversation((prev) => {
-      const next = [...prev, { role: 'user', content: message }];
-      return next.slice(-30);
-    });
-    if (demoMode) {
-      setDemoPromptMessages((prev) => [...prev, message].slice(-100));
-    }
-    let awaitingTerminalReply = false;
-    try {
-      if (showTerminal) {
-        // Push ALL in-browser edits (not just the selected file) so Claude in
-        // the live terminal sees the candidate's full working state.
-        const syncResult = await syncAllRepoFilesToWorkspace(codeRef.current);
-        if (!syncResult?.success) {
-          throw new Error(syncResult?.errorMessage || 'Claude could not sync the latest file state into the workspace.');
-        }
-
-        const requestId = `claude-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        pendingClaudeRequestIdRef.current = requestId;
-        const sent = sendTerminalPayload({
-          type: 'claude_prompt',
-          request_id: requestId,
-          message,
-          code_context: codeRef.current,
-          selected_file_path: selectedRepoPath,
-          paste_detected: claudePromptPasted,
-          browser_focused: typeof document !== 'undefined' ? document.visibilityState === 'visible' : true,
-          time_since_assessment_start_ms: timeSinceAssessmentStartMs,
-          time_since_last_prompt_ms: timeSinceLastPromptMs,
-        });
-        if (!sent) {
-          pendingClaudeRequestIdRef.current = null;
-          throw new Error('Claude terminal is not connected yet. Restart the terminal and try again.');
-        }
-        startClaudePromptTimers(requestId);
-        awaitingTerminalReply = true;
-        return;
-      }
-
-      const repoSnapshot = buildRepoSnapshot(codeRef.current);
-      setRepoFilesState(repoSnapshot);
-      const res = await assessments.claude(
-        id,
-        {
-          message,
-          conversation_history: claudeConversation,
-          code_context: codeRef.current,
-          selected_file_path: selectedRepoPath,
-          repo_files: repoSnapshot,
-          paste_detected: claudePromptPasted,
-          browser_focused: typeof document !== 'undefined' ? document.visibilityState === 'visible' : true,
-          time_since_assessment_start_ms: timeSinceAssessmentStartMs,
-          time_since_last_prompt_ms: timeSinceLastPromptMs,
-        },
-        assessmentTokenForApi,
-      );
-      const payload = res?.data || {};
-      const reply = String(payload.content || payload.response || '').trim() || 'No response from Claude.';
-      if (payload?.claude_budget && typeof payload.claude_budget === 'object') {
-        setClaudeBudget(payload.claude_budget);
-      }
-
-      setClaudeConversation((prev) => {
-        const next = [...prev, { role: 'assistant', content: reply }];
-        return next.slice(-30);
-      });
-    } catch (err) {
-      pendingClaudeRequestIdRef.current = null;
-      clearClaudePromptTimers();
-      const detail = err?.response?.data?.detail;
-      const errorMessage = typeof detail === 'string'
-        ? detail
-        : detail?.message || err?.message || 'Claude prompt failed.';
-      setClaudeConversation((prev) => {
-        const next = [...prev, { role: 'assistant', content: `[Error] ${errorMessage}` }];
-        return next.slice(-30);
-      });
-    } finally {
-      if (!awaitingTerminalReply) {
-        setClaudePromptSending(false);
-      }
-    }
-  }, [
-    claudePrompt,
-    claudePromptSending,
-    isTimerPaused,
-    assessment,
-    assessmentId,
-    assessmentTokenForApi,
-    claudeConversation,
-    buildRepoSnapshot,
-    selectedRepoPath,
-    showTerminal,
-    claudePromptPasted,
-    sendTerminalPayload,
-    syncAllRepoFilesToWorkspace,
-    startClaudePromptTimers,
-    clearClaudePromptTimers,
-  ]);
-
   const handleSubmit = useCallback(
     async (autoSubmit = false) => {
       if (submitted) return;
+      // The demo / showcase preview is read-only — a viewer (or the pitch
+      // deck) must never be able to submit the walkthrough assessment, which
+      // would flip the surface to the "Task submitted" screen. This covers the
+      // manual click, the confirm dialog, and the timer auto-submit, which all
+      // route through handleSubmit.
+      if (demoMode) return;
       if (isTimerPaused) {
         setOutput("Assessment is paused. Retry Claude before submitting.");
         return;
@@ -1172,13 +714,6 @@ export default function AssessmentPage({
         const id = assessment?.id || assessmentId;
         const repoSnapshot = buildRepoSnapshot(codeRef.current);
         setRepoFilesState(repoSnapshot);
-        if (showTerminal) {
-          try {
-            await assessments.terminalStop(id, assessmentTokenForApi);
-          } catch {
-            // Best effort: submission can continue even if terminal stop fails.
-          }
-        }
         if (demoMode) {
           setOutput("Task submitted successfully. You may close this tab.");
           return;
@@ -1219,7 +754,6 @@ export default function AssessmentPage({
       isTimerPaused,
       demoMode,
       proctoringEnabled,
-      showTerminal,
       buildRepoSnapshot,
       selectedRepoPath,
     ],
@@ -1268,9 +802,8 @@ export default function AssessmentPage({
   const progressLabel = useMemo(() => {
     if (executing) return 'Running the latest check';
     if (output) return 'Latest output captured in the workspace dock';
-    if (showTerminal && terminalConnected) return 'Terminal session connected';
     return `${Math.max(0, totalDurationSeconds - timeLeft)}s spent in the live workspace`;
-  }, [executing, output, showTerminal, terminalConnected, totalDurationSeconds, timeLeft]);
+  }, [executing, output, totalDurationSeconds, timeLeft]);
 
   if (loading) {
     return <AssessmentStatusScreen mode="loading" lightMode={assessmentLightMode} />;
@@ -1311,6 +844,7 @@ export default function AssessmentPage({
         onOpenGuide={handleOpenGuide}
         reportIssueHref={reportIssueHref}
         onSubmit={() => handleSubmit(false)}
+        submitDisabled={demoMode}
       />
 
       <div className="flex-1 overflow-y-auto">
@@ -1354,33 +888,12 @@ export default function AssessmentPage({
             editorLanguage={hasRepoStructure ? languageFromPath(selectedRepoPath) : (assessment?.language || 'python')}
             editorFilename={selectedRepoPath || assessment?.filename || 'main'}
             isTimerPaused={isTimerPaused}
-            showTerminal={showTerminal}
             assistantPanelCollapsed={assistantPanelCollapsed}
             onToggleAssistantPanel={() => setAssistantPanelCollapsed((current) => !current)}
-            terminalPanelOpen={terminalPanelOpen}
-            onToggleTerminal={handleToggleTerminalPanel}
             outputPanelOpen={outputPanelOpen}
             onToggleOutput={handleToggleOutputPanel}
-            terminalConnected={terminalConnected}
-            terminalEvents={terminalEvents}
-            onTerminalInput={handleTerminalInput}
-            onTerminalResize={handleTerminalResize}
-            onRestartTerminal={handleRestartTerminal}
-            terminalRestarting={terminalRestarting}
             output={output}
             executing={executing}
-            claudeConversation={claudeConversation}
-            claudePrompt={claudePrompt}
-            onClaudePromptChange={(value) => {
-              setClaudePrompt(value);
-              if (!String(value || '').trim()) {
-                setClaudePromptPasted(false);
-              }
-            }}
-            onClaudePromptPaste={() => setClaudePromptPasted(true)}
-            onClaudePromptSubmit={handleClaudePromptSubmit}
-            claudePromptSending={claudePromptSending}
-            claudePromptSlow={claudePromptSlow}
             claudePromptDisabled={isTimerPaused || submitted}
             assessmentId={assessment?.id || assessmentId}
             assessmentToken={assessmentTokenForApi}
@@ -1432,7 +945,7 @@ export default function AssessmentPage({
 
           <footer className="mt-4 mb-6 flex flex-col gap-3 px-1 text-[0.71875rem] text-[var(--mute)] md:flex-row md:items-center md:justify-between">
             <div>
-              We record your editor, terminal, and Claude chat for this session only. <a href={reportIssueHref} className="text-[var(--purple)]">Need help?</a>
+              We record your editor and Claude chat for this session only. <a href={reportIssueHref} className="text-[var(--purple)]">Need help?</a>
             </div>
             <div className="flex flex-wrap items-center gap-4">
               {privacyFlags.map((flag) => (

@@ -41,6 +41,13 @@ class CandidateApplication(Base):
     pipeline_stage_source = Column(String, default="system", nullable=False)
     application_outcome = Column(String, default="open", nullable=False)
     application_outcome_updated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # Recruiter's manually recorded decision (advance/hold/reject + rationale,
+    # confidence, next steps) with a draft/submitted lifecycle, version, author
+    # stamp and change history. Used for candidates with no assessment linked
+    # (e.g. rejected at CV stage); the assessment-backed equivalent lives on
+    # Assessment.manual_evaluation. Shape: see evaluation_result_service
+    # .build_application_decision / normalize_stored_application_decision.
+    manual_decision = Column(JSON, nullable=True)
     external_refs = Column(JSON, nullable=True)
     external_stage_raw = Column(String, nullable=True)
     external_stage_normalized = Column(String, nullable=True)

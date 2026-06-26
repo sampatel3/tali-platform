@@ -397,6 +397,25 @@
   text-transform: capitalize;
 }
 
+/* Warning shown when the recruiter picks Reject for a candidate they've
+   advanced into a later Workable stage — rejecting disqualifies them in
+   Workable. Plum tint (purple convention, not amber/red): a clear caution,
+   not a block — the reject stays available. */
+.ctc-reject-warning {
+  margin-top: 10px;
+  background: var(--purple-soft, color-mix(in oklab, var(--purple, #6d28d9) 10%, var(--bg)));
+  border: 1px solid color-mix(in oklab, var(--purple, #6d28d9) 35%, var(--line));
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 0.78125rem;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+.ctc-reject-warning strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
 /* When the drawer renders inline within the candidates table, the
    parent <td> needs to drop the table cell padding so the drawer
    sits flush under the row. */

@@ -66,6 +66,12 @@ _MAX_REPO_FILES = 20
 _MAX_DESIGN_DOC_CHARS = 8000
 _MAX_PROMPT_TRANSCRIPT_TURNS = 20
 _MAX_PROMPT_TURN_CHARS = 2000
+# Process-trace bounds (only applied when ``include_process_trace`` is set).
+_MAX_TOOL_CALLS_PER_TURN = 8
+_MAX_TOOL_TARGET_CHARS = 120
+_MAX_TOOL_RESULT_EXCERPT_CHARS = 600
+_MAX_GIT_DIFF_CHARS = 6000
+_MAX_GIT_COMMITS_CHARS = 1500
 
 
 @dataclass(frozen=True)
@@ -107,6 +113,20 @@ class ScoringArtifacts:
     # written onto each ai_prompts record to score the dimension
     # deterministically — no Anthropic call for this dim.
     decision_points: List[Dict[str, Any]] = field(default_factory=list)
+    # Process-visible grading (now the only path): prompt_transcript_excerpt()
+    # interleaves each turn's agent tool calls + results, and
+    # git_evidence_excerpt() surfaces the committed diff — so the grader reads
+    # HOW the candidate drove the agent (verification, iteration), not just the
+    # message/response text. Defaults True (live). Retained as a knob ONLY so
+    # scripts/shadow_rescore_assessments.py can force it off for a before/after
+    # comparison; production never sets it. git_evidence is
+    # assessment.git_evidence (head_sha, diff_main, commits, ...).
+    include_process_trace: bool = True
+    git_evidence: Dict[str, Any] = field(default_factory=dict)
+    # Planted traps (wrong-but-plausible paths) for the DISCERNMENT lens to
+    # check the candidate caught. Each: {id, planted, tell, where?}. Empty =
+    # the task declared none. See interrogation.validate_traps (PR-9).
+    traps: List[Dict[str, Any]] = field(default_factory=list)
 
     def repo_files_excerpt(self) -> str:
         """Concatenated repo files for prompt embedding (bounded)."""
@@ -138,8 +158,83 @@ class ScoringArtifacts:
         for i, turn in enumerate(turns, 1):
             user = str(turn.get("message", "") or "")[:_MAX_PROMPT_TURN_CHARS]
             asst = str(turn.get("response", "") or "")[:_MAX_PROMPT_TURN_CHARS]
-            lines.append(f"### Turn {i}\n[Candidate]: {user}\n[Claude]: {asst}")
+            block = [f"### Turn {i}", f"[Candidate]: {user}"]
+            if self.include_process_trace:
+                tool_lines = self._render_tool_calls(turn.get("tool_calls_made") or [])
+                if tool_lines:
+                    block.append("[Agent actions]:")
+                    block.extend(tool_lines)
+            block.append(f"[Claude]: {asst}")
+            lines.append("\n".join(block))
         return "\n\n".join(lines)
+
+    @staticmethod
+    def _render_tool_calls(tool_calls: List[Dict[str, Any]]) -> List[str]:
+        """One bounded line per tool call: ``- Bash(pytest -q) → 2 failed``.
+
+        Shows what the agent did (tool + target) and what it OBSERVED (the
+        result excerpt + an error flag) so the grader can judge whether the
+        candidate verified the agent's work. Only rendered under
+        ``include_process_trace``.
+        """
+        out: List[str] = []
+        for call in tool_calls[:_MAX_TOOL_CALLS_PER_TURN]:
+            if not isinstance(call, dict):
+                continue
+            name = str(call.get("name", "")).split("__")[-1] or "tool"
+            inp = call.get("input")
+            target = ""
+            if isinstance(inp, dict):
+                target = str(inp.get("path") or inp.get("command") or inp.get("file_path") or "")
+            target = target.replace("\n", " ")[:_MAX_TOOL_TARGET_CHARS]
+            line = f"  - {name}({target})" if target else f"  - {name}"
+            if "result" in call:
+                flag = " [error]" if call.get("is_error") else ""
+                result = str(call.get("result") or "").replace("\n", " ")[:_MAX_TOOL_RESULT_EXCERPT_CHARS]
+                line += f"{flag} → {result}"
+            out.append(line)
+        extra = len(tool_calls) - _MAX_TOOL_CALLS_PER_TURN
+        if extra > 0:
+            out.append(f"  - … ({extra} more tool call(s))")
+        return out
+
+    def git_evidence_excerpt(self) -> str:
+        """Committed diff + commit log for the grader (bounded). Empty unless
+        ``include_process_trace`` is on and git evidence was captured."""
+        if not self.include_process_trace or not self.git_evidence:
+            return ""
+        ge = self.git_evidence if isinstance(self.git_evidence, dict) else {}
+        parts: List[str] = []
+        commits = str(ge.get("commits") or "").strip()
+        if commits:
+            parts.append("Commits (git log --oneline):\n" + commits[:_MAX_GIT_COMMITS_CHARS])
+        diff = str(ge.get("diff_main") or ge.get("diff") or "").strip()
+        if diff:
+            body = diff[:_MAX_GIT_DIFF_CHARS]
+            if len(diff) > _MAX_GIT_DIFF_CHARS:
+                body += "\n... (diff truncated)"
+            parts.append("Diff vs base:\n" + body)
+        return "\n\n".join(parts)
+
+    def traps_excerpt(self) -> str:
+        """Planted traps for the grader to check the candidate caught. Empty
+        unless the task declared traps."""
+        if not self.traps:
+            return ""
+        lines: List[str] = []
+        for trap in self.traps:
+            if not isinstance(trap, dict):
+                continue
+            planted = str(trap.get("planted") or "").strip()
+            if not planted:
+                continue
+            where = str(trap.get("where") or "").strip()
+            tell = str(trap.get("tell") or "").strip()
+            entry = f"- TRAP: {planted}" + (f" (where: {where})" if where else "")
+            if tell:
+                entry += f"\n  CAUGHT IF: {tell}"
+            lines.append(entry)
+        return "\n".join(lines)
 
 
 @dataclass(frozen=True)
@@ -178,7 +273,9 @@ _GRADER_PREAMBLE = (
     "candidate works WITH an AI coding agent. You will receive: (1) the "
     "criterion's excellent / good / poor descriptors, (2) the submission "
     "artifacts (the final repo the candidate shipped, the chat transcript "
-    "with the agent), (3) the task scenario."
+    "with the agent — which, where available, interleaves the agent's tool "
+    "calls + results and the candidate's git diff so you can see how the work "
+    "was actually done), (3) the task scenario."
 )
 _GRADER_OUTPUT = (
     "\n\nChoose ONE rating tier ('excellent', 'good', or 'poor'), assign a "
@@ -226,15 +323,110 @@ _DELIVERABLE_LENS_PROMPT = (
     + _GRADER_OUTPUT
 )
 
-# Back-compat default for any dimension that doesn't declare a lens (treated
-# as decision-leaning, the historical behaviour).
-_SYSTEM_PROMPT = _DECISION_LENS_PROMPT
+# DISCERNMENT lens — did the candidate critically EVALUATE the agent's output
+# rather than take it at face value? The "appropriate reliance" signal: catching
+# a wrong/incomplete suggestion, rejecting a bad approach, noticing a green test
+# run still hid a gap. Only has teeth because the process trace (PR-2) lets the
+# grader see the agent's tool actions + results.
+_DISCERNMENT_LENS_PROMPT = (
+    _GRADER_PREAMBLE
+    + "\n\nLENS: DISCERNMENT. You are grading whether the candidate critically "
+    "EVALUATED the agent's work rather than accepting it at face value. Look in "
+    "the transcript + the agent's tool actions/results for: catching a wrong, "
+    "incomplete, or plausible-but-incorrect suggestion; rejecting or correcting "
+    "a bad approach the agent proposed; noticing that a passing test run still "
+    "left a real gap; pushing the agent to justify or re-check something "
+    "dubious. A candidate who accepted whatever the agent produced without "
+    "scrutiny scores POOR here even if the result happened to be correct — this "
+    "lens measures judgment ABOUT the AI's output (trust good output, override "
+    "bad), not the output itself."
+    + _GRADER_OUTPUT
+)
 
+# DILIGENCE lens — did the candidate take RESPONSIBILITY for what shipped:
+# verify before claiming done (run the tests, re-read the diff), own residual
+# risk, no premature "all done". The "accountable for AI-produced work" signal.
+_DILIGENCE_LENS_PROMPT = (
+    _GRADER_PREAMBLE
+    + "\n\nLENS: DILIGENCE. You are grading whether the candidate took "
+    "RESPONSIBILITY for the work. Did they VERIFY before claiming success — run "
+    "the tests, re-read the changed files, confirm the fix actually holds — "
+    "rather than trusting the agent's word? Did they flag what remains risky or "
+    "unfinished instead of declaring premature completion? The evidence is in "
+    "the agent's tool actions (test runs, re-reads after edits) and the "
+    "transcript. A candidate who declared it done with no verification, or "
+    "shipped on the agent's say-so, scores POOR here even if it happened to work."
+    + _GRADER_OUTPUT
+)
 
 def _system_prompt_for_lens(lens: Optional[str]) -> str:
-    if (lens or "").strip().lower() == "deliverable":
+    key = (lens or "").strip().lower()
+    if key == "deliverable":
         return _DELIVERABLE_LENS_PROMPT
+    if key == "discernment":
+        return _DISCERNMENT_LENS_PROMPT
+    if key == "diligence":
+        return _DILIGENCE_LENS_PROMPT
     return _DECISION_LENS_PROMPT
+
+
+# ---- 4-D fluency rollup (Anthropic AI Fluency framework) --------------------
+#
+# Delegation · Description · Discernment · Diligence (Anthropic's "4 Ds") + a
+# Deliverable/outcome axis. Each graded rubric dimension rolls up to exactly one
+# axis. A dimension may declare its axis explicitly via a ``fluency`` field;
+# otherwise we derive it from its grader/lens so existing tasks roll up sensibly
+# with zero spec churn. This view is purely DERIVED from the same dimension
+# grades — it does NOT change the authoritative weighted score.
+FLUENCY_AXES = ("delegation", "description", "discernment", "diligence", "deliverable")
+
+
+def fluency_axis_for_dimension(spec: Dict[str, Any]) -> str:
+    """Map one rubric-dimension spec to its 4-D fluency axis."""
+    if not isinstance(spec, dict):
+        return "delegation"
+    explicit = str(spec.get("fluency") or "").strip().lower()
+    if explicit in FLUENCY_AXES:
+        return explicit
+    if str(spec.get("grader") or "").strip().lower() == "interrogation_outcome":
+        return "delegation"  # decision-ownership
+    lens = str(spec.get("lens") or "").strip().lower()
+    if lens == "deliverable":
+        return "deliverable"
+    if lens in ("discernment", "diligence", "description", "delegation"):
+        return lens
+    return "delegation"  # decision lens (or unset back-compat default)
+
+
+def summarize_fluency_4d(
+    evaluation_rubric: Optional[Dict[str, Any]],
+    dimensions: List["DimensionGrade"],
+) -> Dict[str, Optional[float]]:
+    """Roll graded dimensions up to the 4-D fluency axes (0-100 per axis).
+
+    Weighted mean of the dimension scores assigned to each axis, scaled to
+    0-100. Axes with no contributing dimension are ``None`` (no signal). A
+    dimension whose grader errored is skipped so a transient failure doesn't
+    drag an axis to zero. Purely derived/additive — never the authoritative
+    score.
+    """
+    rubric = evaluation_rubric if isinstance(evaluation_rubric, dict) else {}
+    acc: Dict[str, List[tuple]] = {axis: [] for axis in FLUENCY_AXES}
+    for dim in dimensions or []:
+        if getattr(dim, "error", None):
+            continue
+        axis = fluency_axis_for_dimension(rubric.get(dim.dimension_id, {}))
+        weight = float(getattr(dim, "weight", 0.0) or 0.0) or 1.0
+        acc[axis].append((float(getattr(dim, "score", 0.0) or 0.0), weight))
+    out: Dict[str, Optional[float]] = {}
+    for axis, pairs in acc.items():
+        if not pairs:
+            out[axis] = None
+            continue
+        wsum = sum(w for _, w in pairs)
+        score10 = (sum(s * w for s, w in pairs) / wsum) if wsum else 0.0
+        out[axis] = round(score10 * 10.0, 1)
+    return out
 
 
 def _build_user_prompt(
@@ -247,25 +439,46 @@ def _build_user_prompt(
     poor = (criteria.get("poor") or "").strip() or "(not specified)"
     role = artifacts.candidate_role or "(unspecified role)"
     scenario = (artifacts.task_scenario or "(no scenario)").strip()
-    return (
-        f"Rubric dimension: **{dimension_id}**\n\n"
-        "Tier descriptors:\n"
-        f"- EXCELLENT (9-10): {excellent}\n"
-        f"- GOOD (5-8): {good}\n"
-        f"- POOR (0-4): {poor}\n\n"
-        f"Candidate role: {role}\n\n"
-        "Task scenario the candidate was given:\n"
-        f"{scenario}\n\n"
-        "Test runner outcome:\n"
-        f"{artifacts.test_results_summary or '(not provided)'}\n\n"
-        "Candidate's DESIGN.md (if any):\n"
-        f"{artifacts.design_doc_excerpt()}\n\n"
-        "Candidate's chat transcript with Claude:\n"
-        f"{artifacts.prompt_transcript_excerpt()}\n\n"
+    git_excerpt = artifacts.git_evidence_excerpt()
+    traps_text = artifacts.traps_excerpt()
+    sections = [
+        f"Rubric dimension: **{dimension_id}**",
+        (
+            "Tier descriptors:\n"
+            f"- EXCELLENT (9-10): {excellent}\n"
+            f"- GOOD (5-8): {good}\n"
+            f"- POOR (0-4): {poor}"
+        ),
+        f"Candidate role: {role}",
+        f"Task scenario the candidate was given:\n{scenario}",
+        f"Test runner outcome:\n{artifacts.test_results_summary or '(not provided)'}",
+        f"Candidate's DESIGN.md (if any):\n{artifacts.design_doc_excerpt()}",
+        (
+            "Candidate's chat transcript with Claude (an [Agent actions] block, "
+            "when present, lists the agent's tool calls + results so you can "
+            "judge how the candidate steered and verified the work):\n"
+            f"{artifacts.prompt_transcript_excerpt()}"
+        ),
+    ]
+    if git_excerpt:
+        sections.append(
+            "Candidate's git history + diff (what they actually committed):\n"
+            f"{git_excerpt}"
+        )
+    if traps_text:
+        sections.append(
+            "Planted traps for this task — wrong-but-plausible paths the agent "
+            "might lead the candidate down. For a DISCERNMENT dimension, judge "
+            "whether the candidate CAUGHT and rejected these (strong signal) vs. "
+            "accepted them uncritically (poor):\n"
+            f"{traps_text}"
+        )
+    sections.append(
         "Final repository state (candidate's submitted code):\n"
-        f"{artifacts.repo_files_excerpt()}\n\n"
-        "Grade this dimension now. Respond with the JSON shape only."
+        f"{artifacts.repo_files_excerpt()}"
     )
+    sections.append("Grade this dimension now. Respond with the JSON shape only.")
+    return "\n\n".join(sections)
 
 
 # ---- Scorer -----------------------------------------------------------------
