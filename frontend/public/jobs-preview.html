@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en" data-brand="taali">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Taali — jobs preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.30.0/dist/tabler-icons.min.css">
+<link rel="stylesheet" href="/report-preview.css">
+<style>
+.previewbar{background:#241147;color:#d9cdfa;font-family:'Geist Mono',monospace;font-size:11.5px;letter-spacing:.04em;text-align:center;padding:6px 12px}
+.jwrap{max-width:1320px;margin:0 auto;padding:24px 28px 60px}
+/* shared slim agent strip (the one bold dark-purple agent-ON treatment) */
+.abar{display:flex;align-items:center;gap:13px;border:1px solid var(--line);border-radius:14px;padding:11px 15px;background:var(--bg-2)}
+.abar.on{background:linear-gradient(120deg,#3a1d6e,#6a3fb8,#2a1556,#4a2a8a,#3a1d6e);background-size:300% 300%;border-color:rgba(196,165,253,.5);color:#efe9fb;animation:flow 7s ease-in-out infinite;box-shadow:0 6px 22px rgba(36,17,71,.28)}
+.abar .absp{width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex:none;font-size:15px}
+.abar.on .absp{background:rgba(255,255,255,.14);color:#fff}
+.abar .ablab{font-weight:600;font-size:13.5px}
+.abar .abtick{font-size:12.5px;opacity:.82;display:flex;align-items:center;gap:6px}
+.abar.on .abtick{color:#e3d8fa}
+.abar .abpend{font-size:11px;font-weight:600;border-radius:99px;padding:2px 9px;background:rgba(255,255,255,.16);color:#fff}
+.abar .abbud{margin-left:auto;display:flex;align-items:center;gap:9px;font-size:12px}
+.abar .abbud .amt{font-variant-numeric:tabular-nums;font-weight:600}.abar .abbud .of{opacity:.65;font-weight:400}
+.abar .abtrack{width:74px;height:5px;border-radius:3px;background:rgba(255,255,255,.22);overflow:hidden}.abar .abtrack i{display:block;height:100%;background:#fff;border-radius:3px}
+.abar .abbtn{font-size:12px;font-weight:500;border-radius:9px;padding:6px 12px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.28);color:#fff}
+.abar .abbtn.solid{background:#fff;color:#2a1854;border-color:#fff;font-weight:600}
+.abar.on + .abar .abbtn{}
+/* workable strip */
+.wkstrip{display:flex;align-items:center;gap:13px;border:1px solid var(--line);border-radius:14px;padding:11px 16px;background:var(--bg-2);margin:14px 0 16px}
+.wklogo{width:30px;height:30px;border-radius:8px;background:#1a8754;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;flex:none}
+.wkstrip .wkt{font-weight:500;font-size:13.5px}
+.wkstrip .wkm{font-size:12px;color:var(--mute);display:flex;align-items:center;gap:8px;margin-top:2px;flex-wrap:wrap}
+.wkdot{width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block}
+.wkstrip .sp{margin-left:auto;display:flex;gap:8px}
+/* KPI strip */
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:13px;margin-bottom:16px}
+.kpi{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px}
+.kpi .k{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute)}
+.kpi .v{font-size:24px;font-weight:600;margin-top:3px;letter-spacing:-.02em}.kpi .v.attn{color:var(--purple-2)}
+.kpi .v small{font-size:13px;color:var(--mute);font-weight:400}
+.kpi .sub{font-size:11.5px;color:var(--mute);margin-top:2px}
+.kpi .bar{height:5px;border-radius:3px;background:var(--bg-3);margin-top:8px;overflow:hidden}.kpi .bar i{display:block;height:100%;border-radius:3px;background:var(--purple-lav)}
+/* filter chips */
+.frow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.fchip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line-2);border-radius:99px;padding:6px 13px;font-size:12.5px;color:var(--ink-2);background:var(--bg-2);cursor:pointer}
+.fchip:hover{border-color:var(--purple-lav)}
+.fchip.on{background:var(--purple);color:#fff;border-color:var(--purple)}
+.fchip .ct{font-size:11px;border-radius:99px;padding:0 7px;background:var(--bg-3);color:var(--mute)}
+.fchip.on .ct{background:rgba(255,255,255,.2);color:#fff}
+.fchip.add{color:var(--mute);border-style:dashed}
+/* role cards */
+.jgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.jcard{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-lg);padding:18px 20px;cursor:pointer;transition:.13s;display:block;color:inherit}
+.jcard:hover{border-color:var(--purple-lav);box-shadow:0 6px 22px rgba(94,58,168,.08);transform:translateY(-1px)}
+.jcard.on{border-color:var(--purple-soft)}
+.jhead{display:flex;align-items:flex-start;gap:11px}
+.jstar{font-size:19px;color:var(--purple);flex:none;margin-top:1px}.jstar.off{color:var(--mute-2)}
+.jname{font-size:16.5px;font-weight:600;letter-spacing:-.01em}
+.jid{font-family:var(--mono);font-size:11.5px;color:var(--mute);margin-left:7px}
+.jsrc{font-size:10.5px;font-weight:500;border-radius:6px;padding:2px 8px;margin-left:8px;vertical-align:middle}
+.jsrc.wk{background:#e3f3ea;color:#1a8754}.jsrc.manual{background:var(--purple-soft);color:var(--purple-2)}.jsrc.draft{background:var(--bg-3);color:var(--mute)}
+.jmeta{font-size:12px;color:var(--mute);margin-top:4px}
+.jpill{margin-left:auto;flex:none;font-size:11px;font-weight:600;border-radius:99px;padding:4px 11px;display:inline-flex;align-items:center;gap:5px}
+.jpill.on{background:linear-gradient(150deg,#3a1d6e,#241147);color:#fff}
+.jpill.paused{background:var(--amber-soft);color:var(--amber-ink)}
+.jpill.off{background:var(--bg-3);color:var(--mute)}
+.jstats{display:flex;gap:0;margin-top:16px;border:1px solid var(--line);border-radius:11px;overflow:hidden}
+.jstat{flex:1;padding:9px 6px;text-align:center;border-right:1px solid var(--line)}.jstat:last-child{border-right:none}.jstat.term{background:var(--bg)}
+.jstat .sk{font-family:var(--mono);font-size:9px;text-transform:uppercase;color:var(--mute);letter-spacing:.03em}
+.jstat .sv{font-size:17px;font-weight:600;margin-top:2px}.jstat.attn .sv{color:var(--purple-2)}.jstat.term .sv{color:var(--mute)}
+.jfoot{display:flex;align-items:center;gap:10px;margin-top:14px;font-size:12px;color:var(--mute)}
+.jpending{color:var(--purple-2);font-weight:500;display:inline-flex;align-items:center;gap:5px}
+.footcard{display:flex;align-items:center;justify-content:space-between;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:13px 18px;margin-top:16px;font-size:12.5px;color:var(--mute)}
+@media (max-width:980px){.jgrid{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<div class="previewbar">Design preview · sample data, not live · Jobs</div>
+
+<nav class="nav">
+  <span class="logo">taali<b>.</b></span>
+  <a class="nt" href="/home-preview"><i class="ti ti-home"></i> Home <span class="mc-badge">12</span></a>
+  <a class="nt on" href="/jobs-preview"><i class="ti ti-briefcase"></i> Jobs</a>
+  <a class="nt" href="/search-preview"><i class="ti ti-message-circle"></i> Chat <span class="mc-badge ai">AI</span></a>
+  <span class="nt"><i class="ti ti-checkbox"></i> Tasks</span>
+  <a class="nt" href="/analytics-preview"><i class="ti ti-chart-line"></i> Analytics</a>
+  <a class="nt" href="/settings-preview"><i class="ti ti-settings"></i> Settings</a>
+  <span style="flex:1"></span>
+  <span class="pill">Search candidates, roles, tasks… <span class="kbd">⌘K</span></span>
+  <span class="ibtn"><i class="ti ti-bell"></i></span>
+  <span class="avwrap"><span class="sp">SP</span><i class="ti ti-chevron-down" style="font-size:14px"></i></span>
+</nav>
+
+<div class="jwrap">
+  <div class="hrow">
+    <div>
+      <div class="crumb">Jobs · 4 active roles</div>
+      <div class="h1">4 active <em style="font-style:normal;color:var(--purple)">roles</em></div>
+      <div class="meta">You're hiring. Star a role to keep its candidates flowing in automatically.</div>
+    </div>
+    <div style="display:flex;gap:9px;flex-wrap:wrap;justify-content:flex-end">
+      <button class="btn sm"><i class="ti ti-filter ic"></i> Filter</button>
+      <button class="btn sm primary"><i class="ti ti-plus ic"></i> New role</button>
+    </div>
+  </div>
+
+  <!-- org agent strip (aggregate) -->
+  <div class="abar on">
+    <span class="absp"><i class="ti ti-sparkles"></i></span>
+    <span class="ablab">Agent on</span>
+    <span class="abpend">12 awaiting you</span>
+    <span class="abtick"><i class="ti ti-point-filled"></i> 3 running · 1 paused — open a role to manage each cap</span>
+    <span class="abbud">
+      <span class="amt">$61<span class="of"> / $180</span></span>
+      <span class="abtrack"><i style="width:34%"></i></span>
+      <span class="abbtn">Pause all</span>
+      <span class="abbtn solid">Resume 1</span>
+    </span>
+  </div>
+
+  <!-- workable sync strip -->
+  <div class="wkstrip">
+    <span class="wklogo">W</span>
+    <div>
+      <div class="wkt">Synced from Workable · 3 of 6 roles</div>
+      <div class="wkm"><span class="wkdot"></span> Healthy · Last pull 4m ago · Next in 11m · 7 new candidates synced</div>
+    </div>
+    <div class="sp">
+      <button class="btn sm"><i class="ti ti-refresh ic"></i> Sync now</button>
+      <button class="btn sm">Manage →</button>
+    </div>
+  </div>
+
+  <!-- org KPIs -->
+  <div class="kpis">
+    <div class="kpi"><div class="k">In pipeline</div><div class="v">218</div><div class="sub">across 4 active roles</div></div>
+    <div class="kpi"><div class="k">Active roles</div><div class="v">4</div><div class="sub">3 starred · auto-syncing</div></div>
+    <div class="kpi"><div class="k">Awaiting you</div><div class="v attn">12</div><div class="sub">across 3 roles</div></div>
+    <div class="kpi"><div class="k">Org budget · MTD</div><div class="v">$61<small> / $180</small></div><div class="bar"><i style="width:34%"></i></div><div class="sub">34% · proj $112 EOM</div></div>
+  </div>
+
+  <!-- source filters -->
+  <div class="frow">
+    <span class="tlabel" style="font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute);margin-right:2px">Show</span>
+    <span class="fchip on">All roles <span class="ct">6</span></span>
+    <span class="fchip">Live <span class="ct">4</span></span>
+    <span class="fchip"><i class="ti ti-arrow-right" style="font-size:13px"></i> From Workable <span class="ct">3</span></span>
+    <span class="fchip">Created in Taali <span class="ct">3</span></span>
+    <span class="fchip">Active <span class="ct">5</span></span>
+    <span class="fchip">Draft <span class="ct">1</span></span>
+    <span class="fchip add"><i class="ti ti-plus" style="font-size:13px"></i> Add filter</span>
+  </div>
+
+  <!-- role cards -->
+  <div class="jgrid">
+
+    <a class="jcard on" href="/pipeline-preview">
+      <div class="jhead">
+        <i class="ti ti-star-filled jstar"></i>
+        <div style="min-width:0">
+          <div><span class="jname">Senior AWS Platform Engineer</span><span class="jid">#26</span><span class="jsrc wk">Workable</span></div>
+          <div class="jmeta">Engineering · Dubai, UAE · updated 14m ago</div>
+        </div>
+        <span class="jpill on"><i class="ti ti-sparkles"></i> ON · $42/$50</span>
+      </div>
+      <div class="jstats">
+        <div class="jstat"><div class="sk">Applied</div><div class="sv">312</div></div>
+        <div class="jstat attn"><div class="sk">Scored</div><div class="sv">148</div></div>
+        <div class="jstat"><div class="sk">Invited</div><div class="sv">34</div></div>
+        <div class="jstat attn"><div class="sk">Completed</div><div class="sv">12</div></div>
+        <div class="jstat"><div class="sk">Advanced</div><div class="sv">8</div></div>
+        <div class="jstat term"><div class="sk">Rejected</div><div class="sv">156</div></div>
+      </div>
+      <div class="jfoot"><span class="jpending"><i class="ti ti-inbox"></i> 9 awaiting you</span><span style="margin-left:auto">Open pipeline →</span></div>
+    </a>
+
+    <a class="jcard on" href="/pipeline-preview">
+      <div class="jhead">
+        <i class="ti ti-star-filled jstar"></i>
+        <div style="min-width:0">
+          <div><span class="jname">Data Engineer</span><span class="jid">#31</span><span class="jsrc wk">Workable</span></div>
+          <div class="jmeta">Data · Remote (MENA) · updated 8m ago</div>
+        </div>
+        <span class="jpill on"><i class="ti ti-sparkles"></i> ON · $19/$40</span>
+      </div>
+      <div class="jstats">
+        <div class="jstat"><div class="sk">Applied</div><div class="sv">204</div></div>
+        <div class="jstat attn"><div class="sk">Scored</div><div class="sv">96</div></div>
+        <div class="jstat"><div class="sk">Invited</div><div class="sv">21</div></div>
+        <div class="jstat attn"><div class="sk">Completed</div><div class="sv">9</div></div>
+        <div class="jstat"><div class="sk">Advanced</div><div class="sv">5</div></div>
+        <div class="jstat term"><div class="sk">Rejected</div><div class="sv">98</div></div>
+      </div>
+      <div class="jfoot"><span class="jpending"><i class="ti ti-inbox"></i> 3 awaiting you</span><span style="margin-left:auto">Open pipeline →</span></div>
+    </a>
+
+    <a class="jcard" href="/pipeline-preview">
+      <div class="jhead">
+        <i class="ti ti-star-filled jstar"></i>
+        <div style="min-width:0">
+          <div><span class="jname">ML Engineer</span><span class="jid">#29</span><span class="jsrc wk">Workable</span></div>
+          <div class="jmeta">Engineering · Abu Dhabi, UAE · updated 1h ago</div>
+        </div>
+        <span class="jpill paused"><i class="ti ti-player-pause"></i> PAUSED · cap $30</span>
+      </div>
+      <div class="jstats">
+        <div class="jstat"><div class="sk">Applied</div><div class="sv">141</div></div>
+        <div class="jstat attn"><div class="sk">Scored</div><div class="sv">73</div></div>
+        <div class="jstat"><div class="sk">Invited</div><div class="sv">11</div></div>
+        <div class="jstat"><div class="sk">Completed</div><div class="sv">4</div></div>
+        <div class="jstat"><div class="sk">Advanced</div><div class="sv">2</div></div>
+        <div class="jstat term"><div class="sk">Rejected</div><div class="sv">61</div></div>
+      </div>
+      <div class="jfoot"><span style="color:var(--amber-ink);font-weight:500;display:inline-flex;align-items:center;gap:5px"><i class="ti ti-player-pause"></i> Monthly budget reached</span><span style="margin-left:auto">Open pipeline →</span></div>
+    </a>
+
+    <a class="jcard on" href="/pipeline-preview">
+      <div class="jhead">
+        <i class="ti ti-star-filled jstar"></i>
+        <div style="min-width:0">
+          <div><span class="jname">Backend Engineer</span><span class="jid">#18</span><span class="jsrc manual">Role</span></div>
+          <div class="jmeta">Engineering · Dubai, UAE · updated 1h ago</div>
+        </div>
+        <span class="jpill on"><i class="ti ti-sparkles"></i> ON</span>
+      </div>
+      <div class="jstats">
+        <div class="jstat"><div class="sk">Applied</div><div class="sv">88</div></div>
+        <div class="jstat attn"><div class="sk">Scored</div><div class="sv">41</div></div>
+        <div class="jstat"><div class="sk">Invited</div><div class="sv">9</div></div>
+        <div class="jstat"><div class="sk">Completed</div><div class="sv">3</div></div>
+        <div class="jstat"><div class="sk">Advanced</div><div class="sv">1</div></div>
+        <div class="jstat term"><div class="sk">Rejected</div><div class="sv">39</div></div>
+      </div>
+      <div class="jfoot"><span class="jpending"><i class="ti ti-inbox"></i> 1 awaiting you</span><span style="margin-left:auto">Open pipeline →</span></div>
+    </a>
+
+    <a class="jcard" href="/pipeline-preview">
+      <div class="jhead">
+        <i class="ti ti-star jstar off"></i>
+        <div style="min-width:0">
+          <div><span class="jname">Product Designer</span><span class="jid">#12</span><span class="jsrc manual">Role</span></div>
+          <div class="jmeta">Design · Remote · updated 3d ago</div>
+        </div>
+        <span class="jpill off">OFF</span>
+      </div>
+      <div class="jstats">
+        <div class="jstat"><div class="sk">Applied</div><div class="sv">52</div></div>
+        <div class="jstat"><div class="sk">Scored</div><div class="sv">0</div></div>
+        <div class="jstat"><div class="sk">Invited</div><div class="sv">0</div></div>
+        <div class="jstat"><div class="sk">Completed</div><div class="sv">0</div></div>
+        <div class="jstat"><div class="sk">Advanced</div><div class="sv">0</div></div>
+        <div class="jstat term"><div class="sk">Rejected</div><div class="sv">0</div></div>
+      </div>
+      <div class="jfoot"><span style="display:inline-flex;align-items:center;gap:5px"><i class="ti ti-bolt"></i> Turn on agent mode to start screening</span><span style="margin-left:auto">Open pipeline →</span></div>
+    </a>
+
+    <a class="jcard" href="/pipeline-preview" style="opacity:.66">
+      <div class="jhead">
+        <i class="ti ti-star jstar off"></i>
+        <div style="min-width:0">
+          <div><span class="jname">Growth Marketer</span><span class="jid">#08</span><span class="jsrc draft">Draft</span></div>
+          <div class="jmeta">Marketing · No metadata yet</div>
+        </div>
+        <span class="jpill off">OFF</span>
+      </div>
+      <div class="jstats">
+        <div class="jstat"><div class="sk">Applied</div><div class="sv">0</div></div>
+        <div class="jstat"><div class="sk">Scored</div><div class="sv">0</div></div>
+        <div class="jstat"><div class="sk">Invited</div><div class="sv">0</div></div>
+        <div class="jstat"><div class="sk">Completed</div><div class="sv">0</div></div>
+        <div class="jstat"><div class="sk">Advanced</div><div class="sv">0</div></div>
+        <div class="jstat term"><div class="sk">Rejected</div><div class="sv">0</div></div>
+      </div>
+      <div class="jfoot"><span style="display:inline-flex;align-items:center;gap:5px"><i class="ti ti-edit"></i> Draft · finish the job spec to publish</span><span style="margin-left:auto">Open →</span></div>
+    </a>
+
+  </div>
+
+  <div class="footcard"><span>Showing 6 of 6 roles</span><button class="btn sm"><i class="ti ti-refresh ic"></i> Refresh hub</button></div>
+</div>
+</body>
+</html>

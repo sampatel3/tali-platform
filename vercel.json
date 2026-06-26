@@ -9,6 +9,11 @@
     { "source": "/ai-native-assessments", "destination": "/ai-native-assessments.html" },
     { "source": "/report-preview", "destination": "/report-preview.html" },
     { "source": "/home-preview", "destination": "/home-preview.html" },
+    { "source": "/jobs-preview", "destination": "/jobs-preview.html" },
+    { "source": "/pipeline-preview", "destination": "/pipeline-preview.html" },
+    { "source": "/search-preview", "destination": "/search-preview.html" },
+    { "source": "/analytics-preview", "destination": "/analytics-preview.html" },
+    { "source": "/settings-preview", "destination": "/settings-preview.html" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en" data-brand="taali">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Taali — pipeline preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.30.0/dist/tabler-icons.min.css">
+<link rel="stylesheet" href="/report-preview.css">
+<style>
+.previewbar{background:#241147;color:#d9cdfa;font-family:'Geist Mono',monospace;font-size:11.5px;letter-spacing:.04em;text-align:center;padding:6px 12px}
+.jwrap{max-width:1320px;margin:0 auto;padding:22px 28px 60px}
+/* agent strip (role-scoped) */
+.abar{display:flex;align-items:center;gap:13px;border:1px solid var(--line);border-radius:14px;padding:11px 15px;background:var(--bg-2);margin-bottom:14px}
+.abar.on{background:linear-gradient(120deg,#3a1d6e,#6a3fb8,#2a1556,#4a2a8a,#3a1d6e);background-size:300% 300%;border-color:rgba(196,165,253,.5);color:#efe9fb;animation:flow 7s ease-in-out infinite;box-shadow:0 6px 22px rgba(36,17,71,.28)}
+.abar .absp{width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex:none;font-size:15px;background:rgba(255,255,255,.14);color:#fff}
+.abar .ablab{font-weight:600;font-size:13.5px}
+.abar .abtick{font-size:12.5px;color:#e3d8fa;display:flex;align-items:center;gap:6px}
+.abar .abpend{font-size:11px;font-weight:600;border-radius:99px;padding:2px 9px;background:rgba(255,255,255,.16);color:#fff}
+.abar .abbud{margin-left:auto;display:flex;align-items:center;gap:9px;font-size:12px}
+.abar .abbud .amt{font-variant-numeric:tabular-nums;font-weight:600}.abar .abbud .of{opacity:.65;font-weight:400}
+.abar .abtrack{width:74px;height:5px;border-radius:3px;background:rgba(255,255,255,.22);overflow:hidden}.abar .abtrack i{display:block;height:100%;background:#fff;border-radius:3px}
+.abar .abbtn{font-size:12px;font-weight:500;border-radius:9px;padding:6px 12px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.28);color:#fff}
+.abar .abbtn.ic{padding:6px 9px}
+/* facts substrip */
+.facts{display:flex;gap:28px;flex-wrap:wrap;font-size:12.5px;color:var(--mute);margin:-4px 0 16px;padding:0 2px}
+.facts .f b{color:var(--ink);font-weight:500}.facts .f .fk{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:2px}
+.facts .f.task b{color:var(--purple-2)}
+/* funnel board */
+.fb{border:1px solid var(--line);border-radius:var(--radius);background:var(--bg-2);overflow:hidden;margin-bottom:18px}
+.fbhead{display:flex;align-items:center;justify-content:space-between;padding:11px 15px;border-bottom:1px solid var(--line)}
+.fbhead .ttl{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute)}
+.fbhead .aw{font-size:11px;font-weight:600;color:var(--purple-2);background:var(--purple-soft);border-radius:99px;padding:2px 10px}
+.fbstages{display:flex}
+.fbstage{flex:1;padding:13px 13px;border-right:1px solid var(--line)}.fbstage:last-child{border-right:none}.fbstage.term{background:var(--bg)}.fbstage.out{border-left:2px solid var(--line-2)}
+.fbstage .fk{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;color:var(--mute)}
+.fbstage .fv{font-size:21px;font-weight:600;margin-top:2px}.fbstage.attn .fv{color:var(--purple-2)}.fbstage.term .fv{color:var(--mute)}
+.fbdrow{display:flex;border-top:1px solid var(--line);background:var(--purple-tint)}
+.fbdcell{flex:1;padding:8px 13px;border-right:1px solid var(--line-2);min-height:38px}.fbdcell:last-child{border-right:none}
+.fbchip{font-size:10px;font-weight:500;border-radius:99px;padding:2px 8px;display:inline-flex;align-items:center;gap:3px;margin:2px 3px 0 0;white-space:nowrap}
+.fbchip.send{background:var(--purple-soft);color:var(--purple-2)}.fbchip.adv{background:#e4ece6;color:#3f6b50}.fbchip.rej{background:var(--bg-3);color:var(--mute)}.fbchip.pend{background:#efe9f6;color:var(--ink-2);border:1px dashed var(--line-2)}.fbchip.pre{background:#f2e6e9;color:#8a4658}
+.fbdcell .out{font-size:9.5px;color:var(--mute)}
+/* tabs */
+.ptabs{display:flex;gap:4px;border:1px solid var(--line-2);border-radius:11px;background:var(--bg-2);padding:3px;width:max-content;margin-bottom:16px}
+.ptab{font-size:13px;color:var(--mute);font-weight:500;padding:8px 15px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+.ptab.on{background:var(--purple);color:#fff}
+.ptab .ct{font-size:10.5px;opacity:.8}
+.panel{display:none}.panel.on{display:block}
+/* candidate KPIs */
+.ckpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:14px}
+.ckpi{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px}
+.ckpi .k{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;color:var(--mute);letter-spacing:.04em}
+.ckpi .v{font-size:21px;font-weight:600;margin-top:3px}.ckpi .v.attn{color:var(--purple-2)}.ckpi .v small{font-size:12px;color:var(--mute);font-weight:400}
+.ckpi .sub{font-size:11px;color:var(--mute);margin-top:2px}
+.ckpi .bar{height:4px;border-radius:3px;background:var(--bg-3);margin-top:7px;overflow:hidden}.ckpi .bar i{display:block;height:100%;background:var(--purple-lav);border-radius:3px}
+/* toolbar */
+.ctool{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:13px}
+.seg{display:inline-flex;border:1px solid var(--line-2);border-radius:9px;overflow:hidden;background:var(--bg-2)}
+.seg button{padding:7px 12px;font-size:12px;color:var(--mute);border:none;background:transparent;border-left:1px solid var(--line);cursor:pointer;font-family:inherit}.seg button:first-child{border-left:none}.seg button.on{background:var(--purple);color:#fff;font-weight:500}.seg button .c{opacity:.7;font-size:11px}
+/* table */
+.ctable{width:100%;border-collapse:collapse;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.ctable th{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--mute);text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);font-weight:500;background:var(--bg)}
+.ctable td{padding:12px 14px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:middle}
+.ctable tr:last-child td{border-bottom:none}
+.ctable tr.agentrow{background:var(--purple-tint)}
+.ctable .cn{font-weight:500}.ctable .csub{font-size:11.5px;color:var(--mute)}
+.scorepill{font-size:12.5px;font-weight:600;border-radius:7px;padding:3px 9px;display:inline-block;font-variant-numeric:tabular-nums}
+.scorepill.hi{background:var(--purple);color:#fff}.scorepill.mid{background:var(--purple-soft);color:var(--purple-2)}.scorepill.lo{background:var(--bg-3);color:var(--mute)}
+.stagepill{font-size:11px;border-radius:99px;padding:3px 10px;background:var(--bg-3);color:var(--ink-2);display:inline-block}
+.aiaction{font-size:12px;color:var(--purple-2);font-weight:500;display:inline-flex;align-items:center;gap:5px}
+/* kanban */
+.kanban{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;align-items:start}
+.kcol{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.kch{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:7px}
+.kch .dot{width:8px;height:8px;border-radius:50%;background:var(--purple)}.kch.term .dot{background:var(--mute)}
+.kch .kn{font-size:12px;font-weight:600}.kch .kc{font-size:10px;color:var(--mute);margin-left:auto}
+.kcard{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:11px;margin:9px;box-shadow:0 1px 3px rgba(0,0,0,.03)}
+.kcard .ktop{display:flex;align-items:center;gap:8px}
+.kav{width:26px;height:26px;border-radius:50%;background:var(--purple-soft);color:var(--purple-2);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:10px;flex:none}
+.kcard .kname{font-weight:500;font-size:12.5px}.kcard .kpos{font-size:10.5px;color:var(--mute)}
+.kline{display:flex;align-items:center;gap:7px;margin-top:8px;font-size:11px;color:var(--mute)}
+.kpip{font-size:11.5px;font-weight:600;color:var(--purple-2)}
+.kagent{border:1px solid var(--purple-soft);background:var(--purple-tint);border-radius:9px;padding:9px;margin-top:9px}
+.kagent .ka{font-size:11.5px;font-weight:600;color:var(--purple-2);display:flex;align-items:center;gap:5px}
+.kagent .kw{font-size:11px;color:var(--ink-2);line-height:1.45;margin:5px 0 8px}
+.kbtns{display:flex;gap:6px}
+.kbtn{flex:1;font-size:11px;font-weight:600;border-radius:7px;padding:6px;text-align:center;cursor:pointer;border:none}
+.kbtn.app{background:linear-gradient(180deg,#3a1d6e,#241147);color:#f1ecfb}
+.kbtn.ovr{background:var(--bg-2);border:1.5px solid var(--purple-lav);color:var(--purple-2)}
+.kmore{font-size:11px;color:var(--purple);font-weight:500;padding:9px;text-align:center;cursor:pointer}
+.live{font-size:9px;font-weight:600;color:var(--purple);border:1px solid var(--purple-lav);border-radius:99px;padding:0 5px}
+/* job spec */
+.spec{display:grid;grid-template-columns:1fr 300px;gap:24px;align-items:start}
+.specsec{margin-bottom:20px}.specsec .num{font-family:var(--mono);font-size:11px;color:var(--purple);font-weight:500}.specsec h4{font-size:15px;font-weight:600;margin:3px 0 7px}.specsec p,.specsec li{font-size:13.5px;color:var(--ink-2);line-height:1.6}.specsec ul{margin-left:17px;margin-top:5px}
+.glance{position:sticky;top:80px;background:linear-gradient(180deg,var(--purple-tint),var(--bg-2) 60%);border:1px solid var(--purple-soft);border-radius:var(--radius-lg);padding:18px}
+.hi{display:flex;gap:10px;padding:10px 0;border-top:1px solid var(--line)}.hi:first-of-type{border-top:none}.hi .ti{color:var(--purple);font-size:18px;flex:none;margin-top:1px}.hi b{font-weight:500;font-size:13px;display:block}.hi span{font-size:11.5px;color:var(--mute)}
+/* agent settings */
+.aset{display:grid;grid-template-columns:1fr 300px;gap:24px;align-items:start}
+.asec{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:17px 19px;margin-bottom:14px}
+.asec .ah{font-size:14.5px;font-weight:600;margin-bottom:4px}.asec .ad{font-size:12.5px;color:var(--mute);margin-bottom:13px}
+.cchips{display:flex;flex-wrap:wrap;gap:7px}
+.cchip{font-size:12px;background:var(--purple-soft);color:var(--purple-2);border-radius:99px;padding:5px 12px;display:inline-flex;align-items:center;gap:6px}.cchip .x{opacity:.6;cursor:pointer}
+.cchip.add{background:var(--bg);color:var(--mute);border:1px dashed var(--line-2)}
+.selrow{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.sel{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line-2);border-radius:9px;padding:8px 13px;font-size:13px;background:var(--bg-2);cursor:pointer}
+.rng{width:100%;margin:6px 0 4px;accent-color:var(--purple)}
+.rngscale{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--mute)}
+.dots{display:flex;flex-wrap:wrap;gap:3px;margin:10px 0 8px}
+.dot2{width:9px;height:9px;border-radius:2px;background:var(--purple-lav)}.dot2.below{background:#d9c6cf}
+.toggle{display:flex;align-items:flex-start;gap:13px;padding:13px 0;border-top:1px solid var(--line)}.toggle:first-of-type{border-top:none}
+.toggle .tg{flex:1}.toggle .tg b{font-weight:500;font-size:13.5px}.toggle .tg p{font-size:12px;color:var(--mute);margin-top:3px;line-height:1.5}
+.sw{width:42px;height:23px;border-radius:99px;background:var(--bg-3);position:relative;flex:none;cursor:pointer;transition:.15s;margin-top:2px}
+.sw.on{background:var(--purple)}.sw::after{content:'';position:absolute;top:2px;left:2px;width:19px;height:19px;border-radius:50%;background:#fff;transition:.15s;box-shadow:0 1px 3px rgba(0,0,0,.2)}.sw.on::after{transform:translateX(19px)}
+.aside .acard{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:15px 17px;margin-bottom:14px}
+.aside .ak{font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--mute);letter-spacing:.05em;margin-bottom:8px}
+.aside .abudv{font-size:19px;font-weight:600}.aside .abudv small{font-size:12px;color:var(--mute);font-weight:400}
+.aside .feat{display:flex;justify-content:space-between;font-size:12px;padding:4px 0;color:var(--ink-2)}.aside .feat b{font-weight:500}
+.savebar{display:flex;align-items:center;justify-content:space-between;gap:14px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:13px 17px;font-size:12.5px;color:var(--mute)}
+@media (max-width:1100px){.kanban{grid-template-columns:repeat(3,1fr)}.spec,.aset{grid-template-columns:1fr}.ckpis{grid-template-columns:repeat(2,1fr)}.fbstages,.fbdrow{flex-wrap:wrap}.fbstage,.fbdcell{flex:1 0 30%}}
+</style>
+</head>
+<body>
+<div class="previewbar">Design preview · sample data, not live · Job pipeline</div>
+
+<nav class="nav">
+  <span class="logo">taali<b>.</b></span>
+  <a class="nt" href="/home-preview"><i class="ti ti-home"></i> Home <span class="mc-badge">12</span></a>
+  <a class="nt on" href="/jobs-preview"><i class="ti ti-briefcase"></i> Jobs</a>
+  <a class="nt" href="/search-preview"><i class="ti ti-message-circle"></i> Chat <span class="mc-badge ai">AI</span></a>
+  <span class="nt"><i class="ti ti-checkbox"></i> Tasks</span>
+  <a class="nt" href="/analytics-preview"><i class="ti ti-chart-line"></i> Analytics</a>
+  <a class="nt" href="/settings-preview"><i class="ti ti-settings"></i> Settings</a>
+  <span style="flex:1"></span>
+  <span class="pill">Search candidates, roles, tasks… <span class="kbd">⌘K</span></span>
+  <span class="ibtn"><i class="ti ti-bell"></i></span>
+  <span class="avwrap"><span class="sp">SP</span><i class="ti ti-chevron-down" style="font-size:14px"></i></span>
+</nav>
+
+<div class="jwrap">
+  <div class="hrow" style="margin-bottom:14px">
+    <div>
+      <div class="crumb"><a href="/jobs-preview" style="color:var(--purple)">Jobs</a> · #26</div>
+      <div class="h1">Senior AWS Platform Engineer</div>
+    </div>
+    <div style="display:flex;gap:9px;flex-wrap:wrap;justify-content:flex-end">
+      <button class="btn sm"><i class="ti ti-inbox ic"></i> 9 pending → Home</button>
+      <button class="btn sm"><i class="ti ti-share-2 ic"></i> Share</button>
+      <button class="btn sm"><i class="ti ti-edit ic"></i> Edit role</button>
+      <button class="btn sm primary"><i class="ti ti-user-plus ic"></i> Invite candidate</button>
+    </div>
+  </div>
+
+  <!-- role agent strip -->
+  <div class="abar on">
+    <span class="absp"><i class="ti ti-sparkles"></i></span>
+    <span class="ablab">Agent on</span>
+    <span class="abpend">9 awaiting you</span>
+    <span class="abtick"><i class="ti ti-point-filled"></i> Scoring Marcus Lin · just now</span>
+    <span class="abbud">
+      <span class="amt">$42<span class="of"> / $50</span></span>
+      <span class="abtrack"><i style="width:84%"></i></span>
+      <span class="abbtn"><i class="ti ti-player-pause"></i> Pause</span>
+      <span class="abbtn ic"><i class="ti ti-settings"></i></span>
+    </span>
+  </div>
+  <div class="facts">
+    <div class="f"><span class="fk">Location</span><b>Dubai, UAE</b></div>
+    <div class="f"><span class="fk">Department</span><b>Engineering</b></div>
+    <div class="f"><span class="fk">Employment</span><b>Full-time</b></div>
+    <div class="f task"><span class="fk">Linked task</span><b>AWS Platform Build · A/B 2 tasks</b></div>
+  </div>
+
+  <!-- funnel board with decision gates -->
+  <div class="fb">
+    <div class="fbhead"><span class="ttl">Pipeline · this role</span><span class="aw">9 awaiting you</span></div>
+    <div class="fbstages">
+      <div class="fbstage"><div class="fk">Applied</div><div class="fv">312</div></div>
+      <div class="fbstage attn"><div class="fk">Scored</div><div class="fv">148</div></div>
+      <div class="fbstage"><div class="fk">Invited</div><div class="fv">34</div></div>
+      <div class="fbstage attn"><div class="fk">Completed</div><div class="fv">12</div></div>
+      <div class="fbstage out"><div class="fk">Advanced</div><div class="fv">8</div></div>
+      <div class="fbstage term out"><div class="fk">Rejected</div><div class="fv">156</div></div>
+    </div>
+    <div class="fbdrow">
+      <div class="fbdcell"><span class="fbchip pre"><i class="ti ti-filter-x"></i> 4 pre-screen reject</span></div>
+      <div class="fbdcell"><span class="fbchip send"><i class="ti ti-send"></i> 5 send</span><span class="fbchip adv"><i class="ti ti-arrow-up-right"></i> 3 advance</span><span class="fbchip rej"><i class="ti ti-x"></i> 1 reject</span><span class="fbchip pend">2 not yet decided</span></div>
+      <div class="fbdcell"><span class="out">22 in progress</span></div>
+      <div class="fbdcell"><span class="fbchip adv"><i class="ti ti-arrow-up-right"></i> 2 advance</span><span class="fbchip rej"><i class="ti ti-x"></i> 1 reject</span></div>
+      <div class="fbdcell"><span class="out">with recruiter</span></div>
+      <div class="fbdcell"><span class="out">closed</span></div>
+    </div>
+  </div>
+
+  <!-- tabs -->
+  <div class="ptabs">
+    <span class="ptab on" data-p="cands"><i class="ti ti-table"></i> Candidates</span>
+    <span class="ptab" data-p="pipe"><i class="ti ti-layout-kanban"></i> Pipeline</span>
+    <span class="ptab" data-p="spec"><i class="ti ti-file-description"></i> Job spec</span>
+    <span class="ptab" data-p="settings"><i class="ti ti-adjustments"></i> Agent settings</span>
+  </div>
+
+  <!-- TAB: candidates -->
+  <div class="panel on" id="cands">
+    <div class="ckpis">
+      <div class="ckpi"><div class="k">In pipeline</div><div class="v">156</div><div class="sub">12 completed</div></div>
+      <div class="ckpi"><div class="k">New CVs</div><div class="v">7</div><div class="sub">ready to score</div></div>
+      <div class="ckpi"><div class="k">Below threshold</div><div class="v">61</div><div class="sub">flagged at &lt; 55</div></div>
+      <div class="ckpi"><div class="k">Awaiting you</div><div class="v attn">9</div><div class="sub">2 not yet decided</div></div>
+      <div class="ckpi"><div class="k">Role budget · MTD</div><div class="v">$42<small> / $50</small></div><div class="bar"><i style="width:84%"></i></div></div>
+    </div>
+    <div class="ctool">
+      <div class="seg">
+        <button class="on">All <span class="c">156</span></button>
+        <button>Applied <span class="c">312</span></button>
+        <button>Scored <span class="c">148</span></button>
+        <button>Invited <span class="c">34</span></button>
+        <button>Completed <span class="c">12</span></button>
+        <button>Advanced <span class="c">8</span></button>
+        <button>Rejected <span class="c">156</span></button>
+      </div>
+      <span style="flex:1"></span>
+      <button class="btn sm"><i class="ti ti-refresh ic"></i> Sync from Workable</button>
+      <button class="btn sm primary"><i class="ti ti-bolt ic"></i> Process 7 candidates</button>
+    </div>
+    <table class="ctable">
+      <thead><tr><th style="width:30px"><input type="checkbox"></th><th>Candidate</th><th>Score ↓</th><th>Stage</th><th>Workable</th><th>Agent</th><th>Last updated</th><th></th></tr></thead>
+      <tbody>
+        <tr class="agentrow"><td><input type="checkbox"></td><td><div class="cn">Yusuf Karim</div><div class="csub">Staff Platform Engineer · yusuf.k@…</div></td><td><span class="scorepill hi">88</span></td><td><span class="stagepill">Completed</span></td><td><span class="stagepill">Assessment</span></td><td><span class="aiaction"><i class="ti ti-sparkles"></i> Advance to interview</span></td><td class="tert">12m ago</td><td><a href="/report-preview" class="btn sm">View →</a></td></tr>
+        <tr class="agentrow"><td><input type="checkbox"></td><td><div class="cn">Dana Okoro</div><div class="csub">Senior Data/Platform Eng · dana.o@…</div></td><td><span class="scorepill hi">83</span></td><td><span class="stagepill">Completed</span></td><td><span class="stagepill">Assessment</span></td><td><span class="aiaction"><i class="ti ti-sparkles"></i> Advance to interview</span></td><td class="tert">2h ago</td><td><a href="/report-preview" class="btn sm">View →</a></td></tr>
+        <tr class="agentrow"><td><input type="checkbox"></td><td><div class="cn">Alex Rahman</div><div class="csub">Senior AWS Platform Engineer · alex.r@…</div></td><td><span class="scorepill mid">72</span></td><td><span class="stagepill">Scored</span></td><td><span class="stagepill">Sourced</span></td><td><span class="aiaction"><i class="ti ti-sparkles"></i> Send assessment</span></td><td class="tert">1h ago</td><td><a href="/report-preview" class="btn sm">View →</a></td></tr>
+        <tr><td><input type="checkbox"></td><td><div class="cn">Priya Nair</div><div class="csub">Cloud Engineer · priya.n@…</div></td><td><span class="scorepill mid">64</span></td><td><span class="stagepill">Invited</span></td><td><span class="stagepill">Assessment invited</span></td><td class="tert">—</td><td class="tert">3h ago</td><td><a href="/report-preview" class="btn sm">View →</a></td></tr>
+        <tr><td><input type="checkbox"></td><td><div class="cn">Marcus Lin</div><div class="csub">DevOps Engineer · marcus.l@…</div></td><td><span class="tert">Scoring…</span></td><td><span class="stagepill">Applied</span></td><td><span class="stagepill">Applied</span></td><td class="tert">—</td><td class="tert">just now</td><td><a href="/report-preview" class="btn sm">View →</a></td></tr>
+        <tr class="agentrow"><td><input type="checkbox"></td><td><div class="cn">Rohan Bhatt</div><div class="csub">Junior SRE · rohan.b@…</div></td><td><span class="scorepill lo">28</span></td><td><span class="stagepill">Scored</span></td><td><span class="stagepill is-disqualified" style="background:#f2e6e9;color:#8a4658">Disqualified</span></td><td><span class="aiaction"><i class="ti ti-filter-x"></i> Pre-screen reject</span></td><td class="tert">5h ago</td><td><a href="/report-preview" class="btn sm">View →</a></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- TAB: pipeline kanban -->
+  <div class="panel" id="pipe">
+    <div class="kanban">
+      <div class="kcol">
+        <div class="kch"><span class="dot"></span><span class="kn">Applied</span><span class="kc">312 · new</span></div>
+        <div class="kcard"><div class="ktop"><span class="kav">ML</span><div><div class="kname">Marcus Lin</div><div class="kpos">DevOps Engineer</div></div></div><div class="kline"><span>No CV score</span> · <span class="tert">just now</span></div></div>
+        <div class="kcard"><div class="ktop"><span class="kav">SK</span><div><div class="kname">Sana Khan</div><div class="kpos">Platform Engineer</div></div></div><div class="kline"><span>No CV score</span> · <span class="tert">14m</span></div></div>
+        <div class="kmore">+ 310 more →</div>
+      </div>
+      <div class="kcol">
+        <div class="kch"><span class="dot"></span><span class="kn">Scored</span><span class="kc">148 · to send</span></div>
+        <div class="kcard"><div class="ktop"><span class="kav">AR</span><div><div class="kname">Alex Rahman</div><div class="kpos">Senior AWS Platform Eng</div></div></div><div class="kline"><span>CV 81%</span> · <span class="kpip">72</span> · <span class="tert">1h</span></div>
+          <div class="kagent"><div class="ka"><i class="ti ti-sparkles"></i> Send assessment</div><div class="kw">Strong AWS/IaC but no Bedrock/SageMaker — assessment closes the AI/ML gap and 8 unverified claims.</div><div class="kbtns"><button class="kbtn app">Approve</button><button class="kbtn ovr">Override</button></div></div>
+        </div>
+        <div class="kcard"><div class="ktop"><span class="kav" style="background:var(--bg-3);color:var(--mute)">RB</span><div><div class="kname">Rohan Bhatt</div><div class="kpos">Junior SRE</div></div></div><div class="kline"><span>CV 31%</span> · <span class="kpip" style="color:var(--mute)">28</span> · <span class="tert">5h</span></div>
+          <div class="kagent"><div class="ka"><i class="ti ti-filter-x"></i> Reject · below threshold</div><div class="kw">Score 28 &lt; 55. No production AWS evidence; 2 years vs 8 required.</div><div class="kbtns"><button class="kbtn app">Approve</button><button class="kbtn ovr">Override</button></div></div>
+        </div>
+        <div class="kmore">+ 146 more →</div>
+      </div>
+      <div class="kcol">
+        <div class="kch"><span class="dot"></span><span class="kn">Invited</span><span class="kc">34 · awaiting</span></div>
+        <div class="kcard"><div class="ktop"><span class="kav">PN</span><div><div class="kname">Priya Nair</div><div class="kpos">Cloud Engineer</div></div></div><div class="kline"><span>CV 70%</span> · <span class="kpip">64</span> · <span class="live">LIVE</span> · <span class="tert">3h</span></div></div>
+        <div class="kcard"><div class="ktop"><span class="kav">FA</span><div><div class="kname">Farah Aziz</div><div class="kpos">SRE</div></div></div><div class="kline"><span>CV 76%</span> · <span class="kpip">69</span> · <span class="tert">6h</span></div></div>
+        <div class="kmore">+ 32 more →</div>
+      </div>
+      <div class="kcol">
+        <div class="kch"><span class="dot"></span><span class="kn">Completed</span><span class="kc">12 · decision</span></div>
+        <div class="kcard"><div class="ktop"><span class="kav">YK</span><div><div class="kname">Yusuf Karim</div><div class="kpos">Staff Platform Eng</div></div></div><div class="kline"><span>CV 90%</span> · <span class="kpip">88</span> · <span class="tert">12m</span></div>
+          <div class="kagent"><div class="ka"><i class="ti ti-arrow-up-right"></i> Advance to interview</div><div class="kw">Assessment 84/100. All must-haves met, Bedrock verified in work-sample.</div><div class="kbtns"><button class="kbtn app">Approve</button><button class="kbtn ovr">Override</button></div></div>
+        </div>
+        <div class="kcard"><div class="ktop"><span class="kav">DO</span><div><div class="kname">Dana Okoro</div><div class="kpos">Senior Data/Platform</div></div></div><div class="kline"><span>CV 85%</span> · <span class="kpip">83</span> · <span class="tert">2h</span></div>
+          <div class="kagent"><div class="ka"><i class="ti ti-arrow-up-right"></i> Advance to interview</div><div class="kw">Assessment 79/100. Strong delegation + diligence; minor gap on cost-optimisation.</div><div class="kbtns"><button class="kbtn app">Approve</button><button class="kbtn ovr">Override</button></div></div>
+        </div>
+        <div class="kmore">+ 10 more →</div>
+      </div>
+      <div class="kcol">
+        <div class="kch"><span class="dot"></span><span class="kn">Advanced</span><span class="kc">8 · recruiter</span></div>
+        <div class="kcard"><div class="ktop"><span class="kav">HM</span><div><div class="kname">Hana Mansour</div><div class="kpos">Principal Engineer</div></div></div><div class="kline"><span>CV 92%</span> · <span class="kpip">91</span> · <span class="tert">1d</span></div></div>
+        <div class="kmore">+ 7 more →</div>
+      </div>
+      <div class="kcol">
+        <div class="kch term"><span class="dot"></span><span class="kn">Rejected</span><span class="kc">156 · closed</span></div>
+        <div class="kcard"><div class="ktop"><span class="kav" style="background:var(--bg-3);color:var(--mute)">TS</span><div><div class="kname">Tom Silva</div><div class="kpos">IT Support</div></div></div><div class="kline"><span class="tert">Pre-screen · 19</span></div></div>
+        <div class="kmore">+ 155 more →</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB: job spec -->
+  <div class="panel" id="spec">
+    <div class="spec">
+      <div>
+        <div style="font-size:12px;color:var(--mute);margin-bottom:14px">Workable ingested job spec · <a style="color:var(--purple-2)">Open source posting ↗</a></div>
+        <div class="specsec"><div class="num">01</div><h4>About the role</h4><p>We're hiring a Senior AWS Platform Engineer to own the cloud platform that runs our regulated banking workloads across the GCC. You'll lead IaC, CI/CD and the move toward AI-assisted infrastructure on Bedrock and SageMaker.</p></div>
+        <div class="specsec"><div class="num">02</div><h4>What you'll do</h4><ul><li>Design and operate multi-account AWS landing zones with Terraform.</li><li>Build and harden CI/CD for platform and ML services.</li><li>Introduce Bedrock / SageMaker patterns for internal AI tooling.</li><li>Partner with security on SOC2 / regional compliance.</li></ul></div>
+        <div class="specsec"><div class="num">03</div><h4>Recruiter requirements</h4><ul><li>8+ years production AWS, with at least 2 at senior/staff level.</li><li>Deep Terraform / IaC; multi-account experience.</li><li>Exposure to Bedrock or SageMaker (must-have).</li><li>FinTech / banking domain strongly preferred.</li></ul></div>
+      </div>
+      <div class="glance">
+        <div style="font-family:var(--mono);font-size:10.5px;text-transform:uppercase;color:var(--purple);font-weight:500;margin-bottom:11px">At a glance</div>
+        <div class="hi"><i class="ti ti-briefcase ti"></i><div><b>Workable-linked role</b><span>Candidates auto-sync every 5 min</span></div></div>
+        <div class="hi"><i class="ti ti-list-check ti"></i><div><b>4 recruiter criteria</b><span>2 must-haves enforced by the agent</span></div></div>
+        <div class="hi"><i class="ti ti-target ti"></i><div><b>Interview focus ready</b><span>Bedrock / cost-optimisation probes</span></div></div>
+        <div class="hi"><i class="ti ti-filter ti"></i><div><b>Screening triggers</b><span>Reject below 55 · assessment 55–80</span></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB: agent settings -->
+  <div class="panel" id="settings">
+    <div style="font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--purple);font-weight:500;margin-bottom:13px">How the agent runs this role · overrides org defaults</div>
+    <div class="aset">
+      <div>
+        <div class="asec">
+          <div class="ah">Role criteria</div><div class="ad">The agent scores every candidate against these. Must-haves are enforced — no exceptions.</div>
+          <div class="cchips">
+            <span class="cchip">8+ yrs production AWS <i class="ti ti-x x"></i></span>
+            <span class="cchip">Terraform / IaC <i class="ti ti-x x"></i></span>
+            <span class="cchip">Bedrock or SageMaker · must-have <i class="ti ti-x x"></i></span>
+            <span class="cchip">FinTech / banking <i class="ti ti-x x"></i></span>
+            <span class="cchip add"><i class="ti ti-plus"></i> Add criterion</span>
+          </div>
+        </div>
+        <div class="asec">
+          <div class="ah">Reject threshold</div><div class="ad">Candidates scoring below this are flagged or auto-rejected.</div>
+          <div class="selrow"><span class="tlabel" style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--mute)">Mode</span><span class="sel">Manual <i class="ti ti-chevron-down" style="font-size:14px;color:var(--mute)"></i></span><span style="font-size:13px;color:var(--ink-2)">Currently <b style="color:var(--purple-2)">55%</b></span></div>
+          <input type="range" class="rng" min="0" max="100" value="55">
+          <div class="rngscale"><span>0</span><span>25</span><span>50</span><span>75</span><span>100%</span></div>
+          <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--mute);margin:14px 0 4px">Pipeline distribution · 148 scored</div>
+          <div class="dots" id="dots"></div>
+          <div style="font-size:12px;color:var(--mute)">61 below threshold · 87 above · <a style="color:var(--purple-2);font-weight:500">Review the 61 →</a></div>
+        </div>
+        <div class="asec">
+          <div class="ah">Autonomy rules</div><div class="ad">What the agent may do without waiting for your approval.</div>
+          <div class="toggle"><div class="tg"><b>Auto-reject below threshold</b><p>Below-threshold candidates are rejected immediately. Off: every reject lands in the Decision Hub for you.</p></div><div class="sw"></div></div>
+          <div class="toggle"><div class="tg"><b>Auto-promote</b><p>Sending an assessment and advancing to interview happen without approval.</p></div><div class="sw on"></div></div>
+        </div>
+        <div class="savebar"><span>Changes apply to this role only — they override your org defaults.</span><button class="btn sm primary">Save role settings</button></div>
+      </div>
+      <div class="aside">
+        <div class="acard">
+          <div class="ak">Role budget · this month</div>
+          <div class="abudv">$42 <small>of $50</small></div>
+          <div class="bar" style="height:5px;border-radius:3px;background:var(--bg-3);margin:9px 0;overflow:hidden"><i style="display:block;height:100%;width:84%;background:var(--purple-lav);border-radius:3px"></i></div>
+          <div style="font-size:11px;color:var(--mute);margin-bottom:11px">EOM projection ≈ $50 · on budget</div>
+          <div class="feat"><span>Scoring</span><b>$21</b></div>
+          <div class="feat"><span>Assessments</span><b>$11</b></div>
+          <div class="feat"><span>Pre-screen</span><b>$6</b></div>
+          <div class="feat"><span>Semantic search</span><b>$4</b></div>
+          <div style="margin-top:11px;font-size:12px"><span style="color:var(--mute)">Monthly cap $50 · </span><a style="color:var(--purple-2);font-weight:500">Edit</a></div>
+        </div>
+        <div class="acard">
+          <div class="ak">Must-have requirements</div>
+          <div style="font-size:12.5px;color:var(--ink-2);line-height:1.7">The agent rejects below these — no exceptions.<br>· Bedrock or SageMaker exposure<br>· 8+ years production AWS</div>
+        </div>
+        <div class="acard">
+          <div class="ak">Pause threshold</div>
+          <div class="selrow" style="margin:0"><span class="sel" style="font-size:12.5px">80% <i class="ti ti-chevron-down" style="font-size:13px;color:var(--mute)"></i></span><span style="font-size:11.5px;color:var(--mute)">Agent pauses itself here</span></div>
+        </div>
+        <div style="font-size:11.5px;color:var(--mute);border:1px dashed var(--line-2);border-radius:11px;padding:11px 13px;line-height:1.5"><i class="ti ti-info-circle"></i> Inherits from org defaults. Changes here apply to this role only.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.querySelectorAll('.ptab').forEach(t=>t.addEventListener('click',()=>{
+  document.querySelectorAll('.ptab').forEach(x=>x.classList.remove('on'));
+  document.querySelectorAll('.panel').forEach(x=>x.classList.remove('on'));
+  t.classList.add('on');document.getElementById(t.dataset.p).classList.add('on');
+}));
+document.querySelectorAll('.sw').forEach(s=>s.addEventListener('click',()=>s.classList.toggle('on')));
+document.querySelectorAll('.seg button, .fchip').forEach(b=>b.addEventListener('click',()=>{
+  if(b.parentElement.classList.contains('seg')){b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');}
+}));
+// distribution dots
+var d=document.getElementById('dots');if(d){for(var i=0;i<148;i++){var s=document.createElement('span');s.className='dot2'+(i<61?' below':'');d.appendChild(s);}}
+</script>
+</body>
+</html>

@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en" data-brand="taali">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Taali — search preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.30.0/dist/tabler-icons.min.css">
+<link rel="stylesheet" href="/report-preview.css">
+<style>
+.previewbar{background:#241147;color:#d9cdfa;font-family:'Geist Mono',monospace;font-size:11.5px;letter-spacing:.04em;text-align:center;padding:6px 12px}
+.cproot{display:grid;grid-template-columns:248px minmax(0,1fr);height:calc(100vh - 60px - 27px);max-width:1320px;margin:0 auto;border-left:1px solid var(--line);border-right:1px solid var(--line)}
+/* sidebar */
+.cpside{border-right:1px solid var(--line);background:var(--bg-2);display:flex;flex-direction:column;overflow:hidden}
+.cpside .sh{padding:16px 16px 12px}
+.cpttl{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--mute);margin-bottom:10px}
+.modesw{display:flex;border:1px solid var(--line-2);border-radius:10px;overflow:hidden;background:var(--bg)}
+.modesw button{flex:1;padding:8px;font-size:13px;font-weight:500;color:var(--mute);border:none;background:transparent;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;justify-content:center;gap:6px;position:relative}
+.modesw button.on{background:var(--bg-2);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.modesw .badge{position:absolute;top:4px;right:10px;font-size:9px;font-weight:600;background:var(--purple);color:#fff;border-radius:99px;padding:0 5px}
+.newchat{margin:0 16px 10px;border:1px dashed var(--line-2);border-radius:10px;padding:9px;font-size:13px;color:var(--purple-2);font-weight:500;display:flex;align-items:center;gap:7px;cursor:pointer}.newchat .p{width:18px;height:18px;border-radius:6px;background:var(--purple-soft);display:flex;align-items:center;justify-content:center;font-size:12px}
+.convgroup{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);padding:10px 16px 5px}
+.conv{margin:0 10px;padding:9px 11px;border-radius:9px;cursor:pointer}.conv:hover{background:var(--bg)}.conv.on{background:var(--purple-tint);box-shadow:inset 0 0 0 1px var(--purple-soft)}
+.conv .ct{font-size:12.5px;font-weight:500;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.conv .cm{font-family:var(--mono);font-size:10px;color:var(--mute);margin-top:3px}
+/* center */
+.cpcenter{display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
+.cphead{height:56px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;padding:0 20px;background:rgba(255,255,255,.8);backdrop-filter:blur(8px)}
+.cphead .htt{font-weight:600;font-size:14.5px}.cphead .hsub{font-family:var(--mono);font-size:10.5px;color:var(--mute)}
+.cphead .pill2{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--mute);border:1px solid var(--line);border-radius:99px;padding:5px 12px;display:inline-flex;align-items:center;gap:7px;background:var(--bg-2)}
+.cphead .pill2 .sq{width:9px;height:9px;border-radius:2px;background:var(--purple)}
+.cpscroll{flex:1;overflow:auto;padding:24px 20px}
+.thread{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+.umsg{align-self:flex-end;background:var(--ink);color:#fff;border-radius:16px;padding:10px 15px;font-size:13.5px;max-width:80%}
+.amsg{font-size:13.5px;color:var(--ink-2);line-height:1.6}.amsg .who{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;color:var(--purple);margin-bottom:5px}
+/* tool call */
+.tool{border:1px solid var(--line);border-radius:11px;background:var(--bg-2);overflow:hidden}
+.toolh{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer}
+.toolg{width:26px;height:26px;border-radius:8px;background:var(--purple-soft);color:var(--purple-2);display:flex;align-items:center;justify-content:center;font-size:14px;flex:none}
+.toolnm{font-family:var(--mono);font-size:12px;font-weight:500}
+.toolargs{font-family:var(--mono);font-size:11px;color:var(--mute)}
+.toolct{margin-left:auto;font-size:11px;color:var(--purple-2);background:var(--purple-soft);border-radius:99px;padding:2px 9px;font-weight:500}
+/* evidence card */
+.evcard{border:1px solid var(--purple-soft);border-radius:14px;background:var(--bg-2);overflow:hidden}
+.evhead{padding:14px 16px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,var(--purple-tint),var(--bg-2))}
+.evhead .et{font-size:15px;font-weight:600}.evhead .et small{color:var(--mute);font-weight:400}
+.evhead .em{font-size:11.5px;color:var(--mute);margin-top:3px}
+.evlist{list-style:none}
+.evcand{padding:14px 16px;border-top:1px solid var(--line)}.evcand:first-child{border-top:none}
+.evtop{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.evrank{font-weight:700;color:var(--purple-2);font-size:14px}
+.evname{font-weight:600;font-size:14.5px;color:var(--ink)}
+.evpill{font-size:12px;font-weight:600;border-radius:7px;padding:3px 9px;font-variant-numeric:tabular-nums}
+.evpill.hi{background:var(--purple);color:#fff}.evpill.mid{background:var(--purple-soft);color:var(--purple-2)}.evpill.lo{background:var(--bg-3);color:var(--mute)}
+.evallmet{font-size:10.5px;font-weight:600;color:var(--purple-2);border:1px solid var(--purple-lav);border-radius:99px;padding:2px 9px}
+.evsub{font-size:12px;color:var(--mute);margin:5px 0 11px;display:flex;align-items:center;gap:8px}
+.evsub a{color:var(--purple-2);font-weight:500}
+.evcrit{padding:9px 0;border-top:1px dashed var(--line)}.evcrit:first-of-type{border-top:none}
+.evcrow{display:flex;align-items:flex-start;gap:9px}
+.evchip{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.02em;border-radius:6px;padding:3px 8px;white-space:nowrap;flex:none}
+.evchip.met{background:var(--purple);color:#fff}
+.evchip.partial{background:var(--purple-soft);color:var(--purple-2)}
+.evchip.notmet{background:#f3f1f8;color:var(--mute);border:1px solid var(--line-2)}
+.evchip.missing{background:transparent;color:var(--mute);border:1px solid var(--line-2)}
+.evchip.unver{background:var(--purple-soft);color:var(--purple-2);border:1px dashed var(--purple-lav)}
+.evctext{font-size:12.5px;color:var(--ink-2);line-height:1.45;padding-top:1px}
+.evreason{font-size:11.5px;color:var(--mute);margin:5px 0 0 0;font-style:italic}
+.evquote{font-size:12px;color:var(--ink-2);font-style:italic;border-left:2px solid var(--purple-lav);padding:3px 0 3px 11px;margin:7px 0 0 0;line-height:1.5}
+.evsrc{font-family:var(--mono);font-size:9px;text-transform:uppercase;letter-spacing:.03em;color:var(--purple-2);background:var(--purple-soft);border-radius:4px;padding:1px 6px;margin-right:7px;font-style:normal}
+.evmore{font-size:11px;color:var(--purple);font-weight:500;cursor:pointer}
+.evnoquote{font-size:11.5px;color:var(--mute);font-style:italic;margin-top:6px}
+.evfoot{padding:12px 16px;border-top:1px solid var(--line);font-size:12px}.evfoot a{color:var(--purple-2);font-weight:500}
+/* composer */
+.composer{border-top:1px solid var(--line);padding:14px 20px 18px;background:linear-gradient(180deg,transparent,var(--bg) 30%)}
+.cwrap{max-width:760px;margin:0 auto}
+.cinput{border:1px solid var(--line-2);border-radius:16px;background:var(--bg-2);padding:13px 15px;display:flex;align-items:center;gap:10px;box-shadow:0 2px 14px rgba(94,58,168,.05)}
+.cinput .ph{flex:1;color:var(--mute);font-size:13.5px}
+.csend{width:34px;height:34px;border-radius:11px;background:var(--purple);color:#fff;display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer}
+.cfoot{font-family:var(--mono);font-size:10px;color:var(--mute);text-align:center;margin-top:8px}
+@media (max-width:860px){.cproot{grid-template-columns:1fr}.cpside{display:none}}
+</style>
+</head>
+<body>
+<div class="previewbar">Design preview · sample data, not live · Chat / Search</div>
+
+<nav class="nav">
+  <span class="logo">taali<b>.</b></span>
+  <a class="nt" href="/home-preview"><i class="ti ti-home"></i> Home <span class="mc-badge">12</span></a>
+  <a class="nt" href="/jobs-preview"><i class="ti ti-briefcase"></i> Jobs</a>
+  <a class="nt on" href="/search-preview"><i class="ti ti-message-circle"></i> Chat <span class="mc-badge ai">AI</span></a>
+  <span class="nt"><i class="ti ti-checkbox"></i> Tasks</span>
+  <a class="nt" href="/analytics-preview"><i class="ti ti-chart-line"></i> Analytics</a>
+  <a class="nt" href="/settings-preview"><i class="ti ti-settings"></i> Settings</a>
+  <span style="flex:1"></span>
+  <span class="pill">Search candidates, roles, tasks… <span class="kbd">⌘K</span></span>
+  <span class="ibtn"><i class="ti ti-bell"></i></span>
+  <span class="avwrap"><span class="sp">SP</span><i class="ti ti-chevron-down" style="font-size:14px"></i></span>
+</nav>
+
+<div class="cproot">
+  <!-- sidebar -->
+  <div class="cpside">
+    <div class="sh">
+      <div class="cpttl">Chat</div>
+      <div class="modesw">
+        <button class="on"><i class="ti ti-message"></i> Ask</button>
+        <button><i class="ti ti-sparkles"></i> Agents <span class="badge">4</span></button>
+      </div>
+    </div>
+    <div class="newchat"><span class="p"><i class="ti ti-plus"></i></span> New conversation</div>
+    <div class="convgroup">Today</div>
+    <div class="conv on"><div class="ct">Senior Backend Engineers, 5+ yrs Python</div><div class="cm">6 msg · 2m</div></div>
+    <div class="conv"><div class="ct">Who's in review across all open roles?</div><div class="cm">3 msg · 40m</div></div>
+    <div class="conv"><div class="ct">Compare the top 3 for Senior AWS</div><div class="cm">8 msg · 1h</div></div>
+    <div class="convgroup">Yesterday</div>
+    <div class="conv"><div class="ct">Anyone from a YC company who knows Postgres?</div><div class="cm">5 msg · 1d</div></div>
+    <div class="conv"><div class="ct">Highest-scoring candidate this month — pull CV</div><div class="cm">4 msg · 1d</div></div>
+    <div class="convgroup">This week</div>
+    <div class="conv"><div class="ct">Data Engineers based in MENA</div><div class="cm">7 msg · 3d</div></div>
+  </div>
+
+  <!-- center -->
+  <div class="cpcenter">
+    <div class="cphead">
+      <div><div class="htt">Senior Backend Engineers, 5+ yrs Python</div><div class="hsub">Taali</div></div>
+      <span class="pill2"><span class="sq"></span> MCP · 9 tools</span>
+    </div>
+    <div class="cpscroll">
+      <div class="thread">
+        <div class="umsg">Find me a Senior Backend Engineer with 5+ years and Python expertise. Top 3, grounded against their CVs.</div>
+
+        <div class="amsg">
+          <div class="who">Taali</div>
+          Here are the three strongest matches in your pool, ranked by Taali fit and checked line-by-line against each CV. Yusuf and Dana clear every requirement; Priya is close but her Python depth is only partially evidenced.
+        </div>
+
+        <div class="tool">
+          <div class="toolh"><span class="toolg"><i class="ti ti-search"></i></span><span class="toolnm">find_top_candidates</span><span class="toolargs">role="Senior Backend" · min_years=5 · skill="Python" · n=3</span><span class="toolct">3 of 41</span><i class="ti ti-chevron-down" style="color:var(--mute);margin-left:8px"></i></div>
+        </div>
+
+        <div class="evcard">
+          <div class="evhead">
+            <div class="et">Top 3 <small>· senior backend, python</small></div>
+            <div class="em">ranked by Taali fit · 41 in pool · grounded vs CV + notes</div>
+          </div>
+          <ol class="evlist">
+
+            <li class="evcand">
+              <div class="evtop"><span class="evrank">#1</span><a class="evname">Yusuf Karim ↗</a><span class="evpill hi">Taali 88</span><span class="evallmet">all met</span></div>
+              <div class="evsub">Staff Backend Engineer · Dubai — Senior AWS Platform Engineer · <a>Workable ↗</a></div>
+              <div class="evcrit"><div class="evcrow"><span class="evchip met">Met</span><span class="evctext">5+ years senior backend</span></div>
+                <div class="evquote"><span class="evsrc">CV</span>"Led a 6-engineer backend team at a regional bank for 4 years; 9 years total building high-throughput payment services."</div></div>
+              <div class="evcrit"><div class="evcrow"><span class="evchip met">Met</span><span class="evctext">Python expertise</span></div>
+                <div class="evquote"><span class="evsrc">CV</span>"Designed the core ledger service in Python (FastAPI + asyncio), processing ~4M transactions/day."</div></div>
+              <div class="evcrit"><div class="evcrow"><span class="evchip met">Met</span><span class="evctext">Distributed systems at scale</span></div>
+                <div class="evquote"><span class="evsrc">notes</span>"Recruiter screen: walked through an event-sourced architecture on Kafka with clear trade-off reasoning."</div></div>
+            </li>
+
+            <li class="evcand">
+              <div class="evtop"><span class="evrank">#2</span><a class="evname">Dana Okoro ↗</a><span class="evpill hi">Taali 83</span><span class="evallmet">all met</span></div>
+              <div class="evsub">Senior Data/Platform Engineer · Remote (MENA) — Data Engineer · <a>Workable ↗</a></div>
+              <div class="evcrit"><div class="evcrow"><span class="evchip met">Met</span><span class="evctext">5+ years senior backend</span></div>
+                <div class="evquote"><span class="evsrc">CV</span>"7 years backend + data platform engineering; senior IC since 2021 owning the ingestion tier."</div></div>
+              <div class="evcrit"><div class="evcrow"><span class="evchip met">Met</span><span class="evctext">Python expertise</span></div>
+                <div class="evquote"><span class="evsrc">CV</span>"Primary language Python — built the Airflow + dbt pipeline and a custom async ETL framework."</div></div>
+              <div class="evcrit"><div class="evcrow"><span class="evchip partial">Partial</span><span class="evctext">Public-facing API ownership</span></div>
+                <div class="evreason">Strong on internal/data APIs; less evidence of customer-facing product APIs.</div>
+                <div class="evquote"><span class="evsrc">CV</span>"Exposed the feature store via an internal gRPC API consumed by 5 teams."</div></div>
+            </li>
+
+            <li class="evcand">
+              <div class="evtop"><span class="evrank">#3</span><a class="evname">Priya Nair ↗</a><span class="evpill mid">Taali 64</span></div>
+              <div class="evsub">Cloud Engineer · Dubai — Senior AWS Platform Engineer · <a>Workable ↗</a></div>
+              <div class="evcrit"><div class="evcrow"><span class="evchip met">Met</span><span class="evctext">5+ years senior backend</span></div>
+                <div class="evquote"><span class="evsrc">CV</span>"6 years across cloud + backend engineering roles, last 2 at senior level."</div></div>
+              <div class="evcrit"><div class="evcrow"><span class="evchip partial">Partial</span><span class="evctext">Python expertise</span></div>
+                <div class="evreason">Python listed in skills, but the CV bullets are mostly Go and infrastructure tooling.</div>
+                <div class="evquote"><span class="evsrc">CV</span>"Skills: Go, Python, Terraform, AWS, Kubernetes."</div></div>
+              <div class="evcrit"><div class="evcrow"><span class="evchip missing">Missing</span><span class="evctext">Production-scale data throughput</span></div>
+                <div class="evnoquote">No supporting evidence in the CV or notes.</div></div>
+              <div class="evcrit"><div class="evcrow"><span class="evchip unver">Unverified</span><span class="evctext">Team leadership</span></div>
+                <div class="evnoquote">Stated, but no verbatim quote — treat as unverified.</div></div>
+            </li>
+
+          </ol>
+          <div class="evfoot"><a><i class="ti ti-external-link" style="font-size:13px"></i> Open shareable report ↗</a></div>
+        </div>
+
+        <div class="amsg"><div class="who">Taali</div>Want me to send an assessment to Priya to verify the Python depth and leadership before she takes a panel slot?</div>
+      </div>
+    </div>
+    <div class="composer">
+      <div class="cwrap">
+        <div class="cinput"><span class="ph">Ask anything about your candidates…</span><span class="csend"><i class="ti ti-arrow-up"></i></span></div>
+        <div class="cfoot">press Enter to send · Shift+Enter for newline · citations link back to the underlying record</div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
