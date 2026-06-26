@@ -261,13 +261,13 @@ button{font-family:inherit;cursor:pointer}
 /* agent-on recommendation slab + motion */
 .agent-rec{background:linear-gradient(120deg,#3a1d6e,#6a3fb8,#2a1556,#4a2a8a,#3a1d6e);background-size:300% 300%;border:1px solid rgba(196,165,253,.55);border-radius:16px;padding:18px 16px;text-align:center;color:#efe9fb;margin-bottom:13px;animation:flow 7s ease-in-out infinite;box-shadow:0 8px 26px rgba(36,17,71,.32)}
 @keyframes flow{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
-.agent-rec .kl{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:#cbb8f6;display:inline-flex;align-items:center;gap:6px;justify-content:center}
+.agent-rec .kl{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:#cbb8f6;display:flex;align-items:center;gap:6px;justify-content:center;margin-bottom:13px}
 .agent-rec .spark{animation:sparkpulse 2.8s ease-in-out infinite}
 @keyframes sparkpulse{0%,100%{opacity:.6;transform:scale(1)}50%{opacity:1;transform:scale(1.18)}}
 .agent-rec .big{font-size:23px;font-weight:600;letter-spacing:-.01em;margin:6px 0 13px}
 .btn-rec{width:100%;background:#fff;color:#2a1854;border:none;border-radius:12px;padding:14px;font-size:16px;font-weight:600;font-family:inherit;display:inline-flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;transition:.12s;box-shadow:0 2px 12px rgba(0,0,0,.14)}
 .btn-rec:hover{background:#f1ecfb}
-.agent-rec .conf{font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;color:#b4a0e6;margin-top:10px}
+.agent-rec .conf{font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;color:#b4a0e6;margin-top:13px}
 
 /* recent roles — compact list */
 .rolelist{display:flex;flex-direction:column;gap:6px;font-size:13.5px}
