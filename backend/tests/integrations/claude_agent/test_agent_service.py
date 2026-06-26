@@ -58,6 +58,18 @@ class _FakeAssistantMessage:
 
 
 @dataclass
+class _FakeToolResultBlock:
+    tool_use_id: str
+    content: Any = None
+    is_error: Optional[bool] = None
+
+
+@dataclass
+class _FakeUserMessage:
+    content: Any  # str | list[block]
+
+
+@dataclass
 class _FakeResultMessage:
     subtype: str = "success"
     duration_ms: int = 100
@@ -122,6 +134,8 @@ def patched_sdk():
          patch.object(claude_agent_sdk, "ResultMessage", _FakeResultMessage), \
          patch.object(claude_agent_sdk, "TextBlock", _FakeTextBlock), \
          patch.object(claude_agent_sdk, "ToolUseBlock", _FakeToolUseBlock), \
+         patch.object(claude_agent_sdk, "ToolResultBlock", _FakeToolResultBlock), \
+         patch.object(claude_agent_sdk, "UserMessage", _FakeUserMessage), \
          patch.object(
              claude_agent_sdk,
              "ClaudeAgentOptions",
@@ -242,6 +256,110 @@ def test_tool_call_path_captures_tool_uses(patched_sdk, patched_meter):
         {"name": "mcp__sandbox__Read", "input": {"path": "x.py"}}
     ]
     assert turn.num_turns == 2
+
+
+# ---- 2b. Tool RESULTS correlated onto calls (process-visible grading) --------
+
+
+def test_stringify_tool_result_variants():
+    """The result flattener handles str / list-of-dicts / None and bounds
+    the output so the ai_prompts JSON column can't balloon."""
+    from app.components.integrations.claude_agent.service import (
+        _MAX_TOOL_RESULT_CHARS,
+        _stringify_tool_result,
+    )
+
+    assert _stringify_tool_result("2 failed, 7 passed") == "2 failed, 7 passed"
+    assert _stringify_tool_result(None) == ""
+    # SDK list form: [{"type": "text", "text": "..."}]
+    assert _stringify_tool_result(
+        [{"type": "text", "text": "line one"}, {"type": "text", "text": "line two"}]
+    ) == "line one\nline two"
+    # Bounded with a truncation marker.
+    big = _stringify_tool_result("x" * (_MAX_TOOL_RESULT_CHARS + 500))
+    assert big.endswith("... (truncated)")
+    assert len(big) <= _MAX_TOOL_RESULT_CHARS + len("\n... (truncated)")
+
+
+def test_tool_results_correlated_onto_calls(patched_sdk, patched_meter):
+    """A ToolResultBlock arriving as a follow-up UserMessage is merged onto
+    its originating call by tool_use_id, so scoring sees what the agent
+    actually OBSERVED (Bash stdout, file contents), not just what it asked
+    for. Results stream AFTER the tool-use block, mirroring the real SDK."""
+    patched_sdk["messages_to_yield"] = [
+        _FakeAssistantMessage(content=[
+            _FakeToolUseBlock(id="tu_1", name="mcp__sandbox__Bash", input={"command": "pytest -q"}),
+        ]),
+        _FakeUserMessage(content=[
+            _FakeToolResultBlock(tool_use_id="tu_1", content="2 failed, 7 passed", is_error=False),
+        ]),
+        _FakeAssistantMessage(content=[
+            _FakeToolUseBlock(id="tu_2", name="mcp__sandbox__Read", input={"path": "dq/gate.py"}),
+        ]),
+        _FakeUserMessage(content=[
+            # list form, plus an error flag to prove it threads through
+            _FakeToolResultBlock(
+                tool_use_id="tu_2",
+                content=[{"type": "text", "text": "def promotion_gate(results): return {'passed': True}"}],
+                is_error=True,
+            ),
+        ]),
+        _FakeAssistantMessage(content=[_FakeTextBlock("The gate hardcodes passed=True.")]),
+        _FakeResultMessage(
+            usage={"input_tokens": 300, "output_tokens": 60, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+            total_cost_usd=0.003,
+            is_error=False,
+            num_turns=3,
+            stop_reason="end_turn",
+        ),
+    ]
+
+    svc, _factory = _build_service()
+    turn = asyncio.run(svc.run(
+        messages=[{"role": "user", "content": "why did the bad batch promote?"}],
+        system="task",
+        budget_remaining_usd=1.0,
+    ))
+
+    assert turn.success is True
+    assert turn.content == "The gate hardcodes passed=True."
+    assert len(turn.tool_calls_made) == 2
+
+    bash_call, read_call = turn.tool_calls_made
+    assert bash_call["name"] == "mcp__sandbox__Bash"
+    assert bash_call["result"] == "2 failed, 7 passed"
+    assert bash_call["is_error"] is False
+
+    assert read_call["name"] == "mcp__sandbox__Read"
+    assert "promotion_gate" in read_call["result"]  # list form flattened
+    assert read_call["is_error"] is True
+
+
+def test_tool_call_without_result_omits_result_keys(patched_sdk, patched_meter):
+    """A tool call whose result never arrives (e.g. truncated at max_turns)
+    keeps the legacy {name, input} shape — no empty result keys."""
+    patched_sdk["messages_to_yield"] = [
+        _FakeAssistantMessage(content=[
+            _FakeToolUseBlock(id="tu_1", name="mcp__sandbox__Read", input={"path": "x.py"}),
+        ]),
+        # No UserMessage/ToolResultBlock follows.
+        _FakeResultMessage(
+            usage={"input_tokens": 100, "output_tokens": 10, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+            total_cost_usd=0.001,
+            num_turns=1,
+        ),
+    ]
+
+    svc, _factory = _build_service()
+    turn = asyncio.run(svc.run(
+        messages=[{"role": "user", "content": "read x.py"}],
+        system="task",
+        budget_remaining_usd=1.0,
+    ))
+
+    assert turn.tool_calls_made == [
+        {"name": "mcp__sandbox__Read", "input": {"path": "x.py"}}
+    ]
 
 
 # ---- 3. SDK error path -------------------------------------------------------
@@ -617,7 +735,8 @@ def test_write_aggregated_usage_event_creates_row_with_source_tag(monkeypatch):
     assert len(added_rows) == 1
     row = added_rows[0]
     assert row.organization_id == 11
-    assert row.entity_id == "22"
+    # entity_id uses the namespaced ``assessment:{id}`` format (2026-06-01).
+    assert row.entity_id == "assessment:22"
     assert row.feature == "assessment"
     assert row.model == "claude-sonnet-4-5"
     assert row.input_tokens == 1000

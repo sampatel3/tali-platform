@@ -715,7 +715,7 @@ def submit_assessment_impl(
     rubric_breakdown: Dict[str, Any] = {}
     if task.evaluation_rubric and settings_obj.ANTHROPIC_API_KEY:
         try:
-            from .rubric_scoring import RubricScorer, ScoringArtifacts
+            from .rubric_scoring import RubricScorer, ScoringArtifacts, summarize_fluency_4d
 
             # Build artifacts from the actual submission state. Prefer the
             # real sandbox repo (where the agent-SDK path wrote the code);
@@ -749,6 +749,11 @@ def submit_assessment_impl(
             raw_dps_for_grader = task_extra.get("decision_points") if isinstance(task_extra, dict) else None
             if isinstance(raw_dps_for_grader, list):
                 decision_points_for_grader = [dp for dp in raw_dps_for_grader if isinstance(dp, dict)]
+            raw_traps_for_grader = task_extra.get("traps") if isinstance(task_extra, dict) else None
+            traps_for_grader = (
+                [t for t in raw_traps_for_grader if isinstance(t, dict)]
+                if isinstance(raw_traps_for_grader, list) else []
+            )
             artifacts = ScoringArtifacts(
                 repo_files=repo_files_for_grader,
                 design_doc=design_doc,
@@ -757,6 +762,13 @@ def submit_assessment_impl(
                 task_scenario=task.scenario or "",
                 candidate_role=str(task.role or ""),
                 decision_points=decision_points_for_grader,
+                # PR-2: surface the agent's tool calls/results + git diff to the
+                # grader so it scores HOW the candidate worked, not just the
+                # message/response text. Flag-gated (default off) until shadow-
+                # validated — see docs/ASSESSMENT_AI_NATIVE_IMPL_PLAN.md.
+                include_process_trace=bool(settings_obj.ASSESSMENT_GRADER_PROCESS_TRACE),
+                git_evidence=(assessment.git_evidence or {}) if isinstance(assessment.git_evidence, dict) else {},
+                traps=traps_for_grader,
             )
             scorer = RubricScorer(
                 api_key=settings_obj.ANTHROPIC_API_KEY,
@@ -790,6 +802,10 @@ def submit_assessment_impl(
                         for d in rubric_result.dimensions
                     ],
                     "heuristic_score_for_comparison": old_score,
+                    # Anthropic AI Fluency "4 Ds" rollup (Delegation / Description
+                    # / Discernment / Diligence) + Deliverable. Derived from the
+                    # same dimension grades; additive, does NOT change the score.
+                    "fluency_4d": summarize_fluency_4d(task.evaluation_rubric, rubric_result.dimensions),
                 }
                 logger.info(
                     "RubricScorer applied assessment=%s heuristic=%.2f rubric=%.2f failed=%s",

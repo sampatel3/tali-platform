@@ -481,6 +481,14 @@ class Settings(BaseSettings):
     MVP_DISABLE_CALIBRATION: bool = False
     MVP_DISABLE_PROCTORING: bool = True
     SCORING_V2_ENABLED: bool = False
+    # When True, the rubric grader's transcript view interleaves the agent's
+    # tool calls + results and the candidate's git diff, so grading can read
+    # HOW the candidate drove the agent (verification, iteration), not just
+    # the message/response text. Default OFF — flip only after shadow-
+    # validating that it doesn't pathologically re-rank live scores
+    # (scripts/shadow_rescore_assessments.py). See
+    # docs/ASSESSMENT_AI_NATIVE_IMPL_PLAN.md (PR-2).
+    ASSESSMENT_GRADER_PROCESS_TRACE: bool = False
 
     # TAALI score blending. assessment vs. role-fit (0.0..1.0 each); role-fit
     # is a 50/50 mix of CV fit and requirements fit. Weights are normalized in

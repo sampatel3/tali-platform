@@ -88,11 +88,12 @@ def _build_agentic_system_prompt(task: Task, interrogation_directive: str) -> st
     base = [
         "You are helping a candidate complete a time-boxed technical assessment in a live code workspace.",
         "",
-        "HARD LIMITS — these are constraints, NOT suggestions:",
-        "- You may use NO MORE than 3 tool calls per response. The runtime will hard-cap you at 4; the 4th IS a failure.",
-        "- After your 2nd tool call you MUST be writing the final answer, even if you'd like more evidence.",
-        "- If 2-3 calls aren't enough, STOP, return what you found, and ASK the candidate which file or symptom to focus on next.",
-        "- A fast partial answer the candidate can iterate on > an exhaustive answer 60 seconds later. They have 30 minutes total.",
+        "WORKING STYLE — you have a real tool budget; spend it deliberately:",
+        "- Work in focused steps and keep each response reasonably tight (a handful of tool calls), so the candidate isn't left waiting — they have 30 minutes and are steering you.",
+        "- For a multi-step change, briefly outline your plan and the candidate's options BEFORE editing, so they can redirect early — then execute it.",
+        "- Always VERIFY before you claim something works: run the tests or re-read the file you changed. Do NOT assert a fix you haven't actually checked.",
+        "- If a task needs more than a few steps, return what you have so far and tell the candidate what you'd do next, so they stay in control.",
+        "- When a load-bearing design decision is the candidate's to make, surface the trade-off and ASK — don't quietly decide for them.",
         "",
         "STYLE:",
         "- Be concise. One short paragraph or a tight bullet list — no preamble, no 'let me check this for you'.",
@@ -275,6 +276,11 @@ async def chat_with_claude_agentic(
         organization_id=int(assessment.organization_id),
         assessment_id=int(assessment.id),
         executor=executor,
+        # PR-10: optional per-task model override (extra_data.agent_model).
+        # None → the service default (CLAUDE_CHAT_MODEL env → Haiku 4.5), so
+        # behaviour is unchanged until a task opts a harder scenario onto a
+        # stronger model. Cost-aware: no task sets this by default.
+        model=(str(extra.get("agent_model")).strip() or None) if extra.get("agent_model") else None,
     )
     # ``budget_remaining_usd`` may be None when build_claude_budget_snapshot
     # couldn't compute it (no limit configured); pass a high floor so the

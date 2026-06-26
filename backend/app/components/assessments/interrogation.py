@@ -158,6 +158,47 @@ def validate_decision_points(decision_points: Any) -> List[str]:
     return errors
 
 
+TRAP_REQUIRED = ("id", "planted", "tell")
+
+
+def validate_traps(traps: Any) -> List[str]:
+    """Validate the optional ``traps`` block. Empty list = valid.
+
+    A trap is a planted, wrong-but-plausible path (a shortcut the agent might
+    propose, a latent bug, a contradiction it might paper over). The grader's
+    DISCERNMENT lens uses them to check whether the candidate CAUGHT and
+    rejected the trap — the hardest-to-game appropriate-reliance signal. Each
+    trap: ``{id, planted, tell, where?}``. Optional field overall; absent =
+    the task simply has no planted-trap aid. Deployment-fatal on schema error
+    (caught at boot, not at grade time), mirroring validate_decision_points.
+    """
+    errors: List[str] = []
+    if traps is None:
+        return errors
+    if not isinstance(traps, list):
+        return ["traps must be a list"]
+    if not traps:
+        return ["traps must be non-empty when present (drop the field instead)"]
+    seen_ids: set[str] = set()
+    for idx, trap in enumerate(traps):
+        if not isinstance(trap, dict):
+            errors.append(f"traps[{idx}] must be an object")
+            continue
+        for field in TRAP_REQUIRED:
+            value = trap.get(field)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"traps[{idx}].{field} must be a non-empty string")
+        where = trap.get("where")
+        if where is not None and not (isinstance(where, str) and where.strip()):
+            errors.append(f"traps[{idx}].where must be a non-empty string when present")
+        tid = trap.get("id")
+        if isinstance(tid, str) and tid.strip():
+            if tid in seen_ids:
+                errors.append(f"traps[{idx}].id={tid!r} duplicates an earlier entry")
+            seen_ids.add(tid)
+    return errors
+
+
 # ---------------------------------------------------------------------------
 # Opener renderer
 # ---------------------------------------------------------------------------
