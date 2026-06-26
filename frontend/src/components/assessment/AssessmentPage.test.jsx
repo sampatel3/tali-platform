@@ -141,7 +141,7 @@ describe('AssessmentPage tracking metadata', () => {
     expect(mockSubmit.mock.calls[0][3]).toMatchObject({ tab_switch_count: 1 });
   });
 
-  it('shows only a simple submitted confirmation in demo task preview mode', async () => {
+  it('disables submission in demo task preview mode', async () => {
     const startData = {
       assessment_id: 26,
       token: null,
@@ -156,19 +156,30 @@ describe('AssessmentPage tracking metadata', () => {
     render(<AssessmentPage startData={startData} demoMode />);
 
     expect(await screen.findByText('Assessment brief')).toBeInTheDocument();
+
+    // PR #707 made the demo / showcase preview read-only: a viewer (or the
+    // pitch deck) must never be able to submit the walkthrough assessment and
+    // flip the surface to the "Task submitted" screen. The top-bar Submit is
+    // disabled + tooltipped, and handleSubmit no-ops in demoMode — so neither
+    // Submit control can open the confirm dialog, hit the API, or reveal the
+    // submitted screen.
+    const submitButtons = screen.getAllByRole('button', { name: 'Submit' });
+    const topBarSubmit = submitButtons[0];
+    expect(topBarSubmit).toBeDisabled();
+    expect(topBarSubmit).toHaveAttribute(
+      'title',
+      'Preview — submission is disabled in the demo',
+    );
+
+    // Clicking either Submit control is inert in demo mode.
     await act(async () => {
-      fireEvent.click(screen.getAllByRole('button', { name: 'Submit' })[0]);
-    });
-    await screen.findByRole('dialog');
-    await act(async () => {
-      fireEvent.click(screen.getAllByRole('button', { name: 'Submit' }).at(-1));
+      submitButtons.forEach((button) => fireEvent.click(button));
     });
 
-    expect(await screen.findByRole('heading', { name: /Task submitted/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Close/ })).toBeInTheDocument();
-    expect(screen.queryByText(/TAALI Demo Results/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Your TAALI profile/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Try another demo/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: /Task submitted/i }),
+    ).not.toBeInTheDocument();
     expect(mockSubmit).not.toHaveBeenCalled();
   });
 
