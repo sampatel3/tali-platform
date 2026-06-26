@@ -178,3 +178,69 @@ button{font-family:inherit;cursor:pointer}
 .notebox{border:1px solid var(--line-2);border-radius:var(--radius);padding:14px 16px;color:var(--mute);background:var(--bg-2);min-height:78px}
 .stars{color:var(--purple);letter-spacing:3px;font-size:16px}
 .wkcomment{border-left:3px solid var(--line-2);padding:6px 0 6px 14px;margin:10px 0;font-size:14px}
+
+/* ===== full-detail components ===== */
+.subhead{font-family:var(--mono);font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--purple);font-weight:500;margin:24px 0 13px;display:flex;align-items:center;justify-content:space-between}
+.subhead.first{margin-top:2px}
+.hr{height:1px;background:var(--line);margin:18px 0}
+
+/* snapshot */
+.snapshot{display:grid;grid-template-columns:auto auto 1fr;gap:30px;padding:16px 18px;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg-2);margin-bottom:18px}
+.snapshot .sk{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute);margin-bottom:7px}
+.snapshot .big{font-size:24px;font-weight:600;letter-spacing:-.02em}
+.snap-roles{display:flex;gap:10px;flex-wrap:wrap}
+.snap-role{border:1px solid var(--line);border-radius:10px;padding:8px 12px;min-width:130px}
+.snap-role b{font-weight:500;font-size:13px;display:block}
+.snap-role span{font-size:11.5px;color:var(--mute)}
+.skchips{display:flex;flex-wrap:wrap;gap:6px;max-width:340px}
+.skchip{font-size:11.5px;background:var(--purple-soft);color:var(--purple-2);border-radius:6px;padding:3px 9px}
+
+/* metric cards */
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}
+.metric{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);padding:13px 15px}
+.metric .k{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--mute)}
+.metric .v{font-size:20px;font-weight:600;margin-top:4px}
+.metric .v.warn{color:var(--amber)}
+
+/* prompt log */
+.pcard{border:1px solid var(--line);border-radius:var(--radius);padding:13px 15px;margin-bottom:10px}
+.pcard .ph{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.pbadge{font-size:11px;border-radius:6px;padding:2px 8px;font-weight:500;white-space:nowrap}
+.pbadge.ok{background:var(--purple-soft);color:var(--purple-2)}
+.pbadge.warn{background:var(--amber-soft);color:var(--amber-ink)}
+.pbadge.mute{background:var(--bg-3);color:var(--mute)}
+.pbody{font-size:13.5px;color:var(--ink-2);line-height:1.55}
+
+/* code / git */
+.codeblock{font-family:var(--mono);font-size:12.5px;background:#1c1430;color:#cdbdf0;border-radius:10px;padding:14px 16px;overflow-x:auto;line-height:1.65;white-space:pre;margin:8px 0 4px}
+.codeblock .add{color:#9ae6b4}
+.codeblock .del{color:#f6a6a6}
+.gitstat{display:flex;gap:26px;flex-wrap:wrap;font-size:13.5px;margin:4px 0 10px}
+.gitstat b{font-weight:500}
+.gitstat .lab{color:var(--mute);font-family:var(--mono);font-size:11px;text-transform:uppercase;display:block;margin-bottom:2px}
+
+/* CV */
+.contact{display:flex;flex-wrap:wrap;gap:9px 20px;font-size:14px;margin:6px 0 20px;align-items:center}
+.clink{display:inline-flex;align-items:center;gap:6px;color:var(--purple-2);font-weight:500}
+.clink .ti{font-size:16px}
+.cvsec{margin-bottom:22px}
+.cvexp{padding:11px 0;border-top:1px solid var(--line)}
+.cvexp:first-of-type{border-top:none}
+.cvexp .top{display:flex;justify-content:space-between;gap:14px}
+.cvexp b{font-weight:500}
+.cvexp ul{margin:7px 0 0 18px;color:var(--ink-2);font-size:13.5px;line-height:1.55}
+.cvexp li{margin:2px 0}
+.chip2{font-size:12px;background:var(--bg-3);color:var(--ink-2);border-radius:6px;padding:4px 10px;display:inline-block}
+.chip2.match{background:var(--purple-soft);color:var(--purple-2);font-weight:500}
+
+/* questionnaire */
+.qa{border:1px solid var(--line);border-radius:var(--radius);padding:13px 16px;margin-bottom:10px}
+.qa .q{font-size:13px;color:var(--mute);margin-bottom:5px}
+.qa .a{font-size:14px}
+
+/* transcript */
+.tcard{border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;margin-bottom:12px}
+.tcell{display:flex;gap:12px;font-size:13.5px;padding:4px 0}
+.tcell .lab{font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--mute);width:96px;flex:none}
+.miniform{border:1px dashed var(--line-2);border-radius:var(--radius);padding:14px 16px;color:var(--mute);font-size:13.5px;margin-bottom:12px}
+.miniform .fld{background:var(--bg-2);border:1px solid var(--line-2);border-radius:8px;padding:8px 11px;margin-top:8px;color:var(--mute)}
