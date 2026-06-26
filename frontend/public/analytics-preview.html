@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en" data-brand="taali">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Taali — analytics preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.30.0/dist/tabler-icons.min.css">
+<link rel="stylesheet" href="/report-preview.css">
+<style>
+.previewbar{background:#241147;color:#d9cdfa;font-family:'Geist Mono',monospace;font-size:11.5px;letter-spacing:.04em;text-align:center;padding:6px 12px}
+.awrap{max-width:1320px;margin:0 auto;padding:24px 28px 60px}
+.sel{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line-2);border-radius:9px;padding:8px 13px;font-size:13px;background:var(--bg-2);cursor:pointer}
+/* summary band */
+.pulse{display:grid;grid-template-columns:repeat(6,1fr);gap:13px;margin-bottom:18px}
+.pcell{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px}
+.pcell .k{font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--mute);letter-spacing:.04em}
+.pcell .v{font-size:24px;font-weight:600;margin-top:4px;letter-spacing:-.02em}.pcell .v.attn{color:var(--purple-2)}
+.pcell .s{font-size:11px;color:var(--mute);margin-top:2px}
+/* tabs */
+.atabs{display:flex;gap:4px;border:1px solid var(--line-2);border-radius:11px;background:var(--bg-2);padding:3px;width:max-content;margin-bottom:18px;flex-wrap:wrap}
+.atab{font-size:13px;color:var(--mute);font-weight:500;padding:8px 15px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:7px}.atab.on{background:var(--purple);color:#fff}
+.panel{display:none}.panel.on{display:block}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.card2{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;margin-bottom:16px}
+.card2 .ch{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.card2 .ct2{font-size:14.5px;font-weight:600}.card2 .cd{font-size:12px;color:var(--mute)}
+/* funnel conversion */
+.conv{display:flex;flex-direction:column;gap:9px}
+.convrow{display:flex;align-items:center;gap:12px}.convrow .cl{width:96px;font-size:12.5px;color:var(--ink-2)}
+.convrow .ctrack{flex:1;height:26px;border-radius:7px;background:var(--bg-3);overflow:hidden;position:relative}
+.convrow .cfill{height:100%;background:linear-gradient(90deg,var(--purple),var(--purple-lav));border-radius:7px;display:flex;align-items:center;padding-left:11px;color:#fff;font-size:12px;font-weight:600}
+.convrow .cpct{width:84px;text-align:right;font-size:12px;color:var(--mute)}
+/* bar chart */
+.bars{display:flex;align-items:flex-end;gap:10px;height:150px;padding-top:10px}
+.bar3{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;height:100%;justify-content:flex-end}
+.bar3 .bk{width:100%;border-radius:6px 6px 0 0;background:var(--purple-lav);position:relative}
+.bar3 .bk.hl{background:var(--purple)}
+.bar3 .bl{font-family:var(--mono);font-size:9.5px;color:var(--mute)}
+.bar3 .bv{font-size:11px;font-weight:600}
+/* donut-ish stat */
+.bigstat{display:flex;align-items:center;gap:18px}
+.bigstat .n{font-size:40px;font-weight:600;letter-spacing:-.02em;color:var(--purple-2)}
+.bigstat .sub{font-size:12.5px;color:var(--mute);line-height:1.5}
+/* fleet KPIs */
+.fkpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:16px}
+.fkpi{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:13px 15px}
+.fkpi.attn{border-color:var(--amber-soft);background:var(--amber-soft)}
+.fkpi .k{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;color:var(--mute)}.fkpi .v{font-size:20px;font-weight:600;margin-top:3px}.fkpi.attn .v{color:var(--amber-ink)}.fkpi .s{font-size:10.5px;color:var(--mute);margin-top:2px}
+.cohort{font-size:12px;color:var(--mute);background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:11px 16px;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.cohort .gp{width:7px;height:7px;border-radius:50%;background:var(--purple);display:inline-block}
+/* agent cards */
+.agrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px}
+.acard2{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:15px 17px;border-left:3px solid var(--line-2)}
+.acard2.run{border-left-color:var(--purple)}.acard2.paused{border-left-color:var(--amber)}
+.acard2 .at{display:flex;align-items:center;gap:9px;margin-bottom:11px}
+.acard2 .an{font-weight:600;font-size:13.5px;flex:1}
+.apill{font-size:10px;font-weight:600;border-radius:99px;padding:2px 9px}
+.apill.on{background:var(--purple-soft);color:var(--purple-2)}.apill.off{background:var(--amber-soft);color:var(--amber-ink)}
+.actbadge{font-size:9.5px;font-weight:600;border-radius:99px;padding:2px 8px;display:inline-flex;align-items:center;gap:4px}
+.actbadge.work{background:var(--purple);color:#fff}.actbadge.paused{background:var(--amber-soft);color:var(--amber-ink)}.actbadge.idle{background:var(--bg-3);color:var(--mute)}
+.actbadge.work .pd{width:5px;height:5px;border-radius:50%;background:#fff;animation:sparkpulse 1.6s infinite}
+.abar2{height:5px;border-radius:3px;background:var(--bg-3);margin:10px 0 9px;overflow:hidden}.abar2 i{display:block;height:100%;border-radius:3px;background:var(--purple-lav)}.abar2 i.hi{background:var(--amber)}
+.astats{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;font-size:11.5px}
+.astats .sr{display:flex;justify-content:space-between}.astats .sr b{font-weight:500}.astats .sr span{color:var(--mute)}
+/* logs */
+.feed3 .fi{display:flex;gap:10px;padding:9px 0;border-top:1px solid var(--line);font-size:12.5px}.feed3 .fi:first-of-type{border-top:none}
+.feed3 .gl{width:22px;height:22px;border-radius:7px;background:var(--purple-soft);color:var(--purple-2);display:flex;align-items:center;justify-content:center;font-size:12px;flex:none}
+.feed3 .rc{font-size:10px;color:var(--purple-2);background:var(--purple-soft);border-radius:5px;padding:1px 6px;margin-right:6px}
+.dtable{width:100%;border-collapse:collapse;font-size:12.5px}
+.dtable th{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;color:var(--mute);text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:500}
+.dtable td{padding:9px 10px;border-bottom:1px solid var(--line)}.dtable tr:last-child td{border-bottom:none}
+.dchip{font-size:10.5px;font-weight:500;border-radius:99px;padding:2px 9px}.dchip.adv{background:#e4ece6;color:#3f6b50}.dchip.send{background:var(--purple-soft);color:var(--purple-2)}.dchip.rej{background:var(--bg-3);color:var(--mute)}
+.stt{font-size:10.5px}.stt.ok{color:var(--green)}.stt.warn{color:var(--amber-ink)}
+/* teaching */
+.teach{border:1px solid var(--line);border-radius:var(--radius);background:var(--bg-2);padding:15px 17px;margin-bottom:12px}
+.teach .th{display:flex;align-items:center;gap:9px;margin-bottom:8px}
+.teach .tk{font-size:10.5px;font-weight:600;color:var(--purple-2);background:var(--purple-soft);border-radius:6px;padding:2px 9px}
+.teach .tw{font-size:11px;color:var(--mute);margin-left:auto;font-family:var(--mono)}
+.teach .qa{font-size:13px;line-height:1.55}.teach .qa .ql{color:var(--mute)}.teach .qa b{font-weight:500}
+.evoline{display:flex;align-items:center;gap:11px;font-size:12.5px;padding:8px 0;border-top:1px solid var(--line)}.evoline:first-of-type{border-top:none}
+.evoline .when{font-family:var(--mono);font-size:10.5px;color:var(--mute);width:74px;flex:none}
+.evoline .badge2{font-size:11px;font-weight:600;color:var(--purple-2)}
+/* A/B */
+.abcard{border:1px solid var(--line);border-radius:var(--radius);background:var(--bg-2);padding:17px 19px;margin-bottom:14px}
+.abrow{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:12px}
+.abarm{border:1px solid var(--line);border-radius:11px;padding:13px 15px}.abarm.win{border-color:var(--purple-lav);background:var(--purple-tint)}
+.abarm .al{font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--mute)}.abarm .av{font-size:22px;font-weight:600;margin-top:3px}
+.abarm .winflag{font-size:10px;font-weight:600;color:var(--purple-2);float:right}
+@media (max-width:1100px){.pulse,.fkpis{grid-template-columns:repeat(3,1fr)}.agrid,.grid3{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}}
+@media (max-width:720px){.pulse,.fkpis,.agrid,.grid3,.abrow{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="previewbar">Design preview · sample data, not live · Analytics</div>
+
+<nav class="nav">
+  <span class="logo">taali<b>.</b></span>
+  <a class="nt" href="/home-preview"><i class="ti ti-home"></i> Home <span class="mc-badge">12</span></a>
+  <a class="nt" href="/jobs-preview"><i class="ti ti-briefcase"></i> Jobs</a>
+  <a class="nt" href="/search-preview"><i class="ti ti-message-circle"></i> Chat <span class="mc-badge ai">AI</span></a>
+  <span class="nt"><i class="ti ti-checkbox"></i> Tasks</span>
+  <a class="nt on" href="/analytics-preview"><i class="ti ti-chart-line"></i> Analytics</a>
+  <a class="nt" href="/settings-preview"><i class="ti ti-settings"></i> Settings</a>
+  <span style="flex:1"></span>
+  <span class="pill">Search candidates, roles, tasks… <span class="kbd">⌘K</span></span>
+  <span class="ibtn"><i class="ti ti-bell"></i></span>
+  <span class="avwrap"><span class="sp">SP</span><i class="ti ti-chevron-down" style="font-size:14px"></i></span>
+</nav>
+
+<div class="awrap">
+  <div class="hrow">
+    <div>
+      <div class="crumb">Analytics · last 30 days</div>
+      <div class="h1">Analytics</div>
+      <div class="meta">Outcomes, the agent fleet, and the teaching history that keeps the agent calibrated — the reporting layer that lives off the home review loop.</div>
+    </div>
+    <div style="display:flex;gap:9px;flex-wrap:wrap;justify-content:flex-end">
+      <span class="sel">All roles <i class="ti ti-chevron-down" style="font-size:14px;color:var(--mute)"></i></span>
+      <span class="sel">Last 30 days <i class="ti ti-chevron-down" style="font-size:14px;color:var(--mute)"></i></span>
+      <button class="btn sm"><i class="ti ti-download ic"></i> Export</button>
+    </div>
+  </div>
+
+  <!-- summary pulse -->
+  <div class="pulse">
+    <div class="pcell"><div class="k">Decisions</div><div class="v">428</div><div class="s">351 approved</div></div>
+    <div class="pcell"><div class="k">Auto-advanced</div><div class="v">96</div><div class="s">142 auto-rejected</div></div>
+    <div class="pcell"><div class="k">Advance → hire</div><div class="v attn">38%</div><div class="s">11 of 29 advanced</div></div>
+    <div class="pcell"><div class="k">Override rate</div><div class="v">8%</div><div class="s">34 overrides</div></div>
+    <div class="pcell"><div class="k">Taught</div><div class="v">12%</div><div class="s">51 teaching events</div></div>
+    <div class="pcell"><div class="k">Spend · MTD</div><div class="v">$61<small style="font-size:13px;color:var(--mute);font-weight:400"> / $180</small></div><div class="s">34% · proj $112</div></div>
+  </div>
+
+  <!-- tabs -->
+  <div class="atabs">
+    <span class="atab on" data-p="outcomes"><i class="ti ti-trending-up"></i> Outcomes</span>
+    <span class="atab" data-p="fleet"><i class="ti ti-robot"></i> Agent fleet</span>
+    <span class="atab" data-p="teaching"><i class="ti ti-brain"></i> Teaching history</span>
+    <span class="atab" data-p="ab"><i class="ti ti-test-pipe"></i> A/B tasks</span>
+    <span class="atab" data-p="history"><i class="ti ti-history"></i> Decision log</span>
+  </div>
+
+  <!-- OUTCOMES -->
+  <div class="panel on" id="outcomes">
+    <div class="card2">
+      <div class="ch"><div><div class="ct2">Funnel conversion · all roles</div><div class="cd">Where candidates move, and where the agent gates them</div></div></div>
+      <div class="conv">
+        <div class="convrow"><span class="cl">Applied</span><span class="ctrack"><span class="cfill" style="width:100%">745</span></span><span class="cpct">100%</span></div>
+        <div class="convrow"><span class="cl">Scored</span><span class="ctrack"><span class="cfill" style="width:62%">358</span></span><span class="cpct">48% of applied</span></div>
+        <div class="convrow"><span class="cl">Invited</span><span class="ctrack"><span class="cfill" style="width:33%">66</span></span><span class="cpct">18% of scored</span></div>
+        <div class="convrow"><span class="cl">Completed</span><span class="ctrack"><span class="cfill" style="width:21%">28</span></span><span class="cpct">42% of invited</span></div>
+        <div class="convrow"><span class="cl">Advanced</span><span class="ctrack"><span class="cfill" style="width:14%">29</span></span><span class="cpct">to recruiter</span></div>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="card2">
+        <div class="ch"><div class="ct2">Advance → hire quality</div></div>
+        <div class="bigstat"><div class="n">38%</div><div class="sub">11 of the 29 candidates the agent advanced were hired.<br>Up from 31% last month — the assessment gate is filtering better.</div></div>
+      </div>
+      <div class="card2">
+        <div class="ch"><div class="ct2">Your override rate over time</div><div class="cd">lower = more agreement</div></div>
+        <div class="bars">
+          <div class="bar3"><div class="bv">14%</div><div class="bk" style="height:60%"></div><div class="bl">Mar</div></div>
+          <div class="bar3"><div class="bv">12%</div><div class="bk" style="height:52%"></div><div class="bl">Apr</div></div>
+          <div class="bar3"><div class="bv">10%</div><div class="bk" style="height:43%"></div><div class="bl">May</div></div>
+          <div class="bar3"><div class="bv">8%</div><div class="bk hl" style="height:34%"></div><div class="bl">Jun</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card2">
+      <div class="ch"><div><div class="ct2">By role</div><div class="cd">Decision volume, override rate, and advance→hire per active role</div></div></div>
+      <table class="dtable">
+        <thead><tr><th>Role</th><th>Decisions</th><th>Auto rate</th><th>Override</th><th>Advance → hire</th><th>Spend</th></tr></thead>
+        <tbody>
+          <tr><td><b>Senior AWS Platform Eng</b></td><td>186</td><td>71%</td><td>6%</td><td>42% (5/12)</td><td>$42</td></tr>
+          <tr><td><b>Data Engineer</b></td><td>132</td><td>68%</td><td>9%</td><td>40% (4/10)</td><td>$19</td></tr>
+          <tr><td><b>ML Engineer</b></td><td>74</td><td>55%</td><td>11%</td><td>33% (1/3)</td><td>$30</td></tr>
+          <tr><td><b>Backend Engineer</b></td><td>36</td><td>61%</td><td>7%</td><td>25% (1/4)</td><td>$8</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- FLEET -->
+  <div class="panel" id="fleet">
+    <div class="cohort"><span class="gp"></span> Agent cohort cycle · last run 4m ago · next in 11m · last activity: advanced Yusuf Karim 12m ago</div>
+    <div class="fkpis">
+      <div class="fkpi"><div class="k">Agents</div><div class="v">3 <span style="font-size:13px;color:var(--mute);font-weight:400">running</span></div><div class="s">1 paused</div></div>
+      <div class="fkpi attn"><div class="k">Pending decisions</div><div class="v">12</div><div class="s">oldest 5h</div></div>
+      <div class="fkpi"><div class="k">Decisions today</div><div class="v">34</div><div class="s">28 approved</div></div>
+      <div class="fkpi"><div class="k">Cycles · 24h</div><div class="v">96</div><div class="s">every 15m</div></div>
+      <div class="fkpi attn"><div class="k">Errors · 24h</div><div class="v">1</div><div class="s">graph sync retry</div></div>
+      <div class="fkpi"><div class="k">Workspace budget</div><div class="v">$61<span style="font-size:12px;color:var(--mute);font-weight:400"> / $180</span></div><div class="s">34%</div></div>
+    </div>
+
+    <div class="kicker" style="margin-bottom:11px">Agents on this workspace</div>
+    <div class="agrid">
+      <div class="acard2 run">
+        <div class="at"><span class="an">Senior AWS Platform Eng</span><span class="apill on">ON</span></div>
+        <span class="actbadge work"><span class="pd"></span> WORKING</span>
+        <div class="abar2"><i style="width:84%"></i></div>
+        <div class="astats"><div class="sr"><span>Budget</span><b>$42/$50</b></div><div class="sr"><span>Cycles 24h</span><b>32</b></div><div class="sr"><span>Pending</span><b>9</b></div><div class="sr"><span>Last run</span><b>just now</b></div></div>
+      </div>
+      <div class="acard2 run">
+        <div class="at"><span class="an">Data Engineer</span><span class="apill on">ON</span></div>
+        <span class="actbadge idle">IDLE · next 11m</span>
+        <div class="abar2"><i style="width:48%"></i></div>
+        <div class="astats"><div class="sr"><span>Budget</span><b>$19/$40</b></div><div class="sr"><span>Cycles 24h</span><b>28</b></div><div class="sr"><span>Pending</span><b>3</b></div><div class="sr"><span>Last run</span><b>8m ago</b></div></div>
+      </div>
+      <div class="acard2 paused">
+        <div class="at"><span class="an">ML Engineer</span><span class="apill off">PAUSED</span></div>
+        <span class="actbadge paused">PAUSED · budget</span>
+        <div class="abar2"><i class="hi" style="width:100%"></i></div>
+        <div class="astats"><div class="sr"><span>Budget</span><b>$30/$30</b></div><div class="sr"><span>Cycles 24h</span><b>21</b></div><div class="sr"><span>Pending</span><b>0</b></div><div class="sr"><span>Last run</span><b>1h ago</b></div></div>
+      </div>
+      <div class="acard2 run">
+        <div class="at"><span class="an">Backend Engineer</span><span class="apill on">ON</span></div>
+        <span class="actbadge idle">IDLE · next 6m</span>
+        <div class="abar2"><i style="width:16%"></i></div>
+        <div class="astats"><div class="sr"><span>Budget</span><b>$8/$50</b></div><div class="sr"><span>Cycles 24h</span><b>15</b></div><div class="sr"><span>Pending</span><b>1</b></div><div class="sr"><span>Last run</span><b>22m ago</b></div></div>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="card2">
+        <div class="ch"><div class="ct2">Activity log</div></div>
+        <div class="feed3">
+          <div class="fi"><span class="gl"><i class="ti ti-arrow-up-right"></i></span><span><span class="rc">Senior AWS</span> Advanced Yusuf Karim — assessment 84 <span class="tert">12m</span></span></div>
+          <div class="fi"><span class="gl"><i class="ti ti-filter-x"></i></span><span><span class="rc">Data Eng</span> Auto-rejected 6 at pre-screen <span class="tert">22m</span></span></div>
+          <div class="fi"><span class="gl"><i class="ti ti-send"></i></span><span><span class="rc">Backend</span> Sent assessment to Sara Haddad <span class="tert">1h</span></span></div>
+          <div class="fi"><span class="gl"><i class="ti ti-player-pause"></i></span><span><span class="rc">ML Eng</span> Paused — monthly budget reached <span class="tert">1h</span></span></div>
+        </div>
+      </div>
+      <div class="card2">
+        <div class="ch"><div class="ct2">Decision log</div></div>
+        <table class="dtable">
+          <thead><tr><th>Time</th><th>Role</th><th>Decision</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td class="tert">12m</td><td>Senior AWS</td><td><span class="dchip adv">Advance</span></td><td><span class="stt ok">approved</span></td></tr>
+            <tr><td class="tert">22m</td><td>Data Eng</td><td><span class="dchip rej">Reject ×6</span></td><td><span class="stt ok">auto</span></td></tr>
+            <tr><td class="tert">1h</td><td>Backend</td><td><span class="dchip send">Send assessment</span></td><td><span class="stt ok">approved</span></td></tr>
+            <tr><td class="tert">2h</td><td>Data Eng</td><td><span class="dchip send">Send assessment</span></td><td><span class="stt warn">overridden → reject</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div style="font-size:11.5px;color:var(--mute);border:1px dashed var(--line-2);border-radius:11px;padding:11px 14px;line-height:1.5"><i class="ti ti-lock"></i> Shown: agent state, live activity, decision outcomes. Hidden by design: raw model cost, model names, and internal reasoning labels.</div>
+  </div>
+
+  <!-- TEACHING -->
+  <div class="panel" id="teaching">
+    <div class="grid2">
+      <div>
+        <div class="kicker" style="margin-bottom:11px">What you've taught the agent · 51 events</div>
+        <div class="teach">
+          <div class="th"><span class="tk">Score threshold</span><span class="tw">2h ago</span></div>
+          <div class="qa"><span class="ql">Agent asked:</span> <b>"Senior AWS keeps surfacing infra-only profiles. Lower the cut-off?"</b><br><span class="ql">You answered:</span> Keep 55, but treat Bedrock/SageMaker as a hard must-have.</div>
+        </div>
+        <div class="teach">
+          <div class="th"><span class="tk">Override → lesson</span><span class="tw">1d ago</span></div>
+          <div class="qa">You overrode <b>Send assessment → Reject</b> for Lena M. — reason: <b>"5 yrs is below our senior bar regardless of score."</b> Agent now weights tenure harder for this role.</div>
+        </div>
+        <div class="teach">
+          <div class="th"><span class="tk">Must-have requirements</span><span class="tw">3d ago</span></div>
+          <div class="qa"><span class="ql">You added:</span> <b>FinTech / banking domain</b> as preferred (not blocking) on Data Engineer.</div>
+        </div>
+        <div class="teach">
+          <div class="th"><span class="tk">Monthly budget</span><span class="tw">5d ago</span></div>
+          <div class="qa"><span class="ql">Agent asked:</span> <b>"ML Engineer will hit its $30 cap in ~2 days."</b><br><span class="ql">You answered:</span> Hold at $30 — pause and queue for my review.</div>
+        </div>
+      </div>
+      <div>
+        <div class="kicker" style="margin-bottom:11px">How the agent has calibrated</div>
+        <div class="card2">
+          <div class="ct2" style="margin-bottom:11px">Senior AWS · threshold history</div>
+          <div class="evoline"><span class="when">Mar 02</span><span class="badge2">60</span><span class="tert">initial default</span></div>
+          <div class="evoline"><span class="when">Apr 18</span><span class="badge2">55</span><span class="tert">you lowered — too many strong rejects</span></div>
+          <div class="evoline"><span class="when">Jun 21</span><span class="badge2">55 + must-have</span><span class="tert">Bedrock/SageMaker enforced</span></div>
+        </div>
+        <div class="card2">
+          <div class="ct2" style="margin-bottom:6px">Agreement trend</div>
+          <div class="cd" style="margin-bottom:12px">Share of agent decisions you approve without change</div>
+          <div class="bars" style="height:120px">
+            <div class="bar3"><div class="bv">86%</div><div class="bk" style="height:72%"></div><div class="bl">Mar</div></div>
+            <div class="bar3"><div class="bv">88%</div><div class="bk" style="height:76%"></div><div class="bl">Apr</div></div>
+            <div class="bar3"><div class="bv">90%</div><div class="bk" style="height:82%"></div><div class="bl">May</div></div>
+            <div class="bar3"><div class="bv">92%</div><div class="bk hl" style="height:88%"></div><div class="bl">Jun</div></div>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--mute);border:1px dashed var(--line-2);border-radius:11px;padding:12px 14px;line-height:1.55"><i class="ti ti-brain" style="color:var(--purple)"></i> Every override and answer becomes standing feedback the agent applies to the next cohort. This is the loop that makes the agent yours.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- A/B -->
+  <div class="panel" id="ab">
+    <div class="kicker" style="margin-bottom:11px">Task A/B experiments · 2 running</div>
+    <div class="abcard">
+      <div class="ch"><div><div class="ct2">Senior AWS Platform Eng · assessment task</div><div class="cd">Which task best predicts a strong hire? · 34 completions</div></div><span class="sel" style="font-size:12px">Running <i class="ti ti-point-filled" style="color:var(--purple);font-size:12px"></i></span></div>
+      <div class="abrow">
+        <div class="abarm win"><span class="winflag">▲ leading</span><div class="al">Arm A · AWS Platform Build</div><div class="av">81<span style="font-size:13px;color:var(--mute)"> avg</span></div><div class="cd" style="margin-top:6px">18 completions · advance→hire 44%</div></div>
+        <div class="abarm"><div class="al">Arm B · IaC Refactor</div><div class="av">73<span style="font-size:13px;color:var(--mute)"> avg</span></div><div class="cd" style="margin-top:6px">16 completions · advance→hire 31%</div></div>
+      </div>
+    </div>
+    <div class="abcard">
+      <div class="ch"><div><div class="ct2">Data Engineer · assessment task</div><div class="cd">19 completions · not yet significant</div></div><span class="sel" style="font-size:12px">Running <i class="ti ti-point-filled" style="color:var(--purple);font-size:12px"></i></span></div>
+      <div class="abrow">
+        <div class="abarm"><div class="al">Arm A · Pipeline Build</div><div class="av">76<span style="font-size:13px;color:var(--mute)"> avg</span></div><div class="cd" style="margin-top:6px">10 completions · advance→hire 40%</div></div>
+        <div class="abarm"><div class="al">Arm B · Data Modelling</div><div class="av">78<span style="font-size:13px;color:var(--mute)"> avg</span></div><div class="cd" style="margin-top:6px">9 completions · advance→hire 33%</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- HISTORY -->
+  <div class="panel" id="history">
+    <div class="card2">
+      <div class="ch"><div><div class="ct2">Decision & audit log</div><div class="cd">Every agent and recruiter action, immutable</div></div><span class="sel" style="font-size:12px"><i class="ti ti-search" style="font-size:14px;color:var(--mute)"></i> Filter</span></div>
+      <table class="dtable">
+        <thead><tr><th>Time</th><th>Actor</th><th>Role</th><th>Action</th><th>Subject</th><th>Outcome</th></tr></thead>
+        <tbody>
+          <tr><td class="tert">12m</td><td>Agent</td><td>Senior AWS</td><td><span class="dchip adv">Advance</span></td><td>Yusuf Karim</td><td><span class="stt ok">approved by you</span></td></tr>
+          <tr><td class="tert">22m</td><td>Agent</td><td>Data Eng</td><td><span class="dchip rej">Pre-screen reject</span></td><td>6 candidates</td><td><span class="stt ok">auto</span></td></tr>
+          <tr><td class="tert">1h</td><td>Agent</td><td>Backend</td><td><span class="dchip send">Send assessment</span></td><td>Sara Haddad</td><td><span class="stt ok">approved by you</span></td></tr>
+          <tr><td class="tert">2h</td><td>You</td><td>Data Eng</td><td><span class="dchip rej">Override → reject</span></td><td>Lena Mbeki</td><td><span class="stt warn">taught: tenure bar</span></td></tr>
+          <tr><td class="tert">3h</td><td>Agent</td><td>Senior AWS</td><td><span class="dchip send">Send assessment</span></td><td>Alex Rahman</td><td><span class="stt ok">approved by you</span></td></tr>
+          <tr><td class="tert">5h</td><td>You</td><td>ML Eng</td><td><span class="dchip rej">Pause agent</span></td><td>—</td><td><span class="stt warn">budget cap</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+document.querySelectorAll('.atab').forEach(t=>t.addEventListener('click',()=>{
+  document.querySelectorAll('.atab').forEach(x=>x.classList.remove('on'));
+  document.querySelectorAll('.panel').forEach(x=>x.classList.remove('on'));
+  t.classList.add('on');document.getElementById(t.dataset.p).classList.add('on');
+}));
+</script>
+</body>
+</html>
