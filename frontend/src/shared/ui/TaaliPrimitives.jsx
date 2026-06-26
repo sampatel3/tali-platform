@@ -221,23 +221,57 @@ const useFloatingMenuStyle = (open, triggerRef) => {
   return style;
 };
 
+const _optionText = (node) => {
+  const c = node?.props?.children;
+  if (typeof c === 'string' || typeof c === 'number') return String(c);
+  if (Array.isArray(c)) {
+    return c.map((part) => (typeof part === 'string' || typeof part === 'number' ? part : '')).join('');
+  }
+  return String(node?.props?.value ?? '');
+};
+
+// `Select` keeps the familiar native-<select> API — a `value`, an
+// `onChange` that receives an event with `target.value`, and `<option>`
+// children — but renders the styled, cross-browser portal menu instead of
+// the OS popup, so the *open* state matches the design system everywhere
+// (not just the closed control). It is a thin adapter over <SingleSelect/>
+// (defined below); existing call sites need no changes.
 export const Select = ({
   className = '',
   children,
+  value,
+  onChange,
   disabled = false,
-  ...props
+  placeholder,
+  bare = false,
+  inline = false,
+  triggerClassName = '',
+  'aria-label': ariaLabel,
 }) => {
+  const options = React.Children.toArray(children)
+    .filter((child) => React.isValidElement(child) && child.type === 'option')
+    .map((child) => ({
+      value: child.props.value,
+      label: _optionText(child),
+      disabled: Boolean(child.props.disabled),
+    }));
   return (
-    <div className="taali-select-shell">
-      <select
-        className={cx('taali-select', className)}
-        disabled={disabled}
-        {...props}
-      >
-        {children}
-      </select>
-      <ChevronDown size={16} className="taali-select-icon" aria-hidden />
-    </div>
+    <SingleSelect
+      className={className}
+      triggerClassName={cx(bare ? 'taali-select-trigger-bare' : '', triggerClassName)}
+      // `bare` (inline filter-chips) and `inline` (compact toolbar selects)
+      // both want a content-width shell so they don't stretch to fill a flex
+      // toolbar; form-field selects keep the default full-width shell.
+      shellClassName={(bare || inline) ? 'taali-select-shell-inline' : ''}
+      options={options}
+      value={value}
+      disabled={disabled}
+      placeholder={placeholder}
+      ariaLabel={ariaLabel}
+      onChange={(next) => {
+        if (typeof onChange === 'function') onChange({ target: { value: next } });
+      }}
+    />
   );
 };
 
@@ -356,7 +390,9 @@ export const MultiSelect = ({
         <span className={cx('taali-select-value', !selectedValues.length ? 'taali-select-value-placeholder' : '')}>
           {_multiSelectSummary(selectedValues, normalizedOptions, emptyLabel)}
         </span>
-        <ChevronDown size={16} className={cx('taali-select-chevron', open ? 'rotate-180' : '')} aria-hidden />
+        <span className={cx('taali-select-chevron', open ? 'rotate-180' : '')} aria-hidden>
+          <ChevronDown size={16} />
+        </span>
       </button>
       {open && resolvedMenuStyle && typeof document !== 'undefined'
         ? createPortal(
@@ -434,6 +470,7 @@ export const SingleSelect = ({
   renderOption,
   renderValue,
   triggerClassName = '',
+  shellClassName = '',
 }) => {
   const controlId = useId();
   const rootRef = useRef(null);
@@ -544,7 +581,7 @@ export const SingleSelect = ({
   };
 
   return (
-    <div ref={rootRef} className="taali-select-shell">
+    <div ref={rootRef} className={cx('taali-select-shell', shellClassName)}>
       <button
         ref={triggerRef}
         type="button"
@@ -569,7 +606,9 @@ export const SingleSelect = ({
             ? (typeof renderValue === 'function' ? renderValue(currentOption.raw) : currentOption.label)
             : placeholder}
         </span>
-        <ChevronDown size={16} className={cx('taali-select-chevron', open ? 'rotate-180' : '')} aria-hidden />
+        <span className={cx('taali-select-chevron', open ? 'rotate-180' : '')} aria-hidden>
+          <ChevronDown size={16} />
+        </span>
       </button>
       {open && resolvedMenuStyle && typeof document !== 'undefined'
         ? createPortal(

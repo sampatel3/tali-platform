@@ -140,6 +140,7 @@ __all__ = [
     "reap_stuck_workable_sync_runs",
     "score_application_job",
     "batch_score_role",
+    "rescore_pool_against_requirement",
     "generate_role_interview_focus",
     "generate_application_interview_pack",
     "parse_application_cv_sections",

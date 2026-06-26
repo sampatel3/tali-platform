@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { decisionPolicyApi } from './api';
+import { Select } from '../../shared/ui/TaaliPrimitives';
 
 // Per-bucket teach / override / manual disagreement counts + top
 // failure modes. Lightweight v1 — no charting library; the table is
@@ -35,11 +36,11 @@ export default function SignalsDashboard() {
         <h2>Disagreement signals</h2>
         <label>
           Window:&nbsp;
-          <select value={days} onChange={(e) => setDays(Number(e.target.value))}>
+          <Select inline value={days} onChange={(e) => setDays(Number(e.target.value))}>
             <option value={7}>7 days</option>
             <option value={30}>30 days</option>
             <option value={90}>90 days</option>
-          </select>
+          </Select>
         </label>
       </header>
 

@@ -10,6 +10,7 @@ import {
   Button,
   Input,
   Panel,
+  Select,
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
@@ -2438,12 +2439,13 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                       <div className="mc-notes-input">
                         <div className="mc-kicker" style={{ marginBottom: 6 }}>QUICK RANKING</div>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                          <select
+                          <Select
+                            bare
+                            triggerClassName="max-w-[120px]"
                             value={rankingValue}
                             onChange={(event) => setRankingValue(event.target.value)}
                             disabled={savingRanking}
                             aria-label="Ranking out of 5"
-                            style={{ maxWidth: 120 }}
                           >
                             <option value="">★ Rank…</option>
                             <option value="1">★ 1/5</option>
@@ -2451,7 +2453,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                             <option value="3">★ 3/5</option>
                             <option value="4">★ 4/5</option>
                             <option value="5">★ 5/5</option>
-                          </select>
+                          </Select>
                           <input
                             type="text"
                             value={rankingComment}

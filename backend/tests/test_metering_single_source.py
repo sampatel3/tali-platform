@@ -15,6 +15,26 @@ not as a ``content[0].text`` JSON blob. The stub Anthropic responses below
 therefore return a ``tool_use`` block whose ``.input`` is the parsed dict —
 the shape the gateway's ``_extract_tool_input`` reads — rather than a text
 block (which the gateway would reject as "did not emit the expected tool").
+
+A cache-miss ``run_cv_match`` now makes TWO real Anthropic calls, each
+forcing a different tool:
+
+1. the main score call, forcing ``emit_cv_match_result`` (``CVMatchResult``);
+2. a focused graded-requirement pass (``cv_matching.graded``), forcing
+   ``grade_requirements`` (``GradedRequirements``).
+
+The stub therefore inspects the forced ``tool_choice`` on each ``create``
+call and returns the matching tool block — the cv-match payload for the
+former, a valid ``grade_requirements`` payload for the latter. If it always
+returned the cv-match block (as it used to), the graded pass would reject
+the wrong block, retry once, and the wrapper would record those extra
+*real* retried calls as extra usage_events — which is the wrapper behaving
+correctly (one event per actual call), not a bug. Satisfying the graded
+tool keeps the graded pass to a single successful call, so the cache-miss
+path makes exactly two metered ``score`` calls.
+
+(Archetype synthesis is monkeypatched to ``None`` in the tests, so it
+makes no call; only the score + graded calls hit the stub.)
 """
 from __future__ import annotations
 
@@ -35,6 +55,30 @@ from app.services.metered_anthropic_client import MeteredAnthropicClient
 from app.cv_matching.schemas import CVMatchResult as _CVMatchResult
 
 _CV_MATCH_TOOL = _default_tool_name(_CVMatchResult)
+
+# The graded pass forces an explicit tool_name="grade_requirements"
+# (see cv_matching.graded.grade_requirements), NOT the derived default — so
+# we hard-code the same literal the runner uses.
+_GRADE_TOOL = "grade_requirements"
+
+
+def _valid_grade_payload() -> dict:
+    """A minimal valid ``GradedRequirements`` tool input.
+
+    One graded entry for the single ``jd_req_1`` requirement the tests pass,
+    so the graded pass succeeds on the FIRST attempt (no retries) and the
+    runner credits a real graded match_score rather than the -1 fallback.
+    """
+    return {
+        "requirements": [
+            {
+                "requirement_id": "jd_req_1",
+                "reasoning": "Evidences Python.",
+                "assessable": True,
+                "match_score": 80,
+            }
+        ]
+    }
 
 
 def _valid_cv_match_payload() -> dict:
@@ -77,11 +121,14 @@ class _ToolUseBlock:
 @dataclass
 class _Resp:
     payload: dict
+    tool_name: str = _CV_MATCH_TOOL
     @property
     def content(self):
         # Forced-tool-use shape: one tool_use block whose .input IS the
-        # structured result the gateway validates against CVMatchResult.
-        return [_ToolUseBlock(input=self.payload, name=_CV_MATCH_TOOL)]
+        # structured result the gateway validates. ``tool_name`` matches the
+        # tool the call forced (cv-match vs grade_requirements) so
+        # ``_extract_tool_input`` finds it on the FIRST attempt.
+        return [_ToolUseBlock(input=self.payload, name=self.tool_name)]
     @property
     def usage(self):
         return _Usage()
@@ -91,11 +138,26 @@ class _Resp:
 
 @dataclass
 class _Msgs:
+    """Stub ``messages`` resource that answers the FORCED tool per call.
+
+    ``run_cv_match`` makes two forced-tool calls — the score call forces
+    ``emit_cv_match_result`` and the graded pass forces ``grade_requirements``
+    — so a single fixed payload can't satisfy both. We read the forced tool
+    off ``tool_choice`` (built by ``llm.core.one_call``) and return the
+    matching block; an unexpected/absent tool_choice falls back to the
+    cv-match payload so the simpler text-mode stubs still work.
+    """
+
     payload: dict
+    grade_payload: dict = field(default_factory=_valid_grade_payload)
     calls: list = field(default_factory=list)
+
     def create(self, **kwargs):
         self.calls.append(kwargs)
-        return _Resp(payload=self.payload)
+        forced = (kwargs.get("tool_choice") or {}).get("name")
+        if forced == _GRADE_TOOL:
+            return _Resp(payload=self.grade_payload, tool_name=_GRADE_TOOL)
+        return _Resp(payload=self.payload, tool_name=_CV_MATCH_TOOL)
 
 
 @dataclass
@@ -104,9 +166,16 @@ class _Inner:
 
 
 def test_score_cache_miss_writes_one_linked_usage_event(db, monkeypatch):
-    """Cache-miss score through the wrapper → exactly one usage_event
-    (feature=score, role attributed) FK-linked to one call_log row.
-    No skip, no double-count."""
+    """Cache-miss score through the wrapper → one usage_event PER ACTUAL
+    Anthropic call, each FK-linked to its own call_log row. No skip, no
+    double-count.
+
+    A cache-miss run makes two real ``score`` calls — the main score call
+    and the graded-requirement pass (both metered ``feature="score"``,
+    same entity) — so we assert exactly two ``score`` usage_events and two
+    FK-linked call_log rows. The invariant under test is one event per real
+    call, not "one event total"; with the graded pass succeeding in a
+    single call there are two real calls."""
     monkeypatch.setattr(archetype_synthesizer, "synthesize_archetype", lambda *a, **kw: None)
     # Wrapper's fresh-session writes go to the test DB.
     from app.services import metered_anthropic_client as mac
@@ -144,13 +213,19 @@ def test_score_cache_miss_writes_one_linked_usage_event(db, monkeypatch):
         events = check.query(UsageEvent).filter(
             UsageEvent.organization_id == org.id, UsageEvent.feature == "score",
         ).all()
-        assert len(events) == 1
-        assert events[0].entity_id == "application:42"
+        # Two real score calls: the main score call + the graded pass.
+        assert len(events) == 2
+        # Both attributed to the same application entity.
+        assert {e.entity_id for e in events} == {"application:42"}
 
         logs = check.query(ClaudeCallLog).filter(ClaudeCallLog.organization_id == org.id).all()
-        assert len(logs) == 1
-        assert logs[0].usage_event_id == events[0].id
-        assert logs[0].feature_hint == "score"
+        # One call_log per real call, each FK-linked to a distinct usage_event.
+        assert len(logs) == 2
+        assert all(log.feature_hint == "score" for log in logs)
+        linked_event_ids = {log.usage_event_id for log in logs}
+        assert linked_event_ids == {e.id for e in events}
+        # No double-count: the FK links are 1:1 (no two call_logs share an event).
+        assert len(linked_event_ids) == 2
     finally:
         check.close()
 
@@ -199,11 +274,16 @@ def test_score_with_caller_db_in_context_still_links_call_log(db, monkeypatch):
         events = check.query(UsageEvent).filter(
             UsageEvent.organization_id == org.id, UsageEvent.feature == "score",
         ).all()
-        assert len(events) == 1
+        # Two real score calls (main score + graded pass).
+        assert len(events) == 2
 
         logs = check.query(ClaudeCallLog).filter(ClaudeCallLog.organization_id == org.id).all()
-        assert len(logs) == 1, "call_log row dropped — FK race regressed"
-        assert logs[0].usage_event_id == events[0].id, "call_log not FK-linked to usage_event"
+        assert len(logs) == 2, "call_log row dropped — FK race regressed"
+        # The #253 invariant: every call_log row is FK-linked to a committed
+        # usage_event even when the caller threads its open ``db`` session.
+        linked = {log.usage_event_id for log in logs}
+        assert None not in linked, "call_log not FK-linked to usage_event"
+        assert linked == {e.id for e in events}, "call_log not FK-linked to usage_event"
     finally:
         check.close()
 

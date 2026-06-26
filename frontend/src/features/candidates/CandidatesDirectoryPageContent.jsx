@@ -1983,37 +1983,29 @@ export const CandidatesDirectoryPage = ({
           {!roleFilterLocked && roleFilterOptions.length > 0 ? (
             <label className="filter-chip" style={{ cursor: 'pointer', padding: 0 }}>
               <span style={{ padding: '0 6px 0 12px', fontSize: 11, color: 'var(--mute)', whiteSpace: 'nowrap' }}>Role:</span>
-              <select
+              <Select
+                bare
+                triggerClassName="max-w-[200px]"
                 value={effectiveRoleFilters[0] || ''}
                 onChange={(event) => {
                   const value = event.target.value;
                   setRoleFilters(value ? [value] : []);
                 }}
                 aria-label="Filter by role"
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  outline: 'none',
-                  fontSize: 12,
-                  padding: '6px 12px 6px 0',
-                  cursor: 'pointer',
-                  color: 'inherit',
-                  appearance: 'none',
-                  maxWidth: 200,
-                }}
               >
                 <option value="">All roles</option>
                 {roleFilterOptions.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
                 ))}
-              </select>
+              </Select>
             </label>
           ) : null}
 
           {!rolePipelineMode ? (
             <label className="filter-chip" style={{ cursor: 'pointer', padding: 0 }}>
               <span style={{ padding: '0 6px 0 12px', fontSize: 11, color: 'var(--mute)', whiteSpace: 'nowrap' }}>Outcome:</span>
-              <select
+              <Select
+                bare
                 value={outcomeFilters.length === 1 ? outcomeFilters[0] : (outcomeFilters.length === 0 ? 'all' : 'open')}
                 onChange={(event) => {
                   const value = event.target.value;
@@ -2024,22 +2016,12 @@ export const CandidatesDirectoryPage = ({
                   }
                 }}
                 aria-label="Filter by application outcome"
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  outline: 'none',
-                  fontSize: 12,
-                  padding: '6px 12px 6px 0',
-                  cursor: 'pointer',
-                  color: 'inherit',
-                  appearance: 'none',
-                }}
               >
                 <option value="all">All outcomes</option>
                 {OUTCOME_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
                 ))}
-              </select>
+              </Select>
             </label>
           ) : null}
           {roleFilterLocked
@@ -2076,25 +2058,16 @@ export const CandidatesDirectoryPage = ({
 
           <label className="filter-chip" style={{ cursor: 'pointer', padding: 0 }}>
             <span style={{ padding: '0 6px 0 12px', fontSize: 11, color: 'var(--mute)', whiteSpace: 'nowrap' }}>Sort:</span>
-            <select
+            <Select
+              bare
               value={sortOption}
               onChange={(event) => setSortOption(event.target.value)}
               aria-label="Sort candidates"
-              style={{
-                background: 'transparent',
-                border: 'none',
-                outline: 'none',
-                fontSize: 12,
-                padding: '6px 12px 6px 0',
-                cursor: 'pointer',
-                color: 'inherit',
-                appearance: 'none',
-              }}
             >
               {SORT_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
-            </select>
+            </Select>
           </label>
 
           <button type="button" className="filter-chip" disabled title="Additional recruiter filters are coming next.">
