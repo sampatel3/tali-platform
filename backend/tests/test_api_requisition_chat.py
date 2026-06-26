@@ -90,6 +90,7 @@ def test_put_requisition_template_validates_and_saves(client):
     headers, _ = auth_headers(client)
     good = {
         "version": 1,
+        "jd_template": "# {{title}}\n\nCustom JD boilerplate.",
         "sections": [
             {
                 "key": "basics",

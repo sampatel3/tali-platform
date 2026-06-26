@@ -312,11 +312,53 @@
   color: var(--mute-2);
 }
 
+/* ============ Right column — Job spec + Brief tabs ============ */
+/* The grid child now wraps a tab bar above the (internally scrolling) panel,
+   so it must be a flex column with its own min-height:0 to keep the panel
+   scrolling rather than growing the page. */
+.rq-right {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Tab bar — purple-underline active treatment, reusing the nav vocabulary. */
+.rq-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+  flex-shrink: 0;
+}
+.rq-tab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 13px 6px 11px;
+  margin: 0 8px -1px 0;
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--mute);
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+.rq-tab:first-child { margin-left: 0; }
+.rq-tab:hover { color: var(--ink-2); }
+.rq-tab.is-active {
+  color: var(--purple-2);
+  border-bottom-color: var(--purple);
+}
+
 /* ============ Live brief column ============ */
 .rq-brief {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  flex: 1;
   background: var(--bg);
 }
 .rq-brief-scroll {
@@ -325,6 +367,35 @@
   overflow-y: auto;
   padding: 20px 22px 32px;
 }
+
+/* ============ Job spec (live JD document) ============ */
+/* The rendered JD reuses the shared chat-kit markdown styles (.tk-md); this
+   gives it document-style spacing/measure so it reads like a JD, not a chat
+   bubble. Purple accents inherited from the tokens. */
+.rq-jobspec {
+  max-width: 62ch;
+  font-family: var(--font-sans);
+  color: var(--ink);
+}
+.rq-jobspec .tk-md { font-size: 0.9375rem; line-height: 1.65; }
+.rq-jobspec .tk-md > :first-child { margin-top: 0; }
+.rq-jobspec .tk-md h1,
+.rq-jobspec .tk-md h2,
+.rq-jobspec .tk-md h3 {
+  font-family: var(--font-display);
+  color: var(--ink);
+  letter-spacing: -0.01em;
+  margin: 1.5em 0 0.5em;
+}
+.rq-jobspec .tk-md h1 { font-size: 1.375rem; }
+.rq-jobspec .tk-md h2 { font-size: 1.125rem; }
+.rq-jobspec .tk-md h3 { font-size: 0.96875rem; }
+.rq-jobspec .tk-md p { margin: 0.65em 0; }
+.rq-jobspec .tk-md ul,
+.rq-jobspec .tk-md ol { margin: 0.6em 0; padding-left: 1.35em; }
+.rq-jobspec .tk-md li { margin: 0.3em 0; }
+.rq-jobspec .tk-md em { color: var(--mute); }
+.rq-jobspec .tk-md hr { border: 0; border-top: 1px solid var(--line-2); margin: 1.5em 0; }
 
 /* Completeness meter */
 .rq-meter {

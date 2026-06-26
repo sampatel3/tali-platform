@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from app.models import Organization
 from app.services.requisition_template_service import (
+    DEFAULT_JD_TEMPLATE,
     DEFAULT_REQUISITION_TEMPLATE,
     resolve_template,
     set_template_for_org,
@@ -58,7 +59,12 @@ def test_resolve_returns_org_override(db):
         ],
     }
     org = _org(db, requisition_spec_template=custom)
-    assert resolve_template(org) == custom
+    result = resolve_template(org)
+    # The override's sections are returned verbatim...
+    assert result["sections"] == custom["sections"]
+    assert result["version"] == 1
+    # ...and resolve injects the default JD template when the override lacks one.
+    assert result["jd_template"] == DEFAULT_JD_TEMPLATE
 
 
 def test_template_key_to_column_mapping():
