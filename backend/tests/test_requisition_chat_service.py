@@ -46,6 +46,7 @@ def test_compute_gaps_lists_required_empty_in_template_order(db):
         "workplace_type",
         "employment_type",
         "openings",
+        "urgency",
         "salary_min",
         "salary_max",
         "salary_currency",
@@ -72,19 +73,44 @@ def test_empty_list_and_dict_count_as_unfilled(db):
     assert "must_haves" in keys  # [] is empty → still a gap
 
 
+def test_suggested_replies_prefers_model_supplied(db):
+    b, _ = _brief(db)
+    cap = ChatCapture(assistant_reply="?", suggested_replies=["A", "B", "", "C"])
+    replies = chat._resolve_suggested_replies(cap, b, DEFAULT_REQUISITION_TEMPLATE)
+    assert replies == ["A", "B", "C"]  # blanks stripped, model wins
+
+
+def test_suggested_replies_fallback_to_select_options_of_next_gap(db):
+    b, _ = _brief(db)
+    template = DEFAULT_REQUISITION_TEMPLATE
+    # With only title filled, the next required gap is workplace_type (a select).
+    update_brief_fields(db, b, title="Eng")
+    cap = ChatCapture(assistant_reply="Onsite, hybrid or remote?")  # no replies
+    replies = chat._resolve_suggested_replies(cap, b, template)
+    assert replies == ["Onsite", "Hybrid", "Remote"]
+
+
+def test_opening_message_has_no_options_for_text_first_field(db):
+    b, _ = _brief(db)
+    seed_opening_message(b, DEFAULT_REQUISITION_TEMPLATE)
+    # First required field (title) is text → opening offers no tappable chips.
+    assert b.messages[0]["role"] == "assistant"
+    assert b.messages[0]["suggested_replies"] == []
+
+
 def test_completeness_math(db):
     b, _ = _brief(db)
     template = DEFAULT_REQUISITION_TEMPLATE
     assert compute_completeness(b, template) == 0
-    # 8 required fields total. Fill 2 → round(100*2/8) = 25.
+    # 9 required fields total. Fill 2 → round(100*2/9) = 22.
     update_brief_fields(db, b, title="Eng", openings=1)
-    assert compute_completeness(b, template) == 25
-    # Fill all 8.
+    assert compute_completeness(b, template) == 22
+    # Fill the remaining 7 (urgency is a custom select → custom_fields).
     update_brief_fields(
         db, b,
         workplace_type="Remote", employment_type="Full-time",
         salary_min=100, salary_max=150, salary_currency="USD",
-        must_haves=["Python"],
+        must_haves=["Python"], custom_fields={"urgency": "High"},
     )
     assert compute_completeness(b, template) == 100
 
@@ -323,8 +349,8 @@ def test_run_chat_turn_applies_capture_appends_messages_shrinks_gaps(db, monkeyp
     keys = [g["key"] for g in compute_gaps(b, resolve_template(_org))]
     assert "title" not in keys and "must_haves" not in keys
     assert "workplace_type" in keys and "openings" in keys
-    # completeness recomputed: 5/8 required filled.
-    assert b.completeness == round(100 * 5 / 8)
+    # completeness recomputed: 5/9 required filled (urgency still empty).
+    assert b.completeness == round(100 * 5 / 9)
 
 
 def test_run_chat_turn_image_block_reaches_llm(db, monkeypatch):

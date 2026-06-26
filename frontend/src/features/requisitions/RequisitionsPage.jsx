@@ -197,28 +197,22 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   }, [addFiles]);
 
   // ---- send a turn ----
-  const sendTurn = useCallback(async () => {
+  // Core: post one turn (message + files) with an optimistic user echo. Used by
+  // both the composer and the tappable quick replies.
+  const runTurn = useCallback(async (message, files, echoAttachments) => {
     if (!selectedId || turnInFlight) return;
-    const message = composer.trim();
-    const files = attachments.map((a) => a.file);
-    // Allow sending with attachments and an empty message.
-    if (!message && files.length === 0) return;
+    if (!message && (!files || files.length === 0)) return;
 
     setTurnInFlight(true);
     setError('');
 
     // Optimistic echo so the recruiter's turn shows immediately.
-    const echo = {
-      role: 'user',
-      content: message,
-      attachments: attachments.map((a) => ({ name: a.file.name, kind: isImage(a.file) ? 'image' : 'file' })),
-    };
-    setBrief((prev) => (prev ? { ...prev, messages: [...(prev.messages || []), echo] } : prev));
-    setComposer('');
-    clearAttachments();
+    setBrief((prev) => (prev
+      ? { ...prev, messages: [...(prev.messages || []), { role: 'user', content: message, attachments: echoAttachments || [] }] }
+      : prev));
 
     try {
-      const res = await requisitionApi.chat(selectedId, { message, files });
+      const res = await requisitionApi.chat(selectedId, { message, files: files || [] });
       // The response is authoritative for the brief + the full message log.
       setBrief((prev) => ({
         ...(prev || {}),
@@ -232,7 +226,24 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     } finally {
       setTurnInFlight(false);
     }
-  }, [selectedId, turnInFlight, composer, attachments, clearAttachments, loadList]);
+  }, [selectedId, turnInFlight, loadList]);
+
+  // Send from the composer (text + staged attachments).
+  const sendTurn = useCallback(() => {
+    const message = composer.trim();
+    const files = attachments.map((a) => a.file);
+    if (!message && files.length === 0) return;
+    const echoAttachments = attachments.map((a) => ({ name: a.file.name, kind: isImage(a.file) ? 'image' : 'file' }));
+    setComposer('');
+    clearAttachments();
+    void runTurn(message, files, echoAttachments);
+  }, [composer, attachments, clearAttachments, runTurn]);
+
+  // Tap a multiple-choice quick reply → send it as the next turn immediately.
+  const sendQuickReply = useCallback((text) => {
+    const t = String(text || '').trim();
+    if (t) void runTurn(t, [], []);
+  }, [runTurn]);
 
   // ChatComposer's onSubmit only fires with non-empty text; we also need an
   // attachments-only send, so the composer's submit defers to sendTurn and we
@@ -278,6 +289,11 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
 
   const published = isPublished(brief?.status);
   const canSend = (composer.trim() || attachments.length > 0) && !turnInFlight;
+  // Multiple-choice quick replies for the latest agent turn (tap instead of type).
+  const lastMsg = messages.length ? messages[messages.length - 1] : null;
+  const quickReplies = (!turnInFlight && lastMsg && lastMsg.role === 'assistant' && Array.isArray(lastMsg.suggested_replies))
+    ? lastMsg.suggested_replies.filter(Boolean)
+    : [];
 
   return (
     <>
@@ -398,6 +414,22 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                         onChange={onFilePick}
                       />
                     </div>
+
+                    {quickReplies.length > 0 ? (
+                      <div className="rq-quick-replies">
+                        {quickReplies.map((q, i) => (
+                          <button
+                            key={`${q}-${i}`}
+                            type="button"
+                            className="rq-quick-chip"
+                            onClick={() => sendQuickReply(q)}
+                            disabled={turnInFlight}
+                          >
+                            {q}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
 
                     <ChatComposer
                       value={composer}
