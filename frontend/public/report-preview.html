@@ -18,9 +18,15 @@
 
 <nav class="nav">
   <span class="logo">taali<b>.</b></span>
-  <span class="nt on">Home</span><span class="nt">Jobs</span><span class="nt">Chat</span><span class="nt">Tasks</span><span class="nt">Settings</span>
-  <span class="pill">Search candidates, roles, tasks…</span>
-  <span class="sp">SP</span>
+  <span class="nt on"><i class="ti ti-home"></i> Home <span class="mc-badge">12</span></span>
+  <span class="nt"><i class="ti ti-briefcase"></i> Jobs</span>
+  <span class="nt"><i class="ti ti-message-circle"></i> Chat <span class="mc-badge ai">AI</span></span>
+  <span class="nt"><i class="ti ti-checkbox"></i> Tasks</span>
+  <span class="nt"><i class="ti ti-settings"></i> Settings</span>
+  <span style="flex:1"></span>
+  <span class="pill">Search candidates, roles, tasks… <span class="kbd">⌘K</span></span>
+  <span class="ibtn"><i class="ti ti-bell"></i></span>
+  <span class="avwrap"><span class="sp">SP</span><i class="ti ti-chevron-down" style="font-size:14px"></i></span>
 </nav>
 
 <div class="wrap">
@@ -48,10 +54,14 @@
         </div>
         <div class="lab" style="margin-top:0">Taali score</div>
       </div>
-      <div class="kicker" style="text-align:center"><i class="ti ti-sparkles"></i> Agent recommends · 100%</div>
-      <div class="rec" style="text-align:center;font-size:19px">Send assessment</div>
-      <div style="text-align:center;margin-bottom:16px"><span class="chip amber"><i class="ti ti-flag ic-amber"></i> 8 flags</span></div>
-      <button class="btn primary" style="width:100%;justify-content:center;margin-bottom:9px"><i class="ti ti-send ic"></i> Send assessment</button>
+
+      <div class="agent-rec">
+        <div class="kl"><i class="ti ti-sparkles spark"></i> Agent recommends · 100% confident</div>
+        <div class="big">Send assessment</div>
+        <button class="btn-rec"><i class="ti ti-send"></i> Send assessment</button>
+      </div>
+      <div style="text-align:center;margin-bottom:14px"><span class="chip amber"><i class="ti ti-flag ic-amber"></i> 8 flags · verify before deciding</span></div>
+
       <div style="display:flex;gap:9px;margin-bottom:9px">
         <button class="btn counter" style="flex:1;justify-content:center"><i class="ti ti-x ic"></i> Reject</button>
         <button class="btn" style="flex:1;justify-content:center"><i class="ti ti-arrow-right ic"></i> Skip</button>
@@ -61,6 +71,7 @@
         <button class="btn" style="flex:1;justify-content:center"><i class="ti ti-clock ic"></i> Snooze</button>
       </div>
       <button class="btn" style="width:100%;justify-content:center"><i class="ti ti-refresh ic"></i> Re-evaluate</button>
+
       <div style="margin-top:18px">
         <div class="fact"><span class="tert">Role fit</span><b>72</b></div>
         <div class="fact"><span class="tert">Assessment</span><b>27</b></div>
@@ -83,14 +94,21 @@
 
       <!-- ===================== OVERVIEW ===================== -->
       <section id="overview" class="panel on">
-        <div class="snapshot">
-          <div><div class="sk">Experience</div><div class="big">15 yrs</div></div>
-          <div><div class="sk">Tech stack</div><div class="skchips"><span class="skchip">AWS</span><span class="skchip">Terraform</span><span class="skchip">Kubernetes</span><span class="skchip">ArgoCD</span><span class="skchip">Kong</span><span class="skchip">CI/CD</span></div></div>
-          <div><div class="sk">Recent roles</div><div class="snap-roles">
-            <div class="snap-role"><b>Meridian Cloud</b><span>Platform Eng Lead · 2025–now</span></div>
-            <div class="snap-role"><b>Regional bank</b><span>DevOps Sr Manager · 2023–25</span></div>
-            <div class="snap-role"><b>Regional telecom</b><span>DevOps Consultant · 2020–23</span></div>
-          </div></div>
+        <div class="snapshot compact">
+          <div>
+            <div class="sk">Experience</div><div class="big">15 yrs</div>
+            <div class="sk" style="margin-top:15px">Tech stack</div>
+            <div class="skchips" style="margin-top:6px"><span class="skchip">AWS</span><span class="skchip">Terraform</span><span class="skchip">Kubernetes</span><span class="skchip">ArgoCD</span><span class="skchip">Kong</span><span class="skchip">CI/CD</span></div>
+          </div>
+          <div>
+            <div class="sk">Recent roles</div>
+            <div class="rolelist" style="margin-top:8px">
+              <div class="r"><span><b>Platform Eng Lead</b> · Meridian Cloud</span><span class="yr">2025 – now</span></div>
+              <div class="r"><span><b>DevOps Sr Manager</b> · regional bank</span><span class="yr">2023 – 25</span></div>
+              <div class="r"><span><b>DevOps Consultant</b> · regional telecom</span><span class="yr">2020 – 23</span></div>
+              <div class="r"><span><b>Sr. DevOps Engineer</b> · fintech startup</span><span class="yr">2019 – 20</span></div>
+            </div>
+          </div>
         </div>
 
         <div class="block">
@@ -104,20 +122,20 @@
           <div class="meta" style="margin:-6px 0 8px">Claims and signals that don't check out — verify before deciding.</div>
           <div class="flag"><i class="ti ti-alert-triangle fi"></i><span><b>Certified Kubernetes Administrator (CKA)</b> — no credential ID or date.</span></div>
           <div class="flag"><i class="ti ti-alert-triangle fi"></i><span><b>"Reduced provisioning time 70%"</b> — at a prior role; no baseline or method.</span></div>
-          <div class="flag"><i class="ti ti-alert-triangle fi"></i><span><b>"100% compliance across 15 areas"</b> — no audit body or framework.</span></div>
+          <div class="flag"><i class="ti ti-alert-triangle fi"></i><span><b>GitHub profile</b> — public repos found, but none match the claimed platform work.</span></div>
           <details><summary class="more" style="cursor:pointer;list-style:none">+ 5 more flags</summary>
+            <div class="flag"><i class="ti ti-alert-triangle fi"></i><span><b>"100% compliance across 15 areas"</b> — no audit body or framework.</span></div>
             <div class="flag"><i class="ti ti-alert-triangle fi"></i><span><b>AWS SA / SysOps (Associate)</b> — no expiry.</span></div>
             <div class="flag"><i class="ti ti-alert-triangle fi"></i><span><b>LPIC-1/2 · CCNA · MCSA/MCSE</b> — likely expired; no dates.</span></div>
-            <div class="flag"><i class="ti ti-alert-triangle fi"></i><span><b>GitHub profile</b> — public repos found, but none match the claimed platform work.</span></div>
           </details>
         </div>
 
         <div class="block">
-          <div class="kicker" style="margin-bottom:13px">Scorecard · the 4 Ds + Deliverable</div>
-          <div class="dim"><span class="nm">Delegation</span><span class="track"><span class="fill" style="width:62%"></span></span><span class="val">62<small>/100</small></span></div>
+          <div class="sechead"><span class="kicker">Scorecard · the 5 Ds</span><span class="tert">from the assessment</span></div>
+          <div class="dim"><span class="nm">Delegation</span><span class="track"><span class="fill" style="width:55%"></span></span><span class="val">55<small>/100</small></span></div>
           <div class="dim"><span class="nm">Description</span><span class="track"><span class="fill" style="width:71%"></span></span><span class="val">71<small>/100</small></span></div>
           <div class="dim"><span class="nm">Discernment</span><span class="track"><span class="fill low" style="width:34%"></span></span><span class="val">34<small>/100</small></span></div>
-          <div class="dim"><span class="nm">Diligence</span><span class="track"><span class="fill" style="width:55%"></span></span><span class="val">55<small>/100</small></span></div>
+          <div class="dim"><span class="nm">Diligence</span><span class="track"><span class="fill" style="width:48%"></span></span><span class="val">48<small>/100</small></span></div>
           <div class="dim"><span class="nm">Deliverable</span><span class="track"><span class="fill low" style="width:40%"></span></span><span class="val">40<small>/100</small></span></div>
         </div>
 
@@ -125,7 +143,7 @@
           <div class="kicker" style="margin-bottom:13px">Evidence</div>
           <div class="evgrid">
             <div class="ev"><div class="kicker">AI usage</div><div class="h">6 prompts</div><div class="d">Clarity, focus &amp; paste signals — see Assessment</div></div>
-            <div class="ev"><div class="kicker">Code &amp; git</div><div class="h">HEAD a3f9c21</div><div class="d">4 commits · +312 / −88 · see Assessment</div></div>
+            <div class="ev"><div class="kicker">Code &amp; git</div><div class="h">HEAD a3f9c21</div><div class="d">4 commits · +312 / −88 · repo linked</div></div>
             <div class="ev"><div class="kicker">Timeline</div><div class="h">24 events</div><div class="d">Prompts, runs, tests, submission</div></div>
             <div class="ev"><div class="kicker">Documents</div><div class="h">CV on file</div><div class="d">Parsed · see CV tab</div></div>
           </div>
@@ -134,26 +152,18 @@
 
       <!-- ===================== REQUIREMENTS ===================== -->
       <section id="requirements" class="panel">
-        <div class="sechead"><span class="kicker">Requirements &amp; fit</span><span class="tert">vs Senior AWS Platform Engineer · Scored 26 Jun</span></div>
-        <div style="display:flex;align-items:center;gap:14px;margin-bottom:6px">
-          <span class="track" style="height:9px;flex:1"><span class="fill" style="width:62%"></span></span>
-        </div>
-        <div style="display:flex;gap:18px;font-size:12.5px;margin-bottom:8px" class="tert"><span><b style="color:var(--purple-2)">6</b> met</span><span><b style="color:var(--ink)">1</b> partial</span><span><b style="color:var(--ink)">2</b> gap</span><span>· 8 of 13 overall</span></div>
+        <div class="sechead"><span class="kicker">Requirements &amp; fit</span><span class="fitscore">Fit <b>72</b>/100 · vs Senior AWS Platform Engineer</span></div>
+        <div class="meta" style="margin:-4px 0 10px">Per-requirement match confidence (0–100). Click a row for evidence.</div>
 
-        <details class="reqrow"><summary><span class="stat met">Met</span><span class="rqname">Production AWS — EKS, ECS, Lambda, RDS</span><i class="ti ti-chevron-right chev"></i></summary><div class="ev"><span class="src">CV</span>15+ years hands-on AWS; containerised workloads on EKS/ECS and serverless on Lambda across cloud, banking and telecom roles.</div></details>
-        <details class="reqrow"><summary><span class="stat met">Met</span><span class="rqname">Infrastructure as Code — Terraform</span><i class="ti ti-chevron-right chev"></i></summary><div class="ev"><span class="src">CV</span>Modular, multi-environment, compliance-audited Terraform; reusable modules across teams.</div></details>
-        <details class="reqrow"><summary><span class="stat met">Met</span><span class="rqname">CI/CD pipelines &amp; GitOps</span><i class="ti ti-chevron-right chev"></i></summary><div class="ev"><span class="src">CV</span>GitHub Actions, Jenkins, GitLab CI and AWS CodePipeline; GitOps with ArgoCD.</div></details>
-        <details class="reqrow"><summary><span class="stat met">Met</span><span class="rqname">Regulated FinTech / banking domain <span class="tag" style="background:var(--purple-soft);color:var(--purple-2);font-size:10.5px;margin-left:6px">Recruiter</span></span><i class="ti ti-chevron-right chev"></i></summary><div class="ev"><span class="src">CV</span>DevOps Senior Manager at a regional bank under PCI-DSS and NIST controls. Recruiter-added must-have.</div></details>
-        <details class="reqrow"><summary><span class="stat partial">Partial</span><span class="rqname">Landing zone / multi-account governance</span><i class="ti ti-chevron-right chev"></i></summary><div class="ev"><span class="src">Role match</span>Multi-account VPN/DNS work evidenced, but Control Tower / Landing Zone Accelerator not explicitly demonstrated. Probe in interview.</div></details>
-        <details class="reqrow"><summary><span class="stat gap">Gap</span><span class="rqname">AWS Bedrock / generative-AI platform <span class="tag" style="background:var(--purple-soft);color:var(--purple-2);font-size:10.5px;margin-left:6px">Recruiter</span></span><i class="ti ti-chevron-right chev"></i></summary><div class="ev"><span class="src">Role match</span>No evidence in CV or work history. A recruiter-added core requirement — the central gap behind the "send assessment" call.</div></details>
-        <details class="reqrow"><summary><span class="stat gap">Gap</span><span class="rqname">SageMaker / MLOps</span><i class="ti ti-chevron-right chev"></i></summary><div class="ev"><span class="src">Role match</span>No evidence of model training, deployment, or MLOps tooling.</div></details>
-
-        <div class="hr"></div>
-        <div class="subhead first">Matched skills</div>
-        <div style="display:flex;flex-wrap:wrap;gap:7px"><span class="chip2 match">AWS EKS/ECS/Lambda</span><span class="chip2 match">Terraform</span><span class="chip2 match">Kong API GW</span><span class="chip2 match">PCI-DSS / NIST</span><span class="chip2 match">ArgoCD / GitOps</span><span class="chip2 match">VPC / Transit Gateway</span></div>
-        <div class="subhead">Gaps to validate</div>
-        <div style="display:flex;flex-wrap:wrap;gap:7px"><span class="chip2">AWS Bedrock</span><span class="chip2">SageMaker / MLOps</span><span class="chip2">Control Tower</span><span class="chip2">Rekognition / Textract</span></div>
-        <a class="more" style="display:inline-block;margin-top:18px">View interview prep →</a>
+        <details class="reqrow"><summary><span class="reqg"><span class="reqscore hi">94</span><span class="reqbar"><i style="width:94%"></i></span></span><span class="rqname">Production AWS — EKS, ECS, Lambda, RDS</span><i class="ti ti-chevron-right chev"></i></summary><div class="ev"><span class="src">CV</span>15+ years hands-on AWS; containerised workloads on EKS/ECS and serverless on Lambda across cloud, banking and telecom roles.</div></details>
+        <details class="reqrow"><summary><span class="reqg"><span class="reqscore hi">91</span><span class="reqbar"><i style="width:91%"></i></span></span><span class="rqname">Infrastructure as Code — Terraform</span><i class="ti ti-chevron-right chev"></i></summary><div class="ev"><span class="src">CV</span>Modular, multi-environment, compliance-audited Terraform; reusable modules across teams.</div></details>
+        <details class="reqrow"><summary><span class="reqg"><span class="reqscore hi">88</span><span class="reqbar"><i style="width:88%"></i></span></span><span class="rqname">CI/CD pipelines &amp; GitOps</span><i class="ti ti-chevron-right chev"></i></summary><div class="ev"><span class="src">CV</span>GitHub Actions, Jenkins, GitLab CI and AWS CodePipeline; GitOps with ArgoCD.</div></details>
+        <details class="reqrow"><summary><span class="reqg"><span class="reqscore hi">85</span><span class="reqbar"><i style="width:85%"></i></span></span><span class="rqname">Regulated FinTech / banking <span class="tag" style="background:var(--purple-soft);color:var(--purple-2);font-size:10.5px;margin-left:6px">Recruiter</span></span><i class="ti ti-chevron-right chev"></i></summary><div class="ev"><span class="src">CV</span>DevOps Senior Manager at a regional bank under PCI-DSS and NIST controls. Recruiter-added must-have.</div></details>
+        <details class="reqrow"><summary><span class="reqg"><span class="reqscore hi">82</span><span class="reqbar"><i style="width:82%"></i></span></span><span class="rqname">Networking &amp; VPC design</span><i class="ti ti-chevron-right chev"></i></summary><div class="ev"><span class="src">CV</span>VPC design, Transit Gateway, multi-AZ topology and DNS management.</div></details>
+        <details class="reqrow"><summary><span class="reqg"><span class="reqscore lo">58</span><span class="reqbar"><i class="lo" style="width:58%"></i></span></span><span class="rqname">Landing zone / multi-account governance</span><i class="ti ti-chevron-right chev"></i></summary><div class="ev"><span class="src">Role match</span>Multi-account VPN/DNS work evidenced, but Control Tower / Landing Zone Accelerator not explicitly demonstrated. Probe in interview.</div></details>
+        <details class="reqrow"><summary><span class="reqg"><span class="reqscore lo">12</span><span class="reqbar"><i class="lo" style="width:12%"></i></span></span><span class="rqname">AWS Bedrock / generative-AI platform <span class="tag" style="background:var(--purple-soft);color:var(--purple-2);font-size:10.5px;margin-left:6px">Recruiter</span></span><i class="ti ti-chevron-right chev"></i></summary><div class="ev"><span class="src">Role match</span>No evidence in CV or work history. A recruiter-added core requirement — the central gap behind the "send assessment" call.</div></details>
+        <details class="reqrow"><summary><span class="reqg"><span class="reqscore lo">8</span><span class="reqbar"><i class="lo" style="width:8%"></i></span></span><span class="rqname">SageMaker / MLOps</span><i class="ti ti-chevron-right chev"></i></summary><div class="ev"><span class="src">Role match</span>No evidence of model training, deployment, or MLOps tooling.</div></details>
+        <a class="more" style="display:inline-block;margin-top:16px">View all 13 requirements · jump to interview prep →</a>
       </section>
 
       <!-- ===================== ASSESSMENT ===================== -->
@@ -165,13 +175,12 @@
           <button class="btn sm"><i class="ti ti-trash ic"></i> Delete</button>
         </div>
 
-        <div class="sechead"><span class="kicker">Graded criteria</span><span class="tert">Completed 18 Jun · 27 / 100 · weak signal</span></div>
-        <div class="dim"><span class="nm">Systems design</span><span class="track"><span class="fill" style="width:50%"></span></span><span class="val">50<small>/100</small></span></div>
-        <div class="dim"><span class="nm">Code craft</span><span class="track"><span class="fill" style="width:50%"></span></span><span class="val">50<small>/100</small></span></div>
-        <div class="dim"><span class="nm">Reasoning under pressure</span><span class="track"><span class="fill low" style="width:23%"></span></span><span class="val">23<small>/100</small></span></div>
-        <div class="dim"><span class="nm">AI collaboration</span><span class="track"><span class="fill" style="width:48%"></span></span><span class="val">48<small>/100</small></span></div>
-        <div class="dim"><span class="nm">Release safety</span><span class="track"><span class="fill" style="width:45%"></span></span><span class="val">45<small>/100</small></span></div>
-        <div class="dim"><span class="nm">Communication</span><span class="track"><span class="fill" style="width:88%"></span></span><span class="val">88<small>/100</small></span></div>
+        <div class="sechead"><span class="kicker">Graded criteria · the 5 Ds</span><span class="tert">Completed 18 Jun · 27 / 100 · weak signal</span></div>
+        <div class="gcrit"><div class="gh"><b>Delegation</b><span class="track"><span class="fill" style="width:55%"></span></span><span class="val">55</span></div><div class="why">Owned the Terraform structure, but handed the guardrail logic to the agent without steering the load-bearing calls.</div></div>
+        <div class="gcrit"><div class="gh"><b>Description</b><span class="track"><span class="fill" style="width:71%"></span></span><span class="val">71</span></div><div class="why">Clear opening prompt with context; later prompts thinned out ("fix the error and make the tests pass").</div></div>
+        <div class="gcrit"><div class="gh"><b>Discernment</b><span class="track"><span class="fill low" style="width:34%"></span></span><span class="val">34</span></div><div class="why">Accepted a failing plan and didn't catch the agent's incorrect Control Tower control identifier.</div></div>
+        <div class="gcrit"><div class="gh"><b>Diligence</b><span class="track"><span class="fill" style="width:48%"></span></span><span class="val">48</span></div><div class="why">Submitted with 2 of 5 tasks done and tests not green; no verification pass before claiming done.</div></div>
+        <div class="gcrit"><div class="gh"><b>Deliverable</b><span class="track"><span class="fill low" style="width:40%"></span></span><span class="val">40</span></div><div class="why">Partial landing-zone module; 3 of 5 tests passing.</div></div>
 
         <div class="hr"></div>
         <div class="subhead first">AI usage &amp; prompt quality</div>
@@ -220,7 +229,7 @@
         <div class="hr"></div>
         <div class="subhead first">Recruiter evaluation</div>
         <div class="gitstat"><span><span class="lab">Manual overall</span><b>— not yet recorded</b></span><span><span class="lab">Tests</span><b>3 / 5 passed</b></span><span><span class="lab">Duration</span><b>41 / 60 min</b></span></div>
-        <div class="meta" style="margin-top:8px">Role criteria, a manual rubric (excellent / good / poor with evidence), strengths &amp; improvements, and the full prompt chat-log live here for the recruiter to score.</div>
+        <div class="meta" style="margin-top:8px">Role-criteria scoring, a manual rubric (excellent / good / poor with evidence) and the full prompt chat-log live here for the recruiter to score and sign off.</div>
       </section>
 
       <!-- ===================== CV ===================== -->
@@ -240,7 +249,7 @@
           <p class="reason">Senior DevOps / platform engineer, 15+ years across AWS infrastructure, IaC and CI/CD, including a direct regulated-banking role. Deep platform-operations background; limited AI/ML platform exposure.</p></div>
 
         <div class="cvsec"><div class="subhead">Experience</div>
-          <div class="cvexp"><div class="top"><b>Platform Engineering Lead · Meridian Cloud</b><span class="tert">2025 – now</span></div><ul><li>Lead a 6-engineer platform team running EKS, Terraform and ArgoCD GitOps.</li><li>Owns multi-account AWS networking and the internal developer platform.</li></ul></div>
+          <div class="cvexp"><div class="top"><b>Platform Engineering Lead · Meridian Cloud</b><span class="tert">2025 – now</span></div><ul><li>Leads a 6-engineer platform team running EKS, Terraform and ArgoCD GitOps.</li><li>Owns multi-account AWS networking and the internal developer platform.</li></ul></div>
           <div class="cvexp"><div class="top"><b>DevOps Senior Manager · regional bank <span class="chip2" style="background:var(--amber-soft);color:var(--amber-ink);font-size:11px;margin-left:4px">Unverified</span></b><span class="tert">2023 – 2025</span></div><ul><li>Ran CI/CD and infrastructure under PCI-DSS and NIST controls.</li><li>Kong API Gateway (Hybrid, Keycloak OIDC, mTLS) for the banking platform.</li></ul></div>
           <div class="cvexp"><div class="top"><b>DevOps Consultant · regional telecom</b><span class="tert">2020 – 2023</span></div><ul><li>Multi-account AWS, CI/CD modernisation, Terraform module library.</li></ul></div>
           <div class="cvexp"><div class="top"><b>Sr. DevOps Engineer · fintech startup</b><span class="tert">2019 – 2020</span></div></div>
@@ -291,7 +300,7 @@
           <div class="q">This role centres on AWS Bedrock and SageMaker. What's your hands-on exposure, and how would you stand up a production GenAI platform with no prior Bedrock experience?</div>
           <div class="cue"><span class="lab">Listen for</span><span>Honest gap acknowledgment + a credible learning plan; transferable MLOps reasoning.</span></div>
           <div class="cue"><span class="lab">Concerning if</span><span>Overclaims AI/ML experience the CV and assessment don't support.</span></div>
-          <div class="cue"><span class="lab">Anchor in</span><span>The requirements gap + the weak AI-collaboration score.</span></div>
+          <div class="cue"><span class="lab">Anchor in</span><span>The requirements gap + the weak Discernment score.</span></div>
         </div>
         <div class="prep" style="margin-bottom:0">
           <div class="kicker mute" style="margin-bottom:6px;font-size:10.5px">Question 04 · Flag</div>
@@ -307,7 +316,6 @@
         <div class="subhead first">Hiring-team notes</div>
         <div class="wkcomment"><b>Priya (you)</b> — Good infra depth. Want to pressure-test the AI/ML gap before committing a panel slot. <span class="tert">1d ago</span></div>
         <div class="wkcomment"><b>Quick ranking · Priya</b> — <span class="stars">★★★☆☆</span> "Solid, not a slam-dunk." <span class="tert">1d ago</span></div>
-        <div class="wkcomment"><b>Link · Priya</b> — <a class="clink" style="display:inline">github.com/arahman-dev/landing-zone</a> <span class="tert">1d ago</span></div>
         <div class="notebox" style="margin-top:6px">Add a note for the team…</div>
         <div style="display:flex;align-items:center;gap:14px;margin:10px 0 4px;font-size:13px" class="tert">
           <span><input type="checkbox" checked> Visible to the hiring agent</span>
@@ -315,23 +323,23 @@
         </div>
 
         <div class="subhead">Interview transcript</div>
-        <div class="tcard">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><b style="font-weight:500">Screening transcript</b><span class="pbadge ok">Fireflies</span><span class="tert" style="font-size:12px">24 Jun</span></div>
+        <div class="tcard" style="border-color:var(--purple-soft);background:var(--purple-tint)">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><i class="ti ti-microphone" style="color:var(--purple)"></i><b style="font-weight:500">Screening transcript</b><span class="pbadge ok">Fireflies</span><span class="tert" style="font-size:12px">24 Jun</span></div>
           <div class="tcell"><span class="lab">Speakers</span><span>Priya N. · Alex Rahman</span></div>
-          <div class="tcell"><span class="lab">Summary</span><span>Confirmed AWS/Terraform depth; candidate was candid about limited Bedrock exposure and keen to learn.</span></div>
+          <div class="tcell"><span class="lab">Summary</span><span>Confirmed AWS/Terraform depth; candid about limited Bedrock exposure and keen to learn. Couldn't substantiate the "70% provisioning" claim on the spot.</span></div>
           <div class="tcell"><span class="lab">Coverage</span><span>4 of 5 screen questions addressed · AI/ML gap probed</span></div>
-          <details style="margin-top:8px"><summary class="more" style="cursor:pointer;list-style:none">Transcript excerpt</summary><div class="pbody" style="margin-top:8px">"…so the landing zone at the bank was largely inherited — I owned the guardrails and the account vending, but Control Tower itself predated me…"</div></details>
+          <details style="margin-top:8px"><summary class="more" style="cursor:pointer;list-style:none">Transcript excerpt →</summary><div class="pbody" style="margin-top:8px">"…so the landing zone at the bank was largely inherited — I owned the guardrails and account vending, but Control Tower itself predated me…"</div></details>
         </div>
-        <div class="miniform">Link a Fireflies meeting or paste a transcript manually<div class="fld">Meeting ID / URL …</div></div>
-
-        <div class="subhead">Workable comments</div>
-        <div class="wkcomment"><b>Jane (recruiter)</b> — Strong DevOps but unsure on the AI/ML side. Worth a screen. <span class="tert">2d ago · Workable</span></div>
-        <div class="wkcomment"><b>Omar (hiring manager)</b> — Agree, send the assessment first. <span class="tert">2d ago · Workable</span></div>
+        <div class="miniform">No transcript yet for Stage 2 — link a Fireflies meeting or paste one manually.<div class="fld">Meeting ID / URL …</div></div>
 
         <div class="subhead">Questionnaire responses</div>
         <div class="qa"><div class="q">Are you open to relocating to Abu Dhabi?</div><div class="a">Yes — open to relocation.</div></div>
         <div class="qa"><div class="q">Salary expectation (AED / month)</div><div class="a">30,000 AED</div></div>
         <div class="qa"><div class="q">Notice period</div><div class="a">1 month</div></div>
+
+        <div class="subhead">Workable comments</div>
+        <div class="wkcomment"><b>Jane (recruiter)</b> — Strong DevOps but unsure on the AI/ML side. Worth a screen. <span class="tert">2d ago · Workable</span></div>
+        <div class="wkcomment"><b>Omar (hiring manager)</b> — Agree, send the assessment first. <span class="tert">2d ago · Workable</span></div>
 
         <div class="subhead">Audit timeline</div>
         <div class="tl">
@@ -341,12 +349,6 @@
           <div class="ti2">Assessment completed — 27 / 100 <span class="when">18 Jun</span></div>
           <div class="ti2">Screening transcript linked <span class="when">24 Jun</span></div>
           <div class="ti2"><b>Agent recommends: Send assessment</b> — awaiting you <span class="when">26 Jun</span></div>
-        </div>
-
-        <div class="subhead">Workable activity</div>
-        <div class="tl">
-          <div class="ti2">Moved to "Review" · Sourced stage <span class="when">12 Jun</span></div>
-          <div class="ti2">Rating added · 3 / 5 <span class="when">24 Jun</span></div>
         </div>
       </section>
 
