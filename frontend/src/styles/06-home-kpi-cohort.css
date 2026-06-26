@@ -302,18 +302,17 @@
 
 /* Stack below the global AgentBar (Mission Control chrome) so tabs remain
    reachable while the candidates table or kanban scrolls past. */
+/* Sticky role-view tab bar — a clean underline bar (the shared .vtabs look),
+   not a pill box. Stays reachable as the table/kanban scrolls under it. */
 .sub-tabs-sticky {
   position: sticky;
   top: 78px;
   z-index: 30;
-  padding: 10px 14px;
-  margin: 4px 0 14px;
-  background: color-mix(in oklab, var(--bg) 88%, transparent);
+  padding-top: 4px;
+  margin: 4px 0 16px;
+  background: color-mix(in oklab, var(--bg) 92%, transparent);
   backdrop-filter: saturate(180%) blur(10px);
   -webkit-backdrop-filter: saturate(180%) blur(10px);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  box-shadow: 0 2px 6px -3px rgba(0, 0, 0, 0.08);
 }
 
 .sub-tabs .seg {
