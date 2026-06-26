@@ -124,13 +124,21 @@ def test_noop_when_pending_already_exists(db):
     assert len(_pending(db, role)) == 1
 
 
-def test_skips_post_handover_stage(db):
+def test_surfaces_post_handover_as_decision(db):
+    """Post-handover candidates are no longer withheld — Taali's read is surfaced
+    as a HITL card via the second opinion (a below-bar verdict → reject:
+    "you're interviewing someone I'd have passed on"), instead of stranding them
+    as 'not yet decided'."""
     org, role = _seed_role(db, score_threshold=50)
     app = _add_app(db, org, role, role_fit=30.0)
-    app.workable_stage = "Offer"
+    app.workable_stage = "Final Interview"
     db.commit()
-    assert bds.ensure_deterministic_decision(db, app=app, role=role) is None
-    assert _pending(db, role) == []
+    out = bds.ensure_deterministic_decision(db, app=app, role=role)
+    assert out == "reject"
+    decs = _pending(db, role)
+    assert len(decs) == 1
+    assert decs[0].decision_type == "reject"
+    assert db.query(UsageEvent).count() == 0  # still zero-LLM
 
 
 def test_skips_non_open_candidate(db):
