@@ -20,6 +20,9 @@ from ...components.scoring.assessment_metrics import (
     is_completed as _is_completed,
     percentile_rank as _percentile_rank,
     status_value as _status_value,
+    score_100 as _score_100,
+    score_10 as _score_10,
+    extract_category_scores as _extract_category_scores,
 )
 from ...models.assessment_experiment import AssessmentExperiment
 from ...models.candidate import Candidate
@@ -32,23 +35,6 @@ router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
 _BENCHMARK_CACHE_TTL_SECONDS = 3600
 _benchmark_cache: dict[Tuple[int, int], dict] = {}
-
-_DIMENSION_ALIASES = {
-    "task_completion": "task_completion",
-    "prompt_clarity": "prompt_clarity",
-    "context_provision": "context_provision",
-    "independence_efficiency": "independence_efficiency",
-    "response_utilization": "response_utilization",
-    "debugging_design": "debugging_design",
-    "written_communication": "written_communication",
-    "role_fit": "role_fit",
-    # Legacy aliases seen in older score breakdown payloads.
-    "independence": "independence_efficiency",
-    "utilization": "response_utilization",
-    "communication": "written_communication",
-    "approach": "debugging_design",
-    "cv_match": "role_fit",
-}
 
 _DIMENSION_KEYS = [
     "task_completion",
@@ -89,58 +75,6 @@ def _parse_filter_datetime(value: Optional[str], *, end_of_day: bool = False) ->
     if parsed and end_of_day and "T" not in raw and " " not in raw:
         parsed = parsed + timedelta(hours=23, minutes=59, seconds=59, microseconds=999999)
     return parsed
-
-
-def _score_100(assessment: Assessment) -> Optional[float]:
-    taali_score = getattr(assessment, "taali_score", None)
-    if isinstance(taali_score, (int, float)):
-        return float(taali_score)
-    assessment_score = getattr(assessment, "assessment_score", None)
-    if isinstance(assessment_score, (int, float)):
-        return float(assessment_score)
-    final_score = getattr(assessment, "final_score", None)
-    if isinstance(final_score, (int, float)):
-        return float(final_score)
-    score = getattr(assessment, "score", None)
-    if isinstance(score, (int, float)):
-        return float(score) * 10.0
-    return None
-
-
-def _score_10(assessment: Assessment) -> Optional[float]:
-    score100 = _score_100(assessment)
-    if score100 is not None:
-        return score100 / 10.0
-    score = getattr(assessment, "score", None)
-    if isinstance(score, (int, float)):
-        return float(score)
-    return None
-
-
-def _extract_category_scores(assessment: Assessment) -> Dict[str, float]:
-    bucket = {}
-    breakdown = assessment.score_breakdown if isinstance(assessment.score_breakdown, dict) else {}
-    analytics = assessment.prompt_analytics if isinstance(assessment.prompt_analytics, dict) else {}
-
-    raw_scores = (
-        (breakdown.get("category_scores") if isinstance(breakdown.get("category_scores"), dict) else None)
-        or (analytics.get("category_scores") if isinstance(analytics.get("category_scores"), dict) else None)
-        or (
-            analytics.get("detailed_scores", {}).get("category_scores")
-            if isinstance(analytics.get("detailed_scores"), dict)
-            and isinstance(analytics.get("detailed_scores", {}).get("category_scores"), dict)
-            else None
-        )
-        or {}
-    )
-    for key, raw_value in raw_scores.items():
-        canonical = _DIMENSION_ALIASES.get(str(key))
-        if not canonical:
-            continue
-        if not isinstance(raw_value, (int, float)):
-            continue
-        bucket[canonical] = float(raw_value)
-    return bucket
 
 
 def _build_dimension_averages(assessments: Sequence[Assessment]) -> Dict[str, Optional[float]]:
