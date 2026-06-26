@@ -230,7 +230,7 @@ export const Select = ({
   return (
     <div className="taali-select-shell">
       <select
-        className={cx('taali-select appearance-none pr-9', className)}
+        className={cx('taali-select', className)}
         disabled={disabled}
         {...props}
       >
