@@ -53,6 +53,18 @@ _CHAT_FEATURE = "requisition_intake_chat"
 _MAX_TOKENS = 4000
 _FOCUS_GAP_COUNT = 3
 
+# Warm-start: the brief columns we prefill on a new requisition from the org's
+# recent specs (location/workplace/employment/department recur across roles).
+_WARM_START_FIELDS = (
+    "location_city",
+    "location_country",
+    "workplace_type",
+    "employment_type",
+    "department",
+)
+# How many recent role titles we surface to the agent as warm-start context.
+_RECENT_ROLE_TITLES = 5
+
 # Extensions we treat as decode-able text/transcripts (appended to the user
 # message inline so the model reads them as conversation context).
 _TEXT_EXTENSIONS = {"txt", "vtt", "srt", "md", "markdown", "text"}
@@ -532,9 +544,13 @@ def _captured_brief_values(brief: RoleBrief, template: dict[str, Any]) -> dict[s
 
 
 def build_chat_system_prompt(
-    brief: RoleBrief, template: dict[str, Any], focus_gaps: list[dict[str, str]]
+    brief: RoleBrief,
+    template: dict[str, Any],
+    focus_gaps: list[dict[str, str]],
+    recent_titles: Optional[list[str]] = None,
 ) -> str:
-    """The system prompt: template + captured-so-far + focus gaps."""
+    """The system prompt: template + captured-so-far + focus gaps (+ a compact
+    recent-roles line for warm-start context when ``recent_titles`` is given)."""
     captured = _captured_brief_values(brief, template)
     # Compact template: just the structure the model needs to fill.
     compact_template = {
@@ -558,6 +574,12 @@ def build_chat_system_prompt(
     focus_lines = "\n".join(
         f"- {g['label']}: {_question_for_gap(template, g['key'])}" for g in focus_gaps
     ) or "- (the spec looks complete)"
+    recent_clean = [str(t).strip() for t in (recent_titles or []) if str(t).strip()]
+    recent_line = (
+        f"\n\nFor context, recent roles at this org: {', '.join(recent_clean)}."
+        if recent_clean
+        else ""
+    )
     return (
         "You are Taali's requisition intake agent, helping a recruiter or hiring "
         "manager capture a complete hiring spec by talking. Here is the org's spec "
@@ -567,6 +589,7 @@ def build_chat_system_prompt(
         + json.dumps(captured, separators=(",", ":"), default=str)
         + "\n\nMost important gaps to close next:\n"
         + focus_lines
+        + recent_line
         + "\n\nFrom the user's message and any attached transcript/screenshot, "
         "capture every field you can — use the typed fields for standard columns "
         "and the 'custom' object for any other template key (e.g. 'urgency'); "
@@ -590,6 +613,65 @@ def _question_for_gap(template: dict[str, Any], field_key: str) -> str:
         if field.get("key") == field_key:
             return (field.get("question") or field.get("label") or field_key)
     return field_key
+
+
+# --------------------------------------------------------------------------- #
+# Warm-start: prefill a new requisition from the org's recent specs.
+# --------------------------------------------------------------------------- #
+def warm_start_fields(
+    db: Session, organization_id: int, exclude_brief_id: Optional[int] = None
+) -> dict[str, Any]:
+    """The most-recent non-empty value for each warm-start field across the org's
+    RoleBriefs (recency-biased prefill for a new requisition).
+
+    For each of ``location_city / location_country / workplace_type /
+    employment_type / department`` independently, walk the org's briefs newest
+    first (``created_at`` desc, then ``id`` desc) and take the first non-empty
+    value. Optionally exclude one brief (the just-created one). Returns only the
+    keys that resolved to a value.
+    """
+    query = (
+        db.query(RoleBrief)
+        .filter(RoleBrief.organization_id == organization_id)
+        .order_by(RoleBrief.created_at.desc(), RoleBrief.id.desc())
+    )
+    if exclude_brief_id is not None:
+        query = query.filter(RoleBrief.id != exclude_brief_id)
+
+    resolved: dict[str, Any] = {}
+    remaining = set(_WARM_START_FIELDS)
+    for prior in query.all():
+        if not remaining:
+            break
+        for field in list(remaining):
+            value = getattr(prior, field, None)
+            if not _is_empty(value):
+                resolved[field] = value
+                remaining.discard(field)
+    return resolved
+
+
+def recent_role_titles(
+    db: Session, organization_id: int, exclude_brief_id: Optional[int] = None
+) -> list[str]:
+    """Up to ``_RECENT_ROLE_TITLES`` recent non-empty brief titles for the org
+    (newest first), for warm-start context in the agent's system prompt."""
+    query = (
+        db.query(RoleBrief)
+        .filter(RoleBrief.organization_id == organization_id)
+        .order_by(RoleBrief.created_at.desc(), RoleBrief.id.desc())
+    )
+    if exclude_brief_id is not None:
+        query = query.filter(RoleBrief.id != exclude_brief_id)
+
+    titles: list[str] = []
+    for prior in query.all():
+        if len(titles) >= _RECENT_ROLE_TITLES:
+            break
+        title = (prior.title or "").strip()
+        if title:
+            titles.append(title)
+    return titles
 
 
 def seed_opening_message(brief: RoleBrief, template: dict[str, Any]) -> None:
@@ -650,7 +732,12 @@ def run_chat_turn(
         or (settings.CLAUDE_CHAT_MODEL or "").strip()
         or settings.resolved_claude_model
     )
-    system = build_chat_system_prompt(brief, template, focus)
+    # Warm-start context: the org's recent role titles (excluding this brief)
+    # so the agent can prefill sensibly.
+    recent_titles = recent_role_titles(
+        db, brief.organization_id, exclude_brief_id=brief.id
+    )
+    system = build_chat_system_prompt(brief, template, focus, recent_titles)
     llm_messages = _history_for_llm(history_before)
     llm_messages.append(
         {"role": "user", "content": build_user_turn_content(message, attachments)}

@@ -132,3 +132,104 @@ def test_patch_requisition_accepts_custom_fields(client):
     assert resp.status_code == 200, resp.text
     assert resp.json()["title"] == "Eng"
     assert resp.json()["custom_fields"] == {"visa_sponsorship": "Yes"}
+
+
+# --------------------------------------------------------------------------- #
+# Warm-start: a 2nd requisition prefills from the org's recent specs
+# --------------------------------------------------------------------------- #
+def test_create_requisition_warm_starts_from_recent_spec(client):
+    headers, _ = auth_headers(client)
+    # First requisition: set location + workplace via PATCH.
+    first_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+    client.patch(
+        f"/api/v1/requisitions/{first_id}",
+        json={
+            "location_city": "Dubai",
+            "location_country": "UAE",
+            "workplace_type": "Hybrid",
+            "department": "Engineering",
+            "employment_type": "Full-time",
+        },
+        headers=headers,
+    )
+    # Second requisition: should be pre-filled from the first.
+    body = client.post("/api/v1/requisitions", json={}, headers=headers).json()
+    assert body["location_city"] == "Dubai"
+    assert body["location_country"] == "UAE"
+    assert body["workplace_type"] == "Hybrid"
+    assert body["department"] == "Engineering"
+    assert body["employment_type"] == "Full-time"
+    # Salary currency still seeded to AED (unaffected by warm-start).
+    assert body["salary_currency"] == "AED"
+    # The prefilled required fields count toward the live gap engine — they're
+    # no longer listed as gaps (completeness itself stays 0 until the first chat
+    # turn, matching the create contract).
+    gap_keys = [g["key"] for g in body["gaps"]]
+    assert "workplace_type" not in gap_keys and "employment_type" not in gap_keys
+
+
+def test_create_first_requisition_has_no_warm_start(client):
+    headers, _ = auth_headers(client)
+    # The very first requisition for a fresh org inherits nothing.
+    body = client.post("/api/v1/requisitions", json={}, headers=headers).json()
+    assert body["location_city"] is None
+    assert body["workplace_type"] is None
+    assert body["completeness"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# JD override: PATCH stores it in agent_state; serializer returns it
+# --------------------------------------------------------------------------- #
+def test_jd_override_round_trips_and_clears_preserving_agent_state(client):
+    headers, _ = auth_headers(client)
+    brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+
+    # New brief has no override.
+    assert client.get(f"/api/v1/requisitions/{brief_id}", headers=headers).json()["jd_override"] is None
+
+    # Seed another agent_state key so we can prove jd_override merges, not clobbers.
+    client.patch(
+        f"/api/v1/requisitions/{brief_id}",
+        json={"agent_state": {"open_questions": ["salary range?"]}},
+        headers=headers,
+    )
+
+    # PATCH sets the override.
+    resp = client.patch(
+        f"/api/v1/requisitions/{brief_id}",
+        json={"jd_override": "# Senior Engineer\n\nHand-edited JD body."},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["jd_override"] == "# Senior Engineer\n\nHand-edited JD body."
+    # The other agent_state key is preserved.
+    assert resp.json()["agent_state"]["open_questions"] == ["salary range?"]
+    # ``jd_override`` is stored inside agent_state, not as a stray column.
+    assert resp.json()["agent_state"]["jd_override"] == "# Senior Engineer\n\nHand-edited JD body."
+
+    # Serializer returns it on GET too.
+    assert client.get(
+        f"/api/v1/requisitions/{brief_id}", headers=headers
+    ).json()["jd_override"] == "# Senior Engineer\n\nHand-edited JD body."
+
+    # Clearing with an empty string removes it but leaves open_questions intact.
+    cleared = client.patch(
+        f"/api/v1/requisitions/{brief_id}", json={"jd_override": ""}, headers=headers
+    ).json()
+    assert cleared["jd_override"] is None
+    assert "jd_override" not in cleared["agent_state"]
+    assert cleared["agent_state"]["open_questions"] == ["salary range?"]
+
+
+def test_jd_override_alongside_other_field_edits(client):
+    headers, _ = auth_headers(client)
+    brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+    # A PATCH that sets jd_override AND a regular column in one go.
+    resp = client.patch(
+        f"/api/v1/requisitions/{brief_id}",
+        json={"title": "Eng", "jd_override": "Custom JD"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["title"] == "Eng"  # column edit still applied
+    assert resp.json()["jd_override"] == "Custom JD"

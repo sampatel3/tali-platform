@@ -83,6 +83,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   // in-flight save flag for the client/rate strip.
   const [clients, setClients] = useState([]);
   const [savingEconomics, setSavingEconomics] = useState(false);
+  // In-flight flag for the per-requisition Job-spec (JD) override save.
+  const [savingOverride, setSavingOverride] = useState(false);
   // Right column: the live Job spec (JD) document by default, or the
   // structured Brief.
   const [rightTab, setRightTab] = useState('jobspec');
@@ -309,6 +311,24 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       setError('Could not save the client details. Try again.');
     } finally {
       setSavingEconomics(false);
+    }
+  }, [selectedId]);
+
+  // ---- per-requisition Job spec (JD) override ----
+  // Same shape as the economics save: PATCH jd_override (a string to set the
+  // override, or null to clear it → revert to the template-filled draft) and
+  // merge the returned brief so `brief.jd_override` updates in place.
+  const saveOverride = useCallback(async (textOrNull) => {
+    if (!selectedId) return;
+    setSavingOverride(true);
+    setError('');
+    try {
+      const updated = await requisitionApi.update(selectedId, { jd_override: textOrNull });
+      setBrief((prev) => ({ ...(prev || {}), ...(updated || {}) }));
+    } catch {
+      setError('Could not save the job spec. Try again.');
+    } finally {
+      setSavingOverride(false);
     }
   }, [selectedId]);
 
@@ -558,7 +578,12 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   {loadingBrief ? (
                     <div className="rq-brief"><div className="rq-brief-scroll"><span className="rq-spinner" /></div></div>
                   ) : rightTab === 'jobspec' ? (
-                    <JobSpec template={template} brief={brief} />
+                    <JobSpec
+                      template={template}
+                      brief={brief}
+                      onSaveOverride={saveOverride}
+                      savingOverride={savingOverride}
+                    />
                   ) : (
                     <LiveBrief
                       template={template}
