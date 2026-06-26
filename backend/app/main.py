@@ -285,6 +285,9 @@ from .domains.billing_webhooks.billing_routes import router as billing_router
 from .domains.candidates_documents.routes import router as candidates_router
 from .domains.assessments_runtime.roles_routes import router as roles_router
 from .domains.assessments_runtime.scoring_routes import router as scoring_router
+from .domains.assessments_runtime.requisition_routes import (
+    router as requisition_router,
+)
 from .domains.identity_access.user_routes import router as users_router
 from .api.v1.workable import router as workable_router
 from .api.v1.auth import router as auth_router
@@ -336,6 +339,7 @@ app.include_router(billing_router, prefix="/api/v1")
 app.include_router(candidates_router, prefix="/api/v1")
 app.include_router(roles_router, prefix="/api/v1")
 app.include_router(scoring_router, prefix="/api/v1")
+app.include_router(requisition_router, prefix="/api/v1")
 app.include_router(workable_router, prefix="/api/v1")
 app.include_router(background_jobs_router, prefix="/api/v1")
 app.include_router(share_links_router, prefix="/api/v1")
