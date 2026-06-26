@@ -230,6 +230,9 @@ export const EvaluatePanel = ({
   roleFitCriteria = [],
   recommendation = null,
   recruiterSummary = '',
+  // PR3: when hosted in the Assessment pane the decision lives on the header
+  // strip, so omit the in-rubric DecisionRecorder (assessment evidence stays).
+  hideDecision = false,
 }) => {
   const { showToast } = useToast();
   const completedAssessment = candidate?._raw || null;
@@ -403,6 +406,7 @@ export const EvaluatePanel = ({
       roleFitCriteria={roleFitCriteria}
       recommendation={recommendation}
       recruiterSummary={recruiterSummary}
+      hideDecision={hideDecision}
     />
   );
 };

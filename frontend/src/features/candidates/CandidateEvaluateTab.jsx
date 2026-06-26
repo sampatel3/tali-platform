@@ -73,6 +73,13 @@ export const CandidateEvaluateTab = ({
   recommendation = null,
   recruiterSummary = '',
   actionPanel = null,
+  // PR3 (decision-surface unification): when this rubric is hosted inside the
+  // Assessment tab, the candidate's DECISION lives on the report header strip,
+  // so the in-rubric DecisionRecorder is dead weight. `hideDecision` drops the
+  // recorder (and collapses the two-up grid to a full-width Role-criteria
+  // column), leaving only the assessment EVIDENCE: criteria ratings, manual
+  // rubric, strengths/improvements, and the chat log.
+  hideDecision = false,
 }) => {
   const assessment = candidate?._raw || {};
   const rubric = evaluationRubric || assessment.evaluation_rubric || {};
@@ -145,25 +152,27 @@ export const CandidateEvaluateTab = ({
         </Card>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_340px]">
-        <DecisionRecorder
-          decision={manualEvalDecision}
-          onDecisionChange={setManualEvalDecision}
-          rationale={manualEvalRationale}
-          onRationaleChange={setManualEvalRationale}
-          confidence={manualEvalConfidence}
-          onConfidenceChange={setManualEvalConfidence}
-          nextSteps={manualEvalNextSteps}
-          onToggleNextStep={toggleNextStep}
-          persisted={decisionState.persisted}
-          dirty={decisionState.dirty}
-          saving={decisionState.saving}
-          savingMode={decisionState.savingMode}
-          conflict={decisionState.conflict}
-          onReload={decisionState.onReload}
-          onSaveDraft={decisionState.onSaveDraft}
-          onSubmit={decisionState.onSubmit}
-        />
+      <div className={hideDecision ? '' : 'grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_340px]'}>
+        {hideDecision ? null : (
+          <DecisionRecorder
+            decision={manualEvalDecision}
+            onDecisionChange={setManualEvalDecision}
+            rationale={manualEvalRationale}
+            onRationaleChange={setManualEvalRationale}
+            confidence={manualEvalConfidence}
+            onConfidenceChange={setManualEvalConfidence}
+            nextSteps={manualEvalNextSteps}
+            onToggleNextStep={toggleNextStep}
+            persisted={decisionState.persisted}
+            dirty={decisionState.dirty}
+            saving={decisionState.saving}
+            savingMode={decisionState.savingMode}
+            conflict={decisionState.conflict}
+            onReload={decisionState.onReload}
+            onSaveDraft={decisionState.onSaveDraft}
+            onSubmit={decisionState.onSubmit}
+          />
+        )}
 
         <Panel className="p-5">
           <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Role criteria</div>
