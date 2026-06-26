@@ -166,12 +166,16 @@ const _buildFloatingMenuStyle = (anchorElement) => {
     FLOATING_MENU_MIN_HEIGHT,
     FLOATING_MENU_MAX_HEIGHT
   );
-  const width = Math.max(120, Math.floor(rect.width));
+  const minWidth = Math.max(160, Math.floor(rect.width));
   const maxLeft = Math.max(
     FLOATING_MENU_VIEWPORT_PADDING,
-    viewportWidth - width - FLOATING_MENU_VIEWPORT_PADDING
+    viewportWidth - minWidth - FLOATING_MENU_VIEWPORT_PADDING
   );
   const left = _clamp(Math.floor(rect.left), FLOATING_MENU_VIEWPORT_PADDING, maxLeft);
+  // Grow to fit the longest option (so full role names aren't truncated) but
+  // never past the viewport edge. CSS `width: max-content` sizes the menu
+  // between this min (at least the trigger width) and max.
+  const maxWidth = Math.max(minWidth, viewportWidth - left - FLOATING_MENU_VIEWPORT_PADDING);
   const top = openUpward
     ? Math.max(
         FLOATING_MENU_VIEWPORT_PADDING,
@@ -188,7 +192,8 @@ const _buildFloatingMenuStyle = (anchorElement) => {
   return {
     left: `${left}px`,
     top: `${top}px`,
-    width: `${width}px`,
+    minWidth: `${minWidth}px`,
+    maxWidth: `${maxWidth}px`,
     maxHeight: `${maxHeight}px`,
     zIndex: 1200,
   };

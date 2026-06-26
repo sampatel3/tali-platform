@@ -295,10 +295,13 @@ input[type="time"]::-webkit-datetime-edit {
    Crisp white card with a tight radius; selected rows take the
    purple-tinted treatment with a check. */
 .taali-select-menu {
-  /* The floating-menu positioner supplies left/top/width as inline styles
-     relative to the viewport; without position:fixed those are ignored and
-     the portaled menu drops to the bottom of <body> in normal flow. */
+  /* The floating-menu positioner supplies left/top relative to the viewport;
+     without position:fixed those are ignored and the portaled menu drops to
+     the bottom of <body> in normal flow. width:max-content lets the menu grow
+     to the longest option (the positioner supplies min/max-width bounds) so
+     long role names are fully visible instead of truncated. */
   position: fixed;
+  width: max-content;
   overflow-y: auto;
   padding: 5px;
   background: var(--bg-2);
