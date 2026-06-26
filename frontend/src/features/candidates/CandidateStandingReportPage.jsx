@@ -2456,6 +2456,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                           </Select>
                           <input
                             type="text"
+                            className="taali-input"
                             value={rankingComment}
                             onChange={(event) => setRankingComment(event.target.value)}
                             placeholder="Optional comment (why this ranking)…"
@@ -2480,6 +2481,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                         <div style={{ display: 'grid', gap: 8 }}>
                           <input
                             type="url"
+                            className="taali-input"
                             value={linkUrl}
                             onChange={(event) => setLinkUrl(event.target.value)}
                             placeholder="https://… (portfolio, GitHub, reference)"
@@ -2487,6 +2489,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                           />
                           <input
                             type="text"
+                            className="taali-input"
                             value={linkLabel}
                             onChange={(event) => setLinkLabel(event.target.value)}
                             placeholder="Optional label (e.g. “Portfolio”)"
