@@ -95,6 +95,19 @@ const initializeRepoEditorState = (runtimeData) => {
       editorContent: starter,
     };
   }
+  // An explicit initial_selected_repo_path (set only by the demo/showcase
+  // fixtures) opens that file immediately, so the preview lands on the code
+  // workspace instead of chat-only. Live assessments never set it, so the
+  // chat-centred default below is unchanged for real candidates.
+  const explicitPath = String(runtimeData?.initial_selected_repo_path || '').trim();
+  const explicitFile = explicitPath ? files.find((file) => file.path === explicitPath) : null;
+  if (explicitFile) {
+    return {
+      repoFiles: files,
+      selectedRepoFile: explicitFile.path,
+      editorContent: explicitFile.content ?? '',
+    };
+  }
   // Chat-centred init (2026-06-01): code-kind tasks land with NO file
   // selected so the editor pane stays hidden and the candidate's first
   // surface is chat only. Doc-kind tasks (PM, Scrum Master) auto-open
@@ -1140,6 +1153,12 @@ export default function AssessmentPage({
   const handleSubmit = useCallback(
     async (autoSubmit = false) => {
       if (submitted) return;
+      // The demo / showcase preview is read-only — a viewer (or the pitch
+      // deck) must never be able to submit the walkthrough assessment, which
+      // would flip the surface to the "Task submitted" screen. This covers the
+      // manual click, the confirm dialog, and the timer auto-submit, which all
+      // route through handleSubmit.
+      if (demoMode) return;
       if (isTimerPaused) {
         setOutput("Assessment is paused. Retry Claude before submitting.");
         return;
@@ -1298,6 +1317,7 @@ export default function AssessmentPage({
         onOpenGuide={handleOpenGuide}
         reportIssueHref={reportIssueHref}
         onSubmit={() => handleSubmit(false)}
+        submitDisabled={demoMode}
       />
 
       <div className="flex-1 overflow-y-auto">
@@ -1317,6 +1337,7 @@ export default function AssessmentPage({
 
           <AssessmentWorkspace
             className="mt-4"
+            staticAssistantPanelWidth={demoMode ? 480 : undefined}
             hasRepoStructure={hasRepoStructure}
             modifiedRepoPaths={modifiedRepoPaths}
             repoFileTree={repoFileTree}

@@ -279,6 +279,30 @@ def enqueue_score(
         )
         return None
 
+    # Pre-screen integrity guard (flag-gated). A bypass is only safe for
+    # REFRESHING the score of a candidate that genuinely PASSED pre-screen.
+    # For never-screened, stale, or below-threshold candidates, do NOT bypass —
+    # route through the gate so the cheap pre-screen runs (and filters) before
+    # the expensive holistic score. Without this, bulk / engine-migration
+    # re-scores (bypass_pre_screen=True) paid for full holistic scores on
+    # candidates the gate would have filtered (2026-06 cost audit: ~56% of the
+    # score line went to fail / never-pre-screened candidates).
+    if bypass_pre_screen and settings.PRE_SCREEN_GATE_GUARD_RESCORE:
+        from .pre_screening_service import application_needs_pre_screen
+
+        genuine = getattr(application, "genuine_pre_screen_score_100", None)
+        if (
+            application_needs_pre_screen(application)
+            or genuine is None
+            or genuine < int(settings.PRE_SCREEN_THRESHOLD)
+        ):
+            logger.info(
+                "pre_screen_guard: not bypassing pre-screen application_id=%s "
+                "genuine=%s threshold=%s",
+                application.id, genuine, settings.PRE_SCREEN_THRESHOLD,
+            )
+            bypass_pre_screen = False
+
     # Pre-flight credit gate. In shadow mode (USAGE_METER_LIVE=False) this
     # is a no-op. In live mode, orgs without enough balance get a silent
     # skip — the caller (batch loops or single-app routes) sees None and
@@ -824,7 +848,11 @@ def _execute_scoring_v3(
         return
 
     application.cv_match_score = output.role_fit_score
-    application.cv_match_details = output.model_dump(mode="json")
+    details = output.model_dump(mode="json")
+    details["integrity_signals"] = _augment_integrity_signals(
+        details.get("integrity_signals"), application, cv_text, job_spec_text
+    )
+    application.cv_match_details = details
     application.cv_match_scored_at = datetime.now(timezone.utc)
     # Record the engine that ACTUALLY scored this candidate on the job row +
     # timeline event (the top-of-function defaults assume the Haiku v3 path;
@@ -1137,4 +1165,45 @@ def mark_application_scores_stale(
         return False
     _clear_application_scores(app)
     supersede_pending_decisions_for_app(db, app.id, reason=reason)
+
+
+def _augment_integrity_signals(
+    existing: dict | None,
+    application: CandidateApplication,
+    cv_text: str,
+    job_spec_text: str,
+) -> dict | None:
+    """Merge the flag-only supplementary fraud signals (JD shingle similarity,
+    CV↔Workable history diff, unverified-employer surfacing) into the score's
+    ``integrity_signals``. Computed here because this is the one place with the
+    CV text, the parsed ``cv_sections``, the candidate's Workable history AND
+    the role JD all in scope, so both scoring engines surface them uniformly.
+    Best-effort — never raises into the scoring path, returns ``existing`` on
+    any failure."""
+    try:
+        from ..platform.config import settings
+        from .fraud_detection import build_supplementary_fraud_signals
+
+        cand = getattr(application, "candidate", None)
+        cv_sections = (
+            getattr(application, "cv_sections", None)
+            or (getattr(cand, "cv_sections", None) if cand is not None else None)
+            or {}
+        )
+        cv_exp = cv_sections.get("experience") if isinstance(cv_sections, dict) else None
+        wk_exp = getattr(cand, "experience_entries", None) if cand is not None else None
+        supp = build_supplementary_fraud_signals(
+            cv_text=cv_text or "",
+            jd_text=job_spec_text or "",
+            cv_experience=cv_exp,
+            workable_experience=wk_exp,
+            shingle_threshold=settings.FRAUD_SHINGLE_THRESHOLD,
+            workable_diff_enabled=settings.FRAUD_WORKABLE_DIFF_ENABLED,
+        )
+        merged = dict(existing or {})
+        merged.update(supp)
+        return merged or None
+    except Exception:  # pragma: no cover — never break scoring on a flag
+        logger.debug("supplementary fraud signals failed", exc_info=True)
+        return existing
     return True

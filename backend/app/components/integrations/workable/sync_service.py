@@ -1206,6 +1206,10 @@ class WorkableSyncService:
             summary["db_snapshot"] = self._build_db_snapshot(db, org)
             self._persist_progress(db, org, run, summary)
 
+            # Set when we stop mid-job to hand the per-org mutex to a waiting
+            # user-facing write; breaks the outer job loop after the current
+            # job's progress is persisted (see the per-candidate check below).
+            yielded_for_op = False
             for job_idx, job in enumerate(jobs):
                 if self._is_cancel_requested(db, org, run):
                     raise WorkableSyncCancelled()
@@ -1263,6 +1267,25 @@ class WorkableSyncService:
                     if not candidates:
                         logger.info("list_job_candidates returned 0 for job shortcode=%s", job.get("shortcode"))
 
+                    # Fairness before the expensive work: a single starred role
+                    # can carry hundreds of applications, whose prefetch wave
+                    # (full mode) alone holds the per-org mutex for minutes. If a
+                    # user-facing write is already waiting, yield BEFORE paying
+                    # for it — this job resyncs on the next tick (idempotent).
+                    if should_yield is not None and should_yield():
+                        logger.info(
+                            "Workable sync yielding the org mutex to a pending op "
+                            "before job %d/%d (%d candidates) for org_id=%s",
+                            job_idx + 1, len(jobs), total_candidates, org.id,
+                        )
+                        summary["errors"].append(
+                            "Paused for a pending Workable write; this role and "
+                            "the remaining roles resync on the next sync."
+                        )
+                        final_status = "partial"
+                        yielded_for_op = True
+                        break
+
                     # Parallel-prefetch full payloads + CVs for this job
                     # before the sequential DB write loop. Turns N serial
                     # Workable GETs into ~N/PREFETCH_WORKERS waves, which
@@ -1297,6 +1320,30 @@ class WorkableSyncService:
                     for idx, candidate_ref in enumerate(candidates):
                         if self._is_cancel_requested(db, org, run):
                             raise WorkableSyncCancelled()
+
+                        # Cooperative fairness WITHIN a job, not just at job
+                        # boundaries: a role with hundreds of applications would
+                        # otherwise hold the per-org mutex for its whole walk and
+                        # starve a waiting user-facing write (decision approval /
+                        # override) past its lock-wait window — surfacing as a
+                        # "Workable lock timeout" on the approval. Re-check the
+                        # op-pending signal between candidates so we release
+                        # within ~one candidate. Already-synced candidates are
+                        # committed; the rest resync on the next tick (idempotent).
+                        if should_yield is not None and should_yield():
+                            logger.info(
+                                "Workable sync yielding the org mutex to a pending "
+                                "op mid-job after %d/%d candidates (job %d/%d) for "
+                                "org_id=%s",
+                                idx, total_candidates, job_idx + 1, len(jobs), org.id,
+                            )
+                            summary["errors"].append(
+                                "Paused mid-role for a pending Workable write; "
+                                "remaining candidates resync on the next sync."
+                            )
+                            final_status = "partial"
+                            yielded_for_op = True
+                            break
 
                         summary["candidates_seen"] += 1
                         cid = sanitize_text_for_storage(str(candidate_ref.get("id") or "?"))[:12]
@@ -1349,6 +1396,11 @@ class WorkableSyncService:
                     logger.exception("Failed syncing job for org_id=%s", org.id)
                     summary["errors"].append(str(exc))
                     final_status = "partial"
+
+                # Yielded mid-candidate-loop above: this job's progress is
+                # persisted, now release the mutex to the waiting op.
+                if yielded_for_op:
+                    break
 
             if self._is_cancel_requested(db, org, run):
                 raise WorkableSyncCancelled()

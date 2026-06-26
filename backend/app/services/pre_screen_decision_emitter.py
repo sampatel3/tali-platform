@@ -922,26 +922,35 @@ def rederive_pre_screen_recommendations(
 
 
 def discard_pending_decisions_for_app(
-    db: Session, *, application_id: int, reason: str
+    db: Session,
+    *,
+    application_id: int,
+    reason: str,
+    decision_types: tuple[str, ...] | None = None,
 ) -> int:
-    """Discard every pending agent decision for an application — used when the
+    """Discard pending agent decisions for an application — used when the
     application closes (rejected / hired / withdrawn). A closed candidate's
     queued decisions are moot; leaving them pending shows the recruiter live
     cards for people already out of the funnel.
+
+    ``decision_types`` optionally restricts the discard to specific decision
+    types (e.g. ``("reject", "skip_assessment_reject")`` to clear only stale
+    reject cards while leaving legitimate advance/send cards live, for a
+    candidate who is being interviewed but not yet terminally resolved).
+    Defaults to all pending decisions.
 
     Never touches a human-resolved row (defensive — a pending row shouldn't
     have a human resolver). Returns the number discarded. Does NOT commit;
     the caller's transaction owns that.
     """
-    cards = (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.application_id == int(application_id),
-            AgentDecision.status == "pending",
-            AgentDecision.resolved_by_user_id.is_(None),
-        )
-        .all()
+    query = db.query(AgentDecision).filter(
+        AgentDecision.application_id == int(application_id),
+        AgentDecision.status == "pending",
+        AgentDecision.resolved_by_user_id.is_(None),
     )
+    if decision_types:
+        query = query.filter(AgentDecision.decision_type.in_(tuple(decision_types)))
+    cards = query.all()
     now = datetime.now(timezone.utc)
     discarded = 0
     for card in cards:

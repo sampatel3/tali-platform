@@ -54,6 +54,11 @@ export const roles = {
     api.post(`/applications/${applicationId}/share-links`, { mode, expiry }),
   revokeShareLink: (linkId) => api.delete(`/share-links/${linkId}`),
   listApplicationEvents: (applicationId, params = {}) => api.get(`/applications/${applicationId}/events`, { params }),
+  // Drop a recruiter note on the candidate's timeline. Works with or without
+  // a linked assessment. `forAgent` (default true) makes the note visible to
+  // the recruiting agent as standing per-candidate guidance.
+  addApplicationNote: (applicationId, note, forAgent = true) =>
+    api.post(`/applications/${applicationId}/notes`, { note, for_agent: forAgent }),
   generateApplicationInterviewDebrief: (applicationId, data = {}) => api.post(`/applications/${applicationId}/interview-debrief`, data),
   downloadApplicationReport: (applicationId) => api.get(`/applications/${applicationId}/report.pdf`, { responseType: 'blob' }),
   downloadApplicationDocument: (applicationId, docType = 'cv', config = {}) =>
@@ -62,6 +67,11 @@ export const roles = {
   updateApplication: (applicationId, data) => api.patch(`/applications/${applicationId}`, data),
   updateApplicationStage: (applicationId, data) => api.patch(`/applications/${applicationId}/stage`, data),
   updateApplicationOutcome: (applicationId, data) => api.patch(`/applications/${applicationId}/outcome`, data),
+  // Record/update a recruiter's manual decision (advance/hold/reject +
+  // rationale, confidence, next steps) on an application with no assessment
+  // linked. `data` carries { status, expected_version, decision, rationale,
+  // confidence, next_steps }. Idempotent upsert with optimistic locking.
+  updateApplicationDecision: (applicationId, data) => api.patch(`/applications/${applicationId}/manual-decision`, data),
   // Hand-back to Workable: pushes the candidate into the chosen Workable
   // stage. `data` is `{ target_stage: string, reason?: string }`. Used at
   // the end of the Tali pipeline (typically when stage === 'review').

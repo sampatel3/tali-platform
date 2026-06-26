@@ -16,6 +16,8 @@ export function normalizeStartData(startData) {
     description: task.description || startData.description || '',
     scenario: task.scenario || startData.scenario || '',
     repo_structure: task.repo_structure || startData.repo_structure || null,
+    initial_selected_repo_path:
+      startData.initial_selected_repo_path || task.initial_selected_repo_path || null,
     task,
     rubric_categories: task.rubric_categories || startData.rubric_categories || [],
     clone_command: startData.clone_command || task.clone_command || null,

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from ..cv_matching.holistic import HOLISTIC_ENGINE_VERSION, resolve_engine_version
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
+from ..services.workable_actions_service import workable_job_syncable
 
 logger = logging.getLogger("taali.agent_chat.rescore")
 
@@ -118,6 +119,19 @@ def rescore_candidates(
         return {"ok": False, "error": f"Unknown scope {scope!r}; use one of {sorted(_SCOPES)}."}
     if scope in ("above_threshold", "below_threshold") and threshold is None:
         return {"ok": False, "error": "Give me a score threshold for that scope (0–100)."}
+
+    # Don't re-score a dead req. A closed/archived Workable job can't be hired
+    # into, so refreshing its scores only burns credits (2026-06 cost audit:
+    # closed/archived roles drove a large share of wasted holistic scoring).
+    if not workable_job_syncable(role):
+        return {
+            "type": "rescore",
+            "stale_total": 0,
+            "message": (
+                "This role's Workable job is closed/archived — skipping re-score "
+                "(no one can be hired into it)."
+            ),
+        }
 
     stale = find_stale_scored(db, role)
     if not stale:

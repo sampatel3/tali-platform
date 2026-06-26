@@ -79,7 +79,12 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Read full detail for one application: candidate, scores, CV summary, "
             "interview pack, recent events. Always call this before queueing a "
-            "decision so your reasoning cites concrete fields."
+            "decision so your reasoning cites concrete fields. The "
+            "``recruiter_notes`` field holds standing guidance the recruiter "
+            "wrote about THIS candidate (e.g. 'already interviewed — not "
+            "suitable', 'lacks the technical depth'); treat it as a strong human "
+            "signal — defer to it over your own read and don't re-propose an "
+            "action it rules out."
         ),
         "input_schema": {
             "type": "object",

@@ -20,7 +20,7 @@ import { ScoreRing } from '../../shared/ui/ScoreRing';
 import { ScoreProvenance } from './ScoreProvenance';
 import { ErrorBoundary } from '../../shared/ui/ErrorBoundary';
 import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAssessmentToCandidateView } from './assessmentViewModels';
-import { AssessmentEvidencePanels, EvaluatePanel, InterviewTranscriptCapture } from './CandidateAssessmentDetailPanels';
+import { ApplicationDecisionPanel, AssessmentEvidencePanels, EvaluatePanel, InterviewTranscriptCapture } from './CandidateAssessmentDetailPanels';
 import { CandidateSnapshotCard } from './CandidateSnapshotCard';
 import {
   getErrorMessage,
@@ -30,6 +30,7 @@ import {
 } from './candidatesUiUtils';
 import {
   AI_SHOWCASE_APPLICATION,
+  AI_SHOWCASE_APPLICATION_EVENTS,
   AI_SHOWCASE_COMPLETED_ASSESSMENT,
 } from '../demo/productWalkthroughModels';
 
@@ -53,7 +54,10 @@ const resolveAssessmentStatus = (application) => (
 const REPORT_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'assessment', label: 'Assessment', internalOnly: true, requiresAssessment: true },
-  { id: 'evaluate', label: 'Evaluate', internalOnly: true, requiresAssessment: true },
+  // Evaluate is always available to the recruiter (internalOnly hides it on
+  // shares): with an assessment it's the full rubric evaluation, without one
+  // it's a decision-only recorder against the application.
+  { id: 'evaluate', label: 'Evaluate', internalOnly: true },
   { id: 'cv', label: 'CV' },
   { id: 'prep', label: 'Interview prep', recruiterOnly: true },
   { id: 'notes', label: 'Notes & timeline', recruiterOnly: true },
@@ -811,6 +815,10 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   // the events feed after a successful save without a full page reload.
   const [noteDraft, setNoteDraft] = useState('');
   const [savingNote, setSavingNote] = useState(false);
+  // Per-candidate notes default to agent-visible — they're almost always
+  // guidance the agent should weigh ("already interviewed — not suitable").
+  // Untick for pure team chatter the agent shouldn't read.
+  const [noteForAgent, setNoteForAgent] = useState(true);
   const [eventsRefetchTick, setEventsRefetchTick] = useState(0);
   // View mode received from the backend when loaded via /share/:token —
   // "client" (scrubbed external view) or "recruiter" (full report). Null
@@ -881,7 +889,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       setApplication(AI_SHOWCASE_APPLICATION);
       setCompletedAssessment(AI_SHOWCASE_COMPLETED_ASSESSMENT);
       setOrgData(null);
-      setApplicationEvents([]);
+      setApplicationEvents(AI_SHOWCASE_APPLICATION_EVENTS);
       setShareViewMode(null);
       setError('');
       setLoading(false);
@@ -1205,29 +1213,40 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   // through ShareModal → the share_links table → the public /share/:token
   // SPA route.
 
-  // Save a recruiter note. We persist via assessmentsApi.addNote when an
-  // assessment is linked (it writes a `recruiter_note` event to the
-  // application timeline); we degrade to a toast otherwise. After save
-  // we bump eventsRefetchTick so the timeline picks up the new event.
+  // Save a recruiter note as a `recruiter_note` event on the application
+  // timeline — works with or without a linked assessment (the legacy
+  // assessment-timeline path dead-ended when none was linked). When
+  // `noteForAgent` the note rides in the agent's get_application payload as
+  // standing per-candidate guidance. We fall back to the assessment-note
+  // endpoint only if there's no application id. After save we bump
+  // eventsRefetchTick so the timeline picks up the new event.
   const handleSaveNote = useCallback(async () => {
     const note = noteDraft.trim();
     if (!note) return;
-    if (!assessmentId || !assessmentsApi?.addNote) {
-      showToast('Notes are saved against the linked assessment — none is linked yet.', 'info');
+    const appId = application?.id;
+    if (!appId && !(assessmentId && assessmentsApi?.addNote)) {
+      showToast('Could not save the note — no candidate record is linked yet.', 'info');
       return;
     }
     setSavingNote(true);
     try {
-      await assessmentsApi.addNote(assessmentId, note);
+      if (appId && rolesApi?.addApplicationNote) {
+        await rolesApi.addApplicationNote(appId, note, noteForAgent);
+      } else {
+        await assessmentsApi.addNote(assessmentId, note);
+      }
       setNoteDraft('');
       setEventsRefetchTick((prev) => prev + 1);
-      showToast('Note added to the timeline.', 'success');
+      showToast(
+        noteForAgent ? 'Note saved — your hiring agent will see it.' : 'Note added to the timeline.',
+        'success',
+      );
     } catch (err) {
       showToast(getErrorMessage(err, 'Failed to add note.'), 'error');
     } finally {
       setSavingNote(false);
     }
-  }, [assessmentId, assessmentsApi, noteDraft, showToast]);
+  }, [application?.id, rolesApi, assessmentId, assessmentsApi, noteDraft, noteForAgent, showToast]);
 
   // One-click share: mint a fresh 7-day share-link of the requested mode
   // and copy the URL to the clipboard. Replaces the previous ShareModal
@@ -1814,6 +1833,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 recruiterSummary={reportModel?.recruiterSummaryText || ''}
               />
             </ErrorBoundary>
+          ) : (!isShareRoute && application?.id) ? (
+            // No assessment linked — let the recruiter still record/update a
+            // decision against the application itself.
+            <ApplicationDecisionPanel
+              application={application}
+              rolesApi={rolesApi}
+              onSaved={(saved) => setApplication((prev) => (prev ? { ...prev, manual_decision: saved } : prev))}
+            />
           ) : (
             <div className="mc-notes-empty">Evaluation opens once a completed assessment is linked.</div>
           )}
@@ -2038,7 +2065,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     <div className="mc-notes-empty">
                       {isInterviewView
                         ? 'No hiring team notes yet.'
-                        : "No hiring team notes yet. Drop a private note to the team below — it'll land in the audit timeline on the right."}
+                        : 'No notes yet. Drop a note below — tell the hiring agent what it should know (e.g. “already interviewed, not suitable”). It lands in the audit timeline too.'}
                     </div>
                   ) : (
                     recruiterNotes.map((note) => (
@@ -2055,30 +2082,44 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     ))
                   )}
                   {/* Adding notes hits an auth-only endpoint, so the input is
-                      recruiter-app only — share recipients see notes read-only. */}
-                  {isInterviewView ? null : (
+                      recruiter-app only — share recipients see notes read-only.
+                      Notes save against the application, so they work with or
+                      without a linked assessment. */}
+                  {isInterviewView ? null : (() => {
+                    const canAddNote = Boolean(application?.id || assessmentId);
+                    return (
                     <div className="mc-notes-input">
                       <textarea
                         value={noteDraft}
                         onChange={(event) => setNoteDraft(event.target.value)}
-                        placeholder={assessmentId
-                          ? 'Add a note for the hiring team…'
-                          : 'Notes are saved against the linked assessment — link one to enable.'}
-                        disabled={!assessmentId || savingNote}
+                        placeholder={canAddNote
+                          ? 'Add a note on this candidate — e.g. “already interviewed, not suitable” or “lacks the technical depth”…'
+                          : 'Notes open once this candidate has an application record.'}
+                        disabled={!canAddNote || savingNote}
                         rows={3}
                       />
+                      <label className="mc-notes-agent-toggle">
+                        <input
+                          type="checkbox"
+                          checked={noteForAgent}
+                          onChange={(event) => setNoteForAgent(event.target.checked)}
+                          disabled={!canAddNote || savingNote}
+                        />
+                        <span>Visible to the hiring agent — it’ll weigh this as standing guidance on this candidate.</span>
+                      </label>
                       <div className="mc-notes-input-actions">
                         <button
                           type="button"
                           className="btn btn-purple btn-sm"
                           onClick={handleSaveNote}
-                          disabled={!assessmentId || savingNote || !noteDraft.trim()}
+                          disabled={!canAddNote || savingNote || !noteDraft.trim()}
                         >
                           {savingNote ? 'Adding…' : 'Add note'}
                         </button>
                       </div>
                     </div>
-                  )}
+                    );
+                  })()}
 
                   {workableComments.length > 0 ? (
                     <>

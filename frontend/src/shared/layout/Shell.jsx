@@ -21,6 +21,7 @@ import {
   setDarkModePreference,
   subscribeThemePreference,
 } from '../../lib/themePreference';
+import { isPreviewNavSurface } from '../../lib/previewNav';
 import { TaaliTile } from '../ui/Branding';
 import { PageLink } from '../ui/PageLink';
 import { useAgentStatusOrg } from './AgentBar';
@@ -253,6 +254,7 @@ export const Shell = ({ currentPage, onNavigate }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const homePending = useHomePendingCount(Boolean(user));
+  const navLocked = isPreviewNavSurface();
 
   // Map legacy page identifiers onto canonical tabs.
   // 'reporting' / 'analytics' fold into 'home' (the Hub) — keep the icon
@@ -284,7 +286,12 @@ export const Shell = ({ currentPage, onNavigate }) => {
 
   return (
     <>
-    <header className="mc-nav" role="banner">
+    <header
+      className="mc-nav"
+      role="banner"
+      style={navLocked ? { pointerEvents: 'none' } : undefined}
+      title={navLocked ? 'Preview — navigation disabled' : undefined}
+    >
       <PageLink
         page="jobs"
         className="mc-nav-logo"

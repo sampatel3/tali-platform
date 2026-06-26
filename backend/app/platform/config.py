@@ -356,6 +356,16 @@ class Settings(BaseSettings):
     # Recruiters override per candidate via enqueue_score(force=True).
     ENABLE_PRE_SCREEN_GATE: bool = False
 
+    # Cost guard (2026-06): when True, ``enqueue_score(bypass_pre_screen=True)``
+    # is downgraded to a normal gated score for candidates that have NOT
+    # genuinely passed pre-screen (never-screened, stale CV, or genuine score
+    # below PRE_SCREEN_THRESHOLD). Stops bulk / engine-migration re-scores from
+    # paying for the expensive holistic score on candidates the cheap pre-screen
+    # would have filtered. No effect unless ENABLE_PRE_SCREEN_GATE is also on.
+    # Default off; flip to true to enforce. (2026-06 audit: ~56% of the June
+    # score line went to fail/never-pre-screened candidates.)
+    PRE_SCREEN_GATE_GUARD_RESCORE: bool = False
+
     # Holistic scoring engine (cv_match holistic_v1). When enabled for an
     # org, the full-score stage (after the pre-screen gate) runs the
     # single-call Sonnet holistic scorer (app.cv_matching.holistic) instead
@@ -417,6 +427,50 @@ class Settings(BaseSettings):
     # Soft on purpose — a few points can't single-handedly drop a plausible
     # candidate below the gate. Set to 0.0 to disable.
     FRAUD_PRESCREEN_UNVERIFIED_PENALTY: float = 5.0
+
+    # ── Stronger fraud / CV-integrity signals (2026-06-25) ──────────────────
+    # Every score/verdict-CHANGING action below defaults OFF (or to "flag"):
+    # the detectors always COMPUTE + PERSIST their signal for recruiter
+    # visibility and shadow analysis, but none deducts / caps / rejects until
+    # explicitly enabled. This lets the work ship to prod with ZERO behaviour
+    # change and the rollout be flipped deliberately (the ADR-0010 pattern).
+    #
+    # Apply the bounded integrity penalty (timeline + unverified claims) on the
+    # HOLISTIC engine — the platform-wide default. Until True, holistic COMPUTES
+    # + PERSISTS timeline_flags / claims_to_verify / integrity_signals (shadow)
+    # but does NOT deduct from the score. Restoring the penalty lowers some live
+    # scores platform-wide, so the deduction is gated; the legacy run_cv_match
+    # path is unaffected (it always applies its penalty). Set True to activate.
+    HOLISTIC_INTEGRITY_PENALTY_ENABLED: bool = False
+
+    # Document hygiene — scan CVs for hidden text, metadata keyword-stuffing and
+    # prompt-injection payloads aimed at the scoring LLM. Detection + persistence
+    # is cheap and safe → default ON. Stripping the offending text BEFORE the LLM
+    # is the actual injection defence → default ON (it only removes content that
+    # is invisible to a human reader, or a direct instruction to the model).
+    CV_DOCUMENT_HYGIENE_ENABLED: bool = True
+    CV_HIDDEN_TEXT_STRIP_ENABLED: bool = True
+    # What a confirmed hidden-text / injection hit DOES to the score:
+    #   "off"  — detect + persist only
+    #   "flag" — detect + persist + surface a recruiter reject option (default)
+    #   "cap"  — hard-cap below the pre-screen gate, like verbatim copy-paste
+    # "flag" keeps "the threshold rejects, not the flag" (roadmap decision 1).
+    FRAUD_HIDDEN_TEXT_ACTION: str = "flag"
+
+    # Near-duplicate (paraphrased-JD) copy-paste: Jaccard over CV/JD word
+    # k-shingles. Catches the "reword the spec" evasion that defeats verbatim
+    # n-gram overlap. Soft signal — flagged/persisted; only the existing verbatim
+    # gate hard-caps. Set to 1.0 to disable.
+    FRAUD_SHINGLE_THRESHOLD: float = 0.34
+    # Absolute longest verbatim lifted block (in words) that, on its own, marks a
+    # CV as JD-copy regardless of the dilution ratio — defeats padding a pasted
+    # block inside a long CV to stay under FRAUD_COPY_PASTE_THRESHOLD. 0 disables.
+    FRAUD_COPY_PASTE_MIN_BLOCK_WORDS: int = 40
+
+    # CV↔Workable structured-history diff (fabricated / omitted / date-shifted
+    # roles). Flag-only, tolerant of legitimate divergence + nulls. No score
+    # effect; default ON for recruiter visibility.
+    FRAUD_WORKABLE_DIFF_ENABLED: bool = True
 
     # MVP feature flags (default to MVP-safe behavior).
     # Stripe is now the live payment processor for credit top-ups; default

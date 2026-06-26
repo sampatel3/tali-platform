@@ -1,9 +1,11 @@
 """Reconcile a Workable-side advance onto Taali.
 
-A recruiter moving a candidate forward in Workable (Phone Screen / Technical /
-Final Interview / Offer — post-handover) is a hand-off: Taali should show them
-as 'advanced', not strand them as 'applied', and any stale pending decision must
-be discarded. Plus: scoring skips Workable-disqualified candidates.
+A recruiter moving a candidate forward in Workable is reconciled by Taali, but
+only a TERMINAL hand-off (Offer / Hired) freezes them as 'advanced'. A
+mid-interview stage (Phone Screen / Technical / Final Interview) keeps them
+in-funnel and decidable — Taali only discards a stale *reject* card (dangerous
+on someone in a live interview), leaving legitimate advance/send cards alone.
+Plus: scoring skips Workable-disqualified candidates.
 """
 from __future__ import annotations
 
@@ -46,28 +48,123 @@ def _pin_verdict(monkeypatch, value):
     )
 
 
-def test_advances_when_verdict_advance(db, monkeypatch):
+def _pending_reject(db, *, org, role, app):
+    d = AgentDecision(
+        id=990000 + int(app.id),  # explicit PK — SQLite won't autoincrement BigInteger
+        organization_id=org.id, role_id=role.id, application_id=app.id,
+        decision_type="reject", recommendation="reject", status="pending",
+        reasoning="below threshold", confidence=0.9,
+        model_version="m", prompt_version="p", idempotency_key=f"t:{app.id}",
+    )
+    db.add(d); db.commit()
+    return d
+
+
+def _pending(db, *, org, role, app, decision_type):
+    d = AgentDecision(
+        id=991000 + int(app.id),
+        organization_id=org.id, role_id=role.id, application_id=app.id,
+        decision_type=decision_type, recommendation=decision_type, status="pending",
+        reasoning="x", confidence=0.9,
+        model_version="m", prompt_version="p", idempotency_key=f"t:{app.id}",
+    )
+    db.add(d); db.commit()
+    return d
+
+
+def _has_pending(db, app):
+    return (
+        db.query(AgentDecision)
+        .filter(AgentDecision.application_id == app.id, AgentDecision.status == "pending")
+        .first()
+        is not None
+    )
+
+
+# --- TERMINAL stages (Offer / Hired): freeze as 'advanced' -------------------
+
+def test_advances_on_terminal_offer(db, monkeypatch):
     _pin_verdict(monkeypatch, "advance")
-    _org, role, app = _seed(db, workable_stage="Technical Interview")
+    _org, role, app = _seed(db, workable_stage="Offer")
     assert reconcile_post_handover_advanced(db, app=app, role=role) is True
     db.commit()
     assert app.pipeline_stage == "advanced"
 
 
+def test_advances_on_hired(db, monkeypatch):
+    _pin_verdict(monkeypatch, "advance")
+    _org, role, app = _seed(db, workable_stage="Hired")
+    assert reconcile_post_handover_advanced(db, app=app, role=role) is True
+    assert app.pipeline_stage == "advanced"
+
+
+def test_terminal_discards_all_pending(db, monkeypatch):
+    # A terminal hand-off freezes the candidate → every queued decision is moot.
+    _pin_verdict(monkeypatch, "advance")
+    org, role, app = _seed(db, workable_stage="Offer")
+    _pending(db, org=org, role=role, app=app, decision_type="send_assessment")
+    assert reconcile_post_handover_advanced(db, app=app, role=role) is True
+    db.commit()
+    assert app.pipeline_stage == "advanced"
+    assert _has_pending(db, app) is False  # advance card discarded on freeze
+
+
+def test_terminal_noop_when_already_advanced(db, monkeypatch):
+    _pin_verdict(monkeypatch, "advance")
+    _org, role, app = _seed(db, workable_stage="Offer", pipeline_stage="advanced")
+    assert reconcile_post_handover_advanced(db, app=app, role=role) is False
+
+
+# --- MID-INTERVIEW stages: stay decidable, never freeze ----------------------
+
+def test_mid_interview_does_not_advance(db, monkeypatch):
+    # Technical Interview is post-handover but NOT terminal — keep them in-funnel.
+    _pin_verdict(monkeypatch, "advance")
+    _org, role, app = _seed(db, workable_stage="Technical Interview")
+    assert reconcile_post_handover_advanced(db, app=app, role=role) is False
+    db.commit()
+    assert app.pipeline_stage == "applied"  # unchanged — not frozen
+
+
+def test_phone_screen_does_not_advance(db, monkeypatch):
+    _pin_verdict(monkeypatch, "advance")
+    _org, role, app = _seed(db, workable_stage="Phone Screen")
+    assert reconcile_post_handover_advanced(db, app=app, role=role) is False
+    assert app.pipeline_stage == "applied"
+
+
+def test_mid_interview_discards_stale_reject(db, monkeypatch):
+    # The dangerous case #652 fixed: a reject card on someone now in a live
+    # interview. We still kill it — without freezing the candidate.
+    _pin_verdict(monkeypatch, "advance")
+    org, role, app = _seed(db, workable_stage="Final Interview")
+    _pending_reject(db, org=org, role=role, app=app)
+    assert reconcile_post_handover_advanced(db, app=app, role=role) is False
+    db.commit()
+    assert app.pipeline_stage != "advanced"
+    assert _has_pending(db, app) is False  # stale reject discarded
+
+
+def test_mid_interview_keeps_legitimate_pending(db, monkeypatch):
+    # A non-reject card (advance / send_assessment) is the agent legitimately
+    # acting on a still-live candidate — must NOT be discarded.
+    _pin_verdict(monkeypatch, "advance")
+    org, role, app = _seed(db, workable_stage="Technical Interview")
+    _pending(db, org=org, role=role, app=app, decision_type="send_assessment")
+    assert reconcile_post_handover_advanced(db, app=app, role=role) is False
+    db.commit()
+    assert _has_pending(db, app) is True  # send_assessment card preserved
+
+
+# --- Verdict / guard cases (unchanged behaviour) -----------------------------
+
 def test_reject_verdict_is_not_advanced(db, monkeypatch):
     # decide_post_handover owns the un-advance + reject-queue; the reconcile must
     # NOT advance a candidate Taali would reject.
     _pin_verdict(monkeypatch, "reject")
-    _org, role, app = _seed(db, workable_stage="Technical Interview")
+    _org, role, app = _seed(db, workable_stage="Offer")
     assert reconcile_post_handover_advanced(db, app=app, role=role) is False
     assert app.pipeline_stage != "advanced"
-
-
-def test_phone_screen_counts_as_handover(db, monkeypatch):
-    _pin_verdict(monkeypatch, "advance")
-    _org, role, app = _seed(db, workable_stage="Phone Screen")
-    assert reconcile_post_handover_advanced(db, app=app, role=role) is True
-    assert app.pipeline_stage == "advanced"
 
 
 def test_noop_when_not_post_handover(db, monkeypatch):
@@ -77,40 +174,11 @@ def test_noop_when_not_post_handover(db, monkeypatch):
     assert app.pipeline_stage == "applied"
 
 
-def test_noop_when_already_advanced(db, monkeypatch):
-    _pin_verdict(monkeypatch, "advance")
-    _org, role, app = _seed(db, workable_stage="Final Interview", pipeline_stage="advanced")
-    assert reconcile_post_handover_advanced(db, app=app, role=role) is False
-
-
 def test_noop_when_resolved(db, monkeypatch):
     # A6: a rejected/hired candidate is frozen — don't re-advance.
     _pin_verdict(monkeypatch, "advance")
-    _org, role, app = _seed(db, workable_stage="Technical Interview", outcome="rejected")
+    _org, role, app = _seed(db, workable_stage="Offer", outcome="rejected")
     assert reconcile_post_handover_advanced(db, app=app, role=role) is False
-
-
-def test_discards_stale_pending_decision_on_advance(db, monkeypatch):
-    _pin_verdict(monkeypatch, "advance")
-    org, role, app = _seed(db, workable_stage="Final Interview")
-    d = AgentDecision(
-        id=990000 + int(app.id),  # explicit PK — SQLite won't autoincrement BigInteger
-        organization_id=org.id, role_id=role.id, application_id=app.id,
-        decision_type="reject", recommendation="reject", status="pending",
-        reasoning="below threshold", confidence=0.9,
-        model_version="m", prompt_version="p", idempotency_key=f"t:{app.id}",
-    )
-    db.add(d); db.commit()
-
-    assert reconcile_post_handover_advanced(db, app=app, role=role) is True
-    db.commit()
-    assert app.pipeline_stage == "advanced"
-    still_pending = (
-        db.query(AgentDecision)
-        .filter(AgentDecision.application_id == app.id, AgentDecision.status == "pending")
-        .first()
-    )
-    assert still_pending is None  # the stale reject was discarded
 
 
 def test_enqueue_score_skips_disqualified(db, monkeypatch):

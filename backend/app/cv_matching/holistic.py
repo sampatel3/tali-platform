@@ -38,8 +38,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..llm import MeteringContext, fuzzy_locate, generate_structured
 from .cache import compute_cache_key, get as _cache_get, set as _cache_set
+from ..services.fraud_detection import (
+    apply_integrity_penalty,
+    build_integrity_signals_payload,
+    compute_integrity_penalty,
+    detect_timeline_inconsistencies,
+)
 from .schemas import (
     CandidateSnapshot,
+    ClaimToVerify,
     Confidence,
     CVMatchOutput,
     DimensionScores,
@@ -186,6 +193,21 @@ class _LeanScore(BaseModel):
     concerns: list[str] = Field(default_factory=list)
 
 
+class _Claim(BaseModel):
+    """One extraordinary, externally-verifiable claim the report flags for human
+    review (award / competition placement / publication / certification). Mirror
+    of ``schemas.ClaimToVerify``; plain-string fields fail open on anything
+    unrecognised so the bounded integrity penalty never bites a real-but-obscure
+    achievement."""
+
+    model_config = ConfigDict(extra="ignore")
+    claim_text: str = ""
+    claim_type: str = ""  # award | competition | publication | certification | employer | other
+    corroboration: str = ""  # corroborated | uncorroborated
+    model_familiarity: str = ""  # known | unknown | implausible
+    reasoning: str = ""
+
+
 class _Report(BaseModel):
     """Call 2 — the descriptive report. Snapshot + dimensions + factual
     per-requirement grades with verbatim evidence. Never feeds the score,
@@ -195,6 +217,7 @@ class _Report(BaseModel):
     snapshot: _Snapshot = Field(default_factory=_Snapshot)
     dimensions: _Dims = Field(default_factory=_Dims)
     requirements: list[_ReqGrade] = Field(default_factory=list)
+    claims: list[_Claim] = Field(default_factory=list)
 
 
 _GRADE_TO_STATUS = {
@@ -263,6 +286,7 @@ Produce:
 - `snapshot`: years_experience (number), top_skills (the 6-strongest tech stack), timeline (up to 5 most-recent employers, most recent FIRST: company, role, start_year, end_year [null if current], is_current).
 - `dimensions` (each 0-100): skills_coverage, skills_depth, title_trajectory, seniority_alignment, industry_match, tenure_pattern.
 - `requirements`: one row per NUMBERED requirement above, referencing its `index`, with status (met|partial|missing|unknown), score 0-100 for how well the CV satisfies it, a SHORT `evidence` quote copied VERBATIM from the CV (empty if unknown/missing), and `impact` (why a gap matters). Credit equivalent tools and clearly-implied capability; "unknown" only when the CV gives no signal either way.
+- `claims`: list any EXTRAORDINARY, externally-verifiable claims on the CV (a named award, competition placement, publication, or named certification — NOT ordinary duties). For each: `claim_text`, `claim_type` (award|competition|publication|certification|employer|other), `corroboration` (corroborated if the CV gives concrete supporting context — employer/date/role/specifics — else uncorroborated), `model_familiarity` (known if you recognise the named event/credential as a real thing, unknown if you don't, implausible if it likely doesn't exist), and a one-line `reasoning`. Empty list if none. This is a flag for human review, never a judgement — do not lower the score for it.
 
 Do not write prose outside the tool call."""
 
@@ -384,6 +408,22 @@ def run_holistic_match(
     if not cv or not jd:
         return _failed_output("missing_inputs", trace_id)
 
+    from ..platform.config import settings
+
+    # Document hygiene — strip hidden text / prompt-injection from the CV BEFORE
+    # it reaches either Sonnet call. The injection payload lands in cv_text after
+    # PDF extraction, so sanitising the text the model sees is the actual defence
+    # (the stored cv_text used for grounding is untouched). Detection always runs
+    # for persistence; stripping is gated by CV_HIDDEN_TEXT_STRIP_ENABLED.
+    hygiene = None
+    if settings.CV_DOCUMENT_HYGIENE_ENABLED:
+        from ..services.document_hygiene import sanitize_cv_for_llm
+
+        cv_for_llm, hygiene = sanitize_cv_for_llm(
+            cv, strip=settings.CV_HIDDEN_TEXT_STRIP_ENABLED
+        )
+        cv = (cv_for_llm or "").strip() or cv
+
     # Shared-result cache (same table run_cv_match uses) — an identical
     # re-score of an unchanged CV/JD/workable-context returns at ~zero
     # Anthropic cost instead of re-firing both Sonnet calls.
@@ -391,8 +431,14 @@ def run_holistic_match(
         cv_text=cv, jd_text=jd, requirements=[],
         # Key on the engine version too, so a logic/calibration fix (which
         # bumps engine_version without changing the prompt) invalidates stale
-        # cached scores instead of serving the old result.
-        prompt_version=f"{HOLISTIC_PROMPT_VERSION}+{HOLISTIC_ENGINE_VERSION}",
+        # cached scores instead of serving the old result. The integrity-penalty
+        # flag is keyed in as well, so flipping it on re-scores (applies the
+        # deduction) rather than serving a cached un-penalised score.
+        prompt_version=(
+            f"{HOLISTIC_PROMPT_VERSION}+{HOLISTIC_ENGINE_VERSION}"
+            f"{'+ip' if settings.HOLISTIC_INTEGRITY_PENALTY_ENABLED else ''}"
+            f"{'+htcap' if settings.FRAUD_HIDDEN_TEXT_ACTION == 'cap' else ''}"
+        ),
         model_version=HOLISTIC_MODEL,
         workable_context=workable_context or "",
     )
@@ -448,13 +494,47 @@ def run_holistic_match(
     )
     report = report_res.value if (report_res.ok and report_res.value) else _Report()
 
-    out = _to_output(score_res.value, report, deriv, trace_id, score_res, report_res)
+    out = _to_output(score_res.value, report, deriv, trace_id, score_res, report_res, hygiene=hygiene)
+    if (
+        hygiene is not None
+        and settings.FRAUD_HIDDEN_TEXT_ACTION == "cap"
+        and (hygiene.injection_detected or hygiene.has_tag_chars)
+    ):
+        out = _cap_for_hidden_text(out, settings.FRAUD_PENALTY_CAP_SCORE)
     try:
         _ground_quotes(out, cv)
     except Exception:  # pragma: no cover — never fail a score on grounding
         logger.warning("holistic grounding pass failed", exc_info=True)
     _cache_set(cache_key, out)
     return out
+
+
+def _cap_for_hidden_text(out: CVMatchOutput, cap: float) -> CVMatchOutput:
+    """Cap a holistic score because the CV carried a hidden-text / prompt-
+    injection payload aimed at the screener (``FRAUD_HIDDEN_TEXT_ACTION='cap'``).
+    The attempt itself is the signal — independent of whether stripping already
+    neutralised it — so all score fields drop to ``cap`` and the summary says
+    why. Detection + stripping happen regardless of the action; only this hard
+    cap is gated behind the opt-in setting."""
+    sig = dict(out.integrity_signals or {})
+    dh = dict(sig.get("document_hygiene") or {})
+    dh["action"] = "capped"
+    sig["document_hygiene"] = dh
+    note = (
+        "Filtered: the CV contains hidden text or a prompt-injection payload "
+        "aimed at the automated screener. "
+    )
+    return out.model_copy(
+        update={
+            "role_fit_score": cap,
+            "cv_fit_score": cap,
+            "requirements_match_score": cap,
+            "skills_match_score": cap,
+            "experience_relevance_score": cap,
+            "integrity_signals": sig,
+            "summary": (note + (out.summary or ""))[:2000],
+        }
+    )
 
 
 def _ground_quotes(out: CVMatchOutput, cv: str) -> None:
@@ -511,6 +591,26 @@ def _snapshot_from(sn: _Snapshot) -> CandidateSnapshot | None:
             for t in (sn.timeline or [])[:5]
         ],
     )
+
+
+def _claims_from(report: _Report) -> list[ClaimToVerify]:
+    """Map the report's flagged extraordinary claims to the persisted
+    ``ClaimToVerify`` shape (truncated; capped at 10). Empty claims dropped."""
+    out: list[ClaimToVerify] = []
+    for c in (report.claims or [])[:10]:
+        ct = (c.claim_text or "").strip()
+        if not ct:
+            continue
+        out.append(
+            ClaimToVerify(
+                claim_text=ct[:300],
+                claim_type=(c.claim_type or "")[:40],
+                corroboration=(c.corroboration or "")[:40],
+                model_familiarity=(c.model_familiarity or "")[:40],
+                reasoning=(c.reasoning or "")[:300],
+            )
+        )
+    return out
 
 
 def _dimensions_from(d: _Dims) -> DimensionScores:
@@ -604,11 +704,43 @@ def _to_output(
     trace_id: str,
     score_res: Any,
     report_res: Any = None,
+    hygiene: Any = None,
 ) -> CVMatchOutput:
     overall = float(max(0, min(100, int(s.overall))))
     reqs = _requirements_from(report.requirements, deriv)
     summary = ((s.verdict + " — ") if s.verdict else "") + (s.reasoning or "")
     u = _usage_sum(score_res, report_res)
+
+    # Deterministic CV-integrity layer — timeline sanity + unverified claims.
+    # Computed (and persisted) on EVERY holistic score; the penalty is only
+    # DEDUCTED when HOLISTIC_INTEGRITY_PENALTY_ENABLED, so the signal ships in
+    # shadow first and the rollout is flipped deliberately. (The legacy
+    # run_cv_match path always deducts; here the deduction is gated because
+    # holistic is the platform-wide default and would move live scores.)
+    from ..platform.config import settings
+
+    timeline_entries = [
+        {
+            "company": t.company, "role": t.role,
+            "start_year": t.start_year, "end_year": t.end_year,
+            "is_current": t.is_current,
+        }
+        for t in (report.snapshot.timeline or [])
+    ]
+    timeline_result = detect_timeline_inconsistencies(timeline_entries)
+    claims = _claims_from(report)
+    integrity = compute_integrity_penalty(
+        claims, timeline_result,
+        points_per_issue=settings.FRAUD_INTEGRITY_PENALTY_POINTS,
+        max_penalty=settings.FRAUD_INTEGRITY_PENALTY_MAX,
+    )
+    apply_penalty = bool(settings.HOLISTIC_INTEGRITY_PENALTY_ENABLED)
+    score = apply_integrity_penalty(overall, integrity.penalty) if apply_penalty else overall
+    integrity_signals = build_integrity_signals_payload(integrity, timeline_result)
+    integrity_signals["applied"] = apply_penalty
+    integrity_signals["penalty_computed"] = round(integrity.penalty, 2)
+    if hygiene is not None:
+        integrity_signals["document_hygiene"] = hygiene.to_dict()
 
     return CVMatchOutput(
         prompt_version=HOLISTIC_PROMPT_VERSION,
@@ -621,14 +753,21 @@ def _to_output(
         experience_highlights=[x[:200] for x in (s.highlights or [])[:5]],
         concerns=[x[:200] for x in (s.concerns or [])[:5]],
         summary=summary[:2000],
-        # role_fit_score = the holistic judgment (call 1). cv_fit/requirements_match
-        # are kept == overall so any 0.40·cv_fit+0.60·req_match recomposition
-        # downstream returns the holistic score, never a re-aggregation.
-        requirements_match_score=overall,
-        cv_fit_score=overall,
-        role_fit_score=overall,
-        skills_match_score=overall,
-        experience_relevance_score=overall,
+        # CV-integrity surface — persisted on every score; timeline_flags +
+        # claims_to_verify drive the "verify before interview" UI, and
+        # integrity_signals.applied says whether the penalty was deducted.
+        claims_to_verify=claims,
+        timeline_flags=[i.detail for i in timeline_result.issues],
+        integrity_penalty=(round(integrity.penalty, 2) if apply_penalty else 0.0),
+        integrity_signals=integrity_signals,
+        # role_fit_score = the holistic judgment (call 1), minus the integrity
+        # penalty when enabled. cv_fit/requirements_match are kept == this so a
+        # downstream 0.40·cv_fit+0.60·req_match recomposition returns the same.
+        requirements_match_score=score,
+        cv_fit_score=score,
+        role_fit_score=score,
+        skills_match_score=score,
+        experience_relevance_score=score,
         score_scale="0-100",
         scoring_status=ScoringStatus.OK,
         model_version=HOLISTIC_MODEL,

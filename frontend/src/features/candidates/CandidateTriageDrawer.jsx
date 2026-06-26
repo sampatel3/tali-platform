@@ -18,6 +18,7 @@ import {
   CandidateAvatar,
   WorkableScorePip,
 } from '../../shared/ui/RecruiterDesignPrimitives';
+import { isPostHandoverWorkableStage } from '../../shared/metrics';
 
 // Pipeline stages — exported because tests and parents still import the
 // list. The drawer itself no longer renders a segmented control for
@@ -370,11 +371,24 @@ export function CandidateTriageDrawer({
                     ));
                 })()}
               </ul>
-              {!application.score_summary.invite_tracking.email_status ? (
-                <div className="ctc-invite-track-note">
-                  Email delivery/open tracking shows here once the Resend webhook is configured.
-                </div>
-              ) : null}
+              {(() => {
+                const es = (application.score_summary.invite_tracking.email_status || '').toLowerCase();
+                if (es === 'failed') {
+                  return (
+                    <div className="ctc-invite-track-note is-danger">
+                      Invite could not be sent — resend it so the candidate receives the assessment.
+                    </div>
+                  );
+                }
+                if (!es) {
+                  return (
+                    <div className="ctc-invite-track-note">
+                      No delivery or open events recorded for this invite yet.
+                    </div>
+                  );
+                }
+                return null;
+              })()}
             </div>
           ) : null}
           <div className="ctc-cards">
@@ -473,6 +487,17 @@ export function CandidateTriageDrawer({
               <div className="ctc-card-sub">Closes the application</div>
             </button>
           </div>
+          {/* Reject is always allowed — even for a candidate the recruiter has
+              advanced in Workable — but a later-stage reject disqualifies them
+              in Workable, so warn clearly first. Advice, not a block. */}
+          {isRejectSelected && isPostHandoverWorkableStage(application?.workable_stage) ? (
+            <div className="ctc-reject-warning" role="alert">
+              <strong>Heads up —</strong> this candidate is in{' '}
+              <strong>{application?.workable_stage}</strong> in Workable
+              {application?.workable_candidate_id ? ', so rejecting will disqualify them there' : ''}.
+              You can still reject — just make sure that&apos;s intended.
+            </div>
+          ) : null}
           <div className="ctc-action-row">
             <a
               className="ctc-link"

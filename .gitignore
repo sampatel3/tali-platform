@@ -25,6 +25,13 @@ build/
 
 # Ralph config (may contain API key)
 .cursor/ralph-config.json
+
+# Ralph runtime state/logs (machine-generated, not meaningful in git)
+.ralph/activity.log
+.ralph/errors.log
+.ralph/.iteration
+.ralph/tasks.mtime
+
 backend/uploads/
 test.db
 test_mig.db

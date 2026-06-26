@@ -242,6 +242,11 @@ class ApplicationResponse(BaseModel):
     pipeline_external_drift: bool = False
     version: int = 1
     notes: Optional[str] = None
+    # Recruiter's manually recorded decision (advance/hold/reject + rationale,
+    # confidence, next steps) with draft/submitted lifecycle, version, author
+    # and history. Null until a decision is recorded. Used for the standing
+    # report's Evaluate surface when no assessment is linked.
+    manual_decision: Optional[dict[str, Any]] = None
     candidate_email: str
     candidate_name: Optional[str] = None
     candidate_position: Optional[str] = None
@@ -377,6 +382,14 @@ class ApplicationEventResponse(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: Optional[str] = None
     created_at: datetime
+
+
+class ApplicationNoteCreate(BaseModel):
+    note: str = Field(min_length=1, max_length=5000)
+    # Default-visible to the recruiting agent: a per-candidate note is almost
+    # always guidance the agent should weigh ("already interviewed — not
+    # suitable"). Untick for pure team chatter the agent shouldn't read.
+    for_agent: bool = True
 
 
 class AssessmentFromApplicationCreate(BaseModel):

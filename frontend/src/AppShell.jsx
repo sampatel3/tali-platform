@@ -35,6 +35,7 @@ import {
   VerifyEmailPage,
 } from './features/auth';
 import { Shell as DashboardNav } from './shared/layout/Shell';
+import { PreviewNavGuard } from './shared/layout/PreviewNavGuard';
 import {
   ConnectWorkableButton,
   WorkableCallbackPage,
@@ -441,6 +442,7 @@ function AppContent() {
   return (
     <>
       <ScrollToTop />
+      <PreviewNavGuard />
       <RouteMeta />
       <KeyboardShortcutsModal
         open={shortcutsModalOpen}

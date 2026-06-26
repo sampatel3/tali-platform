@@ -23,7 +23,7 @@ describe('index.html SEO/AEO head', () => {
 
   it('has Open Graph + Twitter card tags pointing at the social image', () => {
     expect(indexHtml).toMatch(/property="og:title"/);
-    expect(indexHtml).toMatch(/property="og:image" content="https:\/\/www\.taali\.ai\/og-image\.png"/);
+    expect(indexHtml).toMatch(/property="og:image" content="https:\/\/www\.taali\.ai\/og-image\.png(\?v=\d+)?"/);
     expect(indexHtml).toMatch(/name="twitter:card" content="summary_large_image"/);
   });
 

@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="en" data-cover="a" data-problem="a" data-why="a">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <meta name="robots" content="noindex,nofollow" />
-<title>Taali · Investor Deck · 2026</title>
+<title>Taali · Partnership · 2026</title>
 <script>
   // Token-gate fence for the static deck path. The React route at
   // /deck wraps <DeckIframe /> in <TokenGate>, but this file is
@@ -57,13 +57,514 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="investor-deck/tokens.css">
 <link rel="stylesheet" href="investor-deck/deck.css">
+
+<!-- ───────────────────────────────────────────────────────────────────────
+     Partner-pitch additions. Scoped here so the shared deck.css stays the
+     reusable base; these classes only exist for this partnership deck.
+     The product surfaces (slides 04-08) are LIVE iframes of the real
+     app routes — the same approach taali.ai/demo uses, no mock-ups.
+     ──────────────────────────────────────────────────────────────────── -->
+<style id="partner-additions">
+  /* Dark takeaway band under a slide's cards */
+  .takeaway-band {
+    margin-top: 24px; padding: 22px 30px; background: var(--ink); color: #fff;
+    border-radius: 16px; display: flex; align-items: center; gap: 18px;
+    font-size: 21px; line-height: 1.4;
+  }
+  .takeaway-band .lbl {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.14em;
+    color: var(--purple-lav); text-transform: uppercase; white-space: nowrap;
+  }
+  .takeaway-band em { color: var(--purple-lav); font-style: normal; font-weight: 600; }
+
+  /* Offering panels — one model, two uses */
+  .ways { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .way {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 20px;
+    padding: 28px 30px; display: flex; flex-direction: column;
+  }
+  .way.hero { background: var(--ink); border-color: var(--ink); }
+  .way-tag {
+    font-family: var(--font-mono); font-size: 13px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--purple); font-weight: 700; margin-bottom: 12px;
+  }
+  .way.hero .way-tag { color: var(--purple-lav); }
+  .way-h {
+    font-family: var(--font-display); font-size: 34px; font-weight: 600;
+    letter-spacing: -0.025em; line-height: 1.08; color: var(--ink); margin-bottom: 18px;
+  }
+  .way.hero .way-h { color: #fff; }
+  .way-list { display: flex; flex-direction: column; gap: 13px; flex: 1; }
+  .way-li {
+    display: grid; grid-template-columns: 22px 1fr; gap: 11px;
+    font-size: 16.5px; line-height: 1.42; color: var(--ink-2);
+  }
+  .way.hero .way-li { color: rgba(255,255,255,0.9); }
+  .way-li .ic { color: var(--purple); font-weight: 700; font-family: var(--font-mono); }
+  .way.hero .way-li .ic { color: var(--purple-lav); }
+  .way-li b { color: var(--ink); font-weight: 600; }
+  .way.hero .way-li b { color: #fff; }
+
+  /* Offering footer: credits + pilot */
+  .offer-foot { margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .offer-cell {
+    padding: 20px 26px; border-radius: 16px; display: flex; flex-direction: column; gap: 6px;
+  }
+  .offer-cell.credits { background: var(--bg-2); border: 1px solid var(--line); }
+  .offer-cell.pilot { background: var(--ink); color: #fff; }
+  .offer-cell .oc-tag {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--purple); font-weight: 700;
+  }
+  .offer-cell.pilot .oc-tag { color: var(--purple-lav); }
+  .offer-cell .oc-body { font-size: 16px; line-height: 1.45; color: var(--ink-2); }
+  .offer-cell.pilot .oc-body { color: rgba(255,255,255,0.92); }
+  .offer-cell .oc-body b { color: var(--ink); font-weight: 600; }
+  .offer-cell.pilot .oc-body b { color: #fff; }
+  .offer-cell.pilot a { color: var(--purple-lav); text-decoration: none; font-weight: 600; }
+
+  /* ---- Assessment workspace (chat-centred, agentic) ---- */
+  .ide.agentic .ide-body { grid-template-columns: 206px 1.04fr 1fr; }
+  .ide.agentic .ide-claude { border-right: 1px solid var(--line); }
+  .claude-glyph {
+    width: 26px; height: 26px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, #7f39fb, #c44ad0); color: #fff; font-weight: 700; font-size: 13px; font-family: var(--font-display);
+  }
+  .claude-sub { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); }
+  .term-ready {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono);
+    font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--green);
+    border: 1px solid color-mix(in oklab, var(--green) 30%, var(--line)); border-radius: 999px; padding: 3px 9px;
+  }
+  .term-ready .d { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+  .tk-tracker {
+    align-self: flex-start; margin: 0 14px 8px; font-family: var(--font-mono); font-size: 11px;
+    color: var(--purple); background: var(--purple-soft); border-radius: 999px; padding: 4px 11px;
+  }
+  .ide-dock { border-top: 1px solid #241a33; background: #15101f; color: #e6e0ee; display: flex; flex-direction: column; }
+  .ide-dock .dock-tabs { display: flex; border-bottom: 1px solid rgba(255,255,255,0.08); font-family: var(--font-mono); font-size: 12px; }
+  .ide-dock .dock-tab { padding: 8px 16px; color: rgba(255,255,255,0.45); letter-spacing: 0.04em; }
+  .ide-dock .dock-tab.on { color: #fff; box-shadow: inset 0 -2px 0 var(--purple-lav); }
+  .ide-dock .dock-body { padding: 12px 18px; font-family: var(--font-mono); font-size: 13px; line-height: 1.65; color: #cfc7da; }
+  .ide-dock .cli .pr { color: var(--purple-lav); }
+  .ide-dock .cli .ok { color: #4ade80; }
+  .ide-dock .cli .mut { color: #7d738f; }
+
+  /* ---- Product pane shell (home hub + search) ---- */
+  .prod-grid { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .prod-pane { background: var(--bg-2); border: 1px solid var(--line); border-radius: 20px; padding: 24px 26px; display: flex; flex-direction: column; gap: 14px; overflow: hidden; }
+  .pp-head { display: flex; align-items: baseline; gap: 12px; }
+  .pp-kicker { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--purple); font-weight: 700; }
+  .pp-title { font-family: var(--font-display); font-size: 27px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); line-height: 1.1; }
+  .pp-sub { font-size: 14.5px; line-height: 1.45; color: var(--ink-2); margin-top: -4px; }
+
+  /* decision (HITL) cards */
+  .dec-card { border: 1px solid var(--line); border-radius: 14px; padding: 15px 17px; display: flex; flex-direction: column; gap: 9px; background: #fff; }
+  .dec-card.sel { background: var(--purple-soft); border-color: color-mix(in oklab, var(--purple) 32%, var(--line)); }
+  .dec-meta { display: flex; align-items: center; gap: 9px; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); }
+  .dec-type { color: var(--ink-2); font-weight: 600; }
+  .dec-type.adv { color: var(--green); }
+  .dec-type.rej { color: #c0392b; }
+  .dec-score { background: var(--purple-soft); color: var(--purple); padding: 2px 9px; border-radius: 999px; font-weight: 700; }
+  .dec-needs { margin-left: auto; background: var(--purple); color: #fff; padding: 3px 10px; border-radius: 999px; font-weight: 700; letter-spacing: 0.08em; }
+  .dec-name { font-family: var(--font-display); font-size: 18px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
+  .dec-name .role { font-family: var(--font-sans); font-size: 13px; font-weight: 400; color: var(--ink-2); margin-left: 8px; }
+  .dec-reason { font-size: 13px; line-height: 1.45; color: var(--ink-2); }
+  .dec-reason b { color: var(--ink); font-weight: 600; }
+  .dec-actions { display: flex; gap: 8px; }
+  .dec-btn { padding: 7px 15px; border-radius: 10px; font-size: 12.5px; font-weight: 600; border: 1px solid var(--line); background: #fff; color: var(--ink-2); }
+  .dec-btn.approve { background: var(--green); color: #fff; border-color: var(--green); }
+  .dec-btn.override { color: var(--amber); border-color: color-mix(in oklab, var(--amber) 50%, var(--line)); }
+  .dec-btn.reject { color: #c0392b; border-color: color-mix(in oklab, #c0392b 35%, var(--line)); }
+
+  /* grounded search */
+  .sr-query { display: flex; align-items: center; gap: 10px; padding: 13px 15px; border: 1px solid color-mix(in oklab, var(--purple) 25%, var(--line)); border-radius: 12px; font-size: 14.5px; color: var(--ink); background: var(--bg); }
+  .sr-query .q { width: 7px; height: 16px; background: var(--purple); border-radius: 2px; }
+  .sr-result { border: 1px solid var(--line); border-radius: 14px; padding: 15px 17px; display: flex; flex-direction: column; gap: 11px; background: #fff; }
+  .sr-cand { display: flex; align-items: center; gap: 11px; }
+  .sr-av { width: 34px; height: 34px; border-radius: 50%; background: var(--purple-soft); color: var(--purple); display: flex; align-items: center; justify-content: center; font-weight: 700; font-family: var(--font-display); font-size: 14px; }
+  .sr-cand .nm { font-family: var(--font-display); font-size: 17px; font-weight: 600; color: var(--ink); }
+  .sr-cand .sc { margin-left: auto; background: var(--green); color: #fff; font-family: var(--font-mono); font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+  .sr-crit { display: flex; align-items: center; gap: 9px; font-size: 13.5px; color: var(--ink-2); }
+  .sr-pill { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; font-weight: 700; }
+  .sr-pill.met { background: color-mix(in oklab, var(--green) 14%, #fff); color: var(--green); }
+  .sr-pill.partial { background: color-mix(in oklab, var(--amber) 16%, #fff); color: var(--amber); }
+  .sr-quote { border-left: 3px solid var(--purple); padding: 7px 13px; background: var(--bg); border-radius: 0 8px 8px 0; font-size: 13px; line-height: 1.45; color: var(--ink); }
+  .sr-cite { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); margin-top: 5px; }
+
+  /* ---- slide 5: real product screenshots ---- */
+  .shot { margin: 0; display: flex; flex-direction: column; background: var(--bg-2); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; box-shadow: 0 24px 60px -30px rgba(91,44,168,0.4); }
+  .shot-bar { display: flex; align-items: center; gap: 10px; padding: 9px 15px; border-bottom: 1px solid var(--line); background: var(--bg); }
+  .shot-bar .dots { display: flex; gap: 6px; }
+  .shot-bar .dots i { width: 10px; height: 10px; border-radius: 50%; background: #d88a1c; display: block; }
+  .shot-bar .dots i:nth-child(1) { background: #f06; }
+  .shot-bar .dots i:nth-child(3) { background: #15a36a; }
+  .shot-url { font-family: var(--font-mono); font-size: 12px; color: var(--mute); letter-spacing: 0.04em; }
+  .shot-img { flex: 1; min-height: 0; background-size: cover; background-position: top center; background-repeat: no-repeat; }
+  .shot-cap { padding: 14px 18px 16px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+  .shot-cap .t { font-family: var(--font-display); font-size: 19px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
+  .shot-cap .t em { font-style: normal; color: var(--purple); }
+  .shot-cap .d { font-size: 13.5px; line-height: 1.45; color: var(--ink-2); }
+
+  /* ---- slide 8: role chips + filled stat grid ---- */
+  .role-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+  .role-chips span { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.02em; color: var(--purple); background: var(--purple-soft); border-radius: 999px; padding: 5px 11px; }
+  .proof-right { display: flex; flex-direction: column; gap: 14px; }
+  .proof-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; flex: 1; grid-auto-rows: 1fr; }
+  .proof-stats .s { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 18px 22px; display: flex; flex-direction: column; justify-content: center; }
+  .proof-stats .n { font-family: var(--font-display); font-size: 42px; font-weight: 600; letter-spacing: -0.03em; color: var(--ink); line-height: 1; }
+  .proof-stats .s.accent .n { color: var(--purple); }
+  .proof-stats .l { margin-top: 8px; font-size: 13.5px; line-height: 1.4; color: var(--ink-2); }
+  .outcome-band { padding: 18px 24px; background: var(--ink); color: #fff; border-radius: 14px; font-size: 17px; line-height: 1.5; }
+  .outcome-band b { color: var(--purple-lav); }
+
+  /* ---- slide 9: bigger, bolder two options ---- */
+  .ways { flex: 1; }
+  .way { padding: 30px 36px 28px; }
+  .way-num { font-family: var(--font-display); font-size: 30px; font-weight: 600; color: color-mix(in oklab, var(--purple) 45%, var(--mute)); letter-spacing: -0.02em; line-height: 1; margin-bottom: 10px; }
+  .way.hero .way-num { color: var(--purple-lav); }
+  .way-h { font-size: 46px; line-height: 1.02; margin-bottom: 10px; }
+  .way-list { gap: 14px; }
+  .way-li { font-size: 19px; gap: 14px; }
+  .way-foot { margin-top: 20px; padding-top: 16px; border-top: 1px dashed var(--line); font-family: var(--font-mono); font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--purple); }
+  .way.hero .way-foot { border-color: rgba(255,255,255,0.2); color: var(--purple-lav); }
+
+  /* ---- slide 4: commentary chips (demo-style annotation) ---- */
+  .commentary { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+  .commentary span { display: inline-flex; align-items: center; gap: 8px; padding: 8px 15px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 999px; font-size: 15px; color: var(--ink-2); }
+  .commentary b { color: var(--purple); font-weight: 700; font-family: var(--font-mono); }
+
+  /* ---- slide 5: two annotated halves (agentic+HITL / bespoke search) ---- */
+  .s5-grid { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 26px; min-height: 0; }
+  .s5-col { display: flex; flex-direction: column; gap: 13px; min-height: 0; }
+  .s5-head { display: flex; align-items: flex-start; gap: 12px; }
+  .s5-badge { flex: none; width: 32px; height: 32px; border-radius: 9px; background: var(--purple); color: #fff; font-family: var(--font-display); font-weight: 700; font-size: 17px; display: flex; align-items: center; justify-content: center; }
+  .s5-badge.b { background: var(--ink); }
+  .s5-htext .t { font-family: var(--font-display); font-size: 24px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); line-height: 1.1; }
+  .s5-htext .t em { font-style: normal; color: var(--purple); }
+  .s5-htext .d { font-size: 14px; line-height: 1.4; color: var(--ink-2); margin-top: 3px; }
+  .s5-col .shot { flex: 1; min-height: 0; }
+  .s5-notes { display: flex; flex-direction: column; gap: 8px; }
+  .s5-note { display: grid; grid-template-columns: 20px 1fr; gap: 10px; font-size: 14.5px; line-height: 1.42; color: var(--ink-2); }
+  .s5-note .k { color: var(--purple); font-weight: 700; font-family: var(--font-mono); }
+  .s5-note b { color: var(--ink); font-weight: 600; }
+  .s5-note.graph .k { color: var(--mute); }
+  .s5-note.graph { color: var(--mute); }
+  /* slide 5 shot frames — fixed aspect, full content (no crop) */
+  .s5-col .shot { flex: none; }
+  .s5-col .shot-img { aspect-ratio: 1.6; background-size: cover; background-position: top center; background-color: var(--bg-2); }
+
+  /* ---- slide 4: captured & scored → report strip ---- */
+  .s4-strip { display: grid; grid-template-columns: 0.95fr 1.3fr 0.95fr; gap: 14px; margin-top: 14px; }
+  .s4-cell { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 13px 16px; display: flex; flex-direction: column; gap: 9px; }
+  .s4-tag { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--purple); font-weight: 700; }
+  .s4-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .s4-chips span { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-2); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 4px 9px; }
+  .s4-scorewrap { display: flex; gap: 16px; align-items: center; }
+  .s4-score { display: flex; flex-direction: column; align-items: center; flex: none; }
+  .s4-score .big { font-family: var(--font-display); font-size: 46px; font-weight: 600; letter-spacing: -0.03em; color: var(--purple); line-height: 0.9; }
+  .s4-score .lbl { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); text-align: center; margin-top: 5px; }
+  .s4-bars { flex: 1; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .s4-bars span { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink); padding: 4px 9px; border-radius: 5px; border: 1px solid var(--line); background: linear-gradient(to right, color-mix(in oklab, var(--purple) 20%, #fff) var(--w,0%), var(--bg) var(--w,0%)); }
+  .s4-rep { font-size: 14px; line-height: 1.5; color: var(--ink-2); }
+  .s4-rep b { color: var(--ink); font-weight: 600; }
+
+  /* ---- slide 5 v6: built product panels (faithful, legible — not screenshots) ---- */
+  .prod-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg-2); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; box-shadow: 0 20px 50px -30px rgba(91,44,168,0.4); }
+  .pp-bar { display: flex; align-items: center; gap: 10px; padding: 9px 15px; border-bottom: 1px solid var(--line); background: var(--bg); }
+  .pp-bar .dots { display: flex; gap: 6px; }
+  .pp-bar .dots i { width: 10px; height: 10px; border-radius: 50%; background: #d88a1c; display: block; }
+  .pp-bar .dots i:nth-child(1) { background: #f06; }
+  .pp-bar .dots i:nth-child(3) { background: #15a36a; }
+  .pp-url { font-family: var(--font-mono); font-size: 12px; color: var(--mute); letter-spacing: 0.04em; }
+  .pp-right { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--purple); background: var(--purple-soft); border-radius: 999px; padding: 3px 11px; font-weight: 700; }
+  .pp-body { flex: 1; min-height: 0; padding: 18px 20px; display: flex; flex-direction: column; gap: 13px; overflow: hidden; }
+
+  /* HITL: decision queue */
+  .dq { display: flex; flex-direction: column; gap: 8px; }
+  .dq-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 11px; background: #fff; }
+  .dq-row.sel { border-color: color-mix(in oklab, var(--purple) 40%, var(--line)); background: var(--purple-soft); box-shadow: inset 3px 0 0 var(--purple); }
+  .dq-av { width: 26px; height: 26px; border-radius: 50%; background: var(--purple-soft); color: var(--purple); font-family: var(--font-display); font-weight: 700; font-size: 11px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .dq-nm { font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--ink); }
+  .dq-badge { font-family: var(--font-mono); font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; padding: 2px 8px; border-radius: 999px; }
+  .dq-badge.adv { color: var(--green); background: color-mix(in oklab, var(--green) 14%, #fff); }
+  .dq-badge.rej { color: #c0392b; background: color-mix(in oklab, #c0392b 12%, #fff); }
+  .dq-needs { font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.06em; color: #fff; background: var(--purple); border-radius: 999px; padding: 2px 7px; }
+  .dq-sc { margin-left: auto; font-family: var(--font-mono); font-weight: 700; font-size: 13px; color: var(--ink); }
+  .dq-row:not(.sel) .dq-needs { display: none; }
+  .dq-row:not(.sel) .dq-sc { margin-left: auto; }
+
+  /* HITL: decision detail */
+  .dd { flex: 1; border: 1px solid color-mix(in oklab, var(--purple) 22%, var(--line)); border-radius: 14px; background: #fff; padding: 15px 18px; display: flex; flex-direction: column; gap: 11px; }
+  .dd-top { display: flex; align-items: center; gap: 10px; font-family: var(--font-mono); font-size: 11px; }
+  .dd-badge.adv { color: var(--green); font-weight: 700; letter-spacing: 0.06em; }
+  .dd-needs { color: #fff; background: var(--purple); border-radius: 999px; padding: 2px 9px; font-weight: 700; }
+  .dd-conf { color: var(--mute); margin-left: auto; }
+  .dd-id { display: flex; align-items: center; justify-content: space-between; }
+  .dd-name { font-family: var(--font-display); font-size: 22px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); }
+  .dd-role { font-size: 13px; color: var(--ink-2); }
+  .dd-score { font-family: var(--font-display); font-size: 36px; font-weight: 600; color: var(--purple); line-height: 0.9; display: flex; flex-direction: column; align-items: center; }
+  .dd-score span { font-family: var(--font-mono); font-size: 9px; color: var(--mute); letter-spacing: 0.1em; margin-top: 3px; }
+  .dd-reason { font-size: 13.5px; line-height: 1.5; color: var(--ink-2); }
+  .dd-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .dd-stats div { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; }
+  .dd-stats .k { font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--mute); }
+  .dd-stats .v { font-family: var(--font-display); font-size: 17px; font-weight: 600; color: var(--ink); }
+  .dd-actions { display: flex; gap: 8px; margin-top: auto; }
+
+  /* Search: query + ranked top-N */
+  .sq { font-size: 15px; line-height: 1.4; color: var(--ink); background: var(--bg); border: 1px solid color-mix(in oklab, var(--purple) 22%, var(--line)); border-radius: 12px; padding: 11px 15px; }
+  .sq-meta { font-family: var(--font-mono); font-size: 11px; color: var(--mute); letter-spacing: 0.03em; }
+  .rank { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+  .rk-row { display: flex; align-items: center; gap: 11px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 11px; background: #fff; }
+  .rk-row:first-child { border-color: color-mix(in oklab, var(--purple) 30%, var(--line)); background: var(--purple-soft); }
+  .rk-n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; color: var(--mute); width: 14px; text-align: center; flex: none; }
+  .rk-av { width: 28px; height: 28px; border-radius: 50%; background: var(--purple-soft); color: var(--purple); font-family: var(--font-display); font-weight: 700; font-size: 11px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .rk-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+  .rk-nm { font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--ink); }
+  .rk-role { font-size: 12px; color: var(--ink-2); }
+  .rk-pre { font-family: var(--font-mono); font-size: 11px; color: var(--mute); flex: none; }
+  .rk-sc { font-family: var(--font-mono); font-weight: 700; font-size: 13px; padding: 3px 10px; border-radius: 999px; flex: none; color: var(--purple); background: var(--purple-soft); }
+  .rk-note { font-family: var(--font-mono); font-size: 11px; color: var(--mute); }
+
+  /* ---- slide 5 v7: faithful home decision detail (A) ---- */
+  .hb-funnel { display: flex; gap: 7px; flex-wrap: wrap; }
+  .hb-funnel span { font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px; }
+  .hb-funnel b { color: var(--ink); font-weight: 700; }
+  .hb-await { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
+  .hb-await .kk { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); }
+  .hb-await .c { font-family: var(--font-mono); font-size: 11px; font-weight: 700; border-radius: 999px; padding: 3px 9px; }
+  .hb-await .c.sa { color: var(--purple); background: var(--purple-soft); }
+  .hb-await .c.ad { color: var(--green); background: color-mix(in oklab, var(--green) 14%, #fff); }
+  .hb-await .c.rj { color: #c0392b; background: color-mix(in oklab, #c0392b 12%, #fff); }
+  .hb-await .c.pr { color: var(--amber); background: color-mix(in oklab, var(--amber) 16%, #fff); }
+  .dd2 { flex: 1; border: 1px solid color-mix(in oklab, var(--purple) 20%, var(--line)); border-radius: 14px; background: #fff; padding: 15px 18px; display: flex; flex-direction: column; gap: 11px; }
+  .dd2-top { display: flex; align-items: center; gap: 9px; font-family: var(--font-mono); font-size: 11px; flex-wrap: wrap; }
+  .dd2-type { color: var(--purple); font-weight: 700; letter-spacing: 0.05em; }
+  .dd2-id { color: var(--mute); }
+  .dd2-needs { color: #fff; background: var(--purple); border-radius: 999px; padding: 2px 9px; font-weight: 700; }
+  .dd2-conf { color: var(--green); margin-left: auto; }
+  .dd2-id-row { display: flex; align-items: center; gap: 12px; }
+  .dd2-av { width: 40px; height: 40px; border-radius: 50%; background: var(--purple-soft); color: var(--purple); font-family: var(--font-display); font-weight: 700; font-size: 15px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .dd2-who { flex: 1; min-width: 0; }
+  .dd2-name { font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); }
+  .dd2-mail { font-family: var(--font-mono); font-size: 11.5px; color: var(--mute); }
+  .dd2-score { font-family: var(--font-display); font-size: 34px; font-weight: 600; color: var(--purple); line-height: 0.9; display: flex; flex-direction: column; align-items: center; flex: none; }
+  .dd2-score span { font-family: var(--font-mono); font-size: 9px; color: var(--mute); letter-spacing: 0.1em; margin-top: 3px; }
+  .dd2-reason { font-size: 13px; line-height: 1.5; color: var(--ink-2); flex: 1; }
+  .dd2-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+  .ab { font-family: var(--font-sans); font-size: 12.5px; font-weight: 600; border-radius: 9px; padding: 7px 13px; border: 1px solid var(--line); background: #fff; }
+  .ab.green { color: var(--green); border-color: color-mix(in oklab, var(--green) 45%, var(--line)); background: color-mix(in oklab, var(--green) 8%, #fff); }
+  .ab.amber { color: #c0392b; border-color: color-mix(in oklab, #c0392b 35%, var(--line)); }
+  .ab.amber-o { color: var(--amber); border-color: color-mix(in oklab, var(--amber) 45%, var(--line)); }
+  .ab.purple { color: #fff; background: var(--purple); border-color: var(--purple); }
+
+  /* ---- slide 5 v7: faithful candidate evidence card (B) ---- */
+  .ev-head { display: flex; flex-direction: column; gap: 5px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+  .ev-title { font-size: 13px; line-height: 1.45; color: var(--ink-2); }
+  .ev-title b { color: var(--ink); font-family: var(--font-display); }
+  .ev-sub { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.03em; color: var(--mute); }
+  .ev-cand { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .ev-rank { font-family: var(--font-mono); font-size: 12px; font-weight: 700; color: var(--mute); }
+  .ev-nm { font-family: var(--font-display); font-size: 17px; font-weight: 600; color: var(--ink); }
+  .ev-taali { font-family: var(--font-mono); font-size: 11px; font-weight: 700; color: var(--purple); background: var(--purple-soft); border-radius: 999px; padding: 2px 9px; }
+  .ev-role { font-size: 12px; color: var(--ink-2); }
+  .ev-crits { display: flex; flex-direction: column; gap: 6px; }
+  .ev-crit { font-size: 12.5px; color: var(--ink); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .ev-pill { font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.05em; padding: 2px 7px; border-radius: 999px; flex: none; }
+  .ev-pill.met { color: var(--green); background: color-mix(in oklab, var(--green) 14%, #fff); }
+  .ev-pill.partial { color: var(--amber); background: color-mix(in oklab, var(--amber) 16%, #fff); }
+  .ev-src { font-family: var(--font-mono); font-size: 10.5px; color: var(--mute); }
+  .ev-quote { font-size: 12px; line-height: 1.45; color: var(--ink-2); border-left: 2px solid color-mix(in oklab, var(--amber) 50%, var(--line)); padding: 3px 0 3px 10px; margin-left: 4px; }
+  .ev-cand-mini { display: flex; align-items: center; gap: 9px; padding-top: 9px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+  .ev-cand-mini .ev-nm { font-size: 14.5px; }
+
+  /* ---- slide 4 v9: assessment (2/3) + client report (1/3) ---- */
+  .s4-split { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.35fr 1fr; gap: 18px; margin-top: 12px; align-items: stretch; }
+  .s4-split .ide { margin-top: 0; }
+  .asm-img { flex: 1; min-height: 0; background-size: cover; background-position: top center; background-color: var(--bg-2); }
+  .s4-cap { margin-top: 12px; font-family: var(--font-mono); font-size: 12.5px; letter-spacing: 0.01em; color: var(--ink-2); background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 11px 16px; }
+  .s4-cap b { color: var(--purple); }
+  .cr-body { flex: 1; min-height: 0; padding: 15px 17px; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+  .cr-banner { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.04em; color: var(--purple); background: var(--purple-soft); border-radius: 8px; padding: 6px 10px; }
+  .cr-id { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+  .cr-name { font-family: var(--font-display); font-size: 21px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); line-height: 1.05; }
+  .cr-role { font-size: 12px; color: var(--ink-2); margin-top: 3px; }
+  .cr-verdict { font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; color: #fff; background: var(--purple); border-radius: 999px; padding: 3px 10px; white-space: nowrap; flex: none; }
+  .cr-scores { display: flex; gap: 7px; }
+  .cr-sc { flex: 1; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 8px 6px; text-align: center; }
+  .cr-sc .n { font-family: var(--font-display); font-size: 22px; font-weight: 600; color: var(--ink); line-height: 1; }
+  .cr-sc .k { font-family: var(--font-mono); font-size: 8px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); margin-top: 4px; }
+  .cr-sc.lead { background: var(--purple-soft); border-color: color-mix(in oklab, var(--purple) 28%, var(--line)); }
+  .cr-sc.lead .n { color: var(--purple); font-size: 26px; }
+  .cr-tag { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--purple); font-weight: 700; margin-bottom: 6px; }
+  .cr-why { margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+  .cr-why li { list-style: none; font-size: 11.5px; line-height: 1.4; color: var(--ink-2); padding-left: 13px; position: relative; }
+  .cr-why li::before { content: "•"; position: absolute; left: 2px; color: var(--purple); }
+  .cr-dims { display: flex; flex-direction: column; gap: 5px; }
+  .cr-dim { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); }
+  .cr-dim .dl { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cr-dim .db { width: 52px; height: 5px; border-radius: 3px; background: var(--bg-3); flex: none; overflow: hidden; }
+  .cr-dim .db i { display: block; height: 100%; background: var(--purple); }
+  .cr-dim .dn { width: 18px; text-align: right; color: var(--ink); font-weight: 700; flex: none; }
+  .cr-prov { font-family: var(--font-mono); font-size: 10px; color: var(--mute); }
+  .cr-foot { margin-top: auto; font-family: var(--font-mono); font-size: 10px; color: var(--mute); border-top: 1px solid var(--line); padding-top: 8px; }
+  .cr-rec { font-family: var(--font-display); font-size: 19px; font-weight: 600; letter-spacing: -0.02em; color: var(--purple); }
+  .cr-summary { font-size: 11.5px; line-height: 1.45; color: var(--ink-2); margin-top: 3px; }
+  .cr-cov { height: 7px; border-radius: 4px; overflow: hidden; display: flex; }
+  .cr-cov i { display: block; height: 100%; }
+  .cr-cov .m { background: var(--purple); }
+  .cr-cov .p { background: color-mix(in oklab, var(--purple) 32%, #fff); }
+  .cr-reqs { display: flex; flex-direction: column; gap: 5px; }
+  .cr-req { display: flex; align-items: flex-start; gap: 7px; font-size: 11px; line-height: 1.3; color: var(--ink-2); }
+  .cr-req .rp { font-family: var(--font-mono); font-size: 8px; font-weight: 700; letter-spacing: 0.04em; padding: 2px 6px; border-radius: 999px; flex: none; margin-top: 1px; }
+  .cr-req .rp.met { color: var(--green); background: color-mix(in oklab, var(--green) 14%, #fff); }
+  .cr-req .rp.part { color: var(--amber); background: color-mix(in oklab, var(--amber) 16%, #fff); }
+
+  /* agent-on treatment (the bold dark-purple ON pill, as on the live home) */
+  .agent-on { font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; color: #fff; background: linear-gradient(135deg, #3a1d6e, #241147); border-radius: 999px; padding: 4px 11px; display: inline-flex; align-items: center; gap: 7px; }
+  .agent-on::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--purple-lav); box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple) 30%, transparent); }
+
+  /* ---- real demo-page frames (show the actual product, focused) ---- */
+  .pg-frame { flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; box-shadow: 0 18px 44px -28px rgba(91,44,168,0.4); background: #fff; display: flex; }
+  .pg-img { flex: 1; min-height: 0; background-size: contain; background-position: center top; background-repeat: no-repeat; background-color: #fff; }
+  .rep-frame { align-self: center; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; box-shadow: 0 18px 44px -28px rgba(91,44,168,0.4); background: #fff; }
+  .rep-shot { width: 100%; background-size: cover; background-position: top center; background-repeat: no-repeat; }
+  .rep-shot + .rep-shot { border-top: 1px solid var(--line); }
+
+  /* ============================================================
+     PRODUCT-BRANDED SURFACE MOCKS (clean, built — actual product
+     branding: #b450ff purple family, Geist, agent-ON gradient)
+     ============================================================ */
+  .pcard { flex: 1; min-height: 0; background: #fff; border: 1px solid #e8e2ee; border-radius: 16px; box-shadow: 0 24px 54px -34px rgba(91,44,168,0.45); display: flex; flex-direction: column; overflow: hidden; color: #15121a; }
+  .pcard-bar { display: flex; align-items: center; gap: 9px; padding: 11px 16px; border-bottom: 1px solid #f1edf5; font-family: var(--font-mono); font-size: 12px; color: #8b8595; letter-spacing: 0.02em; }
+  .pcard-bar .glyph { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, #b450ff, #7a2fd6); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; font-family: var(--font-display); flex: none; }
+  .pcard-bar .ttl { color: #15121a; font-weight: 600; font-family: var(--font-display); letter-spacing: -0.01em; font-size: 13px; }
+  .pcard-bar .live { color: #15a36a; display: inline-flex; align-items: center; gap: 5px; }
+  .pcard-bar .live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #15a36a; }
+  .pcard-bar .r { margin-left: auto; color: #8b8595; }
+  .pbody { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+  /* agent-on (product treatment) */
+  .ao { font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: 0.09em; color: #fff; background: linear-gradient(135deg, #3a1d6e, #241147); border-radius: 999px; padding: 4px 11px; display: inline-flex; align-items: center; gap: 7px; }
+  .ao::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #c98bff; box-shadow: 0 0 0 3px rgba(180,80,255,0.28); }
+
+  /* --- 5A · decision (HITL) --- */
+  .dc-top { display: flex; align-items: center; gap: 10px; padding: 14px 20px 0; }
+  .dc-top .role { font-family: var(--font-display); font-size: 14px; font-weight: 600; color: #3a3343; }
+  .dc-needs { margin-left: auto; font-family: var(--font-mono); font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; color: #fff; background: #b450ff; border-radius: 999px; padding: 3px 10px; }
+  .dc-mid { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; flex: 1; }
+  .dc-verdict { display: flex; align-items: center; gap: 12px; }
+  .dc-adv { font-family: var(--font-display); font-size: 24px; font-weight: 600; letter-spacing: -0.02em; color: #15a36a; }
+  .dc-conf { font-family: var(--font-mono); font-size: 11.5px; color: #8b8595; }
+  .dc-cand { display: flex; align-items: center; gap: 13px; }
+  .dc-av { width: 44px; height: 44px; border-radius: 50%; background: #f4e8ff; color: #b450ff; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-weight: 700; font-size: 16px; flex: none; }
+  .dc-name { font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -0.02em; color: #15121a; }
+  .dc-csub { font-size: 13px; color: #3a3343; }
+  .dc-score { margin-left: auto; font-family: var(--font-display); font-size: 36px; font-weight: 600; color: #b450ff; line-height: 0.9; display: flex; flex-direction: column; align-items: center; flex: none; }
+  .dc-score span { font-family: var(--font-mono); font-size: 9px; color: #8b8595; letter-spacing: 0.1em; margin-top: 4px; }
+  .dc-reason { font-size: 14px; line-height: 1.5; color: #3a3343; }
+  .dc-ev { display: flex; gap: 8px; flex-wrap: wrap; }
+  .dc-ev span { font-family: var(--font-mono); font-size: 11px; color: #3a3343; background: #f7f4fb; border: 1px solid #e8e2ee; border-radius: 8px; padding: 6px 11px; }
+  .dc-ev b { color: #15121a; font-weight: 700; }
+  .dc-trace { margin-top: auto; border-top: 1px solid #f1edf5; padding-top: 13px; display: flex; flex-direction: column; gap: 8px; }
+  .dc-tracetag { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: #8b8595; }
+  .dc-step { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: #3a3343; }
+  .dc-step .d { width: 7px; height: 7px; border-radius: 50%; background: #b450ff; flex: none; }
+  .dc-act { display: flex; gap: 9px; padding: 0 20px 18px; }
+  .btn-primary { flex: 1; text-align: center; font-family: var(--font-display); font-size: 14px; font-weight: 600; color: #fff; background: #b450ff; border-radius: 11px; padding: 11px; }
+  .btn-ghost { font-family: var(--font-display); font-size: 14px; font-weight: 600; color: #3a3343; background: #fff; border: 1px solid #e8e2ee; border-radius: 11px; padding: 11px 18px; }
+
+  /* --- 5B · search --- */
+  .sr2 { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; }
+  .sr2-q { display: flex; align-items: center; gap: 10px; font-size: 15px; color: #15121a; background: #f7f4fb; border: 1px solid color-mix(in oklab, #b450ff 22%, #e8e2ee); border-radius: 12px; padding: 12px 15px; }
+  .sr2-q .qi { width: 7px; height: 17px; background: #b450ff; border-radius: 2px; flex: none; }
+  .sr2-meta { font-family: var(--font-mono); font-size: 11px; color: #8b8595; letter-spacing: 0.02em; }
+  .sr2-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid #e8e2ee; border-radius: 12px; }
+  .sr2-row.top { background: #f4e8ff; border-color: color-mix(in oklab, #b450ff 28%, #e8e2ee); }
+  .sr2-rank { font-family: var(--font-mono); font-size: 13px; font-weight: 700; color: #8b8595; width: 14px; text-align: center; flex: none; }
+  .sr2-av { width: 32px; height: 32px; border-radius: 50%; background: #efe8f7; color: #b450ff; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-weight: 700; font-size: 12px; flex: none; }
+  .sr2-mid { flex: 1; min-width: 0; }
+  .sr2-name { font-family: var(--font-display); font-size: 16px; font-weight: 600; color: #15121a; }
+  .sr2-sub { font-size: 12.5px; color: #3a3343; }
+  .sr2-sc { font-family: var(--font-mono); font-size: 14px; font-weight: 700; color: #b450ff; background: #fff; border: 1px solid color-mix(in oklab, #b450ff 30%, #e8e2ee); border-radius: 999px; padding: 4px 12px; flex: none; }
+  .sr2-ev { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; line-height: 1.45; color: #3a3343; padding: 2px 4px 2px 26px; }
+  .sr2-ev .m { font-family: var(--font-mono); font-size: 9px; font-weight: 700; color: #15a36a; background: color-mix(in oklab, #15a36a 14%, #fff); border-radius: 999px; padding: 2px 7px; flex: none; }
+  .sr2-ev i { font-style: italic; color: #15121a; }
+
+  /* --- 4A · assessment (work sample) --- */
+  .wp-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 168px 1fr; }
+  .wp-repo { border-right: 1px solid #f1edf5; background: #faf8fd; padding: 14px 14px; display: flex; flex-direction: column; gap: 7px; font-family: var(--font-mono); font-size: 12.5px; }
+  .wp-rh { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #8b8595; margin-bottom: 3px; }
+  .wp-f { color: #3a3343; padding: 3px 8px; border-radius: 6px; }
+  .wp-f.act { background: #f4e8ff; color: #b450ff; font-weight: 600; }
+  .wp-f.act::after { content: " ●"; color: #ef4444; }
+  .wp-fail { margin-top: auto; color: #c0392b; font-size: 11.5px; }
+  .wp-chat { padding: 16px 18px; display: flex; flex-direction: column; gap: 11px; min-height: 0; }
+  .wp-ch { font-family: var(--font-mono); font-size: 11px; color: #8b8595; display: flex; align-items: center; gap: 7px; }
+  .wp-ch .cg { width: 22px; height: 22px; border-radius: 7px; background: linear-gradient(135deg, #b450ff, #c44ad0); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; font-family: var(--font-display); }
+  .wp-ch b { color: #15121a; font-family: var(--font-display); font-size: 13px; }
+  .wp-msg { font-size: 14px; line-height: 1.5; border-radius: 13px; padding: 12px 15px; max-width: 88%; }
+  .wp-msg.cand { background: #f4e8ff; color: #15121a; align-self: flex-end; border-bottom-right-radius: 4px; }
+  .wp-msg.ai { background: #f7f4fb; border: 1px solid #e8e2ee; color: #3a3343; align-self: flex-start; border-bottom-left-radius: 4px; }
+  .wp-msg code { font-family: var(--font-mono); font-size: 12.5px; background: rgba(180,80,255,0.10); color: #7a2fd6; padding: 1px 5px; border-radius: 5px; }
+
+  /* --- 4B · report --- */
+  .rp2 { flex: 1; min-height: 0; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+  .rp2-rec { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #b450ff; font-weight: 700; }
+  .rp2-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+  .rp2-verdict { font-family: var(--font-display); font-size: 30px; font-weight: 600; letter-spacing: -0.03em; color: #b450ff; line-height: 1; }
+  .rp2-rings { display: grid; grid-template-columns: repeat(4, auto); gap: 14px; }
+  .rp2-ring { display: flex; flex-direction: column; align-items: center; }
+  .rp2-ring .n { font-family: var(--font-display); font-size: 22px; font-weight: 600; color: #15121a; line-height: 1; width: 46px; height: 46px; border-radius: 50%; border: 3px solid #b450ff; display: flex; align-items: center; justify-content: center; }
+  .rp2-ring .l { font-family: var(--font-mono); font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: #8b8595; margin-top: 5px; }
+  .rp2-sum { font-size: 13.5px; line-height: 1.5; color: #3a3343; }
+  .rp2-cvh { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #b450ff; font-weight: 700; border-top: 1px solid #f1edf5; padding-top: 12px; }
+  .rp2-crit { display: flex; align-items: flex-start; gap: 9px; font-size: 13px; line-height: 1.4; color: #3a3343; }
+  .rp2-crit .p { font-family: var(--font-mono); font-size: 8.5px; font-weight: 700; letter-spacing: 0.04em; padding: 2px 7px; border-radius: 999px; flex: none; margin-top: 1px; }
+  .rp2-crit .p.met { color: #15a36a; background: color-mix(in oklab, #15a36a 14%, #fff); }
+  .rp2-crit .p.part { color: #f59e0b; background: color-mix(in oklab, #f59e0b 16%, #fff); }
+  .rp2-foot { margin-top: auto; font-family: var(--font-mono); font-size: 10px; color: #8b8595; }
+
+  /* ── Product surfaces — live iframes of the real app (mirrors taali.ai/demo) ── */
+  deck-stage > section[data-slide^="surf-"] { display: flex; flex-direction: column; padding: 46px 88px 48px; }
+  .slide-head.surf-head { margin-bottom: 10px; flex: none; }
+  .surf-title { margin: 6px 0 0; font-family: var(--font-display); font-size: 30px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.1; color: var(--ink); max-width: 1500px; }
+  .surf-title em { color: var(--purple); font-style: normal; }
+  .surf { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+  .surf-frame { flex: 1; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: var(--bg-2); box-shadow: var(--shadow-lg); }
+  .surf-chrome { flex: none; display: flex; align-items: center; gap: 11px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--bg); }
+  .surf-chrome .dots { display: flex; gap: 6px; }
+  .surf-chrome .dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--amber); }
+  .surf-chrome .dots i:nth-child(1) { background: #f0606b; }
+  .surf-chrome .dots i:nth-child(3) { background: var(--green); }
+  .surf-url { font-family: var(--font-mono); font-size: 12.5px; letter-spacing: 0.01em; color: var(--ink-2); }
+  .surf-url .lock { color: var(--green); margin-right: 6px; font-size: 9px; vertical-align: 1px; }
+  .surf-badge { margin-left: auto; font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--purple); background: var(--purple-soft); border-radius: 999px; padding: 3px 12px; }
+  .surf-frame iframe { flex: 1; width: 100%; min-height: 0; border: 0; display: block; background: var(--bg-2); }
+  .surf-out { flex: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .surf-out span { display: block; position: relative; padding-left: 18px; font-size: 12.5px; line-height: 1.4; color: var(--ink-2); }
+  .surf-out span::before { content: "→"; position: absolute; left: 0; top: 0; color: var(--purple); font-weight: 700; }
+  .surf-out b { color: var(--ink); font-weight: 600; }
+  /* Live iframes can't render in a PDF/print export, so each surface also
+     carries a captured screenshot of the real product — hidden on screen,
+     swapped in for print so the downloaded PDF shows the actual surfaces. */
+  .surf-shot { display: none; }
+  @media print {
+    /* Force the deck's dark slabs + colour accents to print even when the
+       browser's "Background graphics" toggle is off — they're essential. */
+    *, *::before, *::after { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    .surf-frame iframe { display: none; }
+    .surf-shot { display: block; flex: 1; width: 100%; min-height: 0; object-fit: cover; object-position: top center; }
+  }
+</style>
 </head>
 <body>
 
 <deck-stage>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       01 · COVER (3 variations)
+       01 · COVER
        ════════════════════════════════════════════════════════════════════ -->
   <section data-slide="cover" data-screen-label="01 Cover">
     <div class="cover-grid"></div>
@@ -71,429 +572,255 @@
     <div class="cover-top">
       <div class="cover-wordmark">taali<span class="p">.</span></div>
       <div class="cover-meta">
-        <span><b>Pre-seed</b> · 2026</span>
-        <span>UAE · MENA</span>
-        <span>Investor deck</span>
+        <span><b>Partnership proposal</b></span>
+        <span>2026</span>
       </div>
     </div>
 
-    <!-- Variant A — engineer-credible -->
-    <div class="cover-body cv cv-a">
-      <div class="cover-eyebrow">// 01 · The recruiter's agent</div>
-      <div class="cover-headline">Hire engineers who <em>ship</em> with AI<span class="p">.</span></div>
-      <div class="cover-sub">Taali is the agent that runs your engineering pipeline — and the only one that scores how candidates actually <em>work</em> with AI. Real IDE. Real Claude. Real evidence.</div>
+    <div class="cover-body">
+      <div class="cover-eyebrow">// 01 · For consultancy &amp; staffing firms</div>
+      <div class="cover-headline">Send clients <em>proof</em>, not CVs<span class="p">.</span></div>
+      <div class="cover-sub">Taali is a hiring agent and an AI-native assessment — <em>built from the ground up, proven running a live data &amp; AI consultancy's hiring</em>. It clears the AI-CV flood off your desks, lets you tailor a role and find the right people in seconds, and turns every candidate you put forward into verified, evidence-backed proof your clients can trust.</div>
       <div class="cover-pillars">
-        <span class="cover-pillar"><b>01</b> Agentic loop</span>
-        <span class="cover-pillar"><b>02</b> AI-fluency scoring</span>
-        <span class="cover-pillar"><b>03</b> Auditable verdicts</span>
-      </div>
-    </div>
-
-    <!-- Variant B — vision-first -->
-    <div class="cover-body cv cv-b">
-      <div class="cover-eyebrow">// 01 · Built for the AI-native era</div>
-      <div class="cover-headline">The recruiter's <em>agent</em><span class="p">.</span></div>
-      <div class="cover-sub">One agent runs each role end-to-end. Watches candidates as they arrive, scores fluency on a real IDE, queues the calls that matter to you. Built in the UAE for the way engineers ship now.</div>
-      <div class="cover-pillars">
-        <span class="cover-pillar">Runs <b>24/7</b> — pauses for your judgment</span>
-        <span class="cover-pillar"><b>AI-native</b> assessment from day one</span>
-        <span class="cover-pillar"><b>UAE-native</b> · Emiratisation-ready</span>
-      </div>
-    </div>
-
-    <!-- Variant C — bold/contrarian -->
-    <div class="cover-body cv cv-c">
-      <div class="cover-eyebrow">// 01 · 2026 — the assessment is the product</div>
-      <div class="cover-headline">Your hiring stack is measuring the <em>wrong thing</em><span class="p">.</span></div>
-      <div class="cover-sub">Engineers ship with Claude, Cursor and Copilot on day one. Assessments still test leetcode in a sandbox. We rebuilt the loop around how engineers actually work — and gave it an agent.</div>
-      <div class="cover-pillars">
-        <span class="cover-pillar"><b>78%</b> of CVs are AI-written</span>
-        <span class="cover-pillar"><b>0</b> incumbents score AI fluency</span>
-        <span class="cover-pillar"><b>1</b> agent runs the loop</span>
+        <span class="cover-pillar"><b>01</b> The agent runs your pipeline — you stay in control</span>
+        <span class="cover-pillar"><b>02</b> Prove real skill, including how they work with AI</span>
+        <span class="cover-pillar"><b>03</b> A service you can sell on to your clients</span>
       </div>
     </div>
 
     <div class="cover-foot">
-      <span>Sam Patel · Founder</span>
-      <span><a href="mailto:hello@taali.ai">hello@taali.ai</a></span>
+      <span>Sam Patel · Founder, Taali · piloted at DeepLight AI</span>
+      <span><a href="https://www.taali.ai/demo">taali.ai/demo</a> · <a href="mailto:hello@taali.ai">hello@taali.ai</a></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       02 · PROBLEM (3 variations)
+       02 · THE SHIFT (problem, agency-framed)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="problem" data-screen-label="02 Problem">
+  <section data-slide="problem" data-screen-label="02 The shift">
     <div class="tally-grid tg-tr"></div>
 
     <div class="slide-head">
-      <div class="eyebrow"><span class="num">02</span><span class="dot">·</span><span>Problem</span></div>
-      <h2 class="slide-title">Hiring engineers in 2026 is broken — <em>three ways at once</em>.</h2>
+      <div class="eyebrow"><span class="num">02</span><span class="dot">·</span><span>The shift</span></div>
+      <h2 class="slide-title">A CV no longer proves anything — <em>for exactly the roles you place</em>.</h2>
+      <p class="slide-sub">Software, data, AI, change. Whoever can <em style="color:#7f39fb;font-style:normal;font-weight:600;">prove</em> capability — not just forward a CV — wins the mandate. That's the opening.</p>
     </div>
 
-    <!-- Variant A: 3 cards -->
-    <div class="problem-a cv cv-a" style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 32px; flex: 1;">
+    <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 32px; flex: 1;">
       <div class="problem-card">
         <div class="pc-eyebrow">// 01 · The flood</div>
         <div class="pc-stat">78<span class="unit">%</span></div>
         <div class="pc-title">Of CVs now contain AI-generated content.</div>
-        <div class="pc-body">ChatGPT averages <b>14 embellishments</b> per CV. 59% of hiring managers suspect candidates of misrepresenting themselves with AI. Resume fraud already costs employers $600B per year.</div>
+        <div class="pc-body">ChatGPT averages <b>14 embellishments</b> per CV, and resume fraud already costs employers <b>~$600B a year</b>. Your consultants burn billable hours sorting a slush pile that <em>looks</em> qualified and isn't.</div>
         <div class="pc-source">Jobcannon · Crosschq · Gartner</div>
       </div>
       <div class="problem-card">
         <div class="pc-eyebrow">// 02 · The blindspot</div>
         <div class="pc-stat">5<span class="unit">×</span></div>
-        <div class="pc-title">Cheating spike on legacy assessments.</div>
-        <div class="pc-body">Engineering work is done with Claude, Cursor, Copilot. Legacy assessments measure leetcode in a sterile sandbox. One tech leader saw <b>80% of candidates use an LLM despite explicit prohibition</b>.</div>
+        <div class="pc-title">Cheating spike on legacy tech tests.</div>
+        <div class="pc-body">Your candidates build with Claude, Cursor and Copilot every day. Legacy tests measure leetcode in a sealed sandbox — one leader saw <b>80% use an LLM despite an explicit ban</b>. You can't verify the dev, data and AI roles that are your bread and butter.</div>
         <div class="pc-source">Karat · 500,000+ technical interviews</div>
       </div>
       <div class="problem-card">
-        <div class="pc-eyebrow">// 03 · The UAE squeeze</div>
-        <div class="pc-stat">10<span class="unit">%</span></div>
-        <div class="pc-title">Emiratisation deadline. December 2026.</div>
-        <div class="pc-body">Every UAE company with 50+ staff must hit 10% Emirati skilled hires by year-end or pay <b>AED 6,000/month per missing hire</b>. Plus 10,000 AI/ML engineers needed by 2031.</div>
-        <div class="pc-source">UAE Government · National AI Strategy 2031</div>
-      </div>
-    </div>
-
-    <!-- Variant B: split — measured vs. real -->
-    <div class="problem-b cv cv-b" style="grid-template-columns: 1fr 1fr; gap: 28px; flex: 1;">
-      <div class="problem-split">
-        <div class="ps-label">// What assessments measure</div>
-        <div class="ps-title">Leetcode in a sandbox.<br/>No AI. No internet. No tools.</div>
-        <div class="ps-mock">
-          <div class="mock-row"><span class="dot"></span><span class="k">env:</span> <span>sealed sandbox</span></div>
-          <div class="mock-row"><span class="dot"></span><span class="k">tools:</span> <span>none</span></div>
-          <div class="mock-row"><span class="dot"></span><span class="k">internet:</span> <span>blocked</span></div>
-          <div class="mock-row"><span class="dot"></span><span class="k">ai:</span> <span>"please don't use"</span></div>
-          <div class="mock-row"><span class="dot"></span><span class="k">measures:</span> <span>recall + speed</span></div>
-        </div>
-        <div class="ps-foot">HackerRank · Codility · CoderPad</div>
-      </div>
-      <div class="problem-split real">
-        <div class="ps-label">// What engineers actually do</div>
-        <div class="ps-title">Pair with Claude all day.<br/>Ship from prompts to PRs.</div>
-        <div class="ps-mock">
-          <div class="mock-row on"><span class="dot"></span><span class="k">env:</span> <span>real repo, real CI</span></div>
-          <div class="mock-row on"><span class="dot"></span><span class="k">tools:</span> <span>Claude · Cursor · Copilot</span></div>
-          <div class="mock-row on"><span class="dot"></span><span class="k">workflow:</span> <span>prompt → diff → test → merge</span></div>
-          <div class="mock-row on"><span class="dot"></span><span class="k">skill:</span> <span>knowing what to ask, when to override</span></div>
-          <div class="mock-row on"><span class="dot"></span><span class="k">measures:</span> <span>nobody scores this. yet.</span></div>
-        </div>
-        <div class="ps-foot">// the gap is the wedge</div>
-      </div>
-    </div>
-
-    <!-- Variant C: stat-forward -->
-    <div class="problem-c cv cv-c" style="flex:1; flex-direction: column; justify-content: space-between;">
-      <div class="big-num">
-        <span class="pct">78%</span>
-        <span class="caption">of CVs in 2026 contain <b>AI-generated content</b>.<br/>The flood broke the screening funnel.</span>
-      </div>
-      <div class="stat-row">
-        <div class="stat-cell">
-          <div class="n"><em>5×</em> spike</div>
-          <div class="lbl">Cheating detected on legacy technical assessments. 80% of candidates use an LLM despite explicit prohibition.</div>
-          <div class="src">Karat · 500k+ interviews</div>
-        </div>
-        <div class="stat-cell">
-          <div class="n">$<em>600B</em>/yr</div>
-          <div class="lbl">Global cost of resume fraud — Gartner predicts 1 in 4 candidates will be fraudulent by 2028.</div>
-          <div class="src">Crosschq · Gartner</div>
-        </div>
-        <div class="stat-cell">
-          <div class="n"><em>10%</em> by Dec 26</div>
-          <div class="lbl">UAE Emiratisation mandate — 50+ staff orgs miss it, pay AED 6k/month per missing hire.</div>
-          <div class="src">UAE Government</div>
-        </div>
+        <div class="pc-eyebrow">// 03 · The trust gap</div>
+        <div class="pc-stat">1<span class="unit">in 3</span></div>
+        <div class="pc-title">Hiring managers have caught a fake or proxy candidate.</div>
+        <div class="pc-body">When a client can no longer trust a CV, they can't trust your shortlist — and your edge as a firm erodes to whoever emails CVs <b>fastest</b>. Proof is the only thing left that travels.</div>
+        <div class="pc-source">Industry hiring surveys · 2025</div>
       </div>
     </div>
 
     <div class="slide-foot">
-      <span>02 / 10 · The problem</span>
+      <span>02 / 12 · The shift</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       03 · WHY NOW (3 variations)
+       03 · WHAT TAALI IS (solution)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="why" data-screen-label="03 Why now">
-    <div class="tally-grid tg-br"></div>
-
-    <div class="slide-head">
-      <div class="eyebrow"><span class="num">03</span><span class="dot">·</span><span>Why now</span></div>
-      <h2 class="slide-title">Three tailwinds converge — and the window is <em>18 months</em>.</h2>
-    </div>
-
-    <!-- Variant A: timeline -->
-    <div class="cv cv-a" style="flex:1; display:flex; flex-direction:column;">
-      <div class="why-a" style="display:grid; grid-template-columns: repeat(3, 1fr); flex:1;">
-        <div class="why-step">
-          <div class="yr">2024</div>
-          <div class="yt">AI moves into every dev workflow.</div>
-          <div class="yb">Claude Code, Cursor and Copilot become how engineers ship code. Hiring assessments that pretend AI doesn't exist start measuring the wrong skill.</div>
-        </div>
-        <div class="why-step">
-          <div class="yr">2025</div>
-          <div class="yt">AI-CV flood + fraud crisis breaks recruiter trust.</div>
-          <div class="yb">78% of applications contain AI-generated content. 1 in 3 hiring managers catches a fake identity or proxy candidate. The funnel can no longer self-filter.</div>
-        </div>
-        <div class="why-step">
-          <div class="yr">2026 <span class="now">NOW</span></div>
-          <div class="yt">UAE Emiratisation + AI Strategy 2031 land together.</div>
-          <div class="yb">10% Emirati skilled-hire deadline by year-end. 10,000 AI/ML engineers needed by 2031. Local-first hiring tooling has explicit policy tailwind.</div>
-        </div>
-      </div>
-      <div class="why-window">
-        <span class="lbl">// the window</span>
-        <span class="txt">Incumbents are bolting AI onto legacy surfaces. Nobody has built around <em style="color:#a78bfa; font-style:normal;">agent + AI-native</em> from day one. Owning that wedge is an 18-month decision.</span>
-      </div>
-    </div>
-
-    <!-- Variant B: convergence chart -->
-    <div class="why-b cv cv-b">
-      <div class="why-chart">
-        <svg viewBox="0 0 800 460" preserveAspectRatio="none">
-          <!-- grid -->
-          <g stroke="#e7e0f0" stroke-width="1">
-            <line x1="60" y1="60" x2="60" y2="400"/>
-            <line x1="60" y1="400" x2="780" y2="400"/>
-            <line x1="60" y1="320" x2="780" y2="320" stroke-dasharray="3 4" stroke="#f0eaf7"/>
-            <line x1="60" y1="240" x2="780" y2="240" stroke-dasharray="3 4" stroke="#f0eaf7"/>
-            <line x1="60" y1="160" x2="780" y2="160" stroke-dasharray="3 4" stroke="#f0eaf7"/>
-            <line x1="60" y1="80" x2="780" y2="80" stroke-dasharray="3 4" stroke="#f0eaf7"/>
-          </g>
-          <!-- x labels -->
-          <g fill="#9e96ae" font-family="Geist Mono" font-size="12" letter-spacing="2">
-            <text x="120" y="430">2022</text>
-            <text x="280" y="430">2024</text>
-            <text x="440" y="430">2025</text>
-            <text x="600" y="430">2026</text>
-            <text x="720" y="430">2027</text>
-          </g>
-          <!-- y label -->
-          <g fill="#9e96ae" font-family="Geist Mono" font-size="11" letter-spacing="1.5">
-            <text x="20" y="84">HIGH</text>
-            <text x="20" y="404">LOW</text>
-          </g>
-          <!-- AI usage -->
-          <path d="M60 380 L180 365 L300 320 L420 230 L540 140 L660 80 L780 60" fill="none" stroke="#7f39fb" stroke-width="3" stroke-linecap="round"/>
-          <!-- Fraud -->
-          <path d="M60 360 L180 340 L300 300 L420 220 L540 130 L660 95 L780 75" fill="none" stroke="#d88a1c" stroke-width="3" stroke-linecap="round"/>
-          <!-- UAE policy -->
-          <path d="M60 395 L180 392 L300 388 L420 380 L540 250 L660 110 L780 88" fill="none" stroke="#15a36a" stroke-width="3" stroke-linecap="round"/>
-          <!-- now line -->
-          <line x1="600" y1="40" x2="600" y2="400" stroke="#1d1730" stroke-width="2" stroke-dasharray="4 4"/>
-          <text x="608" y="56" fill="#1d1730" font-family="Geist Mono" font-size="11" font-weight="600" letter-spacing="2">NOW · 2026</text>
-          <!-- convergence dot -->
-          <circle cx="660" cy="95" r="14" fill="#7f39fb" fill-opacity="0.18"/>
-          <circle cx="660" cy="95" r="6" fill="#7f39fb"/>
-          <text x="678" y="100" fill="#1d1730" font-family="Geist" font-size="13" font-weight="600">Convergence</text>
-        </svg>
-      </div>
-      <div class="why-legend">
-        <div class="leg">
-          <div class="ln"><span class="swatch" style="background:#7f39fb"></span><span class="yr">2022 →</span></div>
-          <div class="ti">AI in every dev workflow.</div>
-          <div class="bd">Claude, Cursor and Copilot become how engineers ship code. Assessments that pretend AI doesn't exist measure the wrong skill.</div>
-        </div>
-        <div class="leg">
-          <div class="ln"><span class="swatch" style="background:#d88a1c"></span><span class="yr">2024 →</span></div>
-          <div class="ti">CV-fraud crisis hits recruiter trust.</div>
-          <div class="bd">78% of CVs are AI-generated. 1 in 3 hiring managers catches a fake identity. The funnel stops self-filtering.</div>
-        </div>
-        <div class="leg">
-          <div class="ln"><span class="swatch" style="background:#15a36a"></span><span class="yr">2026 →</span></div>
-          <div class="ti">UAE policy lands.</div>
-          <div class="bd">Emiratisation deadline + AI Strategy 2031 — 10% Emirati skilled hires + 10,000 AI/ML engineers. Local-first hiring tooling has explicit tailwind.</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Variant C: tailwind callouts -->
-    <div class="why-c cv cv-c" style="flex:1; flex-direction:column;">
-      <div class="why-tail">
-        <div class="yr">2024 → ongoing</div>
-        <div>
-          <div class="ti">AI moves into every dev workflow.</div>
-          <div class="bd">Claude Code, Cursor, Copilot become the way engineers ship. Assessments that pretend AI doesn't exist measure the wrong skill.</div>
-        </div>
-        <div class="stat">+312<span class="u">%</span></div>
-      </div>
-      <div class="why-tail">
-        <div class="yr">2025</div>
-        <div>
-          <div class="ti">AI-CV flood breaks the funnel.</div>
-          <div class="bd">78% of applications contain AI-generated content. 1 in 3 managers catches a fake identity. Recruiter trust collapses.</div>
-        </div>
-        <div class="stat">$600B<span class="u">/yr</span></div>
-      </div>
-      <div class="why-tail">
-        <div class="yr">2026 — now</div>
-        <div>
-          <div class="ti">UAE policy lands together.</div>
-          <div class="bd">Emiratisation deadline + AI Strategy 2031. 10% skilled hires by Dec; 10,000 AI/ML engineers by 2031. Explicit local tailwind.</div>
-        </div>
-        <div class="stat">10k<span class="u">eng</span></div>
-      </div>
-      <div class="why-window-c">
-        <span class="lbl">// the window</span>
-        <span>Incumbents bolt AI onto legacy surfaces. <em style="color:#a78bfa; font-style:normal;">Nobody has built around agent + AI-native from day one.</em> Owning that wedge is an 18-month decision.</span>
-      </div>
-    </div>
-
-    <div class="slide-foot">
-      <span>03 / 10 · Why now</span>
-      <span class="brand">taali<span class="p">.</span></span>
-    </div>
-  </section>
-
-  <!-- ═══════════════════════════════════════════════════════════════════════
-       04 · SOLUTION
-       ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="solution" data-screen-label="04 Solution">
+  <section data-slide="solution" data-screen-label="03 What Taali is">
     <div class="tally-grid tg-r"></div>
 
     <div class="slide-head">
-      <div class="eyebrow"><span class="num">04</span><span class="dot">·</span><span>Solution</span></div>
-      <h2 class="slide-title">One agent runs the loop. <em>You decide what matters.</em></h2>
-      <p class="slide-sub">Taali works each active role end-to-end — picks up new candidates the moment they arrive, batches the cheap deterministic work, queues high-stakes calls for your sign-off, and asks when input is genuinely missing. Every assessment opens a real in-browser IDE with Claude in the candidate's hand — every prompt, paste, edit and test run captured and scored.</p>
+      <div class="eyebrow"><span class="num">03</span><span class="dot">·</span><span>What Taali is</span></div>
+      <h2 class="slide-title">A hiring agent, and an AI-native assessment. <em>You stay in control.</em></h2>
+      <p class="slide-sub">Taali works each live mandate end-to-end — picks up applicants the moment they land, scores and ranks them, and surfaces the calls that need a human on your home hub. Ask it in plain English to tailor a role and pull the right shortlist. Every candidate you put forward can sit a real, in-browser work sample with AI in their hands.</p>
     </div>
 
     <div class="solution-grid">
       <div class="pillar">
-        <div class="p-num"><span>01</span><span class="name">AGENTIC</span></div>
-        <div class="p-title">Runs the loop. Pauses for you.</div>
-        <div class="p-body">Single LLM orchestrator + deterministic decision policy. Works each active role in real time — picks up candidates the moment they arrive, batches the deterministic work, queues high-stakes decisions for human approval. Never silently spends budget.</div>
+        <div class="p-num"><span>01</span><span class="name">SCREEN &amp; SEARCH</span></div>
+        <div class="p-title">The agent runs your pipeline.</div>
+        <div class="p-body">One orchestrator plus a deterministic policy works every active role in real time — pre-screen, CV↔JD scoring, ranking, dedupe across your ATS. Then just ask: "top 5 with payments and AI experience" — and re-tune the bar on the fly.</div>
         <div class="p-meta">
           <span><b>Always-on</b> per active role</span>
-          <span><b>5</b> specialist sub-agents</span>
-          <span><b>Human gate</b> on every advance / reject</span>
+          <span><b>Conversational</b> search + role tailoring</span>
         </div>
       </div>
       <div class="pillar hero">
-        <div class="p-num"><span>02</span><span class="name">AI-NATIVE</span></div>
-        <div class="p-title">Real IDE. Real Claude.</div>
-        <div class="p-body">Editor, terminal, repo, AI side panel — exactly the workspace candidates would work in on day one. We capture every prompt, paste, edit and test run, then score AI fluency on a 5-axis rubric as a first-class dimension.</div>
+        <div class="p-num"><span>02</span><span class="name">PROVE</span></div>
+        <div class="p-title">Real repo. Real Claude. Real evidence.</div>
+        <div class="p-body">The candidate works in the exact environment they'd use on day one — a repo, an editor, and Claude alongside. We capture every move and score a 5-axis rubric, including how well they work <em>with</em> AI — the dimension your clients now hire for, and nobody else measures.</div>
         <div class="p-meta">
-          <span><b>5-axis</b> rubric · coding · AI · problem solving · independence · communication</span>
-          <span><b>Live</b> fraud + autopilot detection</span>
+          <span><b>5-axis</b> · coding · working with AI · problem-solving · independence · communication</span>
+          <span><b>Live</b> fraud + proxy-candidate detection</span>
         </div>
       </div>
       <div class="pillar">
-        <div class="p-num"><span>03</span><span class="name">AUDITABLE</span></div>
-        <div class="p-title">Every call traceable. <em>Learns from your overrides.</em></div>
-        <div class="p-body">The agent makes the call. You see why — which signals it weighed, which rubric version, which evidence clip. Override it and that judgement trains the next loop overnight. No black-box rejections to defend in front of your hiring committee.</div>
+        <div class="p-num"><span>03</span><span class="name">CONTROL</span></div>
+        <div class="p-title">Human sign-off on every call. <em>And it learns from you.</em></div>
+        <div class="p-body">Advance and reject decisions queue on your home hub with the agent's reasoning, score and evidence. You approve, override or reject — it never acts alone. Every verdict is rule-traced and auditable, and your overrides retrain the policy overnight.</div>
         <div class="p-meta">
-          <span><b>Evidence-linked</b> verdict on every advance / reject</span>
-          <span><b>Overrides</b> retrain the policy nightly</span>
+          <span><b>HITL</b> gate on every advance / reject</span>
+          <span><b>Evidence-linked</b>, exportable, FS-defensible</span>
         </div>
       </div>
     </div>
 
     <div class="slide-foot">
-      <span>04 / 11 · Solution</span>
+      <span>03 / 12 · What Taali is</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       05 · WORKSPACE (IDE mock)
+       04 · THE HUB — live product surface (iframe: /showcase/home)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="workspace" data-screen-label="05 Workspace">
-    <div class="slide-head">
-      <div class="eyebrow"><span class="num">05</span><span class="dot">·</span><span>Product — the workspace</span></div>
-      <h2 class="slide-title" style="font-size:64px;">Real IDE, real AI in the side panel. <em>We watch how they use it.</em></h2>
+  <section data-slide="surf-hub" data-screen-label="04 The Hub">
+    <div class="slide-head surf-head">
+      <div class="eyebrow"><span class="num">04</span><span class="dot">·</span><span>The product · live, not a mock-up</span></div>
+      <h2 class="surf-title">Mission control: steer the agent in plain English — <em>keep every call honest.</em></h2>
     </div>
-
-    <div class="ide light">
-      <div class="ide-bar">
-        <div class="dots"><i></i><i></i><i></i></div>
-        <span class="task">TASK 01 / 01</span>
-        <span class="ttl">Revenue Recovery Incident</span>
-        <span class="role">Senior Backend Engineer</span>
-        <div class="spacer"></div>
-        <span class="pill live">● LIVE</span>
-        <span class="pill">CLAUDE · $6.20 / $12.00</span>
-        <span class="pill t">27 : 14 left</span>
-        <span class="pill">Submit ↗</span>
+    <div class="surf">
+      <div class="surf-frame">
+        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/home · your hiring Hub</span><span class="surf-badge">Live surface</span></div>
+        <iframe src="/showcase/home" title="Taali — the hiring Hub" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        <img class="surf-shot" src="img/surf-hub.png" alt="Taali — the hiring Hub" />
       </div>
-      <div class="ide-body">
-        <div class="ide-files">
-          <div class="lbl">Repository</div>
-          <div class="f dir"><span class="ind">▾</span>tali-revenue/</div>
-          <div class="f"><span class="ind">  </span>README.md</div>
-          <div class="f"><span class="ind">  </span>incident_notes.md</div>
-          <div class="f dir"><span class="ind">▾</span>src/</div>
-          <div class="f act"><span class="ind">  </span>revenue_recovery.py</div>
-          <div class="f"><span class="ind">  </span>validators.py</div>
-          <div class="f dir"><span class="ind">▾</span>tests/</div>
-          <div class="f"><span class="ind">  </span>test_revenue_recovery.py</div>
-        </div>
-        <div class="ide-code">
-          <div class="crumb">
-            <span class="file">src/revenue_recovery.py</span>
-            <span class="lang">PYTHON</span>
-            <div class="actions">
-              <span>Save</span>
-              <span>Run tests</span>
-              <span>Run</span>
-            </div>
-          </div>
-<pre><span class="ln"> 1</span><span class="cm"># Restore reconcile flow before finance close — schema drift</span>
-<span class="ln"> 2</span><span class="kw">def</span> <span class="fn">reconcile_batch</span>(records, schema_version):
-<span class="em-line"><span class="ln"> 3</span>    required = {<span class="st">"transaction_id"</span>, <span class="st">"amount_cents"</span>, <span class="st">"posted_at"</span>}</span>
-<span class="em-line"><span class="ln"> 4</span>    missing = required.difference(records.columns)</span>
-<span class="ln"> 5</span>    <span class="kw">if</span> missing:
-<span class="ln"> 6</span>        <span class="kw">raise</span> ValueError(<span class="st">f"Schema drift: {sorted(missing)}"</span>)
-<span class="ln"> 7</span>
-<span class="ln"> 8</span>    <span class="cm"># Coerce legacy schema_version=<span class="nm">2</span> → <span class="nm">3</span> (split posted_at column)</span>
-<span class="ln"> 9</span>    <span class="kw">if</span> schema_version == <span class="nm">2</span>:
-<span class="ln">10</span>        records = _split_posted_at(records)
-<span class="ln">11</span>
-<span class="ln">12</span>    grouped = records.groupby(<span class="st">"merchant_id"</span>, sort=<span class="kw">False</span>)
-<span class="ln">13</span>    <span class="kw">return</span> [_finalize(group) <span class="kw">for</span> _, group <span class="kw">in</span> grouped]
-</pre>
-        </div>
-        <div class="ide-claude">
-          <div class="head"><span>●</span><span class="b">Claude Sonnet</span><span style="margin-left:auto;">14 turns</span></div>
-          <div class="msgs">
-            <div class="msg cand">
-              <span class="who">Candidate · 18:42</span>
-              <div class="bb">The CI run says <code>amount_cents</code> missing on schema v2. Can you read incident_notes.md and tell me whether v2 ever shipped that column?</div>
-            </div>
-            <div class="msg">
-              <span class="who">Claude · 18:42</span>
-              <div class="bb">incident_notes.md: v2 used <code>amount</code> (decimal). Migration utility _split_posted_at was supposed to coerce → cents but skips when source is null. That's your drift.</div>
-            </div>
-            <div class="msg cand">
-              <span class="who">Candidate · 18:43</span>
-              <div class="bb">Right — let me write a coercion path before the column check, then add a regression test.</div>
-            </div>
-          </div>
-          <div class="input"><span class="blink"></span><span>Ask Claude…</span></div>
-        </div>
+      <div class="surf-out">
+        <span>Steer each role's agent in <b>plain English</b> — "cap salary at £90k", "drop the cut-off to 65" — it reasons, shows the impact, and asks before it spends.</span>
+        <span><b>Decision feed:</b> every advance, escalate &amp; pre-screen reject — reviewable and reversible. Your overrides become its training signal.</span>
+        <span><b>One rail</b> for every agent — pending counts, budgets, bulk-message many roles, approve the assessment tasks it drafts.</span>
       </div>
     </div>
-
-    <!-- floating capture badges -->
-    <div class="capture-badge" style="left: 88px; top: 600px;"><span class="dot"></span>Prompt captured · 14 turns</div>
-    <div class="capture-badge" style="left: 88px; top: 660px;"><span class="dot"></span>Paste detected · 0 lines</div>
-    <div class="capture-badge" style="right: 88px; bottom: 124px;"><span class="dot"></span>5-axis fluency · scoring live</div>
-
     <div class="slide-foot">
-      <span>05 / 10 · Workspace · live in browser</span>
+      <span>04 / 12 · The Hub · live product</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       06 · PIPELINE (now vs post-funding)
+       05 · AGENTIC TRIAGE — live product surface (iframe: /jobs)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="pipeline" data-screen-label="06 Pipeline">
+  <section data-slide="surf-triage" data-screen-label="05 Agentic triage">
+    <div class="slide-head surf-head">
+      <div class="eyebrow"><span class="num">05</span><span class="dot">·</span><span>The product · the agent on duty</span></div>
+      <h2 class="surf-title">The Jobs board the agent works against — <em>one agent per role, on a leash you set.</em></h2>
+    </div>
+    <div class="surf">
+      <div class="surf-frame">
+        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/jobs · agent on duty</span><span class="surf-badge">Live surface</span></div>
+        <iframe src="/jobs?demo=1&amp;showcase=1" title="Taali — Jobs board" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        <img class="surf-shot" src="img/surf-triage.png" alt="Taali — Jobs board, agent on duty" />
+      </div>
+      <div class="surf-out">
+        <span>The <b>live agent bar</b> shows what each role's agent advanced, escalated, or pre-screen rejected in the last hour.</span>
+        <span>Every role carries its own <b>budget, autonomy dial &amp; decisions feed</b> — full autonomy on one, review-everything on the next.</span>
+        <span>Click into a role to see the <b>pipeline</b> the way your team will every morning.</span>
+      </div>
+    </div>
+    <div class="slide-foot">
+      <span>05 / 12 · Agentic triage · the agent on duty</span>
+      <span class="brand">taali<span class="p">.</span></span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       06 · AI ASSESSMENT — live product surface (iframe: /assessment/live)
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="surf-assess" data-screen-label="06 AI assessment">
+    <div class="slide-head surf-head">
+      <div class="eyebrow"><span class="num">06</span><span class="dot">·</span><span>The product · the work sample</span></div>
+      <h2 class="surf-title">The chat-first workspace the candidate drives — <em>pairing with AI is the work.</em></h2>
+    </div>
+    <div class="surf">
+      <div class="surf-frame">
+        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/assess · candidate workspace</span><span class="surf-badge">Live surface</span></div>
+        <iframe src="/assessment/live?demo=1&amp;showcase=1" title="Taali — AI assessment" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        <img class="surf-shot" src="img/surf-assess.png" alt="Taali — AI assessment workspace" />
+      </div>
+      <div class="surf-out">
+        <span><b>Claude at the centre</b>, a real editor + sandboxed runtime alongside — we measure how they pair with AI, not whether they memorised syntax.</span>
+        <span>Every <b>prompt, paste &amp; edit captured</b> for replay — the transcript is the record.</span>
+        <span><b>No proctoring overlay</b> — no lockdown browser, no webcam. The work speaks for itself.</span>
+      </div>
+    </div>
+    <div class="slide-foot">
+      <span>06 / 12 · AI assessment · candidate workspace</span>
+      <span class="brand">taali<span class="p">.</span></span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       07 · STANDING REPORT — live product surface (iframe: /c/demo client view)
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="surf-report" data-screen-label="07 Standing report">
+    <div class="slide-head surf-head">
+      <div class="eyebrow"><span class="num">07</span><span class="dot">·</span><span>The product · what you send the client</span></div>
+      <h2 class="surf-title">The standing report your client opens — <em>every score links to the evidence.</em></h2>
+    </div>
+    <div class="surf">
+      <div class="surf-frame">
+        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/c/demo · candidate standing report</span><span class="surf-badge">Live surface</span></div>
+        <iframe src="/c/demo?view=client&amp;k=demo-token&amp;showcase=1" title="Taali — candidate standing report" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        <img class="surf-shot" src="img/surf-report.png" alt="Taali — candidate standing report" />
+      </div>
+      <div class="surf-out">
+        <span><b>Six evidence-linked axes</b>: systems design, code craft, reasoning under pressure, AI collaboration, release safety, communication.</span>
+        <span>Every score <b>links back</b> to the moment in the session it came from — defensible, not a black box.</span>
+        <span>A <b>shareable, expiring link</b> — no PDFs, no leaks. This is what you hand the client instead of a CV.</span>
+      </div>
+    </div>
+    <div class="slide-foot">
+      <span>07 / 12 · Standing report · the client view</span>
+      <span class="brand">taali<span class="p">.</span></span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       08 · CHAT & AGENTS — live product surface (iframe: /showcase/chat)
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="surf-chat" data-screen-label="08 Chat &amp; agents">
+    <div class="slide-head surf-head">
+      <div class="eyebrow"><span class="num">08</span><span class="dot">·</span><span>The product · find anyone, in plain English</span></div>
+      <h2 class="surf-title">Ask your whole pipeline anything — <em>or set a role's agent loose on it.</em></h2>
+    </div>
+    <div class="surf">
+      <div class="surf-frame">
+        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/chat · ask + per-role agents</span><span class="surf-badge">Live surface</span></div>
+        <iframe src="/showcase/chat" title="Taali — chat and agents" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        <img class="surf-shot" src="img/surf-chat.png" alt="Taali — chat and agents" />
+      </div>
+      <div class="surf-out">
+        <span>"Top 3 who've <b>owned a GenAI launch</b>, run Postgres in prod, and led a backend team" → a grounded shortlist, every verdict backed by a <b>verbatim CV quote</b>.</span>
+        <span><b>Ask mode</b> searches your whole pipeline; tool calls are visible — see what was queried, compare side-by-side, pull shortlists.</span>
+        <span><b>Agent mode</b> is per-role: it finds, reasons over the evidence, and acts — invite to assessment, adjust the cut-off — within budget.</span>
+      </div>
+    </div>
+    <div class="slide-foot">
+      <span>08 / 12 · Chat &amp; agents · find anyone</span>
+      <span class="brand">taali<span class="p">.</span></span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       06 · RUNS YOUR WHOLE DESK (pipeline — all live)
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="pipeline" data-screen-label="09 End to end">
     <div class="slide-head">
-      <div class="eyebrow"><span class="num">06</span><span class="dot">·</span><span>Product — pipeline</span></div>
-      <h2 class="slide-title" style="font-size:60px;">Taali on every stage of your pipeline. <em>What's live now → what unlocks with the raise.</em></h2>
+      <div class="eyebrow"><span class="num">09</span><span class="dot">·</span><span>End to end</span></div>
+      <h2 class="slide-title" style="font-size:56px;">Taali runs every stage of the desk. <em>Live in production today.</em></h2>
     </div>
 
     <div class="pipeline">
@@ -501,20 +828,16 @@
       <div class="pipe-col">
         <div class="pipe-head"><span class="n">01</span><span>Apply</span></div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">Workable sync</span>
-          <span class="bd">Two-way ATS sync. Pulls applicants, dedupes by email + profile.</span>
+          <span class="ti">Two-way ATS sync</span>
+          <span class="bd">Workable sync. Pulls applicants, dedupes by email + profile, writes decisions back.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">CV parse + ingest</span>
-          <span class="bd">Drag-and-drop or API. Work history, skills, education in a clean schema.</span>
+          <span class="ti">CV parse + structure</span>
+          <span class="bd">Drag-and-drop or API. Work history, skills, education into a clean schema.</span>
         </div>
-        <div class="pipe-card roadmap"><span class="badge">Next</span>
-          <span class="ti">Greenhouse + Ashby + Lever</span>
-          <span class="bd">ATS connector kit. Same contract as Workable. Unlocks US/EU mid-market.</span>
-        </div>
-        <div class="pipe-card roadmap"><span class="badge">Next</span>
-          <span class="ti">Outbound sourcing</span>
-          <span class="bd">Pull GitHub + LinkedIn signals into a passive pool, scored against open roles.</span>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">Public API</span>
+          <span class="bd">Authed endpoints to ingest candidates and roles from your own systems.</span>
         </div>
       </div>
 
@@ -523,40 +846,32 @@
         <div class="pipe-head"><span class="n">02</span><span>Pre-screen</span></div>
         <div class="pipe-card"><span class="badge">Live</span>
           <span class="ti">Yes / no / maybe</span>
-          <span class="bd">Cheap-LLM triage in seconds. Cuts obvious mismatches before full scoring.</span>
+          <span class="bd">Cheap-LLM triage in seconds. Cuts obvious mismatches before any paid scoring.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
           <span class="ti">Must-have matching</span>
-          <span class="bd">Hard filters — location, eligibility, skills the role can't bend on.</span>
+          <span class="bd">Hard filters — location, eligibility, the skills a role can't bend on.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">CV fraud detection</span>
-          <span class="bd">Catches CVs that copy-paste the job description verbatim — caps the score before paid scoring runs.</span>
-        </div>
-        <div class="pipe-card roadmap"><span class="badge">Next</span>
-          <span class="ti">Arabic + multilingual</span>
-          <span class="bd">Pre-screen and assessment in Arabic, French, Hindi. UAE → KSA → wider GCC.</span>
+          <span class="ti">CV-fraud detection</span>
+          <span class="bd">Flags CVs that copy the job description verbatim and caps the score.</span>
         </div>
       </div>
 
-      <!-- 03 Score & rank -->
+      <!-- 03 Score, rank & search -->
       <div class="pipe-col">
-        <div class="pipe-head"><span class="n">03</span><span>Score &amp; rank</span></div>
+        <div class="pipe-head"><span class="n">03</span><span>Score &amp; search</span></div>
         <div class="pipe-card"><span class="badge">Live</span>
           <span class="ti">CV ↔ JD scoring</span>
-          <span class="bd">Per-dimension, evidence-grounded, per-requirement breakdown.</span>
+          <span class="bd">Per-requirement, evidence-grounded, with a calibrated probability to advance.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">Calibrated p_advance</span>
-          <span class="bd">Per-candidate probability, calibrated to the role family.</span>
+          <span class="ti">Cohort signals + graph</span>
+          <span class="bd">Top-decile clustering; priors from candidates with shared work history.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">Cohort signals + knowledge graph</span>
-          <span class="bd">Top-decile clustering. Priors pulled from candidates with shared work history.</span>
-        </div>
-        <div class="pipe-card roadmap"><span class="badge">Next</span>
-          <span class="ti">Cross-customer benchmarks</span>
-          <span class="bd">Anonymised "how does my pipeline compare" view. Unlocks once we hit 10+ customers.</span>
+          <span class="ti">Conversational search</span>
+          <span class="bd">Tailor the role and pull a shortlist in plain English — grounded, with citations.</span>
         </div>
       </div>
 
@@ -564,24 +879,16 @@
       <div class="pipe-col">
         <div class="pipe-head"><span class="n">04</span><span>Assess</span></div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">In-browser IDE</span>
-          <span class="bd">Monaco + E2B sandbox + Claude side panel. The day-one workspace.</span>
+          <span class="ti">Real repo + Claude</span>
+          <span class="bd">In-browser repo, editor and Claude assistant — the day-one workspace.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">Session telemetry</span>
-          <span class="bd">Every prompt, paste, edit, test run — time-stamped to the second.</span>
+          <span class="ti">Full session telemetry</span>
+          <span class="bd">Every prompt, paste, edit and test run — time-stamped to the second.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
           <span class="ti">5-axis fluency</span>
-          <span class="bd">Coding ability, working with AI, problem solving, independence, communication.</span>
-        </div>
-        <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">Live fraud detection</span>
-          <span class="bd">Pasted-without-reading, copy-from-elsewhere, proxy-candidate signals.</span>
-        </div>
-        <div class="pipe-card roadmap"><span class="badge">Next</span>
-          <span class="ti">Role-family rubrics</span>
-          <span class="bd">ML, data, devops, security, frontend. Each with its own task pack + axes.</span>
+          <span class="bd">Coding, working with AI, problem solving, independence, communication.</span>
         </div>
       </div>
 
@@ -589,88 +896,83 @@
       <div class="pipe-col">
         <div class="pipe-head"><span class="n">05</span><span>Decide</span></div>
         <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">Home decision hub</span>
+          <span class="bd">Every advance / reject queues for your sign-off with reasoning + evidence.</span>
+        </div>
+        <div class="pipe-card"><span class="badge">Live</span>
           <span class="ti">Deterministic policy</span>
-          <span class="bd">Pure-Python verdicts. Every call carries policy_revision_id + rule_path.</span>
-        </div>
-        <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">Approve / override</span>
-          <span class="bd">Advance and reject calls always queue for your sign-off.</span>
-        </div>
-        <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">Asks when stuck</span>
-          <span class="bd">Genuine gaps surface as inline questions, not silent guesses.</span>
+          <span class="bd">Pure-Python verdicts. Every call carries its policy revision + rule path.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
           <span class="ti">Override-trained retune</span>
-          <span class="bd">Nightly. Your corrections become the next pinned RubricRevision.</span>
-        </div>
-        <div class="pipe-card roadmap"><span class="badge">Next</span>
-          <span class="ti">Plain-English rubric authoring</span>
-          <span class="bd">Recruiters describe "what good looks like" in prose; agent compiles to a versioned rubric.</span>
+          <span class="bd">Nightly. Your corrections become the next pinned rubric revision.</span>
         </div>
       </div>
 
-      <!-- 06 Interview -->
+      <!-- 06 Submit -->
       <div class="pipe-col">
-        <div class="pipe-head"><span class="n">06</span><span>Interview</span></div>
+        <div class="pipe-head"><span class="n">06</span><span>Submit</span></div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">Client-ready report</span>
+          <span class="bd">Score, breakdown, AI-usage trace, prompt replay — as a share link or PDF.</span>
+        </div>
         <div class="pipe-card"><span class="badge">Live</span>
           <span class="ti">Tailored interview pack</span>
           <span class="bd">Questions per candidate, grounded in CV + assessment evidence.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">Standing report</span>
-          <span class="bd">Score, dimension breakdown, AI-usage trace, prompt-by-prompt replay.</span>
-        </div>
-        <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">ATS write-back</span>
-          <span class="bd">Reject decisions + pipeline-stage changes flow back to Workable.</span>
-        </div>
-        <div class="pipe-card roadmap"><span class="badge">Next</span>
-          <span class="ti">Audit + compliance pack</span>
-          <span class="bd">Hiring-committee, EEOC, Emiratisation export. SSO, SOC 2, on-prem recordings for enterprise.</span>
+          <span class="ti">Usage-based metering</span>
+          <span class="bd">Credits, per-call metering and per-role budgets — pay only for what you use.</span>
         </div>
       </div>
     </div>
 
+    <div class="roadmap-strip">
+      <span class="rm-eyebrow">Next on<br>the roadmap →</span>
+      <div class="pipe-card roadmap rm-c"><span class="badge">Next</span><span class="ti">Standalone ATS</span><span class="bd">Own the whole funnel — sourcing &amp; job distribution, not just sync into someone else's ATS.</span></div>
+      <div class="pipe-card roadmap rm-c"><span class="badge">Next</span><span class="ti">More ATS &amp; CRM connectors</span><span class="bd">Bullhorn, Vincere, Greenhouse &amp; Lever alongside Workable.</span></div>
+      <div class="pipe-card roadmap rm-c"><span class="badge">Next</span><span class="ti">Candidate sourcing</span><span class="bd">Find talent in-platform, then screen, assess &amp; submit in one flow.</span></div>
+    </div>
+
     <div class="pipe-legend">
-      <span><span class="sw live"></span>Live in production with our design partner</span>
-      <span><span class="sw roadmap"></span>Next — unlocked by the raise</span>
-      <span style="margin-left: auto; text-transform: none; letter-spacing: 0; font-family: var(--font-display); color: rgba(20,15,40,0.7); font-size: 13px;"><b style="color:#1a1228;">The tech is built.</b> Raise funds GTM (2× sales) + 1× FDE for ATS / enterprise depth.</span>
+      <span><span class="sw live"></span>Live in production with our design partner, DeepLight AI</span>
+      <span><span class="sw roadmap"></span>On the roadmap — shipping next</span>
+      <span style="margin-left: auto; text-transform: none; letter-spacing: 0; font-family: var(--font-display); color: rgba(20,15,40,0.7); font-size: 14px;"><b style="color:#1a1228;">The platform is built</b> — live today, and we're still shipping.</span>
     </div>
 
     <div class="slide-foot">
-      <span>06 / 11 · Pipeline · agent-led, end-to-end</span>
+      <span>09 / 12 · End to end · agent-led</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       07 · WEDGE / COMPETITIVE
+       07 · WHY TAALI (wedge — true today)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="wedge" data-screen-label="07 Wedge">
+  <section data-slide="wedge" data-screen-label="10 Why Taali">
     <div class="slide-head">
-      <div class="eyebrow"><span class="num">07</span><span class="dot">·</span><span>Wedge</span></div>
-      <h2 class="slide-title">Incumbents are bolting AI on. <em>Taali was built around it.</em></h2>
+      <div class="eyebrow"><span class="num">10</span><span class="dot">·</span><span>Why Taali</span></div>
+      <h2 class="slide-title">Built around the agent and the work sample — <em>not bolted onto a CV.</em></h2>
     </div>
 
     <div class="wedge-grid">
       <div class="quad">
         <div class="yax">
-          <span class="arr">↑ AI-native assessment</span>
+          <span class="arr">↑ AI-native work sample</span>
           <span>Bolts AI on ↓</span>
         </div>
         <div class="canvas">
           <div class="qcell tl">
-            <span class="lbl">Assessment · adding AI features</span>
-            <span class="nm">HackerRank<br/>CodeSignal<br/>Codility · CoderPad · Karat</span>
+            <span class="lbl">Test vendors · adding AI features</span>
+            <span class="nm">HackerRank<br/>CodeSignal<br/>Codility · Karat</span>
           </div>
           <div class="qcell tr taali">
-            <span class="lbl">Agentic + AI-native + auditable</span>
+            <span class="lbl">Agent + AI-native + human-in-loop</span>
             <span class="nm">TAALI</span>
           </div>
           <div class="qcell bl">
-            <span class="lbl">ATS · automation only</span>
-            <span class="nm">Workable<br/>Greenhouse · Lever · Ashby</span>
+            <span class="lbl">Your ATS / CRM · automation only</span>
+            <span class="nm">Bullhorn · Vincere<br/>Workable · Greenhouse</span>
           </div>
           <div class="qcell br">
             <span class="lbl">Agentic HR — adjacent</span>
@@ -678,16 +980,16 @@
           </div>
         </div>
         <div class="xax">
-          <span>← Manual workflows</span>
+          <span>← Manual screening</span>
           <span class="arr">Agentic loop →</span>
         </div>
       </div>
 
       <div class="feat-tbl">
         <div class="th">
-          <span>Capability</span>
-          <span class="col"><b>ATS</b><br/>Workable / GH</span>
-          <span class="col"><b>Assessment</b><br/>HR / CodeSignal</span>
+          <span>What it does for the desk</span>
+          <span class="col"><b>Your ATS/CRM</b><br/>Bullhorn / Workable</span>
+          <span class="col"><b>Test vendors</b><br/>HR / CodeSignal</span>
           <span class="col taali"><b>TAALI</b></span>
         </div>
         <div class="row">
@@ -695,290 +997,142 @@
           <span class="cell no">○</span><span class="cell no">○</span><span class="cell yes">●</span>
         </div>
         <div class="row">
-          <span>Measures AI fluency on a hands-on task</span>
+          <span>Verifies real skill on a real-repo task with AI</span>
+          <span class="cell no">○</span><span class="cell partial">◐</span><span class="cell yes">●</span>
+        </div>
+        <div class="row">
+          <span>Scores how candidates work <em>with</em> AI</span>
           <span class="cell no">○</span><span class="cell no">○</span><span class="cell yes">●</span>
         </div>
         <div class="row">
-          <span>Live in-browser IDE with Claude / Cursor / Copilot</span>
+          <span>Conversational search to tailor roles + find anyone</span>
+          <span class="cell partial">◐</span><span class="cell no">○</span><span class="cell yes">●</span>
+        </div>
+        <div class="row">
+          <span>Human approves every advance / reject (HITL)</span>
+          <span class="cell partial">◐</span><span class="cell no">○</span><span class="cell yes">●</span>
+        </div>
+        <div class="row">
+          <span>Evidence-linked, auditable verdict (FS-ready)</span>
           <span class="cell no">○</span><span class="cell no">○</span><span class="cell yes">●</span>
         </div>
         <div class="row">
-          <span>AI-CV + autopilot fraud detection</span>
-          <span class="cell partial">◐</span><span class="cell partial">◐</span><span class="cell yes">●</span>
-        </div>
-        <div class="row">
-          <span>Deterministic, rule-traced verdict</span>
-          <span class="cell no">○</span><span class="cell no">○</span><span class="cell yes">●</span>
-        </div>
-        <div class="row">
-          <span>Recruiter override → policy retune overnight</span>
-          <span class="cell no">○</span><span class="cell no">○</span><span class="cell yes">●</span>
-        </div>
-        <div class="row">
-          <span>UAE-native (Emiratisation, MoHRE-aligned)</span>
+          <span>Plugs into your ATS + a public API for clean integration</span>
           <span class="cell partial">◐</span><span class="cell no">○</span><span class="cell yes">●</span>
         </div>
       </div>
     </div>
 
     <div class="slide-foot">
-      <span>07 / 10 · Wedge</span>
+      <span>10 / 12 · Why Taali</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       08 · MARKET & TRACTION
+       08 · PROOF (DeepLight — real numbers + correct positioning)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="market" data-screen-label="08 Market">
+  <section data-slide="proof" data-screen-label="11 Proof">
     <div class="tally-grid tg-tr"></div>
 
     <div class="slide-head">
-      <div class="eyebrow"><span class="num">08</span><span class="dot">·</span><span>Market & traction</span></div>
-      <h2 class="slide-title">UAE-native wedge into a <em>$4.5B</em> global market.</h2>
+      <div class="eyebrow"><span class="num">11</span><span class="dot">·</span><span>Proof</span></div>
+      <h2 class="slide-title">Not a demo — it runs a <em>real hiring operation</em> every day.</h2>
     </div>
 
-    <div class="market-grid">
-      <div class="mkt-stack">
-        <div class="mkt-band">
-          <span class="tag">TAM</span>
+    <div class="market-grid" style="grid-template-columns: 0.92fr 1.18fr;">
+      <div class="traction" style="gap:16px;">
+        <div class="th">// Live · production · the design partner</div>
+        <div class="pilot" style="grid-template-columns: 1fr; gap:14px;">
+          <span class="nm">DeepLight AI</span>
+          <span class="ds">A Dubai-based <b style="color:#1a1228;">data &amp; AI consultancy</b> getting AI into production for banks, insurers and capital-markets firms — 1,300+ models live, $250M+ GWP under live AI. It hires the technical bench it staffs that delivery with, and runs that hiring end-to-end on Taali.</span>
           <div>
-            <div class="num">$4.5B</div>
-            <div class="lbl">Global recruiting software, 2028 forecast</div>
+            <div style="font-family:var(--font-mono); font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:var(--mute); margin-bottom:9px;">// Roles it hires on Taali</div>
+            <div class="role-chips">
+              <span>Data Engineer</span><span>AI Engineer</span><span>GenAI Engineer</span><span>AI/ML Architect</span><span>Senior AWS Solutions Architect</span><span>AI Product Owner</span><span>Platform Engineer</span><span>AI &amp; Data Governance Consultant</span>
+            </div>
           </div>
-          <div class="src">172,800 assessments / day on HackerRank — proves the demand surface</div>
-        </div>
-        <div class="mkt-band">
-          <span class="tag">SAM</span>
-          <div>
-            <div class="num">$1.2B</div>
-            <div class="lbl">AI-native assessment + ATS in MENA + EMEA mid-market</div>
-          </div>
-          <div class="src">Cognitive Market Research · ConnectStaff</div>
-        </div>
-        <div class="mkt-band som">
-          <span class="tag">SOM · 2026</span>
-          <div>
-            <div class="num">AED 1.12B</div>
-            <div class="lbl">UAE recruitment software — direct wedge, 27% YoY growth</div>
-          </div>
-          <div class="src">Cognitive Market Research · UAE Government — Emiratisation cohort</div>
-        </div>
-      </div>
-
-      <div class="traction">
-        <div class="th">// Traction · live now</div>
-        <div class="pilot">
-          <span class="nm">Design partner pilot · UAE</span>
-          <span class="ds">First customer running engineering hires on Taali — cohort scoring, AI-fluency rubric, recruiter-in-the-loop overrides feeding the policy retune. Named reference available under NDA.</span>
           <span class="live"><span class="blip"></span>Live · production</span>
         </div>
-        <div class="stats">
-          <div class="s"><div class="n">Phase 7</div><div class="l">Cohort-planner agent shipped Apr 2026</div></div>
-          <div class="s"><div class="n">5-axis</div><div class="l">Live AI-fluency scoring on every assessment</div></div>
-          <div class="s"><div class="n">115 / 115</div><div class="l">Backend tests on agent surface · 100% pass</div></div>
-          <div class="s"><div class="n">$1.50</div><div class="l">Free credits unlock — full platform on one role, no card</div></div>
+        <div class="founder-card" style="border-radius:18px; padding:20px 24px; gap:8px;">
+          <div class="lbl">// Founder-market fit</div>
+          <div class="bio" style="font-size:14.5px;">Built by <b style="color:#1a1228;">Sam Patel</b> — a data scientist who spent a decade hiring &amp; growing data teams. He built Taali from the ground up, then proved it running DeepLight's hiring. <em style="font-style:normal;color:#7f39fb;font-weight:600;">You're buying a product, proven on a live operation.</em></div>
         </div>
-        <div class="next">
-          <b>Next:</b> Pipeline of UAE design partners in conversation. Specific commercial milestones held until close — happy to walk through 1:1.
+      </div>
+
+      <div class="proof-right">
+        <div class="th">// On Taali at DeepLight, to date</div>
+        <div class="proof-stats">
+          <div class="s"><div class="n">100+</div><div class="l">Roles run on Taali</div></div>
+          <div class="s"><div class="n">58k+</div><div class="l">Applications screened · 42k+ candidates</div></div>
+          <div class="s"><div class="n">16k+</div><div class="l">Agent decisions, human-approved</div></div>
+          <div class="s"><div class="n">70+</div><div class="l">AI-native assessments sent</div></div>
+          <div class="s accent"><div class="n">24</div><div class="l">Offers extended from Taali shortlists</div></div>
+          <div class="s accent"><div class="n">18</div><div class="l">Hires made</div></div>
+        </div>
+        <div class="outcome-band">
+          A <b>58,000-application flood</b> screened down to a verified shortlist — with a <b>human signing off on every advance and reject</b>.
         </div>
       </div>
     </div>
 
     <div class="slide-foot">
-      <span>08 / 10 · Market & traction</span>
+      <span>11 / 12 · Proof</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       09 · FINANCIALS / REVENUE MODEL
+       12 · THE OFFERING (one model, two uses + credits + free pilot)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="financials" data-screen-label="09 Financials">
+  <section data-slide="offering" data-screen-label="12 The offering">
+    <div class="tally-grid tg-br"></div>
+
     <div class="slide-head">
-      <div class="eyebrow"><span class="num">09</span><span class="dot">·</span><span>Revenue model &amp; forecast</span></div>
-      <h2 class="slide-title" style="font-size:60px;">Per-seat SaaS, priced where Workable sits. <em>Enterprise tier funds the FDE motion.</em></h2>
+      <div class="eyebrow"><span class="num">12</span><span class="dot">·</span><span>The offering</span></div>
+      <h2 class="slide-title" style="font-size:60px;">One platform. <em>However you hire.</em></h2>
     </div>
 
-    <div class="fin-grid">
-      <div class="fin-pricing">
-        <div class="ph">// Pricing — three tiers</div>
-
-        <div class="fin-tier">
-          <span class="name">Starter</span>
-          <span class="price">$249<em> / recruiter / mo</em></span>
-          <span class="note">Up to 5 active roles. CV scoring, assessments, decision feed. Self-serve, single-ATS.</span>
+    <div class="ways">
+      <div class="way">
+        <div class="way-num">01</div>
+        <div class="way-tag">Staff your clients</div>
+        <div class="way-h">Place faster, with proof.</div>
+        <div class="way-list">
+          <div class="way-li"><span class="ic">→</span><span>The agent clears top-of-funnel on every mandate — <b>more reqs per consultant, no extra heads</b>.</span></div>
+          <div class="way-li"><span class="ic">→</span><span>Every submission carries a verified work sample — <b>higher shortlist-to-placement, fewer fall-throughs</b>.</span></div>
+          <div class="way-li"><span class="ic">→</span><span>Arrive with evidence — <b>win mandates against firms still emailing CVs</b>.</span></div>
         </div>
-
-        <div class="fin-tier pri">
-          <span class="name">Team <span style="font-family:var(--font-mono); font-size:10px; letter-spacing:0.16em; color:#7f39fb; padding-left:8px;">// MOST PILOTS</span></span>
-          <span class="price">$549<em> / recruiter / mo</em></span>
-          <span class="note">Unlimited roles, full ATS sync, override-trained policy, 5-axis fluency, audit export. Where the wedge lands.</span>
-        </div>
-
-        <div class="fin-tier">
-          <span class="name">Enterprise</span>
-          <span class="price">from $80k<em> / yr</em></span>
-          <span class="note">FDE-led: bespoke rubrics, on-prem assessment recordings, SSO, regulatory audit packs. Pipeline building.</span>
-        </div>
-
-        <div class="fin-tier" style="background: transparent; border: none; padding: 4px 0; grid-template-columns: 1fr;">
-          <span class="note" style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; color: rgba(20,15,40,0.55);">Compute pass-through: ~$0.40 / completed assessment (Anthropic + sandbox). Margin neutral by design.</span>
-        </div>
+        <div class="way-foot">More placements per consultant · fewer clawbacks</div>
       </div>
 
-      <div class="fin-forecast">
-        <div class="ph" style="font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: rgba(20,15,40,0.55); font-weight: 600;">// 4-year forecast — bottom-up, UAE wedge first</div>
-
-        <div class="fin-table">
-          <div class="fin-row head">
-            <span></span><span>2026</span><span>2027</span><span>2028</span><span>2029</span>
-          </div>
-          <div class="fin-row">
-            <span class="lbl">Paying logos</span>
-            <span class="v">11</span><span class="v">80</span><span class="v">230</span><span class="v">510</span>
-          </div>
-          <div class="fin-row">
-            <span class="lbl">Recruiter seats</span>
-            <span class="v">14</span><span class="v">110</span><span class="v">290</span><span class="v">720</span>
-          </div>
-          <div class="fin-row">
-            <span class="lbl">Enterprise contracts</span>
-            <span class="v">0</span><span class="v">3</span><span class="v">10</span><span class="v">20</span>
-          </div>
-          <div class="fin-row">
-            <span class="lbl">Net revenue retention</span>
-            <span class="v">—</span><span class="v">110%</span><span class="v">118%</span><span class="v">124%</span>
-          </div>
-          <div class="fin-row tot">
-            <span class="lbl">ARR exit (USD)</span>
-            <span class="v">$95k</span><span class="v">$1.0M</span><span class="v">$2.8M</span><span class="v">$6.9M</span>
-          </div>
-          <div class="fin-row">
-            <span class="lbl">Gross margin</span>
-            <span class="v">60%</span><span class="v">70%</span><span class="v">76%</span><span class="v">81%</span>
-          </div>
-          <div class="fin-row">
-            <span class="lbl">Burn / mo</span>
-            <span class="v">$50k</span><span class="v">$130k</span><span class="v">$230k</span><span class="v">$360k</span>
-          </div>
+      <div class="way hero">
+        <div class="way-num">02</div>
+        <div class="way-tag">Staff your own teams</div>
+        <div class="way-h">Build your consultancy bench.</div>
+        <div class="way-list">
+          <div class="way-li"><span class="ic">→</span><span>Hire your own consultants and delivery teams on the same platform — <b>your transformation work needs the same scarce talent you place</b>.</span></div>
+          <div class="way-li"><span class="ic">→</span><span>One verifiable bar across the whole firm — <b>the people you place and the people you hire, screened the same way</b>.</span></div>
+          <div class="way-li"><span class="ic">→</span><span>Dogfood the proof you sell — <b>“we hire on Taali too” is the strongest reference you can give a client</b>.</span></div>
         </div>
+        <div class="way-foot">One hiring bar across the firm</div>
+      </div>
+    </div>
 
-        <div class="fin-assumptions">
-          <b>// Assumptions</b>
-          UAE TAM ~5,400 active recruiters · founder-led GCC sales 2026, Greenhouse + Ashby integrations ship Q2'27 unlocking remote-led US/EU mid-market 2028 · ASP blended $6.6k/recruiter/yr (Team tier dominant) · enterprise ACV climbs $90k → $120k as audit-pack maturity grows · NRR rises as 5-axis scoring graduates more roles per logo · Y4 gross profit ($5.6M) covers projected burn ($4.3M) — break-even reachable inside Y4 on plan. Detailed model + sensitivity bands available on request.
-        </div>
+    <div class="offer-foot">
+      <div class="offer-cell credits">
+        <span class="oc-tag">// How you pay</span>
+        <span class="oc-body"><b>Credits — pay only for what you use.</b> One simple usage-based model, whichever way you point it. No big upfront; Taali keeps its margin underneath.</span>
+      </div>
+      <div class="offer-cell pilot">
+        <span class="oc-tag">// How to start — free</span>
+        <span class="oc-body"><b>A no-cost proof-of-value pilot</b> on a few live roles — or walk the live product first at <a href="https://www.taali.ai/demo">taali.ai/demo</a>. &nbsp;<a href="mailto:hello@taali.ai">hello@taali.ai →</a></span>
       </div>
     </div>
 
     <div class="slide-foot">
-      <span>09 / 11 · Financials · bottom-up</span>
+      <span>12 / 12 · The offering · thank you</span>
       <span class="brand">taali<span class="p">.</span></span>
-    </div>
-  </section>
-
-  <!-- ═══════════════════════════════════════════════════════════════════════
-       10 · TEAM & ASK
-       ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="team" data-screen-label="10 Team & Ask">
-    <div class="slide-head">
-      <div class="eyebrow"><span class="num">10</span><span class="dot">·</span><span>Team &amp; ask</span></div>
-      <h2 class="slide-title">Built by an operator who's <em>hired and grown engineering teams</em> — and lived the talent market we're rebuilding.</h2>
-    </div>
-
-    <div class="team-grid">
-      <div class="founder-card">
-        <div class="lbl">// Founder</div>
-        <div class="head">
-          <div class="av">SP</div>
-          <div>
-            <div class="nm">Sam Patel</div>
-            <div class="role">Founder · Taali</div>
-          </div>
-        </div>
-        <div class="bio">Data scientist by training. Spent the last decade growing engineering and analytics teams from inside the hiring funnel — running interview loops, calibrating rubrics, screening at scale. Built Taali because every assessment platform I tested in 2025 was measuring the wrong thing.</div>
-        <div class="why"><em>"I've been the recruiter, the hiring manager, and the engineer on the other side of the loop. The job has changed. The toolchain hasn't. That's the wedge."</em></div>
-        <div class="next">
-          <span class="lbl2">// Hiring next</span>
-          <span class="body">Forward-deployed engineer · GTM lead · UAE BD. Advisors being added across UAE tech, AI infra and recruiting.</span>
-        </div>
-      </div>
-
-      <div class="ask-card">
-        <div class="lbl">// The ask</div>
-        <div>
-          <div class="amt placeholder">Pre-seed<span class="u" style="font-size: 26px;"> · round &amp; size finalising</span></div>
-          <div class="stage">Rolling close · soft commits welcome</div>
-        </div>
-
-        <div class="ask-uof">
-          <div class="uh">// Use of funds — high level</div>
-          <div class="uof"><span class="pct">·</span><span class="desc"><b>GTM:</b> UAE BD + GTM motion — convert design-partner pipeline into paying logos.</span></div>
-          <div class="uof"><span class="pct">·</span><span class="desc"><b>Forward-deployed engineering:</b> ATS integrations (Greenhouse · Ashby), customer onboarding, per-cohort agent tuning.</span></div>
-          <div class="uof"><span class="pct">·</span><span class="desc"><b>Runway + infra:</b> compute, retune cycles, security &amp; compliance for enterprise pilots.</span></div>
-          <div class="uof placeholder-note"><span class="pct"></span><span class="desc">Detailed breakdown + 18-month plan shared 1:1 once we're in conversation.</span></div>
-        </div>
-
-        <div class="ask-cta">
-          <span>Lead investor with conviction in agentic + AI-native + emerging-markets distribution.</span>
-          <a href="mailto:sam@taali.ai">sam@taali.ai →</a>
-        </div>
-      </div>
-    </div>
-
-    <div class="slide-foot">
-      <span>10 / 11 · Team &amp; ask</span>
-      <span class="brand">taali<span class="p">.</span></span>
-    </div>
-  </section>
-
-  <!-- ═══════════════════════════════════════════════════════════════════════
-       10 · VISION (closing)
-       ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="close" data-screen-label="11 Close">
-    <div class="tally-grid"></div>
-
-    <div class="cz-head">
-      <div class="eyebrow"><span class="num">11</span><span class="dot">·</span><span>Close</span></div>
-      <div class="cz-mark">taali<span class="p">.</span></div>
-    </div>
-
-    <div class="cz-hero">
-      <div class="cz-statement">
-        The CV is dead.<br/>
-        <em>The assessment is the new resume.</em>
-      </div>
-      <div class="cz-tagline">
-        Building the capability graph for the AI era — agent-led hiring, evidence-linked verdicts, portable proof of what people can actually do alongside AI. Engineering first. UAE first. Every role AI has rewritten next.
-      </div>
-    </div>
-
-    <div class="cz-pillars">
-      <div class="cz-pill">
-        <span class="cz-pill-tag">// the wedge</span>
-        <span class="cz-pill-text">Engineering hiring + AI fluency. Live in UAE today.</span>
-      </div>
-      <div class="cz-pill">
-        <span class="cz-pill-tag">// the market</span>
-        <span class="cz-pill-text">$4.5B global recruiting software by 2028 — and a 27% YoY home market.</span>
-      </div>
-      <div class="cz-pill cz-pill-now">
-        <span class="cz-pill-tag">// the company</span>
-        <span class="cz-pill-text">Portable record of what every knowledge worker can do alongside AI.</span>
-      </div>
-    </div>
-
-    <div class="cz-foot">
-      <div class="cz-contact">
-        <div class="cz-name">Sam Patel</div>
-        <div class="cz-role">Founder · Taali</div>
-        <div class="cz-links">
-          <a href="mailto:sam@taali.ai">sam@taali.ai</a>
-          <span class="sep">·</span>
-          <a href="https://www.taali.ai">taali.ai</a>
-        </div>
-      </div>
-      <div class="cz-thanks">11 / 11 · thank you.</div>
     </div>
   </section>
 
@@ -989,17 +1143,15 @@
 <!-- Speaker notes -->
 <script type="application/json" id="speaker-notes">
 [
-  "Hello — I'm Sam, founder of Taali. We're building the recruiter's agent — and the only assessment platform that scores how engineers actually work with AI. I'll walk through the problem, the wedge, the product, what's live, and what we're raising.",
-  "Hiring engineers in 2026 is broken three ways at once. The AI-CV flood — 78% of resumes now contain AI-generated content, costing $600B in fraud annually. The blindspot — engineers ship with Claude every day, but every legacy assessment still tests leetcode in a sealed sandbox. And in the UAE specifically, Emiratisation deadlines and the National AI Strategy mean recruiters are squeezed on volume, quality and compliance simultaneously.",
-  "Three tailwinds hit together in 2026. AI is now in every dev workflow — Cursor, Claude Code, Copilot are how engineers ship. The fraud crisis broke the funnel — recruiters can't trust resumes. And UAE policy lands now — 10% Emirati skilled hires by December, 10,000 AI/ML engineers needed by 2031. The window for a category-defining wedge is the next 18 months. Incumbents are bolting AI onto legacy surfaces; nobody has built around the agent and AI-native assessment from day one.",
-  "Taali's solution is one agent that runs each active role end-to-end, with three load-bearing pillars. Agentic — single LLM orchestrator, deterministic policy, picks up candidates the moment they arrive and queues high-stakes calls for you. AI-native — real IDE with Claude in the side panel, every prompt and paste captured, scored on a 5-axis fluency rubric. And auditable — pure-Python decision policy pinned to versioned rubric revisions, defensible to your hiring committee.",
-  "This is the candidate workspace. Real editor, real terminal, real repo, real Claude. Every prompt, paste, edit, file open and test run captured time-stamped to the second. We watch how they work with AI — and turn that into the only score in the market that maps to the actual job.",
-  "This is the pipeline. Apply, pre-screen, score, assess, decide, interview — the agent runs every stage. The big claim on this slide: the tech is built. Almost every card here is live in production with our pilot today — Workable sync, AI-CV fraud detection, cohort signals and the knowledge graph, the Monaco-plus-E2B-plus-Claude IDE, 5-axis fluency scoring, in-session fraud detection, deterministic policy, override-trained retune, ATS write-back. The dashed cards are what the raise unlocks, and they're not just more ATS coverage — they're the surface area that turns this from a UAE pilot into a category. Greenhouse, Ashby and Lever for US/EU mid-market. Outbound sourcing from GitHub and LinkedIn. Arabic and multilingual pre-screen for the wider GCC. Cross-customer benchmarks once we hit ten paying teams. Role-family rubrics beyond engineering — ML, data, devops, security. Plain-English rubric authoring so recruiters compile their own bar. And an audit and compliance pack — hiring committee, EEOC, Emiratisation, SOC 2 — to unlock the enterprise tier. The raise is mostly two GTM hires plus one FDE; the tech moat is already shipped.",
-  "Incumbents are bolting AI on. Workable and Greenhouse are ATS — they automate workflows but don't measure skill. HackerRank, CodeSignal, Codility add AI features to legacy assessment formats. Nobody is in the top-right quadrant — agentic plus AI-native plus auditable. That's the wedge we're building around, and the right side of the table shows the seven capabilities only Taali ships today.",
-  "Market: $4.5B global recruiting software TAM. $1.2B SAM in MENA + EMEA mid-market AI-native assessment. AED 1.12B SOM in UAE alone — our direct wedge, growing 27% YoY. Traction: live in production with our first design partner, DeepLight. Cohort-planner agent shipped, 5-axis fluency scoring on every assessment, 115 of 115 backend tests passing. Next is 5 paying UAE customers by Q2, 25 across GCC by Q3.",
-  "Revenue model is per-seat SaaS at price points where Workable already sits, so procurement is a non-issue. Starter at $249, Team at $549 — that's the tier most pilots land on — and a custom enterprise tier from $80k a year for FDE-led deployments. Compute is pass-through, margin neutral by design. The four-year forecast bottoms-up the UAE wedge first — 12 paying recruiters this year, $1.2M ARR by 2027 once ATS coverage opens US/EU mid-market, $18M ARR and break-even by 2029 at 17% UAE penetration. Net revenue retention compounds because every override teaches the policy. Detailed model with sensitivity bands available on request — building it in Claude Code right now.",
-  "I've been a data scientist who has hired and grown engineering and analytics teams for the last decade — sat on every side of the loop. Raising $750K pre-seed: 55% on two GTM hires to convert design partners into paying customers, 30% on a forward-deployed engineer for ATS integrations and customer onboarding, 15% on runway and infra. Looking for a lead with conviction in agentic, AI-native, and emerging-markets distribution.",
-  "Where this goes. The CV is dead — every signal recruiters used to trust is now AI-generated noise. The only honest signal left is watching someone do the work, with the tools they'll use on day one. Era one: CV-led hiring, broken by AI fraud. Era two: assessment bolted onto CVs, measures the wrong skill. Era three — what we're building — capability-first. The agent runs the role. The assessment is the resume — recorded, replayable, portable. Engineering hiring is the wedge: live now, paying pilots, urgent pain. The company is the capability graph — every knowledge worker, every verified skill, one portable record of what humans can actually do alongside AI. Thanks — email's on the slide."
+  "Thanks for the time. I'm Sam — I built Taali from the ground up, and proved it running the hiring at DeepLight, a data & AI consultancy that hires exactly the kind of technical people you place. This isn't a generic HR-tech pitch; it's one operator showing another a platform built for our shared problem. Two things to land today: it makes your consultants faster and your submissions provable, and it works both sides of your desk — placing into your clients and hiring your own teams. Twelve slides, ending on a free pilot.",
+  "The ground has shifted under recruitment — worst of all for exactly the roles you place: software, data, AI, change. 78% of CVs now contain AI-generated content and resume fraud costs around $600B a year, so your consultants burn billable hours on a slush pile that looks qualified. Legacy tech tests saw a 5x cheating spike because candidates build with AI all day and the tests pretend they don't. And one in three hiring managers has caught a fake or proxy candidate — so clients no longer trust a CV, which means they no longer trust a CV-based shortlist. Whoever can prove capability, not just forward it, wins the mandate.",
+  "Taali is two things in one. A hiring agent that runs each live mandate end-to-end — and crucially, keeps you in control: it brings decisions to your home hub, you make the call. And an AI-native assessment that produces real evidence. Three pillars: Screen and search — the agent does pre-screen, scoring and ranking, and you can ask it in plain English to tailor a role and pull a shortlist. Prove — every candidate works a real task in a real repo with Claude in hand, scored on five axes including how they work with AI. Control — every advance and reject is queued for your sign-off, evidence-linked and auditable, and your overrides retrain it overnight.",
+  "Two halves here. On the left is the candidate's actual assessment — a real GenAI production-readiness task for a bank, three failing tests including a high-risk action that wrongly skips human review. They work in a real repo with Claude alongside; no terminal, just the repo and the assistant. We capture the whole session — every prompt, paste, edit, test run, even time-to-first-prompt and browser focus — and score it on eight weighted signals. On the right is what you actually send the client: the report. A verdict — recommended — the Taali score, the role-fit and dimension breakdown, and three grounded 'why we're sharing' highlights, with recruiter notes, scoring internals and candidate PII stripped out. It goes as a share link or a PDF. So the client doesn't get a claim on a CV — they get the verified work, in a report they can act on.",
+  "Two things, both straight from the product. A — the decision hub for a role: the agent works the funnel and queues every call for you — here a send-assessment on Imran at 100% confidence with the full reasoning. You send it, reject, skip, or send it back to teach the agent; it never acts alone, which matters when your clients are banks and insurers. B — bespoke candidate search: set any criteria — skills, salary, notice period, even 'Taali score at least 60' — and it returns a ranked top ten, each criterion marked met or partial and grounded in quoted CV and notes. Arjun here meets salary, score and notice, but only partially on banking domain, and you can see exactly why. That's a defensible shortlist in seconds.",
+  "Taali runs every stage of the desk — apply, pre-screen, score and search, assess, decide, submit — and the point of this slide is that this is what's live in production today, not a roadmap. Two-way ATS sync, CV-fraud detection, evidence-grounded scoring, the conversational search, the real-repo assessment with five-axis fluency, the home decision hub with human sign-off, client-ready reports as a share link or PDF, and a public API for clean integration into your stack. The platform is built.",
+  "Why Taali and not what you run today. Your ATS or CRM — Bullhorn, Vincere, Workable — automates workflow but doesn't measure skill. Test vendors bolt AI features onto leetcode formats. Nobody sits top-right: agent-driven, AI-native work sample, human-in-the-loop. The table is the short version — only Taali works each role end-to-end, scores how candidates work with AI, lets you tailor roles and find anyone conversationally, keeps a human on every decision, gives you an auditable verdict your FS clients can defend, and exposes an API for clean integration into your stack.",
+  "The honest question with any new tool is 'does it work on real roles?' Taali runs DeepLight's hiring end-to-end, in production: 100-plus roles, 58,000-plus applications and 42,000-plus candidates screened, 16,000-plus agent decisions with a human sign-off on every advance and reject, and 70-plus AI-native assessments sent — leading to 24 offers and 18 hires for a roughly thirty-person consultancy. The story is the compression: a huge application flood screened down to a handful of verified hires, with a human in control throughout. DeepLight is a data and AI consultancy getting AI into production for banks and insurers, hiring data scientists, ML and AI engineers — exactly the technical, FS-facing hiring you do. I built Taali from the ground up because every tool I tested measured the wrong thing, then proved it on that operation.",
+  "So, the offering — one platform, however you hire. Point it at your client mandates: more placements per consultant, submissions clients trust, mandates won against firms still emailing CVs. And point it at your own bench: hire the consultants and delivery teams your transformation work needs, on the same verifiable bar — 'we hire on Taali too' becomes the strongest reference you can give a client. Commercially it's deliberately simple — one usage-based model, credits, you pay for what you use and we keep our margin underneath, whichever way you point it. And to start, it's free: pick a few live roles, we run them end-to-end at no cost, we measure together, then we agree the model. I'd like to pick those roles before we leave."
 ]
 </script>
 

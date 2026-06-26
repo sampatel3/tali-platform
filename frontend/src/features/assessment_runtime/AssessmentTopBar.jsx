@@ -26,6 +26,7 @@ export const AssessmentTopBar = ({
   onOpenGuide,
   reportIssueHref = 'mailto:support@taali.ai',
   onSubmit,
+  submitDisabled = false,
 }) => (
   <header
     className="sticky top-0 z-30 border-b border-[var(--line)] backdrop-blur-[14px]"
@@ -90,7 +91,8 @@ export const AssessmentTopBar = ({
         <button
           type="button"
           onClick={onSubmit}
-          disabled={isTimerPaused}
+          disabled={isTimerPaused || submitDisabled}
+          title={submitDisabled ? 'Preview — submission is disabled in the demo' : undefined}
           className="inline-flex items-center gap-2 rounded-full bg-[var(--ink)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--bg)] transition-colors hover:bg-[var(--purple)] disabled:cursor-not-allowed disabled:opacity-50"
         >
           Submit
