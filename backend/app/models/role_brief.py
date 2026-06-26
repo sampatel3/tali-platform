@@ -1,0 +1,102 @@
+from sqlalchemy import (
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    String,
+    Text,
+)
+from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
+
+from ..platform.database import Base
+
+# How the brief was captured.
+BRIEF_SOURCE_CONVERSATIONAL = "conversational"  # no-login agent chat with the hiring manager
+BRIEF_SOURCE_TRANSCRIPT = "transcript"  # kickoff-call transcript (Fireflies/upload)
+BRIEF_SOURCE_UPLOAD = "upload"  # existing JD / notes
+BRIEF_SOURCES = (
+    BRIEF_SOURCE_CONVERSATIONAL,
+    BRIEF_SOURCE_TRANSCRIPT,
+    BRIEF_SOURCE_UPLOAD,
+)
+
+# Lifecycle: draft (intake in progress) -> submitted (hiring manager finished)
+# -> applied (materialized onto the role: name/description/criteria).
+BRIEF_STATUS_DRAFT = "draft"
+BRIEF_STATUS_SUBMITTED = "submitted"
+BRIEF_STATUS_APPLIED = "applied"
+BRIEF_STATUSES = (BRIEF_STATUS_DRAFT, BRIEF_STATUS_SUBMITTED, BRIEF_STATUS_APPLIED)
+
+
+class RoleBrief(Base):
+    """The AI-native requisition: a structured hiring brief attached to a (draft)
+    role, captured via a no-login conversational intake with the hiring manager.
+
+    Two purposes:
+      1. A job PROFILE (title / location / comp / criteria) that materializes onto
+         the role + role_criterion.
+      2. A hiring BRIEF — the rich, agent-extracted context (success profile,
+         weighted priorities, dealbreakers, calibration exemplars, sourcing
+         signals, assessment focus, process) that downstream agents (scoring,
+         pre-screen, assessment selection, candidate search, decision) read. This
+         is the single source of hiring intent, not just a spec.
+    """
+
+    __tablename__ = "role_briefs"
+    __table_args__ = (
+        Index("ix_role_briefs_org_role", "organization_id", "role_id"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id"), nullable=False
+    )
+    # Null until the brief is materialized onto a role (recruiter publishes).
+    role_id = Column(Integer, ForeignKey("roles.id"), nullable=True)
+    status = Column(String, nullable=False, server_default=BRIEF_STATUS_DRAFT)
+    source_kind = Column(String, nullable=True)
+
+    # --- Job profile (structured, queryable) ---
+    title = Column(String, nullable=True)
+    summary = Column(Text, nullable=True)
+    department = Column(String, nullable=True)
+    location_city = Column(String, nullable=True)
+    location_country = Column(String, nullable=True)
+    workplace_type = Column(String, nullable=True)  # onsite | remote | hybrid
+    employment_type = Column(String, nullable=True)
+    seniority = Column(String, nullable=True)
+    salary_min = Column(Integer, nullable=True)
+    salary_max = Column(Integer, nullable=True)
+    salary_currency = Column(String, nullable=True)
+    salary_period = Column(String, nullable=True)
+    openings = Column(Integer, nullable=True)
+    target_start = Column(String, nullable=True)
+
+    # --- Criteria (agent-proposed; materialize to role_criterion + knockouts) ---
+    must_haves = Column(JSON, nullable=True)
+    preferred = Column(JSON, nullable=True)
+    dealbreakers = Column(JSON, nullable=True)
+
+    # --- Hiring brief: the agent-context layers (goal c) ---
+    success_profile = Column(Text, nullable=True)
+    priorities = Column(JSON, nullable=True)  # [{factor, weight}] weighted trade-offs
+    tradeoffs = Column(JSON, nullable=True)  # explicit "prefer X over Y" statements
+    calibration_exemplars = Column(JSON, nullable=True)  # [{kind: good|bad, description}]
+    sourcing_signals = Column(JSON, nullable=True)  # {companies, industries, titles}
+    assessment_focus = Column(JSON, nullable=True)  # what to actually test
+    process = Column(JSON, nullable=True)  # {rounds, autonomy_level, urgency}
+    evp = Column(JSON, nullable=True)  # selling points / tone for the JD + comms
+
+    # --- Provenance / intake working state ---
+    raw_input = Column(Text, nullable=True)  # transcript / pasted JD / notes
+    agent_state = Column(JSON, nullable=True)  # intake agent memory + open questions
+    completeness = Column(Integer, nullable=True)  # 0..100 agent's coverage estimate
+
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    role = relationship("Role")
