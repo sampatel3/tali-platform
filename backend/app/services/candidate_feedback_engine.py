@@ -31,6 +31,8 @@ from ..components.scoring.assessment_metrics import (
     is_completed as _is_completed,
     percentile_rank as _percentile_rank,
     status_value as _status_value,
+    score_100 as _score_100,
+    extract_category_scores as _extract_category_scores,
 )
 from ..models.candidate_application import CandidateApplication
 from .candidate_interview_kit import (
@@ -41,23 +43,6 @@ from .document_service import load_stored_document_bytes
 from .interview_support_service import refresh_application_interview_support
 from .taali_scoring import compute_role_fit_score, compute_taali_score, normalize_score_100
 
-
-_DIMENSION_ALIASES = {
-    "task_completion": "task_completion",
-    "prompt_clarity": "prompt_clarity",
-    "context_provision": "context_provision",
-    "independence_efficiency": "independence_efficiency",
-    "response_utilization": "response_utilization",
-    "debugging_design": "debugging_design",
-    "written_communication": "written_communication",
-    "role_fit": "role_fit",
-    # Legacy aliases seen in persisted payloads.
-    "independence": "independence_efficiency",
-    "utilization": "response_utilization",
-    "communication": "written_communication",
-    "approach": "debugging_design",
-    "cv_match": "role_fit",
-}
 
 _DIMENSION_ORDER = [
     "task_completion",
@@ -147,24 +132,6 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _score_100(assessment: Assessment) -> float | None:
-    final_score = getattr(assessment, "final_score", None)
-    if isinstance(final_score, (int, float)):
-        return float(final_score)
-    score = getattr(assessment, "score", None)
-    if isinstance(score, (int, float)):
-        return float(score) * 10.0
-    return None
-
-
-def _score_10(assessment: Assessment) -> float | None:
-    score = getattr(assessment, "score", None)
-    if isinstance(score, (int, float)):
-        return float(score)
-    score_100 = _score_100(assessment)
-    return None if score_100 is None else float(score_100 / 10.0)
-
-
 def _normalize_score_100(value: Any) -> float | None:
     # All callers below pass already-0-100 columns
     # (cv_match_score, *_score_100, role_fit_score). The old
@@ -174,31 +141,6 @@ def _normalize_score_100(value: Any) -> float | None:
     if not isinstance(value, (int, float)):
         return None
     return normalize_score_100(value)
-
-
-def _extract_category_scores(assessment: Assessment) -> dict[str, float]:
-    breakdown = assessment.score_breakdown if isinstance(assessment.score_breakdown, dict) else {}
-    analytics = assessment.prompt_analytics if isinstance(assessment.prompt_analytics, dict) else {}
-
-    raw_scores = (
-        (breakdown.get("category_scores") if isinstance(breakdown.get("category_scores"), dict) else None)
-        or (analytics.get("category_scores") if isinstance(analytics.get("category_scores"), dict) else None)
-        or (
-            analytics.get("detailed_scores", {}).get("category_scores")
-            if isinstance(analytics.get("detailed_scores"), dict)
-            and isinstance(analytics.get("detailed_scores", {}).get("category_scores"), dict)
-            else None
-        )
-        or {}
-    )
-
-    out: dict[str, float] = {}
-    for key, value in raw_scores.items():
-        canonical = _DIMENSION_ALIASES.get(str(key))
-        if not canonical or not isinstance(value, (int, float)):
-            continue
-        out[canonical] = round(float(value), 2)
-    return out
 
 
 def _benchmark_payload(db: Session, assessment: Assessment, scores: dict[str, float]) -> dict[str, Any]:
