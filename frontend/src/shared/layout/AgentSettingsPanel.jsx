@@ -1,6 +1,8 @@
 import React, { useEffect } from 'react';
 import { Info, X } from 'lucide-react';
 
+import { Select } from '../ui/TaaliPrimitives';
+
 const Switch = ({ on, onChange, label }) => (
   <button
     type="button"
@@ -168,23 +170,14 @@ export const AgentSettingsPanel = ({
             <div className="mc-panel-help" style={{ marginBottom: 12 }}>
               Agent pauses itself when budget reaches this %.
             </div>
-            <select
+            <Select
               value={v.pause_threshold_pct}
               onChange={(e) => update({ pause_threshold_pct: Number(e.target.value) })}
-              style={{
-                width: '100%',
-                padding: '10px 12px',
-                border: '1px solid var(--line)',
-                borderRadius: 8,
-                fontFamily: 'inherit',
-                fontSize: 13.5,
-                background: 'var(--bg)',
-              }}
             >
               <option value={70}>70%</option>
               <option value={80}>80%</option>
               <option value={90}>90%</option>
-            </select>
+            </Select>
           </section>
 
           <div className="mc-info-callout">

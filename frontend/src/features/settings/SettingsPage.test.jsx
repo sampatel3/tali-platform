@@ -212,9 +212,13 @@ describe('SettingsPage recruiter surface', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /Workable integration/i })).toBeInTheDocument();
     });
-    await waitFor(() => {
-      expect(screen.getByRole('option', { name: 'Hiring Lead' })).toBeInTheDocument();
-    });
+    // The actor-member control is now the styled portal dropdown, so its
+    // options only mount once it's opened. Open it to confirm the member
+    // loaded, then close without selecting so Save is still blocked.
+    const actorField = (await screen.findByText('Workable actor member')).closest('label');
+    fireEvent.click(actorField.querySelector('button'));
+    expect(await screen.findByRole('option', { name: 'Hiring Lead' })).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Save Workable Settings' }));
 

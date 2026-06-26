@@ -13,6 +13,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp } from 'lucide-react';
 
 import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
+import { Select } from '../../shared/ui/TaaliPrimitives';
 import { formatUsd } from './atoms';
 import { HomeActivityTrends } from './HomeActivityTrends';
 import { HomeSignal } from './HomeSignal';
@@ -141,12 +142,12 @@ export const HomeMonitoring = ({
           <div className="hm-controls">
             <label className="hm-rolefilter">
               <span className="kicker">Role</span>
-              <select className="ht-select" value={roleId} onChange={(e) => setRoleId(e.target.value)}>
+              <Select value={roleId} onChange={(e) => setRoleId(e.target.value)}>
                 <option value="">All roles</option>
                 {rolesBreakdown.map((r) => (
                   <option key={r.role_id} value={r.role_id}>{r.name}</option>
                 ))}
-              </select>
+              </Select>
             </label>
             <div className="hm-window" role="group" aria-label="Time window">
               {WINDOWS.map((w) => (

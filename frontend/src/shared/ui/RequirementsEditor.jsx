@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 
+import { Select } from './TaaliPrimitives';
+
 // Priority chips supported on each requirement line. Stored on the wire
 // as plain strings ("Must have: 5+ yrs ...") so the existing CV scorer
 // keeps reading the shape it already reads — we just structure them in
@@ -92,8 +94,7 @@ export const RequirementsEditor = ({ value, onChange, ariaLabelPrefix = 'Require
         <div className="req-editor-list">
           {rows.map((row, index) => (
             <div key={index} className="req-editor-row">
-              <select
-                className="req-editor-priority"
+              <Select
                 value={row.priority}
                 onChange={(event) => updateRow(index, { priority: event.target.value })}
                 aria-label={`${ariaLabelPrefix} ${index + 1} priority`}
@@ -101,7 +102,7 @@ export const RequirementsEditor = ({ value, onChange, ariaLabelPrefix = 'Require
                 {REQUIREMENT_PRIORITIES.map((p) => (
                   <option key={p} value={p}>{p}</option>
                 ))}
-              </select>
+              </Select>
               <input
                 type="text"
                 className="req-editor-text"

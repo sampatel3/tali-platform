@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { ArrowLeft, Mail } from 'lucide-react';
 
 import { PageHero } from '../../shared/layout/PageHero';
+import { Select } from '../../shared/ui/TaaliPrimitives';
 
 const TAALI_EMAIL = 'hello@taali.ai';
 
@@ -69,7 +70,7 @@ export const BespokeTaskRequestPage = ({ onNavigate, NavComponent = null }) => {
 
             <label className="bespoke-field">
               <span className="bespoke-label">Seniority</span>
-              <select
+              <Select
                 value={seniority}
                 onChange={(event) => setSeniority(event.target.value)}
               >
@@ -77,7 +78,7 @@ export const BespokeTaskRequestPage = ({ onNavigate, NavComponent = null }) => {
                 <option value="mid">Mid</option>
                 <option value="senior">Senior</option>
                 <option value="staff">Staff / Principal</option>
-              </select>
+              </Select>
             </label>
 
             <label className="bespoke-field">
