@@ -53,15 +53,18 @@ describe('deriveAssessmentWorkflow', () => {
 });
 
 describe('summarizeAssessmentWorkflow', () => {
-  it('produces cumulative funnel counts and isolates not-sent', () => {
+  it('produces cumulative funnel counts, counts completed, and isolates not-sent', () => {
     const cands = [
       { score_summary: { assessment_status: 'pending', invite_tracking: { invite_sent_at: 'x', email_status: 'sent' } } },
       { score_summary: { assessment_status: 'pending', invite_tracking: { delivered_at: 'x', email_status: 'delivered' } } },
       { score_summary: { assessment_status: 'pending', invite_tracking: { opened_at: 'x', email_status: 'opened' } } },
       { score_summary: { assessment_status: 'in_progress', invite_tracking: { started_at: 'x' } } },
+      { score_summary: { assessment_status: 'completed', invite_tracking: { delivered_at: 'x', opened_at: 'x', started_at: 'x' } } },
       { score_summary: { assessment_status: 'pending', invite_tracking: { email_status: 'failed' } } },
     ];
     const f = summarizeAssessmentWorkflow(cands);
-    expect(f).toEqual({ total: 5, delivered: 3, opened: 2, inProgress: 1, notSent: 1 });
+    // delivered/opened are cumulative (completed counts toward both); a completed
+    // assessment is NOT "in progress"; not-sent is isolated.
+    expect(f).toEqual({ total: 6, delivered: 4, opened: 3, inProgress: 1, completed: 1, notSent: 1 });
   });
 });

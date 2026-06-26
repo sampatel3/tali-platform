@@ -122,9 +122,9 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
           type="button"
           className={filters.view === 'invited' ? 'on' : ''}
           onClick={() => setFilters((f) => ({ ...f, view: f.view === 'invited' ? null : 'invited' }))}
-          title="Candidates sent an assessment that hasn't been completed yet"
+          title="Assessments in flight, plus completed ones awaiting your review before a decision"
         >
-          Assessment pending
+          Assessment stage
         </button>
       </div>
       {/* Everything in this queue is pending, so there's no "Pending" filter to
@@ -344,7 +344,7 @@ const InvitedPanel = ({ candidates, loading, selectedId, onSelect, roleNameById 
     return (
       <div className="rq-empty">
         <Inbox size={18} aria-hidden="true" style={{ marginBottom: 6, color: 'var(--mute)' }} />
-        <div>No assessments awaiting completion. Invites you've sent that haven't been started or completed show up here.</div>
+        <div>No assessments in this stage. Invites you've sent — in flight or completed and awaiting your review — show up here until you decide.</div>
       </div>
     );
   }
@@ -352,7 +352,7 @@ const InvitedPanel = ({ candidates, loading, selectedId, onSelect, roleNameById 
     <aside className="rq-split-list">
       <div className="rq-split-list-head">
         <span className="kicker">
-          Assessment pending
+          Assessment stage
           <span style={{ color: 'var(--purple)', marginLeft: 6 }}>{candidates.length}</span>
         </span>
       </div>
@@ -532,7 +532,7 @@ export const HomeNow = ({
     setInvitedLoading(true);
     rolesApi
       .listApplicationsGlobal({
-        assessment_status: 'pending,in_progress',
+        assessment_status: 'pending,in_progress,completed',
         role_id: filters.role_id || undefined,
         limit: 100,
         include_stage_counts: false,
@@ -541,7 +541,16 @@ export const HomeNow = ({
       })
       .then((res) => {
         if (cancelled) return;
-        const items = Array.isArray(res?.data?.items) ? res.data.items : [];
+        const raw = Array.isArray(res?.data?.items) ? res.data.items : [];
+        // "Assessment stage" = in-flight assessments + completed-but-not-yet-
+        // decided (those sit in the 'review' stage for the recruiter to check
+        // before a decision). Drop already-decided ones (advanced / rejected /
+        // hired) so a completed assessment leaves the stage once it's actioned.
+        const items = raw.filter((it) => {
+          const stage = String(it.pipeline_stage || '').toLowerCase();
+          const outcome = String(it.application_outcome || '').toLowerCase();
+          return stage !== 'advanced' && outcome !== 'rejected' && outcome !== 'hired';
+        });
         setInvited(items);
         // Keep the current selection if it's still in the list, else focus the
         // first row so the detail card is never empty on load.

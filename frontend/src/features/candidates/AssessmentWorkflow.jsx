@@ -116,6 +116,7 @@ export function summarizeAssessmentWorkflow(candidates) {
   let delivered = 0;
   let opened = 0;
   let inProgress = 0;
+  let completed = 0;
   let notSent = 0;
   (candidates || []).forEach((c) => {
     const ss = c.score_summary || {};
@@ -124,14 +125,16 @@ export function summarizeAssessmentWorkflow(candidates) {
     const s = (ss.assessment_status || '').toLowerCase();
     total += 1;
     if (es === 'failed' || es === 'bounced' || es === 'complained') { notSent += 1; return; }
+    const done = s === 'completed' || s === 'completed_due_to_timeout';
     const started = Boolean(t.started_at) || s === 'in_progress';
     const opn = Boolean(t.opened_at) || es === 'opened' || es === 'clicked';
     const dlv = Boolean(t.delivered_at) || es === 'delivered';
-    if (dlv || opn || started) delivered += 1;
-    if (opn || started) opened += 1;
-    if (started) inProgress += 1;
+    if (done) completed += 1;
+    if (dlv || opn || started || done) delivered += 1;
+    if (opn || started || done) opened += 1;
+    if (started && !done) inProgress += 1;
   });
-  return { total, delivered, opened, inProgress, notSent };
+  return { total, delivered, opened, inProgress, completed, notSent };
 }
 
 /** At-a-glance workflow funnel for the top of the invited panel. */
@@ -142,6 +145,7 @@ export function AssessmentFunnelStrip({ candidates }) {
     { n: f.delivered, label: 'Delivered', done: f.delivered > 0 },
     { n: f.opened, label: 'Opened', done: f.opened > 0 },
     { n: f.inProgress, label: 'In progress', done: f.inProgress > 0 },
+    { n: f.completed, label: 'Completed', done: f.completed > 0 },
   ];
   return (
     <div className="aw-funnel-wrap">
