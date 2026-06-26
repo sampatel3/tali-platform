@@ -621,15 +621,22 @@ def _integrity_summary(app: CandidateApplication) -> dict[str, Any] | None:
     lists, kanban, decision hub) reads one canonical object."""
     details = app.cv_match_details if isinstance(getattr(app, "cv_match_details", None), dict) else {}
     sig = details.get("integrity_signals") if isinstance(details, dict) else None
-    if not isinstance(sig, dict):
+    if not isinstance(sig, dict) or not sig:
         return None
-    tri = sig.get("triangulation") if isinstance(sig.get("triangulation"), dict) else {}
-    warnings = [str(w) for w in (sig.get("warnings") or []) if str(w).strip()]
-    band = tri.get("trust_band")
-    if not band and not warnings:
-        return None
+    # Band + warnings are derived live when the persisted signals predate them
+    # (candidates scored before this shipped), so the readout works retroactively
+    # without a re-score. Both are pure functions of the stored signals.
+    from ...services.fraud_detection import aggregate_triangulation, build_integrity_warnings
+
+    tri = sig.get("triangulation")
+    if not isinstance(tri, dict) or "trust_band" not in tri:
+        tri = aggregate_triangulation(sig)
+    warnings = sig.get("warnings")
+    if not isinstance(warnings, list):
+        warnings = build_integrity_warnings(sig)
+    warnings = [str(w) for w in (warnings or []) if str(w).strip()]
     return {
-        "trust_band": band or "high",
+        "trust_band": tri.get("trust_band") or "high",
         "verdict": tri.get("verdict"),
         "to_verify": int(tri.get("to_verify") or len(warnings)),
         "warnings": warnings[:12],
