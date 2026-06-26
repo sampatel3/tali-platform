@@ -9,7 +9,6 @@ from .brand import brand_email_from
 class MvpFeatureFlags:
     disable_stripe: bool
     disable_workable: bool
-    disable_claude_scoring: bool
     disable_calibration: bool
     disable_proctoring: bool
     scoring_v2_enabled: bool
@@ -477,7 +476,6 @@ class Settings(BaseSettings):
     # changed True → False as part of the 2026-04-29 usage-pricing cutover.
     MVP_DISABLE_STRIPE: bool = False
     MVP_DISABLE_WORKABLE: bool = True
-    MVP_DISABLE_CLAUDE_SCORING: bool = True
     MVP_DISABLE_CALIBRATION: bool = False
     MVP_DISABLE_PROCTORING: bool = True
     SCORING_V2_ENABLED: bool = False
@@ -502,7 +500,6 @@ class Settings(BaseSettings):
         return MvpFeatureFlags(
             disable_stripe=self.MVP_DISABLE_STRIPE,
             disable_workable=self.MVP_DISABLE_WORKABLE,
-            disable_claude_scoring=self.MVP_DISABLE_CLAUDE_SCORING,
             disable_calibration=self.MVP_DISABLE_CALIBRATION,
             disable_proctoring=self.MVP_DISABLE_PROCTORING,
             scoring_v2_enabled=self.SCORING_V2_ENABLED,

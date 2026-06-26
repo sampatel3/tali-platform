@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Type
 
@@ -293,36 +292,6 @@ def _run_task_test_runner(
         }
 
 
-def _is_transient_anthropic_error(exc: Exception) -> bool:
-    """True for rate-limit / timeout / connection / 5xx errors worth retrying.
-
-    Auth (401/403) and bad-request (400) errors are NOT transient — retrying
-    them just burns time and budget, so we fail fast on those.
-    """
-    name = type(exc).__name__.lower()
-    if "timeout" in name or "connection" in name or "ratelimit" in name:
-        return True
-    status = getattr(exc, "status_code", None)
-    if isinstance(status, int):
-        return status == 429 or status >= 500
-    return False
-
-
-def _retry_transient(fn: Callable[[], Any], *, attempts: int = 3, base_delay: float = 0.5) -> Any:
-    """Call ``fn`` with bounded exponential backoff on transient Anthropic errors."""
-    last_exc: Exception | None = None
-    for i in range(attempts):
-        try:
-            return fn()
-        except Exception as exc:  # noqa: BLE001 — classified below
-            last_exc = exc
-            if not _is_transient_anthropic_error(exc) or i == attempts - 1:
-                raise
-            time.sleep(base_delay * (2 ** i))
-    if last_exc is not None:  # pragma: no cover — loop always returns or raises
-        raise last_exc
-
-
 def submit_assessment_impl(
     assessment: Assessment,
     final_code: str,
@@ -473,8 +442,8 @@ def submit_assessment_impl(
     # *_score columns and is the authoritative assessment score for tasks
     # with no evaluation_rubric (RubricScorer overrides it when a rubric is
     # present). The legacy LLM analyze_code_quality/analyze_prompt_session
-    # branch (gated by MVP_DISABLE_CLAUDE_SCORING) was removed — its output
-    # was computed but never persisted to any scored column.
+    # branch was removed — its output was computed but never persisted to
+    # any scored column.
     length_stats = heuristics.get("prompt_length_stats", {}) or {}
     code_delta = heuristics.get("code_delta", {}) or {}
     token_eff = heuristics.get("token_efficiency", {}) or {}
