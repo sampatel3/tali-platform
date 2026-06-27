@@ -45,6 +45,9 @@ import { StatsCard, StatusBadge } from './shared/ui/DashboardAtoms';
 const HomePage = lazy(() =>
   import('./features/home/HomePage').then((m) => ({ default: m.HomePage }))
 );
+const AnalyticsPage = lazy(() =>
+  import('./features/home/AnalyticsPage').then((m) => ({ default: m.AnalyticsPage }))
+);
 const CandidateWelcomePage = lazy(() =>
   import('./features/assessment_runtime/CandidateWelcomePage').then((m) => ({ default: m.CandidateWelcomePage }))
 );
@@ -794,15 +797,23 @@ function AppContent() {
         )}
       />
 
-      {/* Reporting + analytics fold into the Hub bottom section now.
-          Both routes 301 to /home — see docs/HOME_HUB_DESIGN.md §4. */}
+      {/* Analytics is its own page now (the agent reporting layer, off the home
+          review loop) — reuses the HomeMonitoring console in standalone mode.
+          /reporting is a legacy alias that lands on it. */}
       <Route
         path="/analytics"
-        element={<Navigate replace to="/home" />}
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <AnalyticsPage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
       />
       <Route
         path="/reporting"
-        element={<Navigate replace to="/home" />}
+        element={<Navigate replace to="/analytics" />}
       />
 
       {/* Requisition spec template editor. A dedicated page (not a tab in the

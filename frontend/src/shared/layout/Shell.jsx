@@ -6,6 +6,7 @@ import {
   CheckSquare,
   ChevronDown,
   Home,
+  LineChart,
   LogOut,
   Menu,
   MessageSquare,
@@ -38,6 +39,7 @@ const NAV_TABS = [
   { id: 'clients',  label: 'Clients',  Icon: Building2 },
   { id: 'chat',     label: 'Chat',     Icon: MessageSquare, badge: 'AI' },
   { id: 'tasks',    label: 'Tasks',    Icon: CheckSquare },
+  { id: 'analytics', label: 'Analytics', Icon: LineChart },
   { id: 'settings', label: 'Settings', Icon: SettingsIcon },
 ];
 
