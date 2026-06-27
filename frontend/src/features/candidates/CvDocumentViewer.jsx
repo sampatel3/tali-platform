@@ -7,7 +7,7 @@
 // (CvDocumentViewer). Extracted verbatim from CandidateStandingReportPage.jsx
 // to keep the page file under the frontend architecture line cap.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Download } from 'lucide-react';
+import { Download, Github, Globe, Linkedin, Mail, MapPin, Phone } from 'lucide-react';
 
 import { getCachedDocumentBlob } from '../../shared/api/documentCache';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
@@ -219,6 +219,21 @@ const renderRawCvLines = (lines) => {
   });
 };
 
+// Leading icon per contact / link, matching report-preview's contact row
+// (mail / map-pin / phone / linkedin / github / world). Inferred from the value
+// itself so it works for both structured contacts and free-text links.
+const contactIcon = (item) => {
+  const value = String(item || '').toLowerCase();
+  if (value.includes('@') && !/^https?:\/\//.test(value)) return Mail;
+  if (value.includes('linkedin.com')) return Linkedin;
+  if (value.includes('github.com')) return Github;
+  if (/^https?:\/\//.test(value) || /\b[a-z0-9-]+\.[a-z]{2,}(\/|$)/.test(value)) return Globe;
+  if (/^[+(]?\d[\d\s().-]{6,}$/.test(value.replace(/[•·]/g, ''))) return Phone;
+  // Phone numbers can be partially masked (e.g. "+971 5• ••• ••••").
+  if (/[•·]/.test(value) && /\d/.test(value)) return Phone;
+  return MapPin;
+};
+
 const CvDocumentContent = ({ cvModel, matchingSkills }) => {
   const matchedSkillSet = new Set(asArray(matchingSkills).map((skill) => asCleanText(skill).toLowerCase()).filter(Boolean));
 
@@ -232,10 +247,18 @@ const CvDocumentContent = ({ cvModel, matchingSkills }) => {
           {[...cvModel.contact, ...cvModel.links].map((item, index) => {
             const isLink = /^https?:\/\//i.test(item) || item.includes('linkedin.com') || item.includes('github.com');
             const href = item.includes('@') && !isLink ? `mailto:${item}` : (isLink ? item : '');
+            const Icon = contactIcon(item);
+            const inner = (
+              <>
+                <Icon size={14} className="ci" aria-hidden="true" />
+                {item}
+              </>
+            );
             return (
               <React.Fragment key={`${item}-${index}`}>
-                {index ? <span className="sep">·</span> : null}
-                {href ? <a href={href} target={isLink ? '_blank' : undefined} rel={isLink ? 'noopener noreferrer' : undefined}>{item}</a> : <span>{item}</span>}
+                {href
+                  ? <a className="clink" href={href} target={isLink ? '_blank' : undefined} rel={isLink ? 'noopener noreferrer' : undefined}>{inner}</a>
+                  : <span className="clink">{inner}</span>}
               </React.Fragment>
             );
           })}

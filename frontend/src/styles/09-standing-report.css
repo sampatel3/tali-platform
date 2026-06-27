@@ -709,22 +709,31 @@ button.eng-badge-button:focus-visible {
 .cv-contact {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  align-items: center;
+  gap: 9px 20px;
   margin-bottom: 28px;
   padding: 10px 0 18px;
-  color: var(--mute);
   border-bottom: 1px solid var(--line-2);
-  font-family: var(--font-mono);
-  font-size: 0.71875rem;
-  letter-spacing: 0.02em;
+  font-size: 0.875rem;
 }
 
-.cv-contact a:hover {
+/* Icon-led contact links — mail / map-pin / phone / linkedin / github / world,
+   matching report-preview's contact row. */
+.cv-contact .clink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--purple-2);
+  font-weight: 500;
+}
+
+.cv-contact .clink .ci {
+  flex: none;
+  color: var(--purple-2);
+}
+
+.cv-contact a.clink:hover {
   color: var(--purple);
-}
-
-.cv-contact .sep {
-  color: var(--mute-2);
 }
 
 .cv-doc .cv-section {
@@ -1276,80 +1285,7 @@ button.eng-badge-button:focus-visible {
   font-weight: 600;
 }
 
-.cvm-list {
-  display: grid;
-}
-
-.cvm-row {
-  display: grid;
-  grid-template-columns: 78px minmax(0, 1fr);
-  gap: 14px;
-  padding: 13px 0;
-  border-top: 1px solid var(--line-2);
-}
-
-.cvm-row:first-child {
-  border-top: 0;
-}
-
-.cvm-row.is-missing {
-  background: color-mix(in oklab, var(--amber) 5%, transparent);
-}
-
-.cvm-status {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: fit-content;
-  padding: 4px 8px;
-  border-radius: 8px;
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
-.cvm-status i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-}
-
-.cvm-status[data-s="met"] {
-  background: var(--purple-soft);
-  color: var(--purple-2);
-}
-
-.cvm-status[data-s="partially_met"] {
-  background: color-mix(in oklab, var(--purple) 9%, transparent);
-  color: var(--ink-soft);
-}
-
-.cvm-status[data-s="missing"] {
-  background: color-mix(in oklab, var(--amber) 15%, transparent);
-  color: color-mix(in oklab, var(--amber) 52%, var(--ink));
-}
-
-.cvm-status[data-s="unknown"] {
-  background: var(--bg-3);
-  color: var(--mute);
-}
-
-.cvm-req-top {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.cvm-req-name {
-  font-size: 0.84375rem;
-  font-weight: 600;
-  color: var(--ink);
-  line-height: 1.4;
-}
-
+/* Recruiter-added tag (e.g. "Recruiter") — shared by the requirement rows. */
 .cvm-tag {
   font-family: var(--font-mono);
   font-size: 0.59375rem;
@@ -1360,21 +1296,6 @@ button.eng-badge-button:focus-visible {
   border-radius: 5px;
   background: var(--purple-soft);
   color: var(--purple-2);
-}
-
-.cvm-ev {
-  display: block;
-  margin-top: 4px;
-  color: var(--mute);
-  font-size: 0.75rem;
-  line-height: 1.5;
-}
-
-@media (max-width: 720px) {
-  .cvm-row {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 6px;
-  }
 }
 
 @media (max-width: 1180px) {
@@ -1917,4 +1838,203 @@ button.eng-badge-button:focus-visible {
 @media (max-width: 920px) {
   .dossier { grid-template-columns: 1fr; }
   .dossier-rail { position: static; }
+}
+
+/* ============================================================
+   Requirements tab — per-requirement match with expandable evidence.
+   Mirrors report-preview's `.reqrow`/`.reqg`/`.reqscore`/`.reqbar`/`.ev .src`,
+   with the app's tokens. Purple-forward: a strong requirement fills purple,
+   a weak/low one fills lavender (--purple-lav); only true gaps go amber.
+   ============================================================ */
+.cv-match-review .reqhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 2px;
+}
+.cv-match-review .reqfit {
+  font-size: 0.8125rem;
+  color: var(--mute);
+}
+.cv-match-review .reqfit b {
+  color: var(--purple-2);
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+.cv-match-review .reqsub {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--mute);
+  line-height: 1.5;
+}
+
+.cv-match-review .reqlist { display: grid; }
+
+.reqrow {
+  border-top: 1px solid var(--line);
+}
+.reqrow:first-child { border-top: none; }
+.reqrow summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 14px 2px;
+  cursor: pointer;
+}
+.reqrow summary::-webkit-details-marker { display: none; }
+.reqrow summary:hover .rqname { color: var(--purple-2); }
+
+.reqrow .reqg {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  width: 92px;
+}
+.reqrow .reqscore {
+  font-family: var(--font-mono);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  width: 24px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.reqrow .reqscore.hi { color: var(--purple-2); }
+.reqrow .reqscore.lo { color: var(--mute); }
+.reqrow .reqbar {
+  flex: 1;
+  height: 6px;
+  border-radius: 4px;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+.reqrow .reqbar i {
+  display: block;
+  height: 100%;
+  background: var(--purple);
+  border-radius: 4px;
+}
+.reqrow .reqbar i.lo { background: var(--purple-lav); }
+
+.reqrow .rqname {
+  font-size: 0.90625rem;
+  font-weight: 500;
+  color: var(--ink);
+  line-height: 1.4;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.reqrow .reqtag {
+  margin-left: 0;
+}
+
+/* Status pill (Met / Partial / Gap / Unclear) — same vocabulary as .cvm-status,
+   pushed to the right so the chevron trails it. */
+.reqrow .reqstat {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 3px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.reqrow .reqstat[data-s="met"] { background: var(--purple-soft); color: var(--purple-2); }
+.reqrow .reqstat[data-s="partially_met"] { background: color-mix(in oklab, var(--purple) 9%, transparent); color: var(--ink-soft); }
+.reqrow .reqstat[data-s="missing"] { background: color-mix(in oklab, var(--amber) 15%, transparent); color: color-mix(in oklab, var(--amber) 52%, var(--ink)); }
+.reqrow .reqstat[data-s="unknown"] { background: var(--bg-3); color: var(--mute); }
+
+.reqrow .chev {
+  color: var(--mute);
+  transition: transform 0.15s ease;
+  flex: none;
+}
+.reqrow[open] .chev { transform: rotate(90deg); }
+
+.reqrow .ev {
+  padding: 0 2px 16px 36px;
+  font-size: 0.875rem;
+  color: var(--ink-2);
+  line-height: 1.6;
+}
+.reqrow .ev .src {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--purple-2);
+  background: var(--purple-soft);
+  border-radius: 5px;
+  padding: 2px 8px;
+  margin-right: 8px;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .reqrow summary { flex-wrap: wrap; }
+  .reqrow .ev { padding-left: 2px; }
+}
+
+/* Overview → Requirements jump cue (replaces the inline CvMatchReview that
+   moved to its own tab). */
+.mc-overview-reqjump {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin: 0 0 20px;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  color: var(--purple-2);
+  font-size: 0.84375rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.mc-overview-reqjump:hover {
+  border-color: var(--purple-lav);
+  background: var(--purple-soft);
+}
+
+/* ============================================================
+   Scorecard — single-column stacked variant (report-preview parity).
+   Overrides the 2-col grid from 22-tail-misc.css when the
+   `--stacked` modifier is present, adds the right-aligned "from the
+   assessment" note, and a lavender low-score fill.
+   ============================================================ */
+.mc-overview-dimensions--stacked .mc-overview-dim-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+}
+.mc-overview-dimensions--stacked .mc-overview-dim-head .mc-kicker { margin: 0; }
+.mc-overview-dimensions--stacked .mc-overview-dim-note {
+  font-size: 0.8125rem;
+  color: var(--mute);
+}
+.mc-overview-dimensions--stacked .mc-overview-dimensions-grid {
+  grid-template-columns: 1fr;
+  gap: 2px;
+}
+.mc-overview-dimensions--stacked .mc-overview-dim-row {
+  grid-template-columns: 190px 1fr 64px;
+  gap: 16px;
+  padding: 7px 0;
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+}
+.mc-overview-dimensions--stacked .mc-overview-dim-label { color: var(--ink-2); }
+.mc-overview-dimensions--stacked .mc-overview-dim-bar { height: 8px; }
+.mc-overview-dimensions--stacked .mc-overview-dim-bar > i.low { background: var(--purple-lav); }
+@media (max-width: 720px) {
+  .mc-overview-dimensions--stacked .mc-overview-dim-row { grid-template-columns: 120px 1fr 56px; gap: 10px; }
 }

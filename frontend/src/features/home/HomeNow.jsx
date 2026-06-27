@@ -10,6 +10,7 @@ import { Select } from '../../shared/ui/TaaliPrimitives';
 import {
   ArrowRight,
   Check,
+  ClipboardList,
   Eye,
   FileText,
   Inbox,
@@ -115,18 +116,21 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
             {o.label}
           </button>
         ))}
-        {/* Not a decision-type — switches the queue to the invited-candidate
-            tracker (sent-but-not-completed assessments). Sits next to the
-            decision-type pills so it reads as part of the same control. */}
-        <button
-          type="button"
-          className={filters.view === 'invited' ? 'on' : ''}
-          onClick={() => setFilters((f) => ({ ...f, view: f.view === 'invited' ? null : 'invited' }))}
-          title="Assessments in flight, plus completed ones awaiting your review before a decision"
-        >
-          Assessment stage
-        </button>
       </div>
+      {/* Not a decision-type — switches the queue to the invited-candidate
+          tracker (sent-but-not-completed assessments). A standalone toggle
+          chip (clipboard) next to the decision-type set, matching the
+          home-preview. */}
+      <button
+        type="button"
+        className={`rq-chiptoggle${filters.view === 'invited' ? ' on' : ''}`}
+        aria-pressed={filters.view === 'invited'}
+        onClick={() => setFilters((f) => ({ ...f, view: f.view === 'invited' ? null : 'invited' }))}
+        title="Assessments in flight, plus completed ones awaiting your review before a decision"
+      >
+        <ClipboardList size={13} strokeWidth={2} aria-hidden="true" />
+        Assessment stage
+      </button>
       {/* Everything in this queue is pending, so there's no "Pending" filter to
           offer — just a standing warning chip for the ones whose score is out
           of date, toggled to review only those. Hidden when there are none and
@@ -202,7 +206,9 @@ const PipelineStandingStrip = ({ rolesBreakdown, filters }) => {
   // Nothing in the pipeline at all → no point showing an all-zero board.
   if (PIPELINE_FUNNEL_STAGES.every((s) => (Number(counts[s.key]) || 0) === 0)) return null;
 
-  return <FunnelBoard stageCounts={counts} decisionsByType={decisionsByType} scopeLabel={scopeLabel} />;
+  // Flat strip (home-preview): stage value + label + inline decision chips per
+  // cell, no cap line and no separate "awaiting your decision" grid.
+  return <FunnelBoard variant="flat" stageCounts={counts} decisionsByType={decisionsByType} scopeLabel={scopeLabel} />;
 };
 
 const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, staleOnly = false }) => {

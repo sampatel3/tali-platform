@@ -443,13 +443,13 @@
 }
 
 .kanban-card .av {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
   display: grid;
   place-items: center;
-  background: var(--ink-soft);
-  color: #fff;
+  background: var(--purple-soft);
+  color: var(--purple-2);
   font-size: 0.625rem;
   font-weight: 600;
   flex-shrink: 0;
@@ -487,7 +487,7 @@
 }
 
 .kanban-card .cc-line .score-pip {
-  color: var(--ink);
+  color: var(--purple-2);
   font-weight: 600;
 }
 
@@ -500,53 +500,91 @@
   flex: 1 1 auto;
 }
 
+/* Agent recommendation block — pipeline-preview .kagent: a soft-purple
+   tinted panel with a 1px purple-soft border, sparkle glyph, a bold
+   purple-2 action line and ink-2 reasoning. */
 .kanban-card .cc-agent {
-  margin-top: 6px;
-  padding: 7px 8px;
-  border-radius: 8px;
-  background: var(--purple-soft);
+  margin-top: 9px;
+  padding: 9px;
+  border-radius: 9px;
+  border: 1px solid var(--purple-soft);
+  background: color-mix(in oklab, var(--purple) 5%, var(--bg-2));
   display: flex;
   gap: 6px;
   align-items: flex-start;
 }
 
 .kanban-card .cc-agent-glyph {
-  color: var(--purple);
+  color: var(--purple-2);
   margin-top: 1px;
   flex-shrink: 0;
 }
 
 .kanban-card .cc-agent-body {
   font-size: 0.6875rem;
-  line-height: 1.4;
+  line-height: 1.45;
   color: var(--ink-2);
   min-width: 0;
 }
 
 .kanban-card .cc-agent-action {
-  font-weight: 500;
-  color: var(--purple);
+  font-weight: 600;
+  color: var(--purple-2);
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .kanban-card .cc-agent-why {
-  color: var(--mute);
+  color: var(--ink-2);
   font-size: 0.65625rem;
+  margin: 5px 0 8px;
 }
 
 .kanban-card .cc-agent-actions {
   display: flex;
   gap: 6px;
-  margin-top: 5px;
+  margin-top: 0;
 }
 
 .kanban-card .cc-agent-actions .btn-xs {
+  flex: 1 1 0;
+  justify-content: center;
   height: 24px;
   padding: 0 9px;
   font-size: 0.6875rem;
+  font-weight: 600;
   display: inline-flex;
   align-items: center;
   border-radius: 6px;
   cursor: pointer;
+}
+
+/* Agent recommendation buttons follow the pipeline-preview .kbtn pair:
+   Approve = the bold dark-purple "agent ON" gradient (recommended action);
+   Override = purple-lavender outline (in-scheme counter-action). This is the
+   ONE agent-positive vocabulary reused on the header, chat rail, and cards. */
+.kanban-card .cc-agent-actions .btn-purple {
+  background: linear-gradient(180deg, #3a1d6e, #241147);
+  border: 1px solid rgba(196, 165, 253, 0.5);
+  color: #f1ecfb;
+  box-shadow: 0 1px 10px rgba(94, 58, 168, 0.28);
+}
+
+.kanban-card .cc-agent-actions .btn-purple:hover {
+  background: linear-gradient(180deg, #43227e, #2a1454);
+}
+
+.kanban-card .cc-agent-actions .btn-outline {
+  background: var(--bg-2);
+  border: 1.5px solid var(--purple-lav);
+  color: var(--purple-2);
+}
+
+.kanban-card .cc-agent-actions .btn-outline:hover {
+  background: color-mix(in oklab, var(--purple) 8%, var(--bg-2));
+  border-color: var(--purple);
+  color: var(--purple-2);
 }
 
 .kanban-card .tag.g {

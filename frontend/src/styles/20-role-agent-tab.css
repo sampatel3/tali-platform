@@ -294,25 +294,9 @@
   cursor: pointer;
 }
 
-.mc-agent-settings-slider-track {
-  position: relative;
-  height: 8px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, #fecaca 0%, #fde68a 50%, #bbf7d0 100%);
-}
-
-.mc-agent-settings-slider-thumb {
-  position: absolute;
-  top: -6px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  border: 2px solid var(--purple);
-  background: var(--bg-2);
-  box-shadow: var(--shadow-sm);
-  transform: translateX(-50%);
-  pointer-events: none;
-}
+/* (Legacy custom slider track/thumb removed — the native range is fully drawn
+   by .ce-range, a purple gradient track + purple thumb. The old overlay used a
+   red→amber→green gradient, which is off-scheme and was no longer rendered.) */
 
 .mc-agent-settings-slider-scale {
   display: flex;
@@ -341,8 +325,11 @@
   display: inline-block;
 }
 
-.mc-agent-settings-dot.is-below { background: #dc2626; opacity: 0.85; }
-.mc-agent-settings-dot.is-above { background: #16a34a; opacity: 0.7; }
+/* Pipeline-distribution dots stay on the purple/grey family (pipeline-preview
+   spec): above-threshold = lavender, below-threshold = a muted mauve-grey.
+   No traffic-light red/green. */
+.mc-agent-settings-dot.is-above { background: var(--purple-lav); }
+.mc-agent-settings-dot.is-below { background: color-mix(in oklab, var(--purple-lav) 32%, var(--bg-3)); }
 
 .mc-agent-settings-distribution-summary {
   display: flex;

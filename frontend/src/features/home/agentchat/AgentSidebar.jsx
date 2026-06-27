@@ -1,25 +1,21 @@
 // Left rail listing the org's roles + their agents, with two notification
 // indicators. Pure presentation — HomePage owns the polled conversation list,
-// selection, and bulk-select state. The list is split into agent-first sections
-// (each role appears once, in the first that fits): agents on/paused, then ones
-// that ran before but are off now, then starred, then other active roles — so
-// the agents you're actively running sit at the top. A multi-select mode lets
-// you message several agents at once.
+// selection, and bulk-select state. The list is ONE flat list under "All roles"
+// (matching the home-preview): agents you're actively running float to the top,
+// then everything else in the backend's order. A multi-select mode lets you
+// message several agents at once.
 
 import { Check, CheckSquare, Layers, MessageSquare, Pause, Sparkles } from 'lucide-react';
 
 const fmtCount = (n) => (n > 999 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 const fmtUsd = (cents) => `$${((cents || 0) / 100).toFixed(2)}`;
 
-// Section order + labels. The backend already sorts items into this order (and
-// by recency within each), so we just split on the `group` field.
+// The backend hands the agents back already sorted by group
+// (on_paused → previously_on → starred → active) and by recency within each.
+// We render them as a single flat list in that order — no group headers — but
+// still float the agents that are actually running to the very top so the ones
+// you're steering sit first.
 const GROUP_ORDER = ['on_paused', 'previously_on', 'starred', 'active'];
-const GROUP_LABELS = {
-  on_paused: 'Agent on / paused',
-  previously_on: 'Previously on',
-  starred: 'Starred',
-  active: 'Active roles',
-};
 
 export function AgentSidebar({
   agents = [],
@@ -33,21 +29,21 @@ export function AgentSidebar({
   const activeCount = agents.filter((a) => a.agent_enabled).length;
   const selectedCount = bulkSelected ? bulkSelected.size : 0;
 
-  // Within the "on / paused" section, float the agents that are actually
-  // running above the paused ones. Stable sort, so the backend's within-group
-  // order (pending count / recency) is preserved inside each subgroup.
-  const activeFirst = (rows) =>
-    [...rows].sort((a, b) => {
-      const rank = (x) => (x.agent_enabled && !x.agent_paused ? 0 : 1);
-      return rank(a) - rank(b);
-    });
-
-  const sections = GROUP_ORDER
-    .map((key) => {
-      const rows = agents.filter((a) => (a.group || 'active') === key);
-      return { key, label: GROUP_LABELS[key], rows: key === 'on_paused' ? activeFirst(rows) : rows };
+  // One flat list. Order the agents by their backend group bucket
+  // (on_paused → previously_on → starred → active), preserving the backend's
+  // within-group order, then float the agents that are actually running to the
+  // very top. Stable sort throughout, so recency / pending-count order survives.
+  const groupRank = (a) => {
+    const idx = GROUP_ORDER.indexOf(a.group || 'active');
+    return idx === -1 ? GROUP_ORDER.length : idx;
+  };
+  const orderedAgents = agents
+    .map((a, i) => ({ a, i }))
+    .sort((x, y) => {
+      const running = (z) => (z.agent_enabled && !z.agent_paused ? 0 : 1);
+      return (running(x.a) - running(y.a)) || (groupRank(x.a) - groupRank(y.a)) || (x.i - y.i);
     })
-    .filter((s) => s.rows.length > 0);
+    .map(({ a }) => a);
 
   const renderRow = (a) => {
     // Two distinct indicators:
@@ -162,15 +158,7 @@ export function AgentSidebar({
                 )}
               </button>
             )}
-            {sections.map((sec) => (
-              <div key={sec.key} className="ac-agent-group">
-                <div className="ac-group-head">
-                  <span>{sec.label}</span>
-                  <span className="ac-group-count">{sec.rows.length}</span>
-                </div>
-                {sec.rows.map(renderRow)}
-              </div>
-            ))}
+            {orderedAgents.map(renderRow)}
           </>
         )}
       </div>

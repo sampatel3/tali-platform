@@ -6,7 +6,6 @@
 // decision feed — and enabled via the filter chips.
 
 import React, { useMemo, useState } from 'react';
-import { Activity, ChevronDown, ChevronUp } from 'lucide-react';
 
 import { useToast } from '../../context/ToastContext';
 import { formatRelativeAge } from './atoms';
@@ -39,7 +38,9 @@ const dotColor = (kind) => {
 
 export const HomePlatformUpdates = () => {
   const { activities } = useToast();
-  const [open, setOpen] = useState(false);
+  // Always-visible feed (matching the home-preview) — no collapse toggle. The
+  // background-chatter filter chips below stay so sync noise can still be folded
+  // away, but the log itself is open on load.
   const [enabledKinds, setEnabledKinds] = useState(() => new Set(DEFAULT_KINDS));
 
   const counts = useMemo(() => {
@@ -81,21 +82,9 @@ export const HomePlatformUpdates = () => {
             background and stays hidden by default.
           </p>
         </div>
-        <button
-          type="button"
-          className="home-analytics-toggle"
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-          style={{ alignSelf: 'flex-start' }}
-        >
-          <Activity size={14} aria-hidden="true" />
-          <span>{open ? 'Hide' : 'Show'} updates ({total})</span>
-          {open ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
-        </button>
       </div>
 
-      {open ? (
-        <div className="home-platform-updates">
+      <div className="home-platform-updates">
           <div className="home-platform-filters">
             <span className="kicker mute">SHOW</span>
             {KIND_ORDER.map((kind) => {
@@ -139,8 +128,7 @@ export const HomePlatformUpdates = () => {
               ))}
             </ul>
           )}
-        </div>
-      ) : null}
+      </div>
     </section>
   );
 };

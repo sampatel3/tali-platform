@@ -51,7 +51,7 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
         breadcrumbs={[{ label: 'Analytics' }]}
         kicker="ANALYTICS · AGENT REPORTING"
         title="Analytics"
-        subtitle="Outcomes, the agent fleet, the teaching history, and the decision log — the reporting layer, off the home review loop."
+        subtitle="Outcomes, the agent fleet, and the teaching history that keeps the agent calibrated — the reporting layer that lives off the home review loop."
       />
       <div className="page">
         <HomeMonitoring

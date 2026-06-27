@@ -65,6 +65,13 @@
   --taali-warning: var(--amber);
   --taali-warning-soft: color-mix(in oklab, var(--amber) 12%, var(--bg-2));
   --taali-warning-border: color-mix(in oklab, var(--amber) 28%, var(--line));
+  /* Soft-fill + deep-ink amber and a faint purple wash. Mirrors the analytics
+     design preview (report-preview.css) so the recoloured agent-fleet status
+     surfaces read amber-on-soft (attention, not alarm) instead of the old
+     traffic-light red/green. */
+  --amber-soft: #fbf0dd;
+  --amber-ink: #7a4d0a;
+  --purple-tint: #f4f0fb;
   --taali-danger: var(--red);
   --taali-danger-soft: color-mix(in oklab, var(--red) 10%, var(--bg-2));
   --taali-danger-border: color-mix(in oklab, var(--red) 28%, var(--line));
