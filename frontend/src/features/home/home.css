@@ -1578,10 +1578,129 @@
    active; just give it the preview's breathing room above/below. */
 .hm-standalone .hm-vtabs { margin-top: 18px; }
 
+/* ---------------- Analytics cards (preview .card2 / .grid2 / .bigstat) ----
+   Used by the Outcomes tab (AnalyticsDrillIns): a full-width funnel card, a
+   two-up grid (advance→hire bigstat + score distribution), and the by-role
+   table — each in a flat bordered card matching the report-preview look. */
+.hm-acard {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px 20px;
+  margin-bottom: 16px;
+}
+.hm-acard:last-child { margin-bottom: 0; }
+
+.hm-acard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.hm-acard-title {
+  font-family: var(--font-display);
+  font-size: 0.90625rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.hm-acard-desc {
+  font-size: 0.75rem;
+  color: var(--mute);
+  margin-top: 2px;
+}
+
+.hm-agrid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.hm-agrid2 > .hm-acard { margin-bottom: 16px; }
+@media (max-width: 960px) {
+  .hm-agrid2 { grid-template-columns: 1fr; }
+}
+
+/* Funnel conversion — filled bars (preview .conv / .convrow). */
+.hm-conv {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.hm-convrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.hm-conv-l {
+  width: 96px;
+  font-size: 0.78125rem;
+  color: var(--ink-2);
+}
+.hm-conv-track {
+  flex: 1;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--bg-3);
+  overflow: hidden;
+  position: relative;
+}
+.hm-conv-fill {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding-left: 11px;
+  border-radius: 7px;
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: linear-gradient(90deg, var(--purple), var(--purple-lav));
+  white-space: nowrap;
+}
+.hm-conv-pct {
+  width: 92px;
+  text-align: right;
+  font-size: 0.75rem;
+  color: var(--mute);
+}
+
+/* Narrator paragraph beneath the funnel (real summary.narrator). */
+.hm-narrator {
+  margin-top: 14px;
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  line-height: 1.55;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+/* Advance → hire bigstat (preview .bigstat). */
+.hm-bigstat {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+.hm-bigstat-n {
+  font-family: var(--font-display);
+  font-size: 2.5rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--purple-2);
+  line-height: 1;
+}
+.hm-bigstat-sub {
+  font-size: 0.78125rem;
+  color: var(--mute);
+  line-height: 1.5;
+}
+
 /* ---------------- Decisions & outcomes by role ---------------- */
+/* Lives inside .hm-acard now, so the card supplies the padding/frame — the
+   table just needs its internal rhythm (no extra top border or box padding). */
 .home-by-role {
-  padding: 16px;
-  border-top: 1px solid var(--line);
+  padding: 0;
 }
 
 .hbr-totals {

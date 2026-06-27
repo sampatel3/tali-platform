@@ -83,7 +83,7 @@ export const HistoryTable = ({ rows, onSelect, onNavigate }) => (
           <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
             {row.status === 'overridden' ? <FeedbackPill kind="override" /> : null}
             {row.human_disposition === 'taught' ? <FeedbackPill /> : null}
-            {row.status === 'approved' ? <span style={{ fontSize: 12, color: 'var(--green)' }}>Approved</span> : null}
+            {row.status === 'approved' ? <span style={{ fontSize: 12, color: 'var(--mute)' }}>Approved</span> : null}
           </span>
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--mute)', letterSpacing: '.04em' }}>
             {formatRelativeAge(row.resolved_at || row.created_at)}
@@ -252,7 +252,12 @@ export const DecisionsByRole = ({ data }) => {
   const totalReachedFinal = safeNumber(tc.reached_final_interview);
   return (
     <div className="home-by-role">
-      <div className="kicker">DECISIONS &amp; OUTCOMES BY ROLE · ALL TIME</div>
+      <div className="hm-acard-head" style={{ marginBottom: 12 }}>
+        <div>
+          <div className="hm-acard-title">By role</div>
+          <div className="hm-acard-desc">Decision volume, advance→hire, and where the advanced cohort sits — per active role</div>
+        </div>
+      </div>
       <div className="hbr-totals">
         <div className="hbr-card">
           <div className="kicker" style={{ marginBottom: 6 }}>Decisions approved</div>
@@ -325,6 +330,38 @@ export const DecisionsByRole = ({ data }) => {
   );
 };
 
+// Single funnel conversion row — filled .conv-style bar. The bar fills to the
+// stage's share of applied; the right label reads the step-to-step conversion
+// ("18% of scored") so the agent's gating is legible.
+const FunnelRow = ({ stage, prev, isLast }) => {
+  const ofApplied = Math.max(0, Math.min(100, safeNumber(stage.percentage)));
+  const prevCount = prev ? safeNumber(prev.count) : 0;
+  const stepPct = !prev
+    ? '100%'
+    : isLast
+      // Terminal stage is a hand-off, not a funnel step — advancement isn't
+      // strictly downstream of completion, so a step-% here can read >100%.
+      // Label it as the hand-off instead (matches preview).
+      ? 'to recruiter'
+      : prevCount > 0
+        ? `${Math.round((safeNumber(stage.count) / prevCount) * 100)}% of ${String(prev.label).toLowerCase()}`
+        : '—';
+  return (
+    <div className="hm-convrow">
+      <span className="hm-conv-l">{stage.label}</span>
+      <span className="hm-conv-track">
+        <span
+          className="hm-conv-fill"
+          style={{ width: `${Math.max(ofApplied, stage.count > 0 ? 7 : 0)}%` }}
+        >
+          {safeNumber(stage.count).toLocaleString()}
+        </span>
+      </span>
+      <span className="hm-conv-pct">{stepPct}</span>
+    </div>
+  );
+};
+
 export const AnalyticsDrillIns = ({ summary, breakdown }) => {
   const histogramData = useMemo(() => {
     const buckets = summary?.score_buckets;
@@ -351,17 +388,60 @@ export const AnalyticsDrillIns = ({ summary, breakdown }) => {
       ]
   ), [summary]);
 
+  // Advance → hire quality, from the by-role breakdown totals (real fields):
+  // of the candidates the agent advanced, how many were hired. The preview's
+  // "Up from 31% last month" delta has NO backing series, so it's omitted.
+  const conv = breakdown?.totals?.advance_conversion || {};
+  const advancedTotal = safeNumber(conv.advanced_total);
+  const hiredTotal = safeNumber(conv.hired);
+  const advanceHirePct = advancedTotal > 0 ? Math.round((hiredTotal / advancedTotal) * 100) : null;
+
   return (
     <>
-    <div className="home-analytics-body">
-      <div>
-        <div className="kicker" style={{ marginBottom: 8 }}>SCORE DISTRIBUTION</div>
-        <div style={{ height: 240 }}>
+    {/* Funnel conversion — full-width card (preview .card2 over .conv). */}
+    <div className="hm-acard">
+      <div className="hm-acard-head">
+        <div>
+          <div className="hm-acard-title">Funnel conversion · all roles</div>
+          <div className="hm-acard-desc">Where candidates move, and where the agent gates them</div>
+        </div>
+      </div>
+      <div className="hm-conv">
+        {funnel.map((stage, i) => (
+          <FunnelRow
+            key={stage.label}
+            stage={stage}
+            prev={i > 0 ? funnel[i - 1] : null}
+            isLast={i === funnel.length - 1}
+          />
+        ))}
+      </div>
+      {summary?.narrator?.paragraph ? (
+        <div className="hm-narrator">{summary.narrator.paragraph}</div>
+      ) : null}
+    </div>
+
+    {/* Advance → hire bigstat + score distribution (preview .grid2). */}
+    <div className="hm-agrid2">
+      <div className="hm-acard">
+        <div className="hm-acard-head"><div className="hm-acard-title">Advance → hire quality</div></div>
+        <div className="hm-bigstat">
+          <div className="hm-bigstat-n">{advanceHirePct != null ? `${advanceHirePct}%` : '—'}</div>
+          <div className="hm-bigstat-sub">
+            {advancedTotal > 0
+              ? <><b style={{ color: 'var(--ink-2)', fontWeight: 600 }}>{hiredTotal.toLocaleString()}</b> of the {advancedTotal.toLocaleString()} candidate{advancedTotal === 1 ? '' : 's'} the agent advanced {hiredTotal === 1 ? 'was' : 'were'} hired.</>
+              : 'No advanced candidates in this window yet — advance→hire appears once the agent hands candidates to the recruiter.'}
+          </div>
+        </div>
+      </div>
+      <div className="hm-acard">
+        <div className="hm-acard-head"><div className="hm-acard-title">Score distribution</div></div>
+        <div style={{ height: 180 }}>
           <ResponsiveContainer>
-            <BarChart data={histogramData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
-              <XAxis dataKey="range" tick={{ fill: 'var(--mute)', fontSize: 12 }} />
-              <YAxis tick={{ fill: 'var(--mute)', fontSize: 12 }} />
+            <BarChart data={histogramData} margin={{ top: 4, right: 4, bottom: 0, left: -16 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" vertical={false} />
+              <XAxis dataKey="range" tick={{ fill: 'var(--mute)', fontSize: 11 }} tickLine={false} />
+              <YAxis tick={{ fill: 'var(--mute)', fontSize: 11 }} tickLine={false} axisLine={false} allowDecimals={false} />
               <Tooltip
                 contentStyle={{
                   background: 'var(--bg-2)',
@@ -370,66 +450,17 @@ export const AnalyticsDrillIns = ({ summary, breakdown }) => {
                   color: 'var(--ink)',
                 }}
               />
-              <Bar dataKey="count" fill="var(--purple)" />
+              <Bar dataKey="count" fill="var(--purple)" radius={[6, 6, 0, 0]} maxBarSize={48} />
             </BarChart>
           </ResponsiveContainer>
         </div>
       </div>
-      <div>
-        <div className="kicker" style={{ marginBottom: 8 }}>FUNNEL CONVERSION · CURRENT PIPELINE</div>
-        {/* Filled conversion bars (preview .conv): the bar fills to the stage's
-            share of applied, and the right label reads the step-to-step
-            conversion (e.g. "18% of scored") so the agent's gating is legible. */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-          {funnel.map((stage, i) => {
-            const ofApplied = Math.max(0, Math.min(100, safeNumber(stage.percentage)));
-            const prev = i > 0 ? funnel[i - 1] : null;
-            const prevCount = prev ? safeNumber(prev.count) : 0;
-            const isLast = i === funnel.length - 1;
-            const stepPct = i === 0
-              ? '100%'
-              : isLast
-                // Terminal stage is a hand-off, not a funnel step — advancement
-                // isn't strictly downstream of completion, so a step-% here can
-                // read >100%. Label it as the hand-off instead (matches preview).
-                ? 'to recruiter'
-                : prevCount > 0
-                  ? `${Math.round((safeNumber(stage.count) / prevCount) * 100)}% of ${String(prev.label).toLowerCase()}`
-                  : '—';
-            return (
-              <div key={stage.label} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <span style={{ width: 96, fontSize: 12.5, color: 'var(--ink-2)' }}>{stage.label}</span>
-                <span style={{ flex: 1, height: 26, borderRadius: 7, background: 'var(--bg-3)', overflow: 'hidden', position: 'relative' }}>
-                  <span
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      height: '100%',
-                      width: `${Math.max(ofApplied, stage.count > 0 ? 7 : 0)}%`,
-                      paddingLeft: 11,
-                      borderRadius: 7,
-                      color: '#fff',
-                      fontSize: 12,
-                      fontWeight: 600,
-                      background: 'linear-gradient(90deg, var(--purple), var(--purple-lav))',
-                    }}
-                  >
-                    {safeNumber(stage.count).toLocaleString()}
-                  </span>
-                </span>
-                <span style={{ width: 92, textAlign: 'right', fontSize: 12, color: 'var(--mute)' }}>{stepPct}</span>
-              </div>
-            );
-          })}
-        </div>
-        {summary?.narrator?.paragraph ? (
-          <div style={{ marginTop: 14, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, padding: 12, background: 'var(--bg)', border: '1px solid var(--line)', borderRadius: 12 }}>
-            {summary.narrator.paragraph}
-          </div>
-        ) : null}
-      </div>
     </div>
-    <DecisionsByRole data={breakdown} />
+
+    {/* By role — the full real decisions/outcomes table. */}
+    <div className="hm-acard">
+      <DecisionsByRole data={breakdown} />
+    </div>
     </>
   );
 };

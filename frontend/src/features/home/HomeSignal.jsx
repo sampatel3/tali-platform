@@ -104,10 +104,10 @@ const FeedbackList = ({ rows, currentUserId, onRevert }) => {
               {row.role_name ? <span>· {row.role_name}</span> : null}
               {row.cosign_required ? (
                 row.cosigned_at
-                  ? <span style={{ color: 'var(--green)' }}>· co-signed by {row.cosigned_by_name || 'admin'}</span>
+                  ? <span style={{ color: 'var(--purple-2)' }}>· co-signed by {row.cosigned_by_name || 'admin'}</span>
                   : <span style={{ color: 'var(--amber)' }}>· awaiting co-sign</span>
               ) : null}
-              {row.applied_at ? <span style={{ color: 'var(--green)' }}>· applied</span> : null}
+              {row.applied_at ? <span style={{ color: 'var(--purple-2)' }}>· applied</span> : null}
               {row.reverted_at ? <span style={{ color: 'var(--mute)' }}>· reverted</span> : null}
               {canRevert ? (
                 <button
@@ -129,9 +129,12 @@ const FeedbackList = ({ rows, currentUserId, onRevert }) => {
   );
 };
 
+// In-scheme purple/grey only (no traffic-light): a confirmed hire reads deep
+// purple (the strongest positive), interview lavender-purple, a confirmed
+// rejection grey. Matches the analytics-preview palette.
 const OUTCOME_LABEL = {
-  interviewed: { label: 'Interviewed', color: 'var(--purple)', Icon: CheckCircle2 },
-  hired: { label: 'Hired', color: 'var(--green)', Icon: Award },
+  interviewed: { label: 'Interviewed', color: 'var(--purple-lav)', Icon: CheckCircle2 },
+  hired: { label: 'Hired', color: 'var(--purple-2)', Icon: Award },
   rejected_confirmed: { label: 'Rejected · confirmed', color: 'var(--mute)', Icon: X },
 };
 
