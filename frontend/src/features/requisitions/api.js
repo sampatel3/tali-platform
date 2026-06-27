@@ -56,6 +56,13 @@ export const requisitionApi = {
   // `custom_fields` (e.g. `{ custom_fields: { relocation_support: 'yes' } }`).
   update: (id, fields) => api.patch(`${BASE}/${id}`, fields).then((r) => r.data),
 
+  // Ask the agent to AI-draft the role's responsibilities (the "What you'll
+  // do" bullets on the JD). Returns the FULL serialized brief — same shape as
+  // update()/get() — with `custom_fields.responsibilities` populated, so the
+  // caller merges it into state exactly like an update.
+  draftResponsibilities: (id) =>
+    api.post(`${BASE}/${id}/draft-responsibilities`).then((r) => r.data),
+
   // Publish the brief: snapshots the rendered JD markdown onto a public job
   // page (and provisions the live role behind it). `jdMarkdown` is the fully
   // rendered job description — the recruiter's per-requisition override if set,

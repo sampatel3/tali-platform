@@ -53,6 +53,13 @@ _CHAT_FEATURE = "requisition_intake_chat"
 _MAX_TOKENS = 4000
 _FOCUS_GAP_COUNT = 3
 
+# AI-draft "What you'll do" — how many concrete responsibility statements we ask
+# for, and the custom_fields key they land in (no RoleBrief column → custom).
+_RESPONSIBILITIES_KEY = "responsibilities"
+_RESPONSIBILITIES_MIN = 6
+_RESPONSIBILITIES_MAX = 10
+_DRAFT_MAX_TOKENS = 1200
+
 # Warm-start: the brief columns we prefill on a new requisition from the org's
 # recent specs (location/workplace/employment/department recur across roles).
 _WARM_START_FIELDS = (
@@ -182,6 +189,13 @@ class ChatCapture(BaseModel):
 _STANDARD_CAPTURE_KEYS = frozenset(
     set(ChatCapture.model_fields) - {"assistant_reply", "open_questions", "custom"}
 )
+
+
+class ResponsibilitiesDraft(BaseModel):
+    """The AI-drafted "What you'll do" list: 6–10 concrete responsibility
+    statements, each a short action phrase starting with a verb."""
+
+    responsibilities: list[str]
 
 
 # --------------------------------------------------------------------------- #
@@ -843,3 +857,100 @@ def _org_of(brief: RoleBrief):
         .filter(Organization.id == brief.organization_id)
         .first()
     )
+
+
+# --------------------------------------------------------------------------- #
+# AI-draft the JD's "What you'll do" responsibilities list.
+# --------------------------------------------------------------------------- #
+def _spec_context_for_draft(brief: RoleBrief) -> dict[str, Any]:
+    """The captured spec fields the responsibilities draft is grounded in
+    (title, summary, seniority, department, must_haves, preferred). Only
+    non-empty values are included so the prompt stays tight."""
+    fields = {
+        "title": brief.title,
+        "summary": brief.summary,
+        "seniority": brief.seniority,
+        "department": brief.department,
+        "must_haves": brief.must_haves,
+        "preferred": brief.preferred,
+    }
+    return {k: v for k, v in fields.items() if not _is_empty(v)}
+
+
+def _build_responsibilities_messages(brief: RoleBrief) -> list[dict[str, Any]]:
+    """The single user turn: the captured spec the draft must be grounded in."""
+    spec = _spec_context_for_draft(brief)
+    return [
+        {
+            "role": "user",
+            "content": (
+                "Draft the responsibilities for this role. Captured spec so far:\n"
+                + json.dumps(spec, separators=(",", ":"), default=str)
+            ),
+        }
+    ]
+
+
+def draft_responsibilities(
+    db: Session,
+    brief: RoleBrief,
+    *,
+    client: Any = None,
+    model: Optional[str] = None,
+    feature: str = _CHAT_FEATURE,
+):
+    """AI-draft the JD's "What you'll do" list and store it into
+    ``custom_fields.responsibilities``.
+
+    Makes ONE metered, forced-tool-use LLM call on the FAST chat model
+    (``CLAUDE_CHAT_MODEL`` = Haiku) that produces 6–10 concrete responsibility
+    statements (short action phrases, verb-first) for the role from the captured
+    spec (title / summary / seniority / department / must_haves / preferred).
+
+    Returns the ``StructuredResult``. On success the drafted list is merged into
+    the brief's ``custom_fields`` (other custom keys preserved) and flushed; the
+    caller owns the commit. On failure the brief is left untouched.
+    """
+    if client is None:
+        client = get_metered_client(organization_id=brief.organization_id)
+    # FAST chat model (Haiku) — same rationale as run_chat_turn: the resolved
+    # model is the recruitment agent's Sonnet on prod, which is overkill + slow
+    # for a one-shot draft.
+    resolved_model = (
+        model
+        or (settings.CLAUDE_CHAT_MODEL or "").strip()
+        or settings.resolved_claude_model
+    )
+    system = (
+        "You are Taali's requisition intake agent. Draft "
+        f"{_RESPONSIBILITIES_MIN}–{_RESPONSIBILITIES_MAX} concrete "
+        "responsibilities for this role as short action statements (start with a "
+        "verb, no preamble). Ground them in the captured spec; infer sensible "
+        "duties for the seniority and domain. Do not fabricate company specifics "
+        "(team names, products, tools) the spec doesn't mention."
+    )
+    result = generate_structured(
+        client,
+        model=resolved_model,
+        system=system,
+        messages=_build_responsibilities_messages(brief),
+        output_model=ResponsibilitiesDraft,
+        metering=MeteringContext(
+            feature=feature,
+            organization_id=brief.organization_id,
+            role_id=brief.role_id,
+            entity_id=f"role_brief:{brief.id}",
+        ),
+        max_tokens=_DRAFT_MAX_TOKENS,
+        temperature=0.4,
+        use_tool_use=True,
+    )
+    if result.ok and result.value is not None:
+        statements = [
+            str(s).strip() for s in result.value.responsibilities if str(s).strip()
+        ]
+        custom = dict(brief.custom_fields or {})
+        custom[_RESPONSIBILITIES_KEY] = statements
+        update_brief_fields(db, brief, custom_fields=custom)
+        db.flush()
+    return result

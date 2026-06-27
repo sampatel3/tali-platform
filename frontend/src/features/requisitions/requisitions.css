@@ -520,6 +520,24 @@ a.rq-btn-sm { text-decoration: none; }
   text-transform: uppercase;
 }
 
+/* "Draft responsibilities (AI)" — a purple-ghost ghost button on the left of
+   the job-spec bar (reusing the .rq-share-btn lean). It lives inside the
+   uppercase mono label container, so reset the inherited text casing/typeface
+   back to the normal small-button look. */
+.rq-draft-btn {
+  text-transform: none;
+  letter-spacing: normal;
+  font-family: var(--font-sans);
+  border-color: color-mix(in oklab, var(--purple) 32%, var(--line));
+  color: var(--purple-2);
+}
+.rq-draft-btn:hover:not(:disabled) {
+  border-color: var(--purple);
+  color: var(--purple-2);
+  background: var(--purple-soft);
+}
+.rq-draft-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
 /* Job-spec edit mode — a full-height monospace markdown editor that fills the
    scroll shell, with its own sticky action bar. */
 .rq-jobspec-edit {
