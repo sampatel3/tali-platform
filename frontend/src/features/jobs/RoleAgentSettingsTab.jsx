@@ -239,8 +239,8 @@ const RoleAgentSettingsTab = ({
               </div>
               <div className="mc-agent-settings-distribution-summary">
                 <span>
-                  <b style={{ color: '#dc2626' }}>{belowThresholdCount}</b> below threshold ·{' '}
-                  <b style={{ color: '#16a34a' }}>{above}</b> above
+                  <b style={{ color: 'var(--ink-2)' }}>{belowThresholdCount}</b> below threshold ·{' '}
+                  <b style={{ color: 'var(--purple-2)' }}>{above}</b> above
                 </span>
                 {belowThresholdCount > 0 ? (
                   <button type="button" className="btn btn-ghost btn-sm" onClick={onScrollToReview}>
