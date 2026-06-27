@@ -55,8 +55,11 @@ export const HomeMonitoring = ({
   reload,
   onNavigate,
   onSelect,
+  // standalone = the dedicated /analytics page: open by default, no collapse
+  // toggle (on /home this stays a collapsible band).
+  standalone = false,
 }) => {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(standalone);
   const [roleId, setRoleId] = useState('');
   const [windowKey, setWindowKey] = useState('30d');
   const [tab, setTab] = useState('activity');
@@ -126,15 +129,17 @@ export const HomeMonitoring = ({
             decision log. Scope it by role and time window.
           </p>
         </div>
-        <button
-          type="button"
-          className="home-section-toggle"
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-        >
-          <span>{open ? 'Hide' : 'Show'} analytics</span>
-          {open ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
-        </button>
+        {!standalone ? (
+          <button
+            type="button"
+            className="home-section-toggle"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+          >
+            <span>{open ? 'Hide' : 'Show'} analytics</span>
+            {open ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+          </button>
+        ) : null}
       </div>
 
       {open ? (
