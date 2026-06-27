@@ -19,13 +19,26 @@ const groupByRecency = (rows) => {
   return groups;
 };
 
+// search-preview shows a compact RELATIVE age in the conversation meta
+// ("2m", "40m", "1h", "1d", "3d"), not an absolute clock time. Mirror that
+// from the real updated_at/created_at timestamp — sub-minute reads "now".
 const formatTime = (iso) => {
   if (!iso) return '';
-  const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (secs < 60) return 'now';
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h`;
+  const days = Math.round(hrs / 24);
+  if (days < 7) return `${days}d`;
+  const wks = Math.round(days / 7);
+  if (wks < 5) return `${wks}w`;
+  const mos = Math.round(days / 30);
+  if (mos < 12) return `${mos}mo`;
+  return `${Math.round(days / 365)}y`;
 };
 
 const fmtCount = (n) => (n > 999 ? `${(n / 1000).toFixed(1)}k` : `${n}`);

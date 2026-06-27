@@ -239,6 +239,7 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
                 rel="noreferrer"
               >
                 {c.candidate_name || 'Candidate'}
+                <span className="ev-name-ext" aria-hidden="true"> ↗</span>
               </a>
               {typeof c.taali_score === 'number' ? (
                 <span className={`ev-pill ${scoreClass(c.taali_score)}`}>
@@ -297,9 +298,11 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
       ) : null}
 
       {showReportLink && data.report_url ? (
-        <a className="ev-report-link" href={data.report_url} target="_blank" rel="noreferrer">
-          Open shareable report ↗
-        </a>
+        <div className="ev-foot">
+          <a className="ev-report-link" href={data.report_url} target="_blank" rel="noreferrer">
+            Open shareable report ↗
+          </a>
+        </div>
       ) : null}
     </div>
   );

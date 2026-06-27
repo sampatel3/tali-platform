@@ -9,6 +9,8 @@ import {
   CheckCircle2,
   CircleHelp,
   DollarSign,
+  FilterX,
+  Send,
   X,
 } from 'lucide-react';
 
@@ -80,6 +82,48 @@ export const TypeBadge = ({ type, size = 'md' }) => {
       }}
     >
       <Icon size={small ? 11 : 12} strokeWidth={2.2} aria-hidden="true" />
+      {cfg.label}
+    </span>
+  );
+};
+
+// Compact verdict pill for the pending-queue rows (home-preview `.vpill`): an
+// icon + a short action word, toned purple for positive actions (Send /
+// Advance), grey for terminal (Reject / Pre-screen), amber for an escalation
+// the agent couldn't resolve. Distinct from the mono TypeBadge — the queue list
+// reads as "what the agent wants to do", at a glance.
+const VERDICT = {
+  send_assessment: { label: 'Send', Icon: Send, tone: 'act' },
+  resend_assessment_invite: { label: 'Resend', Icon: Send, tone: 'act' },
+  advance_to_interview: { label: 'Advance', Icon: ArrowUpRight, tone: 'act' },
+  advance: { label: 'Advance', Icon: ArrowUpRight, tone: 'act' },
+  reject: { label: 'Reject', Icon: X, tone: 'rej' },
+  skip_assessment_reject: { label: 'Pre-screen', Icon: FilterX, tone: 'rej' },
+  escalate_low_confidence: { label: 'Escalate', Icon: CircleHelp, tone: 'q' },
+};
+
+export const VerdictPill = ({ type }) => {
+  const cfg = VERDICT[type] || { label: String(type || '').replace(/_/g, ' '), Icon: CircleHelp, tone: 'act' };
+  const Icon = cfg.Icon;
+  const tones = {
+    act: { background: 'var(--purple-soft)', color: 'var(--purple-2)' },
+    rej: { background: 'var(--bg-3)', color: 'var(--mute)' },
+    q: { background: 'var(--amber-soft)', color: 'var(--amber-ink)' },
+  };
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        fontSize: 10,
+        fontWeight: 500,
+        borderRadius: 999,
+        padding: '2px 8px',
+        ...tones[cfg.tone],
+      }}
+    >
+      <Icon size={11} strokeWidth={2.2} aria-hidden="true" />
       {cfg.label}
     </span>
   );

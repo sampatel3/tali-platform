@@ -11,6 +11,110 @@
   margin-bottom: 18px;
 }
 
+/* Flat strip (home hub, matching home-preview): a plain bordered card — each
+   stage is label + value + inline decision chips, divided by vertical rules,
+   with the terminal (Rejected) cell set apart on the page background. No cap
+   line, no separate "awaiting your decision" grid. */
+.funnel-board.fb-flat {
+  background: var(--bg-2);
+  border-color: var(--line);
+  padding: 0;
+  overflow: hidden;
+}
+
+.fb-flat .fb-stages {
+  gap: 0;
+}
+
+.fb-flat .fb-st {
+  text-align: left;
+  padding: 11px 13px;
+  border-right: 1px solid var(--line);
+}
+
+.fb-flat .fb-st:last-child {
+  border-right: none;
+}
+
+/* Reuse the funnel's pipeline | outcomes divider, but as a plain line in the
+   flat strip (the purple-tinted variant reads as part of the purple slab). */
+.fb-flat .fb-st.is-out-start {
+  border-left: none;
+}
+
+/* Terminal outcome (Rejected) — set apart on the page background. */
+.fb-flat .fb-st.is-out:last-child {
+  background: var(--bg);
+}
+
+.fb-flat .fb-l {
+  margin-top: 0;
+  margin-bottom: 2px;
+}
+
+.fb-flat .fb-v {
+  font-size: 1.1875rem;
+}
+
+/* Inline per-stage decision chips. Reuses the .fb-dchip vocabulary (purple for
+   positive, grey for terminal/negative). */
+.fb-stchips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+  min-height: 16px;
+}
+
+/* Inline chips in the flat strip are smaller than the full board's (matching
+   the home-preview `.fchip` at 9.5px) and use a pill radius + filled tint so
+   they read as the agent's pending-decision counts under each stage. */
+.fb-stchips .fb-dchip {
+  font-family: var(--font-sans);
+  font-size: 0.59375rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+/* Positive (send / advance) = filled purple-soft; terminal/negative = filled
+   grey. Overrides the full board's white-fill + coloured-border treatment so
+   the flat strip matches the preview's solid `.fchip.act` / `.fchip.rej`. */
+.fb-stchips .fb-dchip.is-send,
+.fb-stchips .fb-dchip.is-advance {
+  color: var(--purple-2);
+  background: var(--purple-soft);
+  border-color: transparent;
+}
+
+.fb-stchips .fb-dchip.is-reject,
+.fb-stchips .fb-dchip.is-prescreen,
+.fb-stchips .fb-dchip.is-pending {
+  color: var(--mute);
+  background: var(--bg-3);
+  border-color: transparent;
+}
+
+.fb-stchips .fb-dnone {
+  font-size: 0.59375rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* Phone: let the flat strip scroll inside its own card like the full board. */
+@media (max-width: 720px) {
+  .funnel-board.fb-flat {
+    overflow-x: auto;
+  }
+  .fb-flat .fb-stages {
+    min-width: 560px;
+  }
+  .fb-flat .fb-v {
+    font-size: 1rem;
+  }
+}
+
 .fb-cap {
   display: flex;
   align-items: center;

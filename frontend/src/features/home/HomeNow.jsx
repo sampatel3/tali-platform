@@ -10,6 +10,7 @@ import { Select } from '../../shared/ui/TaaliPrimitives';
 import {
   ArrowRight,
   Check,
+  ClipboardList,
   Eye,
   FileText,
   Inbox,
@@ -33,7 +34,7 @@ import {
   initialsFrom,
   RolePill,
   ScoreChip,
-  TypeBadge,
+  VerdictPill,
 } from './atoms';
 import { TeachModal } from './TeachModal';
 import { OverrideModal, advanceableWorkableStages } from './OverrideModal';
@@ -103,6 +104,9 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
           <option key={r.role_id} value={r.role_id} title={r.name}>{r.name || r.short_name}</option>
         ))}
       </Select>
+      {/* "Filter" label introduces the decision-type segmented set, matching
+          the home-preview's second `.tlabel`. */}
+      <span className="kicker mute" style={{ margin: '0 2px 0 6px' }}>FILTER</span>
       <div className="rq-tabset" role="group" aria-label="Filter by decision type">
         {TYPE_OPTIONS.map((o) => (
           <button
@@ -115,18 +119,21 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
             {o.label}
           </button>
         ))}
-        {/* Not a decision-type — switches the queue to the invited-candidate
-            tracker (sent-but-not-completed assessments). Sits next to the
-            decision-type pills so it reads as part of the same control. */}
-        <button
-          type="button"
-          className={filters.view === 'invited' ? 'on' : ''}
-          onClick={() => setFilters((f) => ({ ...f, view: f.view === 'invited' ? null : 'invited' }))}
-          title="Assessments in flight, plus completed ones awaiting your review before a decision"
-        >
-          Assessment stage
-        </button>
       </div>
+      {/* Not a decision-type — switches the queue to the invited-candidate
+          tracker (sent-but-not-completed assessments). A standalone toggle
+          chip (clipboard) next to the decision-type set, matching the
+          home-preview. */}
+      <button
+        type="button"
+        className={`rq-chiptoggle${filters.view === 'invited' ? ' on' : ''}`}
+        aria-pressed={filters.view === 'invited'}
+        onClick={() => setFilters((f) => ({ ...f, view: f.view === 'invited' ? null : 'invited' }))}
+        title="Assessments in flight, plus completed ones awaiting your review before a decision"
+      >
+        <ClipboardList size={13} strokeWidth={2} aria-hidden="true" />
+        Assessment stage
+      </button>
       {/* Everything in this queue is pending, so there's no "Pending" filter to
           offer — just a standing warning chip for the ones whose score is out
           of date, toggled to review only those. Hidden when there are none and
@@ -202,7 +209,9 @@ const PipelineStandingStrip = ({ rolesBreakdown, filters }) => {
   // Nothing in the pipeline at all → no point showing an all-zero board.
   if (PIPELINE_FUNNEL_STAGES.every((s) => (Number(counts[s.key]) || 0) === 0)) return null;
 
-  return <FunnelBoard stageCounts={counts} decisionsByType={decisionsByType} scopeLabel={scopeLabel} />;
+  // Flat strip (home-preview): stage value + label + inline decision chips per
+  // cell, no cap line and no separate "awaiting your decision" grid.
+  return <FunnelBoard variant="flat" stageCounts={counts} decisionsByType={decisionsByType} scopeLabel={scopeLabel} />;
 };
 
 const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, staleOnly = false }) => {
@@ -238,11 +247,15 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
           // interactive parent (invalid HTML, breaks click + keyboard
           // semantics in some browsers / AT). Same pattern HomeEverything
           // uses for its history rows.
+          // Row layout mirrors the home-preview `.qitem`: an avatar, then the
+          // candidate name + score on one line, the role · age beneath, and the
+          // agent's verdict pill. The stale "re-eval" chip + score-provenance
+          // pill are kept (real, load-bearing signal the preview omits).
           <div
             key={p.id}
             role="button"
             tabIndex={0}
-            className={`rq-split-row ${selectedId === p.id ? 'on' : ''} ${p.status === 'processing' ? 'is-processing' : ''}`.trim()}
+            className={`rq-split-row rq-qrow ${selectedId === p.id ? 'on' : ''} ${p.status === 'processing' ? 'is-processing' : ''}`.trim()}
             onClick={() => onSelect(p.id)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
@@ -251,58 +264,38 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
               }
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
-              <TypeBadge type={p.decision_type} size="sm" />
-              <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
-                <ScoreChip score={p.taali_score} size="sm" />
-                <ScoreProvenance provenance={p?.score_summary?.score_provenance} density="pill" />
-              </span>
-              {p.is_stale ? (
-                <span
-                  title="Score out of date — re-evaluate"
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 3, fontFamily: 'var(--font-mono)',
-                    fontSize: '0.5625rem', letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--purple)',
-                    background: 'var(--purple-soft)', borderRadius: 4, padding: '1px 5px', whiteSpace: 'nowrap',
-                  }}
+            <Avatar initials={initialsFrom(p.candidate_name || `#${p.application_id}`)} size={30} />
+            <div className="rq-qmeta">
+              <div className="rq-qtop">
+                <a
+                  href={pathForPage('candidate-report', { candidateApplicationId: p.application_id, fromHome: true })}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rq-qname rq-inline-link"
+                  style={{ color: 'inherit', textDecoration: 'none' }}
+                  onClick={(e) => e.stopPropagation()}
+                  title="Open candidate report in a new tab"
                 >
-                  <RefreshCw size={9} strokeWidth={2.4} aria-hidden="true" /> re-eval
-                </span>
-              ) : null}
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.625rem', color: 'var(--mute)', letterSpacing: '.06em', marginLeft: 'auto' }}>
-                {formatRelativeAge(p.created_at)}
-              </span>
-            </div>
-            <div style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--ink)', lineHeight: 1.35 }}>
-              <a
-                href={pathForPage('candidate-report', { candidateApplicationId: p.application_id, fromHome: true })}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="rq-inline-link"
-                style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', textDecoration: 'none' }}
-                onClick={(e) => e.stopPropagation()}
-                title="Open candidate report in a new tab"
-              >
-                {p.candidate_name || `Application #${p.application_id}`}
-              </a>
-            </div>
-            {(p.role_name || p.role_id != null) ? (
-              <div style={{ marginTop: 5, minWidth: 0 }}>
-                <RolePill roleName={p.role_name} roleId={p.role_id} />
+                  {p.candidate_name || `Application #${p.application_id}`}
+                </a>
+                <ScoreChip score={p.taali_score} size="sm" />
               </div>
-            ) : null}
-            <div style={{ fontSize: '0.6875rem', color: 'var(--mute)', marginTop: 5, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontFamily: 'var(--font-mono)', letterSpacing: '.04em' }}>#{p.id}</span>
-              {p.confidence != null ? (
-                <>
-                  <span style={{ flex: 1, height: 3, borderRadius: 2, background: 'var(--bg-3)', overflow: 'hidden', maxWidth: 50 }}>
-                    <span style={{ display: 'block', height: '100%', width: `${(p.confidence || 0) * 100}%`, background: p.confidence >= 0.9 ? 'var(--green)' : 'var(--purple)' }} />
+              <div className="rq-qsub">
+                {(p.role_name || p.role_id != null) ? <RolePill roleName={p.role_name} roleId={p.role_id} /> : null}
+                <span className="rq-qage">{formatRelativeAge(p.created_at)}</span>
+                <ScoreProvenance provenance={p?.score_summary?.score_provenance} density="pill" />
+              </div>
+              <div className="rq-qverdict">
+                <VerdictPill type={p.decision_type} />
+                {p.is_stale ? (
+                  <span
+                    className="rq-qstale"
+                    title="Score out of date — re-evaluate"
+                  >
+                    <RefreshCw size={9} strokeWidth={2.4} aria-hidden="true" /> re-eval
                   </span>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--ink-2)' }}>
-                    {Math.round((p.confidence || 0) * 100)}%
-                  </span>
-                </>
-              ) : null}
+                ) : null}
+              </div>
             </div>
           </div>
         ))

@@ -175,14 +175,12 @@ const RoleAgentSettingsTab = ({
                 Below this CV score, candidates are flagged for bulk reject. Nothing auto-rejects without your approval unless autonomy is enabled below.
               </p>
             </div>
-            <div className="mc-agent-settings-threshold-display">
-              {thresholdMode === 'auto'
-                ? <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--purple, #7c5cff)' }}>Dynamic</span>
-                : <>{thresholdDisplay}<span className="mc-agent-settings-threshold-pct">%</span></>}
-            </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--ink)' }}>
+          {/* Mode select + the live cut-off read inline ("Currently 55%"),
+              matching pipeline-preview's .selrow. The earlier giant 60px
+              number floated to the right of the header was off-spec. */}
+          <div className="mc-agent-settings-threshold-row">
+            <label className="mc-agent-settings-threshold-mode">
               <span className="kicker mute">MODE</span>
               <Select
                 inline
@@ -195,8 +193,13 @@ const RoleAgentSettingsTab = ({
                 <option value="auto">Agent-managed (dynamic)</option>
               </Select>
             </label>
+            <span className="mc-agent-settings-threshold-current">
+              {thresholdMode === 'auto'
+                ? <>Currently <b>Dynamic</b></>
+                : <>Currently <b>{thresholdDisplay}%</b></>}
+            </span>
             {thresholdMode === 'auto' && suggestedThreshold?.rationale ? (
-              <span style={{ fontSize: 12, color: 'var(--mute)', flex: 1, minWidth: 0 }}>
+              <span className="mc-agent-settings-threshold-rationale">
                 {suggestedThreshold.rationale}
               </span>
             ) : null}
@@ -239,8 +242,8 @@ const RoleAgentSettingsTab = ({
               </div>
               <div className="mc-agent-settings-distribution-summary">
                 <span>
-                  <b style={{ color: '#dc2626' }}>{belowThresholdCount}</b> below threshold ·{' '}
-                  <b style={{ color: '#16a34a' }}>{above}</b> above
+                  <b style={{ color: 'var(--ink-2)' }}>{belowThresholdCount}</b> below threshold ·{' '}
+                  <b style={{ color: 'var(--purple-2)' }}>{above}</b> above
                 </span>
                 {belowThresholdCount > 0 ? (
                   <button type="button" className="btn btn-ghost btn-sm" onClick={onScrollToReview}>

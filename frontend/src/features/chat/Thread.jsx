@@ -54,6 +54,8 @@ const Message = ({ msg, isStreaming }) => {
   const isEmpty = !msg.parts.length;
   return (
     <ChatMessage role="assistant">
+      {/* search-preview tags each assistant turn with a mono "TAALI" kicker. */}
+      <div className="cp-who">Taali</div>
       {isEmpty && isStreaming ? <ThinkingDots label="thinking…" /> : null}
       {msg.parts.map((part, idx) => {
         if (part.type === 'text') {

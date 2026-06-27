@@ -100,6 +100,11 @@ const resolveAssessmentStatus = (application) => (
 //                   external client shares.
 const REPORT_TABS = [
   { id: 'overview', label: 'Overview' },
+  // Requirements & fit — the per-requirement match breakdown (the CvMatchReview
+  // rows) lives in its own tab, matching report-preview. Client-visible: the
+  // requirement coverage is part of the candidate's standing story, not an
+  // internal-only surface.
+  { id: 'requirements', label: 'Requirements' },
   // PR3 (decision-surface unification): the standalone Evaluate tab is retired.
   // The candidate's DECISION lives in the DecisionRail (the dossier's left
   // column), and the Evaluate tab's assessment EVIDENCE (criteria ratings, manual
@@ -1104,7 +1109,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   scan candidate basics in 3 seconds without scrolling the full CV. */}
               {reportModel?.candidateSnapshot ? (
                 <div className="mb-3">
-                  <CandidateSnapshotCard snapshot={reportModel.candidateSnapshot} variant="page" />
+                  <CandidateSnapshotCard snapshot={reportModel.candidateSnapshot} variant="report" />
                 </div>
               ) : null}
 
@@ -1169,14 +1174,18 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 );
               })() : null}
 
-              {/* (2) CV match review — full requirement breakdown, gaps first */}
-              <CvMatchReview
-                application={application}
-                cvMatchDetails={cvMatchDetails}
-                matchedRequirements={matchedRequirements}
-                missingRequirements={missingRequirements}
-                onJumpToPrep={() => activateTab('prep')}
-              />
+              {/* (2) CV match review moved to its own Requirements tab (matches
+                  report-preview's 6-tab layout). The Overview keeps the verdict,
+                  flags and scorecard; the per-requirement breakdown lives one
+                  click away. A compact "jump to Requirements" cue keeps it
+                  discoverable from the verdict. */}
+              <button
+                type="button"
+                className="mc-overview-reqjump"
+                onClick={() => activateTab('requirements')}
+              >
+                See the full requirement breakdown · {matchedRequirements.length} of {matchedRequirements.length + missingRequirements.length} met →
+              </button>
 
               {/* (3) Scorecard — the ONE canonical scorecard: the 5 axes
                   (Anthropic's 4 Ds + Deliverable). Rubric-first with a
@@ -1185,21 +1194,30 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   The per-rubric dimensions + ~30 heuristic metrics hang under
                   this as evidence on the Assessment tab — not a rival scorecard. */}
               {scorecard ? (
-                <div className="mc-overview-dimensions">
-                  <div className="mc-kicker">SCORECARD · THE 5 Ds</div>
+                <div className="mc-overview-dimensions mc-overview-dimensions--stacked">
+                  <div className="mc-overview-dim-head">
+                    <span className="mc-kicker">SCORECARD · THE 5 Ds</span>
+                    <span className="mc-overview-dim-note">from the assessment</span>
+                  </div>
                   <div className="mc-overview-dimensions-grid">
-                    {scorecard.map((axis) => (
-                      <div key={axis.key} className="mc-overview-dim-row" title={axis.blurb}>
-                        <span className="mc-overview-dim-label">{axis.label}</span>
-                        <div className="mc-overview-dim-bar" aria-hidden="true">
-                          <i style={{ width: `${axis.hasSignal ? Math.max(0, Math.min(100, Math.round(axis.score))) : 0}%` }} />
+                    {scorecard.map((axis) => {
+                      const pct = axis.hasSignal ? Math.max(0, Math.min(100, Math.round(axis.score))) : 0;
+                      // Lavender (low) variant when the axis is a weak signal —
+                      // mirrors report-preview's `.fill.low` (< 45 reads as weak).
+                      const isLow = axis.hasSignal && pct < 45;
+                      return (
+                        <div key={axis.key} className="mc-overview-dim-row" title={axis.blurb}>
+                          <span className="mc-overview-dim-label">{axis.label}</span>
+                          <div className="mc-overview-dim-bar" aria-hidden="true">
+                            <i className={isLow ? 'low' : ''} style={{ width: `${pct}%` }} />
+                          </div>
+                          <span className="mc-overview-dim-score">
+                            {axis.hasSignal ? Math.round(axis.score) : '—'}
+                            {axis.hasSignal ? <span className="mc-overview-dim-suffix">/100</span> : null}
+                          </span>
                         </div>
-                        <span className="mc-overview-dim-score">
-                          {axis.hasSignal ? Math.round(axis.score) : '—'}
-                          {axis.hasSignal ? <span className="mc-overview-dim-suffix">/100</span> : null}
-                        </span>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               ) : (
@@ -1278,6 +1296,20 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             </>
           );
         })()}
+        </div>
+
+        <div className={`pane ${activeTab === 'requirements' ? 'active' : ''}`} data-p="requirements">
+          {/* Requirements & fit — per-requirement match confidence (0–100) with
+              expandable evidence rows. Moved out of Overview to match the
+              report-preview 6-tab layout. */}
+          <CvMatchReview
+            application={application}
+            cvMatchDetails={cvMatchDetails}
+            matchedRequirements={matchedRequirements}
+            missingRequirements={missingRequirements}
+            fitScore={reportModel?.summaryModel?.roleFitScore}
+            onJumpToPrep={() => activateTab('prep')}
+          />
         </div>
 
         <div className={`pane ${activeTab === 'assessment' ? 'active' : ''}`} data-p="assessment">

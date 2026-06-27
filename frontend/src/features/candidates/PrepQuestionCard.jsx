@@ -13,16 +13,19 @@ const toBulletList = (value) => {
   return text ? [text] : [];
 };
 
-// PrepQuestionCard — canvas cand-prep card layout:
-//   QUESTION NN · {source}    (mono purple kicker)
-//   {question}                 (display, weight 500)
-//   LISTEN FOR (green mono)    |  CONCERNING IF (red mono)
-//   {listenFor bullets}        |  {concern bullets}
+// PrepQuestionCard — report-preview's `.prep` card layout:
+//   QUESTION NN · {source}              (mono purple kicker)
+//   {question}                           (display, weight 500)
+//   Listen for     | {listen cues}       (single-column `.cue` rows: a
+//   Concerning if  | {concern cues}        mono mute label column + value;
+//   Anchor in      | {evidence}            in-scheme, NOT green/red)
 const PrepQuestionCard = ({ item, number, listenLabel, concernLabel, fallbackConcern }) => {
   const listenItems = toBulletList(item?.listenFor);
   const concernItems = toBulletList(item?.redFlags || item?.followUp);
   const evidenceText = asCleanText(item?.evidence);
   const contextText = asCleanText(item?.context);
+  const listenText = (listenItems.length ? listenItems : ['Specific examples tied to the candidate evidence.']).join(' ');
+  const concernText = (concernItems.length ? concernItems : [fallbackConcern].filter(Boolean)).join(' ');
   return (
     <div className="mc-prep-card">
       <div className="mc-prep-card-kicker">
@@ -32,28 +35,20 @@ const PrepQuestionCard = ({ item, number, listenLabel, concernLabel, fallbackCon
       {contextText ? (
         <div className="mc-prep-card-context">{contextText}</div>
       ) : null}
-      <div className="mc-prep-card-grid">
-        <div>
-          <div className="mc-prep-card-label is-listen">{listenLabel}</div>
-          <ul className="mc-prep-card-list">
-            {(listenItems.length ? listenItems : ['Specific examples tied to the candidate evidence.']).map((line, idx) => (
-              <li key={`listen-${idx}`}>{line}</li>
-            ))}
-          </ul>
-        </div>
-        <div>
-          <div className="mc-prep-card-label is-concern">{concernLabel}</div>
-          <ul className="mc-prep-card-list">
-            {(concernItems.length ? concernItems : [fallbackConcern]).map((line, idx) => (
-              <li key={`concern-${idx}`}>{line}</li>
-            ))}
-          </ul>
-        </div>
+      <div className="mc-prep-cue">
+        <span className="mc-prep-cue-lab">{listenLabel}</span>
+        <span>{listenText}</span>
       </div>
+      {concernText ? (
+        <div className="mc-prep-cue">
+          <span className="mc-prep-cue-lab">{concernLabel}</span>
+          <span>{concernText}</span>
+        </div>
+      ) : null}
       {evidenceText ? (
-        <div className="mc-prep-card-evidence">
-          <div className="mc-prep-card-evidence-label">ANCHOR IN</div>
-          <div>{evidenceText}</div>
+        <div className="mc-prep-cue">
+          <span className="mc-prep-cue-lab">Anchor in</span>
+          <span>{evidenceText}</span>
         </div>
       ) : null}
     </div>

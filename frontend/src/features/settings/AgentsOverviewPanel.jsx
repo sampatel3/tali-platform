@@ -37,11 +37,13 @@ const TYPE_LABEL = {
 };
 
 // Chart palette — literal tokens (SVG fill can't read CSS custom properties).
+// In-scheme only: purple / lavender / amber / grey. No traffic-light
+// green/red — "decisions" reads as lavender (a positive second series),
+// "errors" as amber (the warn tone), matching the no-traffic-light rule.
 const C = {
   purple: '#5e3aa8',
   purpleLav: '#7c5cff',
-  green: '#15a36a',
-  red: '#e64a4a',
+  purpleSoft: '#c4a5fd',
   amber: '#d88a1c',
   mute: '#8b8595',
   grid: '#f1edf5',
@@ -233,7 +235,7 @@ export default function AgentsOverviewPanel() {
         <Kpi label="Decisions today" value={k.decisions_today ?? 0} tone="purple" />
         <Kpi label="Cycles (24h)" value={k.cycles_24h ?? 0} />
         <Kpi label="Errors (24h)" value={k.errors_24h ?? 0} tone={k.errors_24h ? 'amber' : undefined} />
-        <Kpi label="Workspace budget" value={fmtMoney(k.budget_spent_cents)} sub={`/ ${fmtMoney(k.budget_cap_cents)}`} tone="green" />
+        <Kpi label="Workspace budget" value={fmtMoney(k.budget_spent_cents)} sub={`/ ${fmtMoney(k.budget_cap_cents)}`} tone="purple" />
       </div>
 
       <div className="agz-section-h">Agents on this workspace</div>
@@ -254,7 +256,7 @@ export default function AgentsOverviewPanel() {
               <YAxis tick={{ fontSize: 10, fill: C.mute }} tickLine={false} axisLine={false} allowDecimals={false} width={28} />
               <Tooltip contentStyle={tooltipStyle} />
               <Line type="monotone" dataKey="cycles" stroke={C.purple} strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="decisions" stroke={C.green} strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="decisions" stroke={C.purpleLav} strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -266,7 +268,7 @@ export default function AgentsOverviewPanel() {
               <XAxis dataKey="hour" tick={{ fontSize: 10, fill: C.mute }} interval={5} tickLine={false} axisLine={{ stroke: C.grid }} />
               <YAxis tick={{ fontSize: 10, fill: C.mute }} tickLine={false} axisLine={false} allowDecimals={false} width={28} />
               <Tooltip contentStyle={tooltipStyle} />
-              <Bar dataKey="errors" fill={C.red} radius={[3, 3, 0, 0]} />
+              <Bar dataKey="errors" fill={C.amber} radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -280,7 +282,7 @@ export default function AgentsOverviewPanel() {
               <Tooltip contentStyle={tooltipStyle} cursor={{ fill: 'rgba(94,58,168,0.06)' }} />
               <Bar dataKey="count" radius={[0, 3, 3, 0]}>
                 {typeData.map((entry, i) => (
-                  <Cell key={entry.name} fill={[C.purple, C.purpleLav, C.amber, C.red, C.green][i % 5]} />
+                  <Cell key={entry.name} fill={[C.purple, C.purpleLav, C.purpleSoft, C.amber, C.mute][i % 5]} />
                 ))}
               </Bar>
             </BarChart>

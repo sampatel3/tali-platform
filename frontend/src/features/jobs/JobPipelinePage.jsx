@@ -58,7 +58,7 @@ const PIPELINE_STAGE_ORDER = [
   { key: 'scored', label: 'Scored', countLabel: 'to send' },
   { key: 'invited', label: 'Invited', countLabel: 'awaiting' },
   { key: 'completed', label: 'Completed', countLabel: 'decision' },
-  { key: 'advanced', label: 'Advanced', countLabel: 'with recruiter' },
+  { key: 'advanced', label: 'Advanced', countLabel: 'recruiter' },
 ];
 
 const normalizeThreshold = (value) => {
@@ -1277,7 +1277,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       />
       <div className="page">
         <div className="mc-cockpit-main">
-        <FunnelBoard stageCounts={role?.stage_counts} decisionsByType={role?.pending_decisions_by_type} scopeLabel="this role" />
+        {/* Flat single-strip funnel (matches pipeline-preview): each stage cell
+            stacks value + label + the agent's pending-decision chips inline, with
+            the terminal Rejected cell set apart. The home hub uses the same
+            variant — one funnel look across surfaces. */}
+        <FunnelBoard variant="flat" stageCounts={role?.stage_counts} decisionsByType={role?.pending_decisions_by_type} scopeLabel="this role" />
 
         <RoleViewTabs activeView={activeView} />
 
@@ -1341,17 +1345,21 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                               </div>
                             </div>
                           </div>
+                          {/* Inline meta, left-aligned to match pipeline-preview's
+                              .kline: CV n% · score · LIVE · ago (LIVE before the
+                              timestamp, no right-pushed spacer). */}
                           <div className="cc-line">
                             {cvPct != null ? <span>CV {cvPct}%</span> : <span className="mute">No CV score</span>}
                             {compositeScore != null ? <>
                               <span className="dot-sep">·</span>
                               <span className="score-pip">{compositeScore}</span>
                             </> : null}
-                            <span className="cc-line-grow" />
-                            <span>
-                              {formatRelativeShort(application?.updated_at || application?.created_at)}
-                              {isLive ? <span className="live-pip"> · LIVE</span> : null}
-                            </span>
+                            {isLive ? <>
+                              <span className="dot-sep">·</span>
+                              <span className="live-pip">LIVE</span>
+                            </> : null}
+                            <span className="dot-sep">·</span>
+                            <span>{formatRelativeShort(application?.updated_at || application?.created_at)}</span>
                           </div>
                           <ScoreProvenance
                             provenance={application?.score_summary?.score_provenance}
@@ -1402,7 +1410,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                     })}
                     {hiddenCount > 0 ? (
                       <button type="button" className="kanban-card more" onClick={() => setActiveView('table')}>
-                        + {hiddenCount} more
+                        + {hiddenCount} more →
                       </button>
                     ) : null}
                   </div>
@@ -1600,7 +1608,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                     onClick={() => setTableStageFilter(seg.key)}
                   >
                     {seg.label}
-                    {seg.count > 0 ? <span className="ct"> ({seg.count})</span> : null}
+                    {seg.count > 0 ? <span className="ct">{seg.count}</span> : null}
                   </button>
                 ))}
               </div>

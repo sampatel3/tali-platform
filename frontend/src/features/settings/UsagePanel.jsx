@@ -8,10 +8,14 @@ import { Spinner } from '../../shared/ui/TaaliPrimitives';
 // label implied only the candidate IDE — the bucket actually rolls in
 // the recruiter chat, the autonomous agent, and interview-prep
 // generation, none of which run inside the candidate's IDE.
+// Colors are the taali tokens the settings-preview usage chart uses for
+// its stacked segments — s1 --purple, s2 --purple-lav, s3 --amber. SVG
+// fills can't read CSS custom properties, so the hex values are inlined
+// to match `[data-brand="taali"]` exactly.
 const SURFACES = [
-  { id: 'workspace', label: 'Workspace AI', color: '#7e6dff' },
-  { id: 'scoring', label: 'Scoring & matching', color: '#bcb1f0' },
-  { id: 'prescreen', label: 'Pre-screening', color: '#d8c8b0' },
+  { id: 'workspace', label: 'Workspace AI', color: '#5e3aa8' },
+  { id: 'scoring', label: 'Scoring & matching', color: '#c4a5fd' },
+  { id: 'prescreen', label: 'Pre-screening', color: '#d88a1c' },
 ];
 
 // Backend feature codes → one of the three surfaces. Anything that

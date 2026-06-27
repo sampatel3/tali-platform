@@ -20,6 +20,56 @@ const variantConfig = {
   },
 };
 
+// Compact "snapshot.compact" layout from report-preview: a single bordered
+// card, two columns — col 1 stacks Experience + a Tech-stack chip row, col 2 is
+// a tight vertical Recent-roles list (`role · company` + range). Only used on
+// the standing report's Overview; the other variants keep their existing grid.
+function SnapshotReport({ snapshot }) {
+  const { yearsLabel, topSkills = [], timeline = [] } = snapshot;
+  return (
+    <div className="snapshot-compact">
+      <div className="snapshot-compact-col">
+        {yearsLabel ? (
+          <div>
+            <div className="snapshot-compact-sk">Experience</div>
+            <div className="snapshot-compact-big">{yearsLabel}</div>
+          </div>
+        ) : null}
+        {topSkills.length ? (
+          <div className={yearsLabel ? 'mt-4' : ''}>
+            <div className="snapshot-compact-sk">Tech stack</div>
+            <div className="snapshot-compact-chips">
+              {topSkills.map((skill) => (
+                <span key={skill} className="snapshot-compact-chip">{skill}</span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+      {timeline.length ? (
+        <div className="snapshot-compact-col">
+          <div className="snapshot-compact-sk">Recent roles</div>
+          <div className="snapshot-compact-roles">
+            {timeline.map((entry, idx) => (
+              <div key={`${entry.company || 'role'}-${idx}`} className="snapshot-compact-role">
+                <span className="snapshot-compact-role-t" title={[entry.role, entry.company].filter(Boolean).join(' · ')}>
+                  {entry.role ? <b>{entry.role}</b> : null}
+                  {entry.role && entry.company ? ' · ' : ''}
+                  {entry.company || (entry.role ? '' : '—')}
+                  {entry.company && entry.companyUnverified ? (
+                    <span className="snapshot-compact-unverified" title="Employer name not found in the CV text — auto-extracted, treat as unverified.">Unverified</span>
+                  ) : null}
+                </span>
+                {entry.range ? <span className="snapshot-compact-yr">{entry.range}</span> : null}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 const SectionLabel = ({ children }) => (
   <div className="text-[0.625rem] font-semibold uppercase tracking-[0.1em] text-[var(--taali-muted)]">
     {children}
@@ -60,6 +110,15 @@ export function CandidateSnapshotCard({ snapshot, variant = 'page', className = 
   if (!snapshot) return null;
   const { yearsLabel, topSkills = [], timeline = [] } = snapshot;
   if (!yearsLabel && !topSkills.length && !timeline.length) return null;
+
+  // report-preview's `.snapshot.compact` layout — the standing report Overview.
+  if (variant === 'report') {
+    return (
+      <Card className={cx('snapshot-compact-card', className)}>
+        <SnapshotReport snapshot={snapshot} />
+      </Card>
+    );
+  }
 
   const config = variantConfig[variant] || variantConfig.page;
 

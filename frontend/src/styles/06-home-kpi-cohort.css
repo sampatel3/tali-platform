@@ -397,6 +397,21 @@
   font-size: 0.875rem;
 }
 
+/* Column-head status dot (pipeline-preview .kch .dot): a small purple disc,
+   muted on the terminal Rejected column. Was unstyled — the markup rendered
+   an invisible span. */
+.kanban-col-head .title .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--purple);
+  flex-shrink: 0;
+}
+
+.kanban-col[data-stage="rejected"] .kanban-col-head .title .dot {
+  background: var(--mute);
+}
+
 .kanban-col-head .count {
   font-family: var(--font-mono);
   font-size: 0.65625rem;
@@ -443,13 +458,13 @@
 }
 
 .kanban-card .av {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
   display: grid;
   place-items: center;
-  background: var(--ink-soft);
-  color: #fff;
+  background: var(--purple-soft);
+  color: var(--purple-2);
   font-size: 0.625rem;
   font-weight: 600;
   flex-shrink: 0;
@@ -487,66 +502,106 @@
 }
 
 .kanban-card .cc-line .score-pip {
-  color: var(--ink);
+  color: var(--purple-2);
   font-weight: 600;
 }
 
+/* LIVE pip — pipeline-preview .live: a small purple-lavender bordered pill,
+   not bare text, so an in-progress assessment reads as a status badge. */
 .kanban-card .cc-line .live-pip {
   color: var(--purple);
   font-weight: 600;
+  font-size: 0.5625rem;
+  border: 1px solid var(--purple-lav);
+  border-radius: 999px;
+  padding: 0 5px;
 }
 
-.kanban-card .cc-line-grow {
-  flex: 1 1 auto;
-}
-
+/* Agent recommendation block — pipeline-preview .kagent: a soft-purple
+   tinted panel with a 1px purple-soft border, sparkle glyph, a bold
+   purple-2 action line and ink-2 reasoning. */
 .kanban-card .cc-agent {
-  margin-top: 6px;
-  padding: 7px 8px;
-  border-radius: 8px;
-  background: var(--purple-soft);
+  margin-top: 9px;
+  padding: 9px;
+  border-radius: 9px;
+  border: 1px solid var(--purple-soft);
+  background: color-mix(in oklab, var(--purple) 5%, var(--bg-2));
   display: flex;
   gap: 6px;
   align-items: flex-start;
 }
 
 .kanban-card .cc-agent-glyph {
-  color: var(--purple);
+  color: var(--purple-2);
   margin-top: 1px;
   flex-shrink: 0;
 }
 
 .kanban-card .cc-agent-body {
   font-size: 0.6875rem;
-  line-height: 1.4;
+  line-height: 1.45;
   color: var(--ink-2);
   min-width: 0;
 }
 
 .kanban-card .cc-agent-action {
-  font-weight: 500;
-  color: var(--purple);
+  font-weight: 600;
+  color: var(--purple-2);
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .kanban-card .cc-agent-why {
-  color: var(--mute);
+  color: var(--ink-2);
   font-size: 0.65625rem;
+  margin: 5px 0 8px;
 }
 
 .kanban-card .cc-agent-actions {
   display: flex;
   gap: 6px;
-  margin-top: 5px;
+  margin-top: 0;
 }
 
 .kanban-card .cc-agent-actions .btn-xs {
+  flex: 1 1 0;
+  justify-content: center;
   height: 24px;
   padding: 0 9px;
   font-size: 0.6875rem;
+  font-weight: 600;
   display: inline-flex;
   align-items: center;
   border-radius: 6px;
   cursor: pointer;
+}
+
+/* Agent recommendation buttons follow the pipeline-preview .kbtn pair:
+   Approve = the bold dark-purple "agent ON" gradient (recommended action);
+   Override = purple-lavender outline (in-scheme counter-action). This is the
+   ONE agent-positive vocabulary reused on the header, chat rail, and cards. */
+.kanban-card .cc-agent-actions .btn-purple {
+  background: linear-gradient(180deg, #3a1d6e, #241147);
+  border: 1px solid rgba(196, 165, 253, 0.5);
+  color: #f1ecfb;
+  box-shadow: 0 1px 10px rgba(94, 58, 168, 0.28);
+}
+
+.kanban-card .cc-agent-actions .btn-purple:hover {
+  background: linear-gradient(180deg, #43227e, #2a1454);
+}
+
+.kanban-card .cc-agent-actions .btn-outline {
+  background: var(--bg-2);
+  border: 1.5px solid var(--purple-lav);
+  color: var(--purple-2);
+}
+
+.kanban-card .cc-agent-actions .btn-outline:hover {
+  background: color-mix(in oklab, var(--purple) 8%, var(--bg-2));
+  border-color: var(--purple);
+  color: var(--purple-2);
 }
 
 .kanban-card .tag.g {
@@ -559,13 +614,21 @@
   color: var(--amber);
 }
 
+/* "+ N more →" — pipeline-preview .kmore: borderless purple link, centred. */
 .kanban-card.more {
-  border-style: dashed;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
   text-align: center;
-  font-family: var(--font-mono);
-  font-size: 0.71875rem;
-  letter-spacing: 0.06em;
-  color: var(--mute);
+  padding: 9px;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--purple);
+}
+
+.kanban-card.more:hover {
+  background: color-mix(in oklab, var(--purple) 6%, transparent);
+  color: var(--purple-2);
 }
 
 .focus-panel {

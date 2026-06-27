@@ -1,7 +1,8 @@
 import React from 'react';
 
 // Displays the result of `compare_applications`. Highlights the highest
-// score per row in green so a recruiter can pick out leaders fast.
+// score per row with a soft-purple wash (in-scheme — no traffic-light
+// green) so a recruiter can pick out leaders fast.
 const ComparisonTable = ({ payload }) => {
   const apps = payload?.applications || [];
   if (!apps.length) return null;
