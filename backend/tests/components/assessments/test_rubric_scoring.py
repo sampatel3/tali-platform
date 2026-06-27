@@ -22,6 +22,7 @@ from app.components.assessments.rubric_scoring import (
     _DILIGENCE_LENS_PROMPT,
     _DELIVERABLE_LENS_PROMPT,
     _DECISION_LENS_PROMPT,
+    _PRACTICE_LENS_PROMPT,
     _system_prompt_for_lens,
     _build_user_prompt,
     fluency_axis_for_dimension,
@@ -245,6 +246,7 @@ def test_system_prompt_for_lens_routes_all_lenses():
     assert _system_prompt_for_lens("deliverable") is _DELIVERABLE_LENS_PROMPT
     assert _system_prompt_for_lens("discernment") is _DISCERNMENT_LENS_PROMPT
     assert _system_prompt_for_lens("diligence") is _DILIGENCE_LENS_PROMPT
+    assert _system_prompt_for_lens("practice") is _PRACTICE_LENS_PROMPT
     assert _system_prompt_for_lens("decision") is _DECISION_LENS_PROMPT
     # Unknown / unset → decision-leaning back-compat default.
     assert _system_prompt_for_lens(None) is _DECISION_LENS_PROMPT
@@ -535,3 +537,110 @@ def test_grade_rubric_zero_weights_falls_back_to_equal_weighting(
     result = scorer.grade_rubric(rubric, sample_artifacts)
     # Average of 10 and 0 = 5/10 = 50/100
     assert result.weighted_score_100 == pytest.approx(50.0, abs=0.05)
+
+
+# ---- Practice proficiency (practice_outcome grader + practice lens) ---------
+
+
+def _pa(**kw):
+    """Build ScoringArtifacts for practice-grader tests."""
+    return ScoringArtifacts(**kw)
+
+
+def test_practice_outcome_context_setup_strong(patched_metered_client):
+    scorer = RubricScorer(api_key="sk-fake", organization_id=1)
+    repo = {"AGENTS.md": "# Agents\n- run: pytest -q\n- style: black\n- gotcha: venv in .venv\n"}
+    grade = scorer.grade_dimension_via_practice_outcome(
+        "context_and_direction", _pa(repo_files=repo), weight=0.4, probe="context_setup",
+    )
+    # Presence + structure caps at the GOOD band by design (excellent = LLM lens).
+    assert grade.rating == "good"
+    assert grade.score == 7.5
+    assert any("AGENTS.md" in c for c in grade.evidence_citations)
+
+
+def test_practice_outcome_context_bloat_scores_poor(patched_metered_client):
+    scorer = RubricScorer(api_key="sk-fake", organization_id=1)
+    repo = {"CLAUDE.md": "\n".join(f"line {i}" for i in range(250))}
+    grade = scorer.grade_dimension_via_practice_outcome(
+        "ctx", _pa(repo_files=repo), probe="context_setup",
+    )
+    # Over-long memory file is the documented anti-pattern → poor.
+    assert grade.rating == "poor"
+    assert grade.score == 4.0
+
+
+def test_practice_outcome_context_absent_scores_poor(patched_metered_client):
+    scorer = RubricScorer(api_key="sk-fake", organization_id=1)
+    grade = scorer.grade_dimension_via_practice_outcome(
+        "ctx", _pa(repo_files={"main.py": "print(1)"}), probe="context_setup",
+    )
+    assert grade.rating == "poor"
+    assert grade.score == 1.5
+
+
+def test_practice_outcome_plan_first_present_and_absent(patched_metered_client):
+    scorer = RubricScorer(api_key="sk-fake", organization_id=1)
+    repo = {"PLAN.md": "1. read spec\n2. implement checks\n3. verify gate\n"}
+    present = scorer.grade_dimension_via_practice_outcome("plan", _pa(repo_files=repo), probe="plan_first")
+    assert present.rating == "good" and present.score == 7.5
+    absent = scorer.grade_dimension_via_practice_outcome("plan", _pa(repo_files={}), probe="plan_first")
+    assert absent.rating == "poor" and absent.score == 1.5
+
+
+def test_practice_outcome_verification_from_trace(patched_metered_client):
+    scorer = RubricScorer(api_key="sk-fake", organization_id=1)
+    ran = [{"message": "run it", "response": "ok", "tool_calls_made": [
+        {"name": "mcp__sandbox__Bash", "input": {"command": "pytest -q"}},
+    ]}]
+    g_ran = scorer.grade_dimension_via_practice_outcome("verify", _pa(prompt_transcript=ran), probe="verification")
+    assert g_ran.rating == "good" and g_ran.score == 7.5
+    none = [{"message": "x", "response": "y"}]
+    g_none = scorer.grade_dimension_via_practice_outcome("verify", _pa(prompt_transcript=none), probe="verification")
+    assert g_none.rating == "poor" and g_none.score == 1.5
+
+
+def test_practice_outcome_composite_without_probe(patched_metered_client):
+    scorer = RubricScorer(api_key="sk-fake", organization_id=1)
+    repo = {
+        "AGENTS.md": "- run: pytest\n- style: black\n- note: keep lean\n",  # strong 7.5
+        "PLAN.md": "1\n2\n3\n",                                              # strong 7.5
+        # no reusable asset                                                  -> weak 1.5
+    }
+    transcript = [{"message": "go", "response": "ok", "tool_calls_made": [
+        {"name": "Bash", "input": {"command": "pytest"}},                    # verify 7.5
+    ]}]
+    grade = scorer.grade_dimension_via_practice_outcome(
+        "practice", _pa(repo_files=repo, prompt_transcript=transcript),
+    )
+    # (7.5 + 7.5 + 1.5 + 7.5) / 4 = 6.0
+    assert grade.score == 6.0
+    assert grade.rating == "good"
+
+
+def test_grade_rubric_dispatches_practice_outcome_without_llm_call(patched_metered_client):
+    # practice_outcome is deterministic: grade_rubric must NOT make an Anthropic call.
+    scorer = RubricScorer(api_key="sk-fake", organization_id=1)
+    rubric = {
+        "verification_habit": {
+            "weight": 1.0, "grader": "practice_outcome",
+            "probe": "verification", "fluency": "diligence",
+        },
+    }
+    transcript = [{"message": "go", "response": "ok", "tool_calls_made": [
+        {"name": "Bash", "input": {"command": "pytest -q"}},
+    ]}]
+    result = scorer.grade_rubric(rubric, _pa(prompt_transcript=transcript))
+    assert result.dimensions[0].dimension_id == "verification_habit"
+    assert result.dimensions[0].score == 7.5
+    assert result.weighted_score_100 == 75.0
+    assert patched_metered_client["calls"] == []  # no LLM call for a deterministic dim
+
+
+def test_practice_dimension_rolls_up_to_tagged_fluency_axis():
+    # A practice dim with an explicit fluency tag rolls to that axis (no new axis).
+    dims = [DimensionGrade(dimension_id="verification_habit", score=8.0, rating="good", reasoning="", weight=1.0)]
+    rubric = {"verification_habit": {"grader": "practice_outcome", "fluency": "diligence"}}
+    axes = summarize_fluency_4d(rubric, dims)
+    assert axes["diligence"] == 80.0
+    assert axes["deliverable"] is None

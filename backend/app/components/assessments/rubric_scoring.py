@@ -359,6 +359,37 @@ _DILIGENCE_LENS_PROMPT = (
     + _GRADER_OUTPUT
 )
 
+# PRACTICE lens — did the candidate operate their AI environment the way a
+# strong AI-native practitioner does: gave the agent genuinely useful context
+# (a lean AGENTS.md/CLAUDE.md, source material, examples), planned/specified
+# before building, authored reusable leverage (a skill/template/checklist),
+# kept context clean, and verified — rather than treating the agent as a vague
+# one-shot oracle. This lens grades the QUALITY of that craft (was it
+# load-bearing?), NOT mere presence: a deterministic ``practice_outcome`` grader
+# scores presence/structure and is capped at the "good" band; "excellent" lives
+# here, and only when the practice demonstrably improved the work. Cargo-culting
+# (an empty/box-ticked plan, a bloated AGENTS.md the agent would ignore) scores
+# POOR even though the artifact exists. Maps to Anthropic's AI-Fluency
+# Description/Delegation/Diligence depending on the dimension's ``fluency`` tag.
+_PRACTICE_LENS_PROMPT = (
+    _GRADER_PREAMBLE
+    + "\n\nLENS: PRACTICE. You are grading the candidate's AI-NATIVE CRAFT — "
+    "HOW they set up and operated the agent, visible in the transcript, their "
+    "tool actions/results, the git diff, and the files they created (e.g. "
+    "AGENTS.md/CLAUDE.md, PLAN.md, a reusable skill/template/checklist). Reward "
+    "practice that was GENUINE and LOAD-BEARING: context that demonstrably "
+    "improved the agent's direction, a plan that actually shaped the build, "
+    "verification that caught or prevented a problem, a reusable asset that was "
+    "coherent and used. Penalise CARGO-CULTING: a box-ticked plan the candidate "
+    "ignored, a bloated or irrelevant context file (agents ignore over-long "
+    "memory files), a 'reusable' asset that is noise. Mere presence of an "
+    "artifact is at most GOOD; EXCELLENT requires the practice to have visibly "
+    "improved the work. If the candidate gave vague one-liners with no setup and "
+    "no verification, that is POOR even if the result happened to work."
+    + _GRADER_OUTPUT
+)
+
+
 def _system_prompt_for_lens(lens: Optional[str]) -> str:
     key = (lens or "").strip().lower()
     if key == "deliverable":
@@ -367,6 +398,8 @@ def _system_prompt_for_lens(lens: Optional[str]) -> str:
         return _DISCERNMENT_LENS_PROMPT
     if key == "diligence":
         return _DILIGENCE_LENS_PROMPT
+    if key == "practice":
+        return _PRACTICE_LENS_PROMPT
     return _DECISION_LENS_PROMPT
 
 
@@ -479,6 +512,98 @@ def _build_user_prompt(
     )
     sections.append("Grade this dimension now. Respond with the JSON shape only.")
     return "\n\n".join(sections)
+
+
+# ---- Deterministic practice-proficiency detection ---------------------------
+#
+# AI-Native Practice Proficiency (see docs/AI_NATIVE_PRACTICES_ASSESSMENT_
+# INTEGRATION.md): does the candidate set up + operate their AI environment like
+# a strong practitioner — maintain a lean context file, plan/spec first, author
+# reusable leverage, verify? The ``practice_outcome`` grader scores PRESENCE +
+# STRUCTURE deterministically from already-captured artifacts (final repo files,
+# the process trace), with NO Anthropic call. By design it is capped at the
+# "good" band: the LLM ``practice`` lens is what awards "excellent" for craft
+# that was genuinely load-bearing. A bloated context file scores POOR here — it
+# is the documented anti-pattern (agents ignore over-long memory files).
+_PRACTICE_BAND_STRONG = 7.5   # present + well-formed (capped at "good" — excellent is the LLM lens's job)
+_PRACTICE_BAND_PARTIAL = 5.5  # present but thin/unchanged ("presence alone caps at good")
+_PRACTICE_BAND_BLOAT = 4.0    # present but bloated/irrelevant — anti-pattern → poor
+_PRACTICE_BAND_WEAK = 1.5     # absent
+
+_CONTEXT_FILE_NAMES = ("agents.md", "claude.md")
+_MAX_LEAN_CONTEXT_LINES = 200       # Anthropic memory guidance: keep it lean
+_MIN_SUBSTANTIVE_LINES = 3
+_PLAN_FILE_HINTS = ("plan.md", "design.md", "approach.md", "spec.md", "plan.txt")
+_ASSET_FILE_HINTS = ("skill.md", ".skill.md", "checklist", "template", ".template")
+# Distinctive verification markers in tool commands (kept specific so "latest"
+# etc. don't false-positive on a bare "test").
+_VERIFICATION_MARKERS = (
+    "pytest", "unittest", "vitest", "jest", "npm test", "npm run test",
+    "go test", "make test", "tox", "./run_tests", "run_tests", "cargo test",
+)
+
+
+def _nonempty_lines(text: str) -> List[str]:
+    return [ln for ln in str(text or "").splitlines() if ln.strip()]
+
+
+def _detect_context_file(repo_files: Dict[str, str]):
+    """Return ``(present, lean, substantive, path)`` for an AGENTS.md/CLAUDE.md
+    in the final repo (case-insensitive on the basename)."""
+    for path, content in (repo_files or {}).items():
+        base = str(path).rsplit("/", 1)[-1].lower()
+        if base in _CONTEXT_FILE_NAMES:
+            n = len(_nonempty_lines(content))
+            return True, (n <= _MAX_LEAN_CONTEXT_LINES), (n >= _MIN_SUBSTANTIVE_LINES), path
+    return False, False, False, None
+
+
+def _detect_plan(repo_files: Dict[str, str], design_doc: str) -> Optional[str]:
+    """Return the path of a substantive plan/spec/design artifact, or None."""
+    if design_doc and len(_nonempty_lines(design_doc)) >= _MIN_SUBSTANTIVE_LINES:
+        return "DESIGN.md"
+    for path, content in (repo_files or {}).items():
+        base = str(path).rsplit("/", 1)[-1].lower()
+        if any(base == hint or base.endswith(hint) for hint in _PLAN_FILE_HINTS):
+            if len(_nonempty_lines(content)) >= _MIN_SUBSTANTIVE_LINES:
+                return path
+    return None
+
+
+def _detect_reusable_asset(repo_files: Dict[str, str]) -> Optional[str]:
+    """Return the path of a reusable asset (skill/template/checklist), or None."""
+    for path in (repo_files or {}):
+        low = str(path).lower()
+        if any(hint in low for hint in _ASSET_FILE_HINTS):
+            return path
+    return None
+
+
+def _detect_verification(prompt_transcript: List[Dict[str, Any]]) -> bool:
+    """True if the process trace shows the candidate ran tests/verification.
+
+    Reads the per-turn ``tool_calls_made`` list (name + input) captured on each
+    ai_prompts record. Only meaningful when the process trace was captured;
+    tasks that adopt the ``verification`` probe run with the trace on.
+    """
+    for record in (prompt_transcript or []):
+        if not isinstance(record, dict):
+            continue
+        calls = record.get("tool_calls_made") or record.get("tool_calls") or []
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            name = str(call.get("name", ""))
+            inp = call.get("input")
+            cmd = ""
+            if isinstance(inp, dict):
+                cmd = str(inp.get("command") or inp.get("cmd") or "")
+            blob = f"{name} {cmd}".lower()
+            if any(marker in blob for marker in _VERIFICATION_MARKERS):
+                return True
+    return False
 
 
 # ---- Scorer -----------------------------------------------------------------
@@ -686,6 +811,80 @@ class RubricScorer:
             weight=weight,
         )
 
+    def grade_dimension_via_practice_outcome(
+        self,
+        dimension_id: str,
+        artifacts: ScoringArtifacts,
+        *,
+        weight: float = 0.0,
+        probe: Optional[str] = None,
+    ) -> DimensionGrade:
+        """Deterministic grader for AI-native *practice proficiency* dims
+        (``grader: "practice_outcome"``). No Anthropic call.
+
+        Scores PRESENCE + STRUCTURE of practice artifacts from already-captured
+        data (final repo files + the process trace). ``probe`` selects which
+        practice to score:
+
+        - ``context_setup``   — a lean, substantive AGENTS.md/CLAUDE.md
+        - ``plan_first``      — a plan/spec/design artifact
+        - ``reusable_asset``  — a skill/template/checklist
+        - ``verification``    — tests/verification run during the session
+        - (absent/unknown)    — composite mean of all four
+
+        Capped at the "good" band by design: the LLM ``practice`` lens awards
+        "excellent" for craft that was genuinely load-bearing. A bloated context
+        file scores POOR (the documented anti-pattern). Mirrors the
+        interrogation grader: pure-Python, reproducible, zero metering rows.
+        """
+        repo = artifacts.repo_files or {}
+        present, lean, substantive, cpath = _detect_context_file(repo)
+        if present and substantive and lean:
+            ctx = (_PRACTICE_BAND_STRONG, f"maintains a lean, substantive context file ({cpath})", cpath)
+        elif present and substantive and not lean:
+            ctx = (_PRACTICE_BAND_BLOAT, f"context file {cpath} is bloated (>{_MAX_LEAN_CONTEXT_LINES} lines); agents tend to ignore over-long memory files", cpath)
+        elif present:
+            ctx = (_PRACTICE_BAND_PARTIAL, f"context file {cpath} present but thin/unchanged", cpath)
+        else:
+            ctx = (_PRACTICE_BAND_WEAK, "no AGENTS.md/CLAUDE.md context file maintained", None)
+
+        plan_path = _detect_plan(repo, artifacts.design_doc)
+        plan = (
+            (_PRACTICE_BAND_STRONG, f"wrote a plan/spec artifact ({plan_path})", plan_path)
+            if plan_path else (_PRACTICE_BAND_WEAK, "no plan/spec artifact captured", None)
+        )
+        asset_path = _detect_reusable_asset(repo)
+        asset = (
+            (_PRACTICE_BAND_STRONG, f"authored a reusable asset ({asset_path})", asset_path)
+            if asset_path else (_PRACTICE_BAND_WEAK, "no reusable asset authored", None)
+        )
+        verified = _detect_verification(artifacts.prompt_transcript)
+        verify = (
+            (_PRACTICE_BAND_STRONG, "ran tests/verification during the session", None)
+            if verified else (_PRACTICE_BAND_WEAK, "no test/verification run observed in the trace", None)
+        )
+
+        signals = {
+            "context_setup": ctx,
+            "plan_first": plan,
+            "reusable_asset": asset,
+            "verification": verify,
+        }
+        key = (probe or "").strip().lower()
+        if key in signals:
+            score, note, cite = signals[key]
+            reasoning = note
+            evidence = [c for c in [cite] if c]
+        else:
+            score = round(sum(s for s, _, _ in signals.values()) / len(signals), 1)
+            reasoning = "; ".join(f"{k}: {n}" for k, (_, n, _) in signals.items())
+            evidence = [c for _, _, c in signals.values() if c]
+        rating = "excellent" if score >= 9 else ("good" if score >= 5 else "poor")
+        return DimensionGrade(
+            dimension_id=dimension_id, score=float(score), rating=rating,
+            reasoning=reasoning[:1000], evidence_citations=evidence[:10], weight=weight,
+        )
+
     def grade_dimension(
         self,
         dimension_id: str,
@@ -772,6 +971,13 @@ class RubricScorer:
                 # + per-turn interrogation_state from artifacts.
                 grade = self.grade_dimension_via_interrogation_outcome(
                     dim_id, artifacts, weight=weight,
+                )
+            elif grader_kind == "practice_outcome":
+                # Deterministic, no Anthropic call. Scores presence/structure of
+                # AI-native practice artifacts (context file, plan, asset,
+                # verification) from the final repo + process trace.
+                grade = self.grade_dimension_via_practice_outcome(
+                    dim_id, artifacts, weight=weight, probe=dim_spec.get("probe"),
                 )
             else:
                 criteria = dim_spec.get("criteria") or {}
