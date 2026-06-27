@@ -129,11 +129,10 @@ def parse_intent_text_to_chips(
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
             # Metered Anthropic wrapper auto-writes a usage_event from
-            # response.usage. Use Feature.OTHER (a custom string would
-            # raise inside record_event's Feature() conversion) and tag
-            # the sub-agent in metadata for attribution.
+            # response.usage. Dedicated bucket (was Feature.OTHER) so this
+            # agent-chat parse is attributable out of the unclassified pile.
             metering={
-                "feature": Feature.OTHER,
+                "feature": Feature.INTENT_CHIP_PARSER,
                 "organization_id": int(organization_id),
                 "role_id": int(role.id),
                 "metadata": {"sub_agent": "intent_chip_parser"},

@@ -195,8 +195,19 @@ def submit_cv_match_batch(
             try:
                 from .archetype_synthesizer import synthesize_archetype
 
+                # Pass organization_id in the metering dict so the synthesis
+                # usage_event is attributed even if ``client`` isn't org-bound
+                # (the wrapper skips the event when neither the client nor the
+                # metering dict carries an org). For a multi-org batch this is
+                # None and synthesis stays on the shared key with no org event.
+                synth_metering: dict = {"feature": "archetype_synthesis"}
+                if organization_id is not None:
+                    synth_metering["organization_id"] = int(organization_id)
                 archetype_cache[jd_hash] = synthesize_archetype(
-                    job.jd_text, job.requirements, client=client
+                    job.jd_text,
+                    job.requirements,
+                    client=client,
+                    metering=synth_metering,
                 )
             except Exception as exc:  # pragma: no cover — defensive
                 logger.warning(

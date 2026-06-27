@@ -1657,7 +1657,6 @@ def _tool_evaluate_policy(
         "organization_id": getattr(role, "organization_id", None),
         "role_id": int(role.id),
         "entity_id": f"application:{application_id}",
-        "feature": "evaluate_policy",
     }
     verdict, sub_outputs = policy_evaluator.evaluate_for_application(
         db,
