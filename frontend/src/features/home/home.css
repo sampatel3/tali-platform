@@ -334,6 +334,37 @@
   border-color: var(--purple);
 }
 
+/* Standalone "Assessment stage" toggle — pulled out of the decision-type
+   segmented set so it reads as its own filter (matching the home-preview's
+   .chiptoggle). Switches the queue to the invited-candidate tracker. Soft
+   purple when active, in the house attention vocabulary. */
+.rq-chiptoggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.71875rem;
+  letter-spacing: 0.04em;
+  color: var(--ink-2);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.rq-chiptoggle:hover {
+  border-color: color-mix(in oklab, var(--purple) 40%, var(--line));
+  color: var(--purple);
+}
+
+.rq-chiptoggle.on {
+  background: var(--purple-soft);
+  color: var(--purple-2);
+  border-color: color-mix(in oklab, var(--purple) 30%, var(--line));
+}
+
 .rq-tinybtn {
   border: 1px solid var(--line);
   background: var(--bg);

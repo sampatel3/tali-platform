@@ -11,6 +11,83 @@
   margin-bottom: 18px;
 }
 
+/* Flat strip (home hub, matching home-preview): a plain bordered card — each
+   stage is label + value + inline decision chips, divided by vertical rules,
+   with the terminal (Rejected) cell set apart on the page background. No cap
+   line, no separate "awaiting your decision" grid. */
+.funnel-board.fb-flat {
+  background: var(--bg-2);
+  border-color: var(--line);
+  padding: 0;
+  overflow: hidden;
+}
+
+.fb-flat .fb-stages {
+  gap: 0;
+}
+
+.fb-flat .fb-st {
+  text-align: left;
+  padding: 11px 13px;
+  border-right: 1px solid var(--line);
+}
+
+.fb-flat .fb-st:last-child {
+  border-right: none;
+}
+
+/* Reuse the funnel's pipeline | outcomes divider, but as a plain line in the
+   flat strip (the purple-tinted variant reads as part of the purple slab). */
+.fb-flat .fb-st.is-out-start {
+  border-left: none;
+}
+
+/* Terminal outcome (Rejected) — set apart on the page background. */
+.fb-flat .fb-st.is-out:last-child {
+  background: var(--bg);
+}
+
+.fb-flat .fb-l {
+  margin-top: 0;
+  margin-bottom: 2px;
+}
+
+.fb-flat .fb-v {
+  font-size: 1.1875rem;
+}
+
+/* Inline per-stage decision chips. Reuses the .fb-dchip vocabulary (purple for
+   positive, grey for terminal/negative). */
+.fb-stchips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+  min-height: 16px;
+}
+
+.fb-stchips .fb-dchip {
+  font-size: 0.65625rem;
+  padding: 1px 6px;
+}
+
+.fb-stchips .fb-dnone {
+  font-size: 0.65625rem;
+}
+
+/* Phone: let the flat strip scroll inside its own card like the full board. */
+@media (max-width: 720px) {
+  .funnel-board.fb-flat {
+    overflow-x: auto;
+  }
+  .fb-flat .fb-stages {
+    min-width: 560px;
+  }
+  .fb-flat .fb-v {
+    font-size: 1rem;
+  }
+}
+
 .fb-cap {
   display: flex;
   align-items: center;
