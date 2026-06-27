@@ -135,6 +135,12 @@ const TokenGate = lazy(() =>
 const DeckIframe = lazy(() =>
   import('./features/_dev/DeckIframe')
 );
+const BlogIndexPage = lazy(() =>
+  import('./features/blog/BlogIndexPage')
+);
+const BlogPostPage = lazy(() =>
+  import('./features/blog/BlogPostPage')
+);
 
 const isPublicCandidateSharePath = (pathname, search = '') => {
   if (pathname.startsWith('/c/')) return true;
@@ -520,6 +526,22 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <DeveloperPortalPage />
+          </Suspense>
+        )}
+      />
+      <Route
+        path="/blog"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <BlogIndexPage onNavigate={navigateToPage} />
+          </Suspense>
+        )}
+      />
+      <Route
+        path="/blog/:slug"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <BlogPostPage onNavigate={navigateToPage} />
           </Suspense>
         )}
       />

@@ -1,0 +1,190 @@
+/* Blog typographic styling — on-brand via the marketing CSS variables
+   (--bg, --ink, --ink-2, --mute, --purple, --line, --bg-2, fonts). Scoped to
+   .blog-prose so it never leaks into app surfaces. */
+
+.blog-wrap {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.blog-container {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+.blog-hero {
+  padding: 56px 0 28px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 40px;
+}
+
+.blog-kicker {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--purple);
+}
+
+.blog-hero h1 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: clamp(32px, 5vw, 52px);
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+  margin: 14px 0 16px;
+}
+
+.blog-hero .blog-dek {
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  color: var(--ink-2);
+  max-width: 42rem;
+}
+
+.blog-meta {
+  margin-top: 18px;
+  font-size: 0.8125rem;
+  color: var(--mute);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* ---- markdown body ---- */
+.blog-prose {
+  font-size: 1.0625rem;
+  line-height: 1.75;
+  color: var(--ink-2);
+}
+
+.blog-prose h1,
+.blog-prose h2,
+.blog-prose h3 {
+  font-family: var(--font-display);
+  color: var(--ink);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.blog-prose h1 { font-size: 1.9rem; margin: 2.4em 0 0.6em; }
+.blog-prose h2 { font-size: 1.5rem; margin: 2em 0 0.6em; padding-top: 0.4em; }
+.blog-prose h3 { font-size: 1.18rem; margin: 1.6em 0 0.5em; color: var(--ink); }
+
+.blog-prose p { margin: 0 0 1.2em; }
+.blog-prose strong { color: var(--ink); font-weight: 600; }
+.blog-prose em { font-style: italic; }
+
+.blog-prose a {
+  color: var(--purple);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+.blog-prose a:hover { opacity: 0.8; }
+
+.blog-prose ul,
+.blog-prose ol { margin: 0 0 1.2em; padding-left: 1.4em; }
+.blog-prose li { margin: 0.4em 0; }
+.blog-prose li::marker { color: var(--purple); }
+
+.blog-prose hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 2.4em 0;
+}
+
+.blog-prose blockquote {
+  margin: 1.4em 0;
+  padding: 0.2em 0 0.2em 1.1em;
+  border-left: 3px solid var(--purple);
+  color: var(--ink-2);
+}
+
+.blog-prose code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0.12em 0.4em;
+}
+.blog-prose pre {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  overflow-x: auto;
+  margin: 0 0 1.2em;
+}
+.blog-prose pre code { background: none; border: 0; padding: 0; font-size: 0.85rem; }
+
+/* tables (remark-gfm) */
+.blog-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.4em 0;
+  font-size: 0.9375rem;
+  display: block;
+  overflow-x: auto;
+}
+.blog-prose th,
+.blog-prose td {
+  border: 1px solid var(--line);
+  padding: 9px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+.blog-prose th {
+  background: var(--bg-2);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* ---- index cards ---- */
+.blog-index-head { padding: 56px 0 8px; }
+.blog-card {
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg-2);
+  padding: 24px;
+  margin: 18px 0;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.blog-card:hover { border-color: var(--purple); transform: translateY(-2px); }
+.blog-card h2 {
+  font-family: var(--font-display);
+  font-size: 1.4rem;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin: 8px 0 10px;
+  line-height: 1.15;
+}
+.blog-card p { color: var(--ink-2); line-height: 1.6; margin: 0; font-size: 0.95rem; }
+
+.blog-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8125rem;
+  color: var(--mute);
+  text-decoration: none;
+  margin-bottom: 8px;
+}
+.blog-back:hover { color: var(--purple); }
+
+.blog-footer {
+  border-top: 1px solid var(--line);
+  margin-top: 64px;
+  padding: 32px 0 56px;
+  color: var(--mute);
+  font-size: 0.8125rem;
+}
+.blog-footer a { color: var(--ink-2); text-decoration: none; }
+.blog-footer a:hover { color: var(--purple); }

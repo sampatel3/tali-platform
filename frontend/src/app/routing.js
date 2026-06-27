@@ -56,6 +56,10 @@ export const pathForPage = (page, options = {}) => {
       return '/demo-lead';
     case 'showcase':
       return '/showcase';
+    case 'blog':
+      return '/blog';
+    case 'blog-post':
+      return options.slug ? `/blog/${options.slug}` : '/blog';
     case 'candidates':
       // The standalone /candidates directory is deprecated. Anything
       // that asked for it lands on /jobs — the triage drawer now lives
