@@ -1471,6 +1471,43 @@
   margin: 0 0 12px;
 }
 
+/* ---------------- Standalone /analytics page ----------------
+   The dedicated Analytics page (AnalyticsPage → HomeMonitoring standalone).
+   The page-level AgentHeader carries the title; the section adds a thin
+   right-aligned scope-control strip, a 6-up summary pulse band, and the
+   shared .vtabs tab bar — mirroring frontend/public/analytics-preview.html. */
+.hm-standalone .hm-head-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px 13px;
+  align-items: flex-end;
+  justify-content: flex-end;
+  margin-bottom: 18px;
+}
+
+/* 6-up pulse band: even columns that wrap to 3 / 1 on narrower viewports,
+   matching the preview's grid-template-columns: repeat(6,1fr). */
+.hm-summary-6 {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 13px;
+  flex-wrap: initial;
+}
+.hm-summary-6 .hm-stat { min-width: 0; }
+@media (max-width: 1100px) {
+  .hm-summary-6 { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 720px) {
+  .hm-summary-6 { grid-template-columns: 1fr; }
+}
+
+/* "Advance → hire" headline reads in deep purple (preview .pcell .v.attn). */
+.hm-stat-value.attn { color: var(--purple-2); }
+
+/* Tab bar spacing: the shared .vtabs already styles the underline + purple
+   active; just give it the preview's breathing room above/below. */
+.hm-standalone .hm-vtabs { margin-top: 18px; }
+
 /* ---------------- Decisions & outcomes by role ---------------- */
 .home-by-role {
   padding: 16px;

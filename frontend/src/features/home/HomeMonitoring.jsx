@@ -10,7 +10,17 @@
 // section reads one window/scope (fixes the old 30d/all-time/last-100 mix).
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp } from 'lucide-react';
+import {
+  AlertTriangle,
+  Bot,
+  Brain,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  FlaskConical,
+  History,
+  TrendingUp,
+} from 'lucide-react';
 
 import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
 import { Select } from '../../shared/ui/TaaliPrimitives';
@@ -20,6 +30,7 @@ import { HomeSignal } from './HomeSignal';
 import { HomeRoles } from './HomeRoles';
 import { HomeExperiments } from './HomeExperiments';
 import { AnalyticsDrillIns, HistoryTable } from './HomeEverything';
+import AgentsOverviewPanel from '../settings/AgentsOverviewPanel';
 
 const WINDOWS = [
   { key: '7d', label: '7d', days: 7 },
@@ -28,6 +39,10 @@ const WINDOWS = [
   { key: 'all', label: 'All', days: 120 },
 ];
 
+// Home (collapsed band) tab set — unchanged. The standalone /analytics page
+// uses STANDALONE_TABS below: a reordered, icon-led `.vtabs` bar that matches
+// the analytics design preview (Outcomes / Agent fleet / Teaching history /
+// A·B tasks / Decision log) and adds the live agent-fleet lens.
 const TABS = [
   { key: 'activity', label: 'Activity' },
   { key: 'outcomes', label: 'Outcomes' },
@@ -36,13 +51,21 @@ const TABS = [
   { key: 'history', label: 'History' },
 ];
 
+const STANDALONE_TABS = [
+  { key: 'outcomes', label: 'Outcomes', Icon: TrendingUp },
+  { key: 'fleet', label: 'Agent fleet', Icon: Bot },
+  { key: 'quality', label: 'Teaching history', Icon: Brain },
+  { key: 'experiments', label: 'A·B tasks', Icon: FlaskConical },
+  { key: 'history', label: 'Decision log', Icon: History },
+];
+
 const safeNum = (v, fb = 0) => (Number.isFinite(Number(v)) ? Number(v) : fb);
 const pct = (part, whole) => (safeNum(whole) > 0 ? Math.round((safeNum(part) / safeNum(whole)) * 100) : 0);
 
-const Stat = ({ label, value, sub }) => (
+const Stat = ({ label, value, sub, valueClass }) => (
   <div className="hm-stat">
     <div className="hm-stat-label">{label}</div>
-    <div className="hm-stat-value">{value}</div>
+    <div className={`hm-stat-value${valueClass ? ` ${valueClass}` : ''}`}>{value}</div>
     {sub ? <div className="hm-stat-sub">{sub}</div> : null}
   </div>
 );
@@ -62,7 +85,9 @@ export const HomeMonitoring = ({
   const [open, setOpen] = useState(standalone);
   const [roleId, setRoleId] = useState('');
   const [windowKey, setWindowKey] = useState('30d');
-  const [tab, setTab] = useState('activity');
+  // Standalone /analytics opens on Outcomes (preview default); the collapsed
+  // home band keeps Activity as its first lens.
+  const [tab, setTab] = useState(standalone ? 'outcomes' : 'activity');
 
   const [summary, setSummary] = useState(null);
   const [breakdown, setBreakdown] = useState(null);
@@ -119,17 +144,46 @@ export const HomeMonitoring = ({
   const anomalies = Array.isArray(summary?.anomalies) ? summary.anomalies : [];
 
   return (
-    <section className="home-section">
-      <div className="home-section-head">
-        <div>
-          <span className="kicker">ANALYTICS · PLATFORM PULSE</span>
-          <h3 className="home-section-title">Analytics<em>.</em></h3>
-          <p className="home-section-sub">
-            Everything worth watching about the agent in one place — throughput, outcomes, quality, and the
-            decision log. Scope it by role and time window.
-          </p>
+    <section className={`home-section${standalone ? ' hm-standalone' : ''}`}>
+      {/* On /analytics the page-level AgentHeader already carries the
+          kicker/title/subtitle, so the section renders just its scope
+          controls (role + window) right-aligned above the pulse band — the
+          preview's header range selectors. The collapsed home band keeps the
+          full section head + show/hide toggle. */}
+      {standalone ? (
+        <div className="hm-head-controls">
+          <label className="hm-rolefilter">
+            <span className="kicker">Role</span>
+            <Select inline value={roleId} onChange={(e) => setRoleId(e.target.value)}>
+              <option value="">All roles</option>
+              {rolesBreakdown.map((r) => (
+                <option key={r.role_id} value={r.role_id}>{r.name}</option>
+              ))}
+            </Select>
+          </label>
+          <div className="hm-window" role="group" aria-label="Time window">
+            {WINDOWS.map((w) => (
+              <button
+                key={w.key}
+                type="button"
+                className={`hm-window-btn${windowKey === w.key ? ' active' : ''}`}
+                onClick={() => setWindowKey(w.key)}
+              >
+                {w.label}
+              </button>
+            ))}
+          </div>
         </div>
-        {!standalone ? (
+      ) : (
+        <div className="home-section-head">
+          <div>
+            <span className="kicker">ANALYTICS · PLATFORM PULSE</span>
+            <h3 className="home-section-title">Analytics<em>.</em></h3>
+            <p className="home-section-sub">
+              Everything worth watching about the agent in one place — throughput, outcomes, quality, and the
+              decision log. Scope it by role and time window.
+            </p>
+          </div>
           <button
             type="button"
             className="home-section-toggle"
@@ -139,36 +193,38 @@ export const HomeMonitoring = ({
             <span>{open ? 'Hide' : 'Show'} analytics</span>
             {open ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
           </button>
-        ) : null}
-      </div>
+        </div>
+      )}
 
       {open ? (
         <>
-          <div className="hm-controls">
-            <label className="hm-rolefilter">
-              <span className="kicker">Role</span>
-              <Select inline value={roleId} onChange={(e) => setRoleId(e.target.value)}>
-                <option value="">All roles</option>
-                {rolesBreakdown.map((r) => (
-                  <option key={r.role_id} value={r.role_id}>{r.name}</option>
+          {!standalone ? (
+            <div className="hm-controls">
+              <label className="hm-rolefilter">
+                <span className="kicker">Role</span>
+                <Select inline value={roleId} onChange={(e) => setRoleId(e.target.value)}>
+                  <option value="">All roles</option>
+                  {rolesBreakdown.map((r) => (
+                    <option key={r.role_id} value={r.role_id}>{r.name}</option>
+                  ))}
+                </Select>
+              </label>
+              <div className="hm-window" role="group" aria-label="Time window">
+                {WINDOWS.map((w) => (
+                  <button
+                    key={w.key}
+                    type="button"
+                    className={`hm-window-btn${windowKey === w.key ? ' active' : ''}`}
+                    onClick={() => setWindowKey(w.key)}
+                  >
+                    {w.label}
+                  </button>
                 ))}
-              </Select>
-            </label>
-            <div className="hm-window" role="group" aria-label="Time window">
-              {WINDOWS.map((w) => (
-                <button
-                  key={w.key}
-                  type="button"
-                  className={`hm-window-btn${windowKey === w.key ? ' active' : ''}`}
-                  onClick={() => setWindowKey(w.key)}
-                >
-                  {w.label}
-                </button>
-              ))}
+              </div>
             </div>
-          </div>
+          ) : null}
 
-          <div className="hm-summary">
+          <div className={`hm-summary${standalone ? ' hm-summary-6' : ''}`}>
             <Stat
               label="Decisions"
               value={safeNum(k.decisions_made?.current).toLocaleString()}
@@ -182,13 +238,29 @@ export const HomeMonitoring = ({
             <Stat
               label="Advance → hire"
               value={`${pct(conv.hired, conv.advanced_total)}%`}
+              valueClass={standalone ? 'attn' : undefined}
               sub={`${safeNum(conv.hired).toLocaleString()} of ${safeNum(conv.advanced_total).toLocaleString()} advanced`}
             />
-            <Stat
-              label="Override / teach"
-              value={`${safeNum(hr.override_rate_pct)}%`}
-              sub={`${safeNum(hr.teach_rate_pct)}% taught`}
-            />
+            {standalone ? (
+              <>
+                <Stat
+                  label="Override rate"
+                  value={`${safeNum(hr.override_rate_pct)}%`}
+                  sub={`${safeNum(hr.overridden).toLocaleString()} override${safeNum(hr.overridden) === 1 ? '' : 's'}`}
+                />
+                <Stat
+                  label="Taught"
+                  value={`${safeNum(hr.teach_rate_pct)}%`}
+                  sub={`${safeNum(hr.taught).toLocaleString()} teaching event${safeNum(hr.taught) === 1 ? '' : 's'}`}
+                />
+              </>
+            ) : (
+              <Stat
+                label="Override / teach"
+                value={`${safeNum(hr.override_rate_pct)}%`}
+                sub={`${safeNum(hr.teach_rate_pct)}% taught`}
+              />
+            )}
             <Stat
               label="Spend · MTD"
               value={formatUsd(spend.spent_cents)}
@@ -211,20 +283,41 @@ export const HomeMonitoring = ({
             )}
           </div>
 
-          <div className="hm-tabs" role="tablist">
-            {TABS.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                role="tab"
-                aria-selected={tab === t.key}
-                className={`hm-tab${tab === t.key ? ' active' : ''}`}
-                onClick={() => setTab(t.key)}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
+          {standalone ? (
+            <div className="vtabs hm-vtabs" role="tablist">
+              {STANDALONE_TABS.map((t) => {
+                const { Icon } = t;
+                return (
+                  <button
+                    key={t.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={tab === t.key}
+                    className={`vtab${tab === t.key ? ' on' : ''}`}
+                    onClick={() => setTab(t.key)}
+                  >
+                    <Icon size={16} aria-hidden="true" />
+                    {t.label}
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="hm-tabs" role="tablist">
+              {TABS.map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === t.key}
+                  className={`hm-tab${tab === t.key ? ' active' : ''}`}
+                  onClick={() => setTab(t.key)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           {tab === 'activity' ? (
             <>
@@ -233,6 +326,12 @@ export const HomeMonitoring = ({
                 <HomeRoles rows={rolesBreakdown} loading={false} onNavigate={onNavigate} embedded />
               ) : null}
             </>
+          ) : tab === 'fleet' ? (
+            // Live agent-fleet lens (settings' AgentsOverviewPanel), recoloured
+            // to the in-scheme purple/amber/grey. Self-fetches + self-polls the
+            // /agent/panel + /agent/activity feeds, so it ignores the role/window
+            // scope above (it's a now-state operational view, not a windowed report).
+            <div className="hm-tabpanel"><AgentsOverviewPanel /></div>
           ) : tab === 'outcomes' ? (
             loading
               ? <div className="home-empty">Loading…</div>

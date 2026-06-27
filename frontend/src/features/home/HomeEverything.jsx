@@ -376,28 +376,51 @@ export const AnalyticsDrillIns = ({ summary, breakdown }) => {
         </div>
       </div>
       <div>
-        <div className="kicker" style={{ marginBottom: 8 }}>FUNNEL · CURRENT PIPELINE</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {funnel.map((stage) => (
-            <div key={stage.label} style={{ display: 'grid', gridTemplateColumns: '110px 1fr auto', alignItems: 'center', gap: 12 }}>
-              <span className="kicker">{stage.label}</span>
-              <div style={{ position: 'relative', height: 10, borderRadius: 999, background: 'var(--bg-3)', overflow: 'hidden' }}>
-                <div
-                  style={{
-                    position: 'absolute',
-                    inset: 0,
-                    left: 0,
-                    width: `${Math.max(0, Math.min(100, safeNumber(stage.percentage)))}%`,
-                    background: 'linear-gradient(90deg, var(--purple), color-mix(in srgb, var(--purple) 60%, var(--lime)))',
-                    borderRadius: 999,
-                  }}
-                />
+        <div className="kicker" style={{ marginBottom: 8 }}>FUNNEL CONVERSION · CURRENT PIPELINE</div>
+        {/* Filled conversion bars (preview .conv): the bar fills to the stage's
+            share of applied, and the right label reads the step-to-step
+            conversion (e.g. "18% of scored") so the agent's gating is legible. */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+          {funnel.map((stage, i) => {
+            const ofApplied = Math.max(0, Math.min(100, safeNumber(stage.percentage)));
+            const prev = i > 0 ? funnel[i - 1] : null;
+            const prevCount = prev ? safeNumber(prev.count) : 0;
+            const isLast = i === funnel.length - 1;
+            const stepPct = i === 0
+              ? '100%'
+              : isLast
+                // Terminal stage is a hand-off, not a funnel step — advancement
+                // isn't strictly downstream of completion, so a step-% here can
+                // read >100%. Label it as the hand-off instead (matches preview).
+                ? 'to recruiter'
+                : prevCount > 0
+                  ? `${Math.round((safeNumber(stage.count) / prevCount) * 100)}% of ${String(prev.label).toLowerCase()}`
+                  : '—';
+            return (
+              <div key={stage.label} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={{ width: 96, fontSize: 12.5, color: 'var(--ink-2)' }}>{stage.label}</span>
+                <span style={{ flex: 1, height: 26, borderRadius: 7, background: 'var(--bg-3)', overflow: 'hidden', position: 'relative' }}>
+                  <span
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      height: '100%',
+                      width: `${Math.max(ofApplied, stage.count > 0 ? 7 : 0)}%`,
+                      paddingLeft: 11,
+                      borderRadius: 7,
+                      color: '#fff',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      background: 'linear-gradient(90deg, var(--purple), var(--purple-lav))',
+                    }}
+                  >
+                    {safeNumber(stage.count).toLocaleString()}
+                  </span>
+                </span>
+                <span style={{ width: 92, textAlign: 'right', fontSize: 12, color: 'var(--mute)' }}>{stepPct}</span>
               </div>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--ink-2)' }}>
-                {safeNumber(stage.count).toLocaleString()}
-              </span>
-            </div>
-          ))}
+            );
+          })}
         </div>
         {summary?.narrator?.paragraph ? (
           <div style={{ marginTop: 14, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55, padding: 12, background: 'var(--bg)', border: '1px solid var(--line)', borderRadius: 12 }}>
