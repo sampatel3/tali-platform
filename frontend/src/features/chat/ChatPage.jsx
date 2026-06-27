@@ -337,7 +337,7 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
           </div>
           <div className="cp-head-grow" />
           <span className="cp-head-pill">
-            <span className="cp-pill-glyph">▮</span>
+            <span className="cp-pill-glyph" aria-hidden="true" />
             MCP · 9 tools
           </span>
         </header>
