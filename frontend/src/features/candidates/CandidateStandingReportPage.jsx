@@ -14,7 +14,7 @@ import {
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
-import { CandidateDecisionStrip } from './CandidateDecisionStrip';
+import { DecisionRail } from './DecisionRail';
 import { OverrideModal } from '../home/OverrideModal';
 import { TeachModal } from '../home/TeachModal';
 import { DECISION_ACTIONS } from '../../shared/decisions/decisionActions';
@@ -23,16 +23,14 @@ import { computeScorecard } from '../../shared/assessment/fluency4d';
 import { ErrorBoundary } from '../../shared/ui/ErrorBoundary';
 import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAssessmentToCandidateView } from './assessmentViewModels';
 // ApplicationDecisionPanel intentionally NOT imported — PR3 retired the decision
-// recorder from the report body; the candidate's decision lives on the header
-// strip (CandidateDecisionStrip). The component file is kept for reference.
+// recorder from the report body; the candidate's decision now lives in the
+// DecisionRail (the dossier's left column). The component file is kept for reference.
 import { AssessmentEvidencePanels, EvaluatePanel, InterviewTranscriptCapture } from './CandidateAssessmentDetailPanels';
 import { CandidateSnapshotCard } from './CandidateSnapshotCard';
 import { CvDocumentViewer } from './CvDocumentViewer';
 import { CvMatchReview } from './CvMatchReview';
 import { PrepQuestionCard } from './PrepQuestionCard';
-import { VerdictBand } from './VerdictBand';
 import { VerdictDetail } from './VerdictDetail';
-import { verdictLabel } from '../../shared/decisions/decisionLabels';
 import {
   getErrorMessage,
   reqGradeKey,
@@ -103,8 +101,8 @@ const resolveAssessmentStatus = (application) => (
 const REPORT_TABS = [
   { id: 'overview', label: 'Overview' },
   // PR3 (decision-surface unification): the standalone Evaluate tab is retired.
-  // The candidate's DECISION lives on the report header (CandidateDecisionStrip,
-  // PR2), and the Evaluate tab's assessment EVIDENCE (criteria ratings, manual
+  // The candidate's DECISION lives in the DecisionRail (the dossier's left
+  // column), and the Evaluate tab's assessment EVIDENCE (criteria ratings, manual
   // rubric, strengths/improvements, chat log) now renders inside this Assessment
   // pane via <EvaluatePanel hideDecision />.
   { id: 'assessment', label: 'Assessment', internalOnly: true, requiresAssessment: true },
@@ -979,25 +977,9 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           ) : null}
         />
       ) : null}
-      {/* Decision strip — the agent's recommendation for THIS candidate with
-          the same Approve / Override / Teach controls as the home hub.
-          Recruiter-view only (hidden on every share link). */}
-      {!isClientView && !isInterviewView ? (
-        <div className="page" style={{ paddingTop: 0, paddingBottom: 0 }}>
-          <CandidateDecisionStrip
-            decision={agentDecision}
-            application={application}
-            recommendation={reportModel?.recommendation}
-            busy={decisionBusy}
-            onApprove={handleDecisionApprove}
-            onAlternative={handleDecisionAlternative}
-            onReEvaluate={handleDecisionReEvaluate}
-            onSnooze={handleDecisionSnooze}
-            onTeach={(d) => setTeachFor(d)}
-            onNavigate={onNavigate}
-          />
-        </div>
-      ) : null}
+      {/* The agent's recommendation + decision controls now live in the
+          DecisionRail (left column of the dossier below), not a full-width
+          strip. */}
       <div className="page">
         {isInterviewView ? (
           <div className="iv-banner">
@@ -1064,6 +1046,27 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           </div>
         ) : null}
 
+        <div className="dossier">
+          <DecisionRail
+            taaliScore={reportModel?.summaryModel?.taaliScore}
+            roleFitScore={reportModel?.summaryModel?.roleFitScore}
+            assessmentScore={reportModel?.summaryModel?.assessmentScore}
+            reqMet={matchedRequirements.length}
+            reqTotal={matchedRequirements.length + missingRequirements.length}
+            experienceLabel={reportModel?.candidateSnapshot?.yearsLabel || ''}
+            decision={agentDecision}
+            application={application}
+            integrity={application?.score_summary?.integrity || null}
+            provenance={application?.score_summary?.score_provenance}
+            canDecide={!isClientView && !isInterviewView}
+            busy={decisionBusy}
+            onApprove={handleDecisionApprove}
+            onAlternative={handleDecisionAlternative}
+            onTeach={(d) => setTeachFor(d)}
+            onSnooze={handleDecisionSnooze}
+            onReEvaluate={handleDecisionReEvaluate}
+          />
+          <main className="dossier-main">
         <div className="vtabs report-tabs" role="tablist" aria-label="Candidate report sections">
           {REPORT_TABS.filter((tab) => availableTabIds.has(tab.id)).map((tab) => (
             <button
@@ -1093,12 +1096,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           // top-level scorecard on the page — the per-rubric dimensions and the
           // ~30 heuristic metrics hang under it as evidence (see below).
           const scorecard = computeScorecard(completedAssessment);
-          const taaliScore = reportModel?.summaryModel?.taaliScore;
-          const roleFitScoreVal = reportModel?.summaryModel?.roleFitScore;
-          const assessmentScore = reportModel?.summaryModel?.assessmentScore;
-          const recommendationLabel = reportModel?.recommendation?.label || 'Continue review';
-          const reqMet = matchedRequirements.length;
-          const reqTotal = matchedRequirements.length + missingRequirements.length;
 
           return (
             <>
@@ -1111,25 +1108,18 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 </div>
               ) : null}
 
-              {/* (1) Verdict band — one canonical Taali ring + the agent's
-                  recommendation + the shared IntegrityFlags trust readout; the
-                  remaining scores demote to tiles (see VerdictBand.jsx). */}
-              <VerdictBand
-                taaliScore={taaliScore}
-                roleFitScore={roleFitScoreVal}
-                assessmentScore={assessmentScore}
-                reqMet={reqMet}
-                reqTotal={reqTotal}
-                recommendationLabel={verdictLabel(agentDecision) || recommendationLabel}
-                confidence={agentDecision?.confidence ?? null}
-                summaryText={reportModel?.recruiterSummaryText || ''}
-                integrity={application?.score_summary?.integrity || null}
-                provenance={application?.score_summary?.score_provenance}
-              />
-
-              {/* (1b) Why this verdict — deterministic decision trace (recruiter-only). */}
-              {!isClientView ? (
+              {/* (1) Why this verdict — recruiters with a live decision see the
+                  reasoning + deterministic trace; clients, the demo, and the
+                  un-decided tail fall back to the holistic summary so there's
+                  always a "why". The score ring, recommendation, flags and the
+                  demoted scores now live in the DecisionRail (left). */}
+              {!isClientView && agentDecision ? (
                 <VerdictDetail decision={agentDecision} />
+              ) : reportModel?.recruiterSummaryText ? (
+                <section className="mc-why" aria-label="Why this verdict">
+                  <div className="mc-kicker">WHY THIS VERDICT</div>
+                  <p className="mc-why-reason">{reportModel.recruiterSummaryText}</p>
+                </section>
               ) : null}
 
               {/* (2) CV match review — full requirement breakdown, gaps first */}
@@ -1907,6 +1897,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               </div>
             );
           })()}
+        </div>
+          </main>
         </div>
       </div>
 

@@ -1701,3 +1701,171 @@ button.eng-badge-button:focus-visible {
   margin-top: 6px;
 }
 .mc-integrity-clean svg { color: var(--purple); }
+
+/* ============================================================
+   Verdict-first DOSSIER — sticky decision rail + tabbed evidence.
+   Namespaced under .dossier / .dossier-rail (NEVER a bare .rail —
+   that collides with .cv-rail above). Mirrors report-preview.html
+   with the app's real tokens. (design-language pass)
+   ============================================================ */
+.dossier {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 26px;
+  align-items: start;
+  margin-top: 18px;
+}
+.dossier-main { min-width: 0; }
+
+.dossier-rail {
+  position: sticky;
+  top: 80px;
+  background: linear-gradient(180deg, color-mix(in oklab, var(--purple) 7%, var(--bg-2)), var(--bg-2) 62%);
+  border: 1px solid var(--purple-soft);
+  border-radius: var(--radius-lg);
+  padding: 22px;
+}
+.dossier-rail .dr-score {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+/* Recommendation slab — the bold dark-purple "agent ON" treatment, with the
+   recommended action as a white CTA. */
+.dossier-rail .dr-rec {
+  background: linear-gradient(120deg, #3a1d6e, #6a3fb8, #2a1556, #4a2a8a, #3a1d6e);
+  background-size: 300% 300%;
+  animation: drFlow 7s ease-in-out infinite;
+  border: 1px solid color-mix(in oklab, var(--purple) 45%, transparent);
+  border-radius: 16px;
+  padding: 16px 15px;
+  text-align: center;
+  color: #efe9fb;
+  box-shadow: 0 8px 24px rgba(36, 17, 71, 0.28);
+  margin-bottom: 12px;
+}
+@keyframes drFlow {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+.dossier-rail .dr-rec-kl {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #cbb8f6;
+  margin-bottom: 12px;
+}
+.dossier-rail .dr-rec-btn {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #fff;
+  color: #2a1854;
+  border: 0;
+  border-radius: 12px;
+  padding: 13px;
+  font-family: inherit;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.14);
+  transition: background 0.12s;
+}
+.dossier-rail .dr-rec-btn:hover { background: #f1ecfb; }
+.dossier-rail .dr-rec-btn:disabled { opacity: 0.6; cursor: default; }
+.dossier-rail .dr-rec-conf {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.05em;
+  color: #b4a0e6;
+  margin-top: 12px;
+}
+
+.dossier-rail .dr-flags-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  justify-content: center;
+  margin-bottom: 12px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--amber-ink, #7a4d0a);
+  background: color-mix(in oklab, var(--amber) 16%, var(--bg-2));
+}
+.dossier-rail .dr-flags-chip svg { color: var(--amber); }
+
+.dossier-rail .dr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.dossier-rail .dr-btn {
+  flex: 1 1 calc(50% - 4px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 10px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--ink-2);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.dossier-rail .dr-btn:hover { border-color: var(--purple-lav, color-mix(in oklab, var(--purple) 40%, var(--line))); background: var(--purple-soft); }
+.dossier-rail .dr-btn:disabled { opacity: 0.55; cursor: default; }
+.dossier-rail .dr-btn-counter {
+  border-color: color-mix(in oklab, var(--purple) 40%, var(--line));
+  color: var(--purple-2);
+}
+.dossier-rail .dr-btn-wide { flex-basis: 100%; }
+
+.dossier-rail .dr-hint {
+  font-size: 0.8125rem;
+  color: var(--mute);
+  line-height: 1.5;
+  padding: 11px 13px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  margin-bottom: 4px;
+}
+.dossier-rail .dr-hint strong { color: var(--ink); }
+
+.dossier-rail .dr-facts { margin-top: 16px; }
+.dossier-rail .dr-fact {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.875rem;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  color: var(--mute);
+}
+.dossier-rail .dr-fact b { color: var(--ink); font-weight: 600; }
+.dossier-rail .dr-prov {
+  margin-top: 14px;
+  justify-content: center;
+  display: flex;
+}
+
+@media (max-width: 920px) {
+  .dossier { grid-template-columns: 1fr; }
+  .dossier-rail { position: static; }
+}
