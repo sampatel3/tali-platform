@@ -262,19 +262,40 @@
   background: var(--bg-2);
 }
 
-.mc-agent-settings-threshold-display {
-  font-family: var(--font-display);
-  font-size: 3.75rem;
-  font-weight: 600;
-  letter-spacing: -0.04em;
-  line-height: 1;
-  color: var(--purple);
-  text-align: right;
+/* Mode row + inline "Currently 55%" read (pipeline-preview .selrow). The
+   mode dropdown and the live cut-off sit on one line; in auto mode the
+   suggested-threshold rationale flows after them. */
+.mc-agent-settings-threshold-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-bottom: 10px;
 }
 
-.mc-agent-settings-threshold-pct {
+.mc-agent-settings-threshold-mode {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.8125rem;
+  color: var(--ink);
+}
+
+.mc-agent-settings-threshold-current {
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+}
+
+.mc-agent-settings-threshold-current b {
+  color: var(--purple-2, var(--purple));
+  font-weight: 600;
+}
+
+.mc-agent-settings-threshold-rationale {
+  font-size: 0.75rem;
   color: var(--mute);
-  font-size: 2rem;
+  flex: 1 1 220px;
+  min-width: 0;
 }
 
 .mc-agent-settings-slider {

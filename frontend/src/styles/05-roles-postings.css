@@ -408,12 +408,12 @@
 }
 
 .role-desc {
-  padding: 24px 32px 26px;
+  /* pipeline-preview .spec: main column + a fixed 300px "At a glance" rail. */
+  padding: 24px 0 26px;
   display: grid;
-  grid-template-columns: 1.4fr 1fr;
-  gap: 32px;
-  border-top: 1px solid var(--line-2);
-  background: linear-gradient(180deg, transparent 0%, color-mix(in oklab, var(--purple) 2%, var(--bg-2)) 100%);
+  grid-template-columns: 1fr 300px;
+  gap: 24px;
+  align-items: start;
 }
 
 .role-desc-summary {
@@ -541,19 +541,23 @@
   transform: rotate(180deg);
 }
 
+/* "At a glance" sidebar — pipeline-preview .glance: a sticky, purple-tinted
+   gradient card with a purple-soft border (was a plain grey non-sticky box). */
 .role-highlights {
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 20px 22px;
+  background: linear-gradient(180deg, var(--purple-tint), var(--bg-2) 60%);
+  border: 1px solid var(--purple-soft);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
   align-self: start;
+  position: sticky;
+  top: 80px;
 }
 
 .role-highlights h4 {
   font-family: var(--font-mono);
   font-size: 0.65625rem;
   letter-spacing: 0.12em;
-  color: var(--mute);
+  color: var(--purple);
   text-transform: uppercase;
   margin: 0 0 14px;
 }
@@ -591,6 +595,17 @@
   font-size: 0.75rem;
   color: var(--mute);
   line-height: 1.45;
+}
+
+/* Job spec tab collapses to a single column on narrow viewports (pipeline-
+   preview @1100px), and the "At a glance" rail stops sticking. */
+@media (max-width: 1100px) {
+  .role-desc {
+    grid-template-columns: 1fr;
+  }
+  .role-highlights {
+    position: static;
+  }
 }
 
 .score-panel {
