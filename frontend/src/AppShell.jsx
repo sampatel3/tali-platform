@@ -105,6 +105,9 @@ const ClientIntakePage = lazy(() =>
 const ClientsPage = lazy(() =>
   import('./features/clients/ClientsPage').then((m) => ({ default: m.ClientsPage }))
 );
+const ClientDetailPage = lazy(() =>
+  import('./features/clients/ClientDetailPage').then((m) => ({ default: m.ClientDetailPage }))
+);
 const JobPipelinePage = lazy(() =>
   import('./features/jobs/JobPipelinePage').then((m) => ({ default: m.JobPipelinePage }))
 );
@@ -180,6 +183,7 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     '/tasks/bespoke',
     '/candidate-detail',
     ].includes(pathname)
+    || pathname.startsWith('/clients/')
     || pathname.startsWith('/jobs/')
     || pathname.startsWith('/assessments/')
     || pathname.startsWith('/candidates/')
@@ -305,6 +309,9 @@ function AppContent() {
         : assessmentIdFromLink,
       candidateApplicationId: Object.prototype.hasOwnProperty.call(options, 'candidateApplicationId')
         ? options.candidateApplicationId
+        : null,
+      clientId: Object.prototype.hasOwnProperty.call(options, 'clientId')
+        ? options.clientId
         : null,
       candidateDetailAssessmentId: Object.prototype.hasOwnProperty.call(options, 'candidateDetailAssessmentId')
         ? options.candidateDetailAssessmentId
@@ -568,6 +575,22 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <ClientsPage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
+      />
+
+      {/* Per-client detail — economics roll-up + assigned requisitions.
+          React Router ranks the static /clients above this param route, so
+          both resolve regardless of declaration order. Protected recruiter
+          route (see isProtectedRecruiterPath). */}
+      <Route
+        path="/clients/:id"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <ClientDetailPage
               onNavigate={navigateToPage}
               NavComponent={DashboardNavWithMode}
             />

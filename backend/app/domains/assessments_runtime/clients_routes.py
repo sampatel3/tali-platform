@@ -7,7 +7,7 @@ the JWT'd user's organization.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -23,6 +23,7 @@ from ...services.client_service import (
     list_clients,
     open_job_count_for_client,
     serialize_client,
+    serialize_client_detail,
     update_client,
 )
 
@@ -82,11 +83,14 @@ def get_client_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """A single client + its requisitions. 404 if not in the caller's org.
+    """A single client enriched for its detail page. 404 if not in the caller's
+    org.
 
     ``open_job_count`` counts the client's PUBLISHED job pages (consistent with
-    the list endpoint); the ``requisitions`` block lists every brief assigned to
-    the client regardless of publish state."""
+    the list endpoint); ``requisitions`` lists every brief assigned to the
+    client regardless of publish state, each with its client_rate / margin /
+    margin_pct and its job page status; ``summary`` rolls those up. The briefs
+    are loaded once and reused for both (no N+1)."""
     client = get_client(db, current_user.organization_id, client_id)
     briefs = (
         db.query(RoleBrief)
@@ -100,17 +104,7 @@ def get_client_endpoint(
     open_job_count = open_job_count_for_client(
         db, current_user.organization_id, client_id
     )
-    payload: dict[str, Any] = serialize_client(client, open_job_count=open_job_count)
-    payload["requisitions"] = [
-        {
-            "id": b.id,
-            "title": b.title,
-            "status": b.status,
-            "completeness": int(b.completeness or 0),
-        }
-        for b in briefs
-    ]
-    return payload
+    return serialize_client_detail(client, briefs, open_job_count=open_job_count)
 
 
 @router.patch("/clients/{client_id}")

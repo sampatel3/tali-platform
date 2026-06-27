@@ -94,6 +94,11 @@ def test_get_client_includes_requisitions_and_404_for_other_org(client):
     assert req["title"] == "Backend Engineer"
     assert req["status"] == "draft"
     assert "completeness" in req
+    # Enriched detail fields present (no rate set → null margin, unpublished → null page).
+    assert req["client_rate"] is None
+    assert req["margin"] is None
+    assert req["margin_pct"] is None
+    assert req["job_page"] is None
     # A drafted-but-unpublished requisition has NO job page → open_job_count 0
     # (the requisition still shows in the requisitions list).
     assert body["open_job_count"] == 0
@@ -101,6 +106,95 @@ def test_get_client_includes_requisitions_and_404_for_other_org(client):
     # A different org cannot see this client.
     other_headers, _ = auth_headers(client, organization_name="OtherOrg")
     assert client.get(f"/api/v1/clients/{client_id}", headers=other_headers).status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Client detail page: summary rollup + enriched requisitions
+# --------------------------------------------------------------------------- #
+def test_get_client_detail_summary_and_enriched_requisitions(client):
+    """Two requisitions — one with rate+salary (computable margin), one without
+    — yield the right summary rollup, enriched requisition items, and an
+    open_job_count from the published page."""
+    headers, _ = auth_headers(client)
+    client_id = client.post(
+        "/api/v1/clients", json={"name": "Soylent"}, headers=headers
+    ).json()["id"]
+
+    # Requisition A: rate 240000, salary_max 180000 → margin 60000, pct 25.
+    with_margin_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+    client.patch(
+        f"/api/v1/requisitions/{with_margin_id}",
+        json={
+            "title": "Data Engineer",
+            "client_id": client_id,
+            "client_rate": 240000,
+            "salary_min": 120000,
+            "salary_max": 180000,
+        },
+        headers=headers,
+    )
+    # Requisition B: assigned but no rate → margin not computable.
+    no_margin_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+    client.patch(
+        f"/api/v1/requisitions/{no_margin_id}",
+        json={"title": "Recruiter", "client_id": client_id},
+        headers=headers,
+    )
+
+    # Publish the margin requisition → one open job page.
+    pub = client.post(
+        f"/api/v1/requisitions/{with_margin_id}/publish",
+        json={"jd_markdown": "# Data Engineer"},
+        headers=headers,
+    )
+    assert pub.status_code == 200, pub.text
+
+    body = client.get(f"/api/v1/clients/{client_id}", headers=headers).json()
+
+    # open_job_count = the single published page.
+    assert body["open_job_count"] == 1
+
+    # summary: only the computable margin contributes; avg over one pct = 25.
+    assert body["summary"] == {
+        "open_jobs": 1,
+        "total_requisitions": 2,
+        "total_margin": 60000,
+        "avg_margin_pct": 25,
+    }
+
+    # Requisitions are newest-first (id desc): B (no margin), then A (margin).
+    reqs = {r["id"]: r for r in body["requisitions"]}
+    assert len(reqs) == 2
+
+    a = reqs[with_margin_id]
+    assert a["client_rate"] == 240000
+    assert a["margin"] == 60000
+    assert a["margin_pct"] == 25
+    assert a["job_page"] == "open"  # published
+
+    b = reqs[no_margin_id]
+    assert b["client_rate"] is None
+    assert b["margin"] is None
+    assert b["margin_pct"] is None
+    assert b["job_page"] is None  # unpublished
+
+
+def test_get_client_detail_no_requisitions_zeros_and_nulls(client):
+    """A client with no requisitions → empty list, zero counts, null margins."""
+    headers, _ = auth_headers(client)
+    client_id = client.post(
+        "/api/v1/clients", json={"name": "Umbrella"}, headers=headers
+    ).json()["id"]
+
+    body = client.get(f"/api/v1/clients/{client_id}", headers=headers).json()
+    assert body["requisitions"] == []
+    assert body["open_job_count"] == 0
+    assert body["summary"] == {
+        "open_jobs": 0,
+        "total_requisitions": 0,
+        "total_margin": None,
+        "avg_margin_pct": None,
+    }
 
 
 def test_patch_client_updates_fields(client):
