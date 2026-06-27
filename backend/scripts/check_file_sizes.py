@@ -34,10 +34,14 @@ ALLOWLIST: dict[str, str] = {
     "app/domains/assessments_runtime/candidate_runtime_routes.py": "candidate runtime API",
     "app/domains/assessments_runtime/pipeline_service.py": "assessment runtime pipeline orchestration",
     "app/domains/assessments_runtime/roles_management_routes.py": "roles + job-spec upload API",
+    "app/domains/assessments_runtime/requisition_routes.py": "requisition routes; predates gate, pending split (512 LOC)",
     "app/domains/billing_webhooks/billing_routes.py": "Stripe + credit-pack billing routes (TODO: split webhook handlers)",
     "app/domains/workable_sync/routes.py": "legacy Workable sync API",
     "app/services/fit_matching_service.py": "CV-to-role fit scoring pipeline",
     "app/services/interview_support_service.py": "interview pack builder (1 LOC over after chip-helper extraction)",
+    "app/services/pricing_service.py": "pricing service; predates gate, pending split (509 LOC)",
+    "app/services/requisition_chat_service.py": "requisition chat service; predates gate, pending split (956 LOC)",
+    "app/services/requisition_template_service.py": "requisition template service; predates gate, pending split (526 LOC)",
 }
 
 
