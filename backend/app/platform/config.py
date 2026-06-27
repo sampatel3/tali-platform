@@ -44,7 +44,10 @@ class Settings(BaseSettings):
     # ~30s → ~5s per tool-using prompt; (b) ~10× cheaper inside the $5/assessment
     # budget; (c) Haiku is fully capable for the read/edit-file tool-use shape
     # the chat exercises.
-    CLAUDE_CHAT_MODEL: str = "claude-3-5-haiku-latest"
+    # NOTE: claude-3-5-haiku-latest was RETIRED by Anthropic (404 not_found),
+    # which 502'd every requisition + candidate chat turn — pin the valid Haiku
+    # 4.5 id (the same one Graphiti uses and that the pricing table rates).
+    CLAUDE_CHAT_MODEL: str = "claude-haiku-4-5-20251001"
     # Autonomous cohort-loop (agent_runtime/orchestrator) model. Independent of
     # CLAUDE_MODEL — the interactive recruitment agent + chat stay on it. The
     # cron deliberation loop is ~92% no-op/fail and the safety-critical decisions
