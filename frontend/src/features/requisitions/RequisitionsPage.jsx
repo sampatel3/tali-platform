@@ -78,6 +78,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const [publishing, setPublishing] = useState(false);
   // Transient "Copied" tick on the share-URL copy button.
   const [copied, setCopied] = useState(false);
+  // Transient "Copied" tick on the careers-board URL copy button.
+  const [careersCopied, setCareersCopied] = useState(false);
   // Minting / "Copied" tick for the client-intake link (the no-login link a
   // consultancy recruiter sends to their client to describe the role).
   const [clientLinking, setClientLinking] = useState(false);
@@ -443,6 +445,24 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     }
   }, [jobPageUrl]);
 
+  // The org's public careers board URL (string or null on the brief). When set,
+  // we surface it alongside the published job-page link so the recruiter can
+  // point candidates at the board where this role also appears.
+  const careersUrl = (typeof brief?.careers_url === 'string' && brief.careers_url.trim() !== '')
+    ? brief.careers_url
+    : '';
+
+  const copyCareersUrl = useCallback(async () => {
+    if (!careersUrl) return;
+    try {
+      await navigator.clipboard.writeText(careersUrl);
+      setCareersCopied(true);
+      setTimeout(() => setCareersCopied(false), 1800);
+    } catch {
+      setError('Could not copy the link — select and copy it manually.');
+    }
+  }, [careersUrl]);
+
   // ---- share with client (the no-login client-intake link) ----
   // The serialized brief carries `client_link` ({ token, url } or null). Build
   // the absolute /intake/:token URL the same way the job page does, so Copy/
@@ -483,7 +503,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   }, [clientLinkUrl]);
 
   // Reset the transient "Copied" ticks when switching requisitions.
-  useEffect(() => { setCopied(false); setClientCopied(false); }, [selectedId]);
+  useEffect(() => { setCopied(false); setClientCopied(false); setCareersCopied(false); }, [selectedId]);
 
   const published = Boolean(jobPage) || isPublished(brief?.status);
   const canSend = (composer.trim() || attachments.length > 0) && !turnInFlight;
@@ -627,6 +647,22 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                           {publishing ? <span className="rq-spinner" /> : <RefreshCw size={13} />} Re-publish
                         </button>
                       </div>
+                      {careersUrl ? (
+                        <div className="rq-careers-row">
+                          <a
+                            className="rq-careers-link"
+                            href={careersUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={careersUrl}
+                          >
+                            On your careers page <ExternalLink size={12} />
+                          </a>
+                          <button type="button" className="rq-btn-sm is-ghost" onClick={copyCareersUrl}>
+                            {careersCopied ? <Check size={13} /> : <Copy size={13} />} {careersCopied ? 'Copied' : 'Copy'}
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   ) : (
                     <button type="button" className="rq-publish-btn" onClick={publish} disabled={publishing}>

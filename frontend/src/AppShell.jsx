@@ -93,6 +93,9 @@ const RequisitionsPage = lazy(() =>
 const PublicJobPage = lazy(() =>
   import('./features/jobpage/PublicJobPage').then((m) => ({ default: m.PublicJobPage }))
 );
+const CareersPage = lazy(() =>
+  import('./features/jobpage/CareersPage').then((m) => ({ default: m.CareersPage }))
+);
 const ClientIntakePage = lazy(() =>
   import('./features/clientintake/ClientIntakePage').then((m) => ({ default: m.ClientIntakePage }))
 );
@@ -891,6 +894,20 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <PublicJobPage />
+          </Suspense>
+        )}
+      />
+
+      {/* Public, no-auth CAREERS BOARD. The per-org page listing all of an
+          org's published jobs, reached via the org's careers_url. Like
+          /job/:token, it renders WITHOUT a NavComponent and without a recruiter
+          session — the page fetches the board through the unauthenticated
+          public careers endpoint. */}
+      <Route
+        path="/careers/:slug"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <CareersPage />
           </Suspense>
         )}
       />
