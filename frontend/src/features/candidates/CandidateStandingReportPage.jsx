@@ -110,9 +110,10 @@ const REPORT_TABS = [
   { id: 'assessment', label: 'Assessment', internalOnly: true, requiresAssessment: true },
   { id: 'cv', label: 'CV' },
   { id: 'prep', label: 'Interview prep', recruiterOnly: true },
-  // "Notes & context" is the unified add-info surface: freeform notes, the
-  // interview transcript capture, and ranking / link quick-adds.
-  { id: 'notes', label: 'Notes & context', recruiterOnly: true },
+  // "Notes & timeline" is the unified add-info surface: freeform notes, the
+  // interview transcript capture, ranking / link quick-adds, and the audit
+  // timeline.
+  { id: 'notes', label: 'Notes & timeline', recruiterOnly: true },
 ];
 
 const INTERNAL_TABS = new Set(REPORT_TABS.filter((tab) => tab.internalOnly).map((tab) => tab.id));
@@ -1063,12 +1064,12 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           </div>
         ) : null}
 
-        <div className="tabs report-tabs" role="tablist" aria-label="Candidate report sections">
+        <div className="vtabs report-tabs" role="tablist" aria-label="Candidate report sections">
           {REPORT_TABS.filter((tab) => availableTabIds.has(tab.id)).map((tab) => (
             <button
               key={tab.id}
               type="button"
-              className={activeTab === tab.id ? 'active' : ''}
+              className={`vtab ${activeTab === tab.id ? 'on' : ''}`.trim()}
               data-internal-only={tab.internalOnly ? '' : undefined}
               role="tab"
               aria-selected={activeTab === tab.id}
