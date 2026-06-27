@@ -160,3 +160,68 @@
 }
 .settings-toggle-list .settings-toggle-card:first-child { border-top: none; }
 
+/* ============================================================
+   Credit packs → light outline cards (match settings-preview's
+   `.pack`): a top-up is an affordance to click, not a filled
+   dark object. Was a solid `var(--ink)` slab; now a bordered
+   card that tints purple on hover, with the price in purple.
+   ============================================================ */
+.settings-credit-pack {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+  padding: 15px 16px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--ink);
+  box-shadow: none;
+  transition: border-color 0.12s, background 0.12s;
+}
+.settings-credit-pack:hover:not(:disabled) {
+  border-color: var(--purple-lav);
+  background: color-mix(in oklab, var(--purple) 5%, var(--bg-2));
+}
+.settings-credit-pack > span:first-child {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+.settings-credit-pack-meta {
+  font-size: 0.8125rem;
+  color: var(--purple-2);
+  font-weight: 500;
+}
+
+/* Workable status object → white card (preview `.wkstatus` sits on
+   --bg with a hairline border, not the grey --bg-3 fill). */
+.wk-status,
+.wk-summary,
+.settings-role-picker {
+  background: var(--bg);
+}
+
+/* Destructive actions inside the danger zone read as a red outline
+   button — the one place red is allowed (a genuine "remove data"
+   action). Matches the preview's `.btn.danger`. */
+.btn.danger {
+  border-color: color-mix(in oklab, var(--red) 45%, var(--line));
+  color: var(--red-deep);
+  background: var(--bg-2);
+}
+.btn.danger:hover {
+  border-color: var(--red);
+  background: color-mix(in oklab, var(--red) 8%, var(--bg-2));
+  color: var(--red-deep);
+}
+
+/* Fireflies "configured" status pills → purple, not traffic-light
+   green (preview shows `.gchip` in purple-soft with a check). Scoped
+   to the settings chip row so the global green chip elsewhere is
+   untouched. */
+.settings-chip-row .chip.green {
+  background: var(--purple-soft);
+  color: var(--purple-2);
+}
+

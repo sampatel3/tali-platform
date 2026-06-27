@@ -649,18 +649,21 @@
   flex-shrink: 0;
   display: inline-block;
 }
-.bg-jobs-panel-dot.tone-running   { background: #2563eb; box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.6); animation: bgJobsPulse 1.6s ease-out infinite; }
-.bg-jobs-panel-dot.tone-queued    { background: #9ca3af; }
-.bg-jobs-panel-dot.tone-cancelling{ background: #f59e0b; }
-.bg-jobs-panel-dot.tone-cancelled { background: #6b7280; }
-.bg-jobs-panel-dot.tone-completed { background: #10b981; }
-.bg-jobs-panel-dot.tone-failed    { background: #ef4444; }
-.bg-jobs-panel-dot.tone-noop      { background: #d1d5db; }
-.bg-jobs-panel-dot.tone-warning   { background: #f59e0b; }
+/* In-scheme status dots — running=purple (pulsing), completed=purple,
+   warn/failed/cancelling=amber, queued/cancelled/noop=grey. No
+   traffic-light blue/green/red (matches the preview's run/done/warn chips). */
+.bg-jobs-panel-dot.tone-running   { background: var(--purple); box-shadow: 0 0 0 0 color-mix(in oklab, var(--purple) 55%, transparent); animation: bgJobsPulse 1.6s ease-out infinite; }
+.bg-jobs-panel-dot.tone-queued    { background: var(--mute-2); }
+.bg-jobs-panel-dot.tone-cancelling{ background: var(--amber); }
+.bg-jobs-panel-dot.tone-cancelled { background: var(--mute); }
+.bg-jobs-panel-dot.tone-completed { background: var(--purple-lav); }
+.bg-jobs-panel-dot.tone-failed    { background: var(--amber); }
+.bg-jobs-panel-dot.tone-noop      { background: var(--line-2); }
+.bg-jobs-panel-dot.tone-warning   { background: var(--amber); }
 @keyframes bgJobsPulse {
-  0%   { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.55); }
-  70%  { box-shadow: 0 0 0 6px rgba(37, 99, 235, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+  0%   { box-shadow: 0 0 0 0 color-mix(in oklab, var(--purple) 55%, transparent); }
+  70%  { box-shadow: 0 0 0 6px color-mix(in oklab, var(--purple) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--purple) 0%, transparent); }
 }
 .bg-jobs-panel-status-label {
   font-size: 0.75rem;
@@ -702,9 +705,9 @@
   cursor: pointer;
 }
 .bg-jobs-panel-btn:hover:not(:disabled) {
-  background: var(--taali-danger-soft, rgba(220, 53, 69, 0.08));
-  border-color: var(--taali-danger-border, rgba(220, 53, 69, 0.3));
-  color: var(--taali-danger, #b91c1c);
+  background: color-mix(in oklab, var(--purple) 7%, var(--bg-2));
+  border-color: var(--purple-lav);
+  color: var(--purple-2);
 }
 .bg-jobs-panel-btn:disabled { cursor: not-allowed; opacity: 0.6; }
 .bg-jobs-panel-icon-btn {
@@ -764,7 +767,9 @@
 .agz-kpi-label { color: var(--mute); font-size: 0.6875rem; text-transform: uppercase; letter-spacing: .5px; font-weight: 600; }
 .agz-kpi-val { font-size: 1.4375rem; font-weight: 700; margin-top: 5px; letter-spacing: -.5px; color: var(--ink); }
 .agz-kpi-val small { font-size: 0.8125rem; color: var(--mute); font-weight: 600; }
-.agz-kpi-val.tone-green { color: var(--green); }
+/* In-scheme only — ON/positive reads purple, attention reads amber.
+   No traffic-light green (the budget KPI now passes tone="purple"). */
+.agz-kpi-val.tone-green { color: var(--purple); }
 .agz-kpi-val.tone-purple { color: var(--purple); }
 .agz-kpi-val.tone-amber { color: var(--amber); }
 .agz-kpi-hint { color: var(--mute); font-size: 0.6875rem; margin-top: 3px; }
@@ -779,26 +784,29 @@
   background: var(--bg); border: 1px solid var(--line); border-left: 4px solid var(--mute);
   border-radius: var(--radius); padding: 15px 16px;
 }
-.agz-agent.run { border-left-color: var(--green); }
-.agz-agent.paused { border-left-color: var(--red); }
+/* Fleet state — in-scheme: ON=purple, PAUSED=amber, IDLE=grey (the
+   default border-left above). No traffic-light green/red. */
+.agz-agent.run { border-left-color: var(--purple); }
+.agz-agent.paused { border-left-color: var(--amber); }
 .agz-agent-top { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .agz-agent-name { font-weight: 700; font-size: 0.875rem; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .agz-pill { padding: 2px 9px; border-radius: 999px; font-size: 0.6875rem; font-weight: 700; letter-spacing: .3px; }
-.agz-pill.on { background: rgba(21,163,106,.12); color: var(--green); }
-.agz-pill.off { background: rgba(230,74,74,.12); color: var(--red); }
+.agz-pill.on { background: var(--purple-soft); color: var(--purple-2); }
+.agz-pill.off { background: color-mix(in oklab, var(--amber) 16%, var(--bg-2)); color: var(--amber); }
 .agz-now { display: flex; align-items: center; gap: 8px; margin: 9px 0; font-size: 0.75rem; }
 .agz-actbadge { padding: 2px 9px; border-radius: 999px; font-weight: 700; font-size: 0.625rem; letter-spacing: .3px; flex: none; }
 .agz-acttxt { color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.agz-work .agz-actbadge { background: rgba(21,163,106,.16); color: var(--green); }
+.agz-work .agz-actbadge { background: var(--purple-soft); color: var(--purple-2); }
 .agz-work { animation: agzSoft 1.8s ease-in-out infinite; }
 .agz-idle .agz-actbadge { background: rgba(139,133,149,.16); color: var(--mute); }
-.agz-paused .agz-actbadge { background: rgba(230,74,74,.14); color: var(--red); }
+.agz-paused .agz-actbadge { background: color-mix(in oklab, var(--amber) 16%, var(--bg-2)); color: var(--amber); }
 @keyframes agzSoft { 0%, 100% { opacity: 1; } 50% { opacity: .6; } }
 .agz-bar { height: 7px; background: var(--bg-3); border-radius: 999px; overflow: hidden; margin: 11px 0 4px; }
 .agz-bar > i { display: block; height: 100%; border-radius: 999px; }
 .agz-bar > i.tone-purple { background: var(--purple); }
 .agz-bar > i.tone-amber { background: var(--amber); }
-.agz-bar > i.tone-red { background: var(--red); }
+/* Near-cap (≥90%) reads as a strong amber warn, not traffic-light red. */
+.agz-bar > i.tone-red { background: var(--amber); }
 .agz-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 14px; color: var(--mute); font-size: 0.71875rem; margin-top: 8px; }
 .agz-stats b { color: var(--ink-2); font-weight: 600; }
 
@@ -834,7 +842,7 @@
 }
 .agz-table td { padding: 8px; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
 .agz-dim { color: var(--mute); }
-.agz-st-ok { color: var(--green); font-weight: 600; }
+.agz-st-ok { color: var(--purple-2); font-weight: 600; }
 .agz-st-warn { color: var(--amber); font-weight: 600; }
 .agz-st-dim { color: var(--mute); }
 .agz-chip { font: 600 11px var(--font-mono); padding: 1px 8px; border-radius: 999px; background: var(--bg-3); color: var(--ink-2); }
