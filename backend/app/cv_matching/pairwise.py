@@ -120,15 +120,22 @@ def _call_pairwise(
     requirements: list,
     cv_a: str,
     cv_b: str,
+    organization_id: int | None = None,
 ) -> str:
     prompt = _build_pairwise_prompt(jd_text, requirements, cv_a, cv_b)
+    metering: dict = {"feature": "pairwise_judge"}
+    if organization_id is not None:
+        # The resolved client is already org-bound; also tag the per-call
+        # dict so the usage_event is attributed even if a caller injects a
+        # non-org-bound client.
+        metering["organization_id"] = int(organization_id)
     response = client.messages.create(
         model=MODEL_VERSION,
         max_tokens=400,
         temperature=0.0,
         system="You are an expert recruiter. Output only JSON.",
         messages=[{"role": "user", "content": prompt}],
-        metering={"feature": "pairwise_judge"},
+        metering=metering,
     )
     raw = response.content[0].text  # type: ignore[attr-defined]
     try:
@@ -284,6 +291,7 @@ def pairwise_score(
                 requirements=requirements,
                 cv_a=candidate.cv_text,
                 cv_b=anchor.cv_text,
+                organization_id=organization_id,
             )
             swapped = _call_pairwise(
                 client,
@@ -291,6 +299,7 @@ def pairwise_score(
                 requirements=requirements,
                 cv_a=anchor.cv_text,
                 cv_b=candidate.cv_text,
+                organization_id=organization_id,
             )
         except Exception as exc:  # pragma: no cover — defensive
             logger.warning(

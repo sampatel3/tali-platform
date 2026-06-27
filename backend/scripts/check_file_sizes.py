@@ -38,6 +38,7 @@ ALLOWLIST: dict[str, str] = {
     "app/domains/workable_sync/routes.py": "legacy Workable sync API",
     "app/services/fit_matching_service.py": "CV-to-role fit scoring pipeline",
     "app/services/interview_support_service.py": "interview pack builder (1 LOC over after chip-helper extraction)",
+    "app/services/pricing_service.py": "single source of truth for the per-feature pricing + reservation tables; grows one entry per metered Feature",
 }
 
 
