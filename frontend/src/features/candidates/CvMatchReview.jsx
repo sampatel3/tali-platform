@@ -111,27 +111,31 @@ const CvMatchReview = ({
               const key = reqGradeKey(item);
               const meta = REQ_STATUS_META[key] || REQ_STATUS_META.missing;
               const grade = requirementGrade(item);
-              // The bar fills to the graded confidence; when a row was never
-              // graded (raw-skill fallback) we approximate from the band so the
-              // bar still reads "strong" vs "gap" rather than rendering empty.
-              const bandFill = key === 'met' ? 90 : key === 'partially_met' ? 55 : key === 'unknown' ? 30 : 12;
-              const pct = grade !== null ? Math.max(0, Math.min(100, grade)) : bandFill;
-              const isLow = pct < 60;
+              // The bar fills to the graded confidence (the real match_score).
+              // When a row was never graded (raw-skill fallback) there is no
+              // number to show — render the status pill alone, never a fabricated
+              // score.
+              const hasGrade = grade !== null && Number.isFinite(Number(grade));
+              const pct = hasGrade ? Math.max(0, Math.min(100, Number(grade))) : null;
+              const isLow = pct !== null && pct < 60;
+              // Real evidence only — no invented "matched evidence" copy.
               const evidence = item?.impact
                 || extractRequirementEvidence(item)
                 || item?.evidence_quote
-                || (key === 'met' ? 'Matched evidence on file.' : 'Probe this live.');
+                || '';
               const isRecruiter = String(item?.requirement_id || '').startsWith('crit_');
               const src = requirementSource(key);
               return (
                 <details key={extractRequirementKey(item, index)} className={`reqrow is-${key}`}>
                   <summary>
-                    <span className="reqg" aria-hidden="true">
-                      <span className={`reqscore ${isLow ? 'lo' : 'hi'}`}>{Math.round(pct)}</span>
-                      <span className="reqbar">
-                        <i className={isLow ? 'lo' : ''} style={{ width: `${pct}%` }} />
+                    {pct !== null ? (
+                      <span className="reqg" aria-hidden="true">
+                        <span className={`reqscore ${isLow ? 'lo' : 'hi'}`}>{Math.round(pct)}</span>
+                        <span className="reqbar">
+                          <i className={isLow ? 'lo' : ''} style={{ width: `${pct}%` }} />
+                        </span>
                       </span>
-                    </span>
+                    ) : null}
                     <span className="rqname">
                       {item.requirement || item.criterion_text || 'Requirement'}
                       {isRecruiter ? <span className="cvm-tag reqtag">Recruiter</span> : null}
@@ -140,8 +144,10 @@ const CvMatchReview = ({
                     <ChevronRight size={16} className="chev" aria-hidden="true" />
                   </summary>
                   <div className="ev">
-                    <span className="src">{src}</span>
-                    {evidence}
+                    {src ? <span className="src">{src}</span> : null}
+                    {evidence || (key === 'met' || key === 'partially_met'
+                      ? 'No verbatim evidence captured for this requirement.'
+                      : 'Probe in the interview.')}
                   </div>
                 </details>
               );
