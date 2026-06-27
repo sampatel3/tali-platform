@@ -68,8 +68,56 @@ def test_well_formed_response_validates_into_directives(db):
     ):
         result = INTENT_PARSER_SUB_AGENT.run(req, db=db)
     assert result.ok is True
+    assert result.cache_hit is False
     assert result.output["must_skills"] == ["python", "kubernetes"]
     assert result.output["strictness_modifier"] == 0.4
+    # Cache-miss success path must surface the token count read off
+    # response.usage (regression guard: this line used to reference
+    # undefined `in_tok`/`out_tok` and crash the whole sub-agent).
+    assert result.tokens_used == 180  # 120 input + 60 output
+
+
+def test_cache_miss_success_tolerates_missing_usage(db):
+    """The Claude response may lack a ``usage`` block (older stubs, some
+    proxies). The cache-miss success path must still return ok=True with
+    ``tokens_used`` defaulting to 0 — never raise on the missing attr."""
+    org, role, _, app = make_full_application(db)
+    req = SubAgentRequest(
+        organization_id=int(org.id),
+        application_id=int(app.id),
+        role_id=int(role.id),
+        extra={
+            "slots": {
+                "must_have": "rust",
+                "preferred": "",
+                "nice_to_have": "",
+                "constraints": "",
+            }
+        },
+    )
+    payload = {
+        "strictness_modifier": 0.0,
+        "must_skills": ["rust"],
+        "disqualifying_signals": [],
+        "soft_signals": [],
+        "constraints_parsed": [],
+    }
+    # No ``usage`` attribute on the response at all.
+    fake_client = SimpleNamespace(
+        messages=SimpleNamespace(
+            create=lambda **kwargs: SimpleNamespace(
+                content=[SimpleNamespace(text=json.dumps(payload), type="text")]
+            )
+        )
+    )
+    with patch(
+        "app.sub_agents.intent_parser.get_client_for_org", return_value=fake_client
+    ):
+        result = INTENT_PARSER_SUB_AGENT.run(req, db=db)
+    assert result.ok is True
+    assert result.cache_hit is False
+    assert result.output["must_skills"] == ["rust"]
+    assert result.tokens_used == 0
 
 
 def test_invalid_json_returns_empty_directives(db):

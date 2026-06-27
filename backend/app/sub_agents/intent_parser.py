@@ -359,6 +359,14 @@ class IntentParserSubAgent:
         except (AttributeError, IndexError):
             raw = ""
 
+        # Token usage for the SubAgentResult is read straight off the
+        # response (the wrapper already metered the call); we just surface
+        # the count to the orchestrator. Defensive getattr mirrors the
+        # idiom in cv_matching/holistic.py and candidate_search/rerank.py.
+        usage = getattr(response, "usage", None)
+        in_tok = int(getattr(usage, "input_tokens", 0) or 0)
+        out_tok = int(getattr(usage, "output_tokens", 0) or 0)
+
         directives = _parse_or_empty(raw)
         payload = directives.model_dump()
         try:
