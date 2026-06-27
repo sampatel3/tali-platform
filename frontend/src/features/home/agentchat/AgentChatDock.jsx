@@ -8,7 +8,7 @@ import { MessageSquare, PanelRightClose, Users, X } from 'lucide-react';
 
 import { agentChat } from '../../../shared/api';
 import { useToast } from '../../../context/ToastContext';
-import { ChatComposer, ChatEmptyState, ChatMessage, ThinkingDots } from '../../../shared/chat';
+import { ChatComposer, ChatEmptyState, ChatMarkdown, ChatMessage, ThinkingDots } from '../../../shared/chat';
 import { DraftTaskCard, ImpactCard, NeedsInputCard } from './cards.jsx';
 import CandidateEvidenceCard from '../../chat/CandidateEvidenceCard';
 
@@ -301,29 +301,46 @@ export function AgentChatDock({
             onPick={(t) => submitComposer(t)}
           />
         ) : (
-          items.map((it) =>
-            it.kind === 'needs_input' ? (
-              <NeedsInputCard key={it.id} item={it} onAnswer={answer} onDismiss={dismiss} />
-            ) : (
-              <ChatMessage key={it.id} role={it.author === 'agent' ? 'assistant' : 'user'} text={it.text} time={it.created_at}>
-                {(it.actions || []).map((card, i) =>
-                  card.type === 'candidate_evidence' ? (
-                    <CandidateEvidenceCard key={i} data={card} />
-                  ) : card.type === 'draft_task_review' ? (
-                    <DraftTaskCard
-                      key={i}
-                      card={card}
-                      onApprove={approveDraft}
-                      onRevise={reviseDraft}
-                      busy={sending}
-                    />
-                  ) : (
-                    <ImpactCard key={i} card={card} onApply={(t) => send(`Set the score cut-off to ${t}.`)} busy={sending} />
-                  )
-                )}
-              </ChatMessage>
-            )
-          )
+          items.map((it) => {
+            if (it.kind === 'needs_input') {
+              return <NeedsInputCard key={it.id} item={it} onAnswer={answer} onDismiss={dismiss} />;
+            }
+            const isAgent = it.author === 'agent';
+            const cards = (it.actions || []).map((card, i) =>
+              card.type === 'candidate_evidence' ? (
+                <CandidateEvidenceCard key={i} data={card} />
+              ) : card.type === 'draft_task_review' ? (
+                <DraftTaskCard
+                  key={i}
+                  card={card}
+                  onApprove={approveDraft}
+                  onRevise={reviseDraft}
+                  busy={sending}
+                />
+              ) : (
+                <ImpactCard key={i} card={card} onApply={(t) => send(`Set the score cut-off to ${t}.`)} busy={sending} />
+              )
+            );
+            // Agent replies carry a mono "Agent" attribution label above the
+            // text (home-preview `.msg.bot .who`). We render the label + markdown
+            // as children (no `text` prop) so the label sits above the bubble
+            // body; the shared <ChatMarkdown> keeps the prose styling identical
+            // to every other chat surface. User messages stay the plain ink pill.
+            if (isAgent) {
+              return (
+                <ChatMessage key={it.id} role="assistant" time={it.created_at}>
+                  <div className="ac-agent-say">
+                    <span className="ac-who">Agent</span>
+                    {it.text ? <ChatMarkdown>{it.text}</ChatMarkdown> : null}
+                  </div>
+                  {cards}
+                </ChatMessage>
+              );
+            }
+            return (
+              <ChatMessage key={it.id} role="user" text={it.text} time={it.created_at} />
+            );
+          })
         )}
         {(sending || agentWorking) && (
           <ChatMessage role="assistant">
@@ -347,7 +364,11 @@ export function AgentChatDock({
               ? `Message ${bulkSelectedRoles.length} agents at once…`
               : agentWorking
                 ? 'The agent is working on your last message…'
-                : "Ask about this role's pool, or tell the agent to change something"
+                // Matches the home-preview composer ("Message the {role} agent…");
+                // falls back to a generic prompt when no role name is loaded.
+                : roleName
+                  ? `Message the ${roleName} agent…`
+                  : "Message this role's agent…"
           }
           busy={(sending || agentWorking) && !isBulk}
         />

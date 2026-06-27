@@ -55,10 +55,17 @@ export function AgentSidebar({
     const decisions = a.pending_decisions || 0;
     const rowStatus = a.agent_paused ? 'paused' : a.agent_enabled ? 'on' : 'off';
     const selected = bulkMode && bulkSelected?.has(a.role_id);
+    // Preview line (home-preview `.aprev`): paused reason → the agent's last
+    // activity → a "{n} decisions waiting" summary when it has a queue but no
+    // fresher message → an idle/off fallback. All real fields — no fabrication.
     const preview = a.agent_paused
       ? `Paused · ${a.agent_paused_reason || 'budget reached'}`
       : a.last_message_preview
-        || (a.agent_enabled ? 'No messages yet' : 'Agent off — tap to set up');
+        || (decisions > 0
+          ? `${fmtCount(decisions)} decision${decisions === 1 ? '' : 's'} waiting`
+          : a.agent_enabled
+            ? 'No messages yet'
+            : 'Agent off — tap to set up');
     return (
       <button
         key={a.role_id}
@@ -66,19 +73,38 @@ export function AgentSidebar({
         onClick={() => (bulkMode ? onToggleSelected?.(a.role_id) : onSelect?.(a.role_id))}
         title={!bulkMode && a.role_id === activeRoleId ? `${a.role_name} — click to deselect (view all roles)` : a.role_name}
       >
-        {bulkMode && (
-          <span className={`ac-check ${selected ? 'on' : ''}`} aria-hidden="true">
-            {selected ? <Check size={11} strokeWidth={3} /> : null}
+        {/* Top row: status glyph + role name (home-preview `.arow`). */}
+        <span className="ac-agent-top">
+          {bulkMode && (
+            <span className={`ac-check ${selected ? 'on' : ''}`} aria-hidden="true">
+              {selected ? <Check size={11} strokeWidth={3} /> : null}
+            </span>
+          )}
+          <span className={`ac-stat ac-stat-${rowStatus}`} aria-hidden="true">
+            {rowStatus === 'on' ? <Sparkles size={13} strokeWidth={2} />
+              : rowStatus === 'paused' ? <Pause size={11} strokeWidth={2} fill="currentColor" />
+              : <span className="ac-stat-dot" />}
           </span>
-        )}
-        <span className={`ac-stat ac-stat-${rowStatus}`} aria-hidden="true">
-          {rowStatus === 'on' ? <Sparkles size={13} strokeWidth={2} />
-            : rowStatus === 'paused' ? <Pause size={11} strokeWidth={2} fill="currentColor" />
-            : <span className="ac-stat-dot" />}
-        </span>
-        <span className="ac-agent-body">
           <span className="ac-agent-role">{a.role_name}</span>
+        </span>
+        {/* Everything below the top row is indented to align past the glyph
+            (home-preview `.aprev` / `.abadges` / `.abud`, margin-left:33px). */}
+        <span className="ac-agent-sub">
           <span className="ac-agent-preview">{preview}</span>
+          {(questions > 0 || decisions > 0) && (
+            <span className="ac-agent-badges">
+              {questions > 0 && (
+                <span className="ac-badge-q" title={`${questions} awaiting your reply`}>
+                  <MessageSquare size={10} /> {questions}
+                </span>
+              )}
+              {decisions > 0 && (
+                <span className="ac-badge-d" title={`${decisions} pending decisions`}>
+                  {fmtCount(decisions)} pending
+                </span>
+              )}
+            </span>
+          )}
           {a.budget_cap_cents > 0 && (
             <span
               className="ac-budget"
@@ -88,18 +114,6 @@ export function AgentSidebar({
                 className="ac-budget-fill"
                 style={{ width: `${Math.min(100, Math.round((a.budget_spent_cents / a.budget_cap_cents) * 100))}%` }}
               />
-            </span>
-          )}
-        </span>
-        <span className="ac-agent-meta">
-          {questions > 0 && (
-            <span className="ac-badge-q" title={`${questions} awaiting your reply`}>
-              <MessageSquare size={10} /> {questions}
-            </span>
-          )}
-          {decisions > 0 && (
-            <span className="ac-badge-d" title={`${decisions} pending decisions`}>
-              {fmtCount(decisions)}
             </span>
           )}
         </span>

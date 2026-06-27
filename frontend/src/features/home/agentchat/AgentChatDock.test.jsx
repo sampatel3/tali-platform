@@ -80,8 +80,9 @@ describe('AgentChatDock', () => {
     // Empty state first.
     expect(await screen.findByText(/What should this agent do/)).toBeInTheDocument();
 
-    // Type into the shared composer and press Enter to send.
-    const ta = screen.getByPlaceholderText(/Ask about this role's pool/);
+    // Type into the shared composer and press Enter to send. The placeholder
+    // names the active role, matching the home-preview ("Message the {role} agent…").
+    const ta = screen.getByPlaceholderText(/Message the Data Eng agent/);
     fireEvent.change(ta, { target: { value: 'what if I drop the cut-off to 60?' } });
     fireEvent.keyDown(ta, { key: 'Enter' });
 
@@ -138,8 +139,9 @@ describe('AgentSidebar', () => {
     expect(screen.getByText('GenAI Engineer')).toBeInTheDocument();
     // Questions indicator: 2 unread + 1 question = 3.
     expect(screen.getByText('3')).toBeInTheDocument();
-    // Decisions indicator: 50, shown separately (NOT summed into the questions badge).
-    expect(screen.getByText('50')).toBeInTheDocument();
+    // Decisions indicator: "50 pending", shown separately (NOT summed into the
+    // questions badge). Reads "{n} pending" per the home-preview `.abadge`.
+    expect(screen.getByText('50 pending')).toBeInTheDocument();
     expect(screen.queryByText('53')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByText('GenAI Engineer'));
