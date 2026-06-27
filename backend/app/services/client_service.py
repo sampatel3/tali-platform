@@ -95,6 +95,65 @@ def serialize_client(client: Client, *, open_job_count: int = 0) -> dict[str, An
     }
 
 
+def serialize_client_detail(
+    client: Client,
+    briefs: list[RoleBrief],
+    *,
+    open_job_count: int = 0,
+) -> dict[str, Any]:
+    """A client + its requisitions, enriched for the per-client detail page.
+
+    ``briefs`` are the client's already-loaded requisitions (newest-first); they
+    back BOTH the per-requisition margin enrichment and the rolled-up
+    ``summary`` — no per-brief query (no N+1). Each requisition carries its
+    ``client_rate`` and computed ``margin`` / ``margin_pct`` (None when not
+    computable) plus its published job page ``status`` (``job_page``, None when
+    unpublished). ``summary``:
+
+      - ``open_jobs`` — published job pages (mirrors ``open_job_count``)
+      - ``total_requisitions`` — count of the client's requisitions
+      - ``total_margin`` — sum of the computable per-requisition margins
+        (None when none are computable)
+      - ``avg_margin_pct`` — rounded mean of the computable margin_pcts
+        (None when none are computable)
+    """
+    payload: dict[str, Any] = serialize_client(client, open_job_count=open_job_count)
+
+    requisitions: list[dict[str, Any]] = []
+    margins: list[int] = []
+    margin_pcts: list[int] = []
+    for b in briefs:
+        margin, margin_pct = compute_margin(b.client_rate, b.salary_min, b.salary_max)
+        if margin is not None:
+            margins.append(margin)
+        if margin_pct is not None:
+            margin_pcts.append(margin_pct)
+        page = b.job_page
+        requisitions.append(
+            {
+                "id": b.id,
+                "title": b.title,
+                "status": b.status,
+                "completeness": int(b.completeness or 0),
+                "client_rate": b.client_rate,
+                "margin": margin,
+                "margin_pct": margin_pct,
+                "job_page": page.status if page else None,
+            }
+        )
+
+    payload["requisitions"] = requisitions
+    payload["summary"] = {
+        "open_jobs": open_job_count,
+        "total_requisitions": len(briefs),
+        "total_margin": sum(margins) if margins else None,
+        "avg_margin_pct": round(sum(margin_pcts) / len(margin_pcts))
+        if margin_pcts
+        else None,
+    }
+    return payload
+
+
 def get_client(db: Session, organization_id: int, client_id: int) -> Client:
     client = (
         db.query(Client)

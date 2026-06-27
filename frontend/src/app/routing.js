@@ -23,6 +23,10 @@ export const pathForPage = (page, options = {}) => {
       return '/requisitions';
     case 'clients':
       return '/clients';
+    case 'client-detail':
+      return options.clientId != null && String(options.clientId).trim() !== ''
+        ? `/clients/${encodeURIComponent(options.clientId)}`
+        : '/clients';
     case 'chat': {
       const base = options.chatConversationId
         ? `/chat/${encodeURIComponent(options.chatConversationId)}`

@@ -1,10 +1,11 @@
 // Clients — the consultancy's client directory.
 //
 // In a consultancy, requisitions belong to CLIENTS. This page lists every
-// client with a prominent open-jobs count, a lightweight "new client" form
-// (name + optional contact), and an expand-to-reveal panel showing each
-// client's requisitions. It composes the global purple design tokens and the
-// existing list conventions; it does NOT own any chat surface.
+// client with a prominent open-jobs count and a lightweight "new client" form
+// (name + optional contact). Clicking a client opens its detail page
+// (/clients/:id) — the economics roll-up + assigned requisitions. It composes
+// the global purple design tokens and the existing list conventions; it does
+// NOT own any chat surface.
 import React, { useCallback, useEffect, useState } from 'react';
 import { Building2, ChevronRight, Mail, Plus, User } from 'lucide-react';
 
@@ -12,22 +13,19 @@ import { clientApi } from './api';
 import './clients.css';
 
 const statusLabel = (status) => String(status || 'active').replace(/_/g, ' ');
-const reqStatusLabel = (status) => String(status || 'draft').replace(/_/g, ' ');
-const isPublished = (status) => String(status || '').toLowerCase() === 'published';
 
-// One client row + its (lazily fetched) requisitions panel.
-function ClientCard({ client, expanded, onToggle, detail, detailLoading }) {
+// One client row — leads to the client's detail page.
+function ClientCard({ client, onOpen }) {
   const count = Number(client.open_job_count) || 0;
   const contactBits = [client.contact_name, client.contact_email].filter(Boolean);
-  const requisitions = Array.isArray(detail?.requisitions) ? detail.requisitions : [];
 
   return (
-    <li className={`cl-card${expanded ? ' is-open' : ''}`}>
+    <li className="cl-card">
       <button
         type="button"
         className="cl-card-row"
-        onClick={onToggle}
-        aria-expanded={expanded}
+        onClick={onOpen}
+        aria-label={`Open ${client.name || 'client'}`}
       >
         <span className="cl-avatar" aria-hidden="true"><Building2 size={18} /></span>
         <span className="cl-card-main">
@@ -61,32 +59,8 @@ function ClientCard({ client, expanded, onToggle, detail, detailLoading }) {
           <span className="cl-count-n">{count}</span>
           <span className="cl-count-label">{count === 1 ? 'open job' : 'open jobs'}</span>
         </span>
-        <ChevronRight size={18} className={`cl-chevron${expanded ? ' is-open' : ''}`} aria-hidden="true" />
+        <ChevronRight size={18} className="cl-chevron" aria-hidden="true" />
       </button>
-
-      {expanded ? (
-        <div className="cl-detail">
-          <p className="cl-detail-label">Requisitions</p>
-          {detailLoading ? (
-            <div className="cl-detail-empty"><span className="cl-spinner" /> Loading…</div>
-          ) : requisitions.length === 0 ? (
-            <div className="cl-detail-empty">No requisitions assigned to this client yet.</div>
-          ) : (
-            <ul className="cl-req-list">
-              {requisitions.map((r) => (
-                <li key={r.id} className="cl-req">
-                  <span className="cl-req-title">{r.title || 'Untitled requisition'}</span>
-                  <span className="cl-req-meta">
-                    {r.completeness != null ? <span>{r.completeness}%</span> : null}
-                    <span className={`cl-dot${isPublished(r.status) ? ' is-published' : ''}`} />
-                    {reqStatusLabel(r.status)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      ) : null}
     </li>
   );
 }
@@ -99,11 +73,6 @@ export const ClientsPage = ({ onNavigate, NavComponent = null }) => {
   const [name, setName] = useState('');
   const [contactName, setContactName] = useState('');
   const [contactEmail, setContactEmail] = useState('');
-
-  // Expansion + per-client requisition detail (lazy, cached by id).
-  const [expandedId, setExpandedId] = useState(null);
-  const [details, setDetails] = useState({});
-  const [detailLoadingId, setDetailLoadingId] = useState(null);
 
   const loadList = useCallback(async () => {
     try {
@@ -142,25 +111,10 @@ export const ClientsPage = ({ onNavigate, NavComponent = null }) => {
     }
   }, [name, contactName, contactEmail, creating, loadList]);
 
-  // Expand a client → fetch its requisitions once (cached thereafter).
-  const toggle = useCallback(async (id) => {
-    if (expandedId === id) {
-      setExpandedId(null);
-      return;
-    }
-    setExpandedId(id);
-    if (details[id]) return; // already cached
-    setDetailLoadingId(id);
-    try {
-      const full = await clientApi.get(id);
-      setDetails((prev) => ({ ...prev, [id]: full }));
-    } catch {
-      // Non-fatal — the row stays expanded showing the empty/error state.
-      setDetails((prev) => ({ ...prev, [id]: { requisitions: [] } }));
-    } finally {
-      setDetailLoadingId((cur) => (cur === id ? null : cur));
-    }
-  }, [expandedId, details]);
+  const openClient = useCallback(
+    (id) => onNavigate?.('client-detail', { clientId: id }),
+    [onNavigate],
+  );
 
   return (
     <>
@@ -230,10 +184,7 @@ export const ClientsPage = ({ onNavigate, NavComponent = null }) => {
                 <ClientCard
                   key={c.id}
                   client={c}
-                  expanded={expandedId === c.id}
-                  onToggle={() => toggle(c.id)}
-                  detail={details[c.id]}
-                  detailLoading={detailLoadingId === c.id}
+                  onOpen={() => openClient(c.id)}
                 />
               ))}
             </ul>

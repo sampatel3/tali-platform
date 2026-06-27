@@ -10,6 +10,7 @@
 // beside the conversation as the agent extracts fields.
 import api, {
   viewPublicJob,
+  viewCareers,
   viewClientIntake,
   sendClientIntakeChat,
   submitClientIntake,
@@ -97,6 +98,15 @@ export const requisitionApi = {
 //    salary_min, salary_max, salary_currency, status, organization_name }`.
 export const publicJobApi = {
   get: (token) => viewPublicJob(token).then((r) => r.data),
+};
+
+// Public, UNAUTHENTICATED careers board — used by the per-org /careers/:slug
+// page that lists all of an org's published jobs. Same JWT-free pattern as
+// publicJobApi. Returns `{ organization_name, slug, jobs: [ { token, url,
+//   title, location, workplace_type, employment_type, seniority, salary,
+//   published_at } ] }` (jobs may be empty).
+export const publicCareersApi = {
+  get: (slug) => viewCareers(slug).then((r) => r.data),
 };
 
 // Public, UNAUTHENTICATED client-intake client — used by the no-login
