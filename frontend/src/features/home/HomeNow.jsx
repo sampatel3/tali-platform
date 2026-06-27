@@ -994,6 +994,11 @@ export const HomeNow = ({
 
   return (
     <section className="home-section">
+      {/* Funnel leads the column (above the queue) so the pending count always
+          has its denominator — how many are already advanced / in review /
+          rejected — in view, matching the hub layout. */}
+      <PipelineStandingStrip rolesBreakdown={rolesBreakdown} filters={filters} />
+
       <div className="home-section-head">
         <div>
           <span className="kicker">NOW · NEEDS YOU</span>
@@ -1011,10 +1016,6 @@ export const HomeNow = ({
         bulkAction={bulkActionEl}
         staleCount={staleCount}
       />
-
-      {/* Funnel standing for the scoped role — how many are already advanced /
-          in review / rejected — so the pending count has a denominator. */}
-      <PipelineStandingStrip rolesBreakdown={rolesBreakdown} filters={filters} />
 
       {/* Open orchestrator questions across the org (or scoped to the
           toolbar's role filter when set). Hides itself when the queue
