@@ -79,6 +79,155 @@ def test_chat_endpoint_requires_message_or_file(client):
 
 
 # --------------------------------------------------------------------------- #
+# Deterministic single-answer endpoint (NO LLM, NO metering)
+# --------------------------------------------------------------------------- #
+def test_answer_endpoint_records_select_column_field_no_llm(client):
+    """Answering a SELECT *column* field (workplace_type) sets the column, drops
+    it from gaps, returns the next gap's question + options, and makes NO LLM
+    call. We deliberately do NOT monkeypatch generate_structured nor set an API
+    key — a real LLM call would fail, so a 200 proves the path is LLM-free."""
+    headers, _ = auth_headers(client)
+    created = client.post("/api/v1/requisitions", json={}, headers=headers).json()
+    brief_id = created["id"]
+    before_completeness = created["completeness"]
+
+    resp = client.post(
+        f"/api/v1/requisitions/{brief_id}/answer",
+        json={"field_key": "workplace_type", "value": "Remote"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # Same top-level contract as /chat.
+    assert set(body.keys()) == {"brief", "reply", "messages", "gaps", "suggested_replies"}
+    # The column was set.
+    assert body["brief"]["workplace_type"] == "Remote"
+    # workplace_type dropped from gaps.
+    gap_keys = [g["key"] for g in body["gaps"]]
+    assert "workplace_type" not in gap_keys
+    # Reply acknowledges the field + asks the next gap (title is still first).
+    assert body["reply"].startswith("Got it — Workplace type: Remote.")
+    assert "What role are you hiring for?" in body["reply"]
+    # Transcript: opening + user answer + assistant ack.
+    assert [m["role"] for m in body["messages"]] == ["assistant", "user", "assistant"]
+    assert body["messages"][1]["content"] == "Remote"
+    assert body["messages"][1]["attachments"] == []
+    # Completeness rose now that a required field is filled.
+    assert body["brief"]["completeness"] > before_completeness
+
+
+def test_answer_endpoint_select_field_offers_next_select_options(client):
+    """When the next gap is itself a select (employment_type), the answer reply
+    surfaces that gap's options as tappable quick replies."""
+    headers, _ = auth_headers(client)
+    brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+    # Fill the earlier required gaps (title, workplace_type) so employment_type
+    # becomes the first remaining required gap.
+    client.patch(
+        f"/api/v1/requisitions/{brief_id}",
+        json={"title": "Engineer", "workplace_type": "Remote"},
+        headers=headers,
+    )
+    resp = client.post(
+        f"/api/v1/requisitions/{brief_id}/answer",
+        json={"field_key": "openings", "value": 2},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # openings is the answered number field; the next required gap is
+    # employment_type (a select) OR urgency — either way options are surfaced.
+    gap_keys = [g["key"] for g in body["gaps"]]
+    next_key = gap_keys[0]
+    assert next_key in ("employment_type", "urgency")
+    # Its select options are the tappable quick replies.
+    assert body["suggested_replies"] == (
+        ["Full-time", "Part-time", "Contract", "Temporary"]
+        if next_key == "employment_type"
+        else ["Low", "Normal", "High", "Urgent"]
+    )
+
+
+def test_answer_endpoint_custom_field_lands_in_custom_fields(client):
+    """Answering a CUSTOM field (urgency has no RoleBrief column) lands the value
+    in custom_fields, not a column."""
+    headers, _ = auth_headers(client)
+    brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+    resp = client.post(
+        f"/api/v1/requisitions/{brief_id}/answer",
+        json={"field_key": "urgency", "value": "Urgent"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["brief"]["custom_fields"]["urgency"] == "Urgent"
+    # urgency is required → it dropped out of the gaps.
+    assert "urgency" not in [g["key"] for g in body["gaps"]]
+
+
+def test_answer_endpoint_coerces_list_field_and_joins_readable(client):
+    """A list field (must_haves) coerces a list value and renders it joined in
+    the transcript + reply."""
+    headers, _ = auth_headers(client)
+    brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+    resp = client.post(
+        f"/api/v1/requisitions/{brief_id}/answer",
+        json={"field_key": "must_haves", "value": ["Python", "AWS"]},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["brief"]["must_haves"] == ["Python", "AWS"]
+    assert body["messages"][1]["content"] == "Python, AWS"
+    assert body["reply"].startswith("Got it — Must-haves: Python, AWS.")
+
+
+def test_answer_endpoint_unknown_field_key_422(client):
+    headers, _ = auth_headers(client)
+    brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+    resp = client.post(
+        f"/api/v1/requisitions/{brief_id}/answer",
+        json={"field_key": "not_a_field", "value": "x"},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+    # The brief was not mutated (no stray user message persisted).
+    after = client.get(f"/api/v1/requisitions/{brief_id}", headers=headers).json()
+    assert [m["role"] for m in after["messages"]] == ["assistant"]
+
+
+def test_answer_endpoint_completeness_reaches_100_then_publish_nudge(client):
+    """Answering every required field drives completeness to 100 and the reply
+    becomes the publish nudge with no options."""
+    headers, _ = auth_headers(client)
+    brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+    # Required fields in the default template: title, workplace_type,
+    # employment_type, openings, urgency, salary_min, salary_max, salary_currency,
+    # must_haves. salary_currency is seeded to AED on create.
+    answers = [
+        ("title", "Backend Engineer"),
+        ("workplace_type", "Remote"),
+        ("employment_type", "Full-time"),
+        ("openings", 2),
+        ("urgency", "Urgent"),
+        ("salary_min", 100),
+        ("salary_max", 200),
+        ("must_haves", ["Python"]),
+    ]
+    body = None
+    for field_key, value in answers:
+        body = client.post(
+            f"/api/v1/requisitions/{brief_id}/answer",
+            json={"field_key": field_key, "value": value},
+            headers=headers,
+        ).json()
+    assert body["gaps"] == []
+    assert body["brief"]["completeness"] == 100
+    assert body["reply"].endswith("That's everything I need — want to publish this?")
+    assert body["suggested_replies"] == []
+
+
+# --------------------------------------------------------------------------- #
 # AI-draft responsibilities ("What you'll do")
 # --------------------------------------------------------------------------- #
 def test_draft_responsibilities_lands_in_custom_fields_and_threads_metering(
