@@ -3,10 +3,12 @@ import { useSearchParams } from 'react-router-dom';
 import {
   ArrowRight,
   Filter,
+  Inbox,
   Pause,
   RefreshCw,
   Sparkles,
   Star,
+  Zap,
 } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
@@ -663,10 +665,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                   <SyncPulse status={syncing ? 'healthy' : workableHealth} className="mr-2 inline-flex" />
                   {syncing ? 'Syncing now' : workableHealthLabel}
                 </span>
-                <span>Last pull: <b>{formatRelativeDateTime(orgData?.workable_last_sync_at)}</b></span>
-                <span>Next pull in <b>{formatCountdown(nextPullAt)}</b></span>
+                <span>Last pull <b>{formatRelativeDateTime(orgData?.workable_last_sync_at)}</b></span>
+                <span>Next in <b>{formatCountdown(nextPullAt)}</b></span>
                 <span><b>{getSyncSummaryValue(workableSummary, ['new_candidates', 'candidates_upserted'], 0)}</b> new candidates synced</span>
-                <span><b>{getSyncSummaryValue(workableSummary, ['candidates_seen', 'active_candidates'], 0)}</b> active candidates</span>
               </div>
             </div>
             <div className="row">
@@ -762,6 +763,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
         })()}
 
         <div className="filter-row" id="jobs-source-filters">
+          <span className="filter-row-label">Show</span>
           {SOURCE_FILTERS.map((filter) => (
             <button
               key={filter.key}
@@ -774,7 +776,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               <span className="ct">{sourceCounts[filter.key]}</span>
             </button>
           ))}
-          <button type="button" className="f-chip" disabled title="Additional recruiter filters are coming next.">
+          <button type="button" className="f-chip add" disabled title="Additional recruiter filters are coming next.">
             + Add filter
           </button>
           {rolesPartial ? (
@@ -838,6 +840,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               const agentSpent = agentLive
                 ? Number(agentLive.monthly_spent_cents || 0) / 100
                 : null;
+              const pendingCount = Number(agentLive?.pending_decisions || 0);
               const roleLoc = String(role?.location || role?.workable_location || '').trim();
               const roleDept = String(role?.department || role?.workable_department || '').trim();
               return (
@@ -906,7 +909,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
                         <h3 className="role-name">{role.name}</h3>
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--mute)' }}>#{role.id}</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--mute)' }}>#{role.id}</span>
                         {workableRole ? (
                           <WorkableTag label="WORKABLE" size="sm" className="wk-tag !border-0 !px-2 !py-1 !text-[0.59375rem]" />
                         ) : (
@@ -954,13 +957,26 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                           <div className="k">{stage.label}</div>
                           <div
                             className="v"
-                            style={tone === 'attn' ? { color: 'var(--purple)' } : tone === 'term' ? { color: 'var(--mute)' } : undefined}
+                            style={tone === 'term' ? { color: 'var(--mute)' } : undefined}
                           >
                             {formatCount(value)}
                           </div>
                         </div>
                       );
                     })}
+                  </div>
+
+                  <div className="job-foot">
+                    {pendingCount > 0 ? (
+                      <span className="job-foot-pending"><Inbox size={13} aria-hidden="true" /> {pendingCount} awaiting you</span>
+                    ) : agentPaused ? (
+                      <span className="job-foot-hint job-foot-paused"><Pause size={13} aria-hidden="true" /> Agent paused</span>
+                    ) : !agentEnabled ? (
+                      <span className="job-foot-hint"><Zap size={13} aria-hidden="true" /> Turn on agent mode to start screening</span>
+                    ) : (
+                      <span />
+                    )}
+                    <span className="job-foot-open">Open pipeline →</span>
                   </div>
                 </div>
               );
