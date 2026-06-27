@@ -12,6 +12,12 @@ import useChatStream from './useChatStream';
 import { conversationsApi } from './api';
 import { agentChat } from '../../shared/api';
 
+// The MCP tool surface the chat exposes. This mirrors the real backend
+// registry (``TAALI_CHAT_TOOLS`` in backend/app/taali_chat/tool_registry.py)
+// so the header pill reports the *actual* tool count, not a placeholder — the
+// search-preview's "9" is illustrative. Bump this if the registry changes.
+const TAALI_CHAT_TOOL_COUNT = 14;
+
 // Backend persists messages with Anthropic-shaped content blocks. The
 // chat hook works with a slightly flatter shape (parts: text/tool_call).
 // This converter lets us hydrate a saved conversation and pick up where
@@ -331,14 +337,14 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
           >
             <PanelLeft size={18} />
           </button>
-          <div className="cp-head-ttl">
-            {heading}
-            <span className="sub">Taali</span>
+          <div className="cp-head-titles">
+            <div className="cp-head-ttl">{heading}</div>
+            <div className="cp-head-sub">Taali</div>
           </div>
           <div className="cp-head-grow" />
           <span className="cp-head-pill">
             <span className="cp-pill-glyph" aria-hidden="true" />
-            MCP · 9 tools
+            MCP · {TAALI_CHAT_TOOL_COUNT} tools
           </span>
         </header>
         <div className="cp-scroll">
@@ -362,6 +368,12 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
             streaming={isStreaming}
             onStop={stop}
           />
+          {/* search-preview composer foot tail — Search-specific (citations are
+              the chat's grounded-evidence promise), so it lives here rather
+              than in the shared composer used by other surfaces. */}
+          <div className="cp-composer-note">
+            citations link back to the underlying record
+          </div>
         </div>
       </div>
       )}
