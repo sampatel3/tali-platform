@@ -55,14 +55,14 @@ class TaskSpecValidationResult:
     errors: List[str]
 
 
-_SUPPORTED_GRADERS = frozenset({"interrogation_outcome"})
+_SUPPORTED_GRADERS = frozenset({"interrogation_outcome", "practice_outcome"})
 _SUPPORTED_DELIVERABLE_KINDS = frozenset({"code", "doc"})
 _DEFAULT_DELIVERABLE_KIND = "code"
 # Rubric-dimension lens (selects the grader frame): "decision" punishes lazy
 # delegation (judgment from the transcript); "deliverable" credits the shipped
 # artifact regardless of who typed it. LLM-criteria dims should declare one;
 # interrogation_outcome dims are inherently decision-lens and don't.
-_SUPPORTED_LENSES = frozenset({"decision", "deliverable", "discernment", "diligence"})
+_SUPPORTED_LENSES = frozenset({"decision", "deliverable", "discernment", "diligence", "practice"})
 
 
 def validate_deliverable(deliverable: Any, repo_files: Dict[str, str]) -> List[str]:

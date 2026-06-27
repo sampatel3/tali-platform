@@ -307,7 +307,7 @@ a "Practice proficiency" glossary entry citing AI Fluency + the CCA-F competency
 | Phase | Work | Gate |
 |---|---|---|
 | **P0 — enable observation** | Seed `context_files`/`AGENTS.md`; promote plan-step to captured `PLAN.md`; PR-1/PR-2 trace flag on in shadow | additive; no score change |
-| **P1 — machinery** | `_PRACTICE_LENS_PROMPT` + `practice_outcome` grader + `practice_rubric` loader validation + `part_weights` blend | inert until a task adopts; unit tests green |
+| **P1 — machinery** | ✅ *landed:* `_PRACTICE_LENS_PROMPT` + deterministic `practice_outcome` grader (context-file / plan / reusable-asset / verification probes) wired into `grade_rubric`; `practice` lens + `practice_outcome` grader added to the task-spec loader enums; unit tests green. ⏳ *remaining:* `part_weights` two-part blend in `submission_runtime` | inert until a task adopts; unit tests green |
 | **P2 — adopt Part 1 on 2–3 flagship tasks** | Add `practice_rubric` to data_quality, genai_production_readiness, + one knowledge-work task; set weights | **shadow re-score (PR-A) → review re-ranking with Sam → flip** |
 | **P3 — reporting** | "How they worked with AI" evidence panel + glossary + CCA-F/AI-Fluency labels | verify on a real authed candidate report page |
 | **P4 — knowledge-work track + Part 0 + senior hybrid** | Document-deliverable tasks; unaided defence; optional BYO sub-segment | per-track shadow validation |
