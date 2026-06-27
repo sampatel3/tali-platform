@@ -28,7 +28,8 @@ export const PIPELINE_FUNNEL_STAGES = [
 // (skipping the assessment). Completed = candidates who actually finished an
 // assessment; they surface as "decision pending" until acted on.
 // `tone` colour-codes the chip, matching the decision-feed badge vocabulary:
-// advance=green, send=purple, reject=red, pre-screen reject=deep-red.
+// advance/send = purple (positive/action), reject/pre-screen = grey (terminal).
+// NOT traffic-light green/red — see TYPE_BADGE in features/home/atoms.jsx.
 export const FUNNEL_DECISION_GATES = [
   { stage: 'applied', key: 'pre_screen', label: 'pre-screen reject', tone: 'prescreen', types: ['skip_assessment_reject'] },
   { stage: 'scored', key: 'send', label: 'send assessment', tone: 'send', types: ['send_assessment', 'resend_assessment_invite'] },

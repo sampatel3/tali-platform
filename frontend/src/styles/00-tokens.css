@@ -93,6 +93,7 @@
   --line-dark: #1f2a38;
   --purple-glow: rgba(120, 230, 182, 0.45);
   --purple-lav: #78e6b6;
+  --purple-tint: #f4f0fb;
   --grad-dark-vert: linear-gradient(180deg, #111a24 0%, #0b1116 100%);
   --grad-dark-diag: linear-gradient(135deg, #111a24 0%, #0b1116 100%);
   --grad-dark-card: linear-gradient(160deg, #111a24 0%, #1f2a38 100%);
@@ -164,6 +165,7 @@
   --line-dark: #3a2a55;
   --purple-glow: rgba(196, 165, 253, 0.45);
   --purple-lav: #c4a5fd;
+  --purple-tint: #f4f0fb;
   --grad-dark-vert: linear-gradient(180deg, #2a1854 0%, #1d1130 100%);
   --grad-dark-diag: linear-gradient(135deg, #2a1854 0%, #1d1130 100%);
   --grad-dark-card: linear-gradient(160deg, #2a1854 0%, #3a2a55 100%);

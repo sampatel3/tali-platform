@@ -12,29 +12,31 @@ import {
   X,
 } from 'lucide-react';
 
+// Decision-outcome vocabulary is purple (positive / action you take) vs grey
+// (terminal / already-resolved) — NOT traffic-light green/red. Matches the
+// design system (purple variations, not brights) and the FunnelBoard chips.
 const TYPE_BADGE = {
   advance_to_interview: {
     label: 'ADVANCE',
-    color: 'var(--green)',
+    color: 'var(--purple)',
     Icon: CheckCircle2,
   },
   advance: {
     label: 'ADVANCE',
-    color: 'var(--green)',
+    color: 'var(--purple)',
     Icon: CheckCircle2,
   },
   reject: {
     label: 'REJECT',
-    color: 'var(--red)',
+    color: 'var(--mute)',
     Icon: X,
   },
   skip_assessment_reject: {
-    // Deeper red than plain ``reject`` so the recruiter reads this as a
-    // stronger signal: "the agent has flagged this CV as not worth
-    // assessing." Pre-screen-stage rejection, distinct from general
-    // mid-pipeline rejection.
+    // Pre-screen-stage rejection, distinct from general mid-pipeline
+    // rejection — carried by the label, not colour (both are terminal, so
+    // both read grey rather than an alarming red).
     label: 'REJECT (PRE-SCREEN)',
-    color: 'var(--red-deep)',
+    color: 'var(--mute)',
     Icon: X,
   },
   // Phase 4 abstention — sub-agents disagreed or were too uncertain.
@@ -85,7 +87,9 @@ export const TypeBadge = ({ type, size = 'md' }) => {
 
 export const ConfBar = ({ value }) => {
   const pct = Math.round((value || 0) * 100);
-  const color = value >= 0.9 ? 'var(--green)' : value >= 0.8 ? 'var(--purple)' : 'var(--amber)';
+  // Purple-only confidence: deep purple for high, lavender for lower — no
+  // green/amber brights (design-system: purple variations).
+  const color = value >= 0.8 ? 'var(--purple)' : 'var(--purple-lav)';
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
       <span style={{ width: 64, height: 5, borderRadius: 3, background: 'var(--bg-3)', overflow: 'hidden' }}>
