@@ -1,0 +1,74 @@
+/* Public careers board (/careers/:slug). Builds on jobpage.css (the .pjp-*
+   wrap/brand/head/muted scaffolding + global purple tokens) and adds the
+   list-of-roles cards. A touch wider than the single-posting page to give the
+   cards room. No recruiter chrome. */
+.crs-wrap {
+  max-width: 860px;
+}
+
+.crs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.crs-card {
+  border: 1px solid var(--line, #ece9f3);
+  border-radius: 14px;
+  background: var(--bg, #fff);
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.08s;
+}
+.crs-card:hover {
+  border-color: color-mix(in oklab, var(--purple, #6d28d9) 36%, var(--line, #ece9f3));
+  box-shadow: 0 4px 18px -10px color-mix(in oklab, var(--purple, #6d28d9) 50%, transparent);
+}
+
+.crs-card-link {
+  display: block;
+  padding: 18px 20px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.crs-card-title {
+  font-family: var(--font-display, inherit);
+  font-size: 18px;
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 0;
+  color: var(--ink, #1c1830);
+}
+.crs-card:hover .crs-card-title {
+  color: var(--purple, #6d28d9);
+}
+
+.crs-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin-top: 8px;
+}
+.crs-card-meta-item {
+  font-size: 13px;
+  color: var(--muted, #6b6480);
+  position: relative;
+}
+/* Middot separators between meta items (mirrors .pjp-meta-item). */
+.crs-card-meta-item:not(:last-child)::after {
+  content: '·';
+  position: absolute;
+  right: -9px;
+  color: var(--mute-2, #b8b2c8);
+}
+
+.crs-card-salary {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--purple-2, #5b21b6);
+}

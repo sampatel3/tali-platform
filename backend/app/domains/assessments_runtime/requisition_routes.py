@@ -63,6 +63,15 @@ def _client_intake_url(token: str) -> str:
     base = (settings.FRONTEND_URL or "").rstrip("/")
     return f"{base}/intake/{token}" if base else f"/intake/{token}"
 
+
+def _careers_url(slug: Optional[str]) -> Optional[str]:
+    """The org's PUBLIC careers board URL (``/careers/{slug}``), relative when
+    FRONTEND_URL is empty. ``None`` when the org has no slug (unreachable board)."""
+    if not slug:
+        return None
+    base = (settings.FRONTEND_URL or "").rstrip("/")
+    return f"{base}/careers/{slug}" if base else f"/careers/{slug}"
+
 # Multipart upload guards for the chat endpoint.
 _MAX_CHAT_FILES = 6
 _MAX_CHAT_FILE_BYTES = 15 * 1024 * 1024  # 15 MB per file
@@ -145,6 +154,9 @@ def _serialize_brief(brief: RoleBrief, org: Optional[Organization]) -> dict[str,
     payload["client_link"] = (
         {"token": token, "url": _client_intake_url(token)} if token else None
     )
+    # The org's PUBLIC careers board (lists every published page). None when the
+    # org has no slug; lets the recruiter UI link the board.
+    payload["careers_url"] = _careers_url(org.slug if org else None)
     return payload
 
 
