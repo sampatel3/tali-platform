@@ -139,8 +139,13 @@
   box-shadow: none;
   padding: 22px 0 2px;
 }
-/* first section sits directly under the panel subtitle — no divider */
-.settings-panel > .settings-subcard:first-of-type {
+/* first section sits directly under the panel subtitle — no divider.
+   Covers panels rendered straight into `.settings-panel` AND those
+   wrapped by a sub-panel component (Developers → `.api-keys-panel`,
+   Background jobs → `.bg-jobs-panel`) where the first subcard is one
+   level deeper. */
+.settings-panel > .settings-subcard:first-of-type,
+.settings-panel > .api-keys-panel > .settings-subcard:first-of-type {
   border-top: none;
   padding-top: 2px;
 }
@@ -223,5 +228,170 @@
 .settings-chip-row .chip.green {
   background: var(--purple-soft);
   color: var(--purple-2);
+}
+
+/* ============================================================
+   DEEP-ALIGN PASS 2 — close the remaining settings-preview gaps.
+   Everything here is scoped to `.settings-panel` (or a settings-*
+   class) so shared primitives (.btn, .field on other pages, the
+   AgentHeader) are untouched. Maps the React markup onto the
+   preview's exact `.smain / .fsec / .fld / .trow / .sw` look.
+   ============================================================ */
+
+/* ── Panel shell: preview `.smain` is a tighter card. h2 21px with a
+   purple, non-italic period; subtitle sits tight under it. ── */
+.settings-panel {
+  padding: 6px 30px 26px;
+}
+.settings-panel h2 {
+  margin-top: 18px;
+  margin-bottom: 0;
+  font-size: 1.3125rem;          /* 21px — preview .smain h2 */
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+.settings-panel h2 em {
+  color: var(--purple);
+  font-style: normal;
+}
+.settings-panel .sub {
+  margin: 4px 0 2px;
+  font-size: 0.84375rem;         /* 13.5px */
+}
+
+/* ── Form field labels: preview `.fld .k` is sentence-case 12px / 500,
+   NOT the mono-uppercase the shared `.field` label uses elsewhere.
+   Inputs sit on the tinted `--bg` with a `--line-2` hairline. ── */
+.settings-panel .field > .k {
+  font-family: var(--font-sans);
+  font-size: 0.75rem;            /* 12px */
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+.settings-panel .field input,
+.settings-panel .field select,
+.settings-panel .field textarea,
+.settings-search-input {
+  background: var(--bg);
+  border-color: var(--line-2);
+  padding: 10px 13px;
+  font-size: 0.84375rem;         /* 13.5px */
+}
+.settings-panel .field textarea {
+  line-height: 1.5;
+}
+
+/* ── Toggle rows: preview `.trow` title is 13.5px / 500 (not 14/600),
+   the body copy 12px. Tighten to match. ── */
+.settings-toggle-list .settings-toggle-card {
+  padding: 14px 16px;
+}
+.settings-toggle-card h4 {
+  font-size: 0.84375rem;         /* 13.5px */
+  font-weight: 500;
+}
+.settings-toggle-card p {
+  font-size: 0.75rem;            /* 12px */
+}
+
+/* ── Toggle switch: preview `.sw` is 42×23 with a 19px knob. The shared
+   02-shell `.sw` is 40×22 with a `left` transition; restyle to match
+   the preview's translateX knob. Scoped to settings surfaces. ── */
+.settings-toggle-card .sw,
+.wk-mode-card .sw {
+  width: 42px;
+  height: 23px;
+}
+.settings-toggle-card .sw::after,
+.wk-mode-card .sw::after {
+  width: 19px;
+  height: 19px;
+  left: 2px;
+  transition: transform 0.15s;
+}
+.settings-toggle-card .sw.on::after,
+.wk-mode-card .sw.on::after {
+  left: 2px;
+  transform: translateX(19px);
+}
+
+/* ── Sub-section heads inside a flat section: preview `.fsec .fh` is
+   14.5px / 600 with a 12.5px muted description. Align the de-carded
+   `.settings-subcard-head` typography. ── */
+.settings-subcard-head h3 {
+  font-size: 0.90625rem;         /* 14.5px */
+}
+.settings-subcard-head p {
+  font-size: 0.78125rem;         /* 12.5px */
+}
+
+/* ── Workable status card: preview `.wkstatus` is a hairline card on
+   white; the logo tile is the brand green. The shared WorkableLogo
+   primitive is left untouched, but the status card itself matches. ── */
+.wk-status {
+  border-color: var(--line);
+}
+
+/* ── Members rows: preview `.member` is a flat divider-led list (no
+   per-row border card, no action button). Invited members get a grey
+   avatar; the role chip carries the tone (purple active / grey
+   invited). ── */
+.members {
+  gap: 0;
+}
+.members .mb {
+  border: none;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  padding: 11px 0;
+  grid-template-columns: 34px 1fr auto;
+}
+.members .mb:first-child {
+  border-top: none;
+}
+.members .mb .av {
+  width: 34px;
+  height: 34px;
+}
+.members .mb .av.inv {
+  background: var(--bg-3);
+  color: var(--mute);
+}
+.members .mb .chip {
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;          /* 11px — preview .mchip */
+  font-weight: 500;
+  letter-spacing: 0;
+  padding: 3px 11px;
+}
+
+/* ── Credit packs: preview `.pack` centres a stacked amount → credit,
+   bonus in purple. Pass-1 already de-slabbed these; ensure the price
+   line reads as the preview's `→ $N credit` purple meta. ── */
+.settings-credit-pack > span:first-child {
+  font-size: 1.125rem;           /* 18px — preview .pack .pamt */
+}
+
+/* ── Stat cards: preview `.bcard .v` / `.wkstatus` numbers are 22px.
+   Nudge the shared 24px summary value down inside settings. ── */
+.settings-panel .settings-billing-card .settings-summary-value,
+.settings-panel .settings-summary-card .settings-summary-value {
+  font-size: 1.375rem;           /* 22px — preview .bcard .v */
+}
+
+/* ── AI-agent budget/threshold row: preview keeps both under ONE flat
+   `.fsec` with a single continuous divider. The React layout puts each
+   in a `.settings-subgrid` cell; move the divider to the grid wrapper
+   so the line is continuous (and drop the per-cell top borders). ── */
+.settings-subgrid {
+  border-top: 1px solid var(--line);
+  padding-top: 22px;
+}
+.settings-subgrid > .settings-subcard {
+  border-top: none;
+  padding-top: 0;
 }
 
