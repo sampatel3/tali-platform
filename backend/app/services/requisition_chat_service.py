@@ -28,6 +28,7 @@ import json
 import logging
 from typing import Any, Optional
 
+from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -450,6 +451,68 @@ def apply_capture(
     brief.completeness = compute_completeness(brief, template)
     db.flush()
     return brief
+
+
+# --------------------------------------------------------------------------- #
+# Deterministic single-answer capture (NO LLM, NO metering) — powers the
+# ``/answer`` endpoint so tapping a quick-reply records one field for free.
+# --------------------------------------------------------------------------- #
+def next_gap_prompt(
+    template: dict[str, Any], brief: RoleBrief
+) -> tuple[str, list[str]]:
+    """The question + tappable options for the FIRST remaining required gap.
+
+    Returns ``(question, options)`` for the first gap from ``compute_gaps`` — its
+    template ``question`` (falling back to its label) and, for a select field,
+    its ``options`` (else ``[]``). When there are NO gaps left, returns a
+    publish nudge with no options."""
+    gaps = compute_gaps(brief, template)
+    if not gaps:
+        return ("That's everything I need — want to publish this?", [])
+    field = _field_by_key(template, gaps[0]["key"])
+    question = ""
+    if field:
+        question = (field.get("question") or field.get("label") or "").strip()
+    question = question or gaps[0]["label"]
+    return (question, _select_options(field))
+
+
+def record_answer(
+    db: Session,
+    brief: RoleBrief,
+    template: dict[str, Any],
+    field_key: str,
+    value: Any,
+) -> None:
+    """Deterministically record ONE field answer onto the brief — no LLM, no
+    metering. Coerces ``value`` by the field's declared template type, routes it
+    to its column (via ``update_brief_fields``) or into ``custom_fields``, then
+    recomputes ``completeness`` and flushes.
+
+    Raises ``HTTPException(422)`` when ``field_key`` isn't a field in the
+    template, or when the coerced value is empty (nothing to record)."""
+    field = _field_by_key(template, field_key)
+    if field is None:
+        raise HTTPException(
+            status_code=422, detail=f"Unknown requisition field {field_key!r}"
+        )
+    coerced = _coerce_value(value, field.get("type", "text"))
+    if _is_empty(coerced):
+        raise HTTPException(
+            status_code=422, detail=f"Empty value for field {field_key!r}"
+        )
+    column = template_key_to_column(field_key)
+    if column is not None:
+        update_brief_fields(db, brief, **{column: coerced})
+    else:
+        update_brief_fields(
+            db,
+            brief,
+            custom_fields={**(brief.custom_fields or {}), field_key: coerced},
+        )
+    # Recompute completeness AFTER applying so it reflects this answer.
+    brief.completeness = compute_completeness(brief, template)
+    db.flush()
 
 
 # --------------------------------------------------------------------------- #

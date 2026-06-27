@@ -52,6 +52,17 @@ export const requisitionApi = {
       .then((r) => r.data);
   },
 
+  // Record ONE brief field DETERMINISTICALLY — no LLM. Used by the tappable
+  // quick replies: a clean structured answer (e.g. a template SELECT option)
+  // maps to exactly one field=value, so the backend can record it without a
+  // model call and advance to the next gap. Returns the SAME shape as chat()
+  // — `{ brief, reply, messages, gaps, suggested_replies }` — so the caller
+  // merges the response identically (and `suggested_replies` carries the next
+  // gap's template options). Typing free-form text / pasting a transcript or
+  // screenshot still goes through chat() (the LLM path).
+  answer: (id, fieldKey, value) =>
+    api.post(`${BASE}/${id}/answer`, { field_key: fieldKey, value }).then((r) => r.data),
+
   // Manual field edits from the live-brief click-to-edit. Pass column fields
   // directly (e.g. `{ summary: '…' }`) or custom template keys under
   // `custom_fields` (e.g. `{ custom_fields: { relocation_support: 'yes' } }`).
