@@ -359,7 +359,9 @@
 
 .rq-hybrid-grid {
   display: grid;
-  grid-template-columns: minmax(280px, 320px) 1fr;
+  /* Narrow pending list + wide decision-complete detail (hub layout) — the
+     detail is where the recruiter decides without opening the report. */
+  grid-template-columns: 268px minmax(0, 1fr);
   gap: 16px;
   align-items: stretch;
 }
