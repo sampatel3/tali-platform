@@ -2,8 +2,7 @@
    "live" against the plain card base — the same dark-purple language the
    header agent strip and the chat agent-rail use. */
 .job-card.agent-on {
-  border-color: var(--purple);
-  box-shadow: 0 0 0 1px var(--purple), 0 10px 24px -16px rgba(94, 58, 168, 0.45);
+  border-color: var(--purple-soft);
 }
 
 .job-card.agent-on:hover {
@@ -91,20 +90,25 @@
 .job-stats {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
-  gap: 6px;
-  padding-top: 10px;
-  border-top: 1px solid var(--line-2);
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  overflow: hidden;
 }
 
 .js-cell {
-  padding: 4px 2px 0;
+  padding: 9px 6px;
   text-align: center;
+  border-right: 1px solid var(--line);
+}
+.js-cell:last-child {
+  border-right: none;
 }
 
-/* Terminal bucket (Rejected) — divided off from the active funnel stages
-   with a leading rule so it reads as an outcome, not an in-flight stage. */
+/* Terminal bucket (Rejected) — filled so it reads as an outcome, not an
+   in-flight stage (matches the dossier funnel + the jobs preview). */
 .js-cell.is-term {
-  border-left: 1px solid var(--line);
+  background: var(--bg);
 }
 
 .js-cell .k {
@@ -117,7 +121,8 @@
 
 .js-cell .v {
   font-family: var(--font-display);
-  font-size: 1.375rem;
+  font-size: 17px;
+  font-weight: 600;
   line-height: 1.1;
   margin-top: 2px;
   letter-spacing: -0.02em;
@@ -129,7 +134,37 @@
   justify-content: space-between;
   align-items: center;
   gap: 10px;
-  margin-top: auto;
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--mute);
+}
+.job-foot-pending {
+  color: var(--purple-2);
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.job-foot-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.job-foot-paused {
+  color: color-mix(in oklab, var(--amber) 75%, var(--ink));
+}
+.job-foot-open {
+  margin-left: auto;
+  white-space: nowrap;
+}
+.filter-row-label {
+  align-self: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--mute);
+  margin-right: 2px;
 }
 
 .wk-tag {
@@ -211,7 +246,6 @@
   background: var(--bg-2);
   font-size: 0.78125rem;
   color: var(--ink-2);
-  font-family: var(--font-mono);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -219,9 +253,15 @@
 }
 
 .f-chip.on {
-  background: var(--purple-soft);
+  background: var(--purple);
   border-color: var(--purple);
-  color: var(--purple-2);
+  color: #fff;
+}
+
+/* "+ Add filter" placeholder chip — dashed + muted (matches the preview). */
+.f-chip.add {
+  color: var(--mute);
+  border-style: dashed;
 }
 
 .f-chip:disabled {
@@ -239,8 +279,8 @@
 }
 
 .f-chip.on .ct {
-  background: rgba(255, 255, 255, 0.4);
-  color: var(--purple-2);
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
 }
 
 .pipeline-back,
