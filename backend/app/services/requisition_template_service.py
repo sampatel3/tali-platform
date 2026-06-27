@@ -89,8 +89,8 @@ def template_key_to_column(field_key: str) -> Optional[str]:
 # sections (About us / Benefits / EEO) are boilerplate an org sets once; the
 # placeholders are populated on the fly as the conversation captures the spec.
 # Supported placeholders: title, summary, department, seniority, location,
-# workplace_type, employment_type, openings, salary, urgency, must_haves,
-# preferred, dealbreakers, success_profile, assessment_focus, evp.
+# workplace_type, employment_type, openings, salary, urgency, responsibilities,
+# must_haves, preferred, dealbreakers, success_profile, assessment_focus, evp.
 DEFAULT_JD_TEMPLATE = """# {{title}}
 
 {{summary}}
@@ -100,6 +100,9 @@ DEFAULT_JD_TEMPLATE = """# {{title}}
 
 ## About the role
 {{summary}}
+
+## What you'll do
+{{responsibilities}}
 
 ## What we're looking for
 {{must_haves}}
@@ -325,6 +328,13 @@ DEFAULT_REQUISITION_TEMPLATE: dict[str, Any] = {
                     "type": "longtext",
                     "required": False,
                     "question": "What does great look like in 6 months?",
+                },
+                {
+                    "key": "responsibilities",
+                    "label": "Key responsibilities",
+                    "type": "list",
+                    "required": False,
+                    "question": "What are the key responsibilities / duties?",
                 },
                 {
                     "key": "priorities",

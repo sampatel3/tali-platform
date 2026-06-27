@@ -21,6 +21,7 @@ from ...services.client_service import (
     create_client,
     get_client,
     list_clients,
+    open_job_count_for_client,
     serialize_client,
     update_client,
 )
@@ -81,7 +82,11 @@ def get_client_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """A single client + its requisitions. 404 if not in the caller's org."""
+    """A single client + its requisitions. 404 if not in the caller's org.
+
+    ``open_job_count`` counts the client's PUBLISHED job pages (consistent with
+    the list endpoint); the ``requisitions`` block lists every brief assigned to
+    the client regardless of publish state."""
     client = get_client(db, current_user.organization_id, client_id)
     briefs = (
         db.query(RoleBrief)
@@ -92,7 +97,9 @@ def get_client_endpoint(
         .order_by(RoleBrief.id.desc())
         .all()
     )
-    open_job_count = sum(1 for b in briefs if b.status != "applied")
+    open_job_count = open_job_count_for_client(
+        db, current_user.organization_id, client_id
+    )
     payload: dict[str, Any] = serialize_client(client, open_job_count=open_job_count)
     payload["requisitions"] = [
         {
@@ -119,14 +126,9 @@ def update_client_endpoint(
     update_client(db, client, **fields)
     db.commit()
     db.refresh(client)
-    # open_job_count for the single client (cheap: one filtered count).
-    open_job_count = (
-        db.query(RoleBrief.id)
-        .filter(
-            RoleBrief.organization_id == current_user.organization_id,
-            RoleBrief.client_id == client.id,
-            RoleBrief.status != "applied",
-        )
-        .count()
+    # open_job_count for the single client (published job pages — consistent
+    # with the list endpoint).
+    open_job_count = open_job_count_for_client(
+        db, current_user.organization_id, client.id
     )
     return serialize_client(client, open_job_count=open_job_count)

@@ -30,6 +30,7 @@ from ...services.client_service import compute_margin
 from ...services.requisition_chat_service import (
     ChatAttachment,
     compute_gaps,
+    draft_responsibilities,
     run_chat_turn,
     seed_opening_message,
     warm_start_fields,
@@ -328,6 +329,33 @@ def run_requisition_intake(
         db.rollback()
         raise HTTPException(
             status_code=502, detail=f"Intake extraction failed: {result.error_reason}"
+        )
+    db.commit()
+    db.refresh(brief)
+    return _serialize_brief(brief, _org(db, current_user.organization_id))
+
+
+@router.post("/requisitions/{brief_id}/draft-responsibilities")
+def draft_requisition_responsibilities(
+    brief_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """AI-draft the JD's "What you'll do" list from the captured spec.
+
+    Makes ONE metered Claude call (the fast chat model) that produces 6–10
+    concrete responsibility statements and stores them into
+    ``custom_fields.responsibilities`` (which the ``{{responsibilities}}`` JD
+    placeholder renders). Returns the full serialized brief. On LLM failure →
+    rollback + 502, mirroring ``/chat`` and ``/intake``.
+    """
+    brief = _get_brief(db, current_user.organization_id, brief_id)
+    result = draft_responsibilities(db, brief)
+    if not result.ok:
+        db.rollback()
+        raise HTTPException(
+            status_code=502,
+            detail=f"Responsibilities draft failed: {result.error_reason}",
         )
     db.commit()
     db.refresh(brief)

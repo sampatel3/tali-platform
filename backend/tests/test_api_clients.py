@@ -94,8 +94,9 @@ def test_get_client_includes_requisitions_and_404_for_other_org(client):
     assert req["title"] == "Backend Engineer"
     assert req["status"] == "draft"
     assert "completeness" in req
-    # Draft (non-applied) requisition counts as open.
-    assert body["open_job_count"] == 1
+    # A drafted-but-unpublished requisition has NO job page → open_job_count 0
+    # (the requisition still shows in the requisitions list).
+    assert body["open_job_count"] == 0
 
     # A different org cannot see this client.
     other_headers, _ = auth_headers(client, organization_name="OtherOrg")
@@ -118,36 +119,78 @@ def test_patch_client_updates_fields(client):
 
 
 # --------------------------------------------------------------------------- #
-# open_job_count semantics
+# open_job_count semantics — counts PUBLISHED job pages, not requisitions
 # --------------------------------------------------------------------------- #
-def test_open_job_count_reflects_non_applied_assigned_requisitions(client):
+def test_open_job_count_counts_published_job_pages(client, db):
     headers, _ = auth_headers(client)
     client_id = client.post("/api/v1/clients", json={"name": "Stark"}, headers=headers).json()["id"]
 
-    # Two requisitions assigned to the client.
-    b1 = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
-    b2 = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
-    for b in (b1, b2):
-        client.patch(f"/api/v1/requisitions/{b}", json={"client_id": client_id}, headers=headers)
+    # Two requisitions assigned to the client; only one is PUBLISHED.
+    published_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+    draft_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+    for b in (published_id, draft_id):
+        client.patch(
+            f"/api/v1/requisitions/{b}",
+            json={"client_id": client_id, "title": "Eng"},
+            headers=headers,
+        )
 
-    # A third requisition with NO client should not be counted.
-    client.post("/api/v1/requisitions", json={}, headers=headers)
-
+    # Brand new: no job pages yet → 0 open jobs even though two requisitions exist.
     listed = {c["id"]: c for c in client.get("/api/v1/clients", headers=headers).json()}
-    assert listed[client_id]["open_job_count"] == 2
+    assert listed[client_id]["open_job_count"] == 0
 
-    # Publishing b1 now creates a shareable PUBLIC job page (status 'open') and
-    # deliberately leaves the brief editable (status unchanged), so the
-    # requisition stays "open" and the count is unchanged.
-    client.patch(f"/api/v1/requisitions/{b1}", json={"title": "Eng"}, headers=headers)
+    # Publish ONE requisition → a published (open) job page → count is 1.
     pub = client.post(
-        f"/api/v1/requisitions/{b1}/publish", json={"jd_markdown": "# Eng"}, headers=headers
+        f"/api/v1/requisitions/{published_id}/publish",
+        json={"jd_markdown": "# Eng"},
+        headers=headers,
     )
     assert pub.status_code == 200, pub.text
     assert pub.json()["status"] == "open"
 
     listed = {c["id"]: c for c in client.get("/api/v1/clients", headers=headers).json()}
-    assert listed[client_id]["open_job_count"] == 2
+    # 1 published page; the drafted-but-unpublished requisition does NOT count.
+    assert listed[client_id]["open_job_count"] == 1
+    # Single-client GET is consistent.
+    assert client.get(
+        f"/api/v1/clients/{client_id}", headers=headers
+    ).json()["open_job_count"] == 1
+
+    # Closing the page (no close endpoint in scope) excludes it again → 0.
+    page_token = pub.json()["token"]
+    from app.models.job_page import JobPage
+
+    page = db.query(JobPage).filter(JobPage.token == page_token).first()
+    page.status = "closed"
+    db.commit()
+
+    listed = {c["id"]: c for c in client.get("/api/v1/clients", headers=headers).json()}
+    assert listed[client_id]["open_job_count"] == 0
+
+
+def test_open_job_count_excludes_other_clients_pages(client):
+    """A published page only counts for the client its requisition is assigned
+    to (the grouped query keys by client_id)."""
+    headers, _ = auth_headers(client)
+    a = client.post("/api/v1/clients", json={"name": "Acme"}, headers=headers).json()["id"]
+    b = client.post("/api/v1/clients", json={"name": "Beta"}, headers=headers).json()["id"]
+
+    # One published requisition for client A, none for B.
+    brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+    client.patch(
+        f"/api/v1/requisitions/{brief_id}",
+        json={"client_id": a, "title": "Eng"},
+        headers=headers,
+    )
+    client.post(
+        f"/api/v1/requisitions/{brief_id}/publish",
+        json={"jd_markdown": "# Eng"},
+        headers=headers,
+    )
+
+    listed = {c["id"]: c for c in client.get("/api/v1/clients", headers=headers).json()}
+    assert listed[a]["open_job_count"] == 1
+    assert listed[b]["open_job_count"] == 0
 
 
 # --------------------------------------------------------------------------- #

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Pencil, RotateCcw } from 'lucide-react';
+import { Pencil, RotateCcw, Sparkles } from 'lucide-react';
 
 // The live Job spec (JD) panel — the recruiter-facing job-description DOCUMENT.
 //
@@ -88,6 +88,10 @@ const buildResolvers = (brief) => {
     dealbreakers: formatList(b.dealbreakers),
     assessment_focus: formatList(b.assessment_focus),
     evp: formatList(b.evp),
+    // CUSTOM list field — AI-drafted responsibilities live under
+    // custom_fields.responsibilities (NOT a top-level brief column), but render
+    // exactly like the other list placeholders (bulleted, TBC when empty).
+    responsibilities: formatList(custom.responsibilities),
   };
 };
 
@@ -125,7 +129,14 @@ export const renderJobSpec = (template, brief) => {
   return substitute(tpl, brief);
 };
 
-export function JobSpec({ template, brief, onSaveOverride, savingOverride = false }) {
+export function JobSpec({
+  template,
+  brief,
+  onSaveOverride,
+  savingOverride = false,
+  onDraftResponsibilities,
+  draftingResponsibilities = false,
+}) {
   // The template-filled draft (live, derived from the brief). Shares the same
   // pure renderer the Publish handler uses, so the panel and the snapshot match.
   const autoMarkdown = useMemo(() => renderJobSpec(template, brief), [template, brief]);
@@ -134,6 +145,7 @@ export function JobSpec({ template, brief, onSaveOverride, savingOverride = fals
   // What's actually shown in view mode: the override if present, else the draft.
   const displayMarkdown = override != null ? override : autoMarkdown;
   const editable = typeof onSaveOverride === 'function';
+  const canDraft = typeof onDraftResponsibilities === 'function';
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -204,31 +216,44 @@ export function JobSpec({ template, brief, onSaveOverride, savingOverride = fals
           </div>
         ) : (
           <>
-            {editable ? (
+            {editable || canDraft ? (
               <div className="rq-jobspec-bar">
                 <div className="rq-jobspec-bar-label">
                   {override != null ? <span className="rq-jobspec-badge">Edited</span> : null}
+                  {canDraft ? (
+                    <button
+                      type="button"
+                      className="rq-btn-sm is-ghost rq-draft-btn"
+                      onClick={() => onDraftResponsibilities()}
+                      disabled={draftingResponsibilities || savingOverride}
+                      title="Let the AI draft the “What you’ll do” responsibilities from the brief"
+                    >
+                      {draftingResponsibilities ? <span className="rq-spinner" /> : <Sparkles size={13} />} Draft responsibilities (AI)
+                    </button>
+                  ) : null}
                 </div>
-                <div className="rq-jobspec-bar-actions">
-                  {override != null ? (
+                {editable ? (
+                  <div className="rq-jobspec-bar-actions">
+                    {override != null ? (
+                      <button
+                        type="button"
+                        className="rq-btn-sm is-ghost"
+                        onClick={resetToAuto}
+                        disabled={savingOverride || draftingResponsibilities}
+                      >
+                        {savingOverride ? <span className="rq-spinner" /> : <RotateCcw size={13} />} Reset to auto
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className="rq-btn-sm is-ghost"
-                      onClick={resetToAuto}
-                      disabled={savingOverride}
+                      onClick={startEdit}
+                      disabled={savingOverride || draftingResponsibilities}
                     >
-                      {savingOverride ? <span className="rq-spinner" /> : <RotateCcw size={13} />} Reset to auto
+                      <Pencil size={13} /> Edit
                     </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="rq-btn-sm is-ghost"
-                    onClick={startEdit}
-                    disabled={savingOverride}
-                  >
-                    <Pencil size={13} /> Edit
-                  </button>
-                </div>
+                  </div>
+                ) : null}
               </div>
             ) : null}
             <div className="rq-jobspec">
