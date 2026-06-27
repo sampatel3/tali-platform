@@ -290,8 +290,8 @@
 }
 
 .rq-tabset button.on {
-  background: var(--purple-soft);
-  color: var(--purple);
+  background: var(--purple);
+  color: #fff;
 }
 
 .rq-tabset button span {
@@ -300,7 +300,7 @@
 }
 
 .rq-tabset button.on span {
-  color: var(--purple);
+  color: #fff;
 }
 
 /* Standalone "needs re-evaluation" warning chip — toggles the queue to just the

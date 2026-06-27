@@ -81,11 +81,11 @@ const apiErrorMessage = (err, fallback = 'Something went wrong') => {
 // 'skip_assessment_reject' map 1:1 to their decision_type so the Hub
 // distinguishes the pre-screen reject from a post-assessment reject.
 const TYPE_OPTIONS = [
-  { id: '', label: 'All types', hint: 'All decision types' },
+  { id: '', label: 'All', hint: 'All decision types' },
   { id: 'advance', label: 'Advance', hint: 'Advance the candidate to the next stage' },
-  { id: 'assessment', label: 'Send assessment', hint: 'Send or resend an assessment invite' },
+  { id: 'assessment', label: 'Send', hint: 'Send or resend an assessment invite' },
   { id: 'reject', label: 'Reject', hint: 'Reject after scoring / assessment' },
-  { id: 'skip_assessment_reject', label: 'Reject (pre-screen)', hint: 'Rejected at pre-screen, before any assessment' },
+  { id: 'skip_assessment_reject', label: 'Pre-screen', hint: 'Rejected at pre-screen, before any assessment' },
 ];
 
 const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
