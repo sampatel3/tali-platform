@@ -1,10 +1,15 @@
 // CvMatchReview — the requirement-by-requirement CV match readout for the
-// candidate standing report's Overview tab. Surfaces met / partial / gap
-// coverage of the role requirements against the CV. (The integrity / trust-band
-// readout that used to sit here now renders via IntegrityFlags in the Overview
-// hero — see #739.) Extracted from CandidateStandingReportPage.jsx to keep the
-// page file under the frontend architecture line cap.
+// candidate standing report's Requirements tab. Surfaces met / partial / gap
+// coverage of the role requirements against the CV. Each row is an expandable
+// <details> with a 0–100 score bar (purple when strong, lavender when low) and
+// a mono provenance chip (CV / Role match) that reveals the evidence on click —
+// mirroring report-preview's `.reqrow`/`.reqg`/`.reqscore`/`.reqbar`/`.ev .src`.
+// (The integrity / trust-band readout that used to sit here now renders via
+// IntegrityFlags in the Overview hero — see #739.) Extracted from
+// CandidateStandingReportPage.jsx to keep the page file under the frontend
+// architecture line cap.
 import React from 'react';
+import { ChevronRight } from 'lucide-react';
 
 import {
   asArray,
@@ -27,11 +32,18 @@ const REQ_STATUS_META = {
   unknown: { label: 'Unclear', dot: 'var(--mute)' },
 };
 
+// The provenance chip: a met / partial requirement is corroborated from the CV;
+// a gap (or anything inferred only from the role spec) reads as "Role match".
+const requirementSource = (gradeKey) => (
+  (gradeKey === 'met' || gradeKey === 'partially_met') ? 'CV' : 'Role match'
+);
+
 const CvMatchReview = ({
   application,
   cvMatchDetails,
   matchedRequirements,
   missingRequirements,
+  fitScore,
   onJumpToPrep,
 }) => {
   // Build one list, scored requirements preferred. Fall back to raw skill
@@ -63,17 +75,24 @@ const CvMatchReview = ({
 
   const scoredAt = application?.cv_match_scored_at || application?.updated_at || null;
   const roleName = application?.role_name || application?.candidate_position || 'target role';
+  const fit = Number.isFinite(Number(fitScore)) ? Math.round(Number(fitScore)) : null;
 
   return (
-    <section className="cv-rail cv-match-summary cv-match-review" aria-label="CV match summary">
+    <section className="cv-rail cv-match-summary cv-match-review" aria-label="Requirements and fit">
       {total ? (
         <div className="rail-card cvm-body">
-          <div className="cvm-head">
-            <div className="mc-kicker">CV MATCH</div>
-            <div className="meta" style={{ marginTop: 4 }}>
-              vs <b>{roleName}</b>{scoredAt ? ` · Scored ${new Date(scoredAt).toLocaleDateString()}` : ''}
-            </div>
+          <div className="reqhead">
+            <div className="mc-kicker">REQUIREMENTS &amp; FIT</div>
+            {fit !== null ? (
+              <span className="reqfit">Fit <b>{fit}</b>/100 · vs {roleName}</span>
+            ) : (
+              <span className="reqfit reqfit-sub">
+                vs <b>{roleName}</b>{scoredAt ? ` · Scored ${new Date(scoredAt).toLocaleDateString()}` : ''}
+              </span>
+            )}
           </div>
+          <p className="reqsub">Per-requirement match confidence (0–100). Click a row for evidence.</p>
+
           <div className="cvm-coverage">
             <div className="cvm-bar" aria-hidden="true">
               {counts.met ? <span style={{ flex: counts.met, background: 'var(--purple)' }} /> : null}
@@ -87,47 +106,44 @@ const CvMatchReview = ({
             </div>
           </div>
 
-          <div className="cvm-list">
+          <div className="reqlist">
             {ordered.map((item, index) => {
               const key = reqGradeKey(item);
               const meta = REQ_STATUS_META[key] || REQ_STATUS_META.missing;
               const grade = requirementGrade(item);
+              // The bar fills to the graded confidence; when a row was never
+              // graded (raw-skill fallback) we approximate from the band so the
+              // bar still reads "strong" vs "gap" rather than rendering empty.
+              const bandFill = key === 'met' ? 90 : key === 'partially_met' ? 55 : key === 'unknown' ? 30 : 12;
+              const pct = grade !== null ? Math.max(0, Math.min(100, grade)) : bandFill;
+              const isLow = pct < 60;
               const evidence = item?.impact
                 || extractRequirementEvidence(item)
                 || item?.evidence_quote
                 || (key === 'met' ? 'Matched evidence on file.' : 'Probe this live.');
               const isRecruiter = String(item?.requirement_id || '').startsWith('crit_');
+              const src = requirementSource(key);
               return (
-                <div key={extractRequirementKey(item, index)} className={`cvm-row is-${key}`}>
-                  <span className="cvm-status" data-s={key}>
-                    <i style={{ background: meta.dot }} />
-                    {meta.label}
-                  </span>
-                  <div className="cvm-req">
-                    <div className="cvm-req-top">
-                      <span className="cvm-req-name">{item.requirement || item.criterion_text || 'Requirement'}</span>
-                      {isRecruiter ? <span className="cvm-tag">Recruiter</span> : null}
-                      {grade !== null ? (
-                        <span
-                          className="cvm-grade"
-                          title="Evidence-graded fit for this requirement (0-100) — this is what the score uses."
-                          style={{
-                            marginLeft: 'auto',
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: '0.75rem',
-                            fontWeight: 700,
-                            color: 'var(--ink)',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          {grade}
-                          <span style={{ color: 'var(--mute)', fontWeight: 500 }}>/100</span>
-                        </span>
-                      ) : null}
-                    </div>
-                    <span className="cvm-ev">{evidence}</span>
+                <details key={extractRequirementKey(item, index)} className={`reqrow is-${key}`}>
+                  <summary>
+                    <span className="reqg" aria-hidden="true">
+                      <span className={`reqscore ${isLow ? 'lo' : 'hi'}`}>{Math.round(pct)}</span>
+                      <span className="reqbar">
+                        <i className={isLow ? 'lo' : ''} style={{ width: `${pct}%` }} />
+                      </span>
+                    </span>
+                    <span className="rqname">
+                      {item.requirement || item.criterion_text || 'Requirement'}
+                      {isRecruiter ? <span className="cvm-tag reqtag">Recruiter</span> : null}
+                    </span>
+                    <span className="reqstat" data-s={key}>{meta.label}</span>
+                    <ChevronRight size={16} className="chev" aria-hidden="true" />
+                  </summary>
+                  <div className="ev">
+                    <span className="src">{src}</span>
+                    {evidence}
                   </div>
-                </div>
+                </details>
               );
             })}
           </div>
