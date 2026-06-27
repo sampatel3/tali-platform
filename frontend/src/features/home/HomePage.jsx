@@ -14,7 +14,6 @@ import { useToast } from '../../context/ToastContext';
 
 import './home.css';
 import { formatCount, budgetTile, decisionPendingFromCounts } from '../../shared/metrics';
-import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { HomeNow } from './HomeNow';
 import { HomeMonitoring } from './HomeMonitoring';
 import { HomePlatformUpdates } from './HomePlatformUpdates';
@@ -567,51 +566,9 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
         <div className="ac-main">
 
       <div className="home-body">
-        {/* One compact KPI row for the Decision Hub — decision-focused, no
-            duplication of the hero chips or the pipeline strip below:
-              Awaiting you · Decisions today · Org budget·MTD · Override 7d.
-            "In pipeline" / "Active roles" were dropped — the funnel strip and
-            the kicker already carry them. "Awaiting you" reads the same
-            pendingDecisions the hero chips sum to. Shared <KpiStrip> tile so
-            this matches the jobs-list strip exactly. */}
-        <KpiStrip
-          columns={4}
-          tiles={[
-            {
-              key: 'awaiting',
-              label: 'Awaiting you',
-              value: formatCount(pendingDecisions),
-              emph: pendingDecisions > 0,
-              sub: orgNotYetDecided > 0
-                ? `${formatCount(orgNotYetDecided)} not yet decided by the agent`
-                : (pendingDecisions > 0 ? 'all flagged' : 'queue clear'),
-              subTitle: orgNotYetDecided > 0
-                ? "Scored candidates the agent hasn't ruled on yet — usually because its agent is paused on that role. Each is decided from its current score when the agent runs; these are not waiting on you."
-                : null,
-            },
-            {
-              key: 'today',
-              label: 'Decisions today',
-              value: formatCount(kpis.today),
-              sub: kpis.auto_applied_today > 0 ? `${formatCount(kpis.auto_applied_today)} auto-applied` : 'none auto-applied',
-            },
-            {
-              key: 'budget',
-              label: 'Org budget · MTD',
-              value: orgBudget.value,
-              unit: orgBudget.unit,
-              bar: kpis.org_budget_cap_cents > 0 ? orgBudget : null,
-              sub: orgBudget.sub,
-            },
-            {
-              key: 'override',
-              label: 'Override rate · 7d',
-              value: `${kpis.override_rate_pct.toFixed(0)}%`,
-              sub: kpis.teach_rate_pct > 0 ? `${kpis.teach_rate_pct.toFixed(0)}% taught` : 'no teach signal yet',
-            },
-          ]}
-        />
-
+        {/* No top KPI strip — the hub leads with the funnel + the review queue
+            (the preview dropped the KPI row; the hero kicker carries "awaiting
+            you" and the full metrics live on the Analytics page). */}
         <HomeNow
           decisions={decisions}
           pendingOrdered={pendingOrdered}
