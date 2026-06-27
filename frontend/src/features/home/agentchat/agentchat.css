@@ -3,7 +3,7 @@
 
 .ac-shell {
   display: grid;
-  grid-template-columns: 248px minmax(0, 1fr) 404px;
+  grid-template-columns: 244px minmax(0, 1fr) 384px;
   gap: 0;
   align-items: stretch;
 }
@@ -22,7 +22,7 @@
 .home-app > .agent-header { flex-shrink: 0; }
 .home-app > .ac-shell { flex: 1 1 auto; min-height: 0; }
 /* When the dock is collapsed, drop the right column. */
-.ac-shell.ac-dock-collapsed { grid-template-columns: 248px minmax(0, 1fr) 0; }
+.ac-shell.ac-dock-collapsed { grid-template-columns: 244px minmax(0, 1fr) 0; }
 .ac-main { min-width: 0; height: 100%; min-height: 0; overflow-y: auto; }
 
 /* Rails fill the bounded app-shell column — no sticky needed. */
@@ -162,7 +162,7 @@
 .ac-bubble .ac-md-li::before { content: '•'; position: absolute; left: 3px; color: var(--purple); }
 .ac-bubble-user .ac-md-li::before { color: rgba(255, 255, 255, 0.82); }
 .ac-bubble-agent { background: var(--bg-2); border: 1px solid var(--line); border-top-left-radius: 5px; box-shadow: var(--shadow-sm); }
-.ac-bubble-user { background: var(--purple); color: #fff; border-top-right-radius: 5px; }
+.ac-bubble-user { background: var(--ink); color: #fff; border-top-right-radius: 5px; }
 .ac-time { font-size: 0.625rem; color: var(--ink-soft); font-family: var(--font-mono); padding: 0 4px; }
 .ac-avatar { border-radius: 50%; display: grid; place-items: center; font-family: var(--font-mono); font-weight: 700; font-size: 0.6875rem; flex-shrink: 0; }
 .ac-avatar-agent { background: var(--purple); color: #fff; }
