@@ -229,6 +229,9 @@ export const MarketingNav = ({ onNavigate }) => {
           >
             Developers
           </button>
+          <PageLink page="blog" className="btn btn-ghost btn-sm">
+            Blog
+          </PageLink>
         </div>
         <div className="row" style={{ gap: 10 }}>
           <PageLink page="login" className="btn btn-ghost btn-sm !hidden sm:!inline-flex">
