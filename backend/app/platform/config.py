@@ -33,18 +33,25 @@ class Settings(BaseSettings):
     # Claude / Anthropic
     ANTHROPIC_API_KEY: str = ""
     # Model for assessment terminal, chat, and general use. Default Haiku for cost/debugging.
-    CLAUDE_MODEL: str = "claude-3-5-haiku-latest"
+    # NOTE: claude-3-5-haiku-latest was RETIRED by Anthropic (404) and is NOT in
+    # the pricing _MODEL_RATES table (a `-latest` alias isn't snapshot-stripped),
+    # so it would mis-price to env-var defaults. Pin the valid Haiku 4.5 id that
+    # the pricing table rates. Prod overrides CLAUDE_MODEL to Sonnet via env.
+    CLAUDE_MODEL: str = "claude-haiku-4-5-20251001"
     # Legacy compatibility only: when set, must match CLAUDE_MODEL.
     CLAUDE_SCORING_MODEL: str = ""
     # Batch-scoring override (cost optimized). If empty, falls back to CLAUDE_MODEL.
-    CLAUDE_SCORING_BATCH_MODEL: str = "claude-3-5-haiku-latest"
+    CLAUDE_SCORING_BATCH_MODEL: str = "claude-haiku-4-5-20251001"
     # Candidate-facing agentic chat model. Independent of CLAUDE_MODEL (which
     # the recruitment agent overrides to Sonnet on prod for reasoning quality).
     # Defaults to Haiku because: (a) ~5× faster round-trip — candidate UX gets
     # ~30s → ~5s per tool-using prompt; (b) ~10× cheaper inside the $5/assessment
     # budget; (c) Haiku is fully capable for the read/edit-file tool-use shape
     # the chat exercises.
-    CLAUDE_CHAT_MODEL: str = "claude-3-5-haiku-latest"
+    # NOTE: claude-3-5-haiku-latest was RETIRED by Anthropic (404 not_found),
+    # which 502'd every requisition + candidate chat turn — pin the valid Haiku
+    # 4.5 id (the same one Graphiti uses and that the pricing table rates).
+    CLAUDE_CHAT_MODEL: str = "claude-haiku-4-5-20251001"
     # Autonomous cohort-loop (agent_runtime/orchestrator) model. Independent of
     # CLAUDE_MODEL — the interactive recruitment agent + chat stay on it. The
     # cron deliberation loop is ~92% no-op/fail and the safety-critical decisions
@@ -189,9 +196,9 @@ class Settings(BaseSettings):
 
     @property
     def resolved_claude_model(self) -> str:
-        """Claude model for assessment terminal, chat, and general use. Defaults to claude-3-5-haiku-latest."""
+        """Claude model for assessment terminal, chat, and general use. Defaults to claude-haiku-4-5-20251001."""
         model = (self.CLAUDE_MODEL or "").strip()
-        return model or "claude-3-5-haiku-latest"
+        return model or "claude-haiku-4-5-20251001"
 
     @property
     def resolved_agent_autonomous_model(self) -> str:
@@ -207,7 +214,7 @@ class Settings(BaseSettings):
         overrides CLAUDE_MODEL to Sonnet for the recruitment agent, but the
         candidate chat should stay on Haiku for speed + cost."""
         model = (self.CLAUDE_CHAT_MODEL or "").strip()
-        return model or "claude-3-5-haiku-latest"
+        return model or "claude-haiku-4-5-20251001"
 
     @property
     def resolved_claude_scoring_model(self) -> str:

@@ -28,6 +28,14 @@ export const viewTopReport = (token) =>
 export const viewPublicJob = (token) =>
   axios.get(`${API_URL}/api/v1/public/job/${encodeURIComponent(token)}`);
 
+// Public unauth CAREERS BOARD — an org's per-org page listing all of its
+// published jobs. Same JWT-free pattern as viewPublicJob (bare axios so the
+// recruiter's token is never attached — anyone with the link can read it).
+// Returns `{ organization_name, slug, jobs: [ { token, url, title, location,
+//   workplace_type, employment_type, seniority, salary, published_at } ] }`.
+export const viewCareers = (slug) =>
+  axios.get(`${API_URL}/api/v1/public/careers/${encodeURIComponent(slug)}`);
+
 // ---- Public, no-auth CLIENT INTAKE (a consultancy's client describing the
 // role via the conversational agent) ----
 //
@@ -84,6 +92,7 @@ const isPublicPath = (pathname = '', search = '') => {
     || pathname.startsWith('/assess/')
     || pathname.startsWith('/assessment/')
     || pathname.startsWith('/job/')
+    || pathname.startsWith('/careers/')
     || pathname.startsWith('/intake/')
     || pathname.startsWith('/showcase/')) {
     return true;

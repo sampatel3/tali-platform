@@ -748,12 +748,21 @@ describe('AssessmentsPage', () => {
     });
   });
 
-  it('redirects /analytics and /reporting to /home (reporting folded in)', async () => {
-    // /analytics → /home (was /reporting before the Hub absorbed reporting).
+  it('serves the dedicated Analytics page at /analytics', async () => {
+    // Analytics is its own page now (the agent reporting layer, off the home
+    // review loop) — it no longer folds into / redirects to the Hub.
     window.history.pushState({}, '', '/analytics');
     renderApp();
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/home');
+      expect(window.location.pathname).toBe('/analytics');
+    });
+  });
+
+  it('aliases legacy /reporting to /analytics', async () => {
+    window.history.pushState({}, '', '/reporting');
+    renderApp();
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/analytics');
     });
   });
 

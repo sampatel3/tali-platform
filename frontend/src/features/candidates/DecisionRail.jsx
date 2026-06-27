@@ -44,7 +44,7 @@ export const DecisionRail = ({
   experienceLabel = '',
   decision = null,
   application = null,
-  integrity = null,
+  flagCount = 0,
   provenance = null,
   // canDecide = recruiter app or recruiter share; false for external clients
   // and any share/interview view. Gates the entire decision apparatus.
@@ -64,7 +64,6 @@ export const DecisionRail = ({
   const confPct = decision?.confidence != null && !Number.isNaN(Number(decision.confidence))
     ? Math.round(Number(decision.confidence) * 100)
     : null;
-  const warnCount = Array.isArray(integrity?.warnings) ? integrity.warnings.length : 0;
   const outcome = resolvedOutcomeLabel(application);
   const isScored = application?.cv_match_score != null;
   const postHandover = isPostHandoverWorkableStage(application?.workable_stage);
@@ -72,7 +71,8 @@ export const DecisionRail = ({
   return (
     <aside className="dossier-rail">
       <div className="dr-score">
-        <ScoreRing score={Number(taaliScore) || 0} label="TAALI" size={104} strokeWidth={9} />
+        <ScoreRing score={Number(taaliScore) || 0} label="" size={104} strokeWidth={9} />
+        <div className="dr-score-label">Taali score</div>
       </div>
 
       {canDecide && isActionable ? (
@@ -92,10 +92,10 @@ export const DecisionRail = ({
             {confPct != null ? <div className="dr-rec-conf">Confidence {confPct}%</div> : null}
           </div>
 
-          {warnCount > 0 ? (
+          {flagCount > 0 ? (
             <div className="dr-flags-chip">
               <Flag size={13} strokeWidth={2.2} aria-hidden="true" />
-              {warnCount} flag{warnCount === 1 ? '' : 's'} · verify before deciding
+              {flagCount} flag{flagCount === 1 ? '' : 's'} · verify before deciding
             </div>
           ) : null}
 

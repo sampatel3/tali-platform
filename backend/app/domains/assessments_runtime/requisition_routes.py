@@ -31,6 +31,8 @@ from ...services.requisition_chat_service import (
     ChatAttachment,
     compute_gaps,
     draft_responsibilities,
+    next_gap_prompt,
+    record_answer,
     run_chat_turn,
     seed_opening_message,
     warm_start_fields,
@@ -38,6 +40,7 @@ from ...services.requisition_chat_service import (
 from ...services.requisition_intake_agent import run_intake_extraction
 from ...services.requisition_template_service import (
     get_template_for_org,
+    iter_fields,
     resolve_template,
     set_template_for_org,
 )
@@ -62,6 +65,15 @@ def _client_intake_url(token: str) -> str:
     FRONTEND_URL is empty."""
     base = (settings.FRONTEND_URL or "").rstrip("/")
     return f"{base}/intake/{token}" if base else f"/intake/{token}"
+
+
+def _careers_url(slug: Optional[str]) -> Optional[str]:
+    """The org's PUBLIC careers board URL (``/careers/{slug}``), relative when
+    FRONTEND_URL is empty. ``None`` when the org has no slug (unreachable board)."""
+    if not slug:
+        return None
+    base = (settings.FRONTEND_URL or "").rstrip("/")
+    return f"{base}/careers/{slug}" if base else f"/careers/{slug}"
 
 # Multipart upload guards for the chat endpoint.
 _MAX_CHAT_FILES = 6
@@ -145,6 +157,9 @@ def _serialize_brief(brief: RoleBrief, org: Optional[Organization]) -> dict[str,
     payload["client_link"] = (
         {"token": token, "url": _client_intake_url(token)} if token else None
     )
+    # The org's PUBLIC careers board (lists every published page). None when the
+    # org has no slug; lets the recruiter UI link the board.
+    payload["careers_url"] = _careers_url(org.slug if org else None)
     return payload
 
 
@@ -183,6 +198,14 @@ class TemplatePut(BaseModel):
 
 class PublishRequisition(BaseModel):
     jd_markdown: str = ""
+
+
+class AnswerRequisition(BaseModel):
+    """A single structured answer to one requisition field (e.g. a tapped
+    quick-reply). ``value`` is open — string, number, or list."""
+
+    field_key: str
+    value: Any = None
 
 
 # --------------------------------------------------------------------------- #
@@ -311,6 +334,76 @@ async def chat_requisition(
         "messages": messages,
         "gaps": payload["gaps"],
         "suggested_replies": (last.get("suggested_replies") or []) if isinstance(last, dict) else [],
+    }
+
+
+def _readable_value(value: Any) -> str:
+    """Render an answer value as a short readable string for the transcript /
+    reply (lists joined with ", ")."""
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(v).strip() for v in value if str(v).strip())
+    return "" if value is None else str(value).strip()
+
+
+def _field_label(template: dict[str, Any], field_key: str) -> str:
+    """The template label for a field key (falls back to the key itself)."""
+    for _section, field in iter_fields(template):
+        if field.get("key") == field_key:
+            return field.get("label") or field_key
+    return field_key
+
+
+@router.post("/requisitions/{brief_id}/answer")
+def answer_requisition(
+    brief_id: int,
+    data: AnswerRequisition,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Record ONE structured answer (a tapped quick-reply or a single field
+    value) WITHOUT any LLM call.
+
+    Deterministically captures ``value`` onto ``field_key`` (coerced by the
+    template field type, routed to its column or ``custom_fields``), appends the
+    user answer + a deterministic assistant acknowledgement (which asks the next
+    gap's question) to the transcript, and returns the same shape as ``/chat``.
+    Unknown ``field_key`` → 422. No metering, no Anthropic call.
+    """
+    brief = _get_brief(db, current_user.organization_id, brief_id)
+    org = _org(db, current_user.organization_id)
+    template = resolve_template(org)
+
+    readable_value = _readable_value(data.value)
+    # Append the USER answer to the transcript.
+    brief.messages = list(brief.messages or []) + [
+        {"role": "user", "content": readable_value, "attachments": []}
+    ]
+
+    # Deterministically record the field (raises 422 on an unknown key / empty).
+    record_answer(db, brief, template, data.field_key, data.value)
+
+    # Deterministic acknowledgement + the next gap's question/options.
+    field_label = _field_label(template, data.field_key)
+    reply_q, options = next_gap_prompt(template, brief)
+    reply = f"Got it — {field_label}: {readable_value}. " + reply_q
+    brief.messages = list(brief.messages) + [
+        {
+            "role": "assistant",
+            "content": reply,
+            "attachments": [],
+            "suggested_replies": options,
+        }
+    ]
+
+    db.commit()
+    db.refresh(brief)
+    payload = _serialize_brief(brief, org)
+    return {
+        "brief": payload,
+        "reply": reply,
+        "messages": payload["messages"],
+        "gaps": payload["gaps"],
+        "suggested_replies": options,
     }
 
 

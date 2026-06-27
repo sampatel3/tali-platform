@@ -11,9 +11,10 @@
    runtime layers that the hiring UI consumes.
    ------------------------------------------------------------------ */
 :root {
-  /* Workable integration accent (hiring-specific — not a brand colour). */
-  --workable: #2d8cff;
-  --workable-dark: #1a5fbf;
+  /* Workable integration accent (hiring-specific — not a brand colour).
+     Green to match the design previews (was blue #2d8cff). */
+  --workable: #1a8754;
+  --workable-dark: #13683f;
 
   /* Backwards-compatible variables for existing components. */
   --taali-bg: var(--bg);
@@ -91,8 +92,8 @@
    (html[data-theme="dark"][data-brand="taali"]). Only the hiring-specific
    Workable accent needs a dark override here. */
 html[data-theme="dark"] {
-  --workable: #53a3ff;
-  --workable-dark: #2d8cff;
+  --workable: #2faa6e;
+  --workable-dark: #1a8754;
 }
 
 @layer base {

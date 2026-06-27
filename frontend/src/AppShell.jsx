@@ -45,6 +45,9 @@ import { StatsCard, StatusBadge } from './shared/ui/DashboardAtoms';
 const HomePage = lazy(() =>
   import('./features/home/HomePage').then((m) => ({ default: m.HomePage }))
 );
+const AnalyticsPage = lazy(() =>
+  import('./features/home/AnalyticsPage').then((m) => ({ default: m.AnalyticsPage }))
+);
 const CandidateWelcomePage = lazy(() =>
   import('./features/assessment_runtime/CandidateWelcomePage').then((m) => ({ default: m.CandidateWelcomePage }))
 );
@@ -93,11 +96,17 @@ const RequisitionsPage = lazy(() =>
 const PublicJobPage = lazy(() =>
   import('./features/jobpage/PublicJobPage').then((m) => ({ default: m.PublicJobPage }))
 );
+const CareersPage = lazy(() =>
+  import('./features/jobpage/CareersPage').then((m) => ({ default: m.CareersPage }))
+);
 const ClientIntakePage = lazy(() =>
   import('./features/clientintake/ClientIntakePage').then((m) => ({ default: m.ClientIntakePage }))
 );
 const ClientsPage = lazy(() =>
   import('./features/clients/ClientsPage').then((m) => ({ default: m.ClientsPage }))
+);
+const ClientDetailPage = lazy(() =>
+  import('./features/clients/ClientDetailPage').then((m) => ({ default: m.ClientDetailPage }))
 );
 const JobPipelinePage = lazy(() =>
   import('./features/jobs/JobPipelinePage').then((m) => ({ default: m.JobPipelinePage }))
@@ -174,6 +183,7 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     '/tasks/bespoke',
     '/candidate-detail',
     ].includes(pathname)
+    || pathname.startsWith('/clients/')
     || pathname.startsWith('/jobs/')
     || pathname.startsWith('/assessments/')
     || pathname.startsWith('/candidates/')
@@ -299,6 +309,9 @@ function AppContent() {
         : assessmentIdFromLink,
       candidateApplicationId: Object.prototype.hasOwnProperty.call(options, 'candidateApplicationId')
         ? options.candidateApplicationId
+        : null,
+      clientId: Object.prototype.hasOwnProperty.call(options, 'clientId')
+        ? options.clientId
         : null,
       candidateDetailAssessmentId: Object.prototype.hasOwnProperty.call(options, 'candidateDetailAssessmentId')
         ? options.candidateDetailAssessmentId
@@ -569,6 +582,22 @@ function AppContent() {
         )}
       />
 
+      {/* Per-client detail — economics roll-up + assigned requisitions.
+          React Router ranks the static /clients above this param route, so
+          both resolve regardless of declaration order. Protected recruiter
+          route (see isProtectedRecruiterPath). */}
+      <Route
+        path="/clients/:id"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <ClientDetailPage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
+      />
+
       <Route
         path="/jobs/:roleId"
         element={(
@@ -794,15 +823,23 @@ function AppContent() {
         )}
       />
 
-      {/* Reporting + analytics fold into the Hub bottom section now.
-          Both routes 301 to /home — see docs/HOME_HUB_DESIGN.md §4. */}
+      {/* Analytics is its own page now (the agent reporting layer, off the home
+          review loop) — reuses the HomeMonitoring console in standalone mode.
+          /reporting is a legacy alias that lands on it. */}
       <Route
         path="/analytics"
-        element={<Navigate replace to="/home" />}
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <AnalyticsPage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
       />
       <Route
         path="/reporting"
-        element={<Navigate replace to="/home" />}
+        element={<Navigate replace to="/analytics" />}
       />
 
       {/* Requisition spec template editor. A dedicated page (not a tab in the
@@ -891,6 +928,20 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <PublicJobPage />
+          </Suspense>
+        )}
+      />
+
+      {/* Public, no-auth CAREERS BOARD. The per-org page listing all of an
+          org's published jobs, reached via the org's careers_url. Like
+          /job/:token, it renders WITHOUT a NavComponent and without a recruiter
+          session — the page fetches the board through the unauthenticated
+          public careers endpoint. */}
+      <Route
+        path="/careers/:slug"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <CareersPage />
           </Suspense>
         )}
       />

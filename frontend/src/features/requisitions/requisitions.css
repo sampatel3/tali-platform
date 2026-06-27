@@ -232,6 +232,24 @@
 /* The View link is an <a> styled as a small button — keep it on the row. */
 a.rq-btn-sm { text-decoration: none; }
 
+/* "On your careers page" — a subtle row under the published actions linking to
+   the org's public careers board (when the brief carries a careers_url). */
+.rq-careers-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rq-careers-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  color: var(--purple-2);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.rq-careers-link:hover { text-decoration: underline; }
+
 /* Right-side header actions: the client-share control stacked above the
    publish / published state, both right-aligned. */
 .rq-head-actions {

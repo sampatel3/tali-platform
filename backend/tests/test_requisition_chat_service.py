@@ -1,7 +1,9 @@
 """Conversational requisition intake — gap engine, completeness, opening
 message, capture/apply, multimodal assembly, and a monkeypatched chat turn."""
+from datetime import datetime, timedelta, timezone
+
 from app.llm.structured import StructuredResult
-from app.models import Organization
+from app.models import Organization, Role
 from app.services import requisition_chat_service as chat
 from app.services.requisition_chat_service import (
     ChatAttachment,
@@ -17,6 +19,7 @@ from app.services.requisition_chat_service import (
     run_chat_turn,
     seed_opening_message,
     warm_start_fields,
+    warm_start_from_roles,
 )
 from app.services.requisition_intake_agent import (
     WeightedPriority,
@@ -504,3 +507,206 @@ def test_run_chat_turn_passes_recent_titles_into_system_prompt(db, monkeypatch):
     # The prior brief's title surfaces as warm-start context; the current brief
     # (untitled) is excluded so it never lists itself.
     assert "recent roles at this org: Staff Engineer." in seen["system"]
+
+
+# --------------------------------------------------------------------------- #
+# Warm-start from the org's REAL roles (roles.workable_job_data)
+# --------------------------------------------------------------------------- #
+def _role(db, org, *, workable_job_data=None, created_at=None, deleted_at=None):
+    """A Role with optional Workable payload, explicit ``created_at`` (so newest-
+    first ordering is deterministic under SQLite), and optional soft-delete."""
+    role = Role(
+        organization_id=org.id,
+        name="Role",
+        source="workable",
+        workable_job_data=workable_job_data,
+        created_at=created_at or datetime.now(timezone.utc),
+        deleted_at=deleted_at,
+    )
+    db.add(role)
+    db.flush()
+    return role
+
+
+def test_warm_start_from_roles_normalises_workable_job_data(db):
+    org = _org(db)
+    _role(
+        db, org,
+        workable_job_data={
+            "title": "Senior Backend Engineer",
+            "department": "Engineering",
+            "workplace_type": "hybrid",
+            "employment_type": "full_time",
+            "location": {
+                "location_str": "Abu Dhabi, Abu Dhabi, United Arab Emirates",
+                "city": "Abu Dhabi",
+                "country": "United Arab Emirates",
+            },
+            "state": "published",
+        },
+    )
+    fields = warm_start_from_roles(db, org.id)
+    # snake_case Workable vocab → the template's nice select labels.
+    assert fields["workplace_type"] == "Hybrid"
+    assert fields["employment_type"] == "Full-time"
+    # Structured location used directly.
+    assert fields["location_city"] == "Abu Dhabi"
+    assert fields["location_country"] == "United Arab Emirates"
+    assert fields["department"] == "Engineering"
+
+
+def test_warm_start_from_roles_recency_biased_per_field(db):
+    org = _org(db)
+    now = datetime.now(timezone.utc)
+    # Older role: has workplace_type + department.
+    _role(
+        db, org,
+        created_at=now - timedelta(days=2),
+        workable_job_data={
+            "workplace_type": "onsite",
+            "department": "Data",
+            "location": {"city": "Riyadh", "country": "Saudi Arabia"},
+        },
+    )
+    # Newer role: a different city, remote, but no department.
+    _role(
+        db, org,
+        created_at=now,
+        workable_job_data={
+            "workplace_type": "remote",
+            "location": {"city": "Dubai", "country": "United Arab Emirates"},
+        },
+    )
+    fields = warm_start_from_roles(db, org.id)
+    # Newest non-empty per field wins.
+    assert fields["workplace_type"] == "Remote"
+    assert fields["location_city"] == "Dubai"
+    assert fields["location_country"] == "United Arab Emirates"
+    # Only the older role had a department → falls back to it.
+    assert fields["department"] == "Data"
+
+
+def test_warm_start_from_roles_falls_back_to_location_str_split(db):
+    org = _org(db)
+    _role(
+        db, org,
+        workable_job_data={
+            "workplace_type": "Hybrid",  # already a nice label → tolerated
+            "employment_type": "contract",
+            # No structured city/country — only the human string.
+            "location": {"location_str": "London, England, United Kingdom"},
+        },
+    )
+    fields = warm_start_from_roles(db, org.id)
+    assert fields["workplace_type"] == "Hybrid"
+    assert fields["employment_type"] == "Contract"
+    # First part = city, last part = country.
+    assert fields["location_city"] == "London"
+    assert fields["location_country"] == "United Kingdom"
+
+
+def test_warm_start_from_roles_skips_missing_and_odd_job_data(db):
+    org = _org(db)
+    now = datetime.now(timezone.utc)
+    # Newest first: a role with no payload, then a non-dict location + null
+    # department, then a clean role. None should raise; the clean values win.
+    _role(db, org, created_at=now, workable_job_data=None)
+    _role(
+        db, org,
+        created_at=now - timedelta(days=1),
+        workable_job_data={
+            "workplace_type": "weird-value",   # unrecognised → skipped
+            "department": None,                 # null → skipped
+            "location": "Just a string city",  # non-dict location
+            "employment_type": "part_time",
+        },
+    )
+    _role(
+        db, org,
+        created_at=now - timedelta(days=2),
+        workable_job_data={
+            "workplace_type": "remote",
+            "location": {"city": "Cairo", "country": "Egypt"},
+        },
+    )
+    fields = warm_start_from_roles(db, org.id)
+    # part_time from the odd role (normalised); workplace_type falls through to
+    # the clean older role since "weird-value" was unrecognised.
+    assert fields["employment_type"] == "Part-time"
+    assert fields["workplace_type"] == "Remote"
+    # The non-dict location string was treated as the city.
+    assert fields["location_city"] == "Just a string city"
+    assert fields["location_country"] == "Egypt"  # from the clean older role
+    # department never resolved (only null seen) → absent.
+    assert "department" not in fields
+
+
+def test_warm_start_from_roles_excludes_soft_deleted_and_scopes_org(db):
+    org = _org(db)
+    other = Organization(name="Other", slug="other")
+    db.add(other)
+    db.flush()
+    # A soft-deleted role in-org must be ignored.
+    _role(
+        db, org,
+        deleted_at=datetime.now(timezone.utc),
+        workable_job_data={"workplace_type": "onsite"},
+    )
+    # A role in another org must not bleed in.
+    _role(db, other, workable_job_data={"workplace_type": "remote"})
+    assert warm_start_from_roles(db, org.id) == {}
+
+
+def test_warm_start_from_roles_empty_when_no_roles(db):
+    org = _org(db)
+    assert warm_start_from_roles(db, org.id) == {}
+
+
+# --------------------------------------------------------------------------- #
+# Combined warm-start: brief value WINS, roles fill the rest
+# --------------------------------------------------------------------------- #
+def test_warm_start_fields_brief_value_wins_over_role(db):
+    org = _org(db)
+    # A role provides workplace_type + location + employment_type.
+    _role(
+        db, org,
+        workable_job_data={
+            "workplace_type": "remote",
+            "employment_type": "full_time",
+            "location": {"city": "Dubai", "country": "United Arab Emirates"},
+        },
+    )
+    # A recruiter's own recent brief sets workplace_type explicitly.
+    brief = create_brief(db, organization_id=org.id)
+    update_brief_fields(db, brief, workplace_type="Onsite")
+
+    fields = warm_start_fields(db, org.id)
+    # Brief value wins for the field it set...
+    assert fields["workplace_type"] == "Onsite"
+    # ...and the role fills every field the briefs left empty.
+    assert fields["employment_type"] == "Full-time"
+    assert fields["location_city"] == "Dubai"
+    assert fields["location_country"] == "United Arab Emirates"
+
+
+def test_warm_start_fields_uses_roles_when_no_briefs(db):
+    org = _org(db)
+    _role(
+        db, org,
+        workable_job_data={
+            "workplace_type": "hybrid",
+            "employment_type": "full_time",
+            "location": {"city": "Abu Dhabi", "country": "United Arab Emirates"},
+        },
+    )
+    # No briefs at all → everything comes from the org's real role history.
+    fields = warm_start_fields(db, org.id)
+    assert fields["workplace_type"] == "Hybrid"
+    assert fields["employment_type"] == "Full-time"
+    assert fields["location_city"] == "Abu Dhabi"
+    assert fields["location_country"] == "United Arab Emirates"
+
+
+def test_warm_start_fields_empty_with_no_briefs_or_roles(db):
+    org = _org(db)
+    assert warm_start_fields(db, org.id) == {}

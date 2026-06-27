@@ -1727,9 +1727,58 @@ button.eng-badge-button:focus-visible {
 }
 .dossier-rail .dr-score {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
   margin-bottom: 16px;
 }
+.dossier-rail .dr-score-label {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mute);
+}
+
+/* Overview "Flags" section — claims/signals to verify, amber, first-class. */
+.mc-flags { margin: 0 0 20px; }
+.mc-flags-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.mc-kicker-amber { color: var(--amber); }
+.mc-flags-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: color-mix(in oklab, var(--amber) 78%, var(--ink));
+  background: color-mix(in oklab, var(--amber) 14%, var(--bg-2));
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+.mc-flags-chip svg { color: var(--amber); }
+.mc-flags-sub { font-size: 0.8125rem; color: var(--mute); margin: 0 0 6px; }
+.mc-flag {
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.mc-flag:first-of-type { border-top: none; }
+.mc-flag-i { color: var(--amber); flex: none; margin-top: 2px; }
+.mc-flag b { font-weight: 600; }
+.mc-flag-why { color: var(--mute); }
+.mc-flags-more > summary {
+  list-style: none;
+  cursor: pointer;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--purple);
+  padding: 9px 0 2px;
+}
+.mc-flags-more > summary::-webkit-details-marker { display: none; }
 
 /* Recommendation slab — the bold dark-purple "agent ON" treatment, with the
    recommended action as a white CTA. */

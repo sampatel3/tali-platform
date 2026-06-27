@@ -150,6 +150,8 @@ class Feature(str, Enum):
     FIT_MATCHING = "fit_matching"          # services/fit_matching_service
     GRAPH_SYNC = "graph_sync"              # candidate_graph (semantic search indexing)
     INTENT_PARSER = "intent_parser"        # sub_agents/intent_parser (recruiter intent-chip parse)
+    INTENT_CHIP_PARSER = "intent_chip_parser"  # services/intent_chip_parser (agent-chat answer → chips)
+    MATERIAL_CHANGE = "material_change"    # services/material_change (job-spec materiality assessor)
     REQUISITION_INTAKE = "requisition_intake"  # requisition_intake_agent (single-shot brief extraction)
     REQUISITION_INTAKE_CHAT = "requisition_intake_chat"  # requisition_chat_service (conversational intake turn)
     REQUISITION_CLIENT_INTAKE = "requisition_client_intake"  # client_intake (no-login client-scoped intake turn)
@@ -257,6 +259,17 @@ _FEATURE_PRICING: dict[Feature, FeaturePricing] = {
     ),
     Feature.INTENT_PARSER: FeaturePricing(
         feature=Feature.INTENT_PARSER,
+        markup_multiplier=Decimal("1.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    # Agent-chat answer→chips + job-spec materiality assessor: internal fast-Haiku prep, at cost (1×).
+    Feature.INTENT_CHIP_PARSER: FeaturePricing(
+        feature=Feature.INTENT_CHIP_PARSER,
+        markup_multiplier=Decimal("1.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.MATERIAL_CHANGE: FeaturePricing(
+        feature=Feature.MATERIAL_CHANGE,
         markup_multiplier=Decimal("1.0"),
         cache_hit_multiplier=Decimal("0.10"),
     ),
@@ -485,8 +498,11 @@ def estimate_reservation(feature: Feature | str) -> int:
         Feature.AGENT_CHAT: 12_000,  # ~$0.012 per role-agent chat turn (tool loop)
         Feature.CV_PARSE: 2_000,
         Feature.CV_RERANK: 5_000,
+        Feature.CANDIDATE_GROUNDING: 5_000,  # per-candidate citation grounding (rerank-tier)
         Feature.SEARCH_PARSE: 500,
         Feature.INTENT_PARSER: 3_000,  # Sonnet structured parse (~2.7k-tok prompt + small output)
+        Feature.INTENT_CHIP_PARSER: 3_000,  # Haiku answer → chips
+        Feature.MATERIAL_CHANGE: 3_000,  # Haiku materiality judgement
         Feature.ARCHETYPE_SYNTHESIS: 8_000,
         Feature.PAIRWISE_JUDGE: 4_000,
         Feature.INTERVIEW_FOCUS: 6_000,

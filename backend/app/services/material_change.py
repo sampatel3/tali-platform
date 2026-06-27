@@ -194,7 +194,7 @@ def _assess_materiality(
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
             metering={
-                "feature": Feature.OTHER,
+                "feature": Feature.MATERIAL_CHANGE,
                 "organization_id": int(role.organization_id),
                 "role_id": int(role.id),
                 "metadata": {"sub_agent": "material_change_assessor"},

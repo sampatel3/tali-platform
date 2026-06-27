@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { Copy, ExternalLink, Eye, Sparkles } from 'lucide-react';
+import { AlertTriangle, Copy, ExternalLink, Eye, Flag, Sparkles } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
 import { viewShareLink } from '../../shared/api';
@@ -1056,7 +1056,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             experienceLabel={reportModel?.candidateSnapshot?.yearsLabel || ''}
             decision={agentDecision}
             application={application}
-            integrity={application?.score_summary?.integrity || null}
+            flagCount={(reportModel?.roleFitModel?.claimsToVerify?.length || 0) + (reportModel?.roleFitModel?.integrityFlags?.length || 0)}
             provenance={application?.score_summary?.score_provenance}
             canDecide={!isClientView && !isInterviewView}
             busy={decisionBusy}
@@ -1122,6 +1122,53 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 </section>
               ) : null}
 
+              {/* (1b) Flags — claims & signals the agent couldn't corroborate
+                  (cv_match_details.claims_to_verify + score_summary.integrity),
+                  surfaced first-class so a recruiter verifies before deciding.
+                  Recruiter-only. */}
+              {!isClientView ? (() => {
+                const claims = Array.isArray(reportModel?.roleFitModel?.claimsToVerify)
+                  ? reportModel.roleFitModel.claimsToVerify : [];
+                const integrity = Array.isArray(reportModel?.roleFitModel?.integrityFlags)
+                  ? reportModel.roleFitModel.integrityFlags : [];
+                const flags = [
+                  ...claims.map((c) => ({
+                    label: c.claimType ? String(c.claimType).replace(/_/g, ' ') : '',
+                    text: c.claimText || '',
+                    why: c.reasoning || '',
+                  })),
+                  ...integrity.map((s) => ({ label: '', text: String(s), why: '' })),
+                ].filter((f) => f.text);
+                if (!flags.length) return null;
+                const renderFlag = (f, i) => (
+                  <div className="mc-flag" key={`flag-${i}`}>
+                    <AlertTriangle size={15} className="mc-flag-i" aria-hidden="true" />
+                    <span>
+                      {f.label ? <b>{f.label}</b> : null}{f.label ? ' — ' : ''}{f.text}
+                      {f.why ? <span className="mc-flag-why"> — {f.why}</span> : null}
+                    </span>
+                  </div>
+                );
+                const shown = flags.slice(0, 3);
+                const rest = flags.slice(3);
+                return (
+                  <section className="mc-flags" aria-label="Flags to verify">
+                    <div className="mc-flags-head">
+                      <span className="mc-kicker mc-kicker-amber">Flags</span>
+                      <span className="mc-flags-chip"><Flag size={12} aria-hidden="true" /> {flags.length} to verify</span>
+                    </div>
+                    <p className="mc-flags-sub">Claims and signals the agent couldn&apos;t corroborate — verify before deciding.</p>
+                    {shown.map(renderFlag)}
+                    {rest.length > 0 ? (
+                      <details className="mc-flags-more">
+                        <summary>+ {rest.length} more flag{rest.length === 1 ? '' : 's'}</summary>
+                        {rest.map((f, i) => renderFlag(f, i + 3))}
+                      </details>
+                    ) : null}
+                  </section>
+                );
+              })() : null}
+
               {/* (2) CV match review — full requirement breakdown, gaps first */}
               <CvMatchReview
                 application={application}
@@ -1139,7 +1186,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   this as evidence on the Assessment tab — not a rival scorecard. */}
               {scorecard ? (
                 <div className="mc-overview-dimensions">
-                  <div className="mc-kicker">SCORECARD · THE 4 Ds + DELIVERABLE</div>
+                  <div className="mc-kicker">SCORECARD · THE 5 Ds</div>
                   <div className="mc-overview-dimensions-grid">
                     {scorecard.map((axis) => (
                       <div key={axis.key} className="mc-overview-dim-row" title={axis.blurb}>
@@ -1157,7 +1204,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 </div>
               ) : (
                 <div className="mc-overview-dimensions mc-overview-dimensions-empty">
-                  <div className="mc-kicker">SCORECARD · THE 4 Ds + DELIVERABLE</div>
+                  <div className="mc-kicker">SCORECARD · THE 5 Ds</div>
                   <p className="mc-overview-dim-empty">
                     The 5-dimension scorecard (Delegation, Description, Discernment, Diligence,
                     Deliverable) appears once the candidate completes the assessment.

@@ -23,6 +23,10 @@ export const pathForPage = (page, options = {}) => {
       return '/requisitions';
     case 'clients':
       return '/clients';
+    case 'client-detail':
+      return options.clientId != null && String(options.clientId).trim() !== ''
+        ? `/clients/${encodeURIComponent(options.clientId)}`
+        : '/clients';
     case 'chat': {
       const base = options.chatConversationId
         ? `/chat/${encodeURIComponent(options.chatConversationId)}`
@@ -78,11 +82,10 @@ export const pathForPage = (page, options = {}) => {
     case 'tasks-bespoke':
       return '/tasks/bespoke';
     case 'analytics':
+      return '/analytics';
     case 'reporting':
-      // Reporting and analytics now live at the bottom of the Hub. The
-      // dedicated route is gone; preserve the page identifier so old
-      // navigateToPage('reporting') calls land on /home.
-      return '/home';
+      // Legacy alias — reporting folded into the dedicated Analytics page.
+      return '/analytics';
     case 'settings':
       return '/settings';
     case 'settings-workable':

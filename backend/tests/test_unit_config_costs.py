@@ -4,12 +4,12 @@ import pytest
 
 def test_resolved_claude_model_defaults_to_haiku_when_empty():
     settings = Settings(CLAUDE_MODEL="")
-    assert settings.resolved_claude_model == "claude-3-5-haiku-latest"
+    assert settings.resolved_claude_model == "claude-haiku-4-5-20251001"
 
 
 def test_resolved_claude_model_defaults_to_haiku_when_whitespace():
     settings = Settings(CLAUDE_MODEL="   ")
-    assert settings.resolved_claude_model == "claude-3-5-haiku-latest"
+    assert settings.resolved_claude_model == "claude-haiku-4-5-20251001"
 
 
 def test_resolved_claude_model_uses_explicit_config():
@@ -18,8 +18,8 @@ def test_resolved_claude_model_uses_explicit_config():
 
 
 def test_resolved_claude_scoring_model_uses_claude_model():
-    settings = Settings(CLAUDE_MODEL="claude-3-5-haiku-latest", CLAUDE_SCORING_MODEL="")
-    assert settings.resolved_claude_scoring_model == "claude-3-5-haiku-latest"
+    settings = Settings(CLAUDE_MODEL="claude-haiku-4-5-20251001", CLAUDE_SCORING_MODEL="")
+    assert settings.resolved_claude_scoring_model == "claude-haiku-4-5-20251001"
 
 
 def test_legacy_scoring_model_mismatch_fails_fast():
@@ -33,9 +33,9 @@ def test_legacy_scoring_model_mismatch_fails_fast():
 def test_resolved_claude_scoring_model_uses_batch_override():
     settings = Settings(
         CLAUDE_MODEL="claude-sonnet-4-5",
-        CLAUDE_SCORING_BATCH_MODEL="claude-3-5-haiku-latest",
+        CLAUDE_SCORING_BATCH_MODEL="claude-haiku-4-5-20251001",
     )
-    assert settings.resolved_claude_scoring_model == "claude-3-5-haiku-latest"
+    assert settings.resolved_claude_scoring_model == "claude-haiku-4-5-20251001"
 
 
 def test_resolved_claude_scoring_model_falls_back_to_claude_model_when_batch_empty():

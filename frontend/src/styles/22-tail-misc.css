@@ -723,19 +723,21 @@
   color: var(--ink-2);
 }
 
+/* Score band = purple ladder (solid → soft → grey), NOT traffic-light
+   green/amber/red. Matches the design system + the preview score pills. */
 .score-pill.hi {
-  background: color-mix(in oklab, #16a34a 18%, transparent);
-  color: #15803d;
+  background: var(--purple);
+  color: #fff;
 }
 
 .score-pill.mid {
-  background: color-mix(in oklab, #f59e0b 18%, transparent);
-  color: #b45309;
+  background: var(--purple-soft);
+  color: var(--purple-2);
 }
 
 .score-pill.lo {
-  background: color-mix(in oklab, #dc2626 18%, transparent);
-  color: #b91c1c;
+  background: var(--bg-3);
+  color: var(--mute);
 }
 
 /* Out-of-date scores: drop the hi/mid/lo colour for a neutral grey pill so

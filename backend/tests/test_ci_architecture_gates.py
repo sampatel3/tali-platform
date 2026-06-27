@@ -308,3 +308,194 @@ def test_no_bare_async_anthropic_client_construction() -> None:
         "Bare AsyncAnthropic produces invisible Haiku spend (Graphiti "
         f"path leaked 16M tokens/day before this gate). Violations: {violations}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Metering-consistency gates
+# ---------------------------------------------------------------------------
+# These guard the *attribution* layer (which Feature a call books to, and
+# whether that Feature/model can be priced) rather than the *transport* layer
+# (the two gates above, which guard that calls flow through the metered
+# wrapper at all). The class of bug they catch shipped for real:
+# ``requisition_intake*`` feature strings were used at call sites before the
+# matching ``Feature`` enum members existed, so ``record_event`` raised a
+# ``ValueError`` on the ``Feature(...)`` conversion and the usage was silently
+# dropped (metering must never raise, so the event just vanished).
+
+
+def test_metering_feature_literals_resolve_to_enum() -> None:
+    """Every metering ``feature`` string literal must be a ``Feature`` member.
+
+    Scans ``app/**.py`` for both shapes that flow into the meter:
+      * ``feature="..."`` kwargs (MeteringContext / record_event / call sites)
+      * ``"feature": "..."`` dict keys (the ``metering={...}`` wrapper kwarg)
+
+    and asserts each literal value resolves to a ``Feature`` member. A literal
+    with no enum member is exactly the ``requisition_intake*`` bug: the wrapper
+    calls ``Feature(value)`` inside ``record_event``, that raises, and the
+    swallow-all metering path drops the usage_event with only a logged warning.
+
+    The negative-lookbehind ``(?<![\\w.])`` keeps this from matching
+    ``sub_feature=`` or attribute access like ``x.feature=``. A small explicit
+    ignore-list covers the one known non-metering false positive (a
+    ``"feature": "kubernetes"`` example inside a docstring).
+    """
+    from app.services.pricing_service import Feature
+
+    valid_values = {f.value for f in Feature}
+
+    # (relative_path, literal_value) pairs that are NOT metering features.
+    # Keep this list TINY — every entry is a place the regex over-matched a
+    # non-metering string. The dead ``"feature": "evaluate_policy"`` key in
+    # tool_registry.py was deleted (not ignored), so it must not appear here.
+    ignore: set[tuple[str, str]] = {
+        # Docstring example in a `"skills": [{"feature": "kubernetes", ...}]`
+        # blob — a candidate-signal shape, not a metering feature.
+        ("app/services/cohort_signals_service.py", "kubernetes"),
+    }
+
+    kwarg_re = re.compile(
+        r"(?<![\w.])feature\s*=\s*[\"']([A-Za-z_][A-Za-z0-9_]*)[\"']"
+    )
+    dict_re = re.compile(
+        r"[\"']feature[\"']\s*:\s*[\"']([A-Za-z_][A-Za-z0-9_]*)[\"']"
+    )
+
+    violations: list[str] = []
+    for path in _python_files(PROJECT_ROOT / "app"):
+        rel = path.relative_to(PROJECT_ROOT).as_posix()
+        content = path.read_text(encoding="utf-8")
+        for match in [*kwarg_re.finditer(content), *dict_re.finditer(content)]:
+            value = match.group(1)
+            if (rel, value) in ignore:
+                continue
+            if value not in valid_values:
+                violations.append(f"{rel}: feature={value!r}")
+
+    assert not violations, (
+        "Every metering `feature` string literal must resolve to a Feature "
+        "enum member, or record_event raises and the usage_event is silently "
+        "dropped (the requisition_intake* bug). Add the member to "
+        "app/services/pricing_service.py::Feature (and its pricing + "
+        "reservation entries), or fix the typo. Offending literals: "
+        f"{violations}"
+    )
+
+
+def test_every_feature_is_priced_and_reservable() -> None:
+    """Every ``Feature`` member must appear in BOTH pricing maps.
+
+    - ``pricing_service._FEATURE_PRICING`` — consulted by ``credits_charged``
+      / ``feature_pricing`` to apply the per-feature markup.
+    - ``pricing_service.estimate_reservation`` — consulted by
+      ``usage_metering_service.reserve`` for the pre-flight balance check.
+
+    A member missing from either map ``KeyError``s at runtime the first time
+    that feature is billed/reserved. This caught ``CANDIDATE_GROUNDING`` (it
+    was priced but absent from the reservation map).
+    """
+    from app.services.pricing_service import (
+        Feature,
+        _FEATURE_PRICING,
+        estimate_reservation,
+        feature_pricing,
+    )
+
+    missing_pricing = [f.name for f in Feature if f not in _FEATURE_PRICING]
+    assert not missing_pricing, (
+        "Feature members missing from _FEATURE_PRICING (credits_charged would "
+        f"KeyError): {missing_pricing}"
+    )
+
+    missing_reservation: list[str] = []
+    for feature in Feature:
+        try:
+            estimate_reservation(feature)
+        except KeyError:
+            missing_reservation.append(feature.name)
+    assert not missing_reservation, (
+        "Feature members missing from estimate_reservation's map "
+        f"(reserve() would KeyError): {missing_reservation}"
+    )
+
+    # Belt-and-suspenders: feature_pricing(...) must succeed for every member
+    # (it also accepts the string value, the form record_event receives).
+    for feature in Feature:
+        feature_pricing(feature)
+        feature_pricing(feature.value)
+
+
+def test_configured_and_literal_claude_models_are_priceable() -> None:
+    """Every Claude model id we configure or hardcode must be in the rate table.
+
+    Two sources are scanned:
+      * ``CLAUDE_*MODEL`` string defaults in ``platform/config.py`` and the
+        ``resolved_claude_*`` fallbacks (the `or "claude-..."` literals).
+      * every ``claude-...`` model literal used anywhere in ``app/``.
+
+    Each must, after the pricing layer's ``_strip_snapshot_suffix``, resolve to
+    a key present in ``_MODEL_RATES``. Otherwise ``raw_cost_usd_micro`` falls
+    back to the env-var default rate and the call is mis-priced (Sonnet booked
+    at Haiku rates was a real −34% reconciliation drift).
+
+    This is exactly what catches a retired/absent id like
+    ``claude-3-5-haiku-latest`` — ``_strip_snapshot_suffix`` does NOT strip a
+    ``-latest`` alias (only an 8-digit ``-YYYYMMDD`` snapshot), so the stripped
+    string is still ``claude-3-5-haiku-latest``, which is not a ``_MODEL_RATES``
+    key. A stray ``-latest`` on any family fails here for the same reason.
+    """
+    from app.services.pricing_service import _MODEL_RATES, _strip_snapshot_suffix
+
+    def _priceable(model_id: str) -> bool:
+        return _strip_snapshot_suffix(model_id) in _MODEL_RATES
+
+    # 1. config.py defaults + resolver fallbacks. Match assignment defaults
+    #    (CLAUDE_*MODEL: str = "claude-...") and the `or "claude-..."` fallbacks.
+    config_path = PROJECT_ROOT / "app" / "platform" / "config.py"
+    config_src = config_path.read_text(encoding="utf-8")
+    config_model_re = re.compile(r"[\"'](claude-[A-Za-z0-9.\-]+)[\"']")
+    config_models = set(config_model_re.findall(config_src))
+
+    bad_config = sorted(m for m in config_models if not _priceable(m))
+    assert not bad_config, (
+        "config.py references Claude model id(s) absent from _MODEL_RATES "
+        "(after snapshot-strip) — they would mis-price to the env-var default "
+        f"rate. Add them to pricing_service._MODEL_RATES or fix the id: {bad_config}"
+    )
+
+    # 2. Every claude-... literal anywhere in app/. Excludes pricing_service
+    #    itself (it DEFINES the legacy rate keys, incl. ids new code shouldn't
+    #    call) and the migration-doc-style comments are caught too — a real
+    #    hardcoded model string that can't be priced is always a bug.
+    literal_re = re.compile(r"[\"'](claude-[A-Za-z0-9.\-]+)[\"']")
+    # Defines the legacy rate keys themselves (incl. retired ids kept for
+    # historical recompute) — not call-site model selection.
+    skip_rel = {"app/services/pricing_service.py"}
+    # (relative_path, model_id) pairs that are legitimately unpriceable: retired
+    # ids kept ONLY as alias-detection keys, never billed at their own id.
+    ignore_literals: set[tuple[str, str]] = {
+        # model_fallback.py keeps retired Haiku ids so an explicit legacy
+        # request still detects as a Haiku alias and resolves (via the fallback
+        # chain) to CURRENT_HAIKU_MODEL = claude-haiku-4-5-20251001 — the only
+        # id actually sent. See that module's docstring for why they must stay.
+        ("app/components/integrations/claude/model_fallback.py", "claude-3-5-haiku-latest"),
+        ("app/components/integrations/claude/model_fallback.py", "claude-3-haiku-20240307"),
+    }
+    offending: list[str] = []
+    for path in _python_files(PROJECT_ROOT / "app"):
+        rel = path.relative_to(PROJECT_ROOT).as_posix()
+        if rel in skip_rel:
+            continue
+        content = path.read_text(encoding="utf-8")
+        for model_id in set(literal_re.findall(content)):
+            if (rel, model_id) in ignore_literals:
+                continue
+            if not _priceable(model_id):
+                offending.append(f"{rel}: {model_id}")
+
+    assert not offending, (
+        "Claude model literal(s) in app/ are absent from _MODEL_RATES (after "
+        "snapshot-strip) and would mis-price to the env-var default rate. "
+        "A retired/absent id (e.g. a stray '-latest') is the classic cause. "
+        f"Offending: {sorted(offending)}"
+    )
