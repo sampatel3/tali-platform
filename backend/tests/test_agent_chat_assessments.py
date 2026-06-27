@@ -46,6 +46,38 @@ def _app(db, org, role, *, name, crit_id, status, reasoning, assessed=True):
     return app
 
 
+def _app_v4(db, org, role, *, name, crit_id, status, cv_quote="", probe=""):
+    """A candidate scored by cv_match_v4: rows key on an integer ``criterion_id``
+    (no ``requirement_id``), carry a single ``cv_quote`` (no ``evidence_quotes``
+    list) and an ``interview_probe`` (no free-text ``reasoning``)."""
+    cand = Candidate(organization_id=org.id, email=f"{name}-{id(db)}@x.test", full_name=name)
+    db.add(cand)
+    db.flush()
+    details = {
+        "scoring_version": "cv_match_v4",
+        "requirements_assessment": [
+            {
+                "criterion_id": crit_id,
+                "criterion_text": "loc",
+                "must_have": True,
+                "status": status,
+                "cv_quote": cv_quote,
+                "evidence_type": "explicit" if cv_quote else "absent",
+                "risk_level": "med",
+                "screening_recommendation": "borderline",
+                "interview_probe": probe,
+            },
+        ],
+    }
+    app = CandidateApplication(
+        organization_id=org.id, candidate_id=cand.id, role_id=role.id,
+        cv_match_details=details,
+    )
+    db.add(app)
+    db.flush()
+    return app
+
+
 def test_criterion_breakdown_groups_by_stored_status(db):
     org = _org(db)
     role = _role(db, org)
@@ -73,6 +105,46 @@ def test_affected_applications_scopes_by_status(db):
     assert [a["candidate_name"] for a in aff] == ["Bo"]
     assert aff[0]["application_id"] == bo.id
     assert "Saudi" in (aff[0]["reasoning"] or "")
+
+
+def test_criterion_breakdown_matches_cv_match_v4_rows(db):
+    """cv_match_v4 keys rows by an integer ``criterion_id`` (not the v3
+    ``requirement_id = "crit_<n>"``). Without the v4 lookup branch every
+    candidate would fall into ``not_assessed`` for a v4-scored role."""
+    org = _org(db)
+    role = _role(db, org)
+    _app_v4(db, org, role, name="Ada", crit_id=42, status="met",
+            cv_quote="Based in London, UK.", probe="Confirm UK work authorisation.")
+    _app_v4(db, org, role, name="Bo", crit_id=42, status="missing",
+            probe="Ask where the candidate is currently based.")
+
+    out = assessments.criterion_breakdown(db, role, 42)
+    assert out["total"] == 2
+    assert out["counts"]["met"] == 1
+    assert out["counts"]["missing"] == 1
+    assert out["counts"]["not_assessed"] == 0
+    # v4 rows have no ``reasoning`` — the interview_probe stands in as the "why".
+    missing_reasons = " ".join(c["reasoning"] or "" for c in out["samples"]["missing"])
+    assert "currently based" in missing_reasons
+
+
+def test_affected_applications_reads_v4_cv_quote_as_evidence(db):
+    """v4 stores a single verified ``cv_quote`` rather than the v3
+    ``evidence_quotes`` list — surface it either way."""
+    org = _org(db)
+    role = _role(db, org)
+    bo = _app_v4(db, org, role, name="Bo", crit_id=7, status="missing",
+                 probe="Confirm current location.")
+    _app_v4(db, org, role, name="Ada", crit_id=7, status="met",
+            cv_quote="Relocated to Dubai in 2023.", probe="")
+
+    aff_missing = assessments.affected_applications(db, role, 7, statuses=("missing",))
+    assert [a["candidate_name"] for a in aff_missing] == ["Bo"]
+    assert aff_missing[0]["application_id"] == bo.id
+    assert aff_missing[0]["evidence_quotes"] == []  # no quote on a missing row
+
+    aff_met = assessments.affected_applications(db, role, 7, statuses=("met",))
+    assert aff_met[0]["evidence_quotes"] == ["Relocated to Dubai in 2023."]
 
 
 def test_rescreen_scoped_only_marks_the_affected_subset(db):

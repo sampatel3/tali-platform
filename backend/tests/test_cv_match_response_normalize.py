@@ -98,6 +98,40 @@ def _req(requirement: str, status: str = "missing", **extra) -> dict:
     return item
 
 
+def _v4_req(criterion_text: str, status: str = "missing", **extra) -> dict:
+    """A cv_match_v4 row: criterion text under ``criterion_text`` (not
+    ``requirement``), keyed by an integer ``criterion_id``, evidence under
+    ``cv_quote``."""
+    item = {
+        "criterion_id": 1,
+        "criterion_text": criterion_text,
+        "must_have": False,
+        "status": status,
+        "cv_quote": None,
+        "evidence_type": "absent",
+        "interview_probe": "",
+    }
+    item.update(extra)
+    return item
+
+
+def test_self_score_requirement_decided_from_taali_score_on_v4_row():
+    """The v4 schema renamed ``requirement`` → ``criterion_text``. The self-score
+    gate must still be detected and corrected, or a v4-scored candidate's
+    "Taali score >= N" criterion stays stuck on the stored "missing"."""
+    details = {"requirements_assessment": [_v4_req("Taali score >= 60", status="missing")]}
+    item = _apply_self_score_requirements(details, 62)["requirements_assessment"][0]
+    assert item["status"] == "met"
+    assert item["source"] == "taali_score"
+    # The score is set on the v4 evidence field (cv_quote) as well as the v3 ones,
+    # so both the candidate page and the interview kit render the verdict.
+    assert item["cv_quote"] == "Taali score 62"
+    assert item["evidence_quote"] == "Taali score 62"
+    assert "62" in item["impact"] and "60" in item["impact"]
+    # The criterion text is left untouched — only the verdict fields change.
+    assert item["criterion_text"] == "Taali score >= 60"
+
+
 def test_self_score_requirement_met_decided_from_taali_score():
     """The reported bug: "Taali score >= 60" stored as MISSING even though the
     candidate scored 62. Decide it against the score, not the CV."""

@@ -1,11 +1,16 @@
 """Read the per-criterion assessments the scorer already stored.
 
 The full CV match persists a per-requirement breakdown (`status` + `reasoning` +
-`priority`) in ``candidate_application.cv_match_details['requirements_assessment']``,
-keyed by ``requirement_id = "crit_<criterion_id>"``. That's the data a criteria
-change should be *reasoned over* — who currently meets/misses the criterion and
-**why** — instead of re-scoring the whole pool. This module surfaces it; nothing
-here calls an LLM or mutates anything. See docs/REASONED_CRITERIA_CHANGES.md (P1).
+`priority`) in ``candidate_application.cv_match_details['requirements_assessment']``.
+Two schemas are live in prod: the v3 rows key on ``requirement_id =
+"crit_<criterion_id>"`` (a string) and carry ``reasoning`` + ``evidence_quotes``;
+the newer cv_match_v4 rows key on an integer ``criterion_id`` and carry a single
+verified ``cv_quote`` + an ``interview_probe``. ``_entry_for`` matches either, so
+a v4-scored role isn't reported as entirely "not_assessed". That's the data a
+criteria change should be *reasoned over* — who currently meets/misses the
+criterion and **why** — instead of re-scoring the whole pool. This module
+surfaces it; nothing here calls an LLM or mutates anything. See
+docs/REASONED_CRITERIA_CHANGES.md (P1).
 """
 from __future__ import annotations
 
@@ -24,13 +29,58 @@ def _req_id(criterion_id: int) -> str:
     return f"crit_{int(criterion_id)}"
 
 
+def _criterion_id_from_rid(rid: str) -> int | None:
+    """Recover the integer criterion id from a v3 ``requirement_id`` ("crit_<n>")."""
+    text = str(rid or "")
+    if text.startswith("crit_"):
+        text = text[len("crit_"):]
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
 def _entry_for(details: Any, rid: str) -> dict[str, Any] | None:
+    """Find the stored assessment row for a criterion across BOTH cv_match schemas.
+
+    v3 keys each row by ``requirement_id`` (the string ``rid`` = "crit_<n>");
+    cv_match_v4 keys them by an integer ``criterion_id``. Match either — without
+    the v4 branch a v4-scored role's rows never match and every candidate falls
+    into ``not_assessed``. ``rid`` stays the public parameter so every caller
+    (the health checks + the breakdown/affected helpers) is unchanged.
+    """
     if not isinstance(details, dict):
         return None
+    numeric_id = _criterion_id_from_rid(rid)
     for e in details.get("requirements_assessment") or []:
-        if isinstance(e, dict) and str(e.get("requirement_id")) == rid:
+        if not isinstance(e, dict):
+            continue
+        if str(e.get("requirement_id")) == rid:
             return e
+        if numeric_id is not None and e.get("criterion_id") is not None:
+            try:
+                if int(e["criterion_id"]) == numeric_id:
+                    return e
+            except (TypeError, ValueError):
+                pass
     return None
+
+
+def _entry_reasoning(entry: dict[str, Any]) -> str | None:
+    """The "why" for the criteria-change reasoning sample. v3 stores free-text
+    ``reasoning``; v4 has no reasoning field, so fall back to the
+    ``interview_probe`` (what to ask to close/confirm the gap)."""
+    return entry.get("reasoning") or entry.get("interview_probe")
+
+
+def _entry_evidence_quotes(entry: dict[str, Any]) -> list[str]:
+    """v3 stores a list under ``evidence_quotes``; v4 stores a single verified
+    ``cv_quote`` (string|null). Return a list of quotes either way."""
+    quotes = entry.get("evidence_quotes")
+    if isinstance(quotes, list) and quotes:
+        return quotes
+    quote = entry.get("cv_quote")
+    return [quote] if quote else []
 
 
 def criterion_breakdown(
@@ -61,7 +111,7 @@ def criterion_breakdown(
         else:
             status = str(entry.get("status") or "unknown").lower()
             bucket = status if status in _STATUSES else "unknown"
-            reasoning = entry.get("reasoning")
+            reasoning = _entry_reasoning(entry)
         groups[bucket].append({
             "application_id": int(app.id),
             "candidate_name": full_name or f"#{app.id}",
@@ -113,8 +163,8 @@ def affected_applications(
                 "application_id": int(app.id),
                 "candidate_name": full_name or f"#{app.id}",
                 "status": status,
-                "reasoning": entry.get("reasoning"),
-                "evidence_quotes": entry.get("evidence_quotes") or [],
+                "reasoning": _entry_reasoning(entry),
+                "evidence_quotes": _entry_evidence_quotes(entry),
             })
     return out
 
