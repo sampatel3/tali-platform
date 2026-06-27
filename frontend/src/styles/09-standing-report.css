@@ -1981,6 +1981,115 @@ button.eng-badge-button:focus-visible {
   .reqrow .ev { padding-left: 2px; }
 }
 
+/* ============================================================
+   Overview snapshot — report-preview's `.snapshot.compact`: one
+   bordered card, two columns (Experience + Tech-stack stacked |
+   Recent-roles list). Maps to CandidateSnapshotCard variant="report".
+   ============================================================ */
+.snapshot-compact-card {
+  padding: 16px 18px;
+}
+.snapshot-compact {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 30px;
+}
+@media (max-width: 640px) {
+  .snapshot-compact { grid-template-columns: 1fr; gap: 18px; }
+}
+.snapshot-compact-col { min-width: 0; }
+.snapshot-compact-sk {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--mute);
+  margin-bottom: 7px;
+}
+.snapshot-compact-big {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.snapshot-compact-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 340px;
+}
+.snapshot-compact-chip {
+  font-size: 0.71875rem;
+  background: var(--purple-soft);
+  color: var(--purple-2);
+  border-radius: 6px;
+  padding: 3px 9px;
+}
+.snapshot-compact-roles {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.84375rem;
+}
+.snapshot-compact-role {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.snapshot-compact-role-t { color: var(--ink-2); min-width: 0; }
+.snapshot-compact-role-t b { font-weight: 500; color: var(--ink); }
+.snapshot-compact-unverified {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--mute-2);
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  vertical-align: middle;
+  white-space: nowrap;
+  cursor: default;
+}
+.snapshot-compact-yr {
+  color: var(--mute);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  flex: none;
+}
+
+/* ============================================================
+   Interview-prep cues — report-preview's single-column `.cue`
+   rows (mono mute label column + value). Replaces the older
+   2-column green/red grid so the labels stay in-scheme (no
+   traffic-light); the card chrome (.mc-prep-card*) stays as-is.
+   ============================================================ */
+.mc-prep-cue {
+  display: flex;
+  gap: 11px;
+  align-items: baseline;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+  padding: 4px 0;
+}
+.mc-prep-cue-lab {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--mute);
+  width: 104px;
+  flex: none;
+}
+@media (max-width: 640px) {
+  .mc-prep-cue { flex-direction: column; gap: 2px; }
+  .mc-prep-cue-lab { width: auto; }
+}
+
 /* Overview → Requirements jump cue (replaces the inline CvMatchReview that
    moved to its own tab). */
 .mc-overview-reqjump {

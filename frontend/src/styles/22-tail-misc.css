@@ -573,30 +573,35 @@
   flex: 1 1 auto;
 }
 
+/* Segmented stage filter — pipeline-preview .seg: a rectangular bordered
+   control (9px corners) whose buttons are divided by thin left-borders and
+   whose active button fills solid purple edge-to-edge. (Was a rounded pill
+   toggle group.) */
 .ctable-toolbar .seg {
   display: inline-flex;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 2px;
-  gap: 2px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  overflow: hidden;
 }
 
 .ctable-toolbar .seg button {
   appearance: none;
   background: transparent;
   border: 0;
-  padding: 5px 12px;
-  font-family: var(--font-mono);
-  font-size: 0.71875rem;
-  letter-spacing: 0.04em;
+  border-left: 1px solid var(--line);
+  padding: 7px 12px;
+  font-size: 0.75rem;
   color: var(--mute);
-  border-radius: 999px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   transition: color 0.12s ease, background 0.12s ease;
+}
+
+.ctable-toolbar .seg button:first-child {
+  border-left: 0;
 }
 
 .ctable-toolbar .seg button:hover {
@@ -606,11 +611,12 @@
 .ctable-toolbar .seg button.on {
   background: var(--purple);
   color: #fff;
+  font-weight: 500;
 }
 
 .ctable-toolbar .seg button .ct {
-  font-size: 0.65625rem;
-  opacity: 0.8;
+  font-size: 0.6875rem;
+  opacity: 0.7;
 }
 
 /* Canvas-spec candidate table — Candidate / Score / Stage / Status /
@@ -780,16 +786,15 @@
   opacity: 0.5;
 }
 
+/* Agent-action cell — pipeline-preview .aiaction: bare purple text + glyph
+   (sans, weight 500), NOT a soft-purple pill. */
 .ai-action {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  color: var(--purple);
-  background: var(--purple-soft);
-  padding: 3px 8px;
-  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--purple-2, var(--purple));
   white-space: nowrap;
 }
 

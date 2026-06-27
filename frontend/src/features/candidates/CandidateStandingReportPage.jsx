@@ -1109,7 +1109,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   scan candidate basics in 3 seconds without scrolling the full CV. */}
               {reportModel?.candidateSnapshot ? (
                 <div className="mb-3">
-                  <CandidateSnapshotCard snapshot={reportModel.candidateSnapshot} variant="page" />
+                  <CandidateSnapshotCard snapshot={reportModel.candidateSnapshot} variant="report" />
                 </div>
               ) : null}
 

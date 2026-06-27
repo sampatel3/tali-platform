@@ -1,8 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CreditCard,
-  KeyRound,
-  Mail,
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
@@ -1517,23 +1515,25 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       table. We default to Owner / Admin / Recruiter /
                       Hiring manager, with Owner/Admin able to manage
                       others. */}
+                  {/* Preview `.member` — flat divider list: avatar · name/email ·
+                      role chip. Active roles read purple, an unverified
+                      "Invited" member greys out the avatar + chip. No per-row
+                      action button (the preview omits it). */}
                   <div className="members">
                     {teamMembers.map((member) => {
                       const isSelf = member?.email === user?.email;
                       const role = isSelf
                         ? 'Owner'
                         : (String(member?.role || '').trim() || (member?.is_email_verified ? 'Recruiter' : 'Invited'));
+                      const invited = role === 'Invited';
                       return (
                         <div key={member.id} className="mb">
-                          <div className="av">{initialsFor(member.full_name || member.email)}</div>
+                          <div className={`av${invited ? ' inv' : ''}`}>{initialsFor(member.full_name || member.email)}</div>
                           <div className="who">
                             <b>{member.full_name || member.email}</b>
                             <div>{isSelf ? 'you' : (member?.email || '—')}</div>
                           </div>
-                          <span className="chip">{role}</span>
-                          <button type="button" className="btn btn-outline btn-sm" disabled>
-                            Manage
-                          </button>
+                          <span className={`chip${invited ? '' : ' purple'}`}>{role}</span>
                         </div>
                       );
                     })}
@@ -1544,8 +1544,18 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     ) : null}
                   </div>
 
-                  <div className="settings-top-gap" style={{ borderTop: '1px solid var(--line)', paddingTop: 18 }}>
-                    <div className="row-form settings-top-gap">
+                  {/* Access — preview shows this as its own flat divider-led
+                      section ("Access" / "Limit who can join by email
+                      domain."). The summary card stays (live-derived, useful)
+                      but the section now carries the matching heading. */}
+                  <div className="settings-subcard settings-top-gap">
+                    <div className="settings-subcard-head">
+                      <div>
+                        <h3>Access</h3>
+                        <p>Limit who can join this workspace by email domain.</p>
+                      </div>
+                    </div>
+                    <div className="row-form">
                       <label className="field">
                         <span className="k">Allowed email domains (comma separated)</span>
                         <input
@@ -2003,10 +2013,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 >
                   <div className="settings-subcard">
                     <div className="settings-subcard-head">
-                      <Mail size={18} />
                       <div>
                         <h3>Invite template</h3>
-                        <p>Default invite body for manual recruiter sends.</p>
+                        <p>Default invite body for manual recruiter sends. Supports {'{{candidate_name}}'} and {'{{assessment_link}}'}.</p>
                       </div>
                     </div>
                     <label className="field">
@@ -2020,9 +2029,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   </div>
 
                   <div className="settings-save-row">
-                    <div className="settings-inline-note">
-                      Supports placeholders like {'{{candidate_name}}'} and {'{{assessment_link}}'}.
-                    </div>
+                    <div className="settings-inline-note" />
                     <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveApiKeys} disabled={apiSaving}>
                       {apiSaving ? 'Saving...' : 'Save invite template'}
                     </button>
@@ -2030,10 +2037,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
                   <div className="settings-subcard settings-top-gap">
                     <div className="settings-subcard-head">
-                      <KeyRound size={18} />
                       <div>
                         <h3>Fireflies transcript ingestion</h3>
-                        <p>Link screening and technical interview transcripts back to candidate records.</p>
+                        <p>Pull interview transcripts in automatically and attach them to the matching candidate.</p>
                       </div>
                     </div>
                     <div className="row-form">

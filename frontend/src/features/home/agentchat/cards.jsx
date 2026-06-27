@@ -5,7 +5,7 @@
 // intentionally NOT rendered here in Option C — those live in the main feed.
 
 import { useState } from 'react';
-import { Check, CircleHelp, FileText, Sparkles, SlidersHorizontal, X } from 'lucide-react';
+import { Check, CircleHelp, FileText, SlidersHorizontal, X } from 'lucide-react';
 
 const numOrDash = (v) => (typeof v === 'number' ? v : v == null ? '—' : v);
 
@@ -82,23 +82,23 @@ export function ImpactCard({ card, onApply, busy }) {
     const sim = card.type === 'threshold_simulation';
     const target = sim ? card.simulated_threshold : card.recommended_threshold;
     const gain = sim ? card.delta_above : card.projected_additional;
+    // Compact threshold-impact box — matches the home-preview `.impact`: a
+    // purple-tint bordered card with an inline "old → new · +N candidates clear"
+    // line and an Apply button beneath. No icon header / oversized numerals.
     return (
-      <div className="ac-card">
-        <div className="ac-card-head">
-          <Sparkles size={14} />
-          <span>{sim ? 'Simulation' : 'Recommendation'}</span>
-        </div>
-        <div className="ac-thresh-line">
-          <span className="ac-thresh-old">{numOrDash(card.current_threshold)}</span>
-          <span className="ac-arrow">→</span>
-          <span className="ac-thresh-new">{numOrDash(target)}</span>
+      <div className="ac-impact">
+        <div className="ac-impact-line">
+          <span className="ac-impact-label">Threshold</span>
+          <span className="ac-impact-old">{numOrDash(card.current_threshold)}</span>
+          <span className="ac-impact-arrow">→</span>
+          <b className="ac-impact-new">{numOrDash(target)}</b>
           {typeof gain === 'number' && gain !== 0 && (
-            <span className={gain > 0 ? 'ac-thresh-gain' : 'ac-thresh-loss'}>
-              {gain > 0 ? `+${gain}` : gain} candidates
+            <span className="ac-impact-gain">
+              · {gain > 0 ? `+${gain}` : gain} candidate{Math.abs(gain) === 1 ? '' : 's'} clear the cut-off
             </span>
           )}
           {typeof gain === 'number' && gain === 0 && (
-            <span className="ac-thresh-flat">no change</span>
+            <span className="ac-impact-gain">· no change</span>
           )}
         </div>
         {Array.isArray(card.added_sample) && card.added_sample.length > 0 && (
@@ -109,9 +109,9 @@ export function ImpactCard({ card, onApply, busy }) {
           </div>
         )}
         {!sim && target != null && onApply && (
-          <div className="ac-card-actions">
-            <button className="ac-btn ac-btn-primary" disabled={busy} onClick={() => onApply(target)}>
-              <Check size={13} /> Apply {target}
+          <div className="ac-impact-actions">
+            <button className="ac-impact-apply" disabled={busy} onClick={() => onApply(target)}>
+              Apply {target}
             </button>
           </div>
         )}

@@ -397,6 +397,21 @@
   font-size: 0.875rem;
 }
 
+/* Column-head status dot (pipeline-preview .kch .dot): a small purple disc,
+   muted on the terminal Rejected column. Was unstyled — the markup rendered
+   an invisible span. */
+.kanban-col-head .title .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--purple);
+  flex-shrink: 0;
+}
+
+.kanban-col[data-stage="rejected"] .kanban-col-head .title .dot {
+  background: var(--mute);
+}
+
 .kanban-col-head .count {
   font-family: var(--font-mono);
   font-size: 0.65625rem;
@@ -491,13 +506,15 @@
   font-weight: 600;
 }
 
+/* LIVE pip — pipeline-preview .live: a small purple-lavender bordered pill,
+   not bare text, so an in-progress assessment reads as a status badge. */
 .kanban-card .cc-line .live-pip {
   color: var(--purple);
   font-weight: 600;
-}
-
-.kanban-card .cc-line-grow {
-  flex: 1 1 auto;
+  font-size: 0.5625rem;
+  border: 1px solid var(--purple-lav);
+  border-radius: 999px;
+  padding: 0 5px;
 }
 
 /* Agent recommendation block — pipeline-preview .kagent: a soft-purple
@@ -597,13 +614,21 @@
   color: var(--amber);
 }
 
+/* "+ N more →" — pipeline-preview .kmore: borderless purple link, centred. */
 .kanban-card.more {
-  border-style: dashed;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
   text-align: center;
-  font-family: var(--font-mono);
-  font-size: 0.71875rem;
-  letter-spacing: 0.06em;
-  color: var(--mute);
+  padding: 9px;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--purple);
+}
+
+.kanban-card.more:hover {
+  background: color-mix(in oklab, var(--purple) 6%, transparent);
+  color: var(--purple-2);
 }
 
 .focus-panel {

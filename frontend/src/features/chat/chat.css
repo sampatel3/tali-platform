@@ -127,15 +127,19 @@
   flex-direction: column;
   min-height: 0;
 }
+/* search-preview `.sh`: 16px/16px/12px, NO bottom rule (the rail reads as one
+   continuous surface; only the conversation rows carry separators). */
 .cp-side-top {
-  padding: 14px 14px 10px;
+  padding: 16px 16px 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  border-bottom: 1px solid var(--c-line-2);
 }
+/* "New conversation" sits as a sibling under the header with 16px side gutters
+   and 10px below (search-preview `.newchat{margin:0 16px 10px}`); no extra top
+   pad so it tucks right under the Ask/Agents switch. */
 .cp-side-head {
-  padding: 12px 14px 8px;
+  padding: 0 16px 10px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -146,6 +150,7 @@
   letter-spacing: .08em;
   color: var(--c-mute);
   text-transform: uppercase;
+  margin-bottom: 0;
 }
 
 /* ---- Ask / Agents segmented switch ----
@@ -154,17 +159,23 @@
 .cp-modeswitch {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  border: 1px solid var(--c-line-2);
+  /* search-preview track uses a visible hairline (--line-2 there = #d8d0e4);
+     the production --line-2 token is far fainter, so map to --line to keep the
+     same crisp pill outline. */
+  border: 1px solid var(--c-line);
   border-radius: 10px;
   background: var(--c-bg);
   overflow: hidden;
 }
 .cp-modeswitch-btn {
+  /* position:relative anchors the absolute attention badge (search-preview
+     `.modesw button{position:relative}` → `.badge{position:absolute}`). */
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 8px 10px;
+  padding: 8px;
   border: 0;
   background: transparent;
   color: var(--c-mute);
@@ -181,17 +192,22 @@
   box-shadow: 0 1px 3px rgba(0,0,0,.08);
 }
 .cp-modeswitch-btn.on svg { color: var(--c-purple); }
+/* search-preview badge: a small solid-purple pill pinned to the segment's
+   top-right corner (NOT inline after the label). */
 .cp-modeswitch-badge {
-  min-width: 17px;
-  height: 17px;
+  position: absolute;
+  top: 4px;
+  right: 10px;
+  height: auto;
+  min-width: 0;
   padding: 0 5px;
   border-radius: 999px;
   background: var(--c-purple);
   color: #fff;
-  font-size: 0.625rem;
-  font-weight: 700;
-  display: grid;
-  place-items: center;
+  font-size: 0.5625rem;
+  font-weight: 600;
+  line-height: 1.5;
+  display: inline-block;
 }
 .cp-side-hint {
   padding: 6px 10px;
@@ -213,11 +229,13 @@
 .cp-conv-del:hover { color: var(--c-red); background: var(--c-bg-2); }
 
 /* ---- Agent rows (Agents tab) ---- */
+/* Inset to match the Ask-mode conversation rows (10px from the rail edge). */
 .cp-agent {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  width: 100%;
+  width: calc(100% - 8px);
+  margin: 0 4px;
   text-align: left;
   padding: 9px 10px;
   border-radius: 9px;
@@ -225,8 +243,14 @@
   background: transparent;
   cursor: pointer;
 }
-.cp-agent:hover { background: var(--c-bg-2); }
-.cp-agent.cp-active { background: var(--c-bg-2); border-color: var(--c-line); }
+.cp-agent:hover { background: var(--c-bg); }
+/* Same active wash as the Ask-mode conversation row (purple-tint + inset
+   soft-purple hairline) so "active" reads identically across both modes. */
+.cp-agent.cp-active {
+  background: var(--c-purple-tint);
+  border-color: transparent;
+  box-shadow: inset 0 0 0 1px var(--c-purple-soft);
+}
 .cp-agent-stat {
   width: 22px;
   height: 22px;
@@ -298,9 +322,13 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 9px 12px;
+  /* search-preview `.newchat{padding:9px}` — uniform inset. */
+  padding: 9px;
   border-radius: 10px;
-  border: 1px dashed var(--c-line-2);
+  /* search-preview dashes this in --line-2 (#d8d0e4 there); production's
+     --line-2 token is far fainter, so map to --line for a dash that actually
+     reads against the white rail. */
+  border: 1px dashed var(--c-line);
   background: var(--c-bg-2);
   color: var(--c-purple-2);
   font-size: 0.8125rem;
@@ -317,13 +345,17 @@
   display: grid; place-items: center;
   font-weight: 600; font-size: 0.75rem;
 }
+/* The rail list itself sits flush; per-element gutters below recreate the
+   search-preview insets (group label at 16px, conversation rows at 10px). */
 .cp-side-list {
   flex: 1;
   overflow-y: auto;
-  padding: 4px 8px 24px;
+  padding: 0 6px 24px;
 }
-.cp-group { margin-top: 10px; }
+.cp-group { margin-top: 0; }
 .cp-group-h {
+  /* search-preview `.convgroup{padding:10px 16px 5px}` — 16px from the rail
+     edge (= 6px list pad + 10px here). */
   padding: 10px 10px 5px;
   font-family: ui-monospace, SFMono-Regular, monospace;
   font-size: 0.59375rem;
@@ -332,6 +364,10 @@
   color: var(--c-mute);
 }
 .cp-conv {
+  /* search-preview `.conv{margin:0 10px;padding:9px 11px}` — rows are inset
+     ~10px from the rail edge (= 6px list pad + 4px margin) and don't run full
+     width, so the active wash reads as a contained pill. */
+  margin: 0 4px;
   padding: 9px 11px;
   border-radius: 9px;
   font-size: 0.78125rem;
@@ -341,7 +377,7 @@
   border: 1px solid transparent;
   display: block;
   text-align: left;
-  width: 100%;
+  width: calc(100% - 8px);
   background: transparent;
 }
 .cp-conv:hover { background: var(--c-bg); }
@@ -365,7 +401,6 @@
   font-size: 0.625rem;
   color: var(--c-mute);
   margin-top: 3px;
-  letter-spacing: .04em;
 }
 
 /* ============ center ============ */
@@ -397,13 +432,27 @@
   backdrop-filter: blur(8px);
   flex-shrink: 0;
 }
-.cp-head-ttl { font-weight: 600; font-size: 0.90625rem; }
-.cp-head-ttl .sub {
+/* search-preview stacks the active-conversation title over a "Taali" sublabel
+   (title on its own line, the mono sublabel beneath) — not inline. */
+.cp-head-titles {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.cp-head-ttl {
+  font-weight: 600;
+  font-size: 0.90625rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cp-head-sub {
   color: var(--c-mute);
   font-weight: 400;
   font-family: ui-monospace, SFMono-Regular, monospace;
   font-size: 0.65625rem;
-  margin-left: 8px;
+  line-height: 1.3;
 }
 .cp-head-grow { flex: 1; }
 /* search-preview "MCP · N tools" pill: a quiet mono chip with a tiny solid
@@ -463,6 +512,15 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* Search-page user bubble matches search-preview `.umsg` exactly (16px radius,
+   10/15 padding, 13.5px, pure-white ink) — scoped to the chat thread so the
+   shared kit's bubble (Home dock + candidate workspace) is untouched. */
+.cp-thread .tk-msg-user {
+  padding: 10px 15px;
+  border-radius: 16px;
+  color: #fff;
+  font-size: 0.84375rem;
+}
 .cp-msg-assistant {
   align-self: flex-start;
   max-width: 100%;
@@ -472,6 +530,26 @@
   font-size: 0.90625rem;
   line-height: 1.6;
   color: var(--c-ink);
+}
+/* search-preview `.amsg .who`: a mono purple "TAALI" kicker above each
+   assistant turn. The assistant column uses a 14px child gap, so pull the next
+   block up to land the preview's ~5px kicker-to-text spacing. */
+.cp-thread .tk-msg-assistant .cp-who,
+.cp-msg-assistant .cp-who {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 0.59375rem;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--c-purple);
+  margin-bottom: -9px;
+}
+/* search-preview `.amsg`: assistant prose is 13.5px in the slightly-softer
+   ink-2. Scoped to the chat thread so the shared kit (Home dock + candidate
+   workspace) keeps its own 14.5px/ink default. */
+.cp-thread .tk-msg-assistant,
+.cp-thread .tk-md {
+  font-size: 0.84375rem;
+  color: var(--c-ink-2);
 }
 .cp-msg-assistant p { margin: 0 0 .6em; }
 .cp-msg-assistant p:last-child { margin-bottom: 0; }
@@ -520,7 +598,9 @@
 .cp-tool-tname {
   font-family: ui-monospace, SFMono-Regular, monospace;
   font-size: 0.75rem;
+  font-weight: 500;
   color: var(--c-ink);
+  flex-shrink: 0;
 }
 .cp-tool-args {
   flex: 1;
@@ -706,8 +786,27 @@
    renders as the shared `.tk-composer`, not the legacy `.cp-composer`, so we
    bridge both class names here. Without this the textarea isn't focusable. */
 .cp-composer-wrap .tk-composer,
+.cp-composer-wrap .cp-composer-note,
 .cp-composer {
   pointer-events: auto;
+}
+/* search-preview composer box: 16px radius, a soft purple-tinted shadow, and
+   the input area capped to the thread width. Scoped overrides on the shared
+   composer keep the other surfaces (Home dock, candidate workspace) untouched. */
+.cp-composer-wrap .tk-composer {
+  max-width: 760px;
+  margin: 0 auto;
+  border-radius: 16px;
+  box-shadow: 0 2px 14px rgba(94, 58, 168, 0.05);
+}
+/* search-preview `.cfoot` tail: a centred mono note under the composer. */
+.cp-composer-note {
+  max-width: 760px;
+  margin: 8px auto 0;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 0.625rem;
+  color: var(--c-mute);
+  text-align: center;
 }
 .cp-composer {
   max-width: 760px;

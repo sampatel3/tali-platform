@@ -13,19 +13,29 @@ const TOOL_LABELS = {
   compare_applications: 'compare_applications',
 };
 
+// Render an arg value the way search-preview does: string values quoted
+// ("Senior Backend"), numbers/booleans bare, arrays bracketed.
+const fmtVal = (v) => {
+  if (Array.isArray(v)) return `[${v.join(',')}]`;
+  if (typeof v === 'string') return `"${v}"`;
+  return String(v);
+};
+
+// search-preview shows args as `key="value" · key=value` — the parts joined by
+// a mono middot, not a bare space.
 const summarizeArgs = (args) => {
   if (!args || typeof args !== 'object') return '';
+  const entries = Object.entries(args).filter(([, v]) => v != null);
   const pieces = [];
-  for (const [k, v] of Object.entries(args)) {
-    if (v == null) continue;
-    if (Array.isArray(v)) {
-      pieces.push(<span key={k}><b>{k}=</b>[{v.join(',')}]</span>);
-    } else if (typeof v === 'object') {
-      pieces.push(<span key={k}><b>{k}=</b>{'{…}'}</span>);
-    } else {
-      pieces.push(<span key={k}><b>{k}=</b>{String(v)} </span>);
-    }
-  }
+  entries.forEach(([k, v], i) => {
+    pieces.push(
+      <span key={k}>
+        <b>{k}=</b>
+        {typeof v === 'object' && !Array.isArray(v) ? '{…}' : fmtVal(v)}
+      </span>,
+    );
+    if (i < entries.length - 1) pieces.push(<span key={`${k}-sep`}> · </span>);
+  });
   return pieces;
 };
 
@@ -36,6 +46,18 @@ const resultCount = (toolName, result) => {
     if (Array.isArray(result.applications)) {
       const total = result.total_matched ?? result.applications.length;
       return `${result.applications.length} of ${total}`;
+    }
+  }
+  // Grounded top-N / rediscovery: mirror search-preview's "3 of 41" — shown
+  // candidates over the pool that was ranked.
+  if (
+    toolName === 'find_top_candidates' ||
+    toolName === 'screen_pool_against_requirement'
+  ) {
+    if (Array.isArray(result.candidates)) {
+      const shown = result.shown ?? result.candidates.length;
+      if (typeof result.total_matched === 'number') return `${shown} of ${result.total_matched}`;
+      return `${shown} shown`;
     }
   }
   if (toolName === 'compare_applications' && Array.isArray(result.applications)) {
