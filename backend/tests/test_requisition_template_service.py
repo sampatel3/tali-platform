@@ -37,6 +37,34 @@ def test_default_template_is_valid_and_has_required_fields():
     assert first_field["key"] == "title" and first_field["required"] is True
 
 
+def test_default_template_has_responsibilities_field_in_context():
+    """The rich 'responsibilities' field lives in the context section, is an
+    optional list, and has no RoleBrief column (→ custom_fields)."""
+    context = next(
+        s for s in DEFAULT_REQUISITION_TEMPLATE["sections"] if s["key"] == "context"
+    )
+    field = next(f for f in context["fields"] if f["key"] == "responsibilities")
+    assert field["type"] == "list"
+    assert field["required"] is False
+    assert field["question"]
+    # It sits right after success_profile.
+    keys = [f["key"] for f in context["fields"]]
+    assert keys.index("responsibilities") == keys.index("success_profile") + 1
+    # No column → routed to custom_fields.
+    assert template_key_to_column("responsibilities") is None
+
+
+def test_default_jd_template_has_responsibilities_placeholder():
+    """The default JD carries a {{responsibilities}} token under a
+    'What you'll do' heading."""
+    assert "{{responsibilities}}" in DEFAULT_JD_TEMPLATE
+    assert "## What you'll do" in DEFAULT_JD_TEMPLATE
+    # The heading precedes the placeholder.
+    assert DEFAULT_JD_TEMPLATE.index("## What you'll do") < DEFAULT_JD_TEMPLATE.index(
+        "{{responsibilities}}"
+    )
+
+
 def test_resolve_returns_default_deep_copy_when_no_override(db):
     org = _org(db)
     resolved = resolve_template(org)

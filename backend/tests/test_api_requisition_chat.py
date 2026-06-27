@@ -6,7 +6,7 @@ import io
 from app.llm.structured import StructuredResult
 from app.platform.config import settings
 from app.services import requisition_chat_service as chat
-from app.services.requisition_chat_service import ChatCapture
+from app.services.requisition_chat_service import ChatCapture, ResponsibilitiesDraft
 from tests.conftest import auth_headers
 
 
@@ -76,6 +76,114 @@ def test_chat_endpoint_requires_message_or_file(client):
         f"/api/v1/requisitions/{brief_id}/chat", data={"message": "   "}, headers=headers
     )
     assert resp.status_code == 422
+
+
+# --------------------------------------------------------------------------- #
+# AI-draft responsibilities ("What you'll do")
+# --------------------------------------------------------------------------- #
+def test_draft_responsibilities_lands_in_custom_fields_and_threads_metering(
+    client, monkeypatch
+):
+    headers, _ = auth_headers(client)
+    brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+    # Capture a bit of spec so the draft has something to ground on.
+    client.patch(
+        f"/api/v1/requisitions/{brief_id}",
+        json={"title": "Backend Engineer", "seniority": "Senior", "must_haves": ["Python"]},
+        headers=headers,
+    )
+
+    # The route builds a real metered client before generate_structured runs;
+    # give it a dummy key so construction succeeds (the call itself is patched).
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key", raising=False)
+
+    drafted = [
+        "Design and ship backend services",
+        "Own API contracts end to end",
+        "Mentor mid-level engineers",
+    ]
+    captured: dict = {}
+
+    def fake_generate_structured(c, **kwargs):
+        # Forced tool-use, fast chat model, and the metering feature threaded.
+        captured["use_tool_use"] = kwargs.get("use_tool_use")
+        captured["model"] = kwargs.get("model")
+        captured["feature"] = kwargs["metering"].feature
+        captured["entity_id"] = kwargs["metering"].entity_id
+        captured["output_model"] = kwargs.get("output_model")
+        return StructuredResult(
+            value=ResponsibilitiesDraft(responsibilities=drafted), ok=True
+        )
+
+    monkeypatch.setattr(chat, "generate_structured", fake_generate_structured)
+
+    resp = client.post(
+        f"/api/v1/requisitions/{brief_id}/draft-responsibilities", headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # The drafted list landed in custom_fields.responsibilities...
+    assert body["custom_fields"]["responsibilities"] == drafted
+    # ...and the serialized brief is the full requisition shape (gaps/messages).
+    assert "gaps" in body and "messages" in body and body["title"] == "Backend Engineer"
+
+    # Metering + call shape threaded correctly.
+    assert captured["use_tool_use"] is True
+    assert captured["feature"] == "requisition_intake_chat"
+    assert captured["entity_id"] == f"role_brief:{brief_id}"
+    assert captured["output_model"] is ResponsibilitiesDraft
+    # The FAST chat model (Haiku) is used, not the resolved/Sonnet model.
+    assert captured["model"] == settings.CLAUDE_CHAT_MODEL
+
+
+def test_draft_responsibilities_merges_with_existing_custom_fields(client, monkeypatch):
+    headers, _ = auth_headers(client)
+    brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+    # Seed an unrelated custom field — the draft must not clobber it.
+    client.patch(
+        f"/api/v1/requisitions/{brief_id}",
+        json={"title": "Eng", "custom_fields": {"visa_sponsorship": "Yes"}},
+        headers=headers,
+    )
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key", raising=False)
+
+    def fake_generate_structured(c, **kwargs):
+        return StructuredResult(
+            value=ResponsibilitiesDraft(responsibilities=["Build things", "Ship code"]),
+            ok=True,
+        )
+
+    monkeypatch.setattr(chat, "generate_structured", fake_generate_structured)
+
+    body = client.post(
+        f"/api/v1/requisitions/{brief_id}/draft-responsibilities", headers=headers
+    ).json()
+    assert body["custom_fields"]["visa_sponsorship"] == "Yes"
+    assert body["custom_fields"]["responsibilities"] == ["Build things", "Ship code"]
+
+
+def test_draft_responsibilities_502_on_llm_failure_leaves_brief_untouched(
+    client, monkeypatch
+):
+    headers, _ = auth_headers(client)
+    brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+    client.patch(
+        f"/api/v1/requisitions/{brief_id}", json={"title": "Eng"}, headers=headers
+    )
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key", raising=False)
+
+    def fake_generate_structured(c, **kwargs):
+        return StructuredResult(value=None, ok=False, error_reason="claude_call_failed: boom")
+
+    monkeypatch.setattr(chat, "generate_structured", fake_generate_structured)
+
+    resp = client.post(
+        f"/api/v1/requisitions/{brief_id}/draft-responsibilities", headers=headers
+    )
+    assert resp.status_code == 502, resp.text
+    # The brief was not mutated — no responsibilities written.
+    after = client.get(f"/api/v1/requisitions/{brief_id}", headers=headers).json()
+    assert "responsibilities" not in (after["custom_fields"] or {})
 
 
 def test_get_requisition_template_returns_default(client):

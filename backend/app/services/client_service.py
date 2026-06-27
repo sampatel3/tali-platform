@@ -15,7 +15,8 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..models.client import Client
-from ..models.role_brief import BRIEF_STATUS_APPLIED, RoleBrief
+from ..models.job_page import JOB_PAGE_STATUS_OPEN, JobPage
+from ..models.role_brief import RoleBrief
 
 # Fields a recruiter may set on a client via create / PATCH.
 _EDITABLE_FIELDS = frozenset({"name", "contact_name", "contact_email", "status"})
@@ -45,22 +46,40 @@ def compute_margin(
 
 
 def _open_job_counts(db: Session, organization_id: int) -> dict[int, int]:
-    """``{client_id: open_requisition_count}`` for the whole org in ONE query.
+    """``{client_id: open_job_page_count}`` for the whole org in ONE query.
 
-    Open = a RoleBrief with this ``client_id`` whose status is not 'applied'
-    (an applied brief has been materialized onto a live role and is no longer an
-    open requisition for the client)."""
+    Open = a PUBLISHED job page (``JobPage.status == 'open'``) whose
+    requisition is assigned to the client. A requisition that's been drafted but
+    never published has no job page and so counts 0; a closed page is excluded.
+    Joins ``JobPage`` → ``RoleBrief`` and groups by the brief's ``client_id``."""
     rows = (
-        db.query(RoleBrief.client_id, func.count(RoleBrief.id))
+        db.query(RoleBrief.client_id, func.count(JobPage.id))
+        .join(JobPage, JobPage.brief_id == RoleBrief.id)
         .filter(
             RoleBrief.organization_id == organization_id,
             RoleBrief.client_id.isnot(None),
-            RoleBrief.status != BRIEF_STATUS_APPLIED,
+            JobPage.status == JOB_PAGE_STATUS_OPEN,
         )
         .group_by(RoleBrief.client_id)
         .all()
     )
     return {client_id: count for client_id, count in rows}
+
+
+def open_job_count_for_client(db: Session, organization_id: int, client_id: int) -> int:
+    """``open_job_count`` for a SINGLE client (published job pages on its
+    requisitions), kept consistent with ``_open_job_counts``. One filtered
+    count — no N+1."""
+    return (
+        db.query(func.count(JobPage.id))
+        .join(RoleBrief, JobPage.brief_id == RoleBrief.id)
+        .filter(
+            RoleBrief.organization_id == organization_id,
+            RoleBrief.client_id == client_id,
+            JobPage.status == JOB_PAGE_STATUS_OPEN,
+        )
+        .scalar()
+    ) or 0
 
 
 def serialize_client(client: Client, *, open_job_count: int = 0) -> dict[str, Any]:

@@ -91,6 +91,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const [savingEconomics, setSavingEconomics] = useState(false);
   // In-flight flag for the per-requisition Job-spec (JD) override save.
   const [savingOverride, setSavingOverride] = useState(false);
+  // In-flight flag for the AI "Draft responsibilities" action on the Job spec.
+  const [draftingResponsibilities, setDraftingResponsibilities] = useState(false);
   // Right column: the live Job spec (JD) document by default, or the
   // structured Brief.
   const [rightTab, setRightTab] = useState('jobspec');
@@ -335,6 +337,25 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       setError('Could not save the job spec. Try again.');
     } finally {
       setSavingOverride(false);
+    }
+  }, [selectedId]);
+
+  // ---- AI-draft the JD responsibilities ----
+  // POST /draft-responsibilities returns the FULL serialized brief (same shape
+  // as update()) with custom_fields.responsibilities populated; merge it like
+  // saveEconomics/saveOverride so the {{responsibilities}} section fills in.
+  // The recruiter can still hand-edit the whole JD via the existing override.
+  const draftResponsibilities = useCallback(async () => {
+    if (!selectedId) return;
+    setDraftingResponsibilities(true);
+    setError('');
+    try {
+      const updated = await requisitionApi.draftResponsibilities(selectedId);
+      setBrief((prev) => ({ ...(prev || {}), ...(updated || {}) }));
+    } catch {
+      setError('Could not draft responsibilities. Try again.');
+    } finally {
+      setDraftingResponsibilities(false);
     }
   }, [selectedId]);
 
@@ -743,6 +764,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                       brief={brief}
                       onSaveOverride={saveOverride}
                       savingOverride={savingOverride}
+                      onDraftResponsibilities={draftResponsibilities}
+                      draftingResponsibilities={draftingResponsibilities}
                     />
                   ) : (
                     <LiveBrief
