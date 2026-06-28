@@ -733,13 +733,13 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   </div>
                 </div>
                 <div className="rq-head-actions">
-                  {/* Share with client — the no-login intake link a
-                      consultancy recruiter sends to their client so the client
-                      describes the role to the same agent (economics hidden). */}
+                  {/* Share with the hiring manager — the no-login intake link
+                      the recruiter sends so the hiring manager describes the role
+                      to the same agent (economics + internal logistics hidden). */}
                   {clientLink ? (
                     <div className="rq-clientlink">
                       <div className="rq-clientlink-top">
-                        <span className="rq-clientlink-flag"><Share2 size={14} /> Client link</span>
+                        <span className="rq-clientlink-flag"><Share2 size={14} /> Hiring-manager link</span>
                         <a
                           className="rq-published-url"
                           href={clientLinkUrl}
@@ -751,7 +751,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                         </a>
                       </div>
                       <div className="rq-published-actions">
-                        <span className="rq-clientlink-hint">Send this to your client — no login needed.</span>
+                        <span className="rq-clientlink-hint">Send this to the hiring manager — no login needed.</span>
                         <button type="button" className="rq-btn-sm is-ghost" onClick={copyClientUrl}>
                           {clientCopied ? <Check size={13} /> : <Copy size={13} />} {clientCopied ? 'Copied' : 'Copy'}
                         </button>
@@ -771,9 +771,9 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                       className="rq-btn-sm is-ghost rq-share-btn"
                       onClick={makeClientLink}
                       disabled={clientLinking}
-                      title="Get a no-login link to send to your client"
+                      title="Get a no-login link to send to the hiring manager"
                     >
-                      {clientLinking ? <span className="rq-spinner" /> : <Share2 size={14} />} Share with client
+                      {clientLinking ? <span className="rq-spinner" /> : <Share2 size={14} />} Share with hiring manager
                     </button>
                   )}
 

@@ -108,13 +108,18 @@ function RolePanel({ captured, gaps, completeness }) {
           <div className="ci-meter-track">
             <div className="ci-meter-fill" style={{ width: `${pct}%` }} />
           </div>
-          {gapList.length > 0 ? (
+          {/* Message tracks the BAR, not just required gaps — so it never says
+              "complete" while the bar is low. Keeps the manager adding depth
+              (tech stack, projects, challenges) until the role's well covered. */}
+          {pct >= 85 ? (
+            <div className="ci-gaps-line">Looking complete — review and submit when you're ready.</div>
+          ) : gapList.length > 0 ? (
             <div className="ci-gaps-line">
               <strong>{gapList.length}</strong> thing{gapList.length === 1 ? '' : 's'} still to cover —
               {' '}the assistant will ask about {gapList.length === 1 ? 'it' : 'them'}.
             </div>
           ) : entries.length > 0 ? (
-            <div className="ci-gaps-line">Looking complete — review and submit when you're ready.</div>
+            <div className="ci-gaps-line">Good start — keep adding detail (tech stack, projects, challenges) so we capture the full picture.</div>
           ) : (
             <div className="ci-gaps-line">Start describing the role and this fills in as you go.</div>
           )}

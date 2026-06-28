@@ -132,7 +132,8 @@ def test_public_get_exposes_role_fields_but_not_org_name(client):
         f"/api/v1/requisitions/{brief_id}",
         json={
             "title": "Backend Engineer",
-            "department": "Platform",
+            "department": "Platform",       # internal — must NOT surface
+            "workplace_type": "remote",     # HR/People — must NOT surface
             "must_haves": ["Python", "AWS"],
         },
         headers=headers,
@@ -153,15 +154,19 @@ def test_public_get_exposes_role_fields_but_not_org_name(client):
     # never exposed, even though the org has one.
     assert body["organization_name"] is None
     assert body["captured"]["title"] == "Backend Engineer"
-    assert body["captured"]["department"] == "Platform"
     assert body["captured"]["must_haves"] == ["Python", "AWS"]
     assert body["status"] == "draft"
-    # Gaps + completeness are computed against the client-scoped template — the
-    # compensation gaps (salary_min/max/currency) must NOT appear.
+    # The hiring-manager intake is ROLE-only — internal/HR logistics never
+    # surface, even when the recruiter has set them on the brief.
+    assert "department" not in body["captured"]
+    assert "workplace_type" not in body["captured"]
+    # Gaps are computed against the hiring-manager-scoped template — neither the
+    # compensation fields nor the dropped logistics fields appear as gaps.
     gap_keys = {g["key"] for g in body["gaps"]}
     assert {"salary_min", "salary_max", "salary_currency"}.isdisjoint(gap_keys)
-    # workplace_type/employment_type/openings/urgency/must_haves still required.
-    assert "workplace_type" in gap_keys
+    assert {"workplace_type", "employment_type", "location_city", "department"}.isdisjoint(gap_keys)
+    # Role fields the manager DOES own still drive the intake.
+    assert {"must_haves", "openings", "urgency"} & gap_keys
 
 
 def test_public_get_never_exposes_client_rate_margin_salary_or_client_id(client):

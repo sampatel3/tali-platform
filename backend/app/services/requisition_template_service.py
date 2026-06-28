@@ -105,24 +105,42 @@ def resolve_template(org: Optional[Organization]) -> dict[str, Any]:
     return template
 
 
-# The template section a consultancy CLIENT must never set — the consultancy
-# owns the economics. Dropped from the client-scoped intake so the agent never
-# asks about salary / pay period / bonus / equity.
+# The template section a HIRING MANAGER must never set — the consultancy owns
+# the economics. Dropped from the hiring-manager intake so the agent never asks
+# about salary / pay period / bonus / equity.
 CLIENT_SCOPED_DROP_SECTIONS = frozenset({"compensation"})
+
+# Logistics/admin fields a HIRING MANAGER doesn't own — location, workplace
+# model, employment type and internal department are HR/People's call, not the
+# hiring manager's. Dropped FIELD-level (not the whole logistics section) so
+# role-relevant logistics the manager DOES know — openings, urgency, target
+# start — stay. Keeps the intake focused on the ROLE itself.
+CLIENT_SCOPED_DROP_FIELDS = frozenset({
+    "location_city",
+    "location_country",
+    "workplace_type",
+    "employment_type",
+    "department",
+})
 
 
 def client_scoped_template(template: dict[str, Any]) -> dict[str, Any]:
-    """A CLIENT-scoped view of a requisition template: the same template with the
-    ``compensation`` section removed (clients don't set pay — the consultancy
-    owns economics). Returns a shallow-copied template with a filtered
-    ``sections`` list; the original is never mutated. Drives both the
-    client-scoped gap engine/completeness and the questions the client-facing
-    agent asks."""
-    sections = [
-        s
-        for s in (template.get("sections") or [])
-        if s.get("key") not in CLIENT_SCOPED_DROP_SECTIONS
-    ]
+    """A HIRING-MANAGER-scoped view of a requisition template: the same template
+    with the ``compensation`` section and the HR/People logistics fields removed,
+    so the intake stays on the ROLE (requirements, responsibilities, seniority,
+    openings/urgency). Returns a shallow-copied template with filtered
+    ``sections``; the original is never mutated. A section left with no fields is
+    dropped. Drives both the gap engine/completeness and the agent's questions."""
+    sections = []
+    for s in template.get("sections") or []:
+        if s.get("key") in CLIENT_SCOPED_DROP_SECTIONS:
+            continue
+        fields = [
+            f for f in (s.get("fields") or [])
+            if f.get("key") not in CLIENT_SCOPED_DROP_FIELDS
+        ]
+        if fields:
+            sections.append({**s, "fields": fields})
     return {**template, "sections": sections}
 
 
