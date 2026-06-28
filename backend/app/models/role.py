@@ -151,12 +151,6 @@ class Role(Base):
     # remaining callers route through model_config and the
     # orchestrator's model is also moved into agent_models.yaml.
     agent_model = Column(String, nullable=True)
-    # Event-debounce window. When set and in the future, an event-triggered
-    # agent cycle is already scheduled for this role and additional events
-    # within the window must NOT enqueue another. The agent task clears it
-    # on entry so events arriving during the cycle start a new window.
-    # See app/agent_runtime/event_debounce.py.
-    agent_next_run_at = Column(DateTime(timezone=True), nullable=True)
     # Cached "do high scorers cluster" signals (skills/companies/titles/schools
     # over-represented in the top decile vs the full applicant pool). Computed
     # lazily by ``cohort_signals_service.compute_cohort_signals`` and refreshed

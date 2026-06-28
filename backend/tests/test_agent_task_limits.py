@@ -19,7 +19,6 @@ from app.tasks.agent_tasks import (
 # hang on a stuck LLM/DB call) must carry the limits. The fan-out sweeps
 # and the watchdog are excluded — they don't run cycles.
 CYCLE_TASKS = [
-    "app.tasks.agent_tasks.agent_react_to_event",
     "app.tasks.agent_tasks.agent_daily_review_role",
     "app.tasks.agent_tasks.agent_cohort_tick_role",
     "app.tasks.agent_tasks.agent_manual_run",
