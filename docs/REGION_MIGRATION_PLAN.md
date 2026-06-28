@@ -42,7 +42,7 @@ The app makes **many** DB / Redis / Neo4j round-trips **per request** over Railw
 5. **Cut over the API entrypoint** (pick one):
    - **(a, recommended) Give the new web service a stable custom domain** (e.g. `api.taali.ai`) and point the frontend `VITE_API_URL` at it **once** — note this first switch still needs **one Vercel redeploy** (Vite inlines `import.meta.env.VITE_API_URL` at build time, so the already-built bundle keeps hitting the old host until rebuilt). After that, future region moves behind the stable domain need no frontend change. Or
    - **(b) Update Vercel `VITE_API_URL`** to the new Railway service URL + redeploy the frontend.
-6. **Update external callbacks**: the **Stripe webhook endpoint URL** (Stripe dashboard) if it targets the old Railway host. (`WORKABLE_WEBHOOK_SECRET=skip` → Workable webhooks not in use; `MAINSPRING_INGEST_URL` is outbound to a *separate* project → unaffected.)
+6. **Update external callbacks** that target the old Railway host: the **Stripe webhook endpoint URL** (Stripe dashboard), and — for any org with Fireflies configured — the **Fireflies webhook URL** (Taali registers `POST /api/v1/webhooks/fireflies`, routed per-org by `fireflies_webhook_secret`); otherwise interview transcripts keep delivering to the old us-east4 host/DB after cutover. (`WORKABLE_WEBHOOK_SECRET=skip` → Workable webhooks not in use; `MAINSPRING_INGEST_URL` is outbound to a *separate* project → unaffected.)
 7. **Verify from the UAE**: login → home/jobs load (measure ttfb with the `openapi.json`/`X-Process-Time-Ms` method — expect ~half), a decision round-trip, batch scoring, Workable sync, metering writes, candidate search (Neo4j).
 8. **Soak, then decommission** the old us-east4 stack (keep ~2–3 days as rollback).
 
@@ -57,7 +57,8 @@ The app makes **many** DB / Redis / Neo4j round-trips **per request** over Railw
 - [ ] **Env drift** — copy all 75+ vars to each of the 3 new services; diff old-vs-new with `railway variables --kv`.
 - [ ] **Internal hostnames** changed → `DATABASE_URL`/`REDIS_URL`/`NEO4J_URI` updated on web + both workers.
 - [ ] **Stripe webhook URL** updated in the Stripe dashboard (currently live-key path is the one unverified per [stripe_sandbox_verified]).
-- [ ] **Custom domain / `VITE_API_URL`** repointed; Vercel redeploy if not using a stable custom domain. Watch the [Vercel 100-deploys/day cap].
+- [ ] **Fireflies webhook URL** updated for every org that uses it (`POST /api/v1/webhooks/fireflies`) so transcripts hit the new host.
+- [ ] **Custom domain / `VITE_API_URL`** repointed — Vercel redeploy on option (b) **and on the first adoption of a stable custom domain** (the built bundle inlines `VITE_API_URL`); only later moves behind an already-live custom domain skip the redeploy. Watch the [Vercel 100-deploys/day cap].
 - [ ] **Neo4j dump/load** (not backfill) to avoid LLM re-extraction cost.
 - [ ] **Row-count + spot-check** the restored DB before cutover.
 - [ ] **Plan/region availability** for `europe-west4` confirmed in the dashboard.
