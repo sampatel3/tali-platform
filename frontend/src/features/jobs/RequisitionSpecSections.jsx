@@ -1,5 +1,7 @@
 import React from 'react';
 
+import { Select } from '../../shared/ui/TaaliPrimitives';
+
 // The Job spec tab's "From the requisition" panel: the linked hiring brief's
 // STRUCTURED spec (responsibilities, must/preferred/dealbreakers, success
 // profile, weighted priorities, client) — richer than the raw job_spec_text the
@@ -123,6 +125,43 @@ export function JobStatusControl({ status, onChange, busy }) {
             {c.label}
           </button>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Client control — assign (or clear) the consultancy client a role belongs to.
+// Unlike JobStatusControl this shows for ANY role (not just requisition-origin
+// ones): its whole point is letting recruiters tag legacy / Workable-imported
+// jobs that never carried a client. The assignment rides on the role's brief
+// (the backend stands up a stub when none exists) so the Jobs Client column /
+// filter + per-client rollups pick the role up.
+// --------------------------------------------------------------------------- //
+export function ClientControl({ clientId, clientName, clients, onChange, busy }) {
+  const options = Array.isArray(clients) ? clients : [];
+  return (
+    <div className="job-status-control client-control">
+      <div className="jsc-head">
+        <span className="jsc-label">Client</span>
+        <span className={`req-client-badge${clientName ? '' : ' is-empty'}`}>
+          {clientName || 'No client'}
+        </span>
+      </div>
+      <div className="jsc-actions">
+        <Select
+          inline
+          value={clientId == null ? '' : String(clientId)}
+          onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
+          disabled={busy}
+          aria-label="Assign client"
+          placeholder="Assign a client…"
+        >
+          <option value="">— No client —</option>
+          {options.map((c) => (
+            <option key={c.id} value={String(c.id)}>{c.name}</option>
+          ))}
+        </Select>
       </div>
     </div>
   );

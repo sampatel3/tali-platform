@@ -11,6 +11,11 @@ export const roles = {
   // Requisition->Workable job lifecycle: draft | open | filled | filled_external | cancelled.
   setJobStatus: (id, status, reason) =>
     api.post(`/roles/${id}/job-status`, { status, reason }),
+  // Assign (or clear, with clientId null) the consultancy client a role
+  // belongs to — works for legacy / Workable-imported roles that never went
+  // through a requisition. Returns the updated role (incl. client_id/_name).
+  setClient: (id, clientId) =>
+    api.post(`/roles/${id}/client`, { client_id: clientId ?? null }),
   // Auto-reject threshold recommendation. Returns {value, source,
   // rationale, sample_size}. Frontend calls this when the role's
   // ``auto_reject_threshold_mode`` is ``auto`` to show the computed

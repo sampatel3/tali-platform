@@ -12,6 +12,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Building2, Check, Plus, TrendingUp, X } from 'lucide-react';
 
+import { Select } from '../../shared/ui/TaaliPrimitives';
+
 // Thousands separators, no decimals — figures are whole AED/yr amounts.
 const fmtMoney = (n) => {
   const num = Number(n);
@@ -114,18 +116,19 @@ export function RequisitionEconomics({
           </div>
         ) : (
           <div className="rq-econ-clientpick">
-            <select
-              id="rq-econ-client"
+            <Select
+              inline
+              aria-label="Assign client"
               className="rq-econ-select"
-              value={clientId === null ? '' : clientId}
+              value={clientId === null || clientId === undefined ? '' : String(clientId)}
               disabled={saving}
               onChange={(e) => onAssignClient?.(e.target.value)}
             >
               <option value="">— Unassigned —</option>
               {clients.map((c) => (
-                <option key={c.id} value={c.id}>{c.name || 'Unnamed client'}</option>
+                <option key={c.id} value={String(c.id)}>{c.name || 'Unnamed client'}</option>
               ))}
-            </select>
+            </Select>
             <button
               type="button"
               className="rq-econ-newbtn"

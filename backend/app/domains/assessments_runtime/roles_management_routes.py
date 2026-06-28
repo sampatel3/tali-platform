@@ -27,6 +27,7 @@ from ...models.role_criterion import (
 )
 from ...schemas.role import (
     JobStatusUpdate,
+    RoleClientUpdate,
     RoleCreate,
     RoleCriterionCreate,
     RoleCriterionResponse,
@@ -350,6 +351,45 @@ def set_job_status_endpoint(
         data.status,
         current_user.id,
         f" ({data.reason})" if data.reason else "",
+    )
+    return _serialize_role_detail(db, role, current_user.organization_id)
+
+
+@router.post("/roles/{role_id}/client", response_model=RoleResponse)
+def set_role_client_endpoint(
+    role_id: int,
+    data: RoleClientUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Assign (or clear, with ``client_id=null``) the consultancy client a role
+    belongs to — including legacy / Workable-imported roles that never went
+    through a requisition. The link is stored on the role's brief (a minimal stub
+    is created when none exists) so the Jobs Client column / filter and per-client
+    rollups pick the role up."""
+    from ...services.role_brief_service import set_role_client
+
+    role = (
+        db.query(Role)
+        .options(joinedload(Role.tasks))
+        .filter(Role.id == role_id, Role.organization_id == current_user.organization_id)
+        .first()
+    )
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+    set_role_client(
+        db,
+        organization_id=current_user.organization_id,
+        role_id=role.id,
+        client_id=data.client_id,
+    )
+    db.commit()
+    db.refresh(role)
+    logger.info(
+        "Role %s client -> %s by user %s",
+        role.id,
+        data.client_id,
+        current_user.id,
     )
     return _serialize_role_detail(db, role, current_user.organization_id)
 
