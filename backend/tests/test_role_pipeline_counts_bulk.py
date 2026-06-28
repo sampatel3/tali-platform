@@ -64,6 +64,9 @@ def test_bulk_matches_per_role_and_counts_advanced_and_rejected(db):
         _seed_app(sess, organization_id=org_id, role_id=role_a, stage="advanced", n=10)
         _seed_app(sess, organization_id=org_id, role_id=role_a, stage="review", n=3)
         _seed_app(sess, organization_id=org_id, role_id=role_a, stage="invited", n=2)
+        # Assessments in progress: still roll up into the `invited` bucket, but
+        # are also tracked separately as the `in_assessment` sub-count.
+        _seed_app(sess, organization_id=org_id, role_id=role_a, stage="in_assessment", n=4)
         # Rejected is an outcome, orthogonal to stage — counted across all.
         _seed_app(sess, organization_id=org_id, role_id=role_a, stage="advanced",
                   outcome="rejected", n=5)
@@ -80,13 +83,17 @@ def test_bulk_matches_per_role_and_counts_advanced_and_rejected(db):
         assert bulk[role_a]["advanced"] == 10
         # `review` stage surfaces as the "completed" funnel bucket.
         assert bulk[role_a]["completed"] == 3
-        assert bulk[role_a]["invited"] == 2
+        # Both `invited` (2) and `in_assessment` (4) roll up into the funnel's
+        # `invited` bucket; `in_assessment` is also surfaced as its own sub-count.
+        assert bulk[role_a]["invited"] == 6
+        assert bulk[role_a]["in_assessment"] == 4
         # Rejected counted across all stages, not just the open funnel.
         assert bulk[role_a]["rejected"] == 5
 
         # A requested role with no applications gets a zero-filled dict
-        # (every funnel bucket + the not_yet_decided chip), never a missing key.
-        assert bulk[role_b] == {**{b: 0 for b in FUNNEL_BUCKETS}, "not_yet_decided": 0}
+        # (every funnel bucket + the not_yet_decided & in_assessment sub-counts),
+        # never a missing key.
+        assert bulk[role_b] == {**{b: 0 for b in FUNNEL_BUCKETS}, "not_yet_decided": 0, "in_assessment": 0}
     finally:
         sess.close()
 

@@ -924,12 +924,20 @@ def role_pipeline_counts(
         .group_by(CandidateApplication.pipeline_stage, scored_expr, ph_expr)
         .all()
     )
+    # `in_assessment` is a SUB-count of the `invited` bucket — assessments that
+    # are in progress (issued and started, not yet completed). The hub surfaces
+    # it as an "N in progress" chip under the Invited stage; it is not itself a
+    # funnel bucket, so it never changes the headline stage totals.
     counts = {bucket: 0 for bucket in FUNNEL_BUCKETS}
+    counts["in_assessment"] = 0
     for stage, is_scored, is_post_handover, total in rows:
         if is_post_handover:
             counts["advanced"] += int(total or 0)
             continue
-        bucket = funnel_bucket_for(normalize_pipeline_key(stage), bool(is_scored))
+        normalized = normalize_pipeline_key(stage)
+        if normalized == "in_assessment":
+            counts["in_assessment"] += int(total or 0)
+        bucket = funnel_bucket_for(normalized, bool(is_scored))
         if bucket:
             counts[bucket] += int(total or 0)
     # `rejected` is an application_outcome, orthogonal to pipeline_stage, so it is
@@ -998,7 +1006,7 @@ def role_pipeline_counts_bulk(
     e.g. the Hub's /agent/roles/breakdown — would N+1 without this.
     """
     counts: dict[int, dict[str, int]] = {
-        int(rid): {**{bucket: 0 for bucket in FUNNEL_BUCKETS}, "not_yet_decided": 0}
+        int(rid): {**{bucket: 0 for bucket in FUNNEL_BUCKETS}, "not_yet_decided": 0, "in_assessment": 0}
         for rid in role_ids
     }
     if not role_ids:
@@ -1040,7 +1048,10 @@ def role_pipeline_counts_bulk(
         if is_post_handover:
             bucket["advanced"] += int(total or 0)
             continue
-        key = funnel_bucket_for(normalize_pipeline_key(stage), bool(is_scored))
+        normalized = normalize_pipeline_key(stage)
+        if normalized == "in_assessment":
+            bucket["in_assessment"] += int(total or 0)
+        key = funnel_bucket_for(normalized, bool(is_scored))
         if key:
             bucket[key] += int(total or 0)
 

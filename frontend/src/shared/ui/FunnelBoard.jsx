@@ -50,6 +50,11 @@ export const FunnelBoard = ({
             const value = Number(stageCounts?.[stage.key] || 0);
             const tone = funnelStageTone(stage.key, value);
             const chips = decisionRow[stage.key] || [];
+            // Assessment activity sub-count: how many of the Invited candidates
+            // are mid-assessment (issued + started, not yet completed). Shown as
+            // an "N in progress" chip beneath the Invited stage, matching the
+            // home preview. Sub-count of `invited`, so it never alters the total.
+            const inProgress = stage.key === 'invited' ? Number(stageCounts?.in_assessment || 0) : 0;
             return (
               <div
                 key={stage.key}
@@ -60,17 +65,27 @@ export const FunnelBoard = ({
                 <div className="fb-stchips">
                   {OUTCOME_KEYS.has(stage.key) ? (
                     <span className="fb-dnone">outcome</span>
-                  ) : chips.length ? (
-                    chips.map((chip) => (
-                      <span
-                        key={chip.key}
-                        className={`fb-dchip is-${chip.tone}`}
-                        title={chip.tip || undefined}
-                      >
-                        {formatCount(chip.count)} {chip.label}
-                      </span>
-                    ))
-                  ) : null}
+                  ) : (
+                    <>
+                      {inProgress > 0 ? (
+                        <span
+                          className="fb-dchip is-send"
+                          title="Assessments in progress — issued and started, not yet completed"
+                        >
+                          {formatCount(inProgress)} in progress
+                        </span>
+                      ) : null}
+                      {chips.map((chip) => (
+                        <span
+                          key={chip.key}
+                          className={`fb-dchip is-${chip.tone}`}
+                          title={chip.tip || undefined}
+                        >
+                          {formatCount(chip.count)} {chip.label}
+                        </span>
+                      ))}
+                    </>
+                  )}
                 </div>
               </div>
             );
