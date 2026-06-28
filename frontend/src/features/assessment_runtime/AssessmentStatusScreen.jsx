@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Check } from 'lucide-react';
 
 import { AssessmentBrandGlyph } from './AssessmentBrandGlyph';
 
@@ -56,31 +57,28 @@ export const AssessmentStatusScreen = ({
     }, 200);
   };
 
+  // Mirrors the client-intake "done" surface (ci-state in clientintake.css):
+  // a clean centered column on the page background — no card chrome — with the
+  // ``taali.`` wordmark, a purple check tile, a display heading and a muted line.
+  // Tokens stay on the ``--taali-runtime-*`` family so the screen still adapts
+  // to the candidate's light/dark preference.
   return (
-    <div className={`taali-runtime ${lightMode ? 'taali-runtime-light' : 'taali-runtime-dark'} flex h-screen items-center justify-center bg-[var(--taali-runtime-bg)] px-4`}>
-      <div className="max-w-md rounded-[var(--radius-xl)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] p-10 text-center shadow-[var(--shadow-lg)]">
-        <div className="mx-auto mb-6 w-fit">
-          {/* Purple background tile variant — Sam's preference. ``compactSquare``
-              has no drop-shadow glow (vs. the default ``primarySquareRounded``
-              which does), so the tile reads as identity rather than a glowing
-              UI sticker. */}
-          <AssessmentBrandGlyph
-            variant="compactSquare"
-            sizeClass="w-14 h-14"
-            markSizeClass="w-9 h-9"
-          />
+    <div className={`taali-runtime ${lightMode ? 'taali-runtime-light' : 'taali-runtime-dark'} flex h-screen items-center justify-center bg-[var(--taali-runtime-bg)] px-6`}>
+      <div className="mx-auto w-full max-w-[520px] py-[72px] text-center">
+        <div className="mb-7 text-[20px] font-extrabold tracking-[-0.01em] text-[var(--taali-runtime-text)]">
+          taali<span className="text-[var(--purple)]">.</span>
         </div>
-        <div className="mb-3 font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--purple)]">
-          ASSESSMENT · COMPLETE
+        <div className="mx-auto mb-5 grid h-14 w-14 place-items-center rounded-[16px] bg-[var(--purple)] text-white">
+          <Check size={26} />
         </div>
-        <h1 className="mb-4 font-[var(--font-display)] text-[2.125rem] font-semibold leading-[1] tracking-[-0.025em] text-[var(--taali-runtime-text)]">
-          Task submitted<span className="text-[var(--purple)]">.</span>
+        <h1 className="mb-2.5 font-[var(--font-display)] text-[24px] font-bold leading-[1.18] tracking-[-0.02em] text-[var(--taali-runtime-text)]">
+          Task submitted
         </h1>
-        <p className="mb-6 text-[0.875rem] leading-[1.55] text-[var(--taali-runtime-muted)]">
+        <p className="mb-0 text-[14.5px] leading-[1.6] text-[var(--taali-runtime-muted)]">
           Your work is locked in. The hiring team will review the transcript, your prompts, and the evidence.
         </p>
         {closeAttempted ? (
-          <div className="rounded-[14px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-bg)] px-5 py-4 text-[0.84375rem] leading-6 text-[var(--taali-runtime-text)]">
+          <div className="mt-6 rounded-[14px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] px-5 py-4 text-[0.84375rem] leading-6 text-[var(--taali-runtime-text)]">
             Your browser doesn’t allow this page to close itself. Press{' '}
             <kbd className="mx-1 rounded-md border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt,var(--taali-runtime-panel))] px-2 py-0.5 font-mono text-[0.75rem] text-[var(--taali-runtime-text)]">
               {shortcutLabel}
@@ -90,7 +88,7 @@ export const AssessmentStatusScreen = ({
         ) : (
           <button
             type="button"
-            className="inline-flex items-center justify-center rounded-full bg-[var(--purple)] px-7 py-3 text-sm font-medium text-white transition-colors hover:bg-[var(--purple-hover,var(--purple))]"
+            className="mt-6 inline-flex items-center justify-center rounded-full bg-[var(--purple)] px-7 py-3 text-sm font-medium text-white transition-colors hover:bg-[var(--purple-hover,var(--purple))]"
             onClick={handleClose}
           >
             Close window
