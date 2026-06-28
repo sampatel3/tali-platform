@@ -1,7 +1,10 @@
 // RequisitionEconomics — the INTERNAL economics strip on a requisition.
 //
-// In a consultancy a requisition belongs to a CLIENT and carries a client
-// rate; the margin (client_rate − salary_max) is what the consultancy keeps.
+// A requisition belongs to a HIRING DEPARTMENT (an external client like ADCB
+// or an internal team like Engineering) and carries a bill rate; the margin
+// (bill_rate − salary_max) is what the consultancy keeps. NB the backend entity
+// + fields are still `client` / `client_rate` (unchanged) — only the
+// user-facing label is "hiring department".
 // This is recruiter-internal — NOT candidate-facing — so it renders as a
 // distinct purple-muted band, visually separate from the brief/job-spec.
 //
@@ -75,19 +78,19 @@ export function RequisitionEconomics({
   const marginPct = brief?.margin_pct != null ? fmtPct(brief.margin_pct) : null;
 
   return (
-    <div className="rq-econ" aria-label="Internal client economics">
+    <div className="rq-econ" aria-label="Internal hiring-department economics">
       <span className="rq-econ-tag"><Building2 size={12} /> Internal</span>
 
-      {/* Client selector + inline "+ New client" */}
+      {/* Hiring-department selector + inline "+ New department" */}
       <div className="rq-econ-field">
-        <label className="rq-econ-label" htmlFor="rq-econ-client">Client</label>
+        <label className="rq-econ-label" htmlFor="rq-econ-client">Hiring department</label>
         {addingClient ? (
           <div className="rq-econ-newclient">
             <input
               ref={newClientRef}
               className="rq-econ-input"
               value={newClientName}
-              placeholder="New client name"
+              placeholder="New department name"
               disabled={saving}
               onChange={(e) => setNewClientName(e.target.value)}
               onKeyDown={(e) => {
@@ -98,7 +101,7 @@ export function RequisitionEconomics({
             <button
               type="button"
               className="rq-econ-iconbtn is-primary"
-              aria-label="Create client"
+              aria-label="Create hiring department"
               onClick={submitNewClient}
               disabled={saving || !newClientName.trim()}
             >
@@ -118,7 +121,7 @@ export function RequisitionEconomics({
           <div className="rq-econ-clientpick">
             <Select
               inline
-              aria-label="Assign client"
+              aria-label="Assign hiring department"
               className="rq-econ-select"
               value={clientId === null || clientId === undefined ? '' : String(clientId)}
               disabled={saving}
@@ -126,7 +129,7 @@ export function RequisitionEconomics({
             >
               <option value="">— Unassigned —</option>
               {clients.map((c) => (
-                <option key={c.id} value={String(c.id)}>{c.name || 'Unnamed client'}</option>
+                <option key={c.id} value={String(c.id)}>{c.name || 'Unnamed department'}</option>
               ))}
             </Select>
             <button
@@ -135,15 +138,15 @@ export function RequisitionEconomics({
               onClick={() => setAddingClient(true)}
               disabled={saving}
             >
-              <Plus size={13} /> New client
+              <Plus size={13} /> New department
             </button>
           </div>
         )}
       </div>
 
-      {/* Client rate */}
+      {/* Bill rate (what the hiring department pays for the role) */}
       <div className="rq-econ-field">
-        <label className="rq-econ-label" htmlFor="rq-econ-rate">Client rate (AED/yr)</label>
+        <label className="rq-econ-label" htmlFor="rq-econ-rate">Bill rate (AED/yr)</label>
         <input
           id="rq-econ-rate"
           className="rq-econ-input rq-econ-rate"
@@ -169,7 +172,7 @@ export function RequisitionEconomics({
             {marginPct ? <span className="rq-econ-margin-pct"> ({marginPct})</span> : null}
           </span>
         ) : (
-          <span className="rq-econ-margin-val is-empty" title="Set a client rate and the role's salary to see the margin">—</span>
+          <span className="rq-econ-margin-val is-empty" title="Set a bill rate and the role's salary to see the margin">—</span>
         )}
       </div>
 

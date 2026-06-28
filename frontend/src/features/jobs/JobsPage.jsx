@@ -827,18 +827,18 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             </button>
           ))}
           {clientOptions.length ? (
-            <label className="jobs-client-filter" title="Filter by client">
-              <span className="filter-row-label">Client</span>
+            <label className="jobs-client-filter" title="Filter by hiring department">
+              <span className="filter-row-label">Department</span>
               <Select
                 inline
-                aria-label="Filter by client"
+                aria-label="Filter by hiring department"
                 value={clientFilter === 'all' ? 'all' : String(clientFilter)}
                 onChange={(event) => {
                   const value = event.target.value;
                   setClientFilter(value === 'all' ? 'all' : Number(value));
                 }}
               >
-                <option value="all">All clients</option>
+                <option value="all">All departments</option>
                 {clientOptions.map((c) => (
                   <option key={c.id} value={String(c.id)}>{c.name}</option>
                 ))}

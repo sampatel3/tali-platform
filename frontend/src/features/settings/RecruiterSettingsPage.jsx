@@ -68,6 +68,9 @@ const SECTION_ALIASES = {
   organization: 'org',
   clients: 'clients',
   client: 'clients',
+  'hiring-departments': 'clients',
+  departments: 'clients',
+  department: 'clients',
   workable: 'workable',
   billing: 'billing',
   usage: 'usage',
@@ -1360,7 +1363,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
             <div className="vtabs" role="tablist" aria-label="Settings sections">
               {[
                 { k: 'org', l: 'Organization' },
-                { k: 'clients', l: 'Clients' },
+                { k: 'clients', l: 'Hiring departments' },
                 { k: 'members', l: 'Members' },
                 { k: 'agent', l: 'AI agent' },
                 { k: 'workable', l: 'Workable' },
@@ -1454,8 +1457,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
               <div ref={(node) => { sectionRefs.current.clients = node; }} hidden={activeSection !== "clients"}>
                 <SectionPanel
                   id="clients"
-                  title="Clients"
-                  subtitle="The consultancy clients you hire for. Add a client, then assign it to a requisition to track its rate, margin, and open / filled jobs; filter the Jobs page by client to see each client's pipeline."
+                  title="Hiring departments"
+                  subtitle="Whoever a requisition is for — an external client like ADCB or an internal team like Engineering. Add one, then assign it to a requisition to track its rate, margin, and open / filled jobs; filter the Jobs page by department to see each one's pipeline."
                 >
                   <ClientsManager />
                 </SectionPanel>
