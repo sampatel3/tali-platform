@@ -347,8 +347,9 @@ export const HomeShowcaseView = () => {
             <KpiStrip columns={4} tiles={SHOWCASE_KPIS} />
 
             <FunnelBoard
+              variant="flat"
               scopeLabel="all roles"
-              stageCounts={{ applied: 312, scored: 184, invited: 9, completed: 4, advanced: 61, rejected: 1905 }}
+              stageCounts={{ applied: 312, scored: 184, invited: 9, completed: 4, advanced: 61, rejected: 1905, in_assessment: 6, invited_opened: 7, invited_delivered: 8 }}
               decisionsByType={{ send_assessment: 20, reject: 80, advance_to_interview: 3, skip_assessment_reject: 0 }}
             />
 

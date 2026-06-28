@@ -267,7 +267,7 @@ export const AssessmentRuntimePreviewView = ({
         claudeBudget={PREVIEW_CLAUDE_BUDGET}
         onClaudeBudgetUpdate={() => {}}
         initialAiPrompts={initialAiPrompts}
-        staticAssistantPanelWidth={staticPreview ? 450 : null}
+        staticAssistantPanelWidth={staticPreview ? 620 : null}
         lightMode={lightMode}
         />
         </div>

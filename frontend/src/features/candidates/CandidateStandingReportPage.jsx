@@ -39,6 +39,7 @@ import {
 import {
   AI_SHOWCASE_APPLICATION,
   AI_SHOWCASE_APPLICATION_EVENTS,
+  AI_SHOWCASE_AGENT_DECISION,
   AI_SHOWCASE_COMPLETED_ASSESSMENT,
 } from '../demo/productWalkthroughModels';
 
@@ -285,6 +286,9 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       setCompletedAssessment(AI_SHOWCASE_COMPLETED_ASSESSMENT);
       setOrgData(null);
       setApplicationEvents(AI_SHOWCASE_APPLICATION_EVENTS);
+      // Show the agent's deterministic recommendation (the demo previously fell
+      // back to the "not yet decided" placeholder despite a completed score).
+      setAgentDecision(AI_SHOWCASE_AGENT_DECISION);
       setShareViewMode(null);
       setError('');
       setLoading(false);
