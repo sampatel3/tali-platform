@@ -22,9 +22,7 @@ from sqlalchemy.orm import Session
 from ..models.role import Role
 from ..models.role_brief import RoleBrief
 from .requisition_chat_capture import (
-    _first_required_field,
     _is_empty,
-    _select_options,
     opening_message,
 )
 
@@ -266,12 +264,17 @@ def recent_role_titles(
 
 def seed_opening_message(brief: RoleBrief, template: dict[str, Any]) -> None:
     """Set ``brief.messages`` to the single deterministic OPENING assistant turn.
-    Mutates in place (does not flush)."""
+    Mutates in place (does not flush).
+
+    No ``suggested_replies`` on the opener — the first turn asks for a free-text
+    brief in the user's own words; tappable options only appear on later turns,
+    grounded in what they said. (Front-loading chips here nudged managers to
+    click through and produced shallow, agent-framed briefs.)"""
     brief.messages = [
         {
             "role": "assistant",
             "content": opening_message(template),
             "attachments": [],
-            "suggested_replies": _select_options(_first_required_field(template)),
+            "suggested_replies": [],
         }
     ]

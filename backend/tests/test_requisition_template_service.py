@@ -38,14 +38,15 @@ def test_default_template_is_valid_and_has_required_fields():
 
 
 def test_default_template_has_responsibilities_field_in_context():
-    """The rich 'responsibilities' field lives in the context section, is an
-    optional list, and has no RoleBrief column (→ custom_fields)."""
+    """The rich 'responsibilities' field lives in the context section, is a
+    required list (substance the brief must capture), and has no RoleBrief
+    column (→ custom_fields)."""
     context = next(
         s for s in DEFAULT_REQUISITION_TEMPLATE["sections"] if s["key"] == "context"
     )
     field = next(f for f in context["fields"] if f["key"] == "responsibilities")
     assert field["type"] == "list"
-    assert field["required"] is False
+    assert field["required"] is True
     assert field["question"]
     # It sits right after success_profile.
     keys = [f["key"] for f in context["fields"]]

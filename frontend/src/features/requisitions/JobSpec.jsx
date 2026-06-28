@@ -70,6 +70,8 @@ const buildResolvers = (brief) => {
     title: b.title,
     summary: b.summary,
     department: b.department,
+    // Domain / industry — a custom field (no brief column); steers the brief.
+    domain: custom.domain,
     seniority: b.seniority,
     location,
     workplace_type: b.workplace_type,

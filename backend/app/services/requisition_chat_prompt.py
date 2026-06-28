@@ -309,6 +309,20 @@ def build_chat_system_prompt(
             "question, or — once the required spec is captured — says so and "
             "offers to publish. "
         )
+    # Free-text-first nudge: on the user's FIRST substantive turn, absorb their
+    # own-words brief and ask one sharp follow-up — don't fall back to a menu.
+    user_turns = sum(
+        1
+        for m in (brief.messages or [])
+        if isinstance(m, dict) and m.get("role") == "user"
+    )
+    early_line = (
+        "The user has just given their first free-text brief — absorb it fully, "
+        "capture every grounded detail, and ask ONE sharp follow-up rather than a "
+        "menu of generic options. "
+        if user_turns <= 1
+        else ""
+    )
     return (
         intro
         + json.dumps(compact_template, separators=(",", ":"))
@@ -318,35 +332,44 @@ def build_chat_system_prompt(
         + focus_lines
         + recent_line
         + guidance_line
-        + "\n\nFrom the user's message and any attached transcript/screenshot, "
-        "capture every field you can — use the typed fields for standard columns "
-        "and the 'custom' object for any other template key (e.g. 'urgency'); "
-        "never skip a field just because it isn't a typed column. "
+        + "\n\nGROUND EVERYTHING IN WHAT THEY SAY. From their message and any "
+        "attached transcript / screenshot, capture every field they've actually "
+        "given — typed fields for standard columns, the 'custom' object for any "
+        "other template key (e.g. 'urgency', 'domain'); never skip a field just "
+        "because it isn't a typed column. But do NOT invent: never fabricate "
+        "responsibilities, a success profile, or requirements from the job title "
+        "alone. If a rich field isn't grounded in what they've told you, leave it "
+        "empty and ASK; if you want to suggest content, offer it as a short DRAFT "
+        "for them to confirm or edit — never record guesses as captured fact. "
         + comp_instruction
-        + "Go BEYOND the basics — a strong role spec is more than a title and a "
-        "must-have list. Actively probe: the TECH STACK / tools they'll work with, "
-        "the specific PROJECTS or initiatives this hire will own or support, and "
-        "the CHALLENGES or gaps a great hire would solve. Fold what you learn into "
-        "must-haves / responsibilities / success profile. Don't treat the role as "
-        "done until these are covered. "
-        + "Then reply "
-        "conversationally — warm, concise, fast — acknowledging what you got and "
-        "asking about ONE focus gap next. Ask a SINGLE question per turn (never "
-        "bundle two different things into one turn, e.g. don't ask the focus AND "
-        "the number of openings together) — it keeps the tappable options clean "
-        "and the chat easy on a phone. "
+        + "DOMAIN FIRST: pin down the domain / industry early (it's required) and "
+        "let it shape everything — the requirements you probe and the options you "
+        "offer must fit it (e.g. in banking: regulatory compliance, data residency "
+        "/ PII, model-risk governance, explainability, on-prem or no-external-LLM "
+        "constraints). "
+        + "Go BEYOND the basics — a strong spec is more than a title and a "
+        "must-have list. Once they've described the role in their own words, probe "
+        "the specifics: the TECH STACK / tools, the PROJECTS this hire will own, "
+        "the CHALLENGES a great hire solves, and what GREAT looks like in 6 months "
+        "— folding what they CONFIRM into must-haves / responsibilities / success "
+        "profile. Don't treat the role as done until these are covered. "
+        + early_line
+        + "Reply conversationally — warm, concise, fast — acknowledge the "
+        "specifics they gave, then ask ONE question. A SINGLE question per turn "
+        "(never bundle two different things into one turn). "
         + closing
-        + "ALWAYS set suggested_replies to up to 6 short, tappable options — and "
-        "EVERY option must be a valid answer to the SINGLE question you just "
-        "asked. Never mix options for different fields in one set (e.g. don't put "
-        "'1 opening' next to 'Research' next to 'High urgency'). For select fields "
-        "use the template's options verbatim; for numbers/dates/free text offer "
-        "the most likely answers or sensible ranges (they can still type "
-        "anything). Set suggested_multi to true ONLY when the question can take "
-        "several answers at once (must-haves, nice-to-haves, tech stack, "
-        "responsibilities, focus areas) so each option is individually "
-        "selectable; set it false for single-choice questions (seniority, "
-        "openings, urgency, one-line summary)."
+        + "QUICK REPLIES are a REFINEMENT aid, not the main input. When you're "
+        "asking the user to describe something in their OWN words (their opening "
+        "brief, or any open-ended 'tell me about…' question), set suggested_replies "
+        "to an EMPTY list so they type or dictate. Otherwise offer up to 6 short "
+        "options GROUNDED in what they've already said and the domain (never a "
+        "generic menu), and every option must answer the SINGLE question you just "
+        "asked — never mix fields (don't put '1 opening' next to 'Research' next "
+        "to 'High urgency'). Use template options verbatim for select fields; "
+        "offer sensible values for numbers / dates. Set suggested_multi to true "
+        "ONLY when the question takes several answers at once (must-haves, tech "
+        "stack, responsibilities, focus areas); false for single-choice "
+        "(seniority, openings, urgency, one-line summary)."
     )
 
 

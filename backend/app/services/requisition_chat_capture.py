@@ -190,18 +190,27 @@ def _resolve_suggested_replies(
 
 
 def opening_message(template: dict[str, Any]) -> str:
-    """Deterministic greeting + the first required field's question."""
-    first_question = "what role are you hiring for?"
-    for _section, field in iter_fields(template):
-        if field.get("required"):
-            q = (field.get("question") or "").strip()
-            if q:
-                first_question = q[0].lower() + q[1:] if q else first_question
-            break
+    """Deterministic OPENING turn — a strong free-text brief request with a clear
+    checklist. We deliberately ask for the role in the user's OWN words first
+    (no tappable options on this turn) so the brief is grounded in what they
+    actually want, not the agent's guesses; the multiple-choice refinement comes
+    on later turns. ``template`` is accepted for signature stability."""
     return (
-        "Hi — I'll help you spec this role fast. You can talk to me, paste your "
-        "kickoff-call notes, or drop a transcript or screenshot. To start: "
-        + first_question
+        "Hi — I'll help you turn this into a sharp role brief. The best way to "
+        "start is to tell me about the role **in your own words** — a few "
+        "sentences is plenty, and you can talk (tap the mic) or paste notes, a "
+        "draft JD, or a call transcript.\n\n"
+        "The more you give me here, the sharper everything downstream — try to "
+        "cover:\n\n"
+        "- **The role + the domain/industry** it sits in (e.g. banking, "
+        "healthcare, e-commerce) — it changes what “good” looks like\n"
+        "- **What this person will actually build or own** day-to-day\n"
+        "- **The genuine must-haves** — skills/experience that are truly "
+        "non-negotiable\n"
+        "- **What “great in 6 months” looks like**\n"
+        "- **Any hard nos / dealbreakers**\n\n"
+        "Don't worry about structure — write it however it comes out and I'll "
+        "organise it, then ask a few focused follow-ups."
     )
 
 

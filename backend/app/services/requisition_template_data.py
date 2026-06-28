@@ -20,13 +20,14 @@ from typing import Any
 # {{placeholders}} the frontend fills from the captured brief. The prose
 # sections (About us / Benefits / EEO) are boilerplate an org sets once; the
 # placeholders are populated on the fly as the conversation captures the spec.
-# Supported placeholders: title, summary, department, seniority, location,
+# Supported placeholders: title, domain, summary, department, seniority, location,
 # workplace_type, employment_type, openings, salary, urgency, responsibilities,
 # must_haves, preferred, dealbreakers, success_profile, assessment_focus, evp.
 DEFAULT_JD_TEMPLATE = """# {{title}}
 
 {{summary}}
 
+**Domain:** {{domain}}
 **Details:** {{location}} · {{workplace_type}} · {{employment_type}} · {{seniority}}
 **Openings:** {{openings}} · **Compensation:** {{salary}} · **Urgency:** {{urgency}}
 
@@ -79,6 +80,13 @@ DEFAULT_REQUISITION_TEMPLATE: dict[str, Any] = {
                     "question": "What role are you hiring for?",
                 },
                 {
+                    "key": "domain",
+                    "label": "Domain / industry",
+                    "type": "text",
+                    "required": True,
+                    "question": "What domain or industry is this role in? (e.g. banking, healthcare, e-commerce) — it changes what 'good' looks like.",
+                },
+                {
                     "key": "department",
                     "label": "Department",
                     "type": "text",
@@ -89,7 +97,7 @@ DEFAULT_REQUISITION_TEMPLATE: dict[str, Any] = {
                     "key": "seniority",
                     "label": "Seniority",
                     "type": "select",
-                    "required": False,
+                    "required": True,
                     "question": "What seniority level?",
                     "options": [
                         "Intern",
@@ -107,7 +115,7 @@ DEFAULT_REQUISITION_TEMPLATE: dict[str, Any] = {
                     "key": "summary",
                     "label": "One-line summary",
                     "type": "longtext",
-                    "required": False,
+                    "required": True,
                     "question": "In one line, what will this person do?",
                 },
             ],
@@ -262,14 +270,14 @@ DEFAULT_REQUISITION_TEMPLATE: dict[str, Any] = {
                     "key": "success_profile",
                     "label": "Success profile",
                     "type": "longtext",
-                    "required": False,
+                    "required": True,
                     "question": "What does great look like in 6 months?",
                 },
                 {
                     "key": "responsibilities",
                     "label": "Key responsibilities",
                     "type": "list",
-                    "required": False,
+                    "required": True,
                     "question": "What are the key responsibilities / duties?",
                 },
                 {
