@@ -1183,12 +1183,19 @@ a.rq-btn-sm { text-decoration: none; }
 }
 
 /* Multiple-choice quick replies — tappable options under the latest agent
-   turn so the recruiter can answer in one click instead of typing. */
+   turn so the recruiter can answer in one click instead of typing. Capped to
+   ~2 rows and scrolled: a long option set can't grow the pinned composer area
+   and starve the thread (which would push the agent's question out of view). */
 .rq-quick-replies {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 8px;
+  max-height: 5.25rem;
+  overflow-y: auto;
+  /* keep the scrollbar off the chips */
+  padding-right: 2px;
+  overscroll-behavior: contain;
 }
 .rq-quick-chip {
   appearance: none;
