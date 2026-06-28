@@ -156,6 +156,19 @@ class RoleResponse(BaseModel):
     criteria: list[RoleCriterionResponse] = Field(default_factory=list)
     source: Optional[str] = "manual"
     workable_job_id: Optional[str] = None
+    # Requisition -> Workable job lifecycle: draft | open | filled |
+    # filled_external | cancelled. None for legacy / Workable-synced roles
+    # (derive display state from workable_job_state). See app.models.role.
+    job_status: Optional[str] = None
+    # The linked hiring brief's structured spec, when this role originated from
+    # (or was linked to) a requisition. Detail-only — the list path leaves it
+    # None to avoid a per-row brief lookup. Drives the role's Job Spec tab.
+    requisition: Optional[dict[str, Any]] = None
+    # The consultancy client this role is for (via its requisition brief). Drives
+    # the Jobs list's Client column + filter + the per-client rollups. None for
+    # direct (non-consultancy) roles. Internal-only — never the rate/margin.
+    client_id: Optional[int] = None
+    client_name: Optional[str] = None
     # Workable job lifecycle state: published | draft | archived | closed.
     # None for manual/Taali-created roles. ``published`` == live/recruiting.
     workable_job_state: Optional[str] = None
@@ -198,6 +211,16 @@ class RoleResponse(BaseModel):
     updated_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
+
+
+class JobStatusUpdate(BaseModel):
+    """Recruiter sets the requisition->Workable job lifecycle status. The
+    recruiter is the authority, so any valid status may be set (incl. reopening
+    a filled role or marking it filled by an outside vendor). ``draft`` and
+    ``open`` are "still being worked"; the rest are terminal outcomes."""
+
+    status: Literal["draft", "open", "filled", "filled_external", "cancelled"]
+    reason: Optional[str] = Field(default=None, max_length=2000)
 
 
 class RoleTaskLinkRequest(BaseModel):

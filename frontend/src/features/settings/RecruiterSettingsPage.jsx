@@ -1444,6 +1444,25 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       Edit requisition template →
                     </button>
                   </div>
+
+                  {/* Consultancy clients — managed here (moved out of the top
+                      nav). The per-client view + open/filled rollup is reached
+                      from the Jobs page's client filter. */}
+                  <div className="settings-subcard settings-top-gap">
+                    <div className="settings-subcard-head">
+                      <div>
+                        <h3>Clients</h3>
+                        <p>Manage the consultancy clients you hire for. Assign a requisition to a client to track its rate, margin, and open / filled jobs; filter the Jobs page by client to see each client's pipeline.</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      onClick={() => onNavigate?.('clients')}
+                    >
+                      Manage clients →
+                    </button>
+                  </div>
                 </SectionPanel>
               </div>
 

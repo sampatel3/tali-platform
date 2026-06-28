@@ -8,6 +8,7 @@ flush but do NOT commit — the caller owns the transaction.
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any, Optional
 
 from fastapi import HTTPException
@@ -16,10 +17,77 @@ from sqlalchemy.orm import Session
 
 from ..models.client import Client
 from ..models.job_page import JOB_PAGE_STATUS_OPEN, JobPage
+from ..models.role import (
+    JOB_STATUS_CANCELLED,
+    JOB_STATUS_DRAFT,
+    JOB_STATUS_FILLED,
+    JOB_STATUS_FILLED_EXTERNAL,
+    JOB_STATUS_OPEN,
+    Role,
+)
 from ..models.role_brief import RoleBrief
 
 # Fields a recruiter may set on a client via create / PATCH.
 _EDITABLE_FIELDS = frozenset({"name", "contact_name", "contact_email", "status"})
+
+# The per-client job-lifecycle rollup buckets (by role.job_status). ``active`` =
+# draft + open ("open / waiting to fill"); the rest are terminal outcomes. This
+# is the count of LINKED ROLES by status — distinct from ``open_job_count``,
+# which counts published careers job pages.
+_ROLLUP_STATUSES = (
+    JOB_STATUS_DRAFT,
+    JOB_STATUS_OPEN,
+    JOB_STATUS_FILLED,
+    JOB_STATUS_FILLED_EXTERNAL,
+    JOB_STATUS_CANCELLED,
+)
+
+
+def _empty_rollup() -> dict[str, int]:
+    return {s: 0 for s in _ROLLUP_STATUSES} | {"active": 0, "total": 0}
+
+
+def _accumulate_rollup(rollup: dict[str, int], status: str | None, count: int) -> None:
+    # An unset / unknown status on a client-linked role reads as an inactive
+    # draft job (defensive — requisition publish always sets a status).
+    key = status if status in _ROLLUP_STATUSES else JOB_STATUS_DRAFT
+    rollup[key] += count
+    rollup["total"] += count
+    if key in (JOB_STATUS_DRAFT, JOB_STATUS_OPEN):
+        rollup["active"] += count
+
+
+def _rollup_rows(db: Session, organization_id: int, client_id: int | None = None):
+    q = (
+        db.query(RoleBrief.client_id, Role.job_status, func.count(Role.id))
+        .join(Role, Role.id == RoleBrief.role_id)
+        .filter(
+            RoleBrief.organization_id == organization_id,
+            RoleBrief.client_id.isnot(None),
+            Role.deleted_at.is_(None),
+        )
+    )
+    if client_id is not None:
+        q = q.filter(RoleBrief.client_id == client_id)
+    return q.group_by(RoleBrief.client_id, Role.job_status).all()
+
+
+def job_status_rollups(db: Session, organization_id: int) -> dict[int, dict[str, int]]:
+    """``{client_id: rollup}`` for every client in the org, in ONE query."""
+    out: dict[int, dict[str, int]] = defaultdict(_empty_rollup)
+    for client_id, status, count in _rollup_rows(db, organization_id):
+        _accumulate_rollup(out[int(client_id)], status, int(count))
+    return dict(out)
+
+
+def job_status_rollup_for_client(
+    db: Session, organization_id: int, client_id: int
+) -> dict[str, int]:
+    """The job-lifecycle rollup for a SINGLE client (open / filled / etc.)."""
+    rollup = _empty_rollup()
+    for _client_id, status, count in _rollup_rows(db, organization_id, client_id=client_id):
+        _accumulate_rollup(rollup, status, int(count))
+    return rollup
 
 
 def compute_margin(
@@ -82,9 +150,15 @@ def open_job_count_for_client(db: Session, organization_id: int, client_id: int)
     ) or 0
 
 
-def serialize_client(client: Client, *, open_job_count: int = 0) -> dict[str, Any]:
+def serialize_client(
+    client: Client,
+    *,
+    open_job_count: int = 0,
+    job_rollup: dict[str, int] | None = None,
+) -> dict[str, Any]:
     """A serialized client: id, name, contact_name, contact_email, status,
-    open_job_count."""
+    open_job_count, and the job-lifecycle ``job_rollup`` (open / waiting / filled
+    counts of its linked roles)."""
     return {
         "id": client.id,
         "name": client.name,
@@ -92,6 +166,7 @@ def serialize_client(client: Client, *, open_job_count: int = 0) -> dict[str, An
         "contact_email": client.contact_email,
         "status": client.status,
         "open_job_count": open_job_count,
+        "job_rollup": job_rollup or _empty_rollup(),
     }
 
 
@@ -100,6 +175,7 @@ def serialize_client_detail(
     briefs: list[RoleBrief],
     *,
     open_job_count: int = 0,
+    job_rollup: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """A client + its requisitions, enriched for the per-client detail page.
 
@@ -117,7 +193,9 @@ def serialize_client_detail(
       - ``avg_margin_pct`` — rounded mean of the computable margin_pcts
         (None when none are computable)
     """
-    payload: dict[str, Any] = serialize_client(client, open_job_count=open_job_count)
+    payload: dict[str, Any] = serialize_client(
+        client, open_job_count=open_job_count, job_rollup=job_rollup
+    )
 
     requisitions: list[dict[str, Any]] = []
     margins: list[int] = []
@@ -175,8 +253,14 @@ def list_clients(db: Session, organization_id: int) -> list[dict[str, Any]]:
         .all()
     )
     counts = _open_job_counts(db, organization_id)
+    rollups = job_status_rollups(db, organization_id)
     return [
-        serialize_client(c, open_job_count=counts.get(c.id, 0)) for c in clients
+        serialize_client(
+            c,
+            open_job_count=counts.get(c.id, 0),
+            job_rollup=rollups.get(c.id),
+        )
+        for c in clients
     ]
 
 

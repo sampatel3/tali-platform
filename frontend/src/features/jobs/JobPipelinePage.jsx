@@ -19,6 +19,7 @@ import { RoleViewTabs, useRoleView } from './RoleViewTabs';
 import { useRoleProgressPolling } from './useRoleProgressPolling';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { parseJobSpec, FormattedJobSpecSection } from './jobSpecFormatting';
+import { RequisitionSpecSections, JobStatusControl } from './RequisitionSpecSections';
 import { RoleAgentSettingsTab } from './RoleAgentSettingsTab';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
 import { useAgentStatus } from '../../shared/layout/AgentBar';
@@ -292,6 +293,26 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setSavingThresholdMode(false);
     }
   }, [numericRoleId, rolesApi, showToast]);
+  // Requisition->Workable job lifecycle (draft/open/filled/filled_external/
+  // cancelled). The control lives on the Job Spec tab; optimistic with rollback.
+  const [savingJobStatus, setSavingJobStatus] = useState(false);
+  const handleSetJobStatus = useCallback(async (nextStatus) => {
+    if (!Number.isFinite(numericRoleId) || !nextStatus) return;
+    const previous = role?.job_status;
+    if (nextStatus === previous) return;
+    setSavingJobStatus(true);
+    setRole((cur) => (cur ? { ...cur, job_status: nextStatus } : cur));
+    try {
+      const res = await rolesApi.setJobStatus(numericRoleId, nextStatus);
+      if (res?.data) setRole(res.data);
+      showToast('Job status updated.', 'success');
+    } catch (error) {
+      setRole((cur) => (cur ? { ...cur, job_status: previous } : cur));
+      showToast(getErrorMessage(error, 'Failed to update job status.'), 'error');
+    } finally {
+      setSavingJobStatus(false);
+    }
+  }, [numericRoleId, role?.job_status, rolesApi, showToast]);
   const [refreshTick, setRefreshTick] = useState(0);
   const [interviewFocusGenerating, setInterviewFocusGenerating] = useState(false);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
@@ -1509,6 +1530,22 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             <div className="role-desc-main">
               {!detailsExpanded && roleSummary ? (
                 <p className="role-desc-summary">{roleSummary}</p>
+              ) : null}
+
+              {/* Job lifecycle control (mark filled / external / cancelled) —
+                  shown for requisition-origin roles that carry a job_status. */}
+              {role?.job_status ? (
+                <JobStatusControl
+                  status={role.job_status}
+                  onChange={handleSetJobStatus}
+                  busy={savingJobStatus}
+                />
+              ) : null}
+
+              {/* The linked requisition's structured spec — always visible (it's
+                  the richest source); the raw ingested spec sits in the expand. */}
+              {role?.requisition ? (
+                <RequisitionSpecSections requisition={role.requisition} />
               ) : null}
 
               <button

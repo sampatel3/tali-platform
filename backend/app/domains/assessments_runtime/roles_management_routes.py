@@ -26,6 +26,7 @@ from ...models.role_criterion import (
     RoleCriterion,
 )
 from ...schemas.role import (
+    JobStatusUpdate,
     RoleCreate,
     RoleCriterionCreate,
     RoleCriterionResponse,
@@ -233,6 +234,14 @@ def list_roles(
             role_ids=role_ids,
         )
 
+    # Batched role -> client lookup (one query) for the Jobs list's Client column
+    # + filter. Roles with no requisition (or no client) are simply absent.
+    from ...services.role_brief_service import role_client_map
+
+    clients_by_role = role_client_map(
+        db, organization_id=current_user.organization_id, role_ids=role_ids
+    )
+
     return [
         role_to_response(
             role,
@@ -241,9 +250,57 @@ def list_roles(
             stage_counts=stage_counts_by_role.get(role.id, {}),
             active_candidates_count=active_counts.get(role.id, 0),
             last_candidate_activity_at=last_activity_by_role.get(role.id),
+            client=clients_by_role.get(role.id),
         )
         for role in roles
     ]
+
+
+def _serialize_role_detail(db: Session, role: Role, organization_id: int) -> RoleResponse:
+    """The full role-detail payload: funnel counts + pending-decision chips + the
+    linked requisition's structured spec. Shared by GET /roles/{id} and the
+    job-status mutation so both stay in lock-step."""
+    app_count = (
+        db.query(func.count(CandidateApplication.id))
+        .filter(
+            CandidateApplication.organization_id == organization_id,
+            CandidateApplication.role_id == role.id,
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .scalar()
+        or 0
+    )
+    # Per-stage funnel counts (applied → invited → in_assessment → review →
+    # advanced + rejected) — the same aggregate the /roles list attaches, so
+    # the role detail page can render the home-card funnel summary from the
+    # single GET rather than deriving it from the (row-capped) applications list.
+    stage_counts = role_pipeline_counts(
+        db, organization_id=organization_id, role_id=role.id
+    )
+    # Pending agent decisions by type — feeds the role funnel's "awaiting your
+    # decision" chips (uncapped, unlike the row-limited applications fetch).
+    pending_decisions_by_type = role_pending_decisions_by_type(
+        db, organization_id=organization_id, role_id=role.id
+    )
+    # The linked requisition's structured spec (None unless this role came from /
+    # was linked to a requisition). Detail-only — drives the role's Job Spec tab.
+    from ...services.role_brief_service import requisition_spec_for_role, role_client_map
+
+    requisition = requisition_spec_for_role(
+        db, organization_id=organization_id, role_id=role.id
+    )
+    client = role_client_map(
+        db, organization_id=organization_id, role_ids=[role.id]
+    ).get(role.id)
+    return role_to_response(
+        role,
+        tasks_count=len(role.tasks or []),
+        applications_count=int(app_count),
+        stage_counts=stage_counts,
+        pending_decisions_by_type=pending_decisions_by_type,
+        requisition=requisition,
+        client=client,
+    )
 
 
 @router.get("/roles/{role_id}", response_model=RoleResponse)
@@ -260,40 +317,41 @@ def get_role_endpoint(
     )
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
+    return _serialize_role_detail(db, role, current_user.organization_id)
 
-    app_count = (
-        db.query(func.count(CandidateApplication.id))
-        .filter(
-            CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == role.id,
-            CandidateApplication.deleted_at.is_(None),
-        )
-        .scalar()
-        or 0
+
+@router.post("/roles/{role_id}/job-status", response_model=RoleResponse)
+def set_job_status_endpoint(
+    role_id: int,
+    data: JobStatusUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Set the job's lifecycle status (draft / open / filled / filled_external /
+    cancelled). The recruiter is the authority — any valid status is accepted,
+    including reopening or marking a role filled by an outside vendor. ``reason``
+    is recorded on the role's feedback timeline for the audit trail."""
+    role = (
+        db.query(Role)
+        .options(joinedload(Role.tasks))
+        .filter(Role.id == role_id, Role.organization_id == current_user.organization_id)
+        .first()
     )
-    # Per-stage funnel counts (applied → invited → in_assessment → review →
-    # advanced + rejected) — the same aggregate the /roles list attaches, so
-    # the role detail page can render the home-card funnel summary from the
-    # single GET rather than deriving it from the (row-capped) applications list.
-    stage_counts = role_pipeline_counts(
-        db,
-        organization_id=current_user.organization_id,
-        role_id=role.id,
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+    previous = role.job_status
+    role.job_status = data.status
+    db.commit()
+    db.refresh(role)
+    logger.info(
+        "Role %s job_status %s -> %s by user %s%s",
+        role.id,
+        previous,
+        data.status,
+        current_user.id,
+        f" ({data.reason})" if data.reason else "",
     )
-    # Pending agent decisions by type — feeds the role funnel's "awaiting your
-    # decision" chips (uncapped, unlike the row-limited applications fetch).
-    pending_decisions_by_type = role_pending_decisions_by_type(
-        db,
-        organization_id=current_user.organization_id,
-        role_id=role.id,
-    )
-    return role_to_response(
-        role,
-        tasks_count=len(role.tasks or []),
-        applications_count=int(app_count),
-        stage_counts=stage_counts,
-        pending_decisions_by_type=pending_decisions_by_type,
-    )
+    return _serialize_role_detail(db, role, current_user.organization_id)
 
 
 def _effective_pre_screen_threshold(db: Session, role: Role) -> float | None:

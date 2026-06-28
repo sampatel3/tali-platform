@@ -141,7 +141,7 @@ describe('JobsPage Workable sync states', () => {
     expect(within(rejectedCell).getByText('4')).toBeInTheDocument();
   });
 
-  it('opens the new role sheet from the jobs hub', async () => {
+  it('routes "+ New requisition" to the requisition flow (the create-a-job entry point)', async () => {
     apiClient.organizations.getWorkableSyncStatus.mockResolvedValue({
       data: {
         run_id: null,
@@ -152,11 +152,12 @@ describe('JobsPage Workable sync states', () => {
       },
     });
 
-    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+    const onNavigate = vi.fn();
+    render(<MemoryRouter><JobsPage onNavigate={onNavigate} /></MemoryRouter>);
 
-    fireEvent.click(await screen.findByRole('button', { name: '+ New role' }));
+    fireEvent.click(await screen.findByRole('button', { name: '+ New requisition' }));
 
-    expect(await screen.findByText('Name the role, attach a job spec, and link the task(s) candidates take.')).toBeInTheDocument();
+    expect(onNavigate).toHaveBeenCalledWith('requisitions');
   });
 
   it('shows AGENT PAUSED (not AGENT ON) for an enabled-but-paused role', async () => {

@@ -8,6 +8,9 @@ export const roles = {
   remove: (id) => api.delete(`/roles/${id}`),
   star: (id) => api.post(`/roles/${id}/star`),
   unstar: (id) => api.delete(`/roles/${id}/star`),
+  // Requisition->Workable job lifecycle: draft | open | filled | filled_external | cancelled.
+  setJobStatus: (id, status, reason) =>
+    api.post(`/roles/${id}/job-status`, { status, reason }),
   // Auto-reject threshold recommendation. Returns {value, source,
   // rationale, sample_size}. Frontend calls this when the role's
   // ``auto_reject_threshold_mode`` is ``auto`` to show the computed

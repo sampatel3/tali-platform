@@ -4,6 +4,27 @@ from sqlalchemy.sql import func
 
 from ..platform.database import Base
 
+# Job lifecycle for the requisition->Workable bridge. NULL means a legacy or
+# Workable-synced role whose live state is derived from ``workable_job_data``
+# (published/archived/closed) as before — only requisition-published drafts and
+# explicit recruiter fill-marks set ``job_status``, so existing roles are
+# untouched. ``filled`` = placed by us; ``filled_external`` = filled by another
+# vendor (so a consultancy client's role can be closed out without a Taali hire).
+JOB_STATUS_DRAFT = "draft"  # published from a requisition, not yet live
+JOB_STATUS_OPEN = "open"  # live (linked to a Workable job or activated)
+JOB_STATUS_FILLED = "filled"  # placed by Taali
+JOB_STATUS_FILLED_EXTERNAL = "filled_external"  # filled by another vendor
+JOB_STATUS_CANCELLED = "cancelled"  # withdrawn / no longer hiring
+JOB_STATUSES = (
+    JOB_STATUS_DRAFT,
+    JOB_STATUS_OPEN,
+    JOB_STATUS_FILLED,
+    JOB_STATUS_FILLED_EXTERNAL,
+    JOB_STATUS_CANCELLED,
+)
+# The "still being worked" subset, for the per-client "waiting to fill" rollup.
+JOB_STATUSES_OPEN = (JOB_STATUS_DRAFT, JOB_STATUS_OPEN)
+
 role_tasks = Table(
     "role_tasks",
     Base.metadata,
@@ -26,6 +47,12 @@ class Role(Base):
     source = Column(String, default="manual", nullable=False)
     workable_job_id = Column(String, nullable=True, index=True)
     workable_job_data = Column(JSON, nullable=True)
+    # Requisition->Workable job lifecycle (see module constants). NULL for
+    # legacy/Workable-synced roles (state derived from workable_job_data); set on
+    # requisition publish (``draft``), on Workable link (``open``), and by
+    # explicit recruiter fill-marks (``filled`` / ``filled_external`` /
+    # ``cancelled``).
+    job_status = Column(String, nullable=True, index=True)
     # Cached Workable recruitment pipeline (the ordered stage list) for this
     # job. Stored so the stage pickers serve instantly from our DB instead of
     # making a live, throttled Workable API call on every modal open. Refreshed
