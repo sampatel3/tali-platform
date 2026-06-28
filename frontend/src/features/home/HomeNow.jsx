@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 
 import { agent as agentApi, organizations as orgsApi, roles as rolesApi } from '../../shared/api';
-import { AssessmentWorkflowStepper, AssessmentFunnelStrip } from '../candidates/AssessmentWorkflow';
+import { AssessmentWorkflowStepper } from '../candidates/AssessmentWorkflow';
 import { PIPELINE_FUNNEL_STAGES } from '../../shared/metrics';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { useToast } from '../../context/ToastContext';
@@ -344,7 +344,6 @@ const InvitedPanel = ({ candidates, loading, selectedId, onSelect, roleNameById 
           <span style={{ color: 'var(--purple)', marginLeft: 6 }}>{candidates.length}</span>
         </span>
       </div>
-      <AssessmentFunnelStrip candidates={candidates} />
       <div className="rq-split-list-body">
       {candidates.map((c) => {
         const ss = c.score_summary || {};

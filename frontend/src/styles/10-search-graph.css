@@ -571,13 +571,8 @@
 .aw--card .aw-conn { margin-top: 5.5px; min-width: 18px; height: 2px; }
 
 .aw-detail-block { margin: 0 0 16px; }
-.aw-funnel-wrap { padding: 8px 14px 6px; }
-.aw-funnel { display: flex; gap: 6px; }
-.aw-fcell { flex: 1; text-align: center; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 4px; }
-.aw-fcell--done { border-color: var(--purple); }
-.aw-fnum { font-size: 1.05rem; font-weight: 600; color: var(--ink); line-height: 1; }
-.aw-flbl { margin-top: 3px; font-size: 0.5rem; color: var(--mute); text-transform: uppercase; letter-spacing: .05em; }
-.aw-flag { margin-top: 6px; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 6px; font-size: 0.6875rem; font-weight: 500; color: var(--amber-ink); background: var(--amber-soft); }
+/* .aw-funnel* removed with AssessmentFunnelStrip — the home funnel's Invited
+   stage now carries the delivered/opened/in-progress sub-counts. */
 
 .graph-chip { background: rgba(0, 0, 0, 0.06); color: #555; }
 .graph-chip--in    { background: rgba(0, 184, 148, 0.18); color: #00604a; }

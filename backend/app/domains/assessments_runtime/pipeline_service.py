@@ -9,6 +9,7 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from ...models.agent_decision import AgentDecision
+from ...models.assessment import Assessment
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.role import Role
@@ -891,6 +892,64 @@ def funnel_bucket_for(stage_key: str, is_scored: bool) -> str | None:
     return None
 
 
+# pipeline_stage values that normalise to the "invited" funnel stage (sent, not
+# yet started) — mirrors normalize_pipeline_key()'s invited mapping.
+_INVITED_STAGE_VALUES = ("invited", "pending", "assessment_sent")
+
+
+def _invite_delivery_extra(
+    db: Session,
+    *,
+    organization_id: int,
+    role_ids: list[int],
+    opened_only: bool,
+) -> dict[int, int]:
+    """Per-role count of INVITED-stage (sent, not yet started) candidates whose
+    assessment invite the Resend webhook recorded as delivered / opened.
+
+    A sub-count used to break the Invited funnel stage down on the hub. Callers
+    ADD the ``in_assessment`` (started) count — starting implies delivered+opened
+    even when the webhook missed the event — so this only covers the not-yet-
+    started remainder. ``opened_only`` restricts to opened (else delivered-or-
+    opened). Post-handover candidates are excluded to match the Invited bucket.
+    """
+    cond = (
+        Assessment.invite_opened_at.isnot(None)
+        if opened_only
+        else or_(
+            Assessment.invite_delivered_at.isnot(None),
+            Assessment.invite_opened_at.isnot(None),
+        )
+    )
+    rows = (
+        db.query(
+            CandidateApplication.role_id,
+            func.count(func.distinct(CandidateApplication.id)),
+        )
+        .join(
+            Assessment,
+            and_(
+                Assessment.candidate_id == CandidateApplication.candidate_id,
+                Assessment.role_id == CandidateApplication.role_id,
+                Assessment.organization_id == CandidateApplication.organization_id,
+                Assessment.is_voided.is_(False),
+            ),
+        )
+        .filter(
+            CandidateApplication.organization_id == organization_id,
+            CandidateApplication.role_id.in_(role_ids),
+            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.application_outcome == "open",
+            CandidateApplication.pipeline_stage.in_(_INVITED_STAGE_VALUES),
+            _not_post_handover_sql(),
+            cond,
+        )
+        .group_by(CandidateApplication.role_id)
+        .all()
+    )
+    return {int(rid): int(n or 0) for rid, n in rows}
+
+
 def role_pipeline_counts(
     db: Session,
     *,
@@ -989,6 +1048,17 @@ def role_pipeline_counts(
         .scalar()
     )
     counts["not_yet_decided"] = int(not_yet_decided or 0)
+    # Delivery sub-counts of the Invited stage. delivered/opened are CUMULATIVE
+    # and include in_assessment (started → delivered+opened), so they nest:
+    # sent (the bucket value) ≥ delivered ≥ opened ≥ in_progress.
+    delivered_extra = _invite_delivery_extra(
+        db, organization_id=organization_id, role_ids=[role_id], opened_only=False
+    ).get(role_id, 0)
+    opened_extra = _invite_delivery_extra(
+        db, organization_id=organization_id, role_ids=[role_id], opened_only=True
+    ).get(role_id, 0)
+    counts["invited_delivered"] = counts["in_assessment"] + delivered_extra
+    counts["invited_opened"] = counts["in_assessment"] + opened_extra
     return counts
 
 
@@ -1006,7 +1076,13 @@ def role_pipeline_counts_bulk(
     e.g. the Hub's /agent/roles/breakdown — would N+1 without this.
     """
     counts: dict[int, dict[str, int]] = {
-        int(rid): {**{bucket: 0 for bucket in FUNNEL_BUCKETS}, "not_yet_decided": 0, "in_assessment": 0}
+        int(rid): {
+            **{bucket: 0 for bucket in FUNNEL_BUCKETS},
+            "not_yet_decided": 0,
+            "in_assessment": 0,
+            "invited_delivered": 0,
+            "invited_opened": 0,
+        }
         for rid in role_ids
     }
     if not role_ids:
@@ -1112,5 +1188,18 @@ def role_pipeline_counts_bulk(
         bucket = counts.get(int(role_id))
         if bucket is not None:
             bucket["not_yet_decided"] = int(total or 0)
+
+    # Delivery sub-counts of the Invited stage (delivered/opened), cumulative
+    # over in_assessment — see role_pipeline_counts(). Two more batched queries.
+    delivered_map = _invite_delivery_extra(
+        db, organization_id=organization_id, role_ids=role_ids, opened_only=False
+    )
+    opened_map = _invite_delivery_extra(
+        db, organization_id=organization_id, role_ids=role_ids, opened_only=True
+    )
+    for rid in role_ids:
+        bucket = counts[int(rid)]
+        bucket["invited_delivered"] = bucket["in_assessment"] + delivered_map.get(int(rid), 0)
+        bucket["invited_opened"] = bucket["in_assessment"] + opened_map.get(int(rid), 0)
 
     return counts

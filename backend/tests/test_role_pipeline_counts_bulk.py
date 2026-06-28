@@ -87,13 +87,23 @@ def test_bulk_matches_per_role_and_counts_advanced_and_rejected(db):
         # `invited` bucket; `in_assessment` is also surfaced as its own sub-count.
         assert bulk[role_a]["invited"] == 6
         assert bulk[role_a]["in_assessment"] == 4
+        # No invite webhook events seeded, so the delivered/opened sub-counts
+        # equal in_assessment (started implies delivered+opened; cumulative).
+        assert bulk[role_a]["invited_delivered"] == 4
+        assert bulk[role_a]["invited_opened"] == 4
         # Rejected counted across all stages, not just the open funnel.
         assert bulk[role_a]["rejected"] == 5
 
-        # A requested role with no applications gets a zero-filled dict
-        # (every funnel bucket + the not_yet_decided & in_assessment sub-counts),
-        # never a missing key.
-        assert bulk[role_b] == {**{b: 0 for b in FUNNEL_BUCKETS}, "not_yet_decided": 0, "in_assessment": 0}
+        # A requested role with no applications gets a zero-filled dict (every
+        # funnel bucket + the not_yet_decided / in_assessment / delivery
+        # sub-counts), never a missing key.
+        assert bulk[role_b] == {
+            **{b: 0 for b in FUNNEL_BUCKETS},
+            "not_yet_decided": 0,
+            "in_assessment": 0,
+            "invited_delivered": 0,
+            "invited_opened": 0,
+        }
     finally:
         sess.close()
 
