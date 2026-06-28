@@ -717,6 +717,15 @@
   line-height: 1.45;
 }
 
+/* Compact decision-card header (preview): score ring + name/role + scored
+   provenance text in one row — no overlapping right-rail. */
+.rq-detail-head2 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
 /* ---------------- Agent-recommends slab ----------------
    Shared dark-purple "agent ON" treatment + white CTA, matching the candidate
    report's .dr-rec so the recommended action looks identical on the hub and the
