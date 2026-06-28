@@ -150,6 +150,10 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   // Bulk messaging: select several roles, send one message that fans out to
   // each role's own thread (separate audit). bulkSelected holds role_ids.
   const [bulkMode, setBulkMode] = useState(false);
+  // Chat-dock visibility, DECOUPLED from role selection: you can hide the chat
+  // while keeping the agent/role selected, and reopen it from the edge handle.
+  // Selecting an agent always reveals its chat (reset below).
+  const [chatHidden, setChatHidden] = useState(false);
   const [bulkSelected, setBulkSelected] = useState(() => new Set());
 
   // Track in-flight reloads so rapid clicks don't pile up requests.
@@ -388,6 +392,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     const deselect = roleId == null || activeRoleId === roleId;
     setActiveRoleId(deselect ? null : roleId);
     setFilters((f) => ({ ...f, role_id: deselect ? null : roleId }));
+    if (!deselect) setChatHidden(false); // selecting an agent always reveals its chat
   }, [activeRoleId, setFilters]);
 
   const activeAgent = useMemo(
@@ -527,7 +532,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       />
       {/* The shell renders immediately (not gated on the async agents fetch),
           so the page lays out once — no flash of the pre-rail layout. */}
-      <div className={`ac-shell ${(activeRoleId != null || bulkMode) ? '' : 'ac-dock-collapsed'}`}>
+      <div className={`ac-shell ${(bulkMode || (activeRoleId != null && !chatHidden)) ? '' : 'ac-dock-collapsed'}`}>
         <AgentSidebar
           agents={agentsWithBudget}
           activeRoleId={activeRoleId}
@@ -565,21 +570,34 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
         <HomeAnalyticsSummary kpis={kpis} orgBudget={orgBudget} onNavigate={onNavigate} />
       </div>
         </div>
-        {/* The chat dock is open only when an agent is selected (or in bulk
-            mode). The hub loads with "All roles" and no chat; clicking an agent
-            opens it, and the dock's collapse control (or re-clicking the agent)
-            deselects → closes it. No separate "reopen" button needed. */}
-        {(activeRoleId != null || bulkMode) ? (
+        {/* The chat dock opens when an agent is selected (or in bulk mode). Its
+            collapse control HIDES the chat but keeps the agent selected — the
+            slim edge handle below reopens it. Re-clicking the agent (or "All
+            roles") clears the scope and closes everything. */}
+        {(bulkMode || (activeRoleId != null && !chatHidden)) ? (
           <AgentChatDock
             roleId={activeRoleId}
             roleName={activeAgent?.role_name}
             agentEnabled={activeAgent ? activeAgent.agent_enabled : true}
             onReload={reloadAll}
-            onCollapse={() => { handleSelectAgent(null); if (bulkMode) clearBulk(); }}
+            onCollapse={() => { if (bulkMode) { clearBulk(); } else { setChatHidden(true); } }}
             bulkSelectedRoles={bulkSelectedRoles}
             onSendBulk={sendBulk}
             onClearBulk={clearBulk}
           />
+        ) : null}
+        {/* Chat hidden but the agent stays selected — a slim edge handle brings
+            it back without losing the role scope. */}
+        {(activeRoleId != null && chatHidden && !bulkMode) ? (
+          <button
+            type="button"
+            className="ac-reopen"
+            onClick={() => setChatHidden(false)}
+            title="Show agent chat"
+          >
+            <MessageSquare size={16} /> Agent chat
+            {totalAttention > 0 && <span className="ac-badge-count">{totalAttention}</span>}
+          </button>
         ) : null}
       </div>
       </div>
