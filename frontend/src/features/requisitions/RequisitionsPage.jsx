@@ -372,7 +372,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       const updated = await requisitionApi.update(selectedId, payload);
       setBrief((prev) => ({ ...(prev || {}), ...(updated || {}) }));
     } catch {
-      setError('Could not save the client details. Try again.');
+      setError('Could not save the hiring-department details. Try again.');
     } finally {
       setSavingEconomics(false);
     }
@@ -440,7 +440,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
         setBrief((prev) => ({ ...(prev || {}), ...(updated || {}) }));
       }
     } catch {
-      setError('Could not create that client. Try again.');
+      setError('Could not create that hiring department. Try again.');
     } finally {
       setSavingEconomics(false);
     }
@@ -578,7 +578,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
         client_link: res?.token ? { token: res.token, url: res.url } : (prev?.client_link || null),
       }));
     } catch {
-      setError('Could not create the client link. Try again.');
+      setError('Could not create the hiring-manager link. Try again.');
     } finally {
       setClientLinking(false);
     }

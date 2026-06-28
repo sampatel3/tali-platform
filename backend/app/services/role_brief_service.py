@@ -369,7 +369,7 @@ def set_role_client(
             .first()
         )
         if client is None:
-            raise HTTPException(status_code=404, detail="Client not found")
+            raise HTTPException(status_code=404, detail="Hiring department not found")
 
     # Newest brief wins (mirrors requisition_spec_for_role / role_client_map).
     brief = (

@@ -1,8 +1,11 @@
-// Clients management — embedded directly in Settings → Clients (no separate
-// page). Lists the org's clients with an inline open/filled rollup + a
-// lightweight "new client" form. The per-client pipeline lives on the Jobs page
-// (filter by client); margins live on each requisition. Composes the global
-// purple tokens + the existing clients.css conventions.
+// Hiring-department management — embedded directly in Settings → Hiring
+// departments (no separate page). A "hiring department" is whoever a requisition
+// is for: an external client (e.g. ADCB) or an internal team (e.g. Engineering).
+// Lists them with an inline open/filled rollup + a lightweight "new department"
+// form. The per-department pipeline lives on the Jobs page (filter by
+// department); margins live on each requisition. NB the backend entity is still
+// `Client` (model/routes/fields unchanged) — only the user-facing label changed.
+// Composes the global purple tokens + the existing clients.css conventions.
 import React, { useCallback, useEffect, useState } from 'react';
 import { Building2, Mail, Plus, User } from 'lucide-react';
 
@@ -23,7 +26,7 @@ function ClientRow({ client }) {
       <div className="cl-card-row is-static">
         <span className="cl-avatar" aria-hidden="true"><Building2 size={18} /></span>
         <span className="cl-card-main">
-          <span className="cl-card-name">{client.name || 'Unnamed client'}</span>
+          <span className="cl-card-name">{client.name || 'Unnamed department'}</span>
           {hasContact ? (
             <span className="cl-card-contact">
               {client.contact_name ? (<><User size={12} aria-hidden="true" />{client.contact_name}</>) : null}
@@ -60,7 +63,7 @@ export function ClientsManager() {
       setClients(Array.isArray(list) ? list : []);
       setError('');
     } catch {
-      setError('Could not load clients.');
+      setError('Could not load hiring departments.');
     } finally {
       setLoading(false);
     }
@@ -85,7 +88,7 @@ export function ClientsManager() {
       setContactEmail('');
       await loadList();
     } catch {
-      setError('Could not create that client. Try again.');
+      setError('Could not create that hiring department. Try again.');
     } finally {
       setCreating(false);
     }
@@ -97,8 +100,8 @@ export function ClientsManager() {
 
       <form className="cl-form" onSubmit={createClient}>
         <div className="cl-field">
-          <label className="cl-field-label" htmlFor="cl-name">Client name</label>
-          <input id="cl-name" className="cl-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Acme Corp" />
+          <label className="cl-field-label" htmlFor="cl-name">Hiring department name</label>
+          <input id="cl-name" className="cl-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Engineering, or a client like ADCB" />
         </div>
         <div className="cl-field">
           <label className="cl-field-label" htmlFor="cl-contact-name">Contact name (optional)</label>
@@ -109,17 +112,17 @@ export function ClientsManager() {
           <input id="cl-contact-email" className="cl-input" type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} placeholder="jane@acme.com" />
         </div>
         <button type="submit" className="cl-new-btn" disabled={!name.trim() || creating}>
-          {creating ? <span className="cl-spinner" /> : <Plus size={15} />} New client
+          {creating ? <span className="cl-spinner" /> : <Plus size={15} />} New department
         </button>
       </form>
 
       {loading ? (
-        <div className="cl-loading"><span className="cl-spinner" /> Loading clients…</div>
+        <div className="cl-loading"><span className="cl-spinner" /> Loading hiring departments…</div>
       ) : clients.length === 0 ? (
         <div className="cl-empty">
           <div className="cl-empty-glyph"><Building2 size={22} /></div>
-          <h2>No clients yet</h2>
-          <p>Add your first client above, then assign it to a requisition. Filter the Jobs page by client to see its pipeline.</p>
+          <h2>No hiring departments yet</h2>
+          <p>Add your first one above — an external client like ADCB or an internal team like Engineering — then assign it to a requisition. Filter the Jobs page by department to see its pipeline.</p>
         </div>
       ) : (
         <ul className="cl-list">

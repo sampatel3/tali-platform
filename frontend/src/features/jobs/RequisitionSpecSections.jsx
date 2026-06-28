@@ -55,7 +55,7 @@ export function RequisitionSpecSections({ requisition }) {
         {r.ref_code ? <code className="req-ref">{r.ref_code}</code> : null}
         {r.client_name ? (
           <span className="req-client">
-            Client · <strong>{r.client_name}</strong>
+            Department · <strong>{r.client_name}</strong>
           </span>
         ) : null}
         {Number.isFinite(completeness) && completeness > 0 ? (
@@ -131,21 +131,22 @@ export function JobStatusControl({ status, onChange, busy }) {
 }
 
 // --------------------------------------------------------------------------- //
-// Client control — assign (or clear) the consultancy client a role belongs to.
-// Unlike JobStatusControl this shows for ANY role (not just requisition-origin
-// ones): its whole point is letting recruiters tag legacy / Workable-imported
-// jobs that never carried a client. The assignment rides on the role's brief
-// (the backend stands up a stub when none exists) so the Jobs Client column /
-// filter + per-client rollups pick the role up.
+// Hiring-department control — assign (or clear) the hiring department a role
+// belongs to (an external client or an internal team). Unlike JobStatusControl
+// this shows for ANY role (not just requisition-origin ones): its whole point is
+// letting recruiters tag legacy / Workable-imported jobs that never carried a
+// department. The assignment rides on the role's brief (the backend stands up a
+// stub when none exists) so the Jobs Department column / filter + per-department
+// rollups pick the role up. NB the backend entity is still `client`.
 // --------------------------------------------------------------------------- //
 export function ClientControl({ clientId, clientName, clients, onChange, busy }) {
   const options = Array.isArray(clients) ? clients : [];
   return (
     <div className="job-status-control client-control">
       <div className="jsc-head">
-        <span className="jsc-label">Client</span>
+        <span className="jsc-label">Hiring department</span>
         <span className={`req-client-badge${clientName ? '' : ' is-empty'}`}>
-          {clientName || 'No client'}
+          {clientName || 'No department'}
         </span>
       </div>
       <div className="jsc-actions">
@@ -154,10 +155,10 @@ export function ClientControl({ clientId, clientName, clients, onChange, busy })
           value={clientId == null ? '' : String(clientId)}
           onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
           disabled={busy}
-          aria-label="Assign client"
-          placeholder="Assign a client…"
+          aria-label="Assign hiring department"
+          placeholder="Assign a department…"
         >
-          <option value="">— No client —</option>
+          <option value="">— No department —</option>
           {options.map((c) => (
             <option key={c.id} value={String(c.id)}>{c.name}</option>
           ))}

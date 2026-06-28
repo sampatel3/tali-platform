@@ -341,10 +341,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     try {
       const res = await rolesApi.setClient(numericRoleId, nextClientId);
       if (res?.data) setRole(res.data);
-      showToast(nextClientId == null ? 'Client cleared.' : 'Client assigned.', 'success');
+      showToast(nextClientId == null ? 'Hiring department cleared.' : 'Hiring department assigned.', 'success');
     } catch (error) {
       setRole((cur) => (cur ? { ...cur, client_id: prevId, client_name: prevName } : cur));
-      showToast(getErrorMessage(error, 'Failed to update client.'), 'error');
+      showToast(getErrorMessage(error, 'Failed to update hiring department.'), 'error');
     } finally {
       setSavingClient(false);
     }
@@ -1578,9 +1578,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 />
               ) : null}
 
-              {/* Consultancy client assignment — shown whenever the org has any
-                  clients (or this role already has one), so legacy / imported
-                  roles with no requisition can still be tagged to a client. */}
+              {/* Hiring-department assignment — shown whenever the org has any
+                  departments (or this role already has one), so legacy / imported
+                  roles with no requisition can still be tagged. */}
               {(clients.length > 0 || role?.client_id) ? (
                 <ClientControl
                   clientId={role?.client_id ?? null}
