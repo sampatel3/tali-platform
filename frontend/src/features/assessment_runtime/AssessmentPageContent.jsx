@@ -6,6 +6,7 @@ import { AssessmentRuntimeAlerts } from './AssessmentRuntimeAlerts';
 import { AssessmentStatusScreen } from './AssessmentStatusScreen';
 import { AssessmentTopBar } from './AssessmentTopBar';
 import { AssessmentWorkspace } from './AssessmentWorkspace';
+import { AssessmentStagePanel } from './AssessmentStagePanel';
 import {
   buildRepoFileTree,
   extractRepoFiles,
@@ -849,6 +850,7 @@ export default function AssessmentPage({
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[90rem] px-4 py-4 lg:px-8 lg:py-5">
+          <AssessmentStagePanel twoStage={assessment?.task?.two_stage} />
           <AssessmentContextWindow
             ref={contextWindowRef}
             taskName={assessment?.task_name || 'Assessment brief'}

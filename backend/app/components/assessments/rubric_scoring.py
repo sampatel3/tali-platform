@@ -462,6 +462,93 @@ def summarize_fluency_4d(
     return out
 
 
+# ---- Two-stage (Part 1 Practice / Part 2 Applied) part scoring --------------
+#
+# The revised assessment is two stages: Part 1 "Practice & Setup" (AI-native
+# craft) and Part 2 "Applied Role Task". Each graded rubric dimension belongs to
+# exactly one part; the part sub-scores are blended by ``part_weights`` (default
+# 30/70, seniority-scaled at the task layer) into the authoritative assessment
+# score. A dimension's part is explicit (``part``) or derived: practice-lens /
+# practice_outcome dims are Part 1, everything else Part 2. Back-compatible: a
+# task with no Part-1 dimension yields practice=None and the blend collapses to
+# the ordinary weighted score, so existing tasks are unchanged.
+_DEFAULT_PART_WEIGHTS = {"practice": 0.3, "applied": 0.7}
+
+
+def part_for_dimension(spec: Dict[str, Any]) -> str:
+    """Map one rubric-dimension spec to its assessment part ('practice'|'applied')."""
+    if not isinstance(spec, dict):
+        return "applied"
+    explicit = str(spec.get("part") or "").strip().lower()
+    if explicit in ("practice", "applied"):
+        return explicit
+    if str(spec.get("grader") or "").strip().lower() == "practice_outcome":
+        return "practice"
+    if str(spec.get("lens") or "").strip().lower() == "practice":
+        return "practice"
+    return "applied"
+
+
+def summarize_part_scores(
+    evaluation_rubric: Optional[Dict[str, Any]],
+    dimensions: List["DimensionGrade"],
+    part_weights: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Roll graded dimensions up to the two assessment parts and blend them.
+
+    Returns ``{practice, applied, blended_100, part_weights_used}`` with each
+    part a 0-100 weighted mean of its dimensions (or ``None`` when the task has
+    no dimension in that part). ``blended_100`` weights the present parts by
+    ``part_weights`` (normalised), so a single-part task blends to that part.
+    Purely derived from the same dimension grades.
+    """
+    rubric = evaluation_rubric if isinstance(evaluation_rubric, dict) else {}
+    acc: Dict[str, List[tuple]] = {"practice": [], "applied": []}
+    for dim in dimensions or []:
+        if getattr(dim, "error", None):
+            continue
+        part = part_for_dimension(rubric.get(dim.dimension_id, {}))
+        weight = float(getattr(dim, "weight", 0.0) or 0.0) or 1.0
+        acc[part].append((float(getattr(dim, "score", 0.0) or 0.0), weight))
+
+    def _mean100(pairs: List[tuple]) -> Optional[float]:
+        if not pairs:
+            return None
+        wsum = sum(w for _, w in pairs)
+        score10 = (sum(s * w for s, w in pairs) / wsum) if wsum else 0.0
+        return round(score10 * 10.0, 2)
+
+    practice = _mean100(acc["practice"])
+    applied = _mean100(acc["applied"])
+
+    pw = part_weights if isinstance(part_weights, dict) else {}
+    try:
+        w_practice = float(pw.get("practice", _DEFAULT_PART_WEIGHTS["practice"]))
+        w_applied = float(pw.get("applied", _DEFAULT_PART_WEIGHTS["applied"]))
+    except (TypeError, ValueError):
+        w_practice, w_applied = _DEFAULT_PART_WEIGHTS["practice"], _DEFAULT_PART_WEIGHTS["applied"]
+
+    present = []
+    if practice is not None:
+        present.append((practice, w_practice))
+    if applied is not None:
+        present.append((applied, w_applied))
+    if not present:
+        blended = None
+    else:
+        tw = sum(w for _, w in present)
+        blended = round(sum(v * w for v, w in present) / tw, 2) if tw > 0 else round(
+            sum(v for v, _ in present) / len(present), 2
+        )
+
+    return {
+        "practice": practice,
+        "applied": applied,
+        "blended_100": blended,
+        "part_weights_used": {"practice": w_practice, "applied": w_applied},
+    }
+
+
 def _build_user_prompt(
     dimension_id: str,
     criteria: Dict[str, str],
