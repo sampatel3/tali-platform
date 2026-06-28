@@ -490,3 +490,35 @@ def test_jd_override_alongside_other_field_edits(client):
     assert resp.status_code == 200, resp.text
     assert resp.json()["title"] == "Eng"  # column edit still applied
     assert resp.json()["jd_override"] == "Custom JD"
+
+
+def test_company_blurb_settings_get_put_generate_and_serializer_fallback(client):
+    """The org's About-the-company blurb is editable in Settings, generates
+    gracefully when there's nothing to derive, and falls back onto every
+    requisition's serialized brief (so the JD's About-us section fills)."""
+    headers, _ = auth_headers(client)
+    base = "/api/v1/settings/requisition-template"
+
+    # Default: no blurb yet.
+    assert client.get(base, headers=headers).json()["company_blurb"] == ""
+
+    # Generate with no role specs in the org → graceful empty (no crash, no LLM).
+    gen = client.post(f"{base}/company-blurb/generate", headers=headers)
+    assert gen.status_code == 200, gen.text
+    assert gen.json()["company_blurb"] == ""
+
+    # Recruiter sets it by hand.
+    put = client.put(
+        f"{base}/company-blurb",
+        json={"company_blurb": "DeepLight builds agentic hiring software."},
+        headers=headers,
+    )
+    assert put.status_code == 200, put.text
+    assert put.json()["company_blurb"] == "DeepLight builds agentic hiring software."
+    assert client.get(base, headers=headers).json()["company_blurb"] == "DeepLight builds agentic hiring software."
+
+    # Every requisition's serialized brief now carries it (render-time fallback),
+    # so the {{company_description}} JD placeholder fills even on fresh requisitions.
+    bid = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+    brief = client.get(f"/api/v1/requisitions/{bid}", headers=headers).json()
+    assert brief["custom_fields"]["company_description"] == "DeepLight builds agentic hiring software."

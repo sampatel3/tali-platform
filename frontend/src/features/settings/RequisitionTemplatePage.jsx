@@ -10,7 +10,7 @@
 // global form/btn/chip classes + the rq-* styles, so it reads like the rest
 // of Settings. Purple accents only.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, Plus, Save, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Plus, Save, Sparkles, Trash2, X } from 'lucide-react';
 
 import { useToast } from '../../context/ToastContext';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
@@ -223,6 +223,11 @@ export const RequisitionTemplatePage = ({ onNavigate, NavComponent = null }) => 
   const [sections, setSections] = useState([]);
   const [version, setVersion] = useState(1);
   const [jdTemplate, setJdTemplate] = useState('');
+  // Role-agnostic "About the company" boilerplate (org-level, reused on every
+  // spec). Auto-derived once; editable here. Renders via the {{company_description}}
+  // JD placeholder.
+  const [companyBlurb, setCompanyBlurb] = useState('');
+  const [generatingBlurb, setGeneratingBlurb] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -257,6 +262,7 @@ export const RequisitionTemplatePage = ({ onNavigate, NavComponent = null }) => 
     try {
       const res = await requisitionApi.getTemplate();
       hydrate(res?.template || { version: 1, sections: [] });
+      setCompanyBlurb(typeof res?.company_blurb === 'string' ? res.company_blurb : '');
     } catch {
       showToast('Could not load the requisition template.', 'error');
       hydrate({ version: 1, sections: [] });
@@ -333,11 +339,32 @@ export const RequisitionTemplatePage = ({ onNavigate, NavComponent = null }) => 
     try {
       const res = await requisitionApi.saveTemplate(template);
       hydrate(res?.template || template);
+      // Persist the About-the-company blurb alongside the template.
+      await requisitionApi.saveCompanyBlurb(companyBlurb);
       showToast('Requisition template saved.', 'success');
     } catch {
       showToast('Failed to save the requisition template.', 'error');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const generateBlurb = async () => {
+    setGeneratingBlurb(true);
+    try {
+      const r = await requisitionApi.generateCompanyBlurb();
+      const blurb = r?.company_blurb || '';
+      setCompanyBlurb(blurb);
+      showToast(
+        blurb
+          ? 'Generated from your recent role specs — review + Save.'
+          : 'No company description could be found in your recent specs yet.',
+        blurb ? 'success' : 'error',
+      );
+    } catch {
+      showToast('Could not generate the company description.', 'error');
+    } finally {
+      setGeneratingBlurb(false);
     }
   };
 
@@ -367,6 +394,39 @@ export const RequisitionTemplatePage = ({ onNavigate, NavComponent = null }) => 
           <>
             <div className="rqt-summary">
               {sections.length} section{sections.length === 1 ? '' : 's'} · {totalFields} field{totalFields === 1 ? '' : 's'}
+            </div>
+
+            {/* About-the-company blurb — the role-agnostic boilerplate reused on
+                every spec. Auto-derived once from recent role specs; editable
+                here. Renders via the {{company_description}} JD placeholder. */}
+            <div className="rqt-section rqt-jd">
+              <div className="rqt-jd-head">
+                <h2 className="rqt-jd-title">About the company</h2>
+                <p className="rqt-jd-sub">
+                  Your standard "About us" blurb — the same on every job spec, so it's set here once,
+                  not per role. Generate it from your recent role specs, then edit. It fills the{' '}
+                  <code>{'{{company_description}}'}</code> placeholder on every requisition.
+                </p>
+              </div>
+              <label className="field rqt-full">
+                <span className="k">Company description</span>
+                <textarea
+                  className="rqt-jd-textarea"
+                  rows={6}
+                  value={companyBlurb}
+                  placeholder="e.g. DeepLight AI builds agentic hiring software…"
+                  onChange={(e) => setCompanyBlurb(e.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={generateBlurb}
+                disabled={generatingBlurb || loading}
+              >
+                {generatingBlurb ? <span className="rq-spinner" /> : <Sparkles size={14} />}
+                {' '}Generate from recent roles
+              </button>
             </div>
 
             {/* Job spec (JD) template — markdown with {{placeholder}} tokens,

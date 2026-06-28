@@ -31,6 +31,26 @@ from app.services.requisition_template_service import (
 from app.services.role_brief_service import create_brief, update_brief_fields
 
 
+def test_record_answer_extracts_number_from_natural_language_chip(db):
+    """A quick-reply chip like "2 openings" tapped against the numeric `openings`
+    field must record 2 — not 422 the whole answer. Regression for the
+    "Could not record that answer" intake error."""
+    org = Organization(name="Acme", slug="acme")
+    db.add(org)
+    db.flush()
+    brief = create_brief(db, organization_id=org.id)
+    template = resolve_template(org)
+
+    chat.record_answer(db, brief, template, "openings", "2 openings")
+    assert brief.openings == 2
+
+    # A genuinely non-numeric reply still fails cleanly (no crash, no value).
+    import pytest
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException):
+        chat.record_answer(db, brief, template, "openings", "lots of people")
+
+
 def _brief(db, **org_kw):
     org = Organization(name="Acme", slug="acme", **org_kw)
     db.add(org)
