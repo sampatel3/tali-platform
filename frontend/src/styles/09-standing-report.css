@@ -1670,9 +1670,10 @@ button.eng-badge-button:focus-visible {
   align-items: center;
   gap: 5px;
   font-size: 0.75rem;
-  font-weight: 500;
-  color: color-mix(in oklab, var(--amber) 78%, var(--ink));
-  background: color-mix(in oklab, var(--amber) 14%, var(--bg-2));
+  font-weight: 600;
+  /* The preview's golden amber, not a dulled amber-into-ink mix. */
+  color: var(--amber);
+  background: var(--amber-soft, color-mix(in oklab, var(--amber) 16%, var(--bg-2)));
   border-radius: 999px;
   padding: 3px 10px;
 }
@@ -1691,15 +1692,19 @@ button.eng-badge-button:focus-visible {
 .mc-flag-i { color: var(--amber); flex: none; margin-top: 2px; }
 .mc-flag b { font-weight: 600; }
 .mc-flag-why { color: var(--mute); }
-.mc-flags-more > summary {
-  list-style: none;
+/* Flags toggle — always pinned at the BOTTOM of the list ("+N more" / "Show
+   fewer"), never mid-list like the old <details><summary>. */
+.mc-flags-toggle {
   cursor: pointer;
   font-size: 0.8125rem;
   font-weight: 500;
   color: var(--purple);
+  background: none;
+  border: none;
   padding: 9px 0 2px;
+  font-family: inherit;
 }
-.mc-flags-more > summary::-webkit-details-marker { display: none; }
+.mc-flags-toggle:hover { text-decoration: underline; }
 
 /* Recommendation slab — the bold dark-purple "agent ON" treatment, with the
    recommended action as a white CTA. */
@@ -1770,9 +1775,9 @@ button.eng-badge-button:focus-visible {
   padding: 7px 12px;
   border-radius: 999px;
   font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--amber-ink, #7a4d0a);
-  background: color-mix(in oklab, var(--amber) 16%, var(--bg-2));
+  font-weight: 600;
+  color: var(--amber);
+  background: var(--amber-soft, color-mix(in oklab, var(--amber) 16%, var(--bg-2)));
 }
 .dossier-rail .dr-flags-chip svg { color: var(--amber); }
 
