@@ -8,14 +8,15 @@
    ========================================================== */
 
 .home-body {
-  padding: 28px 32px 48px;
-  max-width: 1440px;
-  margin: 0 auto;
+  /* No max-width / centering and no big side padding: the centre column fills
+     its grid track so it reaches the chat with only the shell gap between —
+     not a wide dead band. The gapped-card shell already insets the columns. */
+  padding: 0 0 28px;
   width: 100%;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 20px;
 }
 
 .home-section {
@@ -725,12 +726,12 @@
   background-size: 300% 300%;
   animation: rqRecFlow 7s ease-in-out infinite;
   border: 1px solid color-mix(in oklab, var(--purple) 45%, transparent);
-  border-radius: 16px;
-  padding: 16px 15px;
+  border-radius: 14px;
+  padding: 11px 13px;
   text-align: center;
   color: #efe9fb;
-  box-shadow: 0 8px 24px rgba(36, 17, 71, 0.28);
-  margin-top: 16px;
+  box-shadow: 0 6px 18px rgba(36, 17, 71, 0.22);
+  margin: 0 0 14px;
 }
 @keyframes rqRecFlow {
   0% { background-position: 0% 50%; }
@@ -747,7 +748,7 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: #cbb8f6;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 .rq-rec-btn {
   width: 100%;
@@ -758,10 +759,10 @@
   background: #fff;
   color: #2a1854;
   border: 0;
-  border-radius: 12px;
-  padding: 13px;
+  border-radius: 11px;
+  padding: 9px 14px;
   font-family: inherit;
-  font-size: 0.9375rem;
+  font-size: 0.875rem;
   font-weight: 600;
   cursor: pointer;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.14);
@@ -774,7 +775,7 @@
   font-size: 0.625rem;
   letter-spacing: 0.05em;
   color: #b4a0e6;
-  margin-top: 12px;
+  margin-top: 8px;
 }
 
 /* "Show all / fewer" toggle under the capped Recent-decisions feed. */
