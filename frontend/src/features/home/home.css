@@ -832,6 +832,24 @@
 .rq-recent-outcome--mute { background: var(--bg-3); color: var(--mute); }
 .rq-recent-age { font-family: var(--font-mono); font-size: 0.6875rem; color: var(--mute); white-space: nowrap; flex: none; }
 
+/* Requirement bars on the decision card — the candidate's top requirement
+   grades, mirroring the candidate report / preview (label · bar · score). */
+.rq-reqs { margin: 0 0 14px; }
+.rq-req { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+.rq-req-nm {
+  width: 150px;
+  flex: none;
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rq-req-track { flex: 1; height: 6px; border-radius: 999px; background: var(--bg-3); overflow: hidden; }
+.rq-req-fill { display: block; height: 100%; border-radius: 999px; background: var(--purple); }
+.rq-req-fill.is-low { background: var(--purple-lav); }
+.rq-req-val { flex: none; width: 28px; text-align: right; font-family: var(--font-mono); font-size: 0.75rem; font-weight: 500; color: var(--ink); }
+
 /* ---------------- Action bar ---------------- */
 .rq-action-bar {
   display: flex;

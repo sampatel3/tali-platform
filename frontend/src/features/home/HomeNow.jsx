@@ -280,10 +280,10 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
                 </a>
                 <ScoreChip score={p.taali_score} size="sm" />
               </div>
+              {/* Clean "role · time" text (preview), not a role pill + a noisy
+                  score-provenance/version chip. */}
               <div className="rq-qsub">
-                {(p.role_name || p.role_id != null) ? <RolePill roleName={p.role_name} roleId={p.role_id} /> : null}
-                <span className="rq-qage">{formatRelativeAge(p.created_at)}</span>
-                <ScoreProvenance provenance={p?.score_summary?.score_provenance} density="pill" />
+                {p.role_name || `Role #${p.role_id}`} · {formatRelativeAge(p.created_at)}
               </div>
               <div className="rq-qverdict">
                 <VerdictPill type={p.decision_type} />

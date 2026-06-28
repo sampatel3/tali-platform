@@ -153,6 +153,28 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
           candidate report renders, so the wording is identical everywhere. */}
       <IntegrityFlags integrity={decision?.score_summary?.integrity} style={{ margin: '0 0 14px' }} />
 
+      {/* Requirement bars — the candidate's top requirement grades (same source
+          as the candidate report). Preview order: after flags, before actions. */}
+      {Array.isArray(decision.requirements) && decision.requirements.length > 0 ? (
+        <div className="rq-reqs">
+          <div className="kicker mute" style={{ margin: '0 0 7px' }}>REQUIREMENTS</div>
+          {decision.requirements.map((r, i) => (
+            <div className="rq-req" key={`${r.label}-${i}`}>
+              <span className="rq-req-nm" title={r.label}>{r.label}</span>
+              <span className="rq-req-track">
+                {r.score != null ? (
+                  <span
+                    className={`rq-req-fill${r.score < 40 ? ' is-low' : ''}`}
+                    style={{ width: `${Math.max(0, Math.min(100, r.score))}%` }}
+                  />
+                ) : null}
+              </span>
+              {r.score != null ? <span className="rq-req-val">{Math.round(r.score)}</span> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       {isStale && (decision.status === 'pending' || decision.status === 'reverted_for_feedback') ? (
         <div className="rq-stale-banner" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 14px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: '0.8125rem', fontWeight: 500 }}>
           <RefreshCw size={14} strokeWidth={2} aria-hidden="true" />

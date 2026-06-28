@@ -132,6 +132,11 @@ class AgentDecisionPayload(BaseModel):
     # render the "scored {date} · v{version}" line under the score — the same
     # shape the candidate surfaces read.
     score_summary: Optional[dict] = None
+    # A capped list of the candidate's top requirement grades ({label, score
+    # 0-100, status}) from cv_match_details.requirements_assessment, so the Hub
+    # card renders the same requirement bars as the candidate report without a
+    # second fetch. None for pre-screen rejects (no scoring yet).
+    requirements: Optional[list[dict[str, Any]]] = None
     # Workable shortcode (= role.workable_job_id) so the home-page modal
     # can fetch this role's Workable stages for the Advance / Skip & advance
     # stage <select> without a second round-trip.
@@ -328,6 +333,29 @@ def _decision_to_payload(
             score_provenance = None
             integrity = None
 
+    # Top requirement grades for the card's requirement bars — same source as the
+    # candidate report (cv_match_details.requirements_assessment). Capped + gated
+    # like taali_score so a pre-screen reject never leaks a stale match.
+    requirements = None
+    if str(decision.decision_type) != "skip_assessment_reject" and application is not None:
+        details = getattr(application, "cv_match_details", None)
+        ra = details.get("requirements_assessment") if isinstance(details, dict) else None
+        if isinstance(ra, list) and ra:
+            rows: list[dict[str, Any]] = []
+            for item in ra[:6]:
+                if not isinstance(item, dict):
+                    continue
+                label = str(item.get("criterion_text") or item.get("requirement") or "").strip()
+                if not label:
+                    continue
+                raw = item.get("match_score")
+                rows.append({
+                    "label": label,
+                    "score": round(float(raw)) if isinstance(raw, (int, float)) else None,
+                    "status": (str(item.get("status") or "").strip().lower() or None),
+                })
+            requirements = rows or None
+
     return AgentDecisionPayload(
         id=int(decision.id),
         role_id=int(decision.role_id),
@@ -355,6 +383,7 @@ def _decision_to_payload(
             if (score_provenance or integrity)
             else None
         ),
+        requirements=requirements,
         workable_job_id=getattr(role, "workable_job_id", None) if role else None,
         is_stale=is_stale,
         staleness_reasons=staleness_reasons or [],
