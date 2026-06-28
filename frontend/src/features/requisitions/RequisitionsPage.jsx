@@ -589,6 +589,18 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   // Reset the transient "Copied" ticks when switching requisitions.
   useEffect(() => { setCopied(false); setClientCopied(false); setCareersCopied(false); setWorkableCopied(false); }, [selectedId]);
 
+  // Auto-surface the client-collect link the moment a requisition opens, so the
+  // recruiter can immediately send it to the client / hiring manager to gather
+  // the role data — no extra "Share with client" click. Idempotent (the mint
+  // endpoint returns the existing token); fires once per opened requisition.
+  useEffect(() => {
+    if (selectedId && brief && !brief.client_link && !clientLinking) {
+      makeClientLink();
+    }
+    // Keyed on the opened requisition only — re-minting is a no-op anyway.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, brief?.id]);
+
   const published = Boolean(jobPage) || isPublished(brief?.status);
   const canSend = (composer.trim() || attachments.length > 0) && !turnInFlight;
 

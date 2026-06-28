@@ -679,15 +679,12 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             <button
               type="button"
               className="btn btn-purple"
-              onClick={() => {
-                if (isShowcase) return;
-                setRoleSheetError('');
-                setRoleSheetOpen(true);
-              }}
+              onClick={() => { if (!isShowcase) onNavigate('requisitions'); }}
               disabled={isShowcase}
               aria-disabled={isShowcase || undefined}
+              title="Start a requisition — the agent captures the full spec, then publishes the job"
             >
-              + New role
+              + New requisition
             </button>
           </>
         )}
@@ -881,17 +878,14 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
         ) : filtered.length === 0 ? (
           <EmptyState
             title="No jobs found"
-            description="Try a different filter, or create the role from the recruiter workflow."
+            description="Try a different filter, or start a new requisition — the agent captures the spec and publishes the job."
             action={(
               <button
                 type="button"
                 className="btn btn-outline"
-                onClick={() => {
-                  setRoleSheetError('');
-                  setRoleSheetOpen(true);
-                }}
+                onClick={() => onNavigate('requisitions')}
               >
-                Create role
+                + New requisition
               </button>
             )}
           />
