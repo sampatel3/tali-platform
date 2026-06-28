@@ -80,8 +80,16 @@ export function deriveAssessmentWorkflow(status, tracking) {
 export function AssessmentWorkflowStepper({ status, tracking, labeled = false }) {
   const wf = deriveAssessmentWorkflow(status, tracking);
   if (!wf.steps[0]) return null;
+  // `labeled` is the card variant (detail pane): the state reads as a pill above
+  // a full-width rail of named nodes. Unlabeled is the compact dots-only row.
   return (
-    <div className="aw" title={wf.title}>
+    <div className={`aw${labeled ? ' aw--card' : ''}`} title={wf.title}>
+      {labeled ? (
+        <div className={`aw-state aw-state--${wf.tone}`}>
+          {wf.live ? <span className="aw-live-dot" aria-hidden="true" /> : null}
+          {wf.label}
+        </div>
+      ) : null}
       <div className={`aw-step${labeled ? ' aw-step--labeled' : ''}`}>
         {wf.steps.map((step, i) => (
           <React.Fragment key={step.key}>
@@ -102,10 +110,12 @@ export function AssessmentWorkflowStepper({ status, tracking, labeled = false })
           </React.Fragment>
         ))}
       </div>
-      <div className={`aw-state aw-state--${wf.tone}`}>
-        {wf.live ? <span className="aw-live-dot" aria-hidden="true" /> : null}
-        {wf.label}
-      </div>
+      {labeled ? null : (
+        <div className={`aw-state aw-state--${wf.tone}`}>
+          {wf.live ? <span className="aw-live-dot" aria-hidden="true" /> : null}
+          {wf.label}
+        </div>
+      )}
     </div>
   );
 }

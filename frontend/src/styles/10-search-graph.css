@@ -545,6 +545,31 @@
 .aw-state--ok { color: var(--purple); }
 .aw-live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--purple); animation: aw-pulse 1.4s ease-in-out infinite; }
 @keyframes aw-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* Card variant (detail pane): the live state reads as a pill above a full-width
+   rail of named nodes — aligned with the redesigned decision card. */
+.aw--card { margin: 0; }
+.aw--card .aw-state {
+  display: inline-flex;
+  margin: 0 0 14px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: .01em;
+  background: var(--purple-soft);
+  color: var(--purple);
+}
+.aw--card .aw-state--warn,
+.aw--card .aw-state--err { background: var(--amber-soft); color: var(--amber-ink); }
+.aw--card .aw-state--muted { background: var(--bg-2); color: var(--mute); }
+.aw--card .aw-step--labeled { max-width: none; width: 100%; align-items: flex-start; justify-content: space-between; }
+.aw--card .aw-node { gap: 8px; }
+.aw--card .aw-dot { width: 13px; height: 13px; border-width: 2px; }
+.aw--card .aw-dot--current { box-shadow: 0 0 0 4px var(--purple-soft); }
+.aw--card .aw-node-lbl { font-size: 0.6875rem; letter-spacing: .01em; }
+.aw--card .aw-conn { margin-top: 5.5px; min-width: 18px; height: 2px; }
+
 .aw-detail-block { margin: 0 0 16px; }
 .aw-funnel-wrap { padding: 8px 14px 6px; }
 .aw-funnel { display: flex; gap: 6px; }

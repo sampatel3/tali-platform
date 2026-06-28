@@ -11,8 +11,6 @@ import {
   ArrowRight,
   Check,
   ClipboardList,
-  Eye,
-  FileText,
   Inbox,
   ListChecks,
   RefreshCw,
@@ -26,10 +24,8 @@ import { PIPELINE_FUNNEL_STAGES } from '../../shared/metrics';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { useToast } from '../../context/ToastContext';
 import { pathForPage } from '../../app/routing';
-import { ScoreRing } from '../../shared/ui/ScoreRing';
 import {
   Avatar,
-  DeepLinkRow,
   formatRelativeAge,
   initialsFrom,
   RolePill,
@@ -39,7 +35,6 @@ import {
 import { TeachModal } from './TeachModal';
 import { OverrideModal, advanceableWorkableStages } from './OverrideModal';
 import { RecentDecisions } from './RecentDecisions';
-import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import AgentNeedsInputCard from '../jobs/AgentNeedsInputCard';
 import { AgentDecisionCard } from '../../shared/decisions/AgentDecisionCard';
 import { DECISION_ACTIONS, DEFAULT_ACTIONS } from '../../shared/decisions/decisionActions';
@@ -386,9 +381,11 @@ const InvitedPanel = ({ candidates, loading, selectedId, onSelect, roleNameById 
   );
 };
 
-// Right-pane card for the selected invited candidate — mirrors DecisionDetail's
-// identity block, with the invite delivery timeline in place of the agent's
-// reasoning/actions.
+// Right-pane card for the selected invited candidate. An EXACT copy of the
+// redesigned AgentDecisionCard (same header, deep-links, integrity flags and
+// requirement bars) — only the agent-recommendation slab is swapped for the
+// assessment stage tracker + invite timeline, and the decision-only parts are
+// hidden. Reuses the card component so the two surfaces never drift.
 const InvitedDetail = ({ candidate, roleNameById, onNavigate }) => {
   if (!candidate) {
     return (
@@ -409,54 +406,38 @@ const InvitedDetail = ({ candidate, roleNameById, onNavigate }) => {
     ['Assessment started', t.started_at],
     ['Expires', t.expires_at],
   ].filter(([, ts]) => ts);
-  return (
-    <section className="rq-hybrid-detail">
-      <div className="rq-detail-identity" style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 14 }}>
-        <Avatar initials={initialsFrom(candidate.candidate_name || candidate.candidate_email)} size={48} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <h2 className="home-title-md" style={{ margin: 0, lineHeight: 1.2, overflowWrap: 'anywhere' }}>
-            <a
-              href={pathForPage('candidate-report', { candidateApplicationId: candidate.id, fromHome: true })}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="rq-inline-link"
-              style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', textAlign: 'left', textDecoration: 'none' }}
-              title="Open candidate report in a new tab"
-            >
-              {candidate.candidate_name || `Application #${candidate.id}`}
-            </a>
-          </h2>
-          <div style={{ fontSize: '0.8125rem', color: 'var(--mute)', marginTop: 2 }}>
-            {candidate.candidate_email || ''}
-          </div>
-          <div className="rq-detail-links" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
-            <RolePill roleName={roleName} roleId={candidate.role_id} />
-          </div>
-          <div className="rq-detail-links" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
-            <DeepLinkRow
-              Icon={FileText}
-              label="Open candidate report"
-              href={pathForPage('candidate-report', { candidateApplicationId: candidate.id, fromHome: true })}
-            />
-            <DeepLinkRow
-              Icon={Eye}
-              label="Open job pipeline"
-              onClick={() => onNavigate?.('job-pipeline', { roleId: candidate.role_id })}
-            />
-          </div>
-        </div>
-        {ss.taali_score != null ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-            <ScoreRing score={ss.taali_score} size={72} label="TALI" />
-            <ScoreProvenance provenance={ss.score_provenance} density="full" />
-          </div>
-        ) : null}
-      </div>
 
+  // Requirement bars from the candidate's CV match — same source + shape the
+  // decision card's backend payload uses (criterion + match score, capped 6).
+  const cvDetails = candidate.cv_match_details && typeof candidate.cv_match_details === 'object' ? candidate.cv_match_details : {};
+  const reqItems = Array.isArray(cvDetails.requirements_assessment) ? cvDetails.requirements_assessment : [];
+  const requirements = reqItems.slice(0, 6).map((it) => ({
+    label: it.criterion_text || it.requirement || it.criterion || 'Requirement',
+    score: typeof it.match_score === 'number' ? Math.round(it.match_score) : null,
+  }));
+
+  // Decision-shaped subject: gives the card its identical identity header,
+  // provenance, integrity flags and requirement bars. A non-pending status
+  // means no recommendation slab and no action bar render.
+  const subject = {
+    application_id: candidate.id,
+    role_id: candidate.role_id,
+    candidate_name: candidate.candidate_name,
+    candidate_email: candidate.candidate_email,
+    role_name: roleName,
+    taali_score: ss.taali_score,
+    status: 'invited',
+    score_summary: { score_provenance: ss.score_provenance, integrity: ss.integrity },
+    requirements,
+  };
+
+  // The stage tracker + invite timeline sit exactly where the agent's
+  // recommendation slab would be on a decision card.
+  const tracker = (
+    <>
       <div className="aw-detail-block">
         <AssessmentWorkflowStepper status={ss.assessment_status} tracking={t} labeled />
       </div>
-
       <div className="rq-invite-timeline">
         <span className="kicker mute">INVITE STATUS</span>
         <ul className="rq-invite-timeline-list">
@@ -486,7 +467,16 @@ const InvitedDetail = ({ candidate, roleNameById, onNavigate }) => {
           return null;
         })()}
       </div>
-    </section>
+    </>
+  );
+
+  return (
+    <AgentDecisionCard
+      decision={subject}
+      middleSlot={tracker}
+      hideDecisionParts
+      onNavigate={onNavigate}
+    />
   );
 };
 

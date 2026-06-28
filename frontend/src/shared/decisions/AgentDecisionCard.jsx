@@ -38,7 +38,13 @@ import { IntegrityFlags } from './IntegrityFlags';
 import { DECISION_ACTIONS, DEFAULT_ACTIONS } from './decisionActions';
 import '../../features/home/home.css';
 
-export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach, onSnooze, onNavigate, onReEvaluate, busy }) => {
+// `middleSlot` / `hideDecisionParts` / `statusPill` let a non-decision surface
+// reuse this card VERBATIM. The invited-candidate tracker passes the assessment
+// stage tracker as `middleSlot` (it sits exactly where the agent-recommendation
+// slab would be) and hides the decision-only parts (reasoning, evidence, trace,
+// action bar) — keeping the identical header, deep-links, integrity flags and
+// requirement bars. One card, two surfaces, guaranteed in lockstep.
+export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach, onSnooze, onNavigate, onReEvaluate, busy, middleSlot = null, hideDecisionParts = false, statusPill = null }) => {
   if (!decision) {
     return (
       <section className="rq-hybrid-detail">
@@ -95,11 +101,11 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
           </div>
           <ScoreProvenance provenance={decision?.score_summary?.score_provenance} density="full" />
         </div>
-        {decision.status === 'pending' ? (
+        {statusPill || (decision.status === 'pending' ? (
           <span className="rq-stream-pendpill" style={{ alignSelf: 'flex-start' }}>NEEDS YOU</span>
         ) : decision.status === 'reverted_for_feedback' ? (
           <span className="rq-stream-teachpill" style={{ alignSelf: 'flex-start' }}>+ FEEDBACK</span>
-        ) : null}
+        ) : null)}
       </div>
 
       {/* Deep-links on their own row — standard outline buttons (preview). */}
@@ -123,9 +129,12 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
         </button>
       </div>
 
+      {/* Invited mode: the assessment stage tracker takes the slab's place. */}
+      {middleSlot}
+
       {/* Agent-recommends slab — near the TOP (preview order): the recommendation
           first, then reasoning + flags, with the secondary actions at the bottom. */}
-      {isPending ? (
+      {isPending && !middleSlot ? (
         <div className="rq-rec">
           <div className="rq-rec-kl"><Sparkles size={12} aria-hidden="true" /> Agent recommends</div>
           <button
@@ -144,9 +153,11 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
         </div>
       ) : null}
 
-      <p style={{ margin: '0 0 14px', fontSize: '0.875rem', color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: 760 }}>
-        {decision.reasoning}
-      </p>
+      {!hideDecisionParts && decision.reasoning ? (
+        <p style={{ margin: '0 0 14px', fontSize: '0.875rem', color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: 760 }}>
+          {decision.reasoning}
+        </p>
+      ) : null}
 
       {/* Trust readout right under the summary — the specific things to verify
           and the cross-source corroborations we confirmed. Same component the
@@ -175,7 +186,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
         </div>
       ) : null}
 
-      {isStale && (decision.status === 'pending' || decision.status === 'reverted_for_feedback') ? (
+      {!hideDecisionParts && isStale && (decision.status === 'pending' || decision.status === 'reverted_for_feedback') ? (
         <div className="rq-stale-banner" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 14px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: '0.8125rem', fontWeight: 500 }}>
           <RefreshCw size={14} strokeWidth={2} aria-hidden="true" />
           <span>
@@ -190,14 +201,14 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
           (the action couldn't complete — e.g. the role has no assessment task).
           Surface the reason so the recruiter doesn't blindly re-approve into the
           same failure; a fresh pending decision has no note. */}
-      {decision.status === 'pending' && decision.resolution_note ? (
+      {!hideDecisionParts && decision.status === 'pending' && decision.resolution_note ? (
         <div className="rq-returned-banner" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, margin: '0 0 14px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: '0.8125rem', fontWeight: 500, lineHeight: 1.45 }}>
           <Inbox size={14} strokeWidth={2} aria-hidden="true" style={{ marginTop: 1, flexShrink: 0 }} />
           <span>{decision.resolution_note}</span>
         </div>
       ) : null}
 
-      {evidence.length > 0 ? (
+      {!hideDecisionParts && evidence.length > 0 ? (
         <div className="rq-evidence-grid">
           {evidence.map((e, i) => (
             <div key={i} className="rq-ev-cell">
@@ -210,7 +221,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
         </div>
       ) : null}
 
-      {trace.length > 0 ? (
+      {!hideDecisionParts && trace.length > 0 ? (
         <div className="rq-trace" style={{ marginTop: 14 }}>
           <div className="rq-trace-head">
             <span className="kicker">DECISION TRACE · {trace.length} EVENTS</span>
@@ -234,7 +245,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
 
       {/* Secondary actions at the very BOTTOM (preview order), standard .btn
           family. The recommended action lives in the slab near the top. */}
-      {isPending ? (
+      {hideDecisionParts ? null : isPending ? (
         <div className="rq-action-bar">
           <div className="rq-action-l">
             {isStale && onReEvaluate ? (
