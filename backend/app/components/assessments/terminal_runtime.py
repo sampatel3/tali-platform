@@ -31,13 +31,8 @@ def resolve_ai_mode() -> str:
 
 
 def terminal_capabilities() -> dict:
-    ai_mode = resolve_ai_mode()
     return {
         "enabled": terminal_mode_enabled(),
-        "ws_protocol": "v1",
-        "permission_mode": settings.CLAUDE_CLI_PERMISSION_MODE_DEFAULT,
-        "command": settings.CLAUDE_CLI_COMMAND,
-        "active_mode": ai_mode,
     }
 
 
