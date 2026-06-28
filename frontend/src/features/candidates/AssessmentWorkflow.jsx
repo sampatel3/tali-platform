@@ -120,58 +120,8 @@ export function AssessmentWorkflowStepper({ status, tracking, labeled = false })
   );
 }
 
-/** Roll the candidate list up into cumulative funnel counts. */
-export function summarizeAssessmentWorkflow(candidates) {
-  let total = 0;
-  let delivered = 0;
-  let opened = 0;
-  let inProgress = 0;
-  let completed = 0;
-  let notSent = 0;
-  (candidates || []).forEach((c) => {
-    const ss = c.score_summary || {};
-    const t = ss.invite_tracking || {};
-    const es = (t.email_status || '').toLowerCase();
-    const s = (ss.assessment_status || '').toLowerCase();
-    total += 1;
-    if (es === 'failed' || es === 'bounced' || es === 'complained') { notSent += 1; return; }
-    const done = s === 'completed' || s === 'completed_due_to_timeout';
-    const started = Boolean(t.started_at) || s === 'in_progress';
-    const opn = Boolean(t.opened_at) || es === 'opened' || es === 'clicked';
-    const dlv = Boolean(t.delivered_at) || es === 'delivered';
-    if (done) completed += 1;
-    if (dlv || opn || started || done) delivered += 1;
-    if (opn || started || done) opened += 1;
-    if (started && !done) inProgress += 1;
-  });
-  return { total, delivered, opened, inProgress, completed, notSent };
-}
-
-/** At-a-glance workflow funnel for the top of the invited panel. */
-export function AssessmentFunnelStrip({ candidates }) {
-  const f = summarizeAssessmentWorkflow(candidates);
-  const cells = [
-    { n: f.total, label: 'Sent', done: f.total > 0 },
-    { n: f.delivered, label: 'Delivered', done: f.delivered > 0 },
-    { n: f.opened, label: 'Opened', done: f.opened > 0 },
-    { n: f.inProgress, label: 'In progress', done: f.inProgress > 0 },
-    { n: f.completed, label: 'Completed', done: f.completed > 0 },
-  ];
-  return (
-    <div className="aw-funnel-wrap">
-      <div className="aw-funnel">
-        {cells.map((c) => (
-          <div key={c.label} className={`aw-fcell${c.done ? ' aw-fcell--done' : ''}`}>
-            <div className="aw-fnum">{c.n}</div>
-            <div className="aw-flbl">{c.label}</div>
-          </div>
-        ))}
-      </div>
-      {f.notSent > 0 ? (
-        <div className="aw-flag" title="These invites never reached the candidate — resend them">
-          {f.notSent} not sent — needs resend
-        </div>
-      ) : null}
-    </div>
-  );
-}
+// The aggregate "Assessment stage" strip (summarizeAssessmentWorkflow +
+// AssessmentFunnelStrip) was removed: the home funnel's Invited stage now
+// carries these sub-counts (delivered / opened / in-progress) from a real
+// backend aggregate, so the client-side strip over the loaded page was
+// redundant. The per-candidate stepper above is the remaining surface.

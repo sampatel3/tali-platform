@@ -50,11 +50,21 @@ export const FunnelBoard = ({
             const value = Number(stageCounts?.[stage.key] || 0);
             const tone = funnelStageTone(stage.key, value);
             const chips = decisionRow[stage.key] || [];
-            // Assessment activity sub-count: how many of the Invited candidates
-            // are mid-assessment (issued + started, not yet completed). Shown as
-            // an "N in progress" chip beneath the Invited stage, matching the
-            // home preview. Sub-count of `invited`, so it never alters the total.
-            const inProgress = stage.key === 'invited' ? Number(stageCounts?.in_assessment || 0) : 0;
+            // Assessment lifecycle sub-counts beneath the Invited stage — the
+            // delivered → opened → in-progress progression (cumulative, each
+            // nests in the previous). Deduped: a step only shows when it exceeds
+            // the more-advanced one, so sparse delivery-webhook data (delivered
+            // == opened == in-progress) collapses to just "in progress". "Sent"
+            // is the stage value itself; "completed" is the Completed stage.
+            const invitedChips = [];
+            if (stage.key === 'invited') {
+              const inProg = Number(stageCounts?.in_assessment || 0);
+              const opened = Number(stageCounts?.invited_opened || 0);
+              const delivered = Number(stageCounts?.invited_delivered || 0);
+              if (delivered > opened) invitedChips.push({ key: 'delivered', count: delivered, label: 'delivered', tone: 'pending', tip: 'Invites delivered to the candidate (Resend) — a sub-count of Invited' });
+              if (opened > inProg) invitedChips.push({ key: 'opened', count: opened, label: 'opened', tone: 'pending', tip: 'Invite emails opened — a sub-count of Invited' });
+              if (inProg > 0) invitedChips.push({ key: 'inprog', count: inProg, label: 'in progress', tone: 'send', tip: 'Assessments started, not yet completed — a sub-count of Invited' });
+            }
             return (
               <div
                 key={stage.key}
@@ -67,14 +77,15 @@ export const FunnelBoard = ({
                     <span className="fb-dnone">outcome</span>
                   ) : (
                     <>
-                      {inProgress > 0 ? (
+                      {invitedChips.map((chip) => (
                         <span
-                          className="fb-dchip is-send"
-                          title="Assessments in progress — issued and started, not yet completed"
+                          key={chip.key}
+                          className={`fb-dchip is-${chip.tone}`}
+                          title={chip.tip}
                         >
-                          {formatCount(inProgress)} in progress
+                          {formatCount(chip.count)} {chip.label}
                         </span>
-                      ) : null}
+                      ))}
                       {chips.map((chip) => (
                         <span
                           key={chip.key}
