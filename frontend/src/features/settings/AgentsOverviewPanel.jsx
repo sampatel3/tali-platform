@@ -113,7 +113,7 @@ function AgentCard({ a }) {
   const act = a.activity || { label: 'IDLE', text: 'idle' };
   const actCls = act.label === 'WORKING' ? 'work' : act.label === 'PAUSED' ? 'paused' : 'idle';
   const idleText = act.label === 'IDLE'
-    ? `last run ${fmtRelShort(a.last_run_at)} · next ${a.next_run_at ? fmtRelShort(a.next_run_at) : 'on beat'}`
+    ? `last run ${fmtRelShort(a.last_run_at)} · next on beat`
     : act.text;
   return (
     <div className={`agz-agent ${a.running ? 'run' : 'paused'}`}>
@@ -130,7 +130,7 @@ function AgentCard({ a }) {
         <span>budget <b>{fmtMoney(a.budget_spent_cents)} / {fmtMoney(a.budget_cap_cents)}</b> ({pct}%)</span>
         <span>cycles 24h <b>{a.cycles_24h}</b></span>
         <span>last run <b>{fmtClock(a.last_run_at)}</b></span>
-        <span>next run <b>{a.running ? (a.next_run_at ? fmtClock(a.next_run_at) : 'on beat') : '—'}</b></span>
+        <span>next run <b>{a.running ? 'on beat' : '—'}</b></span>
         <span>pending <b>{a.pending}</b></span>
         <span />
       </div>

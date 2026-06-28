@@ -91,7 +91,6 @@ class AgentCard(BaseModel):
     budget_spent_cents: int
     budget_cap_cents: int
     last_run_at: Optional[datetime]
-    next_run_at: Optional[datetime]
     pending: int
     cycles_24h: int
     activity: AgentLiveActivity
@@ -259,7 +258,6 @@ def agent_panel(
                 budget_spent_cents=role_spent_cents,
                 budget_cap_cents=int(role.monthly_usd_budget_cents or 0),
                 last_run_at=role.agent_last_run_at,
-                next_run_at=role.agent_next_run_at,
                 pending=int(pending_by_role.get(rid, 0)),
                 cycles_24h=int(cycles_by_role.get(rid, 0)),
                 activity=_live_activity(

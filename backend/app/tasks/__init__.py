@@ -58,10 +58,9 @@ from .workable_tasks import (
 from .reconciliation_tasks import reconcile_anthropic_usage
 # Eager-import agent_tasks so the autonomous-agent task names land in
 # the worker registry. Without this, every agent path — manual-run API,
-# event triggers, the daily-review sweep, and the cohort-tick beat —
-# silently NotRegistered's on the worker and the agent never runs.
+# the daily-review sweep, and the cohort-tick beat — silently
+# NotRegistered's on the worker and the agent never runs.
 from .agent_tasks import (
-    agent_react_to_event,
     agent_manual_run,
     agent_daily_review_sweep,
     agent_daily_review_role,
@@ -149,7 +148,6 @@ __all__ = [
     "retry_workable_disqualify_task",
     "run_workable_op_task",
     "reconcile_anthropic_usage",
-    "agent_react_to_event",
     "agent_manual_run",
     "agent_daily_review_sweep",
     "agent_daily_review_role",
