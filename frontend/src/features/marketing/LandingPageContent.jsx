@@ -113,44 +113,11 @@ const dashboardCandidates = [
   { name: 'More candidates', status: 'view all', avatar: '+' },
 ];
 
-const timelineItems = [
-  { label: 'plan', pill: 'plan', body: 'Whether they thought before they prompted - design notes, tradeoffs, decisions.' },
-  { label: 'prompt', pill: 'claude', body: 'Prompt quality - scoped vs. vague, with-context vs. cold.', tone: 'ai' },
-  { label: 'recover', pill: 'claude', body: 'How they handled an incorrect AI suggestion - accepted, rejected, verified.', tone: 'ai' },
-  { label: 'test', pill: 'test', body: 'Whether tests came before or after the AI implementation.', tone: 'pass' },
-  { label: 'refactor', pill: 'refactor', body: 'Whether they shipped AI boilerplate or tightened it to your team\'s style.' },
-  { label: 'ship', pill: 'ship', body: 'Final state - tests passing, edge cases handled, graceful failure paths.', tone: 'pass' },
-];
-
-const sixAxes = [
-  'Prompt quality',
-  'Error recovery',
-  'Context utilization',
-  'Independence',
-  'Design thinking',
-  'Debugging strategy',
-];
-
 const questionBankRows = [
   ['AI.01', 'GenAI production readiness review', 'Medium', 'amber'],
   ['AI.01A', 'Tighten safety defaults during moderation outages', 'Hard', 'red'],
   ['DE.01', 'AWS Glue pipeline recovery', 'Medium', 'amber'],
   ['DE.01A', 'Fix schema drift, dedupe, and bookmark trust', 'Hard', 'red'],
-];
-
-const runtimeSignalCards = [
-  {
-    title: 'Prompt quality',
-    body: 'Whether the prompt was scoped and sequenced, with the exact prompt text linked back to the timeline.',
-  },
-  {
-    title: 'Error recovery',
-    body: 'Whether the candidate verified, rejected, or accepted incorrect AI suggestions before they touched production logic.',
-  },
-  {
-    title: 'Independence',
-    body: 'Where the candidate delegated to AI versus where they wrote and owned the critical reasoning themselves.',
-  },
 ];
 
 const howItWorksSteps = [
