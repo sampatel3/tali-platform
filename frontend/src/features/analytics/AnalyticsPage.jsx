@@ -1,379 +1,303 @@
-import React, { useEffect, useMemo, useState } from 'react';
+// AnalyticsPage — the dedicated /analytics route, rebuilt to match
+// frontend/public/analytics-preview.html exactly: crumb + title + role/window/
+// Export controls, a 6-stat pulse band, and five underline tabs (Outcomes /
+// Agent fleet / Teaching history / A·B tasks / Decision log).
+//
+// EVERY value is real. The page owns the role + window scope and threads it
+// into the windowed feeds:
+//   pulse + funnel + narrator      → GET /analytics/reporting-summary
+//   advance→hire + by-role         → GET /analytics/decisions-breakdown
+//   override / agreement bars      → GET /analytics/decision-trend (new)
+//   per-role override + spend      → GET /agent/roles/breakdown
+//   teach feed                     → GET /agent/feedback
+// The Fleet, A/B, Teaching-timeline and Decision-log tabs self-fetch their own
+// live feeds (panel / experiments / threshold-history / decisions). Where real
+// data is absent every surface renders a proper empty state — nothing is faked.
+
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+  Bot,
+  Brain,
+  Download,
+  FlaskConical,
+  History,
+  TrendingUp,
+} from 'lucide-react';
 
-import { analytics as analyticsApi } from '../../shared/api';
+import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
-import { Panel, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { Select } from '../../shared/ui/TaaliPrimitives';
+import {
+  safeNum,
+  pct,
+  fmtUsd,
+  decisionTypeLabel,
+} from './analyticsFormat';
+import { OutcomesTab } from './OutcomesTab';
+import { FleetTab } from './FleetTab';
+import { TeachingTab } from './TeachingTab';
+import { ExperimentsTab } from './ExperimentsTab';
+import { DecisionLogTab } from './DecisionLogTab';
 
-const DATE_RANGE_OPTIONS = [
-  { value: '7d', label: 'Last 7 days' },
-  { value: '30d', label: 'Last 30 days' },
-  { value: '90d', label: 'Last 90 days' },
-  { value: 'all', label: 'All time' },
+const WINDOWS = [
+  { key: '7d', label: '7d', days: 7 },
+  { key: '30d', label: '30d', days: 30 },
+  { key: '90d', label: '90d', days: 90 },
+  { key: 'all', label: 'All', days: null },
 ];
 
-const toIso = (date) => date.toISOString();
+const TABS = [
+  { key: 'outcomes', label: 'Outcomes', Icon: TrendingUp },
+  { key: 'fleet', label: 'Agent fleet', Icon: Bot },
+  { key: 'teaching', label: 'Teaching history', Icon: Brain },
+  { key: 'ab', label: 'A·B tasks', Icon: FlaskConical },
+  { key: 'log', label: 'Decision log', Icon: History },
+];
 
-const getDateRangeParams = (range) => {
-  if (range === 'all') return {};
-  const days = Number(String(range || '').replace('d', ''));
-  if (!Number.isFinite(days) || days <= 0) return {};
-  const now = new Date();
-  const from = new Date(now);
-  from.setDate(now.getDate() - days);
-  return {
-    date_from: toIso(from),
-    date_to: toIso(now),
-  };
+const windowLabel = (key) => {
+  const w = WINDOWS.find((x) => x.key === key);
+  if (!w) return 'Last 30 days';
+  return w.key === 'all' ? 'All time' : `Last ${w.days} days`;
 };
 
-const safeNumber = (value, fallback = 0) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
-
-const formatDollars = (cents) => {
-  const n = Number(cents || 0) / 100;
-  return n >= 100 ? `$${Math.round(n)}` : `$${n.toFixed(0)}`;
+const csvEscape = (v) => {
+  const s = v == null ? '' : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
-const formatRelative = (iso) => {
-  if (!iso) return '';
-  const diff = Date.now() - new Date(iso).getTime();
-  if (Number.isNaN(diff)) return '';
-  const m = Math.round(diff / 60000);
-  if (m < 1) return 'just now';
-  if (m < 60) return `${m}m ago`;
-  const h = Math.round(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.round(h / 24)}d ago`;
-};
+export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
+  const [roleId, setRoleId] = useState('');
+  const [windowKey, setWindowKey] = useState('30d');
+  const [tab, setTab] = useState('outcomes');
+  const [exporting, setExporting] = useState(false);
 
-const EMPTY_SUMMARY = {
-  window: { from: null, to: null, label: 'Last 30 days' },
-  kpis: {
-    decisions_made: { current: 0, prior: 0, delta_pct: null },
-    auto_advanced: { current: 0, borderlines_flagged: 0 },
-    auto_rejected: { current: 0, below_threshold: 0 },
-    org_spend: { spent_cents: 0, budget_cents: 0, over_pct: null, top_role: null, active_role_count: 0 },
-  },
-  narrator: { paragraph: '', chips: [] },
-  decisions_feed: [],
-  anomalies: [],
-  funnel: [],
-  score_buckets: [],
-};
-
-export const ReportingPage = ({ onNavigate, NavComponent }) => {
+  const [summary, setSummary] = useState(null);
+  const [breakdown, setBreakdown] = useState(null);
+  const [trend, setTrend] = useState(null);
+  const [rolesBreakdown, setRolesBreakdown] = useState([]);
+  const [feedback, setFeedback] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [summary, setSummary] = useState(EMPTY_SUMMARY);
-  const [activeChip, setActiveChip] = useState(null);
 
-  // Reporting is org-wide and locked to a fixed 30-day window per the
-  // narrative-first canvas: "a daily standup in retrospect". Drill-downs
-  // happen by clicking narrator chips, not by filtering the page.
-  const dateRange = '30d';
-  const roleFilter = '';
+  const days = useMemo(
+    () => (WINDOWS.find((w) => w.key === windowKey) || WINDOWS[1]).days,
+    [windowKey],
+  );
+  const dateFrom = useMemo(
+    () => (days == null ? null : new Date(Date.now() - days * 86400000).toISOString()),
+    [days],
+  );
 
-  const queryParams = useMemo(() => ({ ...getDateRangeParams(dateRange) }), [dateRange]);
+  // Role list for the selector — loaded once (roles/breakdown also feeds the
+  // by-role override/spend columns).
+  useEffect(() => {
+    let cancelled = false;
+    agentApi.rolesBreakdown()
+      .then((res) => { if (!cancelled) setRolesBreakdown(Array.isArray(res?.data) ? res.data : []); })
+      .catch(() => { if (!cancelled) setRolesBreakdown([]); });
+    return () => { cancelled = true; };
+  }, []);
 
+  // Windowed/scoped feeds — refetched whenever role or window changes.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    analyticsApi.reportingSummary(queryParams)
-      .then((res) => {
+    const scope = {
+      ...(roleId ? { role_id: roleId } : {}),
+      ...(dateFrom ? { date_from: dateFrom } : {}),
+    };
+    Promise.all([
+      analyticsApi.reportingSummary(scope),
+      analyticsApi.decisionsBreakdown(scope),
+      analyticsApi.decisionTrend(roleId ? { role_id: roleId } : {}),
+      agentApi.listFeedback({ limit: 30, ...(roleId ? { role_id: roleId } : {}) }),
+    ])
+      .then(([s, b, t, f]) => {
         if (cancelled) return;
-        const data = res?.data || EMPTY_SUMMARY;
-        setSummary({
-          window: data.window || EMPTY_SUMMARY.window,
-          kpis: data.kpis || EMPTY_SUMMARY.kpis,
-          narrator: data.narrator || EMPTY_SUMMARY.narrator,
-          decisions_feed: Array.isArray(data.decisions_feed) ? data.decisions_feed : [],
-          anomalies: Array.isArray(data.anomalies) ? data.anomalies : [],
-          funnel: Array.isArray(data.funnel) ? data.funnel : [],
-          score_buckets: Array.isArray(data.score_buckets) ? data.score_buckets : [],
-        });
-        setActiveChip(null);
+        setSummary(s?.data || null);
+        setBreakdown(b?.data || null);
+        setTrend(t?.data || null);
+        setFeedback(Array.isArray(f?.data) ? f.data : []);
       })
       .catch(() => {
-        if (!cancelled) setSummary(EMPTY_SUMMARY);
+        if (!cancelled) { setSummary(null); setBreakdown(null); setTrend(null); setFeedback([]); }
       })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [queryParams]);
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [roleId, dateFrom]);
 
-  const rangeLabel = summary.window?.label
-    || DATE_RANGE_OPTIONS.find((opt) => opt.value === dateRange)?.label
-    || 'Last 30 days';
+  // ── Pulse band values (all real KPIs from reporting-summary +
+  //    decisions-breakdown) ──────────────────────────────────────────────
+  const k = summary?.kpis || {};
+  const hr = k.human_review || {};
+  const spend = k.org_spend || {};
+  const conv = breakdown?.totals?.advance_conversion || {};
+  const decisions = safeNum(k.decisions_made?.current);
+  const autoAdvanced = safeNum(k.auto_advanced?.current);
+  const autoRejected = safeNum(k.auto_rejected?.current);
+  const approved = safeNum(hr.approved);
+  const advancedTotal = safeNum(conv.advanced_total);
+  const hired = safeNum(conv.hired);
+  const advanceHirePct = advancedTotal > 0 ? pct(hired, advancedTotal) : null;
+  const overrideRate = safeNum(hr.override_rate_pct);
+  const overridden = safeNum(hr.overridden);
+  const teachRate = safeNum(hr.teach_rate_pct);
+  const taught = safeNum(hr.taught);
+  const spentCents = safeNum(spend.spent_cents);
+  const budgetCents = safeNum(spend.budget_cents);
+  const budgetPctValue = budgetCents > 0 ? Math.round((spentCents / budgetCents) * 100) : null;
 
-  const decisionsKpi = summary.kpis.decisions_made;
-  const advancedKpi = summary.kpis.auto_advanced;
-  const rejectedKpi = summary.kpis.auto_rejected;
-  const spendKpi = summary.kpis.org_spend;
-  const overBudget = (spendKpi.over_pct || 0) > 0;
+  const roleName = useMemo(() => {
+    if (!roleId) return null;
+    const r = rolesBreakdown.find((x) => String(x.role_id) === String(roleId));
+    return r?.name || null;
+  }, [roleId, rolesBreakdown]);
 
-  const histogramData = summary.score_buckets?.length ? summary.score_buckets : [
-    { range: '0-20', count: 0, percentage: 0 },
-    { range: '20-40', count: 0, percentage: 0 },
-    { range: '40-60', count: 0, percentage: 0 },
-    { range: '60-80', count: 0, percentage: 0 },
-    { range: '80-100', count: 0, percentage: 0 },
-  ];
+  // ── Export → CSV of the decision log (fetched on click, scope-aware). ──
+  const handleExport = useCallback(async () => {
+    setExporting(true);
+    try {
+      const res = await agentApi.listDecisions({ status: 'all', limit: 500, ...(roleId ? { role_id: roleId } : {}) });
+      const rows = Array.isArray(res?.data) ? res.data : [];
+      const header = ['Time', 'Actor', 'Role', 'Action', 'Subject', 'Status', 'Override action'];
+      const lines = rows.map((r) => [
+        (r.resolved_at || r.created_at || '').toString(),
+        r.resolved_by_user_id != null ? 'You' : 'Agent',
+        r.role_name || `Role #${r.role_id}`,
+        decisionTypeLabel(r.decision_type),
+        r.candidate_name || `Application #${r.application_id}`,
+        r.status || '',
+        r.override_action ? decisionTypeLabel(r.override_action) : '',
+      ].map(csvEscape).join(','));
+      const csv = [header.join(','), ...lines].join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `taali-decision-log-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      /* non-fatal — the button simply does nothing if the fetch fails */
+    } finally {
+      setExporting(false);
+    }
+  }, [roleId]);
 
-  const activeChipBody = activeChip
-    ? (summary.narrator.chips || []).find((c) => c.key === activeChip)?.body
-    : null;
-
-  const decisionsDelta = decisionsKpi.delta_pct;
-  const decisionsDeltaLabel = decisionsDelta == null
-    ? `${decisionsKpi.current === 0 ? 'No prior data' : 'No change vs prior period'}`
-    : `${decisionsDelta > 0 ? '+' : ''}${decisionsDelta.toFixed(0)}% vs prior ${rangeLabel.toLowerCase()}`;
+  const headerActions = (
+    <div className="an-controls">
+      <span className="an-sel">
+        <Select inline value={roleId} onChange={(e) => setRoleId(e.target.value)} aria-label="Role filter">
+          <option value="">All roles</option>
+          {rolesBreakdown.map((r) => (
+            <option key={r.role_id} value={r.role_id}>{r.name}</option>
+          ))}
+        </Select>
+      </span>
+      <span className="an-window" role="group" aria-label="Time window">
+        {WINDOWS.map((w) => (
+          <button
+            key={w.key}
+            type="button"
+            className={windowKey === w.key ? 'active' : ''}
+            onClick={() => setWindowKey(w.key)}
+          >
+            {w.label}
+          </button>
+        ))}
+      </span>
+      <button type="button" className="btn sm" onClick={handleExport} disabled={exporting}>
+        <Download size={14} aria-hidden="true" />
+        {exporting ? 'Exporting…' : 'Export'}
+      </button>
+    </div>
+  );
 
   return (
     <div>
-      <NavComponent currentPage="reporting" onNavigate={onNavigate} />
+      {NavComponent ? <NavComponent currentPage="analytics" onNavigate={onNavigate} /> : null}
       <AgentHeader
-        breadcrumbs={[{ label: 'Reporting' }]}
-        kicker={`MISSION CONTROL · ${rangeLabel.toUpperCase()}${roleFilter ? '' : ' · ALL ROLES'}`}
-        title={<>Your agent in <em>narrative</em></>}
-        subtitle="What Taali did, what it skipped, and where it was unsure. Not a dashboard — a daily standup in retrospect."
+        breadcrumbs={[{ label: `Analytics · ${windowLabel(windowKey).toLowerCase()}` }]}
+        kicker={`ANALYTICS · ${windowLabel(windowKey).toUpperCase()}${roleId ? '' : ' · ALL ROLES'}`}
+        title="Analytics"
+        subtitle="Outcomes, the agent fleet, and the teaching history that keeps the agent calibrated — the reporting layer that lives off the home review loop."
+        actions={headerActions}
       />
-      <div className="mc-page mc-page-narrow">
-        {loading ? (
-          <div className="flex min-h-[16.25rem] items-center justify-center">
-            <Spinner size={32} />
+      <div className="an-page">
+        {/* 6-stat pulse band. */}
+        <div className="an-pulse">
+          <div className="an-pcell">
+            <div className="k">Decisions</div>
+            <div className="v">{decisions.toLocaleString()}</div>
+            <div className="s">{approved.toLocaleString()} approved</div>
           </div>
+          <div className="an-pcell">
+            <div className="k">Auto-advanced</div>
+            <div className="v">{autoAdvanced.toLocaleString()}</div>
+            <div className="s">{autoRejected.toLocaleString()} auto-rejected</div>
+          </div>
+          <div className="an-pcell">
+            <div className="k">Advance → hire</div>
+            <div className="v attn">{advanceHirePct != null ? `${advanceHirePct}%` : '—'}</div>
+            <div className="s">{hired.toLocaleString()} of {advancedTotal.toLocaleString()} advanced</div>
+          </div>
+          <div className="an-pcell">
+            <div className="k">Override rate</div>
+            <div className="v">{overrideRate}%</div>
+            <div className="s">{overridden.toLocaleString()} override{overridden === 1 ? '' : 's'}</div>
+          </div>
+          <div className="an-pcell">
+            <div className="k">Taught</div>
+            <div className="v">{teachRate}%</div>
+            <div className="s">{taught.toLocaleString()} teaching event{taught === 1 ? '' : 's'}</div>
+          </div>
+          <div className="an-pcell">
+            <div className="k">Spend · MTD</div>
+            <div className="v">
+              {fmtUsd(spentCents)}
+              {budgetCents > 0 ? <small> / {fmtUsd(budgetCents)}</small> : null}
+            </div>
+            <div className="s">{budgetPctValue != null ? `${budgetPctValue}%` : 'no cap set'}</div>
+          </div>
+        </div>
+
+        {/* Underline tabs — shared .vtabs/.vtab vocabulary. */}
+        <div className="vtabs" role="tablist">
+          {TABS.map((t) => {
+            const { Icon } = t;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                role="tab"
+                aria-selected={tab === t.key}
+                className={`vtab${tab === t.key ? ' on' : ''}`}
+                onClick={() => setTab(t.key)}
+              >
+                <Icon size={16} aria-hidden="true" />
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {tab === 'outcomes' ? (
+          loading && !summary
+            ? <div className="an-empty">Loading…</div>
+            : <OutcomesTab summary={summary} breakdown={breakdown} trend={trend} rolesBreakdown={rolesBreakdown} />
+        ) : tab === 'fleet' ? (
+          <FleetTab />
+        ) : tab === 'teaching' ? (
+          <TeachingTab feedback={feedback} trend={trend} roleId={roleId} roleName={roleName} />
+        ) : tab === 'ab' ? (
+          <ExperimentsTab roleId={roleId} />
         ) : (
-          <div className="space-y-5">
-            {/* Narrator — concrete numbers + clickable chip drill-ins. */}
-            <section className="mc-narrator">
-              <div className="mc-narrator-bg" aria-hidden="true" />
-              <div className="mc-kicker" style={{ color: 'rgba(255,255,255,0.7)', marginBottom: 6 }}>
-                NARRATOR · WHAT THE AGENT DID
-              </div>
-              <p>{summary.narrator.paragraph}</p>
-              {summary.narrator.chips?.length ? (
-                <div className="mc-narrator-chips">
-                  {summary.narrator.chips.map((chip) => (
-                    <button
-                      key={chip.key}
-                      type="button"
-                      className={`mc-narrator-chip ${activeChip === chip.key ? 'on' : ''}`.trim()}
-                      onClick={() => setActiveChip((prev) => (prev === chip.key ? null : chip.key))}
-                    >
-                      {chip.label}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-              {activeChipBody ? (
-                <div className="mc-narrator-chip-body">{activeChipBody}</div>
-              ) : null}
-            </section>
-
-            {/* KPI row matching the canvas: Decisions / Auto-advanced /
-                Auto-rejected / Org spend with deltas + drivers. */}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-              <Panel className="p-4">
-                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--mute)]">Decisions made</div>
-                <div className="text-2xl font-bold text-[var(--ink)]">
-                  {decisionsKpi.current.toLocaleString()}
-                </div>
-                <div className="mt-1 text-[0.75rem] text-[var(--mute)]" style={{ color: decisionsDelta != null && decisionsDelta > 0 ? 'var(--purple)' : 'var(--mute)' }}>
-                  {decisionsDeltaLabel}
-                </div>
-              </Panel>
-              <Panel className="p-4">
-                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--mute)]">Auto-advanced</div>
-                <div className="text-2xl font-bold text-[var(--purple)]">
-                  {advancedKpi.current}
-                </div>
-                <div className="mt-1 text-[0.75rem] text-[var(--mute)]">
-                  {advancedKpi.borderlines_flagged > 0
-                    ? `+${advancedKpi.borderlines_flagged} borderline${advancedKpi.borderlines_flagged === 1 ? '' : 's'} flagged`
-                    : 'No borderlines flagged'}
-                </div>
-              </Panel>
-              <Panel className="p-4">
-                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--mute)]">Auto-rejected</div>
-                <div className="text-2xl font-bold text-[var(--ink)]">{rejectedKpi.current}</div>
-                <div className="mt-1 text-[0.75rem] text-[var(--mute)]">All below role threshold</div>
-              </Panel>
-              <Panel className="p-4">
-                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--mute)]">
-                  Org spend{spendKpi.budget_cents > 0 ? ` (vs ${formatDollars(spendKpi.budget_cents)} cap)` : ''}
-                </div>
-                <div className="text-2xl font-bold text-[var(--ink)]">
-                  {formatDollars(spendKpi.spent_cents)}
-                  {spendKpi.budget_cents > 0 ? (
-                    <span className="text-base font-normal text-[var(--mute)]"> / {formatDollars(spendKpi.budget_cents)}</span>
-                  ) : null}
-                </div>
-                <div className="mt-1 text-[0.75rem]" style={{ color: overBudget ? 'var(--amber)' : 'var(--mute)' }}>
-                  {spendKpi.active_role_count === 0
-                    ? 'No agent-enabled roles yet'
-                    : overBudget
-                      ? `${spendKpi.over_pct?.toFixed(0)}% over${spendKpi.top_role ? ` · driven by ${spendKpi.top_role}` : ''}`
-                      : 'Within budget'}
-                </div>
-              </Panel>
-            </div>
-
-            <div className="grid gap-5 lg:grid-cols-[1.3fr_1fr]">
-              {/* Decisions feed (left, larger). */}
-              <Panel className="p-4">
-                <h2 className="mb-1 font-bold text-base">Decisions feed</h2>
-                <p className="mb-3 text-[0.78125rem] text-[var(--mute)]">
-                  A reverse-chronological log of every consequential action.
-                </p>
-                {summary.decisions_feed.length === 0 ? (
-                  <div className="mc-decisions-empty" style={{ padding: '24px 4px', textAlign: 'left', color: 'var(--mute)', fontSize: 13 }}>
-                    No agent decisions in this window yet. Once the agent advances, rejects, or
-                    flags a candidate, every action lands here with the reasoning attached.
-                  </div>
-                ) : (
-                  <div className="mc-decisions-feed">
-                    {summary.decisions_feed.slice(0, 8).map((decision) => {
-                      const tone = decision.kind === 'advance' ? 'var(--green, #16a34a)'
-                        : decision.kind === 'reject' ? 'var(--red, #dc2626)'
-                        : decision.kind === 'flag' ? 'var(--amber, #f59e0b)'
-                        : decision.kind === 'pause' ? 'var(--mute)'
-                        : 'var(--purple)';
-                      const verb = decision.recommendation
-                        || (decision.kind === 'advance' ? 'Advanced candidate'
-                          : decision.kind === 'reject' ? 'Rejected candidate'
-                          : decision.kind === 'flag' ? 'Flagged candidate'
-                          : decision.kind === 'pause' ? 'Paused agent'
-                          : decision.kind === 'invite' ? 'Sent invitation'
-                          : 'Recorded action');
-                      const candName = decision.candidate_name || 'Candidate';
-                      return (
-                        <div key={decision.id} className="mc-decisions-row">
-                          <span className="mc-decisions-row-time">{formatRelative(decision.created_at)}</span>
-                          <span
-                            className="mc-decisions-row-dot"
-                            style={{ background: `color-mix(in oklab, ${tone} 22%, transparent)`, color: tone }}
-                            aria-hidden="true"
-                          />
-                          <div>
-                            <div className="mc-decisions-row-title">
-                              {decision.kind === 'advance' || decision.kind === 'reject'
-                                ? `${verb}${candName !== 'Candidate' ? ` · ${candName}` : ''}`
-                                : verb}
-                            </div>
-                            <div className="mc-decisions-row-body">{decision.reasoning || '—'}</div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </Panel>
-
-              <div className="flex flex-col gap-4">
-                <Panel className="p-4">
-                  <h2 className="mb-1 font-bold text-base">Anomalies</h2>
-                  <p className="mb-3 text-[0.78125rem] text-[var(--mute)]">Things worth your attention.</p>
-                  {summary.anomalies.length === 0 ? (
-                    <p className="text-[0.78125rem] text-[var(--mute)]">
-                      Anomalies appear once the agent has graded enough assessments to spot drift.
-                    </p>
-                  ) : (
-                    <div className="flex flex-col gap-2">
-                      {summary.anomalies.map((anomaly, i) => (
-                        <AnomalyRow key={`${anomaly.title}-${i}`} {...anomaly} />
-                      ))}
-                    </div>
-                  )}
-                </Panel>
-
-                <Panel className="p-4">
-                  <h2 className="mb-1 font-bold text-base">Funnel · org-wide</h2>
-                  <p className="mb-3 text-[0.78125rem] text-[var(--mute)]">From application through review to hire.</p>
-                  <div className="flex flex-col gap-2">
-                    {(summary.funnel.length ? summary.funnel : [
-                      { label: 'APPLIED', count: 0, percentage: 0 },
-                      { label: 'INVITED', count: 0, percentage: 0 },
-                      { label: 'DONE', count: 0, percentage: 0 },
-                      { label: 'REVIEW', count: 0, percentage: 0 },
-                      { label: 'HIRED', count: 0, percentage: 0 },
-                    ]).map((stage) => (
-                      <div key={stage.label} className="grid grid-cols-[110px_1fr_auto] items-center gap-3">
-                        <span className="font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[var(--mute)]">{stage.label}</span>
-                        <div className="relative h-2.5 overflow-hidden rounded-full bg-[var(--bg-3)]">
-                          <div
-                            className="absolute inset-y-0 left-0 rounded-full"
-                            style={{
-                              width: `${Math.max(0, Math.min(100, safeNumber(stage.percentage)))}%`,
-                              background: 'linear-gradient(90deg, var(--purple), color-mix(in srgb, var(--purple) 60%, var(--lime)))',
-                            }}
-                          />
-                        </div>
-                        <span className="font-mono text-[0.71875rem] text-[var(--ink-2)]">{safeNumber(stage.count).toLocaleString()}</span>
-                      </div>
-                    ))}
-                  </div>
-                </Panel>
-              </div>
-            </div>
-
-            <Panel className="p-4">
-              <h2 className="mb-1 font-bold text-base">Score distribution</h2>
-              <p className="mb-3 text-[0.78125rem] text-[var(--mute)]">Composite scores bucketed into deciles.</p>
-              <div className="h-[16.25rem]">
-                <ResponsiveContainer>
-                  <BarChart data={histogramData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
-                    <XAxis dataKey="range" tick={{ fill: 'var(--mute)', fontSize: 12 }} axisLine={{ stroke: 'var(--line)' }} tickLine={{ stroke: 'var(--line)' }} />
-                    <YAxis tick={{ fill: 'var(--mute)', fontSize: 12 }} axisLine={{ stroke: 'var(--line)' }} tickLine={{ stroke: 'var(--line)' }} />
-                    <Tooltip
-                      contentStyle={{
-                        background: 'var(--bg-2)',
-                        border: '1px solid var(--line)',
-                        borderRadius: '12px',
-                        color: 'var(--ink)',
-                      }}
-                    />
-                    <Bar dataKey="count" fill="var(--purple)" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </Panel>
-          </div>
+          <DecisionLogTab roleId={roleId} />
         )}
       </div>
     </div>
   );
 };
 
-const AnomalyRow = ({ tone, title, body }) => {
-  const dotColor = tone === 'red'
-    ? 'var(--red)'
-    : tone === 'amber'
-      ? 'var(--amber)'
-      : 'var(--purple)';
-  return (
-    <div className="flex items-start gap-3 rounded-[10px] border border-[var(--line)] bg-[var(--bg)] px-3 py-3">
-      <span
-        className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
-        style={{ background: dotColor }}
-        aria-hidden="true"
-      />
-      <div>
-        <div className="text-[0.8125rem] font-medium text-[var(--ink)]">{title}</div>
-        <div className="mt-0.5 text-[0.75rem] leading-[1.45] text-[var(--mute)]">{body}</div>
-      </div>
-    </div>
-  );
-};
-
-export const AnalyticsPage = ReportingPage;
+export default AnalyticsPage;

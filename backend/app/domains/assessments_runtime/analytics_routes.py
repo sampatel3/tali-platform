@@ -1512,3 +1512,228 @@ def get_experiment_comparison(
             else "All arms meet the minimum sample; compare with care (no winner is auto-declared)."
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Decision trend — backs the Outcomes "override rate over time" bar chart and
+# the Teaching "agreement trend" bars on the standalone Analytics page. For the
+# last ~6 calendar months, computes per month the override rate (overridden /
+# resolved) and its complement, the agreement rate (= 100 − override). Counts
+# only RESOLVED agent decisions (pending/sent-back rows aren't a verdict yet),
+# org-scoped and optionally role-scoped, so it mirrors the human-review KPIs in
+# reporting-summary. No synthetic series — a month with no resolved decisions
+# reports 0 across the board and the UI renders it as an empty bar.
+# ---------------------------------------------------------------------------
+
+
+def _month_key(dt: datetime) -> str:
+    return f"{dt.year:04d}-{dt.month:02d}"
+
+
+def _add_months(year: int, month: int, delta: int) -> Tuple[int, int]:
+    idx = (year * 12 + (month - 1)) + delta
+    return idx // 12, (idx % 12) + 1
+
+
+@router.get("/decision-trend")
+def get_decision_trend(
+    role_id: Optional[int] = Query(default=None),
+    months: int = Query(default=6, ge=1, le=24),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Monthly override / agreement rate over resolved agent decisions.
+
+    Returns one entry per calendar month for the trailing ``months`` window
+    (oldest first), each carrying the resolved-decision count, the override
+    rate (overridden / resolved) and the agreement rate (100 − override). The
+    decision engine's verdicts are the source — never fabricated.
+    """
+    org_id = current_user.organization_id
+    now = datetime.now(timezone.utc)
+    # Build the ordered list of (year, month) buckets ending with the current
+    # month, then a start boundary so the DB scan is bounded.
+    cur_year, cur_month = now.year, now.month
+    buckets: List[Tuple[int, int]] = [
+        _add_months(cur_year, cur_month, -(months - 1 - i)) for i in range(months)
+    ]
+    empty = {
+        "months": [
+            {
+                "month": f"{y:04d}-{m:02d}",
+                "override_rate_pct": 0.0,
+                "agreement_rate_pct": 0.0,
+                "decisions": 0,
+            }
+            for (y, m) in buckets
+        ]
+    }
+    if not org_id:
+        return empty
+
+    start_year, start_month = buckets[0]
+    window_start = datetime(start_year, start_month, 1, tzinfo=timezone.utc)
+
+    q = db.query(AgentDecision.created_at, AgentDecision.status).filter(
+        AgentDecision.organization_id == org_id,
+        AgentDecision.created_at >= window_start,
+    )
+    if role_id is not None:
+        q = q.filter(AgentDecision.role_id == role_id)
+
+    resolved_by_month: Dict[str, int] = {}
+    overridden_by_month: Dict[str, int] = {}
+    for created, status in q.all():
+        created = _ensure_utc(created)
+        if created is None:
+            continue
+        status_l = str(status or "").lower()
+        if status_l in _NON_RESOLVED_DECISION_STATUSES:
+            continue
+        key = _month_key(created)
+        resolved_by_month[key] = resolved_by_month.get(key, 0) + 1
+        if status_l == "overridden":
+            overridden_by_month[key] = overridden_by_month.get(key, 0) + 1
+
+    out_months: List[Dict[str, Any]] = []
+    for (y, m) in buckets:
+        key = f"{y:04d}-{m:02d}"
+        resolved = resolved_by_month.get(key, 0)
+        overridden = overridden_by_month.get(key, 0)
+        override_pct = round((overridden / resolved) * 100.0, 1) if resolved else 0.0
+        agreement_pct = round(100.0 - override_pct, 1) if resolved else 0.0
+        out_months.append({
+            "month": key,
+            "override_rate_pct": override_pct,
+            "agreement_rate_pct": agreement_pct,
+            "decisions": resolved,
+        })
+
+    return {"months": out_months}
+
+
+# ---------------------------------------------------------------------------
+# Threshold history — backs the Teaching "how the agent calibrated" timeline on
+# the standalone Analytics page. The role-fit advance/reject boundary is a real
+# persisted artefact: ``ThresholdCalibration`` rows (active / superseded /
+# discarded) carry the learned cut, when it activated, and the learner metric.
+# When such rows exist we return the genuine change history (newest first);
+# when they DON'T we return a single entry for the role's current resolved
+# threshold and set ``has_history=false`` — we never invent past changes.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/threshold-history")
+def get_threshold_history(
+    role_id: int = Query(..., gt=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The agent's score-threshold change history for one role.
+
+    Real source: the ``threshold_calibrations`` table (per-role, then the
+    org-wide pool). Each activated/superseded row is a genuine boundary change.
+    Falls back to the single current effective threshold with
+    ``has_history=false`` when no calibration has ever been activated — no
+    fabricated history.
+    """
+    org_id = current_user.organization_id
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == role_id,
+            Role.organization_id == org_id,
+            Role.deleted_at.is_(None),
+        )
+        .first()
+        if org_id
+        else None
+    )
+    if role is None:
+        raise HTTPException(status_code=404, detail="Role not found")
+
+    # Current effective boundary (manual pin → learned calibration → dynamic
+    # heuristic). Read defensively so a resolver hiccup never 500s the page.
+    current_threshold: Optional[float] = None
+    try:
+        from ...services.auto_threshold_service import resolve_role_fit_threshold
+
+        resolved = resolve_role_fit_threshold(db, role=role)
+        current_threshold = round(float(resolved), 1) if resolved is not None else None
+    except Exception:  # pragma: no cover — never break the page on resolution
+        current_threshold = (
+            float(role.score_threshold) if role.score_threshold is not None else None
+        )
+
+    entries: List[Dict[str, Any]] = []
+    try:
+        from ...models.threshold_calibration import (
+            STATUS_ACTIVE,
+            STATUS_SUPERSEDED,
+            ThresholdCalibration,
+        )
+
+        rows = (
+            db.query(ThresholdCalibration)
+            .filter(
+                ThresholdCalibration.organization_id == org_id,
+                ThresholdCalibration.status.in_([STATUS_ACTIVE, STATUS_SUPERSEDED]),
+                or_(
+                    ThresholdCalibration.role_id == role_id,
+                    ThresholdCalibration.role_id.is_(None),
+                ),
+            )
+            .order_by(
+                desc(
+                    func.coalesce(
+                        ThresholdCalibration.activated_at,
+                        ThresholdCalibration.created_at,
+                    )
+                )
+            )
+            .all()
+        )
+        for row in rows:
+            at = row.activated_at or row.created_at
+            scope_note = "role-specific" if row.role_id is not None else "org-wide pool"
+            metric_bits = []
+            if row.metric_name:
+                metric_bits.append(str(row.metric_name).replace("_", " "))
+            if row.n_positive or row.n_negative:
+                metric_bits.append(
+                    f"{int(row.n_positive or 0)}+/{int(row.n_negative or 0)}− labels"
+                )
+            note = scope_note
+            if metric_bits:
+                note = f"{scope_note} · " + " · ".join(metric_bits)
+            entries.append({
+                "at": at.isoformat() if at is not None else None,
+                "threshold": round(float(row.learned_threshold), 1),
+                "status": str(row.status),
+                "scope": str(row.scope),
+                "note": note,
+            })
+    except Exception:  # pragma: no cover — calibration is optional infra
+        entries = []
+
+    has_history = len(entries) > 0
+    if not has_history:
+        # No persisted calibration history — surface only the current boundary
+        # as a single entry, flagged so the UI never implies past changes.
+        entries = [{
+            "at": None,
+            "threshold": current_threshold,
+            "status": "current",
+            "scope": "role" if role.score_threshold is not None else "auto",
+            "note": (
+                "Current threshold — no calibration history recorded yet."
+            ),
+        }]
+
+    return {
+        "role_id": int(role_id),
+        "role_name": role.name,
+        "current_threshold": current_threshold,
+        "has_history": has_history,
+        "entries": entries,
+    }

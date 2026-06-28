@@ -19,4 +19,12 @@ export const analytics = {
   // candidate experience). Without experiment_id, returns the org's experiments
   // so the UI can populate a selector.
   experimentsComparison: (params = {}) => api.get('/analytics/experiments/comparison', { params }),
+  // Monthly override / agreement rate over resolved agent decisions (trailing
+  // ~6 months, optional role_id) — backs the Analytics Outcomes "override rate
+  // over time" bars and the Teaching "agreement trend" bars. Real verdicts only.
+  decisionTrend: (params = {}) => api.get('/analytics/decision-trend', { params }),
+  // A role's score-threshold change history from the persisted
+  // ThresholdCalibration rows; `has_history=false` + a single current-threshold
+  // entry when no calibration was ever activated (never fabricates past changes).
+  thresholdHistory: (roleId) => api.get('/analytics/threshold-history', { params: { role_id: roleId } }),
 };
