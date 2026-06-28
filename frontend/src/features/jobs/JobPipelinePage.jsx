@@ -19,7 +19,8 @@ import { RoleViewTabs, useRoleView } from './RoleViewTabs';
 import { useRoleProgressPolling } from './useRoleProgressPolling';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { parseJobSpec, FormattedJobSpecSection } from './jobSpecFormatting';
-import { RequisitionSpecSections, JobStatusControl } from './RequisitionSpecSections';
+import { RequisitionSpecSections, JobStatusControl, ClientControl } from './RequisitionSpecSections';
+import { clientApi } from '../clients/api';
 import { RoleAgentSettingsTab } from './RoleAgentSettingsTab';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
 import { useAgentStatus } from '../../shared/layout/AgentBar';
@@ -313,6 +314,41 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setSavingJobStatus(false);
     }
   }, [numericRoleId, role?.job_status, rolesApi, showToast]);
+  // Consultancy client assignment — the org's clients (for the picker) + the
+  // mutation. Lets recruiters tag a client onto ANY role, including legacy /
+  // Workable-imported jobs that never went through a requisition. Optimistic
+  // with rollback, same shape as the job-status control above.
+  const [clients, setClients] = useState([]);
+  const [savingClient, setSavingClient] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    clientApi
+      .list()
+      .then((rows) => { if (!cancelled) setClients(Array.isArray(rows) ? rows : []); })
+      .catch(() => { if (!cancelled) setClients([]); });
+    return () => { cancelled = true; };
+  }, []);
+  const handleSetClient = useCallback(async (nextClientId) => {
+    if (!Number.isFinite(numericRoleId)) return;
+    const prevId = role?.client_id ?? null;
+    const prevName = role?.client_name ?? null;
+    if ((nextClientId ?? null) === prevId) return;
+    const nextName = nextClientId == null
+      ? null
+      : (clients.find((c) => c.id === nextClientId)?.name ?? null);
+    setSavingClient(true);
+    setRole((cur) => (cur ? { ...cur, client_id: nextClientId ?? null, client_name: nextName } : cur));
+    try {
+      const res = await rolesApi.setClient(numericRoleId, nextClientId);
+      if (res?.data) setRole(res.data);
+      showToast(nextClientId == null ? 'Client cleared.' : 'Client assigned.', 'success');
+    } catch (error) {
+      setRole((cur) => (cur ? { ...cur, client_id: prevId, client_name: prevName } : cur));
+      showToast(getErrorMessage(error, 'Failed to update client.'), 'error');
+    } finally {
+      setSavingClient(false);
+    }
+  }, [numericRoleId, role?.client_id, role?.client_name, clients, rolesApi, showToast]);
   const [refreshTick, setRefreshTick] = useState(0);
   const [interviewFocusGenerating, setInterviewFocusGenerating] = useState(false);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
@@ -1539,6 +1575,19 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   status={role.job_status}
                   onChange={handleSetJobStatus}
                   busy={savingJobStatus}
+                />
+              ) : null}
+
+              {/* Consultancy client assignment — shown whenever the org has any
+                  clients (or this role already has one), so legacy / imported
+                  roles with no requisition can still be tagged to a client. */}
+              {(clients.length > 0 || role?.client_id) ? (
+                <ClientControl
+                  clientId={role?.client_id ?? null}
+                  clientName={role?.client_name ?? null}
+                  clients={clients}
+                  onChange={handleSetClient}
+                  busy={savingClient}
                 />
               ) : null}
 

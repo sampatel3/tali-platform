@@ -343,6 +343,62 @@ def role_client_map(
     return out
 
 
+def set_role_client(
+    db: Session, *, organization_id: int, role_id: int, client_id: int | None
+) -> dict | None:
+    """Assign (or clear) the client a role belongs to, returning the new
+    ``{"client_id", "client_name"}`` mapping (or None when cleared).
+
+    A role's client lives on its requisition brief. Roles that came from a
+    requisition already have one; Workable-imported / legacy roles created before
+    client tagging existed have no brief, so we lazily stand up a minimal stub
+    brief (status ``applied`` — it's already bound to a live role, not an
+    in-flight intake) carrying just the client link. The brief's other fields
+    stay empty; this is purely the consultancy attribution that the Jobs Client
+    column / filter and per-client rollups read via ``role_client_map``.
+
+    Flushes but does not commit — the caller owns the transaction.
+    """
+    from ..models.client import Client
+
+    client = None
+    if client_id is not None:
+        client = (
+            db.query(Client)
+            .filter(Client.id == client_id, Client.organization_id == organization_id)
+            .first()
+        )
+        if client is None:
+            raise HTTPException(status_code=404, detail="Client not found")
+
+    # Newest brief wins (mirrors requisition_spec_for_role / role_client_map).
+    brief = (
+        db.query(RoleBrief)
+        .filter(
+            RoleBrief.organization_id == organization_id,
+            RoleBrief.role_id == role_id,
+        )
+        .order_by(RoleBrief.id.desc())
+        .first()
+    )
+    if brief is None:
+        if client_id is None:
+            return None  # nothing to clear, nothing to create
+        brief = RoleBrief(
+            organization_id=organization_id,
+            role_id=role_id,
+            status=BRIEF_STATUS_APPLIED,
+            source_kind="manual_attribution",
+        )
+        db.add(brief)
+
+    brief.client_id = client_id
+    db.flush()
+    if client_id is None:
+        return None
+    return {"client_id": client_id, "client_name": client.name if client else None}
+
+
 def _brief_location(brief: RoleBrief) -> str | None:
     """Public location string: "City, Country" from the brief's parts. Omits a
     missing half (so just a city or just a country still renders), returns None

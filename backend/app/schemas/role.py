@@ -223,6 +223,16 @@ class JobStatusUpdate(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=2000)
 
 
+class RoleClientUpdate(BaseModel):
+    """Assign (or clear) the consultancy client a role belongs to. For roles
+    with no requisition brief — e.g. Workable-imported jobs created before
+    client tagging existed — the assignment is stored on a minimal stub brief so
+    the Jobs Client column / filter and per-client rollups pick the role up.
+    ``client_id=None`` clears the assignment."""
+
+    client_id: Optional[int] = Field(default=None, gt=0)
+
+
 class RoleTaskLinkRequest(BaseModel):
     task_id: int = Field(gt=0)
 

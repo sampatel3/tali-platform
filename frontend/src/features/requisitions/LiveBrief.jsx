@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Check, Plus, Sparkles, X } from 'lucide-react';
 
+import { Select } from '../../shared/ui/TaaliPrimitives';
+
 // The live brief panel — rendered FROM the org's requisition spec template.
 // Each template section + field is shown with its captured value from the
 // brief (a top-level column, or `custom_fields[key]` for keys without a
@@ -109,12 +111,12 @@ function FieldEditor({ field, value, onCancel, onSave, saving }) {
     const options = Array.isArray(field.options) ? field.options : [];
     return (
       <div className="rq-edit">
-        <select autoFocus value={draft} onChange={(e) => setDraft(e.target.value)}>
+        <Select value={draft} onChange={(e) => setDraft(e.target.value)} aria-label={field.label}>
           <option value="">— Select —</option>
           {options.map((opt) => (
             <option key={opt} value={opt}>{opt}</option>
           ))}
-        </select>
+        </Select>
         <EditActions onCancel={onCancel} onSave={commit} saving={saving} />
       </div>
     );

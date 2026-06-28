@@ -27,6 +27,7 @@ import { RoleSheet } from '../candidates/RoleSheet';
 import { trimOrUndefined } from '../candidates/candidatesUiUtils';
 import {
   EmptyState,
+  Select,
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
 import {
@@ -828,7 +829,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           {clientOptions.length ? (
             <label className="jobs-client-filter" title="Filter by client">
               <span className="filter-row-label">Client</span>
-              <select
+              <Select
+                inline
+                aria-label="Filter by client"
                 value={clientFilter === 'all' ? 'all' : String(clientFilter)}
                 onChange={(event) => {
                   const value = event.target.value;
@@ -839,7 +842,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                 {clientOptions.map((c) => (
                   <option key={c.id} value={String(c.id)}>{c.name}</option>
                 ))}
-              </select>
+              </Select>
             </label>
           ) : null}
           <button type="button" className="f-chip add" disabled title="Additional recruiter filters are coming next.">
