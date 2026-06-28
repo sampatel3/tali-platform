@@ -284,7 +284,6 @@ from .domains.assessments_runtime.analytics_routes import router as analytics_ro
 from .domains.billing_webhooks.billing_routes import router as billing_router
 from .domains.candidates_documents.routes import router as candidates_router
 from .domains.assessments_runtime.roles_routes import router as roles_router
-from .domains.assessments_runtime.scoring_routes import router as scoring_router
 from .domains.assessments_runtime.requisition_routes import (
     router as requisition_router,
 )
@@ -339,7 +338,6 @@ app.include_router(analytics_router, prefix="/api/v1")
 app.include_router(billing_router, prefix="/api/v1")
 app.include_router(candidates_router, prefix="/api/v1")
 app.include_router(roles_router, prefix="/api/v1")
-app.include_router(scoring_router, prefix="/api/v1")
 app.include_router(requisition_router, prefix="/api/v1")
 app.include_router(clients_router, prefix="/api/v1")
 app.include_router(workable_router, prefix="/api/v1")
