@@ -19,6 +19,7 @@ vi.mock('../../shared/api', () => ({
     bulkOverrideDecisions: (...a) => bulkOverrideDecisions(...a),
     snoozeDecision: vi.fn().mockResolvedValue({ data: {} }),
     reEvaluateDecision: vi.fn().mockResolvedValue({ data: {} }),
+    listDecisions: vi.fn().mockResolvedValue({ data: [] }),
   },
   organizations: {
     getWorkableStages: vi.fn().mockResolvedValue({ data: { stages: [] } }),

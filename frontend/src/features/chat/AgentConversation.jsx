@@ -263,11 +263,6 @@ const AgentConversation = ({
             right edge. */}
         <span className="cp-head-lead"><MessageSquare size={15} /> Ask the agent</span>
         {roleName ? <span className="cp-head-role">{roleName}</span> : null}
-        <div className="cp-head-grow" />
-        <span className={`cp-head-pill ${agentEnabled ? 'cp-head-pill-on' : ''}`}>
-          <span className="cp-pill-glyph"><Sparkles size={11} /></span>
-          {agentEnabled ? 'Agent on' : 'Agent off'}
-        </span>
       </header>
       <div className="cp-scroll" ref={scrollRef}>
         {loading && items.length === 0 ? (

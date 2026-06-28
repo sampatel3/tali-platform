@@ -16,7 +16,6 @@ import './home.css';
 import { formatCount, budgetTile, decisionPendingFromCounts } from '../../shared/metrics';
 import { HomeNow } from './HomeNow';
 import { HomeAnalyticsSummary } from './HomeAnalyticsSummary';
-import { HomePlatformUpdates } from './HomePlatformUpdates';
 import { AgentSidebar } from './agentchat/AgentSidebar';
 import { AgentChatDock } from './agentchat/AgentChatDock';
 import './agentchat/agentchat.css';
@@ -148,7 +147,6 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   // reachable, `agents` stays empty and the home renders exactly as before.
   const [agents, setAgents] = useState([]);
   const [activeRoleId, setActiveRoleId] = useState(null);
-  const [dockCollapsed, setDockCollapsed] = useState(false);
   // Bulk messaging: select several roles, send one message that fans out to
   // each role's own thread (separate audit). bulkSelected holds role_ids.
   const [bulkMode, setBulkMode] = useState(false);
@@ -362,13 +360,11 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       }
       prevUnreadRef.current = new Map(list.map((a) => [a.role_id, a.unread_messages || 0]));
       setActiveRoleId((cur) => {
+        // Keep a still-valid selection across polls; otherwise default to
+        // "All roles" (null). The hub loads with NO agent chat open — the
+        // recruiter opens one by clicking an agent in the rail.
         if (cur && list.some((a) => a.role_id === cur)) return cur;
-        // Auto-focus the most-urgent agent on FIRST load only. Once the
-        // recruiter has chosen (incl. deliberately deselecting to view all
-        // roles), don't yank a selection back on the 30s poll.
-        if (userTouchedSelectionRef.current) return null;
-        const ranked = [...list].sort((a, b) => (b.attention || 0) - (a.attention || 0));
-        return ranked.length ? ranked[0].role_id : null;
+        return null;
       });
     } catch {
       setAgents([]);
@@ -392,7 +388,6 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     const deselect = roleId == null || activeRoleId === roleId;
     setActiveRoleId(deselect ? null : roleId);
     setFilters((f) => ({ ...f, role_id: deselect ? null : roleId }));
-    if (!deselect) setDockCollapsed(false);
   }, [activeRoleId, setFilters]);
 
   const activeAgent = useMemo(
@@ -532,7 +527,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       />
       {/* The shell renders immediately (not gated on the async agents fetch),
           so the page lays out once — no flash of the pre-rail layout. */}
-      <div className={`ac-shell ${dockCollapsed ? 'ac-dock-collapsed' : ''}`}>
+      <div className={`ac-shell ${(activeRoleId != null || bulkMode) ? '' : 'ac-dock-collapsed'}`}>
         <AgentSidebar
           agents={agentsWithBudget}
           activeRoleId={activeRoleId}
@@ -568,29 +563,24 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
             /analytics — keeps the hub's review loop focused, and keeps the
             expensive reporting queries off every home load. */}
         <HomeAnalyticsSummary kpis={kpis} orgBudget={orgBudget} onNavigate={onNavigate} />
-
-        <HomePlatformUpdates compact />
       </div>
         </div>
-        {dockCollapsed ? (
-          <div className="ac-dock-handle">
-            <button className="ac-reopen" onClick={() => setDockCollapsed(false)}>
-              <MessageSquare size={15} /> Ask the agent
-              {totalAttention > 0 && <span className="ac-badge-count">{totalAttention}</span>}
-            </button>
-          </div>
-        ) : (
+        {/* The chat dock is open only when an agent is selected (or in bulk
+            mode). The hub loads with "All roles" and no chat; clicking an agent
+            opens it, and the dock's collapse control (or re-clicking the agent)
+            deselects → closes it. No separate "reopen" button needed. */}
+        {(activeRoleId != null || bulkMode) ? (
           <AgentChatDock
             roleId={activeRoleId}
             roleName={activeAgent?.role_name}
             agentEnabled={activeAgent ? activeAgent.agent_enabled : true}
             onReload={reloadAll}
-            onCollapse={() => setDockCollapsed(true)}
+            onCollapse={() => { handleSelectAgent(null); if (bulkMode) clearBulk(); }}
             bulkSelectedRoles={bulkSelectedRoles}
             onSendBulk={sendBulk}
             onClearBulk={clearBulk}
           />
-        )}
+        ) : null}
       </div>
       </div>
       {/* Mobile only: the side rail + dock don't fit a phone, so we route to
