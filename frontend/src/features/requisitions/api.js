@@ -83,6 +83,14 @@ export const requisitionApi = {
   publish: (id, jdMarkdown) =>
     api.post(`${BASE}/${id}/publish`, { jd_markdown: jdMarkdown }).then((r) => r.data),
 
+  // Smarter warm-start: once the role has a title, prefill the SUBSTANCE
+  // (requirements / responsibilities / seniority / salary band) from the most
+  // similar prior role/requisition. Deterministic, no LLM. Fills only empty
+  // fields. Returns the FULL serialized brief plus `prefilled_from`
+  // ({ kind, id, name, score } or null) and `prefilled_fields` (the keys filled).
+  prefillFromSimilar: (id) =>
+    api.post(`${BASE}/${id}/prefill-from-similar`).then((r) => r.data),
+
   // Mint (or fetch) the public CLIENT INTAKE link for this requisition — the
   // no-login URL a consultancy recruiter sends to their client so the client
   // can describe the role via the same conversational agent (company/economics

@@ -38,6 +38,10 @@ from ...services.requisition_chat_service import (
     warm_start_fields,
 )
 from ...services.requisition_intake_agent import run_intake_extraction
+from ...services.requisition_similar_service import (
+    apply_prefill_to_empty_fields,
+    find_similar_prefill,
+)
 from ...services.requisition_template_service import (
     get_template_for_org,
     iter_fields,
@@ -439,6 +443,39 @@ def answer_requisition(
         "gaps": payload["gaps"],
         "suggested_replies": options,
     }
+
+
+@router.post("/requisitions/{brief_id}/prefill-from-similar")
+def prefill_requisition_from_similar(
+    brief_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Smarter warm-start: prefill the SUBSTANCE (requirements / responsibilities
+    / seniority / salary band) from the most SIMILAR prior role or requisition,
+    matched by title. Deterministic, no LLM, no spend.
+
+    Fills ONLY fields still empty on this brief (never overwrites the recruiter /
+    agent), so it's safe to call once the title is known and idempotent on repeat.
+    Returns the updated brief plus ``prefilled_from`` (the source: name/kind/score)
+    and ``prefilled_fields`` (the keys filled) — null/empty when nothing matched.
+    """
+    brief = _get_brief(db, current_user.organization_id, brief_id)
+    org = _org(db, current_user.organization_id)
+
+    suggestion = find_similar_prefill(
+        db, organization_id=current_user.organization_id, brief=brief
+    )
+    applied: list[str] = []
+    if suggestion is not None:
+        applied = apply_prefill_to_empty_fields(db, brief, suggestion["fields"])
+        db.commit()
+        db.refresh(brief)
+
+    payload = _serialize_brief(brief, org)
+    payload["prefilled_from"] = suggestion["source"] if (suggestion and applied) else None
+    payload["prefilled_fields"] = applied
+    return payload
 
 
 @router.post("/requisitions/{brief_id}/intake")

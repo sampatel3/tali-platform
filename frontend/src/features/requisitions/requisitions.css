@@ -250,6 +250,38 @@ a.rq-btn-sm { text-decoration: none; }
 }
 .rq-careers-link:hover { text-decoration: underline; }
 
+/* Smarter warm-start banner — shown after the substance is prefilled from a
+   similar prior role. Sits below the header, above the economics strip. */
+.rq-prefill-banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 14px;
+  margin: 0 0 12px;
+  border-radius: 10px;
+  background: var(--purple-soft);
+  border: 1px solid color-mix(in oklab, var(--purple) 22%, transparent);
+  color: var(--purple-2);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+.rq-prefill-banner strong { color: var(--ink); font-weight: 600; }
+.rq-prefill-dismiss {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--purple-2);
+  cursor: pointer;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+.rq-prefill-dismiss:hover { background: color-mix(in oklab, var(--purple) 14%, transparent); }
+
 /* Workable bridge: the inactive Taali job + the spec the recruiter posts in
    Workable. Sits under the careers row in the published block. */
 .rq-workable-row {
