@@ -67,10 +67,6 @@ vi.mock('../candidates/CandidateSheet', () => ({
   CandidateSheet: () => null,
 }));
 
-vi.mock('../candidates/CandidatesDirectoryPage', () => ({
-  CandidatesDirectoryPage: () => null,
-}));
-
 import * as apiClient from '../../shared/api';
 import { JobPipelinePage } from './JobPipelinePage';
 
