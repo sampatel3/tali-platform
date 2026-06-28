@@ -393,20 +393,19 @@
 
 /* ===========================================================================
    Candidate Notes & timeline tab — HANDOFF v2 §5.1 / canvas cand-notes
-   Two-col grid: HIRING TEAM NOTES (1.4fr) + AUDIT TIMELINE (1fr) with
-   colored dots on a left vertical line.
+   Single column (preview order): hiring-team notes → transcript →
+   questionnaire → Workable comments → audit timeline (full width, bottom).
    =========================================================================== */
 
-.mc-notes-grid {
-  display: grid;
-  grid-template-columns: 1.4fr 1fr;
-  gap: 18px;
+/* Single-column notes flow, matching the preview order: hiring-team notes +
+   inputs → interview transcript → questionnaire → Workable comments → audit
+   timeline (full width, at the very bottom). Replaces the old cramped 2-col
+   grid that boxed the timeline into a narrow right rail. */
+.mc-notes-single {
+  display: flex;
+  flex-direction: column;
 }
-@media (max-width: 880px) {
-  .mc-notes-grid { grid-template-columns: 1fr; }
-}
-
-.mc-notes-col .mc-kicker {
+.mc-notes-single > .mc-kicker {
   margin-bottom: 10px;
 }
 

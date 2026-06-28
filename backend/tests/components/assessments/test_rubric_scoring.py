@@ -644,3 +644,68 @@ def test_practice_dimension_rolls_up_to_tagged_fluency_axis():
     axes = summarize_fluency_4d(rubric, dims)
     assert axes["diligence"] == 80.0
     assert axes["deliverable"] is None
+
+
+# ---- Two-stage part scoring (Part 1 Practice / Part 2 Applied) --------------
+
+from app.components.assessments.rubric_scoring import (  # noqa: E402
+    part_for_dimension,
+    summarize_part_scores,
+)
+
+
+def test_part_for_dimension_mapping():
+    assert part_for_dimension({"grader": "practice_outcome"}) == "practice"
+    assert part_for_dimension({"lens": "practice"}) == "practice"
+    assert part_for_dimension({"part": "practice"}) == "practice"
+    assert part_for_dimension({"lens": "deliverable"}) == "applied"
+    assert part_for_dimension({"grader": "interrogation_outcome"}) == "applied"
+    assert part_for_dimension({}) == "applied"
+
+
+def _dg(dim_id, score, weight=1.0, error=None):
+    return DimensionGrade(dimension_id=dim_id, score=score, rating="good", reasoning="", weight=weight, error=error)
+
+
+def test_summarize_part_scores_blends_two_stages():
+    rubric = {
+        "ctx": {"grader": "practice_outcome", "part": "practice"},
+        "verify": {"grader": "practice_outcome", "part": "practice"},
+        "impl": {"lens": "deliverable"},
+    }
+    dims = [_dg("ctx", 7.5, 0.5), _dg("verify", 1.5, 0.5), _dg("impl", 8.0, 1.0)]
+    out = summarize_part_scores(rubric, dims, {"practice": 0.3, "applied": 0.7})
+    assert out["practice"] == 45.0   # (7.5*.5 + 1.5*.5) * 10
+    assert out["applied"] == 80.0    # 8.0 * 10
+    # blend: 0.3*45 + 0.7*80 = 13.5 + 56 = 69.5
+    assert out["blended_100"] == 69.5
+    assert out["part_weights_used"] == {"practice": 0.3, "applied": 0.7}
+
+
+def test_summarize_part_scores_single_part_collapses_to_that_part():
+    # No practice dim -> practice None, blend == applied (back-compat: identical
+    # to the ordinary weighted score for existing tasks).
+    rubric = {"a": {"lens": "decision"}, "b": {"lens": "deliverable"}}
+    dims = [_dg("a", 6.0, 0.4), _dg("b", 9.0, 0.6)]
+    out = summarize_part_scores(rubric, dims)
+    assert out["practice"] is None
+    assert out["applied"] == round((6.0 * 0.4 + 9.0 * 0.6) / 1.0 * 10, 2)  # 78.0
+    assert out["blended_100"] == out["applied"]
+
+
+def test_summarize_part_scores_default_weights_when_unset():
+    rubric = {"ctx": {"grader": "practice_outcome"}, "impl": {"lens": "deliverable"}}
+    dims = [_dg("ctx", 10.0), _dg("impl", 5.0)]
+    out = summarize_part_scores(rubric, dims, None)
+    assert out["part_weights_used"] == {"practice": 0.3, "applied": 0.7}
+    # 0.3*100 + 0.7*50 = 30 + 35 = 65
+    assert out["blended_100"] == 65.0
+
+
+def test_summarize_part_scores_skips_errored_dim():
+    rubric = {"ctx": {"grader": "practice_outcome"}, "impl": {"lens": "deliverable"}}
+    dims = [_dg("ctx", 9.0), _dg("impl", 0.0, error="boom")]
+    out = summarize_part_scores(rubric, dims)
+    assert out["practice"] == 90.0
+    assert out["applied"] is None
+    assert out["blended_100"] == 90.0  # only practice present
