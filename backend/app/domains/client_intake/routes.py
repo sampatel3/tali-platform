@@ -137,9 +137,10 @@ def view_client_intake(
     db: Session = Depends(get_db),
     _user: User | None = Depends(get_optional_current_user),
 ):
-    """The client's view of the scoped intake: the org name (the consultancy),
-    the transcript so far, and the live spec progress computed against the
-    CLIENT-scoped template. ROLE-safe fields only."""
+    """The client's view of the scoped intake: the transcript so far + the live
+    spec progress computed against the CLIENT-scoped template. ROLE-safe fields
+    only, and deliberately ANONYMOUS — the consultancy/org name is never exposed
+    (safety/privacy); the page reads as a generic role intake."""
     brief = _resolve_brief(db, token)
     org = (
         db.query(Organization)
@@ -148,7 +149,8 @@ def view_client_intake(
     )
     client_template = client_scoped_template(resolve_template(org))
     return {
-        "organization_name": org.name if org else None,
+        # Intentionally NOT the real org name — the client surface stays generic.
+        "organization_name": None,
         "messages": brief.messages or [],
         "captured": _role_safe_captured(brief, client_template),
         "gaps": compute_gaps(brief, client_template),
@@ -210,7 +212,6 @@ async def chat_client_intake(
         .filter(Organization.id == brief.organization_id)
         .first()
     )
-    org_name = org.name if org else None
     client_template = client_scoped_template(resolve_template(org))
 
     result = run_chat_turn(
@@ -220,7 +221,9 @@ async def chat_client_intake(
         attachments=attachments,
         template=client_template,
         feature=Feature.REQUISITION_CLIENT_INTAKE.value,
-        client_org_name=org_name,
+        # Generic, non-empty gate: switches the prompt to CLIENT-framed + no-pay
+        # mode WITHOUT passing the real org name (privacy — the prompt is anon).
+        client_org_name="client",
     )
     if not result.ok:
         db.rollback()

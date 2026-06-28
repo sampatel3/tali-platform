@@ -92,6 +92,12 @@ const buildResolvers = (brief) => {
     // custom_fields.responsibilities (NOT a top-level brief column), but render
     // exactly like the other list placeholders (bulleted, TBC when empty).
     responsibilities: formatList(custom.responsibilities),
+    // Role-agnostic benefits (custom list field, auto-standardised from recent
+    // roles). Tolerate a legacy string value too.
+    benefits: Array.isArray(custom.benefits) ? formatList(custom.benefits) : custom.benefits,
+    // Role-agnostic "About the company" blurb (auto-derived once per org, copied
+    // onto each requisition). Plain text.
+    company_description: custom.company_description,
   };
 };
 

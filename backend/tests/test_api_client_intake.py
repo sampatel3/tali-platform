@@ -121,9 +121,10 @@ def test_client_scoped_template_drops_compensation_section():
 
 
 # --------------------------------------------------------------------------- #
-# Public GET — role fields + org name, NEVER economics / pay / client identity
+# Public GET — role fields only; NEVER the org name (privacy), economics, pay,
+# or client identity.
 # --------------------------------------------------------------------------- #
-def test_public_get_exposes_role_fields_and_org_name(client):
+def test_public_get_exposes_role_fields_but_not_org_name(client):
     headers, _ = auth_headers(client, organization_name="Globex Recruiting")
     brief_id, link = _mint_link(client, headers)
     # Capture some role-safe fields onto the brief via the recruiter PATCH.
@@ -148,7 +149,9 @@ def test_public_get_exposes_role_fields_and_org_name(client):
         "completeness",
         "status",
     }
-    assert body["organization_name"] == "Globex Recruiting"
+    # Privacy: the client surface is anonymous — the consultancy/org name is
+    # never exposed, even though the org has one.
+    assert body["organization_name"] is None
     assert body["captured"]["title"] == "Backend Engineer"
     assert body["captured"]["department"] == "Platform"
     assert body["captured"]["must_haves"] == ["Python", "AWS"]

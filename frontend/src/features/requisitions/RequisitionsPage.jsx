@@ -11,7 +11,7 @@
 // ThinkingDots) — the one standard chat UI across Search, the Home dock and
 // the candidate workspace — and the global purple design tokens.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Copy, ExternalLink, FileText, Paperclip, Plus, RefreshCw, Rocket, Share2, Sparkles, X } from 'lucide-react';
+import { Check, Copy, ExternalLink, FileText, Paperclip, Plus, RefreshCw, Rocket, Share2, X } from 'lucide-react';
 
 import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
 import { requisitionApi } from './api';
@@ -86,11 +86,6 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const [clientCopied, setClientCopied] = useState(false);
   // Transient "Copied" tick on the "Copy spec for Workable" button.
   const [workableCopied, setWorkableCopied] = useState(false);
-  // Smarter warm-start: the banner shown after the substance is prefilled from a
-  // similar prior role ({ name, fields } or null), + a per-requisition guard so
-  // the auto-prefill fires once.
-  const [prefilledFrom, setPrefilledFrom] = useState(null);
-  const prefillTriedRef = useRef(new Set());
   const [savingKey, setSavingKey] = useState(null);
   const [loadingBrief, setLoadingBrief] = useState(false);
   const [error, setError] = useState('');
@@ -606,45 +601,24 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, brief?.id]);
 
-  // Clear the prefill banner when switching requisitions.
-  useEffect(() => { setPrefilledFrom(null); }, [selectedId]);
-
-  // Smarter warm-start: as soon as a requisition has a TITLE but no requirements
-  // yet, pull the substance (requirements / responsibilities / seniority / salary)
-  // from the most similar prior role. Deterministic backend call, fills only
-  // empty fields, fires once per requisition.
+  // Live sync from the client link: the client fills the role from their no-login
+  // link and the backend persists each turn to THIS brief — so poll every 5s
+  // while a client link is live (and the requisition isn't finalized) so the
+  // recruiter sees the client's input appear WITHOUT waiting for them to submit.
+  // Skips while the tab is hidden or a recruiter turn is in flight (no clobber).
   useEffect(() => {
-    if (!selectedId || !brief) return;
-    const hasTitle = typeof brief.title === 'string' && brief.title.trim() !== '';
-    const custom = brief.custom_fields || {};
-    const hasSubstance =
-      (Array.isArray(brief.must_haves) && brief.must_haves.length > 0)
-      || (Array.isArray(custom.responsibilities) && custom.responsibilities.length > 0);
-    if (!hasTitle || hasSubstance || prefillTriedRef.current.has(selectedId)) return;
-    prefillTriedRef.current.add(selectedId);
-    (async () => {
+    if (!selectedId || !clientLink || brief?.status === 'applied') return undefined;
+    const tick = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (turnInFlight) return;
       try {
-        const res = await requisitionApi.prefillFromSimilar(selectedId);
-        if (res && Array.isArray(res.prefilled_fields) && res.prefilled_fields.length > 0) {
-          // Merge the prefilled substance, preserving the live client_link +
-          // transcript (which a concurrent turn/mint may have just updated).
-          setBrief((prev) => ({
-            ...(prev || {}),
-            ...res,
-            client_link: prev?.client_link ?? res.client_link,
-            messages: prev?.messages ?? res.messages,
-          }));
-          setPrefilledFrom({
-            name: res.prefilled_from?.name || 'a similar role',
-            fields: res.prefilled_fields,
-          });
-        }
-      } catch {
-        /* best-effort warm-start — never blocks the flow */
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, brief?.title]);
+        const fresh = await requisitionApi.get(selectedId);
+        setBrief((prev) => (prev && fresh && prev.id === fresh.id ? { ...prev, ...fresh } : prev));
+      } catch { /* transient — keep polling */ }
+    };
+    const id = setInterval(tick, 5000);
+    return () => clearInterval(id);
+  }, [selectedId, clientLink, brief?.status, turnInFlight]);
 
   const published = Boolean(jobPage) || isPublished(brief?.status);
   const canSend = (composer.trim() || attachments.length > 0) && !turnInFlight;
@@ -862,24 +836,6 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   )}
                 </div>
               </header>
-
-              {prefilledFrom ? (
-                <div className="rq-prefill-banner" role="status">
-                  <Sparkles size={14} />
-                  <span>
-                    Pre-filled {prefilledFrom.fields.length} field{prefilledFrom.fields.length === 1 ? '' : 's'} from your similar role{' '}
-                    <strong>{prefilledFrom.name}</strong> — review and edit on the right.
-                  </span>
-                  <button
-                    type="button"
-                    className="rq-prefill-dismiss"
-                    onClick={() => setPrefilledFrom(null)}
-                    aria-label="Dismiss"
-                  >
-                    <X size={13} />
-                  </button>
-                </div>
-              ) : null}
 
               <RequisitionEconomics
                 brief={brief}

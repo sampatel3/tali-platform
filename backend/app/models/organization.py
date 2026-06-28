@@ -63,6 +63,10 @@ class Organization(Base):
     # conversational intake captures against. NULL means "use the built-in
     # DEFAULT_REQUISITION_TEMPLATE" (see requisition_template_service).
     requisition_spec_template = Column(JSON, nullable=True)
+    # Cached, auto-derived "About the company" blurb (role-agnostic boilerplate,
+    # the same on every spec). Derived once from recent role specs and copied
+    # onto each new requisition. NULL = not yet derived; "" = derived, none found.
+    company_blurb = Column(Text, nullable=True)
     scoring_policy = Column(JSON, nullable=True)
     ai_tooling_config = Column(JSON, nullable=True)
     notification_preferences = Column(JSON, nullable=True)
