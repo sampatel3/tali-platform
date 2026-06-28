@@ -6,11 +6,11 @@
 // the dock's internals so the Home page stays untouched.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { PanelLeft, Sparkles } from 'lucide-react';
+import { MessageSquare, PanelLeft, Sparkles } from 'lucide-react';
 
 import { agentChat } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
-import { ChatComposer, ChatEmptyState, ChatMessage, ThinkingDots } from '../../shared/chat';
+import { ChatComposer, ChatEmptyState, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
 import { DraftTaskCard, ImpactCard, NeedsInputCard } from '../home/agentchat/cards.jsx';
 import CandidateEvidenceCard from './CandidateEvidenceCard';
 
@@ -233,7 +233,7 @@ const AgentConversation = ({
               <PanelLeft size={18} />
             </button>
           ) : null}
-          <div className="cp-head-ttl">Agents<span className="sub">Agent</span></div>
+          <span className="cp-head-lead"><MessageSquare size={15} /> Ask the agent</span>
         </header>
         <div className="cp-scroll">
           <ChatEmptyState
@@ -258,10 +258,11 @@ const AgentConversation = ({
             <PanelLeft size={18} />
           </button>
         ) : null}
-        <div className="cp-head-ttl">
-          {roleName || 'Agent'}
-          <span className="sub">Agent</span>
-        </div>
+        {/* Dock-style head (Home `.ac-dock-head`): a chat glyph + "Ask the
+            agent" + the role pill, with the agent on/off state pushed to the
+            right edge. */}
+        <span className="cp-head-lead"><MessageSquare size={15} /> Ask the agent</span>
+        {roleName ? <span className="cp-head-role">{roleName}</span> : null}
         <div className="cp-head-grow" />
         <span className={`cp-head-pill ${agentEnabled ? 'cp-head-pill-on' : ''}`}>
           <span className="cp-pill-glyph"><Sparkles size={11} /></span>
@@ -289,9 +290,19 @@ const AgentConversation = ({
                 <ChatMessage
                   key={it.id}
                   role={it.author === 'agent' ? 'assistant' : 'user'}
-                  text={it.text}
+                  text={it.author === 'agent' ? undefined : it.text}
                   time={it.created_at}
                 >
+                  {/* Agent replies carry the mono "AGENT" kicker above the prose
+                      (home dock `.ac-agent-say` / `.ac-who`); the shared
+                      <ChatMarkdown> keeps the prose identical to every other
+                      chat surface. User messages stay the plain ink pill. */}
+                  {it.author === 'agent' ? (
+                    <div className="cp-agent-say">
+                      <span className="cp-who">Agent</span>
+                      {it.text ? <ChatMarkdown>{it.text}</ChatMarkdown> : null}
+                    </div>
+                  ) : null}
                   {(it.actions || []).map((card, i) =>
                     card.type === 'candidate_evidence' ? (
                       <CandidateEvidenceCard key={i} data={card} />

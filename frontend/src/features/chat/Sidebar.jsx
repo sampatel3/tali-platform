@@ -1,5 +1,5 @@
 import React from 'react';
-import { MessageSquare, Plus, Sparkles, Trash2 } from 'lucide-react';
+import { MessageSquare, Pause, Plus, Sparkles, Trash2 } from 'lucide-react';
 
 const groupByRecency = (rows) => {
   const groups = { today: [], yesterday: [], week: [], older: [] };
@@ -147,33 +147,63 @@ const AgentList = ({ agents, activeRoleId, onSelectAgent }) => {
     .map((key) => ({ key, label: AGENT_GROUP_LABELS[key], rows: (agents || []).filter((a) => (a.group || 'active') === key) }))
     .filter((s) => s.rows.length > 0);
 
+  // Flat-list agent row, mirroring the Home rail (`.ac-agent`): a top row of
+  // status glyph + role name, then a sub-column (preview · badges · budget bar)
+  // indented to line up under the role name. Same status vocabulary + the two
+  // indicators (purple questions pill, muted pending pill) the Home rail uses.
   const renderAgent = (a) => {
     const questions = (a.unread_messages || 0) + (a.open_questions || 0);
+    const decisions = a.pending_decisions || 0;
     const status = a.agent_paused ? 'paused' : a.agent_enabled ? 'on' : 'off';
     const preview = a.agent_paused
       ? `Paused · ${a.agent_paused_reason || 'budget reached'}`
       : a.last_message_preview
-        || (a.agent_enabled ? 'No messages yet' : 'Agent off — tap to set up');
+        || (decisions > 0
+          ? `${fmtCount(decisions)} decision${decisions === 1 ? '' : 's'} waiting`
+          : a.agent_enabled
+            ? 'No messages yet'
+            : 'Agent off — tap to set up');
     return (
       <button
         key={a.role_id}
         type="button"
-        className={`cp-agent ${a.role_id === activeRoleId ? 'cp-active' : ''}`}
+        className={`cp-agent cp-agent-${status} ${a.role_id === activeRoleId ? 'cp-active' : ''}`}
         onClick={() => onSelectAgent(a.role_id)}
         title={a.role_name}
       >
-        <span className={`cp-agent-stat cp-agent-stat-${status}`} aria-hidden="true">
-          {status === 'on' ? <Sparkles size={12} strokeWidth={2} /> : <span className="cp-agent-dot" />}
-        </span>
-        <span className="cp-agent-body">
-          <span className="cp-agent-role">{a.role_name}</span>
-          <span className="cp-agent-preview">{preview}</span>
-        </span>
-        {questions > 0 ? (
-          <span className="cp-agent-badge" title={`${questions} awaiting your reply`}>
-            {fmtCount(questions)}
+        <span className="cp-agent-top">
+          <span className={`cp-agent-stat cp-agent-stat-${status}`} aria-hidden="true">
+            {status === 'on' ? <Sparkles size={13} strokeWidth={2} />
+              : status === 'paused' ? <Pause size={11} strokeWidth={2} fill="currentColor" />
+              : <span className="cp-agent-dot" />}
           </span>
-        ) : null}
+          <span className="cp-agent-role">{a.role_name}</span>
+        </span>
+        <span className="cp-agent-sub">
+          <span className="cp-agent-preview">{preview}</span>
+          {(questions > 0 || decisions > 0) && (
+            <span className="cp-agent-badges">
+              {questions > 0 && (
+                <span className="cp-agent-badge-q" title={`${questions} awaiting your reply`}>
+                  <MessageSquare size={10} /> {fmtCount(questions)}
+                </span>
+              )}
+              {decisions > 0 && (
+                <span className="cp-agent-badge-d" title={`${decisions} pending decisions`}>
+                  {fmtCount(decisions)} pending
+                </span>
+              )}
+            </span>
+          )}
+          {a.budget_cap_cents > 0 && (
+            <span className="cp-agent-budget" title="Budget this month">
+              <span
+                className="cp-agent-budget-fill"
+                style={{ width: `${Math.min(100, Math.round(((a.budget_spent_cents || 0) / a.budget_cap_cents) * 100))}%` }}
+              />
+            </span>
+          )}
+        </span>
       </button>
     );
   };
