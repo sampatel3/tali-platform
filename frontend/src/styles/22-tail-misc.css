@@ -550,6 +550,37 @@
   line-height: 1.5;
 }
 
+/* Audit timeline collapsed by default (Notes tab) — a clickable kicker row with
+   an event count + Show/Hide, so the long log doesn't dominate the page. */
+.mc-audit-collapse {
+  margin-top: 22px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+.mc-audit-summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.mc-audit-summary::-webkit-details-marker { display: none; }
+.mc-audit-count {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--mute);
+}
+.mc-audit-summary::after {
+  content: 'Show';
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--purple);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.mc-audit-collapse[open] .mc-audit-summary::after { content: 'Hide'; }
+
 /* ===========================================================================
    Role detail Candidates tab toolbar — HANDOFF v2 §4 / canvas
    jobs-detail-candidates. Segmented stage filter + Sort + Score new

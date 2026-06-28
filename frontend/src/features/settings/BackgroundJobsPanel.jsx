@@ -4,7 +4,6 @@ import { Loader2, X } from 'lucide-react';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { roles as rolesApi } from '../../shared/api';
 import { formatRelativeDateTime } from '../../shared/ui/RecruiterDesignPrimitives';
-import AgentsOverviewPanel from './AgentsOverviewPanel';
 
 const HISTORY_POLL_MS = 5000;
 // Hide terminal-state history rows older than this so the panel stays focused
@@ -339,9 +338,6 @@ export default function BackgroundJobsPanel() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
   const [tick, setTick] = useState(0);
   const [showAllHistory, setShowAllHistory] = useState(false);
-  // Default to the consolidated Agents overview; "Job runs" holds the original
-  // scoring / CV fetch / Workable / graph sync table.
-  const [view, setView] = useState('agents');
 
   const liveJobs = ctx?.jobs ?? {};
   const liveFetch = ctx?.fetchJobs ?? {};
@@ -681,63 +677,38 @@ export default function BackgroundJobsPanel() {
 
   return (
     <div className="bg-jobs-panel">
-      <div className="agz-toggle" role="tablist" aria-label="Background jobs view">
+      {/* Infra job runs only — scoring / CV fetch / Workable + graph sync /
+          decision approvals. The agent fleet (cards + KPIs) lives on the
+          Analytics → Agent fleet tab; it used to be duplicated here. */}
+      <div className="bg-jobs-panel-header" title={lastUpdatedTitle}>
+        <Loader2
+          size={12}
+          className={hasActive ? 'animate-spin' : ''}
+          style={{ opacity: hasActive ? 1 : 0.45 }}
+        />
+        <span className="bg-jobs-panel-header-text">
+          Auto-refreshing every 5s · finished runs auto-clear after 30 min
+        </span>
         <button
           type="button"
-          role="tab"
-          aria-selected={view === 'agents'}
-          className={view === 'agents' ? 'on' : ''}
-          onClick={() => setView('agents')}
+          className="bg-jobs-panel-btn"
+          onClick={() => setShowAllHistory((v) => !v)}
+          style={{ marginLeft: 'auto' }}
         >
-          Agents
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={view === 'jobs'}
-          className={view === 'jobs' ? 'on' : ''}
-          onClick={() => setView('jobs')}
-        >
-          Job runs
-          {allRows.length > 0 ? <span className="agz-toggle-count">{allRows.length}</span> : null}
+          {showAllHistory ? 'Hide older runs' : 'Show all history'}
         </button>
       </div>
 
-      {view === 'agents' ? (
-        <AgentsOverviewPanel />
-      ) : (
-        <>
-          <div className="bg-jobs-panel-header" title={lastUpdatedTitle}>
-            <Loader2
-              size={12}
-              className={hasActive ? 'animate-spin' : ''}
-              style={{ opacity: hasActive ? 1 : 0.45 }}
-            />
-            <span className="bg-jobs-panel-header-text">
-              Auto-refreshing every 5s · finished runs auto-clear after 30 min
-            </span>
-            <button
-              type="button"
-              className="bg-jobs-panel-btn"
-              onClick={() => setShowAllHistory((v) => !v)}
-              style={{ marginLeft: 'auto' }}
-            >
-              {showAllHistory ? 'Hide older runs' : 'Show all history'}
-            </button>
-          </div>
-
-          <div className="bg-jobs-panel-table">
-            <div className="bg-jobs-panel-row bg-jobs-panel-head">
-              {headers.map((h) => (
-                <div key={h} className="bg-jobs-panel-cell bg-jobs-panel-head-cell">{h}</div>
-              ))}
-            </div>
-            {allRows.length === 0 ? (
-              <div className="bg-jobs-panel-empty">No background jobs running.</div>
-            ) : allRows.map((row) => row.node)}
-          </div>
-        </>
-      )}
+      <div className="bg-jobs-panel-table">
+        <div className="bg-jobs-panel-row bg-jobs-panel-head">
+          {headers.map((h) => (
+            <div key={h} className="bg-jobs-panel-cell bg-jobs-panel-head-cell">{h}</div>
+          ))}
+        </div>
+        {allRows.length === 0 ? (
+          <div className="bg-jobs-panel-empty">No background jobs running.</div>
+        ) : allRows.map((row) => row.node)}
+      </div>
     </div>
   );
 }
