@@ -129,6 +129,40 @@ const REPORT_TAB_IDS = new Set(REPORT_TABS.map((tab) => tab.id));
 // (keyed on the rubric identity) doesn't reset recruiter input every render.
 const EMPTY_RUBRIC = Object.freeze({});
 
+// Overview "Flags" — the claims/signals the agent couldn't corroborate. Shows
+// the first 3 with a toggle pinned at the BOTTOM ("+N more flags" / "Show
+// fewer") so the control never sits in the middle of the list (the old
+// <details><summary> did). All data is real (claims_to_verify + integrity).
+const OverviewFlags = ({ flags }) => {
+  const [showAll, setShowAll] = useState(false);
+  if (!flags.length) return null;
+  const visible = showAll ? flags : flags.slice(0, 3);
+  const hidden = flags.length - 3;
+  return (
+    <section className="mc-flags" aria-label="Flags to verify">
+      <div className="mc-flags-head">
+        <span className="mc-kicker mc-kicker-amber">Flags</span>
+        <span className="mc-flags-chip"><Flag size={12} aria-hidden="true" /> {flags.length} to verify</span>
+      </div>
+      <p className="mc-flags-sub">Claims and signals the agent couldn&apos;t corroborate — verify before deciding.</p>
+      {visible.map((f, i) => (
+        <div className="mc-flag" key={`flag-${i}`}>
+          <AlertTriangle size={15} className="mc-flag-i" aria-hidden="true" />
+          <span>
+            {f.label ? <b>{f.label}</b> : null}{f.label ? ' — ' : ''}{f.text}
+            {f.why ? <span className="mc-flag-why"> — {f.why}</span> : null}
+          </span>
+        </div>
+      ))}
+      {hidden > 0 ? (
+        <button type="button" className="mc-flags-toggle" onClick={() => setShowAll((v) => !v)}>
+          {showAll ? 'Show fewer' : `+ ${hidden} more flag${hidden === 1 ? '' : 's'}`}
+        </button>
+      ) : null}
+    </section>
+  );
+};
+
 export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null }) => {
   const { showToast } = useToast();
   // ``shareToken`` is set when the SPA is mounted via the public
@@ -1145,33 +1179,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   ...integrity.map((s) => ({ label: '', text: String(s), why: '' })),
                 ].filter((f) => f.text);
                 if (!flags.length) return null;
-                const renderFlag = (f, i) => (
-                  <div className="mc-flag" key={`flag-${i}`}>
-                    <AlertTriangle size={15} className="mc-flag-i" aria-hidden="true" />
-                    <span>
-                      {f.label ? <b>{f.label}</b> : null}{f.label ? ' — ' : ''}{f.text}
-                      {f.why ? <span className="mc-flag-why"> — {f.why}</span> : null}
-                    </span>
-                  </div>
-                );
-                const shown = flags.slice(0, 3);
-                const rest = flags.slice(3);
-                return (
-                  <section className="mc-flags" aria-label="Flags to verify">
-                    <div className="mc-flags-head">
-                      <span className="mc-kicker mc-kicker-amber">Flags</span>
-                      <span className="mc-flags-chip"><Flag size={12} aria-hidden="true" /> {flags.length} to verify</span>
-                    </div>
-                    <p className="mc-flags-sub">Claims and signals the agent couldn&apos;t corroborate — verify before deciding.</p>
-                    {shown.map(renderFlag)}
-                    {rest.length > 0 ? (
-                      <details className="mc-flags-more">
-                        <summary>+ {rest.length} more flag{rest.length === 1 ? '' : 's'}</summary>
-                        {rest.map((f, i) => renderFlag(f, i + 3))}
-                      </details>
-                    ) : null}
-                  </section>
-                );
+                return <OverviewFlags flags={flags} />;
               })() : null}
 
               {/* (2) CV match review moved to its own Requirements tab (matches
@@ -1253,46 +1261,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 })}
               </div>
 
-              {/* Internal-only footer: Workable comparison + quick links + status.
-                  Hidden on isClient external shared views. */}
-              {!isClientView ? (
-                <div className="mc-overview-footer" data-internal-only>
-                  <div className="mc-overview-footer-row">
-                    <div className="mc-overview-footer-status">
-                      <div className="mc-kicker is-mute">STANDING REPORT STATUS</div>
-                      <p>
-                        {completedAssessment
-                          ? 'Assessment completed. This report combines role-fit evidence with final assessment signal.'
-                          : 'Assessment not completed yet. This report stays anchored to CV, role-fit, and recruiter-facing evidence already on file.'}
-                      </p>
-                    </div>
-                    <div className="mc-overview-footer-links">
-                      {canOpenAssessmentDetail ? (
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => onNavigate('candidate-detail', { candidateDetailAssessmentId: assessmentId })}
-                        >
-                          Open assessment detail
-                          <ExternalLink size={13} />
-                        </Button>
-                      ) : null}
-                      {application?.workable_profile_url ? (
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => window.open(application.workable_profile_url, '_blank', 'noopener,noreferrer')}
-                        >
-                          View on Workable
-                          <ExternalLink size={13} />
-                        </Button>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              ) : null}
             </>
           );
         })()}
@@ -1676,9 +1644,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               : [];
 
             return (
-              <div className="mc-notes-grid">
-                <div className="mc-notes-col">
-                  <div className="mc-kicker">HIRING TEAM NOTES</div>
+              <div className="mc-notes-single">
+                <div className="mc-kicker">HIRING TEAM NOTES</div>
                   {recruiterNotes.length === 0 ? (
                     <div className="mc-notes-empty">
                       {isInterviewView
@@ -1868,6 +1835,26 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     </div>
                   ) : null}
 
+                  {/* Questionnaire — the candidate's own Workable/LinkedIn-apply
+                      answers (read-only). Above Workable comments per preview. */}
+                  {workableAnswers.length > 0 ? (
+                    <>
+                      <div className="mc-kicker" style={{ marginTop: 18 }}>QUESTIONNAIRE RESPONSES</div>
+                      {workableAnswers.map((entry, idx) => {
+                        const question = String(entry?.question || '').trim();
+                        const answer = String(entry?.answer || '').trim();
+                        if (!question && !answer) return null;
+                        return (
+                          <div key={`wk-answer-${idx}`} className="mc-notes-card">
+                            {question ? <div className="mc-notes-card-who">{question}</div> : null}
+                            {answer ? <div className="mc-notes-card-body">{answer}</div> : null}
+                          </div>
+                        );
+                      })}
+                    </>
+                  ) : null}
+
+                  {/* Workable comments — recruiter comments synced from Workable. */}
                   {workableComments.length > 0 ? (
                     <>
                       <div className="mc-kicker" style={{ marginTop: 18 }}>WORKABLE COMMENTS</div>
@@ -1891,26 +1878,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     </>
                   ) : null}
 
-                  {workableAnswers.length > 0 ? (
-                    <>
-                      <div className="mc-kicker" style={{ marginTop: 18 }}>QUESTIONNAIRE RESPONSES</div>
-                      {workableAnswers.map((entry, idx) => {
-                        const question = String(entry?.question || '').trim();
-                        const answer = String(entry?.answer || '').trim();
-                        if (!question && !answer) return null;
-                        return (
-                          <div key={`wk-answer-${idx}`} className="mc-notes-card">
-                            {question ? <div className="mc-notes-card-who">{question}</div> : null}
-                            {answer ? <div className="mc-notes-card-body">{answer}</div> : null}
-                          </div>
-                        );
-                      })}
-                    </>
-                  ) : null}
-                </div>
-
-                <div className="mc-notes-col">
-                  <div className="mc-kicker">AUDIT TIMELINE</div>
+                  {/* Audit timeline — full width, at the very bottom (preview order). */}
+                  <div className="mc-kicker" style={{ marginTop: 22 }}>AUDIT TIMELINE</div>
                   {applicationEvents.length === 0 ? (
                     <div className="mc-notes-empty">
                       Audit events will appear here as the candidate moves through the pipeline.
@@ -1972,7 +1941,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                       </div>
                     </>
                   ) : null}
-                </div>
               </div>
             );
           })()}
