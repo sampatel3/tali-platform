@@ -11,9 +11,7 @@ from ...deps import get_current_user
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate_application import CandidateApplication
 from ...models.user import User
-from ...platform.config import settings
 from ...platform.database import get_db
-from ...services.ai_assisted_evaluator import generate_ai_suggestions
 from ...services.candidate_feedback_engine import (
     build_client_assessment_report_payload,
     build_client_assessment_summary_pdf,
@@ -337,37 +335,3 @@ def generate_interview_debrief(
         "generated_at": assessment.interview_debrief_generated_at,
         "interview_debrief": debrief,
     }
-
-
-@router.post("/{assessment_id}/ai-eval-suggestions")
-def ai_eval_suggestions(
-    assessment_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """V2 scaffold: AI suggests rubric scores/evidence; human reviewer decides final scores."""
-    if not settings.AI_ASSISTED_EVAL_ENABLED:
-        raise HTTPException(status_code=404, detail="AI-assisted evaluation is disabled")
-
-    assessment = (
-        db.query(Assessment)
-        .options(joinedload(Assessment.candidate), joinedload(Assessment.task))
-        .filter(
-            Assessment.id == assessment_id,
-            Assessment.organization_id == current_user.organization_id,
-        )
-        .first()
-    )
-    if not assessment:
-        raise HTTPException(status_code=404, detail="Assessment not found")
-
-    payload = {
-        "evaluation_rubric": (assessment.task.evaluation_rubric if assessment.task else {}) or {},
-        "chat_log": assessment.ai_prompts or [],
-        "git_evidence": getattr(assessment, "git_evidence", {}) or {},
-        "test_results": assessment.test_results or {},
-    }
-    try:
-        return generate_ai_suggestions(payload)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=501, detail=str(exc)) from exc

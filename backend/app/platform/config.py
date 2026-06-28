@@ -251,9 +251,6 @@ class Settings(BaseSettings):
     # Task authoring API guardrail (tasks are backend-authored by default).
     TASK_AUTHORING_API_ENABLED: bool = False
 
-    # V2 AI-assisted evaluator (suggestions only)
-    AI_ASSISTED_EVAL_ENABLED: bool = False
-
     # Workable
     WORKABLE_CLIENT_ID: str = ""
     WORKABLE_CLIENT_SECRET: str = ""

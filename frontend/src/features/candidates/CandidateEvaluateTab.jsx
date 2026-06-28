@@ -2,7 +2,6 @@ import React from 'react';
 
 import {
   Badge,
-  Button,
   Card,
   Panel,
   Select,
@@ -47,9 +46,6 @@ const statusMeta = (status) => {
 export const CandidateEvaluateTab = ({
   candidate,
   evaluationRubric = null,
-  aiEvalSuggestion,
-  onGenerateAiSuggestions,
-  aiEvalLoading = false,
   manualEvalScores,
   setManualEvalScores,
   manualEvalStrengths,
@@ -108,36 +104,6 @@ export const CandidateEvaluateTab = ({
 
   return (
     <div className="space-y-6">
-      {import.meta.env.VITE_AI_ASSISTED_EVAL_ENABLED === 'true' ? (
-        <Panel className="border-[var(--taali-purple)] bg-[var(--taali-purple-soft)] p-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div className="font-mono text-xs font-bold text-[var(--taali-text)]">AI suggestion (Claude)</div>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={aiEvalLoading}
-              onClick={onGenerateAiSuggestions}
-            >
-              {aiEvalLoading ? 'Generating...' : 'Generate AI Evaluation'}
-            </Button>
-          </div>
-          {aiEvalSuggestion ? (
-            <div className="space-y-1 text-sm text-[var(--taali-text)]">
-              {aiEvalSuggestion.overall_score != null ? (
-                <div className="font-mono text-xs">Suggested score: {aiEvalSuggestion.overall_score}/100</div>
-              ) : null}
-              {aiEvalSuggestion.verdict ? (
-                <div className="font-mono text-xs">Suggested verdict: {aiEvalSuggestion.verdict}</div>
-              ) : null}
-              <div className="text-xs text-[var(--taali-muted)]">{aiEvalSuggestion.message || 'Suggestion generated. Review before finalizing.'}</div>
-            </div>
-          ) : (
-            <div className="text-xs text-[var(--taali-muted)]">Generate a suggestion to get Claude&apos;s structured second opinion.</div>
-          )}
-        </Panel>
-      ) : null}
-
       {manualEvalSummary ? (
         <Card className="bg-[var(--taali-surface-subtle)] p-3">
           <div className="font-mono text-xs text-gray-600">

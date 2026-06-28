@@ -37,7 +37,6 @@ export const assessments = {
   resend: (id) => api.post(`/assessments/${id}/resend`),
   downloadReport: (id) => api.get(`/assessments/${id}/report.pdf`, { responseType: 'blob' }),
   generateInterviewDebrief: (id, data = {}) => api.post(`/assessments/${id}/interview-debrief`, data),
-  aiEvalSuggestions: (id) => api.post(`/assessments/${id}/ai-eval-suggestions`),
   updateManualEvaluation: (id, data) => api.patch(`/assessments/${id}/manual-evaluation`, data),
   addNote: (id, note) => api.post(`/assessments/${id}/notes`, { note }),
   uploadCv: (assessmentId, token, file) => {
