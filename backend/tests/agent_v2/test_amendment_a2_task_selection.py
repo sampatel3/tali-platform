@@ -5,7 +5,6 @@ Covers:
 - graph vocabulary additions
 - task_calibration: Pearson correlation, recompute_for_pair, retirement
 - task_selection sub-agent: skip / send / request_artifacts paths
-- request_candidate_artifacts action: actor gating + idempotency
 """
 
 from __future__ import annotations
@@ -14,11 +13,8 @@ import math
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from fastapi import HTTPException
 from sqlalchemy import event
 
-from app.actions import request_candidate_artifacts
-from app.actions.types import ACTOR_AGENT, Actor
 from app.agent_runtime import role_intent as ri
 from app.agent_runtime.contracts import (
     StructuredIntent,
@@ -305,63 +301,3 @@ def test_task_selection_registered_in_registry(db):
     from app.sub_agents import all_sub_agents
     names = {a.name for a in all_sub_agents()}
     assert "task_selection" in names
-
-
-# ---------------------------------------------------------------------------
-# request_candidate_artifacts action
-# ---------------------------------------------------------------------------
-
-
-def test_request_candidate_artifacts_requires_agent_or_recruiter(db):
-    s = _seed(db)
-    try:
-        request_candidate_artifacts.run(
-            db,
-            Actor(type="system", user_id=None, agent_run_id=None),
-            organization_id=int(s.org.id),
-            application_id=int(s.app.id),
-            dimensions=["python"],
-        )
-    except HTTPException as exc:
-        assert exc.status_code == 403
-        return
-    raise AssertionError("expected 403")
-
-
-def test_request_candidate_artifacts_rejects_empty_dimensions(db):
-    s = _seed(db)
-    try:
-        request_candidate_artifacts.run(
-            db,
-            Actor(type=ACTOR_AGENT, agent_run_id=1, user_id=None),
-            organization_id=int(s.org.id),
-            application_id=int(s.app.id),
-            dimensions=[],
-        )
-    except HTTPException as exc:
-        assert exc.status_code == 422
-        return
-    raise AssertionError("expected 422")
-
-
-def test_request_candidate_artifacts_is_idempotent(db):
-    s = _seed(db)
-    a1 = request_candidate_artifacts.run(
-        db,
-        Actor(type=ACTOR_AGENT, agent_run_id=7, user_id=None),
-        organization_id=int(s.org.id),
-        application_id=int(s.app.id),
-        dimensions=["python", "system_design"],
-    )
-    db.flush()
-    a2 = request_candidate_artifacts.run(
-        db,
-        Actor(type=ACTOR_AGENT, agent_run_id=7, user_id=None),
-        organization_id=int(s.org.id),
-        application_id=int(s.app.id),
-        dimensions=["python", "system_design"],
-    )
-    assert a1.id == a2.id
-    assert a1.event_type == request_candidate_artifacts.EVENT_TYPE
-    # JSON metadata captures the requested dimensions.
-    assert a1.event_metadata == {"dimensions": ["python", "system_design"]}

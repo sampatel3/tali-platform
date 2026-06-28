@@ -336,9 +336,6 @@ class Settings(BaseSettings):
     ASSESSMENT_PRICE_CURRENCY: str = "aed"
     ASSESSMENT_PRICE_MAJOR: int = 25
     ASSESSMENT_PRICE_MINOR: int = 2500
-    # Deprecated alias (sunset target: 2026-04-15). Keep until clients fully
-    # migrate to ASSESSMENT_PRICE_MINOR.
-    ASSESSMENT_PRICE_PENCE: int = 2500
     ASSESSMENT_EXPIRY_DAYS: int = 7
     EMAIL_FROM: str = brand_email_from()
 

@@ -47,22 +47,10 @@ def __getattr__(name: str):
         from .runner import run_cv_match
 
         return run_cv_match
-    if name in {
-        "BatchJob",
-        "BatchSubmission",
-        "run_cv_match_batch",
-        "submit_cv_match_batch",
-        "retrieve_cv_match_batch",
-    }:
-        from . import runner_batch
-
-        return getattr(runner_batch, name)
     raise AttributeError(f"module 'app.cv_matching' has no attribute {name!r}")
 
 
 __all__ = [
-    "BatchJob",
-    "BatchSubmission",
     "CandidateSnapshot",
     "Category",
     "ClaimToVerify",
@@ -80,8 +68,5 @@ __all__ = [
     "ScoringStatus",
     "Status",
     "TimelineEntry",
-    "retrieve_cv_match_batch",
     "run_cv_match",
-    "run_cv_match_batch",
-    "submit_cv_match_batch",
 ]
