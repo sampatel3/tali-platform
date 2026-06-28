@@ -531,12 +531,28 @@ def screen_pool_against_requirement(
     # deliberately do NOT restrict to the current open pipeline — a candidate
     # rejected for or advanced on ANOTHER role may be exactly who fits this new
     # requirement (the whole point of rediscovery). NULL outcome reads as open.
+    # Exclude anyone already PLACED. "Placed" is a property of the PERSON, not a
+    # single application row: a candidate hired via a *different* application
+    # (e.g. another role) still has other scored rows that would otherwise be
+    # recommended here. So exclude at the candidate level, not just the row whose
+    # own outcome is "hired". (Hires per org are few, so the id list is small.)
+    hired_candidate_ids = [
+        cid
+        for (cid,) in db.query(CandidateApplication.candidate_id)
+        .filter(
+            CandidateApplication.organization_id == user.organization_id,
+            func.coalesce(CandidateApplication.application_outcome, "open") == "hired",
+        )
+        .distinct()
+        .all()
+    ]
     base = db.query(CandidateApplication).filter(
         CandidateApplication.organization_id == user.organization_id,
         CandidateApplication.deleted_at.is_(None),
         CandidateApplication.cv_match_details.isnot(None),
-        func.coalesce(CandidateApplication.application_outcome, "open") != "hired",
     )
+    if hired_candidate_ids:
+        base = base.filter(CandidateApplication.candidate_id.notin_(hired_candidate_ids))
     if role_id is not None:
         base = base.filter(CandidateApplication.role_id == int(role_id))
 

@@ -233,6 +233,52 @@ def test_screen_pool_handler_scopes_scored_nonhired(db):
     assert hired.id not in captured["ids"]      # already placed → excluded
 
 
+def test_screen_pool_handler_excludes_candidate_hired_elsewhere(db):
+    """A person hired via ONE application must not resurface through a DIFFERENT,
+    still-open scored application: rediscovery excludes placed *people*, not just
+    the row whose own outcome is 'hired'."""
+    user, org = _make_user_and_org(db)
+    role_a = Role(organization_id=org.id, name="Backend", source="manual")
+    role_b = Role(organization_id=org.id, name="Data", source="manual")
+    db.add_all([role_a, role_b])
+    db.commit()
+
+    # ONE candidate, TWO applications: hired on role_a, scored + still-open on role_b.
+    cand = Candidate(organization_id=org.id, email="dup@x.test", full_name="Dup",
+                     position="Engineer")
+    db.add(cand)
+    db.flush()
+    hired_app = CandidateApplication(
+        organization_id=org.id, candidate_id=cand.id, role_id=role_a.id,
+        status="hired", pipeline_stage="hired", pipeline_stage_source="recruiter",
+        application_outcome="hired", source="manual", taali_score_cache_100=90.0,
+    )
+    open_app = CandidateApplication(
+        organization_id=org.id, candidate_id=cand.id, role_id=role_b.id,
+        status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
+        application_outcome="open", source="manual", taali_score_cache_100=80.0,
+    )
+    db.add_all([hired_app, open_app])
+    db.commit()
+    open_app.cv_match_details = {"requirements_assessment": []}  # scored → eligible but for the hire
+    db.commit()
+
+    captured = {}
+
+    def _fake_engine(*, db, organization_id, requirement, base_query, limit):
+        captured["ids"] = {a.id for a in base_query.all()}
+        return {"mode": "rediscovery", "candidates": []}
+
+    with patch(
+        "app.candidate_search.top_candidates.screen_pool_against_requirement",
+        _fake_engine,
+    ):
+        handlers.screen_pool_against_requirement(db, user, requirement_text="banking")
+
+    assert open_app.id not in captured["ids"]   # candidate already placed elsewhere
+    assert hired_app.id not in captured["ids"]
+
+
 def test_screen_pool_handler_rejects_empty_requirement(db):
     user, _org = _make_user_and_org(db)
     with pytest.raises(ValueError, match="non-empty"):
