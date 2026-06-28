@@ -594,8 +594,9 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
             className="ac-reopen"
             onClick={() => setChatHidden(false)}
             title="Show agent chat"
+            aria-label="Show agent chat"
           >
-            <MessageSquare size={16} /> Agent chat
+            <MessageSquare size={18} />
             {totalAttention > 0 && <span className="ac-badge-count">{totalAttention}</span>}
           </button>
         ) : null}

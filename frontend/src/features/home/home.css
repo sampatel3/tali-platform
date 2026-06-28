@@ -760,7 +760,11 @@
   margin-bottom: 8px;
 }
 .rq-rec-btn {
-  width: 100%;
+  /* Fixed, content-sized pill — centred in the slab. Does NOT stretch with the
+     card width (it read as oversized when the card grew). */
+  width: auto;
+  min-width: 240px;
+  max-width: 100%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -769,7 +773,7 @@
   color: #2a1854;
   border: 0;
   border-radius: 11px;
-  padding: 9px 14px;
+  padding: 9px 18px;
   font-family: inherit;
   font-size: 0.875rem;
   font-weight: 600;
