@@ -175,7 +175,6 @@ The candidate knowledge-graph view and graph predicates in NL search are powered
 | `MVP_DISABLE_CLAUDE_SCORING` | No | `true` | Disables the v3 scoring pipeline; assessments fall back to deterministic scoring. |
 | `MVP_DISABLE_CALIBRATION` | No | `false` | Calibration is enabled by default (`false`). |
 | `MVP_DISABLE_PROCTORING` | No | `true` | Proctoring signals (browser focus, tab switches) are recorded but not gated on. |
-| `SCORING_V2_ENABLED` | No | `false` | Legacy scoring pipeline toggle; v2 is untested in production. |
 | `TASK_AUTHORING_API_ENABLED` | No | `false` | Gates the task-authoring API (tasks are backend-authored by default). |
 | `ADMIN_SECRET` | No | `""` | Required to call `/admin/*` debug routes. Leave blank to disable admin debug entirely. |
 

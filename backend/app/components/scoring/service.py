@@ -41,7 +41,6 @@ def calculate_mvp_score(
     tests_total: int,
     total_duration_seconds: int,
     time_limit_minutes: int,
-    v2_enabled: bool = False,
     weights: Dict[str, float] | None = None,
     cv_match_result: Dict[str, Any] | None = None,
     task_scoring_hints: Dict[str, Any] | None = None,
@@ -58,11 +57,6 @@ def calculate_mvp_score(
     - component_scores (legacy 12-metric dict for backward compat)
     - weights_used, soft_signals, metric_details
     """
-    if v2_enabled:
-        raise RuntimeError(
-            "SCORING_V2_ENABLED is set, but no production scoring v2 integration is configured."
-        )
-
     prompts = []
     for raw_prompt in interactions or []:
         prompt = dict(raw_prompt or {})

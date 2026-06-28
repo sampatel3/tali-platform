@@ -11,7 +11,6 @@ class MvpFeatureFlags:
     disable_workable: bool
     disable_calibration: bool
     disable_proctoring: bool
-    scoring_v2_enabled: bool
 
 
 class Settings(BaseSettings):
@@ -541,7 +540,6 @@ class Settings(BaseSettings):
     MVP_DISABLE_WORKABLE: bool = True
     MVP_DISABLE_CALIBRATION: bool = False
     MVP_DISABLE_PROCTORING: bool = True
-    SCORING_V2_ENABLED: bool = False
 
     # TAALI score blending. assessment vs. role-fit (0.0..1.0 each); role-fit
     # is a 50/50 mix of CV fit and requirements fit. Weights are normalized in
@@ -565,7 +563,6 @@ class Settings(BaseSettings):
             disable_workable=self.MVP_DISABLE_WORKABLE,
             disable_calibration=self.MVP_DISABLE_CALIBRATION,
             disable_proctoring=self.MVP_DISABLE_PROCTORING,
-            scoring_v2_enabled=self.SCORING_V2_ENABLED,
         )
 
     model_config = {

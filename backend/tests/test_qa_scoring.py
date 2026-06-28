@@ -270,7 +270,6 @@ class TestCalculateMvpScore:
             tests_passed=8, tests_total=10,
             total_duration_seconds=1500,
             time_limit_minutes=30,
-            v2_enabled=False,
             weights=CATEGORY_WEIGHTS,
             cv_match_result={"cv_job_match_score": 75},
         )
@@ -286,7 +285,7 @@ class TestCalculateMvpScore:
         r = calculate_mvp_score(
             interactions=[], tests_passed=0, tests_total=0,
             total_duration_seconds=0, time_limit_minutes=30,
-            v2_enabled=False, weights=CATEGORY_WEIGHTS, cv_match_result={},
+            weights=CATEGORY_WEIGHTS, cv_match_result={},
         )
         assert "final_score" in r
         assert r["final_score"] >= 0
@@ -296,7 +295,7 @@ class TestCalculateMvpScore:
             interactions=_make_interactions(3),
             tests_passed=10, tests_total=10,
             total_duration_seconds=600, time_limit_minutes=30,
-            v2_enabled=False, weights=CATEGORY_WEIGHTS,
+            weights=CATEGORY_WEIGHTS,
             cv_match_result={"cv_job_match_score": 100, "skills_match": 100, "experience_relevance": 100},
         )
         assert r["final_score"] >= 30  # Should be decent
@@ -307,7 +306,7 @@ class TestCalculateMvpScore:
             interactions=_make_interactions(3),
             tests_passed=5, tests_total=10,
             total_duration_seconds=1000, time_limit_minutes=30,
-            v2_enabled=False, weights=w, cv_match_result={},
+            weights=w, cv_match_result={},
         )
         assert "final_score" in r
 
@@ -316,7 +315,7 @@ class TestCalculateMvpScore:
             interactions=_make_interactions(3),
             tests_passed=5, tests_total=10,
             total_duration_seconds=1000, time_limit_minutes=30,
-            v2_enabled=False, weights=CATEGORY_WEIGHTS, cv_match_result={},
+            weights=CATEGORY_WEIGHTS, cv_match_result={},
         )
         for cat in CATEGORY_WEIGHTS.keys():
             assert cat in r["category_scores"], f"Missing category: {cat}"
