@@ -1878,14 +1878,21 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     </>
                   ) : null}
 
-                  {/* Audit timeline — full width, at the very bottom (preview order). */}
-                  <div className="mc-kicker" style={{ marginTop: 22 }}>AUDIT TIMELINE</div>
+                  {/* Audit timeline — collapsed by default at the bottom so it
+                      doesn't dominate the Notes tab; expand for the full log. */}
+                  <details className="mc-audit-collapse">
+                    <summary className="mc-audit-summary">
+                      <span className="mc-kicker" style={{ margin: 0 }}>AUDIT TIMELINE</span>
+                      <span className="mc-audit-count">
+                        {applicationEvents.length + workableActivity.length} event{(applicationEvents.length + workableActivity.length) === 1 ? '' : 's'}
+                      </span>
+                    </summary>
                   {applicationEvents.length === 0 ? (
-                    <div className="mc-notes-empty">
+                    <div className="mc-notes-empty" style={{ marginTop: 12 }}>
                       Audit events will appear here as the candidate moves through the pipeline.
                     </div>
                   ) : (
-                    <div className="mc-audit-timeline">
+                    <div className="mc-audit-timeline" style={{ marginTop: 12 }}>
                       {applicationEvents.slice(0, 12).map((event, idx) => {
                         const type = String(event?.event_type || 'activity').replace(/_/g, ' ');
                         const meta = event?.metadata || {};
@@ -1941,6 +1948,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                       </div>
                     </>
                   ) : null}
+                  </details>
               </div>
             );
           })()}

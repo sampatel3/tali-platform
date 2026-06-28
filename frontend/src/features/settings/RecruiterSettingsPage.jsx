@@ -1607,7 +1607,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 <SectionPanel
                   id="jobs"
                   title="Background jobs"
-                  subtitle="Live agents and recent runs across decision approvals, scoring, CV fetch, Workable sync, and graph sync — all in one place."
+                  subtitle="Recent infrastructure runs — decision approvals, scoring, CV fetch, Workable sync, and graph sync. The agent fleet lives on the Analytics page."
                 >
                   <BackgroundJobsPanel />
                 </SectionPanel>

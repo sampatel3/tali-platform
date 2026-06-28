@@ -532,7 +532,7 @@
 .aw-dot--done, .aw-dot--current { background: var(--purple); border-color: var(--purple); }
 .aw-dot--current { box-shadow: 0 0 0 3px var(--purple-soft); }
 .aw-dot--warn { background: var(--amber); border-color: var(--amber); }
-.aw-dot--err { background: var(--red); border-color: var(--red); }
+.aw-dot--err { background: var(--amber); border-color: var(--amber); }
 .aw-conn { flex: 1; height: 2px; min-width: 7px; background: var(--line); }
 .aw-conn--on { background: var(--purple); }
 .aw-node { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 0 0 auto; }
@@ -541,8 +541,8 @@
 .aw-state { display: flex; align-items: center; gap: 5px; margin-top: 5px; font-size: 0.6875rem; font-weight: 500; color: var(--mute); }
 .aw-state--live { color: var(--purple); }
 .aw-state--warn { color: var(--amber); }
-.aw-state--err { color: var(--red); }
-.aw-state--ok { color: var(--green); }
+.aw-state--err { color: var(--amber); }
+.aw-state--ok { color: var(--purple); }
 .aw-live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--purple); animation: aw-pulse 1.4s ease-in-out infinite; }
 @keyframes aw-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 .aw-detail-block { margin: 0 0 16px; }
@@ -552,7 +552,7 @@
 .aw-fcell--done { border-color: var(--purple); }
 .aw-fnum { font-size: 1.05rem; font-weight: 600; color: var(--ink); line-height: 1; }
 .aw-flbl { margin-top: 3px; font-size: 0.5rem; color: var(--mute); text-transform: uppercase; letter-spacing: .05em; }
-.aw-flag { margin-top: 6px; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 6px; font-size: 0.6875rem; font-weight: 500; color: var(--red); background: rgba(230, 74, 74, 0.13); }
+.aw-flag { margin-top: 6px; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 6px; font-size: 0.6875rem; font-weight: 500; color: var(--amber-ink); background: var(--amber-soft); }
 
 .graph-chip { background: rgba(0, 0, 0, 0.06); color: #555; }
 .graph-chip--in    { background: rgba(0, 184, 148, 0.18); color: #00604a; }
