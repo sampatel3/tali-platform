@@ -637,6 +637,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
           setPrefilledFrom({
             name: res.prefilled_from?.name || 'a similar role',
             fields: res.prefilled_fields,
+            applicants: Number(res.prefilled_from?.applicants || 0),
           });
         }
       } catch {
@@ -645,6 +646,25 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, brief?.title]);
+
+  // Live sync from the client link: the client fills the role from their no-login
+  // link and the backend persists each turn to THIS brief — so poll every 5s
+  // while a client link is live (and the requisition isn't finalized) so the
+  // recruiter sees the client's input appear WITHOUT waiting for them to submit.
+  // Skips while the tab is hidden or a recruiter turn is in flight (no clobber).
+  useEffect(() => {
+    if (!selectedId || !clientLink || brief?.status === 'applied') return undefined;
+    const tick = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (turnInFlight) return;
+      try {
+        const fresh = await requisitionApi.get(selectedId);
+        setBrief((prev) => (prev && fresh && prev.id === fresh.id ? { ...prev, ...fresh } : prev));
+      } catch { /* transient — keep polling */ }
+    };
+    const id = setInterval(tick, 5000);
+    return () => clearInterval(id);
+  }, [selectedId, clientLink, brief?.status, turnInFlight]);
 
   const published = Boolean(jobPage) || isPublished(brief?.status);
   const canSend = (composer.trim() || attachments.length > 0) && !turnInFlight;
@@ -868,7 +888,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   <Sparkles size={14} />
                   <span>
                     Pre-filled {prefilledFrom.fields.length} field{prefilledFrom.fields.length === 1 ? '' : 's'} from your similar role{' '}
-                    <strong>{prefilledFrom.name}</strong> — review and edit on the right.
+                    <strong>{prefilledFrom.name}</strong>
+                    {prefilledFrom.applicants > 0 ? ` (${prefilledFrom.applicants} applicant${prefilledFrom.applicants === 1 ? '' : 's'})` : ''} — review and edit on the right.
                   </span>
                   <button
                     type="button"

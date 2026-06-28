@@ -1,66 +1,66 @@
 """Requisition warm-start, smarter tier: prefill the SUBSTANCE of a new
-requisition from the most SIMILAR prior role/brief.
+requisition from the most SIMILAR prior role.
 
-The base warm-start (``requisition_chat_service.warm_start_fields``) fills 5
+The base warm-start (``requisition_chat_warm_start.warm_start_fields``) fills 5
 logistics fields by recency. This adds the high-value part: once the recruiter
-has given the role a title, find the closest prior role (or brief) by title and
-offer its requirements / responsibilities / seniority / salary band as editable
-starting points — so the agent confirms rather than asks from scratch.
+has given the role a title, find the closest prior role by title and offer its
+spec — summary, requirements (must/preferred/dealbreakers), seniority, and (from
+the role's originating requisition, if any) responsibilities / success profile /
+salary band — as editable starting points the agent confirms rather than asks
+from scratch.
 
-Deterministic, no LLM, no spend — consistent with the base warm-start. Matching
-is title-token overlap (overlap coefficient) with a high-precision threshold, so
-a weak/unrelated match prefills nothing rather than misleading the recruiter.
+Selection (deterministic, no LLM, no spend), mirroring how a recruiter would
+reuse a past spec:
+  1. RELEVANCE — title-token overlap (overlap coefficient) must clear a floor, so
+     an unrelated role never prefills.
+  2. STRONG SPEC — among comparably-similar roles, prefer the one with more
+     candidate applications (a proven, well-written spec attracts applicants).
+  3. RECENCY — final tie-break toward the most recent.
+Ranked lexicographically: (similarity band, applicant count, recency).
 """
 from __future__ import annotations
 
 import re
 from typing import Any, Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
+from ..models.candidate_application import CandidateApplication
 from ..models.org_criterion import BUCKET_CONSTRAINT, BUCKET_MUST, BUCKET_PREFERRED
 from ..models.role import Role
 from ..models.role_brief import RoleBrief
-from ..models.role_criterion import RoleCriterion
 
-# How many recent candidates to score (bounded — scoring is cheap, but the
-# criteria selectinload on roles shouldn't be unbounded).
-_CANDIDATE_LIMIT = 300
-# Minimum title-overlap to accept a match. 0.6 means the smaller title is almost
-# a subset of the other (e.g. "Data Engineer" ⊂ "Senior Data Engineer"); a lone
-# shared generic token like "engineer" (0.5 on two 2-token titles) is rejected.
-_MIN_SCORE = 0.6
+# How many recent roles to score (bounded — scoring is cheap, but the criteria
+# selectinload shouldn't be unbounded). Covers "recent" generously; recency is
+# only a tie-break, so a similar older role is still found within this window.
+_CANDIDATE_LIMIT = 150
+# Minimum title overlap to accept a match. 0.4 = the smaller title shares ~40%+
+# of its meaningful tokens (e.g. "Data Engineer" vs "Senior Data Engineer" = 1.0;
+# "Data Engineer" vs "Data Analyst" = 0.5 — relevant enough as a starting point;
+# "Data Engineer" vs "Marketing Manager" = 0.0 — rejected).
+_MIN_SCORE = 0.4
+# Applicant count at/above which a spec reads as "strong" (for the banner).
+_STRONG_APPLICANTS = 15
+_SUMMARY_MAX = 400
 
-# Tokens that carry no matching signal — dropped before scoring.
 _STOPWORDS = frozenset({
     "the", "a", "an", "for", "of", "and", "to", "in", "at", "on", "with",
     "role", "roles", "position", "job", "opening", "new", "other", "team", "i",
 })
 
-# Seniority hints we can lift straight out of a title (token -> nice label).
 _SENIORITY = {
-    "intern": "Intern",
-    "graduate": "Junior",
-    "junior": "Junior",
-    "associate": "Associate",
-    "mid": "Mid",
-    "intermediate": "Mid",
-    "senior": "Senior",
-    "snr": "Senior",
-    "sr": "Senior",
-    "lead": "Lead",
-    "principal": "Principal",
-    "staff": "Staff",
-    "head": "Head",
-    "director": "Director",
-    "vp": "VP",
-    "chief": "Chief",
-    "manager": "Manager",
+    "intern": "Intern", "graduate": "Junior", "junior": "Junior",
+    "associate": "Associate", "mid": "Mid", "intermediate": "Mid",
+    "senior": "Senior", "snr": "Senior", "sr": "Senior", "lead": "Lead",
+    "principal": "Principal", "staff": "Staff", "head": "Head",
+    "director": "Director", "vp": "VP", "chief": "Chief", "manager": "Manager",
 }
 
-# Substance fields we'll offer (columns); ``responsibilities`` rides in
-# custom_fields and is handled separately by the applier.
+# Substance fields offered (columns); ``responsibilities`` rides in custom_fields
+# and is handled separately by the applier.
 PREFILL_COLUMN_FIELDS = (
+    "summary",
     "must_haves",
     "preferred",
     "dealbreakers",
@@ -102,65 +102,68 @@ def _seniority_from_title(title: Optional[str]) -> Optional[str]:
     return None
 
 
-def _extract_from_role(role: Role) -> dict[str, Any]:
+def _spec_summary(role: Role, linked_brief: Optional[RoleBrief]) -> Optional[str]:
+    """A short role summary to seed the new spec's summary line. Prefers the
+    originating requisition's (short) summary; else the first paragraph of the
+    role's description, truncated — never the whole JD."""
+    if linked_brief is not None and isinstance(linked_brief.summary, str) and linked_brief.summary.strip():
+        return linked_brief.summary.strip()
+    desc = (role.description or "").strip()
+    if not desc:
+        return None
+    para = desc.split("\n\n", 1)[0].strip() or desc
+    return (para[:_SUMMARY_MAX].rstrip() + "…") if len(para) > _SUMMARY_MAX else para
+
+
+def _extract(role: Role, linked_brief: Optional[RoleBrief]) -> dict[str, Any]:
+    """The prefill payload from the matched role + (if present) its originating
+    requisition. Role criteria → requirements; the brief adds the richer fields
+    a bare role lacks (responsibilities / success profile / priorities / salary)."""
     crit = [c for c in (role.criteria or []) if getattr(c, "deleted_at", None) is None]
-    return {
+    out: dict[str, Any] = {
+        "summary": _spec_summary(role, linked_brief),
         "must_haves": [c.text for c in crit if c.bucket == BUCKET_MUST and c.text],
         "preferred": [c.text for c in crit if c.bucket == BUCKET_PREFERRED and c.text],
         "dealbreakers": [c.text for c in crit if c.bucket == BUCKET_CONSTRAINT and c.text],
         "seniority": _seniority_from_title(role.name),
     }
-
-
-def _extract_from_brief(brief: RoleBrief) -> dict[str, Any]:
-    custom = brief.custom_fields if isinstance(brief.custom_fields, dict) else {}
-    return {
-        "must_haves": brief.must_haves,
-        "preferred": brief.preferred,
-        "dealbreakers": brief.dealbreakers,
-        "responsibilities": custom.get("responsibilities"),
-        "success_profile": brief.success_profile,
-        "priorities": brief.priorities,
-        "seniority": brief.seniority or _seniority_from_title(brief.title),
-        "salary_min": brief.salary_min,
-        "salary_max": brief.salary_max,
-    }
+    if linked_brief is not None:
+        custom = linked_brief.custom_fields if isinstance(linked_brief.custom_fields, dict) else {}
+        # Richer fields a role row doesn't carry — take from the requisition.
+        for key, value in (
+            ("responsibilities", custom.get("responsibilities")),
+            ("success_profile", linked_brief.success_profile),
+            ("priorities", linked_brief.priorities),
+            ("salary_min", linked_brief.salary_min),
+            ("salary_max", linked_brief.salary_max),
+        ):
+            if not _is_empty(value):
+                out[key] = value
+        # If the role had no derived criteria, fall back to the brief's lists.
+        for key, value in (
+            ("must_haves", linked_brief.must_haves),
+            ("preferred", linked_brief.preferred),
+            ("dealbreakers", linked_brief.dealbreakers),
+        ):
+            if _is_empty(out.get(key)) and not _is_empty(value):
+                out[key] = value
+        if _is_empty(out.get("seniority")) and not _is_empty(linked_brief.seniority):
+            out["seniority"] = linked_brief.seniority
+    return out
 
 
 def find_similar_prefill(
     db: Session, *, organization_id: int, brief: RoleBrief
 ) -> Optional[dict[str, Any]]:
-    """The most similar prior role/brief's substance, as a prefill suggestion, or
-    None when the brief has no title yet or nothing clears the match threshold.
+    """The most-similar prior role's spec as a prefill suggestion, or None when
+    the brief has no title yet or nothing clears the relevance floor.
 
-    Briefs are scored first so a similar prior REQUISITION (richer — it carries
-    responsibilities / success profile / salary) wins ties over a bare role; a
-    higher-scoring role still beats a weaker brief. Returns
-    ``{"source": {kind, id, name, score}, "fields": {<non-empty suggestions>}}``.
+    Returns ``{"source": {kind, id, name, score, applicants, strong_spec},
+    "fields": {<non-empty suggestions>}}``.
     """
     target = _tokens(brief.title)
     if not target:
         return None
-
-    best_score = 0.0
-    best_kind: Optional[str] = None
-    best_obj: Any = None
-
-    briefs = (
-        db.query(RoleBrief)
-        .filter(
-            RoleBrief.organization_id == organization_id,
-            RoleBrief.id != brief.id,
-            RoleBrief.title.isnot(None),
-        )
-        .order_by(RoleBrief.created_at.desc(), RoleBrief.id.desc())
-        .limit(_CANDIDATE_LIMIT)
-        .all()
-    )
-    for cand in briefs:
-        score = _score(target, _tokens(cand.title))
-        if score >= _MIN_SCORE and score > best_score:
-            best_score, best_kind, best_obj = score, "brief", cand
 
     roles = (
         db.query(Role)
@@ -170,29 +173,61 @@ def find_similar_prefill(
         .limit(_CANDIDATE_LIMIT)
         .all()
     )
-    for cand in roles:
-        if brief.role_id and cand.id == brief.role_id:
-            continue
-        score = _score(target, _tokens(cand.name))
-        # strict > keeps a tie with an equally-scored brief on the (richer) brief
-        if score >= _MIN_SCORE and score > best_score:
-            best_score, best_kind, best_obj = score, "role", cand
-
-    if best_obj is None:
+    candidates = [r for r in roles if not (brief.role_id and r.id == brief.role_id)]
+    if not candidates:
         return None
 
-    raw = _extract_from_brief(best_obj) if best_kind == "brief" else _extract_from_role(best_obj)
-    fields = {k: v for k, v in raw.items() if not _is_empty(v)}
+    # Batched applicant counts for the candidate roles (one query) — the
+    # strong-spec signal. Roles with no applications simply count 0.
+    counts = dict(
+        db.query(CandidateApplication.role_id, func.count(CandidateApplication.id))
+        .filter(
+            CandidateApplication.organization_id == organization_id,
+            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.role_id.in_([r.id for r in candidates]),
+        )
+        .group_by(CandidateApplication.role_id)
+        .all()
+    )
+
+    best_key: Optional[tuple] = None
+    best: Optional[tuple] = None  # (role, sim, applicants)
+    for index, role in enumerate(candidates):
+        sim = _score(target, _tokens(role.name))
+        if sim < _MIN_SCORE:
+            continue
+        applicants = int(counts.get(role.id, 0))
+        # Lexicographic: similarity band (dominant) → applicants → recency
+        # (newest = smaller index = larger -index).
+        key = (round(sim, 1), applicants, -index)
+        if best_key is None or key > best_key:
+            best_key, best = key, (role, sim, applicants)
+
+    if best is None:
+        return None
+    role, sim, applicants = best
+
+    linked_brief = (
+        db.query(RoleBrief)
+        .filter(
+            RoleBrief.organization_id == organization_id,
+            RoleBrief.role_id == role.id,
+        )
+        .order_by(RoleBrief.id.desc())
+        .first()
+    )
+    fields = {k: v for k, v in _extract(role, linked_brief).items() if not _is_empty(v)}
     if not fields:
         return None
 
-    name = best_obj.title if best_kind == "brief" else best_obj.name
     return {
         "source": {
-            "kind": best_kind,
-            "id": best_obj.id,
-            "name": name,
-            "score": round(best_score, 2),
+            "kind": "role",
+            "id": role.id,
+            "name": role.name,
+            "score": round(sim, 2),
+            "applicants": applicants,
+            "strong_spec": applicants >= _STRONG_APPLICANTS,
         },
         "fields": fields,
     }

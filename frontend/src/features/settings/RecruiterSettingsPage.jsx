@@ -65,6 +65,8 @@ const SECTION_ALIASES = {
   '': 'org',
   org: 'org',
   organization: 'org',
+  clients: 'clients',
+  client: 'clients',
   workable: 'workable',
   billing: 'billing',
   usage: 'usage',
@@ -1357,6 +1359,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
             <div className="vtabs" role="tablist" aria-label="Settings sections">
               {[
                 { k: 'org', l: 'Organization' },
+                { k: 'clients', l: 'Clients' },
                 { k: 'members', l: 'Members' },
                 { k: 'agent', l: 'AI agent' },
                 { k: 'workable', l: 'Workable' },
@@ -1444,23 +1447,28 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       Edit requisition template →
                     </button>
                   </div>
+                </SectionPanel>
+              </div>
 
-                  {/* Consultancy clients — managed here (moved out of the top
-                      nav). The per-client view + open/filled rollup is reached
-                      from the Jobs page's client filter. */}
-                  <div className="settings-subcard settings-top-gap">
+              <div ref={(node) => { sectionRefs.current.clients = node; }} hidden={activeSection !== "clients"}>
+                <SectionPanel
+                  id="clients"
+                  title="Clients"
+                  subtitle="The consultancy clients you hire for. Assign a requisition to a client to track its rate, margin, and open / filled jobs; filter the Jobs page by client to see each client's pipeline."
+                >
+                  <div className="settings-subcard">
                     <div className="settings-subcard-head">
                       <div>
-                        <h3>Clients</h3>
-                        <p>Manage the consultancy clients you hire for. Assign a requisition to a client to track its rate, margin, and open / filled jobs; filter the Jobs page by client to see each client's pipeline.</p>
+                        <h3>Manage clients</h3>
+                        <p>Add clients, edit their contacts, and open a client to see its requisitions and open / waiting / filled rollup.</p>
                       </div>
                     </div>
                     <button
                       type="button"
-                      className="btn btn-outline btn-sm"
+                      className="btn btn-purple btn-sm"
                       onClick={() => onNavigate?.('clients')}
                     >
-                      Manage clients →
+                      Open clients →
                     </button>
                   </div>
                 </SectionPanel>

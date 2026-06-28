@@ -1,8 +1,11 @@
 """Smarter warm-start: prefill a new requisition's SUBSTANCE from the most
 similar prior role/brief (title-matched, deterministic, no LLM)."""
+from app.models.candidate import Candidate
+from app.models.candidate_application import CandidateApplication
 from app.models.org_criterion import BUCKET_CONSTRAINT, BUCKET_MUST, BUCKET_PREFERRED
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.role_brief import RoleBrief
 from app.models.role_criterion import CRITERION_SOURCE_RECRUITER, RoleCriterion
 from app.services.requisition_similar_service import (
     _score,
@@ -88,25 +91,64 @@ def test_no_title_returns_none(db):
     assert find_similar_prefill(db, organization_id=org.id, brief=brief) is None
 
 
-def test_richer_brief_wins_tie_over_role(db):
+def _apps(db, org, role, n):
+    """Attach ``n`` applications to a role (the strong-spec signal)."""
+    for i in range(n):
+        c = Candidate(organization_id=org.id, email=f"c{role.id}-{i}@x.test", full_name=f"C{i}")
+        db.add(c)
+        db.flush()
+        db.add(CandidateApplication(
+            organization_id=org.id, candidate_id=c.id, role_id=role.id,
+            status="applied", pipeline_stage="applied", application_outcome="open", source="manual",
+        ))
+    db.flush()
+
+
+def test_enriches_from_the_roles_originating_requisition(db):
+    """The matched role's linked brief contributes the richer fields a bare role
+    lacks (responsibilities / success profile / salary)."""
     org = _org(db)
-    _role_with_criteria(db, org, "Data Engineer", must=["Python"])
-    prior = create_brief(db, organization_id=org.id)
+    role = _role_with_criteria(db, org, "Data Engineer", must=["Python"])
+    linked = create_brief(db, organization_id=org.id)
     update_brief_fields(
-        db, prior,
+        db, linked,
         title="Data Engineer",
-        must_haves=["Python", "Airflow"],
         success_profile="Owns the data platform",
-        salary_min=200000,
-        salary_max=260000,
+        salary_min=200000, salary_max=260000,
     )
+    linked.role_id = role.id  # the requisition this role came from
+    linked.custom_fields = {"responsibilities": ["Build pipelines"]}
+    db.flush()
+
     brief = create_brief(db, organization_id=org.id)
     update_brief_fields(db, brief, title="Data Engineer")
 
     res = find_similar_prefill(db, organization_id=org.id, brief=brief)
-    assert res["source"]["kind"] == "brief"  # richer source wins the tie
-    assert res["fields"]["success_profile"] == "Owns the data platform"
+    assert res["source"]["kind"] == "role"
+    assert res["fields"]["must_haves"] == ["Python"]          # from role criteria
+    assert res["fields"]["success_profile"] == "Owns the data platform"  # from brief
     assert res["fields"]["salary_min"] == 200000
+    assert res["fields"]["responsibilities"] == ["Build pipelines"]
+
+
+def test_prefers_the_similar_role_with_more_applicants(db):
+    """Among comparably-similar roles, the one with the stronger spec (more
+    applications) wins."""
+    org = _org(db)
+    # ``strong`` is created FIRST (older) so the win is on applicants, not recency.
+    strong = _role_with_criteria(db, org, "Senior Data Engineer", must=["Scala", "Spark"])
+    weak = _role_with_criteria(db, org, "Data Engineer", must=["Python"])
+    _apps(db, org, weak, 2)
+    _apps(db, org, strong, 30)
+
+    brief = create_brief(db, organization_id=org.id)
+    update_brief_fields(db, brief, title="Data Engineer")
+
+    res = find_similar_prefill(db, organization_id=org.id, brief=brief)
+    assert res["source"]["name"] == "Senior Data Engineer"
+    assert res["source"]["applicants"] == 30
+    assert res["source"]["strong_spec"] is True
+    assert set(res["fields"]["must_haves"]) == {"Scala", "Spark"}
 
 
 def test_scoped_to_org(db):
@@ -144,13 +186,15 @@ def test_apply_fills_empties_only(db):
 # --- endpoint -------------------------------------------------------------- #
 def test_prefill_from_similar_endpoint_applies_and_is_idempotent(client):
     headers, _ = auth_headers(client)
-    # A prior requisition with requirements (publishing it also creates a role).
+    # A prior requisition with requirements, PUBLISHED so it materializes a role
+    # (the matcher is role-primary; the role carries the criteria + applicants).
     a = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
     client.patch(
         f"/api/v1/requisitions/{a}",
         json={"title": "Senior Data Engineer", "must_haves": ["Python", "Spark"], "preferred": ["AWS"]},
         headers=headers,
     )
+    client.post(f"/api/v1/requisitions/{a}/publish", json={"jd_markdown": "JD"}, headers=headers)
     # A new requisition with only a title.
     b = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
     client.patch(f"/api/v1/requisitions/{b}", json={"title": "Data Engineer"}, headers=headers)

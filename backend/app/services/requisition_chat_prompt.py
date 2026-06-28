@@ -248,21 +248,25 @@ def build_chat_system_prompt(
     )
     org = (client_org_name or "").strip()
     if org:
-        # CLIENT-framed intro + a hard no-pay-questions instruction. The
-        # speaker is the consultancy's client, not an internal recruiter.
+        # CLIENT-framed AND anonymous: the speaker is a client / hiring manager
+        # describing a role they want filled. For safety/privacy the prompt
+        # NEVER names the consultancy or any company, and NEVER asks about pay
+        # (the consultancy owns economics). ``client_org_name`` is only the
+        # on-switch here — its value is intentionally not rendered.
         intro = (
-            f"You are {org}'s requisition intake agent, helping {org}'s CLIENT "
-            f"describe a role they want {org} to hire for. Capture the role and "
-            "its requirements. Here is the spec template you must fill: "
+            "You are a requisition intake agent helping someone describe a role "
+            "they want to hire for. Capture the role and its requirements — do "
+            "not name or reference any company. Here is the spec template you "
+            "must fill: "
         )
         comp_instruction = (
-            "Do NOT ask about salary, compensation, or budget — "
-            f"{org}'s team handles that; never raise pay even if prompted. "
+            "Do NOT ask about salary, compensation, or budget — the hiring team "
+            "handles that; never raise pay even if prompted. "
         )
         closing = (
             "ALWAYS keep momentum: every reply asks the next most useful "
-            "question, or — once the role is captured — thanks them and says "
-            f"{org}'s team will take it from here. "
+            "question, or — once the role is captured — thanks them and says the "
+            "team will take it from here. "
         )
     else:
         intro = (
