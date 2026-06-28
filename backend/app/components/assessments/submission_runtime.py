@@ -618,7 +618,6 @@ def submit_assessment_impl(
         tests_total=total,
         total_duration_seconds=duration_seconds,
         time_limit_minutes=assessment.duration_minutes or 30,
-        v2_enabled=settings_obj.SCORING_V2_ENABLED,
         weights=score_weights,
         cv_match_result=cv_match_result,
         task_scoring_hints=task_scoring_hints,
