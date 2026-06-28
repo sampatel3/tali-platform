@@ -1671,8 +1671,10 @@ button.eng-badge-button:focus-visible {
   gap: 5px;
   font-size: 0.75rem;
   font-weight: 600;
-  /* The preview's golden amber, not a dulled amber-into-ink mix. */
-  color: var(--amber);
+  /* Preview-exact amber: bright golden flag icon (svg, below) + readable
+     amber-ink count on a warm amber-soft chip. Matches .chip.amber in the
+     preview — the brighter, cleaner amber, not a dulled amber-into-ink mix. */
+  color: var(--amber-ink);
   background: var(--amber-soft, color-mix(in oklab, var(--amber) 16%, var(--bg-2)));
   border-radius: 999px;
   padding: 3px 10px;
@@ -1776,7 +1778,7 @@ button.eng-badge-button:focus-visible {
   border-radius: 999px;
   font-size: 0.75rem;
   font-weight: 600;
-  color: var(--amber);
+  color: var(--amber-ink);
   background: var(--amber-soft, color-mix(in oklab, var(--amber) 16%, var(--bg-2)));
 }
 .dossier-rail .dr-flags-chip svg { color: var(--amber); }
@@ -1954,7 +1956,7 @@ button.eng-badge-button:focus-visible {
 }
 .reqrow .reqstat[data-s="met"] { background: var(--purple-soft); color: var(--purple-2); }
 .reqrow .reqstat[data-s="partially_met"] { background: color-mix(in oklab, var(--purple) 9%, transparent); color: var(--ink-soft); }
-.reqrow .reqstat[data-s="missing"] { background: color-mix(in oklab, var(--amber) 15%, transparent); color: color-mix(in oklab, var(--amber) 52%, var(--ink)); }
+.reqrow .reqstat[data-s="missing"] { background: color-mix(in oklab, var(--amber) 15%, transparent); color: var(--amber-ink); }
 .reqrow .reqstat[data-s="unknown"] { background: var(--bg-3); color: var(--mute); }
 
 .reqrow .chev {

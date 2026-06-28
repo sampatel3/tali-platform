@@ -41,9 +41,9 @@
 }
 .job-agent-pill.is-on .d { background: rgba(196, 165, 253, 0.3); }
 .job-agent-pill.is-paused {
-  background: color-mix(in oklab, var(--amber) 14%, var(--bg-2));
-  color: color-mix(in oklab, var(--amber) 72%, var(--ink));
-  border: 1px solid color-mix(in oklab, var(--amber) 45%, var(--line));
+  background: var(--amber-soft);
+  color: var(--amber-ink);
+  border: 1px solid color-mix(in oklab, var(--amber) 40%, var(--line));
 }
 .job-agent-pill.is-paused .d { background: var(--bg-2); }
 .job-agent-pill.is-off {
@@ -151,7 +151,7 @@
   gap: 5px;
 }
 .job-foot-paused {
-  color: color-mix(in oklab, var(--amber) 75%, var(--ink));
+  color: var(--amber-ink);
 }
 .job-foot-open {
   margin-left: auto;
