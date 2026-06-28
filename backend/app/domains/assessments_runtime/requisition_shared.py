@@ -90,7 +90,15 @@ def _serialize_brief(brief: RoleBrief, org: Optional[Organization]) -> dict[str,
     empty), and the consultancy economics (client_name + margin/margin_pct)."""
     template = resolve_template(org)
     payload: dict[str, Any] = {k: getattr(brief, k, None) for k in _BRIEF_FIELDS}
-    payload["custom_fields"] = brief.custom_fields or {}
+    # The "About the company" blurb is ORG-level boilerplate (set once in
+    # Settings / auto-derived), so fall back to it on EVERY requisition whose
+    # brief hasn't captured its own — render-time only, not persisted — so the
+    # About-us section fills even on requisitions created before it was set.
+    custom_fields = dict(brief.custom_fields or {})
+    org_blurb = (getattr(org, "company_blurb", None) or "").strip() if org else ""
+    if org_blurb and not str(custom_fields.get("company_description") or "").strip():
+        custom_fields["company_description"] = org_blurb
+    payload["custom_fields"] = custom_fields
     payload["messages"] = brief.messages or []
     payload["completeness"] = int(brief.completeness or 0)
     payload["gaps"] = compute_gaps(brief, template)

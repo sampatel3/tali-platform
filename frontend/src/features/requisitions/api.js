@@ -99,6 +99,13 @@ export const requisitionApi = {
   // Persist an edited spec template for the org.
   saveTemplate: (template) =>
     api.put('/settings/requisition-template', { template }).then((r) => r.data),
+
+  // The org's "About the company" boilerplate (role-agnostic — reused on every
+  // spec). `getTemplate` returns it as `company_blurb`; these edit + regenerate it.
+  saveCompanyBlurb: (companyBlurb) =>
+    api.put('/settings/requisition-template/company-blurb', { company_blurb: companyBlurb }).then((r) => r.data),
+  generateCompanyBlurb: () =>
+    api.post('/settings/requisition-template/company-blurb/generate').then((r) => r.data),
 };
 
 // Public, UNAUTHENTICATED job-posting client — used by the careers-style

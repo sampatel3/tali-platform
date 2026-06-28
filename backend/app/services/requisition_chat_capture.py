@@ -16,6 +16,7 @@ without a DB-or-LLM-free where possible.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 from fastapi import HTTPException
@@ -214,13 +215,23 @@ def _coerce_value(value: Any, field_type: str) -> Any:
             return None
         if isinstance(value, (int, float)):
             return value
-        try:
-            text = str(value).strip().replace(",", "")
-            if text == "":
-                return None
-            return int(text) if text.lstrip("-").isdigit() else float(text)
-        except (TypeError, ValueError):
+        text = str(value).strip().replace(",", "")
+        if text == "":
             return None
+        if text.lstrip("-").isdigit():
+            return int(text)
+        try:
+            return float(text)
+        except (TypeError, ValueError):
+            pass
+        # Natural-language answer / quick-reply chip like "2 openings",
+        # "around 3", "AED 200k" — pull the first number out rather than
+        # rejecting the whole answer (which 422s the deterministic recorder).
+        match = re.search(r"-?\d+(?:\.\d+)?", text)
+        if match is None:
+            return None
+        num = match.group(0)
+        return float(num) if "." in num else int(num)
     if field_type == "list":
         if isinstance(value, list):
             out = [str(v).strip() for v in value if str(v).strip()]
