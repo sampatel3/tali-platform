@@ -63,19 +63,17 @@ _ROLE_SAFE_CAPTURE_KEYS = frozenset(
     {
         "title",
         "summary",
-        "department",
         "seniority",
-        "location_city",
-        "location_country",
-        "workplace_type",
-        "employment_type",
         "must_haves",
         "preferred",
         "dealbreakers",
         "success_profile",
         "assessment_focus",
-        # Role-ish context the client legitimately sets.
+        # Role context a HIRING MANAGER legitimately sets. Logistics that are
+        # HR/People's call (location / workplace / employment / department) are
+        # deliberately NOT here — the intake stays on the role itself.
         "responsibilities",
+        "openings",
         "urgency",
     }
 )

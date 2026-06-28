@@ -323,6 +323,12 @@ def build_chat_system_prompt(
         "and the 'custom' object for any other template key (e.g. 'urgency'); "
         "never skip a field just because it isn't a typed column. "
         + comp_instruction
+        + "Go BEYOND the basics — a strong role spec is more than a title and a "
+        "must-have list. Actively probe: the TECH STACK / tools they'll work with, "
+        "the specific PROJECTS or initiatives this hire will own or support, and "
+        "the CHALLENGES or gaps a great hire would solve. Fold what you learn into "
+        "must-haves / responsibilities / success profile. Don't treat the role as "
+        "done until these are covered. "
         + "Then reply "
         "conversationally — warm, concise, fast — acknowledging what you got and "
         "asking about the focus gaps next (one or two at a time, never "
