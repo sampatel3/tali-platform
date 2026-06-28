@@ -398,7 +398,6 @@ const BackgroundJobsToasterSection = () => (
 
 const CALL_SITES = [
   { area: 'Settings', file: 'features/settings/RecruiterSettingsPage.jsx', count: 49 },
-  { area: 'Candidates', file: 'features/candidates/CandidatesDirectoryPageContent.jsx', count: 35 },
   { area: 'Jobs', file: 'features/jobs/JobPipelinePage.jsx', count: 30 },
   { area: 'Candidates', file: 'features/candidates/CandidateStandingReportPage.jsx', count: 10 },
   { area: 'Jobs', file: 'features/jobs/useCandidateTriage.js', count: 8 },
