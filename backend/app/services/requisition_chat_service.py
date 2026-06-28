@@ -351,3 +351,108 @@ def draft_responsibilities(
         update_brief_fields(db, brief, custom_fields=custom)
         db.flush()
     return result
+
+
+class CompanyBlurbDraft(BaseModel):
+    """The role-agnostic 'About the company' description extracted from specs."""
+
+    company_description: str = ""
+
+
+# Metering bucket for the one-time company-blurb extraction (single-shot, like
+# the intake-agent extraction). Recent role specs we feed the extractor.
+_COMPANY_BLURB_FEATURE = "requisition_intake"
+_COMPANY_BLURB_SOURCE_ROLES = 3
+_COMPANY_BLURB_MAX_TOKENS = 400
+
+
+def derive_company_blurb(
+    db: Session,
+    organization_id: int,
+    *,
+    client: Any = None,
+    model: Optional[str] = None,
+) -> Optional[str]:
+    """The org's standardised "About the company" blurb, derived ONCE from recent
+    role specs and cached on ``organizations.company_blurb``.
+
+    The company description recurs verbatim across an org's job specs but, in
+    per-role JD bodies, sits tangled with role-specific intro text — so a single
+    cheap LLM extraction (FAST model, metered) pulls out the reusable, role-free
+    company description. Cached so it runs once per org (``""`` caches a
+    no-result so we don't re-call). Best-effort: any failure returns None without
+    caching (so a later create retries). Never raises."""
+    from ..models.organization import Organization
+    from ..models.role import Role
+
+    org = db.query(Organization).filter(Organization.id == organization_id).first()
+    if org is None:
+        return None
+    cached = getattr(org, "company_blurb", None)
+    if cached is not None:
+        return cached or None
+
+    roles = (
+        db.query(Role)
+        .filter(
+            Role.organization_id == organization_id,
+            Role.deleted_at.is_(None),
+            Role.job_spec_text.isnot(None),
+        )
+        .order_by(Role.created_at.desc(), Role.id.desc())
+        .limit(_COMPANY_BLURB_SOURCE_ROLES * 4)
+        .all()
+    )
+    specs: list[str] = []
+    for role in roles:
+        text = (role.job_spec_text or "").strip()
+        if text:
+            specs.append(text[:4000])
+        if len(specs) >= _COMPANY_BLURB_SOURCE_ROLES:
+            break
+    if not specs:
+        org.company_blurb = ""  # nothing to derive from yet — cache the no-result
+        db.flush()
+        return None
+
+    if client is None:
+        client = get_metered_client(organization_id=organization_id)
+    resolved_model = (
+        model or (settings.CLAUDE_CHAT_MODEL or "").strip() or settings.resolved_claude_model
+    )
+    system = (
+        "Extract ONLY the standardised 'About the company' description from these "
+        "job specs — who the employer is and what it does. STRIP everything "
+        "role-specific (the role itself, responsibilities, requirements, benefits, "
+        "location, pay). Return a concise, reusable 1–3 sentence company "
+        "description that would fit on ANY of this company's job posts. If the "
+        "specs contain no clear company description, return an empty string."
+    )
+    messages = [
+        {"role": "user", "content": "Job specs:\n\n" + "\n\n---\n\n".join(specs)}
+    ]
+    try:
+        result = generate_structured(
+            client,
+            model=resolved_model,
+            system=system,
+            messages=messages,
+            output_model=CompanyBlurbDraft,
+            metering=MeteringContext(
+                feature=_COMPANY_BLURB_FEATURE,
+                organization_id=organization_id,
+                entity_id=f"org:{organization_id}:company_blurb",
+            ),
+            max_tokens=_COMPANY_BLURB_MAX_TOKENS,
+            temperature=0.2,
+            use_tool_use=True,
+        )
+    except Exception:
+        return None  # transient — don't cache, retry on a later create
+
+    blurb = ""
+    if result.ok and result.value is not None:
+        blurb = (result.value.company_description or "").strip()
+    org.company_blurb = blurb  # cache the result (incl. "" = derived, none found)
+    db.flush()
+    return blurb or None

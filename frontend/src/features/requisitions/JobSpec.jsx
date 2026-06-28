@@ -95,6 +95,9 @@ const buildResolvers = (brief) => {
     // Role-agnostic benefits (custom list field, auto-standardised from recent
     // roles). Tolerate a legacy string value too.
     benefits: Array.isArray(custom.benefits) ? formatList(custom.benefits) : custom.benefits,
+    // Role-agnostic "About the company" blurb (auto-derived once per org, copied
+    // onto each requisition). Plain text.
+    company_description: custom.company_description,
   };
 };
 

@@ -49,7 +49,7 @@ DEFAULT_JD_TEMPLATE = """# {{title}}
 {{evp}}
 
 ## About us
-_Set your company description here in Settings → Requisition template — this boilerplate is reused on every job spec._
+{{company_description}}
 
 ## Benefits
 {{benefits}}

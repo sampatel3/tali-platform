@@ -710,3 +710,45 @@ def test_warm_start_fields_uses_roles_when_no_briefs(db):
 def test_warm_start_fields_empty_with_no_briefs_or_roles(db):
     org = _org(db)
     assert warm_start_fields(db, org.id) == {}
+
+
+# --------------------------------------------------------------------------- #
+# derive_company_blurb — one-time, cached "About the company" extraction
+# --------------------------------------------------------------------------- #
+def test_derive_company_blurb_extracts_then_caches(db, monkeypatch):
+    org = _org(db)
+    db.add(Role(
+        organization_id=org.id, name="Engineer", source="workable",
+        job_spec_text="About Acme\nWe build payroll software.\n\nRequirements\n- Python",
+    ))
+    db.flush()
+    calls = {"n": 0}
+
+    def fake_generate_structured(client, **kwargs):
+        calls["n"] += 1
+        return StructuredResult(
+            value=chat.CompanyBlurbDraft(company_description="Acme builds payroll software."),
+            ok=True,
+        )
+
+    monkeypatch.setattr(chat, "generate_structured", fake_generate_structured)
+    blurb = chat.derive_company_blurb(db, org.id, client=object())
+    assert blurb == "Acme builds payroll software."
+    assert org.company_blurb == "Acme builds payroll software."
+    # Cached — a second call returns the stored blurb WITHOUT another LLM call.
+    assert chat.derive_company_blurb(db, org.id, client=object()) == "Acme builds payroll software."
+    assert calls["n"] == 1
+
+
+def test_derive_company_blurb_no_specs_caches_empty_and_skips_llm(db, monkeypatch):
+    org = _org(db)
+    calls = {"n": 0}
+
+    def fake_generate_structured(client, **kwargs):
+        calls["n"] += 1
+        return StructuredResult(value=chat.CompanyBlurbDraft(company_description="x"), ok=True)
+
+    monkeypatch.setattr(chat, "generate_structured", fake_generate_structured)
+    assert chat.derive_company_blurb(db, org.id, client=object()) is None
+    assert org.company_blurb == ""   # no-result cached so we don't re-call
+    assert calls["n"] == 0           # never invoked the model (no specs to read)

@@ -29,6 +29,7 @@ from ...models.user import User
 from ...platform.database import get_db
 from ...services.requisition_chat_service import (
     ChatAttachment,
+    derive_company_blurb,
     draft_responsibilities,
     next_gap_prompt,
     record_answer,
@@ -119,6 +120,20 @@ def create_requisition(
     # them live, guided by the most similar role; see requisition_similar_service.)
     agnostic = standardize_agnostic_fields(db, current_user.organization_id)
     apply_agnostic_fields(db, brief, agnostic)
+    # Auto-derive the role-agnostic "About the company" blurb (one cheap LLM
+    # extraction, cached per org) and seed the JD's About section. Best-effort —
+    # never blocks create. (The blurb can't be split out deterministically, so
+    # unlike EVP/benefits it needs the extractor.)
+    try:
+        blurb = derive_company_blurb(db, current_user.organization_id)
+    except Exception:
+        blurb = None
+    if blurb:
+        custom = dict(brief.custom_fields or {})
+        existing = custom.get("company_description")
+        if not (isinstance(existing, str) and existing.strip()):
+            custom["company_description"] = blurb
+            brief.custom_fields = custom
     seed_opening_message(brief, template)
     db.flush()
     db.commit()
