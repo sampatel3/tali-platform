@@ -283,6 +283,151 @@
   color: #fff;
 }
 
+/* Client filter dropdown — sits in the filter row next to the source chips. */
+.jobs-client-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+}
+.jobs-client-filter select {
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  font-size: 0.78125rem;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+/* Per-client rollup strip (open/waiting · filled · external) shown when the
+   grid is filtered to one client. */
+.client-rollup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  border-radius: 10px;
+  background: var(--purple-soft);
+  border: 1px solid color-mix(in oklab, var(--purple) 16%, transparent);
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+}
+.client-rollup-name {
+  font-weight: 600;
+  color: var(--ink);
+}
+.client-rollup-stat b {
+  font-family: var(--font-mono);
+  color: var(--purple-2);
+  margin-right: 3px;
+}
+.client-rollup-stat.is-muted b { color: var(--mute); }
+
+/* Job lifecycle badge on a role card (draft/open/filled/external/cancelled). */
+.job-status-badge {
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.job-status-badge.is-draft {
+  background: color-mix(in oklab, var(--ink) 8%, transparent);
+  color: color-mix(in oklab, var(--ink) 62%, transparent);
+}
+.job-status-badge.is-open {
+  background: var(--purple-soft);
+  color: var(--purple-2);
+}
+.job-status-badge.is-filled {
+  background: color-mix(in oklab, var(--green, #2f9e6b) 16%, transparent);
+  color: color-mix(in oklab, var(--green, #2f9e6b) 82%, var(--ink));
+}
+.job-status-badge.is-ext {
+  background: color-mix(in oklab, var(--ink) 8%, transparent);
+  color: color-mix(in oklab, var(--ink) 70%, transparent);
+}
+.job-status-badge.is-cancelled {
+  background: color-mix(in oklab, var(--ink) 6%, transparent);
+  color: var(--mute);
+  text-decoration: line-through;
+}
+
+/* Client chip on a role card — subtle, building icon + name. */
+.job-client-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.625rem;
+  color: var(--ink-2);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  padding: 2px 7px;
+  border-radius: 999px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Job status control on the role's Job Spec tab — current status + the
+   mark-filled / external / cancelled actions. */
+.job-status-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 12px 16px;
+  margin: 16px 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-2);
+}
+.jsc-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+.jsc-label {
+  font-family: var(--font-mono);
+  font-size: 0.65625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+.jsc-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.jsc-btn {
+  padding: 4px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--card, #fff);
+  font-size: 0.75rem;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.jsc-btn:hover:not(:disabled) {
+  border-color: var(--purple);
+  color: var(--purple-2);
+}
+.jsc-btn.is-current {
+  background: var(--purple);
+  border-color: var(--purple);
+  color: #fff;
+  cursor: default;
+}
+.jsc-btn:disabled:not(.is-current) {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .pipeline-back,
 .candidate-detail-back,
 .standing-back {
@@ -514,6 +659,55 @@
 .role-sec strong {
   color: var(--ink);
   font-weight: 600;
+}
+
+/* "From the requisition" panel — the linked hiring brief's structured spec,
+   shown above the collapsible raw job spec on the Job spec tab. Purple-tinted
+   card so it reads as the canonical, richer source. */
+.role-sec.req-spec {
+  background: var(--purple-soft);
+  border: 1px solid color-mix(in oklab, var(--purple) 18%, transparent);
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin: 16px 0 4px;
+}
+.role-sec.req-spec .role-sec-title::after {
+  background: color-mix(in oklab, var(--purple) 22%, transparent);
+}
+.req-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.req-ref {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--purple);
+  background: var(--card, #fff);
+  border: 1px solid color-mix(in oklab, var(--purple) 24%, transparent);
+  padding: 1px 7px;
+  border-radius: 5px;
+}
+.req-client {
+  font-size: 0.78rem;
+  color: var(--ink-2);
+}
+.req-complete {
+  font-size: 0.72rem;
+  color: var(--mute);
+}
+.req-group {
+  margin-top: 12px;
+}
+.req-subhead {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--purple);
+  margin-bottom: 5px;
 }
 
 .desc-toggle {

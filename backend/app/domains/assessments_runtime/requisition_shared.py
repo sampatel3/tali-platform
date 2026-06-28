@@ -49,6 +49,7 @@ def _careers_url(slug: Optional[str]) -> Optional[str]:
 _BRIEF_FIELDS = (
     "id",
     "role_id",
+    "ref_code",
     "status",
     "source_kind",
     "title",
@@ -123,7 +124,36 @@ def _serialize_brief(brief: RoleBrief, org: Optional[Organization]) -> dict[str,
     # The org's PUBLIC careers board (lists every published page). None when the
     # org has no slug; lets the recruiter UI link the board.
     payload["careers_url"] = _careers_url(org.slug if org else None)
+    # The INACTIVE Taali job stood up on publish (None until first published).
+    # Carries the lifecycle status (draft -> open once the Workable bridge links
+    # it) so the requisition UI can show "Inactive job created / now Open".
+    role = brief.role
+    payload["job"] = (
+        {
+            "role_id": role.id,
+            "name": role.name,
+            "job_status": role.job_status,
+            "workable_job_id": role.workable_job_id,
+        }
+        if role
+        else None
+    )
     return payload
+
+
+def _workable_spec(jd_markdown: str, ref_code: str) -> str:
+    """The recruiter copies THIS into the Workable job description. It's the
+    rendered JD with a visible ref line appended — when the job syncs back, the
+    read-sync scans the description for ``ref_code`` and adopts the matching
+    inactive Taali job (Workable has no job-creation API, so the code rides
+    inside the spec the recruiter is already pasting). The wording asks them to
+    keep the line; ``find_ref_code`` tolerates any surrounding prose."""
+    body = (jd_markdown or "").rstrip()
+    ref_line = (
+        f"_Taali ref: {ref_code} — please keep this line so this role links "
+        f"back to your Taali requisition._"
+    )
+    return f"{body}\n\n---\n{ref_line}\n" if body else f"{ref_line}\n"
 
 
 def _get_brief(db: Session, organization_id: int, brief_id: int) -> RoleBrief:

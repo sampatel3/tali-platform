@@ -74,6 +74,13 @@ class RoleBrief(Base):
     # ``/api/v1/public/intake/{token}``.
     client_intake_token = Column(String, nullable=True, unique=True, index=True)
 
+    # Short, human-friendly requisition code (e.g. ``TAL-7K2QF``), minted on the
+    # first publish and reused. Embedded in the spec the recruiter copies into
+    # Workable; the read-sync scans the imported job description for it to link
+    # the synced Workable role back to this requisition (Workable has no
+    # job-creation API, so this paste-the-code bridge is the link mechanism).
+    ref_code = Column(String, nullable=True, unique=True, index=True)
+
     # --- Job profile (structured, queryable) ---
     title = Column(String, nullable=True)
     summary = Column(Text, nullable=True)

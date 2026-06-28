@@ -11,7 +11,7 @@
 // ThinkingDots) — the one standard chat UI across Search, the Home dock and
 // the candidate workspace — and the global purple design tokens.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Copy, ExternalLink, FileText, Paperclip, Plus, RefreshCw, Rocket, Share2, X } from 'lucide-react';
+import { Check, Copy, ExternalLink, FileText, Paperclip, Plus, RefreshCw, Rocket, Share2, Sparkles, X } from 'lucide-react';
 
 import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
 import { requisitionApi } from './api';
@@ -84,6 +84,13 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   // consultancy recruiter sends to their client to describe the role).
   const [clientLinking, setClientLinking] = useState(false);
   const [clientCopied, setClientCopied] = useState(false);
+  // Transient "Copied" tick on the "Copy spec for Workable" button.
+  const [workableCopied, setWorkableCopied] = useState(false);
+  // Smarter warm-start: the banner shown after the substance is prefilled from a
+  // similar prior role ({ name, fields } or null), + a per-requisition guard so
+  // the auto-prefill fires once.
+  const [prefilledFrom, setPrefilledFrom] = useState(null);
+  const prefillTriedRef = useRef(new Set());
   const [savingKey, setSavingKey] = useState(null);
   const [loadingBrief, setLoadingBrief] = useState(false);
   const [error, setError] = useState('');
@@ -456,6 +463,16 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       setBrief((prev) => ({
         ...(prev || {}),
         status: res?.status ?? prev?.status,
+        // Stage-1 bridge: the ref code + the inactive job publish stood up.
+        ref_code: res?.ref_code ?? prev?.ref_code,
+        job: res?.role_id
+          ? {
+              role_id: res.role_id,
+              name: prev?.title ?? prev?.job?.name ?? null,
+              job_status: res.job_status,
+              workable_job_id: prev?.job?.workable_job_id ?? null,
+            }
+          : (prev?.job || null),
         job_page: res?.token
           ? { token: res.token, url: res.url, status: res.status, published_at: res.published_at }
           : (prev?.job_page || null),
@@ -487,6 +504,35 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       setError('Could not copy the link — select and copy it manually.');
     }
   }, [jobPageUrl]);
+
+  // ---- Workable bridge (Stage 1) ----
+  // The requisition's ref code + the inactive job it stood up on publish, plus
+  // the spec the recruiter pastes into Workable: the rendered JD with a ref line
+  // appended. Mirrors the backend's _workable_spec EXACTLY so the import-side
+  // scan recovers the code; built FE-side so "Copy" works on load without a
+  // re-publish. ``brief.job`` = { role_id, name, job_status, workable_job_id }.
+  const refCode = brief?.ref_code || '';
+  const linkedJob = brief?.job || null;
+  const workableSpec = useMemo(() => {
+    if (!refCode) return '';
+    const jd = (typeof brief?.jd_override === 'string' && brief.jd_override.trim() !== '')
+      ? brief.jd_override
+      : renderJobSpec(template, brief);
+    const body = (jd || '').replace(/\s+$/, '');
+    const refLine = `_Taali ref: ${refCode} — please keep this line so this role links back to your Taali requisition._`;
+    return body ? `${body}\n\n---\n${refLine}\n` : `${refLine}\n`;
+  }, [refCode, brief, template]);
+
+  const copyWorkableSpec = useCallback(async () => {
+    if (!workableSpec) return;
+    try {
+      await navigator.clipboard.writeText(workableSpec);
+      setWorkableCopied(true);
+      setTimeout(() => setWorkableCopied(false), 1800);
+    } catch {
+      setError('Could not copy the spec — select and copy it manually.');
+    }
+  }, [workableSpec]);
 
   // The org's public careers board URL (string or null on the brief). When set,
   // we surface it alongside the published job-page link so the recruiter can
@@ -546,7 +592,59 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   }, [clientLinkUrl]);
 
   // Reset the transient "Copied" ticks when switching requisitions.
-  useEffect(() => { setCopied(false); setClientCopied(false); setCareersCopied(false); }, [selectedId]);
+  useEffect(() => { setCopied(false); setClientCopied(false); setCareersCopied(false); setWorkableCopied(false); }, [selectedId]);
+
+  // Auto-surface the client-collect link the moment a requisition opens, so the
+  // recruiter can immediately send it to the client / hiring manager to gather
+  // the role data — no extra "Share with client" click. Idempotent (the mint
+  // endpoint returns the existing token); fires once per opened requisition.
+  useEffect(() => {
+    if (selectedId && brief && !brief.client_link && !clientLinking) {
+      makeClientLink();
+    }
+    // Keyed on the opened requisition only — re-minting is a no-op anyway.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, brief?.id]);
+
+  // Clear the prefill banner when switching requisitions.
+  useEffect(() => { setPrefilledFrom(null); }, [selectedId]);
+
+  // Smarter warm-start: as soon as a requisition has a TITLE but no requirements
+  // yet, pull the substance (requirements / responsibilities / seniority / salary)
+  // from the most similar prior role. Deterministic backend call, fills only
+  // empty fields, fires once per requisition.
+  useEffect(() => {
+    if (!selectedId || !brief) return;
+    const hasTitle = typeof brief.title === 'string' && brief.title.trim() !== '';
+    const custom = brief.custom_fields || {};
+    const hasSubstance =
+      (Array.isArray(brief.must_haves) && brief.must_haves.length > 0)
+      || (Array.isArray(custom.responsibilities) && custom.responsibilities.length > 0);
+    if (!hasTitle || hasSubstance || prefillTriedRef.current.has(selectedId)) return;
+    prefillTriedRef.current.add(selectedId);
+    (async () => {
+      try {
+        const res = await requisitionApi.prefillFromSimilar(selectedId);
+        if (res && Array.isArray(res.prefilled_fields) && res.prefilled_fields.length > 0) {
+          // Merge the prefilled substance, preserving the live client_link +
+          // transcript (which a concurrent turn/mint may have just updated).
+          setBrief((prev) => ({
+            ...(prev || {}),
+            ...res,
+            client_link: prev?.client_link ?? res.client_link,
+            messages: prev?.messages ?? res.messages,
+          }));
+          setPrefilledFrom({
+            name: res.prefilled_from?.name || 'a similar role',
+            fields: res.prefilled_fields,
+          });
+        }
+      } catch {
+        /* best-effort warm-start — never blocks the flow */
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, brief?.title]);
 
   const published = Boolean(jobPage) || isPublished(brief?.status);
   const canSend = (composer.trim() || attachments.length > 0) && !turnInFlight;
@@ -735,6 +833,27 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                           </button>
                         </div>
                       ) : null}
+
+                      {/* Workable bridge: the inactive Taali job + the spec to post in Workable. */}
+                      <div className="rq-workable-row">
+                        <div className="rq-workable-head">
+                          <span className={`rq-job-status ${linkedJob?.workable_job_id ? 'is-open' : 'is-draft'}`}>
+                            {linkedJob?.workable_job_id ? 'Linked to Workable · Open' : 'Inactive job created · Draft'}
+                          </span>
+                          {refCode ? <code className="rq-ref-code" title="Requisition ref code">{refCode}</code> : null}
+                        </div>
+                        <p className="rq-workable-hint">
+                          Create the job in Workable using this spec — keep the ref line so it links back to this requisition automatically when it syncs in.
+                        </p>
+                        <button
+                          type="button"
+                          className="rq-btn-sm is-ghost"
+                          onClick={copyWorkableSpec}
+                          disabled={!workableSpec}
+                        >
+                          {workableCopied ? <Check size={13} /> : <FileText size={13} />} {workableCopied ? 'Copied' : 'Copy spec for Workable'}
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     <button type="button" className="rq-publish-btn" onClick={publish} disabled={publishing}>
@@ -743,6 +862,24 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   )}
                 </div>
               </header>
+
+              {prefilledFrom ? (
+                <div className="rq-prefill-banner" role="status">
+                  <Sparkles size={14} />
+                  <span>
+                    Pre-filled {prefilledFrom.fields.length} field{prefilledFrom.fields.length === 1 ? '' : 's'} from your similar role{' '}
+                    <strong>{prefilledFrom.name}</strong> — review and edit on the right.
+                  </span>
+                  <button
+                    type="button"
+                    className="rq-prefill-dismiss"
+                    onClick={() => setPrefilledFrom(null)}
+                    aria-label="Dismiss"
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              ) : null}
 
               <RequisitionEconomics
                 brief={brief}
