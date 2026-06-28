@@ -38,7 +38,7 @@ import {
 } from './atoms';
 import { TeachModal } from './TeachModal';
 import { OverrideModal, advanceableWorkableStages } from './OverrideModal';
-import { ActivityFeed } from './ActivityFeed';
+import { RecentDecisions } from './RecentDecisions';
 import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import AgentNeedsInputCard from '../jobs/AgentNeedsInputCard';
 import { AgentDecisionCard } from '../../shared/decisions/AgentDecisionCard';
@@ -1063,19 +1063,10 @@ export const HomeNow = ({
             </div>
           </div>
 
-          {/* Short "recent decisions" glance (last 5, expandable) — so a
-              recruiter who advanced someone can find the name again after it's
-              moved to Workable. The full audit trail lives on Analytics. */}
-          <ActivityFeed
-            rows={effDecisions}
-            selectedId={selected?.id}
-            onSelect={setSelectedId}
-            onNavigate={onNavigate}
-            title="Recent decisions"
-            kicker="RECENT DECISIONS"
-            subtitle="The agent's latest calls — find a candidate again after they've moved to Workable."
-            collapsedCount={5}
-          />
+          {/* Minimal recent-decisions list — who, what was decided, when, and a
+              link to the report. Find a candidate again after they've moved on;
+              the full audit trail lives on Analytics → Decision log. */}
+          <RecentDecisions rows={effDecisions} collapsedCount={5} />
         </>
       )}
 
