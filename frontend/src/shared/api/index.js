@@ -5,7 +5,6 @@ export { viewShareLink } from './httpClient';
 export { auth } from './authClient';
 export { assessments } from './assessmentsClient';
 export { roles } from './rolesClient';
-export { scoring } from './scoringClient';
 export { billing } from './billingClient';
 export { organizations } from './orgClient';
 export { apiKeys } from './apiKeysClient';
