@@ -536,6 +536,10 @@ def preview_assessment(token: str, db: Session = Depends(get_db)):
             "repo_structure": _preview_repo_structure(task.repo_structure),
             "rubric_categories": candidate_rubric_view(task.evaluation_rubric),
             "expected_candidate_journey": extra_data.get("expected_candidate_journey"),
+            # Two-stage assessments (Part 1 Practice & Setup → Part 2 Applied
+            # Task) carry a presentational stage config the candidate UI renders
+            # as a phase stepper. Absent on normal tasks → UI shows nothing.
+            "two_stage": extra_data.get("two_stage"),
             "has_cv_on_file": bool(
                 assessment.cv_filename
                 or (assessment.candidate.cv_filename if getattr(assessment, "candidate", None) else None)

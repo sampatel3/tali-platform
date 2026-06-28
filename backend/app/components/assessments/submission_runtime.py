@@ -656,7 +656,12 @@ def submit_assessment_impl(
     rubric_breakdown: Dict[str, Any] = {}
     if task.evaluation_rubric and settings_obj.ANTHROPIC_API_KEY:
         try:
-            from .rubric_scoring import RubricScorer, ScoringArtifacts, summarize_fluency_4d
+            from .rubric_scoring import (
+                RubricScorer,
+                ScoringArtifacts,
+                summarize_fluency_4d,
+                summarize_part_scores,
+            )
 
             # Build artifacts from the actual submission state. Prefer the
             # real sandbox repo (where the agent-SDK path wrote the code);
@@ -747,9 +752,24 @@ def submit_assessment_impl(
                     # same dimension grades; additive, does NOT change the score.
                     "fluency_4d": summarize_fluency_4d(task.evaluation_rubric, rubric_result.dimensions),
                 }
+                # Two-stage scoring: when the task has a Part 1 (Practice & Setup)
+                # dimension, the authoritative assessment score is the part-blend
+                # (w1*Practice + w2*Applied) rather than the flat weighted score.
+                # Tasks with no practice dimension yield practice=None and the
+                # blend collapses to the ordinary score — existing tasks unchanged.
+                part_weights = task_extra.get("part_weights") if isinstance(task_extra, dict) else None
+                part_scores = summarize_part_scores(
+                    task.evaluation_rubric, rubric_result.dimensions, part_weights,
+                )
+                rubric_breakdown["part_scores"] = part_scores
+                if part_scores.get("practice") is not None and part_scores.get("blended_100") is not None:
+                    assessment_score_100 = round(float(part_scores["blended_100"]), 2)
+                    assessment_score_10 = round(assessment_score_100 / 10.0, 1)
+                    rubric_breakdown["weighted_score_100"] = assessment_score_100
                 logger.info(
-                    "RubricScorer applied assessment=%s heuristic=%.2f rubric=%.2f failed=%s",
+                    "RubricScorer applied assessment=%s heuristic=%.2f rubric=%.2f parts=%s failed=%s",
                     assessment.id, old_score, assessment_score_100,
+                    {k: part_scores.get(k) for k in ("practice", "applied")},
                     rubric_result.failed_dimension_ids,
                 )
                 # Recompute downstream blends with the new assessment score.
