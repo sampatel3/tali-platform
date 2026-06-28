@@ -5,31 +5,64 @@
    does NOT redefine any chat component, only the surrounding shell. Class
    prefix: rq- (requisitions). Light, purple-accented, generous. */
 
+/* Gapped bordered-card shell (mirrors the Home agent dock `.ac-shell`): the
+   requisition rail and the main column sit as separate cards with breathing
+   room, not flush divider panes. Fills the viewport under the fixed light
+   header (96px) so each card scrolls internally rather than growing the page. */
 .rq-root {
   display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
+  grid-template-columns: 256px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
-  /* Fill the viewport under the fixed light header (96px) so each pane
-     scrolls internally rather than growing the page. */
+  gap: 16px;
+  padding: 16px;
   height: calc(100vh - 96px);
   height: calc(100dvh - 96px);
   background: var(--bg);
-  border-top: 1px solid var(--line);
   color: var(--ink);
   font-family: var(--font-sans);
+  align-items: stretch;
 }
 
 /* ============ Sidebar — the requisition list ============ */
+/* A bordered, rounded card (mirrors `.ac-sidebar`): a kicker head, the
+   "New requisition" action, then the list — overflow hidden so the rounded
+   corners clip cleanly. */
 .rq-side {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-right: 1px solid var(--line);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
   background: var(--bg-2);
 }
+/* Head: a mono kicker + count row (home `.ac-sidebar-head`), then the
+   "New requisition" button below it. */
 .rq-side-head {
-  padding: 16px 16px 12px;
-  border-bottom: 1px solid var(--line-2);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.rq-side-head-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.rq-side-kicker {
+  font-family: var(--font-mono);
+  font-size: 0.65625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--mute);
+}
+.rq-side-count {
+  font-size: 0.6875rem;
+  color: var(--mute);
+  font-weight: 500;
 }
 .rq-new-btn {
   display: inline-flex;
@@ -52,37 +85,44 @@
 .rq-new-btn:active { transform: translateY(1px); }
 .rq-new-btn:disabled { background: var(--line); color: var(--mute-2); cursor: not-allowed; }
 
+/* Flat, hairline-separated rows (mirrors the Home rail `.ac-agent-list`):
+   no per-row card chrome — selection alone carries the purple. */
 .rq-side-list {
   list-style: none;
   margin: 0;
-  padding: 8px;
+  padding: 0;
   overflow-y: auto;
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .rq-side-item {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 11px 12px;
-  margin-bottom: 4px;
-  border: 1px solid transparent;
-  border-radius: 12px;
+  padding: 11px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
   background: transparent;
   cursor: pointer;
-  transition: background 0.12s, border-color 0.12s;
+  position: relative;
+  transition: background 0.12s;
 }
 .rq-side-item:hover { background: var(--bg-3); }
+/* Selected row (home `.ac-agent.is-active`): purple-tint fill + a 3px inset
+   purple bar on the left — the only purple treatment on a row. */
 .rq-side-item.is-active {
-  background: var(--purple-soft);
-  border-color: color-mix(in oklab, var(--purple) 30%, transparent);
+  background: var(--purple-tint);
+  box-shadow: inset 3px 0 0 var(--purple);
 }
 .rq-side-title {
   display: block;
-  font-size: 0.875rem;
-  font-weight: 600;
+  font-size: 0.8125rem;
+  font-weight: 500;
   color: var(--ink);
-  line-height: 1.3;
+  line-height: 1.25;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -93,16 +133,17 @@
   gap: 7px;
   margin-top: 5px;
   font-family: var(--font-mono);
-  font-size: 0.65625rem;
+  font-size: 0.625rem;
   letter-spacing: 0.04em;
   color: var(--mute);
   text-transform: uppercase;
 }
 .rq-side-empty {
-  padding: 18px 14px;
+  padding: 24px 16px;
   color: var(--mute);
-  font-size: 0.8125rem;
+  font-size: 0.78125rem;
   line-height: 1.5;
+  text-align: center;
 }
 
 /* A tiny status dot — purple family only (no red/amber/green per design). */
@@ -117,20 +158,28 @@
 .rq-dot.is-published { background: var(--purple-2); }
 
 /* ============ Main — header + two columns ============ */
+/* A gapped column: the header/econ card on top, then the split of two bordered
+   cards (conversation + detail) below — matching the Home shell's card rhythm. */
 .rq-main {
   display: flex;
   flex-direction: column;
+  gap: 16px;
   min-width: 0;
   min-height: 0;
 }
 
+/* The header + economics strip read as one bordered card at the top of the
+   column (rounded, clipped) so they sit apart from the two columns below. */
 .rq-main-head {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 14px 24px;
-  border-bottom: 1px solid var(--line);
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  border-radius: 14px 14px 0 0;
   background: var(--bg-2);
+  flex-shrink: 0;
 }
 .rq-main-head-titles { min-width: 0; flex: 1; }
 .rq-main-title {
@@ -375,34 +424,70 @@ a.rq-btn-sm { text-decoration: none; }
   margin-right: 2px;
 }
 
+/* The two columns sit as separate bordered cards with the same 16px gap the
+   shell uses (home `.ac-shell`) — the conversation card and the detail card. */
 .rq-split {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);
+  gap: 16px;
   min-height: 0;
   flex: 1;
 }
 
 /* ============ Conversation column ============ */
+/* A bordered, rounded card (mirrors `.ac-dock`): the thread scrolls internally,
+   the composer pins to the bottom — overflow hidden so the corners clip. */
 .rq-convo {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-right: 1px solid var(--line);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--bg-2);
 }
+/* White conversation surface (home `.ac-stream`), with the same 11px
+   inter-message rhythm the dock uses. */
 .rq-thread {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 24px 24px 8px;
+  padding: 18px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
-}
-.rq-composer-wrap {
-  padding: 12px 20px 18px;
-  border-top: 1px solid var(--line-2);
+  gap: 14px;
   background: var(--bg-2);
 }
+/* Wraps the shared <ChatComposer> + the attach/quick-reply tools at the bottom
+   of the conversation card (home `.ac-dock-composer`). */
+.rq-composer-wrap {
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-2);
+  flex-shrink: 0;
+}
+
+/* ============ Chat messages ============ */
+/* Messages come from the shared kit (<ChatMessage>): user = right-aligned ink
+   pill (`.tk-msg-user`), agent = borderless markdown on the LEFT. We add the
+   mono "AGENT" kicker above the agent prose (home `.ac-who` / home-preview
+   `.msg.bot .who`). The kicker + markdown wrap in one tight column so the
+   shared assistant column's 14px gap only separates the prose from any cards
+   slotted beneath it. */
+.rq-agent-say { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.rq-who {
+  font-family: var(--font-mono);
+  font-size: 0.59375rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--purple);
+}
+/* Trim the shared assistant text/markdown to the dock's tighter scale (home
+   `.ac-stream .tk-*`) — the kit defaults to the roomier Search-page size. */
+.rq-thread .tk-msg-assistant,
+.rq-thread .tk-md,
+.rq-thread .tk-msg-user { font-size: 0.8125rem; line-height: 1.5; }
 
 /* Attachment chips above the composer. Image chips show a thumbnail. */
 .rq-attach-row {
@@ -491,21 +576,26 @@ a.rq-btn-sm { text-decoration: none; }
 }
 
 /* ============ Right column — Job spec + Brief tabs ============ */
-/* The grid child now wraps a tab bar above the (internally scrolling) panel,
-   so it must be a flex column with its own min-height:0 to keep the panel
-   scrolling rather than growing the page. */
+/* A bordered, rounded card (mirrors the conversation card / `.ac-dock`): the
+   tab bar is the card head, the panel below scrolls internally. Overflow
+   hidden so the rounded corners clip the tabs and the scrolling panel. */
 .rq-right {
   display: flex;
   flex-direction: column;
   min-height: 0;
   min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--bg-2);
 }
 
-/* Tab bar — purple-underline active treatment, reusing the nav vocabulary. */
+/* Tab bar — the card head: purple-underline active treatment, reusing the nav
+   vocabulary (home `.ac-dock-head` sits in the same slot). */
 .rq-tabs {
   display: flex;
   gap: 4px;
-  padding: 0 22px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--line);
   background: var(--bg-2);
   flex-shrink: 0;
@@ -532,18 +622,20 @@ a.rq-btn-sm { text-decoration: none; }
 }
 
 /* ============ Live brief column ============ */
+/* Sits inside the rounded detail card — the white card surface, scrolling
+   internally below the tab head. */
 .rq-brief {
   display: flex;
   flex-direction: column;
   min-height: 0;
   flex: 1;
-  background: var(--bg);
+  background: var(--bg-2);
 }
 .rq-brief-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 20px 22px 32px;
+  padding: 18px 18px 28px;
 }
 
 /* ============ Job spec (live JD document) ============ */
@@ -670,8 +762,8 @@ a.rq-btn-sm { text-decoration: none; }
   position: sticky;
   top: 0;
   z-index: 1;
-  margin: -20px -22px 18px;
-  padding: 16px 22px 14px;
+  margin: -18px -18px 18px;
+  padding: 16px 18px 14px;
   background: color-mix(in oklab, var(--bg-2) 92%, transparent);
   backdrop-filter: blur(6px);
   border-bottom: 1px solid var(--line-2);
@@ -887,16 +979,21 @@ a.rq-btn-sm { text-decoration: none; }
   font-size: 0.8125rem;
 }
 
-/* Error + empty states */
+/* Error / caution states — amber per the design rules (caution = amber-ink
+   text on amber-soft, never red). Sits between the header card and the split;
+   the `.rq-main` gap gives it breathing room, so no extra margin. */
 .rq-error {
-  margin: 14px 24px;
+  margin: 0;
   padding: 12px 14px;
-  border: 1px solid color-mix(in oklab, var(--red) 35%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--amber) 35%, var(--line));
   border-radius: 12px;
-  background: color-mix(in oklab, var(--red) 8%, var(--bg-2));
-  color: var(--red-deep);
+  background: var(--amber-soft);
+  color: var(--amber-ink);
   font-size: 0.8125rem;
+  flex-shrink: 0;
 }
+/* No-selection state — a bordered card filling the main column so the empty
+   page still reads as the gapped-card shell (matches the rail card beside it). */
 .rq-blank {
   flex: 1;
   display: grid;
@@ -904,6 +1001,10 @@ a.rq-btn-sm { text-decoration: none; }
   padding: 40px;
   text-align: center;
   color: var(--mute);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg-2);
+  min-height: 0;
 }
 .rq-blank-card { max-width: 420px; }
 .rq-blank-glyph {
@@ -937,10 +1038,11 @@ a.rq-btn-sm { text-decoration: none; }
 }
 @keyframes rq-spin { to { transform: rotate(360deg); } }
 
-/* Narrow viewports: stack the brief under the conversation. */
+/* Narrow viewports: drop the detail card and let the conversation card fill
+   the column (the JD / Brief don't fit a phone; the chat is the priority). */
 @media (max-width: 1080px) {
   .rq-split { grid-template-columns: 1fr; }
-  .rq-brief { display: none; }
+  .rq-right { display: none; }
 }
 @media (max-width: 860px) {
   .rq-root { grid-template-columns: 1fr; }
@@ -951,14 +1053,19 @@ a.rq-btn-sm { text-decoration: none; }
    Recruiter-internal client + rate + margin band on a requisition. NOT
    candidate-facing — a distinct purple-tinted strip below the header, set
    apart from the brief/job-spec so the recruiter reads it as "internal". */
+/* The economics strip is the BOTTOM half of the header card — same border, the
+   card's rounded bottom corners, a hairline divider from the header above it. */
 .rq-econ {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 18px;
-  padding: 11px 24px;
-  border-bottom: 1px solid var(--line);
+  padding: 11px 18px;
+  border: 1px solid var(--line);
+  border-top: 1px solid var(--line-2);
+  border-radius: 0 0 14px 14px;
   background: color-mix(in oklab, var(--purple) 5%, var(--bg-2));
+  flex-shrink: 0;
 }
 .rq-econ-tag {
   display: inline-flex;

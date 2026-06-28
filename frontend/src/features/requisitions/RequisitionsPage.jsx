@@ -37,7 +37,9 @@ const statusLabel = (status) => String(status || 'draft').replace(/_/g, ' ');
 const isPublished = (status) => String(status || '').toLowerCase() === 'published';
 
 // One conversation turn rendered with the shared message bubbles. Assistant
-// turns render Markdown; user turns show their text plus any attachment chips.
+// turns render Markdown under a mono "AGENT" kicker (the same attribution the
+// Home dock shows above its agent prose); user turns show their text plus any
+// attachment chips in the ink pill.
 function Turn({ msg }) {
   const attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
   if (msg.role === 'user') {
@@ -59,9 +61,16 @@ function Turn({ msg }) {
       </div>
     );
   }
+  // Agent turns carry a mono "AGENT" kicker above the prose (home-preview
+  // `.msg.bot .who`). We render the kicker + markdown as children — no `text`
+  // prop — so the label sits above the shared <ChatMarkdown> body, keeping the
+  // prose styling identical to every other chat surface.
   return (
     <ChatMessage role="assistant">
-      <ChatMarkdown>{msg.content}</ChatMarkdown>
+      <div className="rq-agent-say">
+        <span className="rq-who">Agent</span>
+        <ChatMarkdown>{msg.content}</ChatMarkdown>
+      </div>
     </ChatMessage>
   );
 }
@@ -661,9 +670,16 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     <>
       {NavComponent ? <NavComponent currentPage="requisitions" onNavigate={onNavigate} /> : null}
       <div className="rq-root">
-        {/* Sidebar — the requisition list */}
+        {/* Sidebar — the requisition list (a bordered card: kicker head +
+            "New requisition" + a flat hairline list, mirroring the Home rail) */}
         <aside className="rq-side">
           <div className="rq-side-head">
+            <div className="rq-side-head-row">
+              <span className="rq-side-kicker">Requisitions</span>
+              {briefs.length > 0 ? (
+                <span className="rq-side-count">{briefs.length}</span>
+              ) : null}
+            </div>
             <button type="button" className="rq-new-btn" onClick={createReq} disabled={creating}>
               {creating ? <span className="rq-spinner" /> : <Plus size={15} />} New requisition
             </button>
