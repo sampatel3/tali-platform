@@ -781,10 +781,18 @@
   background: linear-gradient(180deg, #43227e, #2a1454);
 }
 
+/* Alternatives (Reject / Skip / Re-evaluate) wear the report's neutral-outline
+   .btn-outline style — not a traffic-light amber. Recommended action keeps the
+   dark-purple "agent on" signature; teach stays purple; everything else neutral. */
 .rq-btn.rq-override {
-  background: color-mix(in oklab, var(--amber) 14%, var(--bg-2));
-  border-color: color-mix(in oklab, var(--amber) 28%, var(--line));
-  color: var(--amber);
+  background: var(--bg-2);
+  border-color: var(--line);
+  color: var(--ink-2);
+}
+.rq-btn.rq-override:hover:not(:disabled) {
+  background: var(--bg-2);
+  border-color: var(--ink);
+  color: var(--ink);
 }
 
 .rq-btn.rq-teach {
@@ -2303,4 +2311,62 @@
   .rq-modal-backdrop {
     padding: 14px;
   }
+}
+
+/* ---------------- Hub analytics pulse (compact) ----------------
+   A high-level summary that sits on the hub; the full console lives on
+   /analytics. Matches the home-preview's "Analytics · platform pulse" block. */
+.home-pulse-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.home-pulse-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--purple-2);
+  background: var(--bg-2);
+  border: 1px solid var(--purple-lav);
+  border-radius: 9px;
+  padding: 5px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.home-pulse-link:hover { background: var(--purple-tint); }
+.home-pulse-stats {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+  margin-top: 14px;
+}
+.home-pulse-k {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--mute);
+}
+.home-pulse-v {
+  font-size: 1.1875rem;
+  font-weight: 600;
+  margin-top: 3px;
+  letter-spacing: -0.01em;
+}
+.home-pulse-unit {
+  font-size: 0.8125rem;
+  font-weight: 400;
+  color: var(--mute);
+}
+.home-pulse-note {
+  font-size: 0.75rem;
+  color: var(--mute);
+  line-height: 1.5;
+  margin: 14px 0 0;
+}
+@media (max-width: 900px) {
+  .home-pulse-stats { grid-template-columns: repeat(2, 1fr); }
 }
