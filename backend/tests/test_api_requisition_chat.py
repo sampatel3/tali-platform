@@ -19,10 +19,11 @@ def test_create_requisition_seeds_opening_message_and_serializer_extras(client):
     assert body["custom_fields"] == {}
     assert body["completeness"] == 0
     assert isinstance(body["gaps"], list) and body["gaps"][0]["key"] == "title"
-    # Opening assistant message seeded.
+    # Opening assistant message seeded — a free-text brief request, no chips.
     assert len(body["messages"]) == 1
     assert body["messages"][0]["role"] == "assistant"
-    assert "what role are you hiring for?" in body["messages"][0]["content"]
+    assert "in your own words" in body["messages"][0]["content"]
+    assert body["messages"][0]["suggested_replies"] == []
 
 
 def test_chat_endpoint_multipart_applies_and_returns_contract(client, monkeypatch):
@@ -56,8 +57,9 @@ def test_chat_endpoint_multipart_applies_and_returns_contract(client, monkeypatc
     assert set(body.keys()) == {"brief", "reply", "messages", "gaps", "suggested_replies"}
     assert body["reply"].startswith("Onsite or remote")
     # The model gave no suggested_replies → deterministic fallback to the next
-    # select gap's options (workplace_type), surfaced as tappable quick replies.
-    assert body["suggested_replies"] == ["Onsite", "Hybrid", "Remote"]
+    # gap's options. With title captured, the next gap is `domain` (a free-text
+    # field), so there are no tappable options — the manager types it.
+    assert body["suggested_replies"] == []
     # Brief reflects the capture.
     assert body["brief"]["title"] == "Backend Engineer"
     assert body["brief"]["must_haves"] == ["Python"]
@@ -121,13 +123,21 @@ def test_answer_endpoint_select_field_offers_next_select_options(client):
     surfaces that gap's options as tappable quick replies."""
     headers, _ = auth_headers(client)
     brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
-    # Fill the earlier required gaps (title, workplace_type) so employment_type
-    # becomes the first remaining required gap.
-    client.patch(
-        f"/api/v1/requisitions/{brief_id}",
-        json={"title": "Engineer", "workplace_type": "Remote"},
-        headers=headers,
-    )
+    # Fill every required gap that precedes employment_type (title, domain,
+    # seniority, summary, workplace_type) so employment_type — a select — becomes
+    # the first remaining required gap. domain is a custom field → use /answer.
+    for field_key, value in [
+        ("title", "Engineer"),
+        ("domain", "Banking"),
+        ("seniority", "Mid"),
+        ("summary", "Builds APIs"),
+        ("workplace_type", "Remote"),
+    ]:
+        client.post(
+            f"/api/v1/requisitions/{brief_id}/answer",
+            json={"field_key": field_key, "value": value},
+            headers=headers,
+        )
     resp = client.post(
         f"/api/v1/requisitions/{brief_id}/answer",
         json={"field_key": "openings", "value": 2},
@@ -201,11 +211,15 @@ def test_answer_endpoint_completeness_reaches_100_then_publish_nudge(client):
     becomes the publish nudge with no options."""
     headers, _ = auth_headers(client)
     brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
-    # Required fields in the default template: title, workplace_type,
-    # employment_type, openings, urgency, salary_min, salary_max, salary_currency,
-    # must_haves. salary_currency is seeded to AED on create.
+    # Required fields in the default template: title, domain, seniority, summary,
+    # workplace_type, employment_type, openings, urgency, salary_min, salary_max,
+    # salary_currency, must_haves, success_profile, responsibilities.
+    # salary_currency is seeded to AED on create.
     answers = [
         ("title", "Backend Engineer"),
+        ("domain", "Banking"),
+        ("seniority", "Senior"),
+        ("summary", "Builds and ships backend services"),
         ("workplace_type", "Remote"),
         ("employment_type", "Full-time"),
         ("openings", 2),
@@ -213,6 +227,8 @@ def test_answer_endpoint_completeness_reaches_100_then_publish_nudge(client):
         ("salary_min", 100),
         ("salary_max", 200),
         ("must_haves", ["Python"]),
+        ("success_profile", "Ships reliable services in 6 months"),
+        ("responsibilities", ["Build APIs", "Own reliability"]),
     ]
     body = None
     for field_key, value in answers:

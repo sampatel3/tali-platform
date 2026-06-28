@@ -66,9 +66,14 @@ def test_compute_gaps_lists_required_empty_in_template_order(db):
     template = DEFAULT_REQUISITION_TEMPLATE
     gaps = compute_gaps(b, template)
     keys = [g["key"] for g in gaps]
-    # All required fields, in template (section→field) order.
+    # All required fields, in template (section→field) order. The intake gathers
+    # role substance (domain, seniority, summary, success profile, key
+    # responsibilities) — not just logistics + a must-have list.
     assert keys == [
         "title",
+        "domain",
+        "seniority",
+        "summary",
         "workplace_type",
         "employment_type",
         "openings",
@@ -77,6 +82,8 @@ def test_compute_gaps_lists_required_empty_in_template_order(db):
         "salary_max",
         "salary_currency",
         "must_haves",
+        "success_profile",
+        "responsibilities",
     ]
     # Each gap carries its section.
     title_gap = gaps[0]
@@ -109,8 +116,12 @@ def test_suggested_replies_prefers_model_supplied(db):
 def test_suggested_replies_fallback_to_select_options_of_next_gap(db):
     b, _ = _brief(db)
     template = DEFAULT_REQUISITION_TEMPLATE
-    # With only title filled, the next required gap is workplace_type (a select).
-    update_brief_fields(db, b, title="Eng")
+    # With the role-basics required fields filled, the next required gap is
+    # workplace_type (a select), so the fallback offers its options.
+    update_brief_fields(
+        db, b, title="Eng", seniority="Mid", summary="Builds APIs",
+        custom_fields={"domain": "Banking"},
+    )
     cap = ChatCapture(assistant_reply="Onsite, hybrid or remote?")  # no replies
     replies = chat._resolve_suggested_replies(cap, b, template)
     assert replies == ["Onsite", "Hybrid", "Remote"]
@@ -128,15 +139,18 @@ def test_completeness_math(db):
     b, _ = _brief(db)
     template = DEFAULT_REQUISITION_TEMPLATE
     assert compute_completeness(b, template) == 0
-    # 9 required fields total. Fill 2 → round(100*2/9) = 22.
+    # 14 required fields total. Fill 2 → round(100*2/14) = 14.
     update_brief_fields(db, b, title="Eng", openings=1)
-    assert compute_completeness(b, template) == 22
-    # Fill the remaining 7 (urgency is a custom select → custom_fields).
+    assert compute_completeness(b, template) == 14
+    # Fill the remaining 12 (domain / urgency / responsibilities are custom keys
+    # → custom_fields; the rest are brief columns).
     update_brief_fields(
         db, b,
+        seniority="Mid", summary="Builds APIs",
         workplace_type="Remote", employment_type="Full-time",
         salary_min=100, salary_max=150, salary_currency="USD",
-        must_haves=["Python"], custom_fields={"urgency": "High"},
+        must_haves=["Python"], success_profile="Ships reliably",
+        custom_fields={"urgency": "High", "domain": "Banking", "responsibilities": ["Build"]},
     )
     assert compute_completeness(b, template) == 100
 
@@ -155,10 +169,12 @@ def test_completeness_100_when_no_required_fields(db):
 # --------------------------------------------------------------------------- #
 # Opening message
 # --------------------------------------------------------------------------- #
-def test_opening_message_includes_greeting_and_first_required_question():
+def test_opening_message_is_free_text_brief_with_checklist():
     msg = opening_message(DEFAULT_REQUISITION_TEMPLATE)
     assert msg.startswith("Hi —")
-    assert "what role are you hiring for?" in msg
+    # Free-text-first: asks for the role in their own words + names the domain.
+    assert "in your own words" in msg
+    assert "domain" in msg.lower()
 
 
 def test_seed_opening_message_sets_single_assistant_turn(db):
@@ -166,7 +182,9 @@ def test_seed_opening_message_sets_single_assistant_turn(db):
     seed_opening_message(b, DEFAULT_REQUISITION_TEMPLATE)
     assert len(b.messages) == 1
     assert b.messages[0]["role"] == "assistant"
-    assert "what role are you hiring for?" in b.messages[0]["content"]
+    assert "in your own words" in b.messages[0]["content"]
+    # No tappable options on the opener — free text first.
+    assert b.messages[0]["suggested_replies"] == []
     assert b.messages[0]["attachments"] == []
 
 
@@ -375,8 +393,8 @@ def test_run_chat_turn_applies_capture_appends_messages_shrinks_gaps(db, monkeyp
     keys = [g["key"] for g in compute_gaps(b, resolve_template(_org))]
     assert "title" not in keys and "must_haves" not in keys
     assert "workplace_type" in keys and "openings" in keys
-    # completeness recomputed: 5/9 required filled (urgency still empty).
-    assert b.completeness == round(100 * 5 / 9)
+    # completeness recomputed: 5/14 required filled (title, salary×3, must_haves).
+    assert b.completeness == round(100 * 5 / 14)
 
 
 def test_run_chat_turn_image_block_reaches_llm(db, monkeypatch):

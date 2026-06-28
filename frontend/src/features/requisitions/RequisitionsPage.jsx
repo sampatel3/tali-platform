@@ -658,7 +658,11 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const gapOptions = (gapField && gapField.type === 'select' && Array.isArray(gapField.options))
     ? gapField.options.filter(Boolean)
     : [];
-  const quickReplies = turnInFlight
+  // Free-text-first: hold back tappable options until the user has answered the
+  // opener in their own words, so the brief is grounded in what they say rather
+  // than a menu they click through.
+  const hasUserTurn = messages.some((m) => m && m.role === 'user');
+  const quickReplies = (turnInFlight || !hasUserTurn)
     ? []
     : gapOptions.length > 0
       ? gapOptions

@@ -382,8 +382,12 @@ export function ClientIntakePage() {
   // Quick replies for the latest agent turn — prefer the standalone `suggested`
   // (set from the chat response), else fall back to the last message's own.
   const lastMsg = messages.length ? messages[messages.length - 1] : null;
+  // Free-text-first: no tappable options until the manager has answered the
+  // opener in their own words — the brief should be grounded in what they say,
+  // not a menu they click through.
+  const hasUserTurn = messages.some((m) => m && m.role === 'user');
   const quickReplies = (() => {
-    if (turnInFlight) return [];
+    if (turnInFlight || !hasUserTurn) return [];
     if (Array.isArray(suggested) && suggested.length) return suggested.filter(Boolean);
     if (lastMsg && lastMsg.role === 'assistant' && Array.isArray(lastMsg.suggested_replies)) {
       return lastMsg.suggested_replies.filter(Boolean);
