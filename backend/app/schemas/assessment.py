@@ -117,10 +117,6 @@ class AssessmentResponse(BaseModel):
     total_paused_seconds: Optional[int] = None
     completed_due_to_timeout: Optional[bool] = None
     ai_mode: Optional[str] = None
-    cli_session_pid: Optional[int] = None
-    cli_session_state: Optional[str] = None
-    cli_session_started_at: Optional[datetime] = None
-    cli_session_last_seen_at: Optional[datetime] = None
     cli_transcript: Optional[List[Dict[str, Any]]] = None
     final_repo_state: Optional[str] = None
     git_evidence: Optional[Dict[str, Any]] = None
