@@ -29,7 +29,6 @@ import { ScoreRing } from '../ui/ScoreRing';
 import {
   Avatar,
   ConfBar,
-  DeepLinkRow,
   formatRelativeAge,
   initialsFrom,
   TypeBadge,
@@ -56,6 +55,15 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
   // current engine rather than just re-running the agent.
   const stalenessReasons = Array.isArray(decision.staleness_reasons) ? decision.staleness_reasons : [];
   const staleEngineOnly = stalenessReasons.length > 0 && stalenessReasons.every((r) => r === 'engine_outdated');
+
+  const isPending = decision.status === 'pending' || decision.status === 'reverted_for_feedback';
+  const spec = DECISION_ACTIONS[decision.decision_type] || DEFAULT_ACTIONS;
+  const PrimaryIcon = spec.primaryIcon || Check;
+  const primaryTitle = staleEngineOnly
+    ? 'Scored by an older model — this approves the old score as-is. Re-evaluate to re-score first.'
+    : isStale
+      ? 'Inputs changed since this was decided — this acts on them anyway. Re-evaluate first to refresh.'
+      : undefined;
 
   return (
     <section className="rq-hybrid-detail">
@@ -99,17 +107,25 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
           </div>
           {/* Deep-links sit on their own line below the email so a long name
               can never collide with them. */}
-          <div className="rq-detail-links" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
-            <DeepLinkRow
-              Icon={FileText}
-              label="Open candidate report"
+          {/* Standard outline buttons (preview), not the bespoke DeepLinkRow. */}
+          <div className="rq-detail-links" style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+            <a
+              className="btn btn-outline btn-sm"
               href={pathForPage('candidate-report', { candidateApplicationId: decision.application_id, fromHome: true })}
-            />
-            <DeepLinkRow
-              Icon={Eye}
-              label="Open job pipeline"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ flex: 1, justifyContent: 'center' }}
+            >
+              <FileText size={14} aria-hidden="true" /> Candidate report
+            </a>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
               onClick={() => onNavigate?.('job-pipeline', { roleId: decision.role_id })}
-            />
+              style={{ flex: 1, justifyContent: 'center' }}
+            >
+              <Eye size={14} aria-hidden="true" /> Job pipeline
+            </button>
           </div>
         </div>
         {decision.taali_score != null ? (
@@ -119,6 +135,27 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
           </div>
         ) : null}
       </div>
+
+      {/* Agent-recommends slab — near the TOP (preview order): the recommendation
+          first, then reasoning + flags, with the secondary actions at the bottom. */}
+      {isPending ? (
+        <div className="rq-rec">
+          <div className="rq-rec-kl"><Sparkles size={12} aria-hidden="true" /> Agent recommends</div>
+          <button
+            type="button"
+            className="rq-rec-btn"
+            onClick={() => onApprove(decision)}
+            disabled={busy}
+            title={primaryTitle}
+          >
+            <PrimaryIcon size={16} strokeWidth={2.4} aria-hidden="true" />
+            {spec.primaryLabel}
+          </button>
+          {decision.confidence != null ? (
+            <div className="rq-rec-conf">Confidence {Math.round(decision.confidence * 100)}%</div>
+          ) : null}
+        </div>
+      ) : null}
 
       <p style={{ margin: '0 0 14px', fontSize: '0.875rem', color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: 760 }}>
         {decision.reasoning}
@@ -186,78 +223,47 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
         </div>
       ) : null}
 
-      {decision.status === 'pending' || decision.status === 'reverted_for_feedback' ? (
-        (() => {
-          const spec = DECISION_ACTIONS[decision.decision_type] || DEFAULT_ACTIONS;
-          const PrimaryIcon = spec.primaryIcon || Check;
-          const primaryTitle = staleEngineOnly
-            ? 'Scored by an older model — this approves the old score as-is. Re-evaluate to re-score first.'
-            : isStale
-              ? 'Inputs changed since this was decided — this acts on them anyway. Re-evaluate first to refresh.'
-              : undefined;
-          return (
-            <>
-            {/* Agent-recommends slab — the dark-purple "agent ON" treatment with
-                the recommended action as a white CTA, matching the candidate
-                report's DecisionRail so the recommendation looks identical on
-                the hub and the report. */}
-            <div className="rq-rec">
-              <div className="rq-rec-kl"><Sparkles size={12} aria-hidden="true" /> Agent recommends</div>
+      {/* Secondary actions at the very BOTTOM (preview order), standard .btn
+          family. The recommended action lives in the slab near the top. */}
+      {isPending ? (
+        <div className="rq-action-bar">
+          <div className="rq-action-l">
+            {isStale && onReEvaluate ? (
               <button
                 type="button"
-                className="rq-rec-btn"
-                onClick={() => onApprove(decision)}
+                className="btn btn-outline btn-sm"
+                onClick={() => onReEvaluate(decision)}
                 disabled={busy}
-                title={primaryTitle}
               >
-                <PrimaryIcon size={16} strokeWidth={2.4} aria-hidden="true" />
-                {spec.primaryLabel}
+                <RefreshCw size={14} strokeWidth={2.4} aria-hidden="true" />
+                Re-evaluate
               </button>
-              {decision.confidence != null ? (
-                <div className="rq-rec-conf">Confidence {Math.round(decision.confidence * 100)}%</div>
-              ) : null}
-            </div>
-            <div className="rq-action-bar">
-              <div className="rq-action-l">
-                {isStale && onReEvaluate ? (
-                  <button
-                    type="button"
-                    className="rq-btn rq-override"
-                    onClick={() => onReEvaluate(decision)}
-                    disabled={busy}
-                  >
-                    <RefreshCw size={14} strokeWidth={2.4} aria-hidden="true" />
-                    Re-evaluate
-                  </button>
-                ) : null}
-                {(spec.alternatives || []).map((alt) => {
-                  const AltIcon = alt.icon || X;
-                  return (
-                    <button
-                      key={alt.action}
-                      type="button"
-                      className="rq-btn rq-override"
-                      onClick={() => onAlternative(decision, alt)}
-                      disabled={busy}
-                      title={alt.body}
-                    >
-                      <AltIcon size={14} strokeWidth={2} aria-hidden="true" />
-                      {alt.label}
-                    </button>
-                  );
-                })}
-                <button type="button" className="rq-btn rq-teach" onClick={() => onTeach(decision)} disabled={busy}>
-                  <Brain size={14} strokeWidth={2} aria-hidden="true" />
-                  Send back &amp; teach
+            ) : null}
+            {(spec.alternatives || []).map((alt) => {
+              const AltIcon = alt.icon || X;
+              return (
+                <button
+                  key={alt.action}
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={() => onAlternative(decision, alt)}
+                  disabled={busy}
+                  title={alt.body}
+                >
+                  <AltIcon size={14} strokeWidth={2} aria-hidden="true" />
+                  {alt.label}
                 </button>
-              </div>
-              <button type="button" className="rq-btn rq-defer" onClick={() => onSnooze(decision)} disabled={busy}>
-                Snooze 1h
-              </button>
-            </div>
-            </>
-          );
-        })()
+              );
+            })}
+            <button type="button" className="btn btn-purple btn-sm" onClick={() => onTeach(decision)} disabled={busy}>
+              <Brain size={14} strokeWidth={2} aria-hidden="true" />
+              Send back &amp; teach
+            </button>
+          </div>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => onSnooze(decision)} disabled={busy}>
+            Snooze 1h
+          </button>
+        </div>
       ) : (
         <div className="home-empty" style={{ marginTop: 12 }}>
           {decision.status === 'approved' ? 'Approved — actions are read-only.'
