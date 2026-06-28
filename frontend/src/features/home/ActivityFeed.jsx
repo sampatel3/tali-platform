@@ -7,7 +7,7 @@
 //     role_id, confidence, reasoning, created_at, resolved_at,
 //     resolved_by, human_disposition, resolution_note }
 
-import React from 'react';
+import React, { useState } from 'react';
 import { Check, X } from 'lucide-react';
 
 import { Avatar, RolePill, ScoreChip, TypeBadge, formatRelativeAge, initialsFrom } from './atoms';
@@ -35,12 +35,19 @@ export const ActivityFeed = ({
   onSelect,
   onNavigate,
   subtitle = DEFAULT_SUBTITLE,
-}) => (
+  title = 'Decision feed',
+  kicker,
+  collapsedCount,
+}) => {
+  const [expanded, setExpanded] = useState(false);
+  const capped = collapsedCount != null && !expanded;
+  const shown = capped ? rows.slice(0, collapsedCount) : rows;
+  return (
   <section className="home-section">
     <div className="home-section-head">
       <div>
-        <span className="kicker">ACTIVITY · {rows.length} ROWS</span>
-        <h3 className="home-section-title">Decision feed<em>.</em></h3>
+        <span className="kicker">{kicker || `ACTIVITY · ${rows.length} ROWS`}</span>
+        <h3 className="home-section-title">{title}<em>.</em></h3>
         <p className="home-section-sub">{subtitle}</p>
       </div>
     </div>
@@ -48,7 +55,7 @@ export const ActivityFeed = ({
       <div className="home-empty">Nothing matches these filters yet.</div>
     ) : (
       <ol className="rq-stream-list">
-        {rows.map((row) => {
+        {shown.map((row) => {
           // ``processing`` = approved/overridden and mid-Workable-writeback. It
           // renders in the same rich layout as pending (candidate + reasoning)
           // but greyed + non-actionable so the recruiter can see it's in flight.
@@ -160,7 +167,13 @@ export const ActivityFeed = ({
         })}
       </ol>
     )}
+    {collapsedCount != null && rows.length > collapsedCount ? (
+      <button type="button" className="rq-feed-toggle" onClick={() => setExpanded((v) => !v)}>
+        {expanded ? 'Show fewer' : `Show all ${rows.length} decisions`}
+      </button>
+    ) : null}
   </section>
-);
+  );
+};
 
 export default ActivityFeed;

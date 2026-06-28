@@ -716,6 +716,82 @@
   line-height: 1.45;
 }
 
+/* ---------------- Agent-recommends slab ----------------
+   Shared dark-purple "agent ON" treatment + white CTA, matching the candidate
+   report's .dr-rec so the recommended action looks identical on the hub and the
+   report. The primary action lives here; secondary actions sit in the bar below. */
+.rq-rec {
+  background: linear-gradient(120deg, #3a1d6e, #6a3fb8, #2a1556, #4a2a8a, #3a1d6e);
+  background-size: 300% 300%;
+  animation: rqRecFlow 7s ease-in-out infinite;
+  border: 1px solid color-mix(in oklab, var(--purple) 45%, transparent);
+  border-radius: 16px;
+  padding: 16px 15px;
+  text-align: center;
+  color: #efe9fb;
+  box-shadow: 0 8px 24px rgba(36, 17, 71, 0.28);
+  margin-top: 16px;
+}
+@keyframes rqRecFlow {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+.rq-rec-kl {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #cbb8f6;
+  margin-bottom: 12px;
+}
+.rq-rec-btn {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #fff;
+  color: #2a1854;
+  border: 0;
+  border-radius: 12px;
+  padding: 13px;
+  font-family: inherit;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.14);
+  transition: background 0.12s;
+}
+.rq-rec-btn:hover { background: #f1ecfb; }
+.rq-rec-btn:disabled { opacity: 0.6; cursor: default; }
+.rq-rec-conf {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.05em;
+  color: #b4a0e6;
+  margin-top: 12px;
+}
+
+/* "Show all / fewer" toggle under the capped Recent-decisions feed. */
+.rq-feed-toggle {
+  display: block;
+  margin: 6px auto 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--purple);
+  cursor: pointer;
+  padding: 8px;
+}
+.rq-feed-toggle:hover { text-decoration: underline; }
+
 /* ---------------- Action bar ---------------- */
 .rq-action-bar {
   display: flex;
