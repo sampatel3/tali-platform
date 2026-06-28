@@ -15,7 +15,7 @@ import { useToast } from '../../context/ToastContext';
 import './home.css';
 import { formatCount, budgetTile, decisionPendingFromCounts } from '../../shared/metrics';
 import { HomeNow } from './HomeNow';
-import { HomeMonitoring } from './HomeMonitoring';
+import { HomeAnalyticsSummary } from './HomeAnalyticsSummary';
 import { HomePlatformUpdates } from './HomePlatformUpdates';
 import { AgentSidebar } from './agentchat/AgentSidebar';
 import { AgentChatDock } from './agentchat/AgentChatDock';
@@ -140,11 +140,8 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   // not the silent poll.
   const [staleCount, setStaleCount] = useState(0);
   const [rolesBreakdown, setRolesBreakdown] = useState([]);
-  const [feedback, setFeedback] = useState([]);
-  const [outcomes, setOutcomes] = useState([]);
   const [loadingDecisions, setLoadingDecisions] = useState(true);
   const [loadingRoles, setLoadingRoles] = useState(true);
-  const [loadingSignal, setLoadingSignal] = useState(true);
 
   // Agent chat (Option C): active agents for the left rail + the dock's target
   // role. Progressive enhancement — if the /agent-chat endpoints aren't
@@ -264,23 +261,6 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     }
   }, []);
 
-  const loadSignal = useCallback(async () => {
-    setLoadingSignal(true);
-    try {
-      const [fbRes, outRes] = await Promise.all([
-        agentApi.listFeedback({ limit: 20 }),
-        agentApi.realisedOutcomes({ limit: 20 }),
-      ]);
-      setFeedback(Array.isArray(fbRes?.data) ? fbRes.data : []);
-      setOutcomes(Array.isArray(outRes?.data) ? outRes.data : []);
-    } catch {
-      setFeedback([]);
-      setOutcomes([]);
-    } finally {
-      setLoadingSignal(false);
-    }
-  }, []);
-
   // Org-status + roles-breakdown poll — keeps the KPI strip, tab badge,
   // and the "By role" pending column in lockstep. Polling both together
   // avoids the stale per-role counts users saw when actions resolved
@@ -312,7 +292,6 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   }, []);
 
   useEffect(() => { void loadDecisions(); }, [loadDecisions]);
-  useEffect(() => { void loadSignal(); }, [loadSignal]);
 
   // Accurate "Needs re-eval" total for the pill — scoped to role + type, over
   // the whole queue (the per-row is_stale on the list only covers the capped
@@ -354,12 +333,12 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   }, []);
 
   const reloadAll = useCallback(async () => {
-    await Promise.all([loadDecisions(), loadRoles(), loadSignal()]);
+    await Promise.all([loadDecisions(), loadRoles()]);
     try {
       const res = await agentApi.orgStatus();
       setOrgStatus(res?.data || null);
     } catch { /* silent */ }
-  }, [loadDecisions, loadRoles, loadSignal]);
+  }, [loadDecisions, loadRoles]);
 
   // Poll the active-agents list for the left rail + notification badges.
   // Self-contained: a missing/erroring endpoint degrades to the plain home
@@ -584,29 +563,13 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           questionsInDock={true}
         />
 
-        {/* One consolidated analytics surface — Activity / Outcomes / Quality
-            / History, scoped by a shared role + window. Replaces the former
-            By-role, Signal, History & analytics, and backlog-trend sections. */}
-        <HomeMonitoring
-          rolesBreakdown={rolesBreakdown}
-          feedback={feedback}
-          outcomes={outcomes}
-          loadingSignal={loadingSignal}
-          reload={reloadAll}
-          onNavigate={onNavigate}
-          onSelect={(id) => {
-            setSelectedId(id);
-            // History rows are always resolved (non-pending). If the NOW
-            // feed is on its default pending view, widen it to 'all' so the
-            // selected row is visible there after we scroll up.
-            if (filters.status === 'pending') {
-              setFilters((f) => ({ ...f, status: 'all' }));
-            }
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          }}
-        />
+        {/* High-level pulse + a link to the full Analytics page. The detailed
+            console (outcomes, fleet, teaching, A/B, decision log) moved to
+            /analytics — keeps the hub's review loop focused, and keeps the
+            expensive reporting queries off every home load. */}
+        <HomeAnalyticsSummary kpis={kpis} orgBudget={orgBudget} onNavigate={onNavigate} />
 
-        <HomePlatformUpdates />
+        <HomePlatformUpdates compact />
       </div>
         </div>
         {dockCollapsed ? (

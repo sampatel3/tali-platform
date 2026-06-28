@@ -155,7 +155,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
           {evidence.map((e, i) => (
             <div key={i} className="rq-ev-cell">
               <div className="rq-ev-k">{e.k || e.label}</div>
-              <div className="rq-ev-v" style={{ color: e.good === true ? 'var(--green)' : e.good === false ? 'var(--red)' : 'var(--ink)' }}>
+              <div className="rq-ev-v" style={{ color: e.good === true ? 'var(--purple)' : 'var(--ink)' }}>
                 {e.v ?? e.value}
               </div>
             </div>
@@ -195,7 +195,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
                 {isStale && onReEvaluate ? (
                   <button
                     type="button"
-                    className="rq-btn rq-approve"
+                    className="rq-btn rq-override"
                     onClick={() => onReEvaluate(decision)}
                     disabled={busy}
                   >

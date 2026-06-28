@@ -36,7 +36,7 @@ const dotColor = (kind) => {
   }
 };
 
-export const HomePlatformUpdates = () => {
+export const HomePlatformUpdates = ({ compact = false }) => {
   const { activities } = useToast();
   // Always-visible feed (matching the home-preview) — no collapse toggle. The
   // background-chatter filter chips below stay so sync noise can still be folded
@@ -66,6 +66,34 @@ export const HomePlatformUpdates = () => {
 
   const total = activities.length;
   const hiddenChatter = total - visible.length;
+
+  // Compact hub variant — the last few default-kind updates, no filter chips.
+  // The full filterable log lives on the Analytics page's fleet activity tab.
+  if (compact) {
+    const rows = activities.filter((entry) => DEFAULT_KINDS.has(entry.kind)).slice(0, 3);
+    return (
+      <section className="home-section home-updates-mini">
+        <div className="home-section-head">
+          <span className="kicker">PLATFORM UPDATES</span>
+        </div>
+        {rows.length === 0 ? (
+          <div className="home-empty" style={{ marginTop: 10 }}>
+            Nothing yet. Updates appear here as the platform works.
+          </div>
+        ) : (
+          <ul className="home-platform-list">
+            {rows.map((entry) => (
+              <li key={entry.id} className={`home-platform-row k-${entry.kind}`}>
+                <span className="dot" style={{ background: dotColor(entry.kind) }} aria-hidden="true" />
+                <span className="msg">{entry.message}</span>
+                <span className="age">{formatRelativeAge(entry.createdAt)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    );
+  }
 
   return (
     <section className="home-section">
