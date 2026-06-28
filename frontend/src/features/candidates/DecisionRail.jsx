@@ -143,15 +143,21 @@ export const DecisionRail = ({
             ) : null}
           </div>
         </div>
+      ) : canDecide && outcome ? (
+        // Resolved — surface the decision that was MADE with the same slab
+        // treatment as the agent's recommendation (read-only: the outcome, not
+        // an action). Mirrors the retired strip's STATE 2.
+        <div className="dr-decided" data-internal-only>
+          <div className="dr-rec-kl">
+            <Check size={14} strokeWidth={2.2} aria-hidden="true" /> Decision
+          </div>
+          <div className="dr-decided-outcome">{outcome}</div>
+          <div className="dr-rec-conf">Resolved — no agent action pending</div>
+        </div>
       ) : canDecide ? (
-        // No actionable decision — the resolved chip or the honest "why no card"
-        // hint (mirrors the retired strip's STATE 2 / STATE 3).
+        // Honest "why no card" hint (mirrors the retired strip's STATE 3).
         <div className="dr-hint" data-internal-only>
-          {outcome ? (
-            <span>
-              <strong>Decision: {outcome}.</strong> Resolved — no agent action is pending.
-            </span>
-          ) : !isScored ? (
+          {!isScored ? (
             <span>No agent decision yet — score this candidate to get a recommendation.</span>
           ) : postHandover ? (
             <span>

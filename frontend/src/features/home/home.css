@@ -793,6 +793,36 @@
 }
 .rq-feed-toggle:hover { text-decoration: underline; }
 
+/* Recent decisions — minimal HITL-decision rows (who · outcome · when · report).
+   Deliberately sparse: a recruiter just needs to re-find a candidate, not the
+   full evidence. */
+.rq-recent-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; }
+.rq-recent-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); }
+.rq-recent-row:first-child { border-top: none; }
+.rq-recent-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  font-size: 0.875rem;
+  color: var(--ink);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rq-recent-name:hover { color: var(--purple); text-decoration: underline; }
+.rq-recent-outcome {
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 999px;
+  padding: 2px 10px;
+  white-space: nowrap;
+  flex: none;
+}
+.rq-recent-outcome--purple { background: var(--purple-soft); color: var(--purple-2); }
+.rq-recent-outcome--mute { background: var(--bg-3); color: var(--mute); }
+.rq-recent-age { font-family: var(--font-mono); font-size: 0.6875rem; color: var(--mute); white-space: nowrap; flex: none; }
+
 /* ---------------- Action bar ---------------- */
 .rq-action-bar {
   display: flex;

@@ -1766,6 +1766,25 @@ button.eng-badge-button:focus-visible {
   margin-top: 12px;
 }
 
+/* Resolved-decision slab — the same dark-purple treatment as the recommendation
+   slab, but STATIC + read-only: it surfaces the decision that was MADE (the
+   outcome), not an action to take. */
+.dossier-rail .dr-decided {
+  background: linear-gradient(150deg, #3a1d6e, #241147);
+  border: 1px solid color-mix(in oklab, var(--purple) 45%, transparent);
+  border-radius: 16px;
+  padding: 16px 15px;
+  text-align: center;
+  color: #efe9fb;
+  box-shadow: 0 8px 24px rgba(36, 17, 71, 0.28);
+  margin-bottom: 12px;
+}
+.dossier-rail .dr-decided-outcome {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin: 4px 0 0;
+}
+
 .dossier-rail .dr-flags-chip {
   display: inline-flex;
   align-items: center;
