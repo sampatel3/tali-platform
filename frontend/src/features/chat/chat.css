@@ -38,32 +38,34 @@
 }
 
 /* ============ shell ============ */
+/* Gapped bordered-card shell (Home `.ac-shell`): the sidebar + the chat sit as
+   two separate cards with breathing room over the lavender page tone — not
+   flush divider panes. Each card scrolls internally so the rails stay pinned
+   without sticky. */
 
 .cp-root {
   display: grid;
-  /* Match search-preview: 248px sidebar + fluid centre, capped at 1320px and
-     centred in the viewport with a hairline rule down each side so the shell
-     reads as a contained app pane (not edge-to-edge). */
-  grid-template-columns: 248px minmax(0, 1fr);
+  /* 244px rail + fluid centre, matching the Home rail width. */
+  grid-template-columns: 244px minmax(0, 1fr);
+  gap: 16px;
+  padding: 16px;
   max-width: 1320px;
   margin: 0 auto;
-  border-left: 1px solid var(--c-line);
-  border-right: 1px solid var(--c-line);
+  align-items: stretch;
   /* Bound the single row to the container height so neither column can grow
-     the page — each pane scrolls internally instead (Claude-desktop style:
-     fixed sidebar, the thread scrolls on its own). */
+     the page — each card scrolls internally instead (Home dock style). */
   grid-template-rows: minmax(0, 1fr);
-  height: calc(100vh - 64px);
+  height: calc(100vh - var(--nav-h, 64px));
   /* Mobile Safari's 100vh excludes the URL bar, so it's taller than the
      visible viewport — that made the whole page body scroll (carrying the
      nav + chat header, and the drawer toggle in it, off-screen) instead of
      the internal .cp-scroll. dvh tracks the *visible* height, so the header
      stays pinned and only the thread scrolls. Plain vh stays as the fallback
      for browsers without dvh. */
-  height: calc(100dvh - 64px);
+  height: calc(100dvh - var(--nav-h, 64px));
   background: var(--c-bg);
-  border-top: 1px solid var(--c-line);
   color: var(--c-ink);
+  box-sizing: border-box;
 }
 
 /* Mobile drawer. NOTE: every rule here is scoped under .cp-root on purpose —
@@ -76,8 +78,9 @@
 @media (max-width: 900px) {
   /* Single column on phones/tablets: the list collapses into a slide-in
      drawer reachable from the header, so conversation + agent switching
-     still works (the old rule hid the sidebar outright). */
-  .cp-root { grid-template-columns: 1fr; border-left: 0; border-right: 0; }
+     still works (the old rule hid the sidebar outright). The gapped padding
+     is dropped so the chat card fills the phone width. */
+  .cp-root { grid-template-columns: 1fr; gap: 0; padding: 0; }
   .cp-root .cp-mobile-menu { display: inline-flex; }
   .cp-root .cp-side {
     position: fixed;
@@ -89,9 +92,13 @@
     transform: translateX(-100%);
     transition: transform .22s ease;
     box-shadow: 0 24px 48px rgba(15, 8, 30, 0.22);
+    border: 0;
     border-right: 1px solid var(--c-line);
+    border-radius: 0;
   }
   .cp-root.cp-nav-open .cp-side { transform: translateX(0); }
+  /* The chat card goes flush edge-to-edge on a phone. */
+  .cp-root .cp-center { border: 0; border-radius: 0; }
   .cp-root .cp-nav-scrim {
     display: block;
     position: fixed;
@@ -119,35 +126,40 @@
 /* ============ sidebar ============ */
 
 .cp-side {
-  border-right: 1px solid var(--c-line);
-  /* search-preview: the rail is white (--bg-2); the thread column carries the
-     lavender page tone (--bg). */
+  /* Bordered rounded card (Home `.ac-sidebar`): white surface, hairline border,
+     14px radius, clipped so the inner rows + active wash never bleed past the
+     rounded corners. */
   background: var(--c-bg-2);
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius, 14px);
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
-/* search-preview `.sh`: 16px/16px/12px, NO bottom rule (the rail reads as one
-   continuous surface; only the conversation rows carry separators). */
+/* Header block (Home `.ac-sidebar-head`): the mono "CHAT" kicker + the
+   Ask/Agents switch, closed off with a hairline rule so it reads as a distinct
+   head band over the list — matching the rail's bordered-card head. */
 .cp-side-top {
-  padding: 16px 16px 12px;
+  padding: 13px 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 11px;
+  border-bottom: 1px solid var(--c-line);
 }
-/* "New conversation" sits as a sibling under the header with 16px side gutters
-   and 10px below (search-preview `.newchat{margin:0 16px 10px}`); no extra top
-   pad so it tucks right under the Ask/Agents switch. */
+/* "New conversation" tucks right under the head with the same 14px gutters the
+   list rows use, 10px below. */
 .cp-side-head {
-  padding: 0 16px 10px;
+  padding: 11px 12px 8px;
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 .cp-side-title {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.6875rem;
-  letter-spacing: .08em;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 0.65625rem;
+  font-weight: 600;
+  letter-spacing: .05em;
   color: var(--c-mute);
   text-transform: uppercase;
   margin-bottom: 0;
@@ -226,77 +238,85 @@
   border-radius: 6px;
   cursor: pointer;
 }
-.cp-conv-del:hover { color: var(--c-red); background: var(--c-bg-2); }
+.cp-conv-del:hover { color: var(--c-ink); background: var(--c-bg-3); }
 
 /* ---- Agent rows (Agents tab) ---- */
-/* Inset to match the Ask-mode conversation rows (10px from the rail edge). */
+/* Flat-list row, mirroring the Home rail (`.ac-agent`): a top row of status
+   glyph + role name, then a sub-column (preview · badges · budget bar) indented
+   to line up past the glyph. Full-width, hairline-separated — selection alone
+   carries the purple. */
 .cp-agent {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  width: calc(100% - 8px);
-  margin: 0 4px;
+  flex-direction: column;
+  gap: 0;
+  /* Break out of the list's 6px side gutter so the row spans the full card
+     width (Home flat-list rows are full-bleed, hairline-separated). */
+  width: calc(100% + 12px);
+  margin: 0 -6px;
   text-align: left;
-  padding: 9px 10px;
-  border-radius: 9px;
-  border: 1px solid transparent;
+  padding: 11px 13px;
+  border: 0;
+  border-top: 1px solid var(--c-line);
   background: transparent;
   cursor: pointer;
+  position: relative;
+  transition: background .12s ease;
 }
-.cp-agent:hover { background: var(--c-bg); }
-/* Same active wash as the Ask-mode conversation row (purple-tint + inset
-   soft-purple hairline) so "active" reads identically across both modes. */
+.cp-agent:first-of-type { border-top: 0; }
+.cp-agent:hover { background: var(--c-bg-3); }
+/* Selected row (Home `.ac-agent.is-active`): purple-tint fill + a 3px inset
+   purple bar — the only purple treatment on a row; ON-ness is the glyph. */
 .cp-agent.cp-active {
   background: var(--c-purple-tint);
-  border-color: transparent;
-  box-shadow: inset 0 0 0 1px var(--c-purple-soft);
+  box-shadow: inset 3px 0 0 var(--c-purple);
 }
+.cp-agent.cp-agent-off .cp-agent-role { color: var(--c-mute); }
+.cp-agent-top { display: flex; align-items: center; gap: 9px; min-width: 0; }
+/* 33px = the 24px glyph + 9px gap, so the sub-column lines up under the role
+   name (Home `.ac-agent-sub{padding-left:33px}`). */
+.cp-agent-sub { display: flex; flex-direction: column; gap: 0; padding-left: 33px; min-width: 0; }
+.cp-agent-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 7px; }
+/* Status glyph (Home `.ac-stat`) — on = purple-gradient sparkle, paused =
+   amber-soft pause (icon-only on an amber chip), off = grey dot. */
 .cp-agent-stat {
-  width: 22px;
-  height: 22px;
-  border-radius: 7px;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
   flex-shrink: 0;
-  margin-top: 1px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
-.cp-agent-stat-on { background: linear-gradient(135deg, #3a1d6e, #241147); color: #fff; }
-.cp-agent-stat-paused { background: color-mix(in oklab, var(--c-amber) 16%, var(--c-bg-2)); color: var(--c-amber); }
-.cp-agent-stat-off { background: var(--c-bg-3); border: 1px solid var(--c-line); }
-.cp-agent-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-mute-2); }
-.cp-agent-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cp-agent-stat-on { background: linear-gradient(150deg, #3a1d6e, #241147); color: #fff; box-shadow: 0 0 0 3px var(--c-purple-soft); }
+.cp-agent-stat-paused { background: var(--amber-soft, #fbf0dd); color: var(--c-amber); }
+.cp-agent-stat-off { background: var(--c-bg-3); color: var(--c-mute); }
+.cp-agent-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .cp-agent-role {
+  flex: 1;
+  min-width: 0;
   font-size: 0.8125rem;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--c-ink);
   line-height: 1.25;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.cp-agent-preview {
-  font-size: 0.71875rem;
-  color: var(--c-mute);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.cp-agent-badge {
-  flex-shrink: 0;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 6px;
-  border-radius: 999px;
-  background: var(--c-purple);
-  color: #fff;
-  font-size: 0.65625rem;
-  font-weight: 700;
-  display: grid;
-  place-items: center;
-  margin-top: 2px;
+.cp-agent-preview {
+  font-size: 0.6875rem;
+  color: var(--c-mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 4px;
 }
+/* Badges sit on their own left-aligned row under the preview (Home `.ac-agent-badges`):
+   a purple questions pill + a muted "{n} pending" pill. */
+.cp-agent-badge-q { display: inline-flex; align-items: center; gap: 3px; background: var(--c-purple-soft); color: var(--c-purple-2); font-size: 0.625rem; font-weight: 500; padding: 1px 7px; border-radius: 999px; line-height: 1.6; }
+.cp-agent-badge-d { font-size: 0.625rem; font-weight: 500; color: var(--c-mute); background: var(--c-bg-3); padding: 1px 7px; border-radius: 999px; line-height: 1.6; }
+/* Small, light monthly-budget bar under each agent (Home `.ac-budget`). */
+.cp-agent-budget { display: block; height: 4px; border-radius: 3px; background: var(--c-bg-3); overflow: hidden; margin-top: 7px; width: 100%; }
+.cp-agent-budget-fill { display: block; height: 100%; background: var(--c-purple-lav); border-radius: 3px; }
 
 /* Mobile-only button in the chat header that opens the list drawer. */
 .cp-mobile-menu {
@@ -354,12 +374,13 @@
 }
 .cp-group { margin-top: 0; }
 .cp-group-h {
-  /* search-preview `.convgroup{padding:10px 16px 5px}` — 16px from the rail
-     edge (= 6px list pad + 10px here). */
-  padding: 10px 10px 5px;
-  font-family: ui-monospace, SFMono-Regular, monospace;
+  /* Mono section label (Home kicker vocabulary) — 16px from the rail edge
+     (= 6px list pad + 10px here). */
+  padding: 11px 10px 5px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
   font-size: 0.59375rem;
-  letter-spacing: .06em;
+  font-weight: 600;
+  letter-spacing: .05em;
   text-transform: uppercase;
   color: var(--c-mute);
 }
@@ -409,27 +430,30 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  /* Mirror .cp-side: a grid/flex child defaults to min-height:auto, which
-     refuses to shrink below its content — so a long thread overflowed the
-     bounded .cp-root and scrolled the whole page (carrying the sidebar).
-     min-height:0 lets the column shrink so .cp-scroll scrolls internally. */
+  /* Bordered rounded card (Home `.ac-dock`): the chat sits as its own white
+     card with a hairline border + 14px radius, clipped so the header band, the
+     thread, and the composer stay inside the rounded corners. */
   min-height: 0;
-  background: var(--c-bg);
-  /* Anchor the absolute composer wrap to this column. Without it the
+  background: var(--c-bg-2);
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius, 14px);
+  overflow: hidden;
+  /* Anchor the absolute composer wrap to this card. Without it the
      wrap escapes to the viewport and slides under the sidebar — making
      the composer look offset relative to the conversation thread. */
   position: relative;
 }
+/* Chat header band (Home `.ac-dock-head`): a hairline-closed head row inside
+   the card. Solid white (the card surface) — not the translucent veil the old
+   edge-to-edge layout used. */
 .cp-head {
-  height: 56px;
+  height: 52px;
   border-bottom: 1px solid var(--c-line);
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 20px;
-  /* search-preview: a translucent white veil over the lavender thread column. */
-  background: color-mix(in oklab, var(--c-bg-2) 80%, transparent);
-  backdrop-filter: blur(8px);
+  gap: 10px;
+  padding: 0 16px;
+  background: var(--c-bg-2);
   flex-shrink: 0;
 }
 /* search-preview stacks the active-conversation title over a "Taali" sublabel
@@ -455,6 +479,31 @@
   line-height: 1.3;
 }
 .cp-head-grow { flex: 1; }
+/* Agents-mode head lead (Home dock `.ac-dock-head`): a purple chat glyph +
+   "Ask the agent" in the lighter 500 weight the dock uses. */
+.cp-head-lead {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.84375rem;
+  font-weight: 500;
+  color: var(--c-ink);
+  flex-shrink: 0;
+}
+.cp-head-lead svg { color: var(--c-purple); flex-shrink: 0; }
+/* The role pill sits right after the lead (Home dock `.ac-dock-role`). */
+.cp-head-role {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--c-purple-2);
+  background: var(--c-purple-soft);
+  padding: 2px 9px;
+  border-radius: 999px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* search-preview "MCP · N tools" pill: a quiet mono chip with a tiny solid
    purple square (rounded-rect, not a circular chip) as the status glyph. */
 .cp-head-pill {
@@ -484,9 +533,10 @@
 .cp-scroll {
   flex: 1;
   overflow-y: auto;
-  /* search-preview gutters (24px/20px); the larger bottom pad clears the
-     absolutely-positioned composer that the static preview doesn't have. */
-  padding: 24px 20px 200px;
+  /* White conversation surface (Home dock `.ac-stream`). The larger bottom pad
+     clears the absolutely-positioned composer wrap. */
+  padding: 20px 20px 180px;
+  background: var(--c-bg-2);
   scroll-behavior: smooth;
   min-height: 0;
 }
@@ -531,18 +581,27 @@
   line-height: 1.6;
   color: var(--c-ink);
 }
-/* search-preview `.amsg .who`: a mono purple "TAALI" kicker above each
-   assistant turn. The assistant column uses a 14px child gap, so pull the next
-   block up to land the preview's ~5px kicker-to-text spacing. */
+/* Mono purple kicker above each agent/assistant turn — "TAALI" on the Ask
+   thread (Thread.jsx), "AGENT" on the Agents thread (AgentConversation.jsx),
+   matching the Home dock `.ac-who`. The assistant column uses a 14px child gap,
+   so pull the next block up to land the preview's ~5px kicker-to-text spacing. */
 .cp-thread .tk-msg-assistant .cp-who,
 .cp-msg-assistant .cp-who {
-  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
   font-size: 0.59375rem;
-  letter-spacing: .04em;
+  font-weight: 500;
+  letter-spacing: .05em;
   text-transform: uppercase;
   color: var(--c-purple);
   margin-bottom: -9px;
 }
+/* On the Agents thread the kicker + prose wrap in one tight column
+   (.cp-agent-say, mirroring the Home dock `.ac-agent-say`) so the shared
+   assistant column's 14px gap only separates the prose from any impact /
+   evidence cards beneath it — the wrapper's own 3px gap sets the kicker
+   spacing, so the -9px pull above must not apply here. */
+.cp-thread .cp-agent-say { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.cp-thread .cp-agent-say .cp-who { margin-bottom: 0; }
 /* search-preview `.amsg`: assistant prose is 13.5px in the slightly-softer
    ink-2. Scoped to the chat thread so the shared kit (Home dock + candidate
    workspace) keeps its own 14.5px/ink default. */
@@ -776,9 +835,10 @@
 .cp-composer-wrap {
   position: absolute;
   bottom: 0; left: 0; right: 0;
-  /* search-preview composer gutters (14px/20px/18px). */
+  /* Sits at the foot of the white chat card (Home dock `.ac-dock-composer`),
+     so the gradient fades up into the card surface, not the lavender page. */
   padding: 14px 20px 18px;
-  background: linear-gradient(to bottom, transparent 0, var(--c-bg) 30%);
+  background: linear-gradient(to bottom, transparent 0, var(--c-bg-2) 30%);
   pointer-events: none;
 }
 /* The wrap is pointer-events:none so taps on the transparent gradient fall
@@ -1022,3 +1082,11 @@
   from { opacity: 0; transform: translateY(4px) scale(.98); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
+
+/* ============ scrollbars ============ */
+/* Quiet thin scrollbars on the rail + thread, matching the Home dock
+   (`.ac-stream` / `.ac-agent-list`). */
+.cp-scroll::-webkit-scrollbar,
+.cp-side-list::-webkit-scrollbar { width: 8px; }
+.cp-scroll::-webkit-scrollbar-thumb,
+.cp-side-list::-webkit-scrollbar-thumb { background: var(--c-line); border-radius: 4px; }
