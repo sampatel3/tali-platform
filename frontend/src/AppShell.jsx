@@ -102,12 +102,6 @@ const CareersPage = lazy(() =>
 const ClientIntakePage = lazy(() =>
   import('./features/clientintake/ClientIntakePage').then((m) => ({ default: m.ClientIntakePage }))
 );
-const ClientsPage = lazy(() =>
-  import('./features/clients/ClientsPage').then((m) => ({ default: m.ClientsPage }))
-);
-const ClientDetailPage = lazy(() =>
-  import('./features/clients/ClientDetailPage').then((m) => ({ default: m.ClientDetailPage }))
-);
 const JobPipelinePage = lazy(() =>
   import('./features/jobs/JobPipelinePage').then((m) => ({ default: m.JobPipelinePage }))
 );
@@ -180,7 +174,6 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     '/home',
     '/jobs',
     '/requisitions',
-    '/clients',
     '/assessments',
     '/candidates',
     '/analytics',
@@ -189,7 +182,6 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     '/tasks/bespoke',
     '/candidate-detail',
     ].includes(pathname)
-    || pathname.startsWith('/clients/')
     || pathname.startsWith('/jobs/')
     || pathname.startsWith('/assessments/')
     || pathname.startsWith('/candidates/')
@@ -592,33 +584,9 @@ function AppContent() {
         )}
       />
 
-      <Route
-        path="/clients"
-        element={(
-          <Suspense fallback={lazyFallback}>
-            <ClientsPage
-              onNavigate={navigateToPage}
-              NavComponent={DashboardNavWithMode}
-            />
-          </Suspense>
-        )}
-      />
-
-      {/* Per-client detail — economics roll-up + assigned requisitions.
-          React Router ranks the static /clients above this param route, so
-          both resolve regardless of declaration order. Protected recruiter
-          route (see isProtectedRecruiterPath). */}
-      <Route
-        path="/clients/:id"
-        element={(
-          <Suspense fallback={lazyFallback}>
-            <ClientDetailPage
-              onNavigate={navigateToPage}
-              NavComponent={DashboardNavWithMode}
-            />
-          </Suspense>
-        )}
-      />
+      {/* Clients are managed directly in Settings → Clients (embedded
+          ClientsManager); there is no standalone /clients page. Per-client
+          pipeline lives on the Jobs page's client filter. */}
 
       <Route
         path="/jobs/:roleId"

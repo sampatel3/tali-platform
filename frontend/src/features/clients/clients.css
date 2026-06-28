@@ -137,6 +137,17 @@
   transition: background 0.12s;
 }
 .cl-card-row:hover { background: var(--bg-3); }
+/* Embedded-in-Settings rows are informational (no drill-in), so no hover/cursor. */
+.cl-card-row.is-static { cursor: default; }
+.cl-card-row.is-static:hover { background: transparent; }
+/* Inline per-client open/filled rollup shown on each row in Settings → Clients. */
+.cl-rollup-mini {
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  color: var(--mute);
+  white-space: nowrap;
+}
+.cl-rollup-mini b { font-family: var(--font-mono); color: var(--purple-2); }
 .cl-avatar {
   display: grid;
   place-items: center;
