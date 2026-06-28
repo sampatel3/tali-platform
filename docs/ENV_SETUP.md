@@ -123,7 +123,6 @@ Use the output as the value for `SECRET_KEY`. Never reuse the dev default in pro
 | `ASSESSMENT_PRICE_CURRENCY` | No | `aed` | ISO currency code used in Stripe checkout sessions. |
 | `ASSESSMENT_PRICE_MAJOR` | No | `25` | Price per assessment in major currency units (used in display copy and receipts). |
 | `ASSESSMENT_PRICE_MINOR` | No | `2500` | Price per assessment in minor units (e.g. fils/cents) — what Stripe actually bills. |
-| `ASSESSMENT_PRICE_PENCE` | No | `2500` | **Deprecated** alias for `ASSESSMENT_PRICE_MINOR`. Original sunset target (2026-04-15) has passed; remove from any active env files. |
 | `ASSESSMENT_EXPIRY_DAYS` | No | `7` | Number of days before an assessment invite link expires. |
 | `EMAIL_FROM` | No | `TAALI <noreply@taali.ai>` | Sender address used by all transactional emails. |
 | `SCORE_WEIGHTS` | No | JSON defaults | JSON string for composite scoring weights (tests, code_quality, prompt_quality, etc.). |

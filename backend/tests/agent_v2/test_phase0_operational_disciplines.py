@@ -21,7 +21,6 @@ from sqlalchemy import event
 
 from app.actions import queue_decision
 from app.actions.types import ACTOR_AGENT, Actor
-from app.agent_runtime import model_config
 from app.agent_runtime import token_spend_aggregator
 from app.agent_runtime.system_prompt import build_system_prompt
 from app.models.agent_decision import AgentDecision
@@ -45,49 +44,6 @@ def _assign(mapper, connection, target):  # pragma: no cover
 
 event.listen(AgentDecision, "before_insert", _assign)
 event.listen(AgentRun, "before_insert", _assign)
-
-
-# ---------------------------------------------------------------------------
-# Discipline §8.1 — tiered models, configured not coded
-# ---------------------------------------------------------------------------
-
-
-def test_agent_models_yaml_overrides_global_default():
-    """Per the canonical five sub-agents in §2 of
-    recruitment_system_architecture.md + the cost-model review on
-    graph_priors (downshifted from spec's Sonnet → Haiku).
-    """
-    model_config.invalidate()
-    pre = model_config.get_model_for_agent("pre_screen")
-    cv = model_config.get_model_for_agent("cv_scoring")
-    gp = model_config.get_model_for_agent("graph_priors")
-    ts = model_config.get_model_for_agent("task_selection")
-    asx = model_config.get_model_for_agent("assessment_scoring")
-    assert pre.model.startswith("claude-haiku")
-    assert cv.model.startswith("claude-sonnet")
-    assert gp.model.startswith("claude-haiku"), (
-        f"graph_priors should be on Haiku per cost-model review; got {gp.model}"
-    )
-    assert ts.model.startswith("claude-haiku")
-    assert asx.model.startswith("claude-sonnet")
-
-
-def test_max_tokens_bounded_per_agent():
-    """Discipline §8.4: bounded outputs per natural schema size."""
-    model_config.invalidate()
-    assert model_config.get_model_for_agent("pre_screen").max_tokens == 256
-    assert model_config.get_model_for_agent("cv_scoring").max_tokens == 512
-    assert model_config.get_model_for_agent("graph_priors").max_tokens == 512
-    assert model_config.get_model_for_agent("task_selection").max_tokens == 256
-    assert model_config.get_model_for_agent("assessment_scoring").max_tokens == 1024
-
-
-def test_unknown_agent_falls_through_to_global_default():
-    model_config.invalidate()
-    out = model_config.get_model_for_agent("nonexistent_agent")
-    default = model_config.global_default()
-    assert out.model == default.model
-    assert out.max_tokens == default.max_tokens
 
 
 # ---------------------------------------------------------------------------

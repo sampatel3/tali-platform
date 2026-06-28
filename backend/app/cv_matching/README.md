@@ -85,8 +85,6 @@ your JD volume crosses ~50 distinct JDs/month.
 | [`telemetry.py`](telemetry.py) | One trace row per call |
 | [`routes.py`](routes.py) | `GET /admin/cv-match/traces` + `POST /candidates/{id}/cv-match-override` |
 | [`archetype_synthesizer.py`](archetype_synthesizer.py) | On-demand Sonnet rubric synthesis, hash-cached |
-| [`pairwise.py`](pairwise.py) | Bradley-Terry tie-break + auto-sampled anchors |
-| [`borderline.py`](borderline.py) | CISC self-consistency for borderline scores |
 | [`calibrators/`](calibrators) | Platt + isotonic calibrators, judge bootstrap, recalibrator |
 | [`evals/`](evals) | Golden-case harness + agreement metrics + autogen baseline diff |
 
