@@ -48,8 +48,13 @@ class ChatCapture(BaseModel):
     open_questions: Optional[list[str]] = None
     # Up to ~6 short tappable answers to the question the reply asks — quick
     # replies the recruiter clicks instead of typing. For select fields use the
-    # template options verbatim; otherwise offer the most likely answers.
+    # template options verbatim; otherwise offer the most likely answers. EVERY
+    # option must answer the SAME single question (never mix fields).
     suggested_replies: Optional[list[str]] = None
+    # True when the question accepts SEVERAL of the suggested_replies at once
+    # (must-haves, tech stack, focus areas …) → the UI lets the user pick
+    # multiple chips and send them together. False/absent = single-choice.
+    suggested_multi: Optional[bool] = None
 
     # Standard RoleBrief columns (typed).
     title: Optional[str] = None

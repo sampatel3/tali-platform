@@ -238,8 +238,15 @@ async def chat_client_intake(
         "messages": messages,
         "captured": _role_safe_captured(brief, client_template),
         "gaps": compute_gaps(brief, client_template),
+        # The bar must update every turn — the GET snapshot is the only other
+        # place this is computed, so omitting it here froze the meter at its
+        # initial value (0%) no matter how much the manager filled in.
+        "completeness": compute_completeness(brief, client_template),
         "suggested_replies": (
             (last.get("suggested_replies") or []) if isinstance(last, dict) else []
+        ),
+        "suggested_multi": (
+            bool(last.get("suggested_multi")) if isinstance(last, dict) else False
         ),
     }
 

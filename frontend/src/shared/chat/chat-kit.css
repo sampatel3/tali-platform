@@ -74,6 +74,48 @@
 .tk-send-btn:disabled { background: var(--line); color: var(--mute-2); cursor: not-allowed; }
 .tk-stop-btn { background: var(--bg-3); color: var(--ink-2); border: 1px solid var(--line); }
 
+/* Right-side action cluster (mic + send/stop). */
+.tk-composer-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+/* Voice dictation toggle — quiet pill by default; turns purple + pulses while
+   the browser is listening. Min 36px tap target for phones. */
+.tk-mic-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink-2);
+  font-family: var(--font-sans);
+  font-size: 0.78125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.tk-mic-btn:hover:not(:disabled) { border-color: var(--purple); color: var(--purple-2); }
+.tk-mic-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.tk-mic-btn.is-listening {
+  background: var(--purple);
+  border-color: var(--purple);
+  color: #fff;
+  animation: tk-mic-pulse 1.3s ease-in-out infinite;
+}
+.tk-mic-text { font-size: 0.75rem; }
+@keyframes tk-mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--purple) 45%, transparent); }
+  50% { box-shadow: 0 0 0 5px color-mix(in oklab, var(--purple) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tk-mic-btn.is-listening { animation: none; }
+}
+
 /* ============ Empty state ============ */
 .tk-empty {
   display: flex;

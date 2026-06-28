@@ -250,7 +250,9 @@ def test_public_chat_captures_role_fields_and_meters_client_intake(client, db, m
         "messages",
         "captured",
         "gaps",
+        "completeness",
         "suggested_replies",
+        "suggested_multi",
     }
     assert body["reply"].startswith("Got it")
     # Role fields captured onto the brief and surfaced (role-safe).

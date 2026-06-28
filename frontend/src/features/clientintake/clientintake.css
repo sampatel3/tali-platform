@@ -5,20 +5,34 @@
    re-skins per brand; it never redefines a chat component. Class prefix: ci-
    (client intake). Light, centered, generous. */
 
+/* App-height shell — the page fills the viewport and never grows the document;
+   the chat thread scrolls INSIDE while the composer stays pinned, so adding
+   options/turns never pushes the input off-screen (works the same on a phone).
+   The non-conversation states (loading / 404 / done) are direct children too;
+   they size to content and centre. */
 .ci-shell {
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
   background: var(--bg, #fff);
   color: var(--ink, #1c1830);
   font-family: var(--font-sans);
 }
 
 /* Centered page column — wide enough for the two-pane layout, capped so it
-   reads like a document on big screens. */
+   reads like a document on big screens. Fills the shell as a flex column so the
+   conversation pane can own its own scroll. */
 .ci-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
   max-width: 1100px;
   margin: 0 auto;
-  padding: 40px 24px 72px;
+  padding: 32px 24px 18px;
+  overflow: hidden;
 }
 
 /* ============ Header ============ */
@@ -31,11 +45,12 @@
 .ci-brand span { color: var(--purple, #6d28d9); }
 
 .ci-head {
-  margin-bottom: 24px;
-  padding-bottom: 22px;
+  flex-shrink: 0;
+  margin-bottom: 18px;
+  padding-bottom: 16px;
   border-bottom: 1px solid var(--line, #ece9f3);
 }
-.ci-head .ci-brand { margin-bottom: 22px; }
+.ci-head .ci-brand { margin-bottom: 16px; }
 .ci-org {
   font-size: 14px;
   font-weight: 650;
@@ -61,10 +76,12 @@
 
 /* ============ Split: conversation + side ============ */
 .ci-split {
+  flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
   gap: 28px;
-  align-items: start;
+  align-items: stretch;
 }
 
 /* ============ Conversation column ============ */
@@ -72,20 +89,23 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
 .ci-thread {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 18px;
-  /* Cap the thread height on tall screens so the composer stays reachable; it
-     scrolls internally past that. */
-  max-height: min(58vh, 560px);
   overflow-y: auto;
   padding: 4px 4px 8px;
 }
+/* Pinned at the bottom of the conversation column — chips + composer never get
+   pushed off-screen; the thread above shrinks and scrolls instead. */
 .ci-composer-wrap {
-  margin-top: 14px;
-  padding-top: 14px;
+  flex-shrink: 0;
+  margin-top: 12px;
+  padding-top: 12px;
   border-top: 1px solid var(--line-2, #f1f5f9);
 }
 
@@ -181,12 +201,15 @@
   justify-content: flex-end;
 }
 
-/* Tappable multiple-choice quick replies under the latest agent turn. */
+/* Tappable multiple-choice quick replies under the latest agent turn. Capped +
+   scrollable so a big option set never pushes the composer down. */
 .ci-quick-replies {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 8px;
+  max-height: 24vh;
+  overflow-y: auto;
 }
 .ci-quick-chip {
   appearance: none;
@@ -209,26 +232,60 @@
 }
 .ci-quick-chip:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Multi-select chips — pick several, then send as one answer. Toggle chips stay
+   in their selected (filled) state instead of sending on tap. */
+.ci-quick-multi { margin-bottom: 8px; }
+.ci-quick-multi-hint {
+  font-size: 12px;
+  color: var(--mute);
+  margin-bottom: 6px;
+}
+.ci-quick-chip.is-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ci-quick-chip.is-toggle:hover {
+  background: var(--purple-soft);
+  color: var(--purple-2);
+  border-color: var(--purple);
+}
+.ci-quick-chip.is-toggle.is-on,
+.ci-quick-chip.is-toggle.is-on:hover {
+  background: var(--purple);
+  color: var(--bg);
+  border-color: var(--purple);
+}
+.ci-quick-send { margin-top: 8px; }
+
 /* ============ Side column — Role so far + Submit ============ */
 .ci-side {
-  position: sticky;
-  top: 24px;
   display: flex;
   flex-direction: column;
   gap: 14px;
   min-width: 0;
+  min-height: 0;
 }
 .ci-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--line);
   border-radius: 16px;
   background: var(--bg-2);
   overflow: hidden;
 }
 .ci-panel-scroll {
-  max-height: min(52vh, 480px);
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 18px 18px 20px;
 }
+/* Mobile-only toggle for the captured-fields list (hidden on desktop, where the
+   list always shows). */
+.ci-panel-toggle { display: none; }
+.ci-panel-body { display: contents; }
 .ci-panel-empty {
   margin: 0;
   font-size: 0.8125rem;
@@ -315,6 +372,7 @@
 
 /* Submit bar. */
 .ci-submit-bar {
+  flex-shrink: 0;
   border: 1px solid var(--line);
   border-radius: 16px;
   background: color-mix(in oklab, var(--purple) 5%, var(--bg-2));
@@ -419,9 +477,62 @@
 }
 @keyframes ci-spin { to { transform: rotate(360deg); } }
 
-/* Narrow viewports: stack the side panel under the conversation. */
+/* ============ Mobile-first: phones (a hiring manager briefing on the go) ====
+   Single column, full viewport height: a compact "Role so far" card on top
+   (meter always visible, captured fields collapse behind a toggle), the chat
+   filling the rest with the composer pinned at the bottom. */
 @media (max-width: 920px) {
-  .ci-split { grid-template-columns: 1fr; gap: 20px; }
-  .ci-side { position: static; }
-  .ci-thread { max-height: none; }
+  .ci-page { padding: 16px 14px 12px; }
+  .ci-head {
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+  }
+  .ci-head .ci-brand { margin-bottom: 8px; font-size: 18px; }
+  .ci-title { font-size: 20px; }
+  .ci-lede { display: none; }          /* get to the conversation fast */
+  .ci-org { font-size: 13px; margin-bottom: 4px; }
+
+  /* Stack: role card first (compact), chat fills the remaining height. */
+  .ci-split { display: flex; flex-direction: column; gap: 10px; }
+  .ci-side { order: -1; flex-shrink: 0; gap: 10px; }
+  .ci-convo { flex: 1; min-height: 0; }
+
+  /* Role panel sizes to content; the meter + toggle stay, the field list
+     collapses so it doesn't eat the chat. */
+  .ci-panel { flex: none; }
+  .ci-panel-scroll { max-height: none; overflow: visible; padding: 14px; }
+  .ci-panel-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    margin-top: 10px;
+    padding: 6px 0 0;
+    background: none;
+    border: 0;
+    cursor: pointer;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--purple-2);
+  }
+  .ci-panel-caret { transition: transform 0.18s ease; flex-shrink: 0; }
+  .ci-panel-caret.is-open { transform: rotate(180deg); }
+  .ci-panel-body {
+    display: block;
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.2s ease;
+  }
+  .ci-panel-body.is-open {
+    max-height: 46vh;
+    overflow-y: auto;
+    margin-top: 8px;
+  }
+
+  /* Roomier tap targets on touch. */
+  .ci-quick-chip { padding: 9px 14px; font-size: 14px; }
+  .ci-quick-replies { max-height: 30vh; }
+  .ci-submit-btn { padding: 13px 16px; font-size: 0.9375rem; }
+  .ci-attach-btn { padding: 9px 14px; }
 }

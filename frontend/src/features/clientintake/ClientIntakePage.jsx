@@ -12,7 +12,7 @@
 // a compact "Role so far" panel built from `captured`, a completeness bar, and
 // a "Submit to {org}" button that flips the page to a clean done state.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, FileText, Paperclip, Send, X } from 'lucide-react';
+import { Check, ChevronDown, FileText, Paperclip, Send, X } from 'lucide-react';
 
 import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
 import { publicIntakeApi } from '../requisitions/api';
@@ -90,7 +90,7 @@ function Turn({ msg }) {
 
 // The compact "Role so far" panel — the captured ROLE fields (no economics,
 // no client internals; the backend already scrubs those) + a completeness bar.
-function RolePanel({ captured, gaps, completeness }) {
+function RolePanel({ captured, gaps, completeness, detailsOpen, onToggleDetails }) {
   const entries = useMemo(() => (
     Object.entries(captured || {}).filter(([, v]) => !isEmptyValue(v))
   ), [captured]);
@@ -125,30 +125,46 @@ function RolePanel({ captured, gaps, completeness }) {
           )}
         </div>
 
-        {entries.length === 0 ? (
-          <p className="ci-panel-empty">Nothing captured yet.</p>
-        ) : (
-          <dl className="ci-fields">
-            {entries.map(([key, value]) => (
-              <div key={key} className="ci-field">
-                <dt className="ci-field-label">{humanizeKey(key)}</dt>
-                <dd className="ci-field-value">
-                  {Array.isArray(value) ? (
-                    <div className="ci-chips">
-                      {value.map((it, i) => (
-                        <span key={i} className="ci-chip">
-                          {typeof it === 'string' ? it : formatStructRow(it)}
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    String(value)
-                  )}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        )}
+        {/* On phones the captured fields collapse so the chat leads; this
+            toggle (hidden on desktop) reveals them. */}
+        {entries.length > 0 ? (
+          <button
+            type="button"
+            className="ci-panel-toggle"
+            onClick={onToggleDetails}
+            aria-expanded={detailsOpen}
+          >
+            <span>{detailsOpen ? 'Hide' : 'Show'} what's captured ({entries.length})</span>
+            <ChevronDown size={14} className={`ci-panel-caret${detailsOpen ? ' is-open' : ''}`} />
+          </button>
+        ) : null}
+
+        <div className={`ci-panel-body${detailsOpen ? ' is-open' : ''}`}>
+          {entries.length === 0 ? (
+            <p className="ci-panel-empty">Nothing captured yet.</p>
+          ) : (
+            <dl className="ci-fields">
+              {entries.map(([key, value]) => (
+                <div key={key} className="ci-field">
+                  <dt className="ci-field-label">{humanizeKey(key)}</dt>
+                  <dd className="ci-field-value">
+                    {Array.isArray(value) ? (
+                      <div className="ci-chips">
+                        {value.map((it, i) => (
+                          <span key={i} className="ci-chip">
+                            {typeof it === 'string' ? it : formatStructRow(it)}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      String(value)
+                    )}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </div>
       </div>
     </aside>
   );
@@ -172,6 +188,11 @@ export function ClientIntakePage() {
   const [completeness, setCompleteness] = useState(0);
   const [status, setStatus] = useState('');
   const [suggested, setSuggested] = useState([]);
+  // When true, the quick replies are non-exclusive — tap several, then send.
+  const [suggestedMulti, setSuggestedMulti] = useState(false);
+  const [selectedChips, setSelectedChips] = useState([]);
+  // Mobile: the "Role so far" details collapse by default so the chat leads.
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const [composer, setComposer] = useState('');
   const [attachments, setAttachments] = useState([]);
@@ -198,6 +219,15 @@ export function ClientIntakePage() {
     if (Array.isArray(data.suggested_replies)) {
       setSuggested(data.suggested_replies);
     }
+    // Multi-select flag rides on the chat response and (for the GET snapshot)
+    // on the last assistant message. New chips → clear any prior selection.
+    if (data.suggested_multi != null) {
+      setSuggestedMulti(Boolean(data.suggested_multi));
+    } else if (Array.isArray(data.messages) && data.messages.length) {
+      const last = data.messages[data.messages.length - 1];
+      setSuggestedMulti(Boolean(last && last.suggested_multi));
+    }
+    setSelectedChips([]);
   }, []);
 
   // Initial snapshot. A 404 (revoked / bad token) reads the same to a visitor.
@@ -287,6 +317,8 @@ export function ClientIntakePage() {
     setError('');
     // Clear stale quick replies the moment we send.
     setSuggested([]);
+    setSuggestedMulti(false);
+    setSelectedChips([]);
 
     // Optimistic echo so the client's turn shows immediately.
     setMessages((prev) => [...prev, { role: 'user', content: message, attachments: echoAttachments || [] }]);
@@ -317,6 +349,18 @@ export function ClientIntakePage() {
     const t = String(text || '').trim();
     if (t) void runTurn(t, [], []);
   }, [runTurn]);
+
+  // Multi-select chips: toggle membership, then send the picked set as one
+  // comma-joined answer (e.g. "Python, AWS, Spark").
+  const toggleChip = useCallback((text) => {
+    setSelectedChips((prev) => (
+      prev.includes(text) ? prev.filter((c) => c !== text) : [...prev, text]
+    ));
+  }, []);
+  const sendSelectedChips = useCallback(() => {
+    if (!selectedChips.length) return;
+    void runTurn(selectedChips.join(', '), [], []);
+  }, [selectedChips, runTurn]);
 
   // ---- submit ----
   const submit = useCallback(async () => {
@@ -461,19 +505,52 @@ export function ClientIntakePage() {
               </div>
 
               {quickReplies.length > 0 ? (
-                <div className="ci-quick-replies">
-                  {quickReplies.map((q, i) => (
-                    <button
-                      key={`${q}-${i}`}
-                      type="button"
-                      className="ci-quick-chip"
-                      onClick={() => sendQuickReply(q)}
-                      disabled={turnInFlight}
-                    >
-                      {q}
-                    </button>
-                  ))}
-                </div>
+                suggestedMulti ? (
+                  <div className="ci-quick-multi">
+                    <div className="ci-quick-multi-hint">Pick any that apply, then send:</div>
+                    <div className="ci-quick-replies">
+                      {quickReplies.map((q, i) => {
+                        const on = selectedChips.includes(q);
+                        return (
+                          <button
+                            key={`${q}-${i}`}
+                            type="button"
+                            className={`ci-quick-chip is-toggle${on ? ' is-on' : ''}`}
+                            onClick={() => toggleChip(q)}
+                            disabled={turnInFlight}
+                            aria-pressed={on}
+                          >
+                            {on ? <Check size={13} /> : null} {q}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {selectedChips.length > 0 ? (
+                      <button
+                        type="button"
+                        className="ci-btn-sm is-primary ci-quick-send"
+                        onClick={sendSelectedChips}
+                        disabled={turnInFlight}
+                      >
+                        Send {selectedChips.length} selected
+                      </button>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="ci-quick-replies">
+                    {quickReplies.map((q, i) => (
+                      <button
+                        key={`${q}-${i}`}
+                        type="button"
+                        className="ci-quick-chip"
+                        onClick={() => sendQuickReply(q)}
+                        disabled={turnInFlight}
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
+                )
               ) : null}
 
               <ChatComposer
@@ -483,6 +560,7 @@ export function ClientIntakePage() {
                 onPaste={onPaste}
                 placeholder="Describe the role, or answer the assistant's question…"
                 busy={turnInFlight}
+                voice
               />
 
               {/* Attachments-only send (the composer's own send is disabled on
@@ -499,7 +577,13 @@ export function ClientIntakePage() {
 
           {/* Role so far + submit */}
           <div className="ci-side">
-            <RolePanel captured={captured} gaps={gaps} completeness={completeness} />
+            <RolePanel
+              captured={captured}
+              gaps={gaps}
+              completeness={completeness}
+              detailsOpen={detailsOpen}
+              onToggleDetails={() => setDetailsOpen((v) => !v)}
+            />
             <div className="ci-submit-bar">
               <button
                 type="button"

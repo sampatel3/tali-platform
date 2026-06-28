@@ -123,22 +123,43 @@ CLIENT_SCOPED_DROP_FIELDS = frozenset({
     "department",
 })
 
+# Role-substance fields PROMOTED to required for the hiring-manager intake (only
+# — the recruiter template is untouched). With compensation + logistics dropped,
+# the stock template leaves just 4 required fields (title, openings, urgency,
+# must_haves); the count emptied long before a usable role was described while
+# the agent (rightly) kept probing tech stack / projects / challenges. Promoting
+# these makes the gather ~9 meaningful things, so the meter tracks real depth and
+# "done" lines up with the agent actually being done. Only fields PRESENT in the
+# template are promoted (an org that removed one simply has fewer).
+CLIENT_SCOPED_REQUIRE_FIELDS = frozenset({
+    "seniority",
+    "summary",
+    "responsibilities",
+    "preferred",
+    "success_profile",
+})
+
 
 def client_scoped_template(template: dict[str, Any]) -> dict[str, Any]:
     """A HIRING-MANAGER-scoped view of a requisition template: the same template
     with the ``compensation`` section and the HR/People logistics fields removed,
     so the intake stays on the ROLE (requirements, responsibilities, seniority,
-    openings/urgency). Returns a shallow-copied template with filtered
-    ``sections``; the original is never mutated. A section left with no fields is
-    dropped. Drives both the gap engine/completeness and the agent's questions."""
+    openings/urgency). Role-substance fields in ``CLIENT_SCOPED_REQUIRE_FIELDS``
+    are promoted to ``required`` so the gather goes deep enough to be useful.
+    Returns a shallow-copied template with filtered ``sections``; the original is
+    never mutated. A section left with no fields is dropped. Drives both the gap
+    engine/completeness and the agent's questions."""
     sections = []
     for s in template.get("sections") or []:
         if s.get("key") in CLIENT_SCOPED_DROP_SECTIONS:
             continue
-        fields = [
-            f for f in (s.get("fields") or [])
-            if f.get("key") not in CLIENT_SCOPED_DROP_FIELDS
-        ]
+        fields = []
+        for f in (s.get("fields") or []):
+            if f.get("key") in CLIENT_SCOPED_DROP_FIELDS:
+                continue
+            if f.get("key") in CLIENT_SCOPED_REQUIRE_FIELDS and not f.get("required"):
+                f = {**f, "required": True}
+            fields.append(f)
         if fields:
             sections.append({**s, "fields": fields})
     return {**template, "sections": sections}

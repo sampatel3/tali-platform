@@ -1095,36 +1095,40 @@ a.rq-btn-sm { text-decoration: none; }
 }
 .rq-econ-clientpick,
 .rq-econ-newclient { display: flex; align-items: center; gap: 6px; }
-.rq-econ-select,
+/* The department picker is a Taali <Select> — it styles its OWN trigger (border,
+   36px height, segmented chevron). We only constrain the shell width so the row
+   doesn't jump; no border/padding here or it double-boxes the control. */
+.rq-econ-dept { min-width: 168px; }
+/* Plain inputs (bill rate, new-department name) match the Taali control
+   vocabulary so they line up with the Select on the row. */
 .rq-econ-input {
-  padding: 7px 10px;
+  min-height: 36px;
+  padding: 8px 12px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 10px;
   background: var(--bg-2);
   color: var(--ink);
   font-size: 0.8125rem;
   font-family: var(--font-sans);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
-.rq-econ-select { min-width: 160px; cursor: pointer; }
 .rq-econ-input { min-width: 150px; }
 .rq-econ-rate { width: 150px; min-width: 0; }
-.rq-econ-select:focus,
 .rq-econ-input:focus {
   outline: 0;
   border-color: var(--purple);
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple) 15%, transparent);
 }
-.rq-econ-select:disabled,
 .rq-econ-input:disabled { background: var(--bg-3); color: var(--mute-2); cursor: not-allowed; }
 
 .rq-econ-newbtn {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 7px 11px;
+  min-height: 36px;
+  padding: 7px 12px;
   border: 1px dashed color-mix(in oklab, var(--purple) 40%, var(--line));
-  border-radius: 9px;
+  border-radius: 10px;
   background: transparent;
   color: var(--purple-2);
   font-size: 0.75rem;
@@ -1140,11 +1144,11 @@ a.rq-btn-sm { text-decoration: none; }
 .rq-econ-iconbtn {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
   flex-shrink: 0;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--bg-2);
   color: var(--ink-2);
   cursor: pointer;
