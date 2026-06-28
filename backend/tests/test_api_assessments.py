@@ -299,7 +299,7 @@ def test_start_assessment_response_includes_workspace_branch_metadata(client, db
             "total_paused_seconds": 0,
             "ai_mode": "claude_cli_terminal",
             "terminal_mode": True,
-            "terminal_capabilities": {"permission_mode": "default"},
+            "terminal_capabilities": {"enabled": True},
             "repo_url": "https://github.com/taali-assessments/runtime_start_metadata.git",
             "branch_name": f"assessment/{assessment.id}",
             "clone_command": f"git clone --branch assessment/{assessment.id} https://github.com/taali-assessments/runtime_start_metadata.git",
@@ -607,7 +607,7 @@ def test_demo_start_falls_back_to_local_repo_when_branch_init_fails(client, db, 
     monkeypatch.setattr(
         assessments_svc,
         "terminal_capabilities",
-        lambda: {"enabled": True, "ws_protocol": "v1", "permission_mode": "default", "command": "claude", "active_mode": "claude_cli_terminal"},
+        lambda: {"enabled": True},
     )
 
     payload = {

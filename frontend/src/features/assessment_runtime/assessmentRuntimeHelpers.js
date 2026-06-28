@@ -26,8 +26,6 @@ export function normalizeStartData(startData) {
     is_timer_paused: Boolean(startData.is_timer_paused),
     pause_reason: startData.pause_reason || null,
     ai_mode: startData.ai_mode || task.ai_mode || 'claude_cli_terminal',
-    terminal_mode: Boolean(startData.terminal_mode),
-    terminal_capabilities: startData.terminal_capabilities || {},
     repo_url: startData.repo_url || null,
     branch_name: startData.branch_name || null,
   };

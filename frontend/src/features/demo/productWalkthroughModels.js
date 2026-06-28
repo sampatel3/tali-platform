@@ -745,7 +745,6 @@ export const PRODUCT_WALKTHROUGH_START_DATA = {
   candidate_name: 'Candidate walkthrough',
   organization_name: 'Taali demo',
   time_remaining: aiGenaiProductionReadinessTask.duration_minutes * 60,
-  terminal_mode: false,
   task: {
     ...aiGenaiProductionReadinessTask,
     name: aiGenaiProductionReadinessTask.name,
