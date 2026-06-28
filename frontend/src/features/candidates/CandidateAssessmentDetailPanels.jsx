@@ -253,8 +253,6 @@ export const EvaluatePanel = ({
   const [persisted, setPersisted] = useState(null);
   const [baselineKey, setBaselineKey] = useState(null);
   const [conflict, setConflict] = useState(false);
-  const [aiEvalSuggestion, setAiEvalSuggestion] = useState(null);
-  const [aiEvalLoading, setAiEvalLoading] = useState(false);
 
   // Hydrate the form + lifecycle snapshot + dirty baseline from a stored
   // evaluation (on mount, and again after each save/reload). Recording the
@@ -356,28 +354,12 @@ export const EvaluatePanel = ({
     }
   }, [assessmentId, assessmentsApi, hydrateFromStored, showToast]);
 
-  const handleGenerateAiSuggestions = async () => {
-    if (!assessmentId || !assessmentsApi?.aiEvalSuggestions) return;
-    setAiEvalLoading(true);
-    try {
-      const res = await assessmentsApi.aiEvalSuggestions(assessmentId);
-      setAiEvalSuggestion(res?.data || null);
-    } catch (err) {
-      showToast(err?.response?.data?.detail || 'Failed to generate AI evaluation suggestion.', 'error');
-    } finally {
-      setAiEvalLoading(false);
-    }
-  };
-
   if (!candidate) return null;
 
   return (
     <CandidateEvaluateTab
       candidate={candidate}
       evaluationRubric={evaluationRubric}
-      aiEvalSuggestion={aiEvalSuggestion}
-      onGenerateAiSuggestions={handleGenerateAiSuggestions}
-      aiEvalLoading={aiEvalLoading}
       manualEvalScores={manualEvalScores}
       setManualEvalScores={setManualEvalScores}
       manualEvalStrengths={manualEvalStrengths}

@@ -177,7 +177,6 @@ The candidate knowledge-graph view and graph predicates in NL search are powered
 | `MVP_DISABLE_PROCTORING` | No | `true` | Proctoring signals (browser focus, tab switches) are recorded but not gated on. |
 | `SCORING_V2_ENABLED` | No | `false` | Legacy scoring pipeline toggle; v2 is untested in production. |
 | `TASK_AUTHORING_API_ENABLED` | No | `false` | Gates the task-authoring API (tasks are backend-authored by default). |
-| `AI_ASSISTED_EVAL_ENABLED` | No | `false` | Gates the v2 AI-assisted evaluator (suggestions only). |
 | `ADMIN_SECRET` | No | `""` | Required to call `/admin/*` debug routes. Leave blank to disable admin debug entirely. |
 
 ### AWS S3 (Optional)
