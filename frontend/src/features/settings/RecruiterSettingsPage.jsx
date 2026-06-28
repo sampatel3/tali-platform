@@ -24,6 +24,7 @@ import {
 import BackgroundJobsPanel from './BackgroundJobsPanel';
 import UsagePanel from './UsagePanel';
 import ApiKeysPanel from './ApiKeysPanel';
+import { ClientsManager } from '../clients/ClientsManager';
 import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 
 const WORKABLE_SCOPE_OPTIONS = [
@@ -1454,23 +1455,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 <SectionPanel
                   id="clients"
                   title="Clients"
-                  subtitle="The consultancy clients you hire for. Assign a requisition to a client to track its rate, margin, and open / filled jobs; filter the Jobs page by client to see each client's pipeline."
+                  subtitle="The consultancy clients you hire for. Add a client, then assign it to a requisition to track its rate, margin, and open / filled jobs; filter the Jobs page by client to see each client's pipeline."
                 >
-                  <div className="settings-subcard">
-                    <div className="settings-subcard-head">
-                      <div>
-                        <h3>Manage clients</h3>
-                        <p>Add clients, edit their contacts, and open a client to see its requisitions and open / waiting / filled rollup.</p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn btn-purple btn-sm"
-                      onClick={() => onNavigate?.('clients')}
-                    >
-                      Open clients →
-                    </button>
-                  </div>
+                  <ClientsManager />
                 </SectionPanel>
               </div>
 
