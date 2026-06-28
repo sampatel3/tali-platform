@@ -428,79 +428,6 @@ export const buildCandidateSnapshot = ({ application, completedAssessment } = {}
   return null;
 };
 
-// Flatten cv_match_details.integrity_signals (the deterministic fraud surface:
-// document hygiene, JD mirroring, unverified employers, CV↔Workable diff) into
-// recruiter-readable strings for the "Verify before interview" panel. Flag-only
-// — these never change the score, they prompt a question in screening.
-const buildIntegrityFlags = (details) => {
-  const sig = details && typeof details.integrity_signals === 'object' ? details.integrity_signals : null;
-  if (!sig) return [];
-  const flags = [];
-
-  const dh = sig.document_hygiene && typeof sig.document_hygiene === 'object' ? sig.document_hygiene : null;
-  if (dh) {
-    if (dh.injection_detected) {
-      flags.push('Hidden instruction / prompt-injection text aimed at the automated screener was found in the CV file (removed before scoring).');
-    } else if (dh.has_tag_chars) {
-      flags.push('Invisible Unicode (Tags-block) characters were embedded in the CV file.');
-    } else if (Number(dh.invisible_char_count) >= 8) {
-      flags.push(`${dh.invisible_char_count} invisible characters were embedded in the CV file.`);
-    }
-  }
-
-  const sh = sig.jd_shingle && typeof sig.jd_shingle === 'object' ? sig.jd_shingle : null;
-  if (sh && sh.triggered) {
-    flags.push(`CV closely mirrors the job description (${Math.round((Number(sh.similarity) || 0) * 100)}% phrase overlap).`);
-  }
-
-  const ue = sig.unverified_employers && typeof sig.unverified_employers === 'object' ? sig.unverified_employers : null;
-  if (ue && Number(ue.count) > 0) {
-    const names = Array.isArray(ue.companies) ? ue.companies.filter(Boolean).join(', ') : '';
-    flags.push(`${ue.count} employer name${Number(ue.count) > 1 ? 's' : ''} not found verbatim in the CV text${names ? `: ${names}` : ''}.`);
-  }
-
-  // NOTE: the CV↔Workable history diff is intentionally NOT surfaced — it fired
-  // on ~54% of candidates in production (mostly benign "role on the CV but not in
-  // the Workable form"), so it drowned the real signals. Mirrors the backend
-  // (fraud_detection.build_integrity_warnings). Revive only behind a stricter matcher.
-
-  // NOTE: grounding (un-evidenced "met" must-haves) is intentionally NOT a flag.
-  // Each requirement is graded 0-100 and that grade drives the score and is shown
-  // per requirement, so a thinly-evidenced "met" already grades low — a separate
-  // warning duplicated it. Mirrors the backend (fraud_detection).
-
-  // CV-internal coherence.
-  const ei = sig.experience_inflation && typeof sig.experience_inflation === 'object' ? sig.experience_inflation : null;
-  if (ei && ei.triggered) {
-    flags.push(`Claims ~${ei.years_claimed} years' experience but the career history spans only ~${ei.years_evidenced} years.`);
-  }
-  const ta = sig.tech_anachronism && typeof sig.tech_anachronism === 'object' ? sig.tech_anachronism : null;
-  if (ta && Array.isArray(ta.issues)) {
-    ta.issues.forEach((item) => {
-      if (item && item.tool) {
-        flags.push(`Lists "${item.tool}" in a role ending ${item.role_end}, before it existed (${item.release_year}).`);
-      }
-    });
-  }
-
-  // Cross-source corroboration (Prong 2).
-  const gc = sig.graph_corroboration && typeof sig.graph_corroboration === 'object' ? sig.graph_corroboration : null;
-  if (gc && gc.status === 'anomaly') {
-    const co = Array.isArray(gc.companies)
-      ? gc.companies.filter((c) => c && c.status === 'anomaly').map((c) => c.company).filter(Boolean)
-      : [];
-    flags.push(`Claimed tech stack is unlike what other candidates from ${co.length ? co.join(', ') : 'that employer'} show — verify it's genuine, not spec-tailoring.`);
-  }
-  // GitHub: only the "doesn't resolve" case is a concern (a match is positive
-  // corroboration, surfaced elsewhere; a quiet/empty account is never flagged).
-  const ghc = sig.github && typeof sig.github === 'object' ? sig.github : null;
-  if (ghc && ghc.status === 'not_found') {
-    flags.push(`The GitHub link on the CV doesn't resolve (github.com/${ghc.username}) — confirm it's correct.`);
-  }
-
-  return flags.map((item) => String(item).trim()).filter(Boolean);
-};
-
 export const buildRoleFitEvidenceModel = ({ application, completedAssessment }) => {
   const payload = getRoleFitPayload({ application, completedAssessment });
   const details = payload.details && typeof payload.details === 'object' ? payload.details : {};
@@ -548,11 +475,13 @@ export const buildRoleFitEvidenceModel = ({ application, completedAssessment }) 
     timelineFlags: Array.isArray(details.timeline_flags)
       ? details.timeline_flags.map((item) => String(item || '').trim()).filter(Boolean)
       : [],
-    // Prefer the server-canonical, de-noised warnings (score_summary.integrity);
-    // fall back to the local derivation only when score_summary is absent.
+    // Integrity / corroboration flags come from ONE canonical source: the
+    // server's score_summary.integrity.warnings (fraud_detection.build_integrity_warnings,
+    // re-derived live from the persisted integrity_signals on every read). The FE
+    // never derives its own — if the server computed no warnings, there are none.
     integrityFlags: Array.isArray(application?.score_summary?.integrity?.warnings)
-      ? application.score_summary.integrity.warnings
-      : buildIntegrityFlags(details),
+      ? application.score_summary.integrity.warnings.filter((w) => typeof w === 'string' && w.trim())
+      : [],
     summaryText,
     hasAnyEvidence: Boolean(
       payload.roleFitScore != null

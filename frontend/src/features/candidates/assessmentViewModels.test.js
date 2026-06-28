@@ -38,67 +38,53 @@ describe('assessmentViewModels', () => {
     expect(summaryModel.taaliScore).toBe(74);
   });
 
-  it('surfaces integrity_signals as recruiter-readable integrity flags', () => {
+  it('surfaces the server-canonical integrity warnings verbatim (single source)', () => {
+    // Flags come ONLY from score_summary.integrity.warnings — the server's
+    // build_integrity_warnings is the one place the wording lives.
+    const application = {
+      cv_match_score: 70,
+      cv_match_details: { score_scale: '0-100', summary: 'ok' },
+      score_summary: {
+        integrity: {
+          warnings: [
+            'Hidden prompt-injection text aimed at the screener was found in the CV file (removed before scoring).',
+            'CV closely mirrors the job description (62% phrase overlap).',
+            '1 employer name not found verbatim in the CV text: Faketron.',
+          ],
+        },
+      },
+    };
+    const model = buildRoleFitEvidenceModel({ application, completedAssessment: null });
+    expect(model.integrityFlags.length).toBe(3);
+    const joined = model.integrityFlags.join(' | ');
+    expect(joined).toContain('prompt-injection');
+    expect(joined).toContain('62% phrase overlap');
+    expect(joined).toContain('Faketron');
+  });
+
+  it('does NOT re-derive integrity flags from cv_match_details — the server is the only source', () => {
+    // integrity_signals present on cv_match_details, but no score_summary.integrity:
+    // the FE must not compute its own warnings (one system). Result: none.
     const application = {
       cv_match_score: 70,
       cv_match_details: {
         score_scale: '0-100',
-        summary: 'ok',
         integrity_signals: {
-          document_hygiene: { injection_detected: true, has_tag_chars: false, invisible_char_count: 0 },
+          document_hygiene: { injection_detected: true },
           jd_shingle: { triggered: true, similarity: 0.62 },
           unverified_employers: { count: 1, companies: ['Faketron'] },
-          workable_history_diff: { issues: [{ kind: 'date_shift', detail: 'Acme: CV start 2018 vs Workable 2021' }] },
         },
       },
     };
     const model = buildRoleFitEvidenceModel({ application, completedAssessment: null });
-    const joined = model.integrityFlags.join(' | ');
-    // The CV↔Workable history diff is intentionally NOT surfaced (too noisy in
-    // production), so the three remaining signals show and the Workable one does not.
-    expect(model.integrityFlags.length).toBe(3);
-    expect(joined).toContain('prompt-injection');
-    expect(joined).toContain('62% phrase overlap');
-    expect(joined).toContain('Faketron');
-    expect(joined).not.toContain('Workable mismatch');
+    expect(model.integrityFlags).toEqual([]);
   });
 
-  it('returns no integrity flags when integrity_signals is absent', () => {
+  it('returns no integrity flags when score_summary.integrity is absent', () => {
     const model = buildRoleFitEvidenceModel({
       application: { cv_match_score: 80, cv_match_details: { summary: 'x' } },
       completedAssessment: null,
     });
-    expect(model.integrityFlags).toEqual([]);
-  });
-
-  it('does NOT surface grounding as an integrity flag (it lives in the per-requirement grade now)', () => {
-    const application = {
-      cv_match_score: 78,
-      cv_match_details: {
-        score_scale: '0-100',
-        integrity_signals: {
-          grounding: {
-            met_must_haves: 3,
-            grounded_must_haves: 1,
-            coverage: 0.33,
-            ungrounded_requirements: ['Kubernetes', 'Spark'],
-            ungrounded_match: true,
-          },
-        },
-      },
-    };
-    const model = buildRoleFitEvidenceModel({ application, completedAssessment: null });
-    // Un-evidenced "met" must-haves grade low in cv_matching.graded and that
-    // grade drives the score + shows per requirement — so no duplicate warning.
-    expect(model.integrityFlags).toEqual([]);
-  });
-
-  it('does not flag grounding when ungrounded_match is false', () => {
-    const application = {
-      cv_match_score: 78,
-      cv_match_details: { integrity_signals: { grounding: { ungrounded_match: false, coverage: 1.0 } } },
-    };
-    const model = buildRoleFitEvidenceModel({ application, completedAssessment: null });
     expect(model.integrityFlags).toEqual([]);
   });
 
