@@ -4,7 +4,10 @@
 .ac-shell {
   display: grid;
   grid-template-columns: 244px minmax(0, 1fr) 384px;
-  gap: 0;
+  /* Gapped cards (home-preview .home3): the rail, the centre column, and the
+     chat sit as separate cards with breathing room, not flush divider panes. */
+  gap: 16px;
+  padding: 16px;
   align-items: stretch;
 }
 /* App-shell: the hero + the 3 columns fill the viewport below the 64px nav, so
@@ -33,9 +36,10 @@
   display: flex;
   flex-direction: column;
   background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
 }
-.ac-sidebar { border-right: 1px solid var(--line); }
-.ac-dock { border-left: 1px solid var(--line); }
 
 /* ---- Sidebar ----------------------------------------------------------- */
 /* One clean flat list (home-preview `.pcard` agent rail): a head row, the

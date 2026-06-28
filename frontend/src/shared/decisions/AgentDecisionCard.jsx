@@ -20,6 +20,7 @@ import {
   FileText,
   Inbox,
   RefreshCw,
+  Sparkles,
   X,
 } from 'lucide-react';
 
@@ -189,7 +190,33 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
         (() => {
           const spec = DECISION_ACTIONS[decision.decision_type] || DEFAULT_ACTIONS;
           const PrimaryIcon = spec.primaryIcon || Check;
+          const primaryTitle = staleEngineOnly
+            ? 'Scored by an older model — this approves the old score as-is. Re-evaluate to re-score first.'
+            : isStale
+              ? 'Inputs changed since this was decided — this acts on them anyway. Re-evaluate first to refresh.'
+              : undefined;
           return (
+            <>
+            {/* Agent-recommends slab — the dark-purple "agent ON" treatment with
+                the recommended action as a white CTA, matching the candidate
+                report's DecisionRail so the recommendation looks identical on
+                the hub and the report. */}
+            <div className="rq-rec">
+              <div className="rq-rec-kl"><Sparkles size={12} aria-hidden="true" /> Agent recommends</div>
+              <button
+                type="button"
+                className="rq-rec-btn"
+                onClick={() => onApprove(decision)}
+                disabled={busy}
+                title={primaryTitle}
+              >
+                <PrimaryIcon size={16} strokeWidth={2.4} aria-hidden="true" />
+                {spec.primaryLabel}
+              </button>
+              {decision.confidence != null ? (
+                <div className="rq-rec-conf">Confidence {Math.round(decision.confidence * 100)}%</div>
+              ) : null}
+            </div>
             <div className="rq-action-bar">
               <div className="rq-action-l">
                 {isStale && onReEvaluate ? (
@@ -203,22 +230,6 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
                     Re-evaluate
                   </button>
                 ) : null}
-                <button
-                  type="button"
-                  className={`rq-btn ${spec.primaryClass || 'rq-approve'}`}
-                  onClick={() => onApprove(decision)}
-                  disabled={busy}
-                  title={
-                    staleEngineOnly
-                      ? 'Scored by an older model — this approves the old score as-is. Re-evaluate to re-score first.'
-                      : isStale
-                        ? 'Inputs changed since this was decided — this acts on them anyway. Re-evaluate first to refresh.'
-                        : undefined
-                  }
-                >
-                  <PrimaryIcon size={14} strokeWidth={2.4} aria-hidden="true" />
-                  {spec.primaryLabel}
-                </button>
                 {(spec.alternatives || []).map((alt) => {
                   const AltIcon = alt.icon || X;
                   return (
@@ -244,6 +255,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
                 Snooze 1h
               </button>
             </div>
+            </>
           );
         })()
       ) : (

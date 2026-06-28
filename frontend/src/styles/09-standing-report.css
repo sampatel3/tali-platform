@@ -1671,10 +1671,9 @@ button.eng-badge-button:focus-visible {
   gap: 5px;
   font-size: 0.75rem;
   font-weight: 600;
-  /* Preview-exact amber: bright golden flag icon (svg, below) + readable
-     amber-ink count on a warm amber-soft chip. Matches .chip.amber in the
-     preview — the brighter, cleaner amber, not a dulled amber-into-ink mix. */
-  color: var(--amber-ink);
+  /* Bright golden amber for icon AND text — punchier than the preview's
+     amber-ink chip text, which read dull. Warm amber-soft chip behind. */
+  color: var(--amber);
   background: var(--amber-soft, color-mix(in oklab, var(--amber) 16%, var(--bg-2)));
   border-radius: 999px;
   padding: 3px 10px;
@@ -1778,7 +1777,7 @@ button.eng-badge-button:focus-visible {
   border-radius: 999px;
   font-size: 0.75rem;
   font-weight: 600;
-  color: var(--amber-ink);
+  color: var(--amber);
   background: var(--amber-soft, color-mix(in oklab, var(--amber) 16%, var(--bg-2)));
 }
 .dossier-rail .dr-flags-chip svg { color: var(--amber); }
