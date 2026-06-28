@@ -16,7 +16,8 @@ from sqlalchemy.orm import Session
 from ....models.candidate import Candidate
 from ....models.candidate_application import CandidateApplication
 from ....models.organization import Organization
-from ....models.role import Role
+from ....models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, Role
+from ....models.role_brief import RoleBrief
 from ....models.workable_sync_run import WorkableSyncRun
 from ....platform.config import settings
 from ....domains.assessments_runtime.pipeline_service import (
@@ -423,6 +424,69 @@ def _normalize_stage_for_terminal(value: str | None) -> str | None:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _adopt_requisition_role(
+    db: Session,
+    org: Organization,
+    *,
+    job_id: str,
+    title: str,
+    description: str,
+) -> Role | None:
+    """Requisition -> Workable bridge: link a freshly-imported Workable job back
+    to the INACTIVE Taali job a requisition published, instead of minting a
+    duplicate role.
+
+    The recruiter pasted the requisition spec — which carries a ``Taali ref:
+    TAL-XXXXX`` line — into the Workable job description. We scan the imported
+    description (then the title) for that code; if it points to a draft
+    requisition role in this org that isn't yet linked to Workable, we adopt that
+    role: attach the Workable job id and flip it ``draft`` -> ``open``. The
+    brief's recruiter criteria survive because the caller treats an adopted role
+    as existing (``created=False``), so it skips the org-criteria snapshot.
+
+    Returns the adopted role, or None when there's no usable match (no code, no
+    matching brief, the brief has no role, or the role is already linked / past
+    draft). A stable ``job_id`` is required so the next sync re-finds the role by
+    ``workable_job_id`` rather than re-adopting.
+    """
+    if not job_id:
+        return None
+    from ....services.role_brief_service import find_ref_code
+
+    code = find_ref_code(description) or find_ref_code(title)
+    if not code:
+        return None
+    brief = (
+        db.query(RoleBrief)
+        .filter(RoleBrief.organization_id == org.id, RoleBrief.ref_code == code)
+        .first()
+    )
+    if brief is None or not brief.role_id:
+        return None
+    role = (
+        db.query(Role)
+        .filter(Role.id == brief.role_id, Role.organization_id == org.id)
+        .first()
+    )
+    if role is None:
+        return None
+    # Only adopt an inactive requisition job not already tied to a Workable job.
+    # A role that's already linked (or marked filled / cancelled) is left alone so
+    # a re-imported or edited spec can never hijack it.
+    if role.workable_job_id or role.job_status not in (None, JOB_STATUS_DRAFT):
+        return None
+    role.workable_job_id = job_id
+    role.job_status = JOB_STATUS_OPEN
+    role.deleted_at = None
+    logger.info(
+        "Workable bridge: adopted requisition role_id=%s into job_id=%s via ref %s",
+        role.id,
+        job_id,
+        code,
+    )
+    return role
 
 
 def _is_terminal_stage(stage_value: str | None) -> bool:
@@ -1673,6 +1737,14 @@ class WorkableSyncService:
                 .first()
             )
         created = False
+        if not role:
+            # Bridge: before minting a fresh role, try to ADOPT the inactive
+            # requisition job whose ref code is stamped in this Workable job's
+            # spec (draft -> open, no duplicate). Adopted roles are treated as
+            # existing so their brief-materialized criteria are preserved.
+            role = _adopt_requisition_role(
+                db, org, job_id=job_id, title=title, description=description
+            )
         if not role:
             # Seed budget + threshold from workspace settings. Workable itself
             # doesn't supply criteria so the new role's chip set is snapshotted

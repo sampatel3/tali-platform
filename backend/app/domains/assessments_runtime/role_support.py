@@ -259,6 +259,8 @@ def role_to_response(
     pending_decisions_by_type: dict[str, int] | None = None,
     active_candidates_count: int | None = None,
     last_candidate_activity_at: datetime | None = None,
+    requisition: dict | None = None,
+    client: dict | None = None,
 ) -> RoleResponse:
     if tasks_count is None:
         loaded_tasks = _loaded_relationship_items(role, "tasks")
@@ -300,6 +302,10 @@ def role_to_response(
         criteria=criteria,
         source=role.source,
         workable_job_id=role.workable_job_id,
+        job_status=getattr(role, "job_status", None),
+        requisition=requisition,
+        client_id=(client or {}).get("client_id"),
+        client_name=(client or {}).get("client_name"),
         workable_job_state=(
             str(role.workable_job_data.get("state") or "").strip().lower() or None
             if isinstance(getattr(role, "workable_job_data", None), dict)

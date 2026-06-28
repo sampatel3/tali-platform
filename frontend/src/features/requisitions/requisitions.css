@@ -250,6 +250,55 @@ a.rq-btn-sm { text-decoration: none; }
 }
 .rq-careers-link:hover { text-decoration: underline; }
 
+/* Workable bridge: the inactive Taali job + the spec the recruiter posts in
+   Workable. Sits under the careers row in the published block. */
+.rq-workable-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  margin-top: 2px;
+  border-top: 1px dashed var(--line);
+}
+.rq-workable-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.rq-job-status {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.rq-job-status.is-draft {
+  background: color-mix(in oklab, var(--ink) 8%, transparent);
+  color: color-mix(in oklab, var(--ink) 62%, transparent);
+}
+.rq-job-status.is-open {
+  background: var(--purple-soft);
+  color: var(--purple-2);
+}
+.rq-ref-code {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--purple-2);
+  background: var(--purple-soft);
+  padding: 1px 6px;
+  border-radius: 5px;
+}
+.rq-workable-hint {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: color-mix(in oklab, var(--ink) 58%, transparent);
+  max-width: 380px;
+}
+
 /* Right-side header actions: the client-share control stacked above the
    publish / published state, both right-aligned. */
 .rq-head-actions {

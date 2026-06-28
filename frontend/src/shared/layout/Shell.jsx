@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bell,
   Briefcase,
-  Building2,
   CheckSquare,
   ChevronDown,
   Home,
@@ -33,10 +32,12 @@ import { formatHeaderOrgLabel, normalizeHeaderOrgName } from './headerIdentity';
 // Home is the agent-first landing — see docs/HOME_HUB_DESIGN.md. It
 // absorbs the old Reporting tab and surfaces the agent's pending review
 // queue. The pending badge is reactive (polled below).
+// Clients moved out of the top nav into Settings → Clients (managed there);
+// the per-client view is reached via the Jobs page's client filter. See the
+// requisition->job bridge work.
 const NAV_TABS = [
   { id: 'home',     label: 'Home',     Icon: Home },
   { id: 'jobs',     label: 'Jobs',     Icon: Briefcase },
-  { id: 'clients',  label: 'Clients',  Icon: Building2 },
   { id: 'chat',     label: 'Chat',     Icon: MessageSquare, badge: 'AI' },
   { id: 'tasks',    label: 'Tasks',    Icon: CheckSquare },
   { id: 'analytics', label: 'Analytics', Icon: LineChart },

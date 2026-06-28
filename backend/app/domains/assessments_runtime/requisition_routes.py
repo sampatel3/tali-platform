@@ -46,10 +46,13 @@ from ...services.requisition_template_service import (
 )
 from ...services.role_brief_service import (
     create_brief,
+    ensure_ref_code,
+    materialize_brief_to_role,
     publish_job_page,
     submit_brief,
     update_brief_fields,
 )
+from ...models.role import JOB_STATUS_DRAFT
 
 router = APIRouter(tags=["Requisitions"])
 
@@ -75,6 +78,22 @@ def _careers_url(slug: Optional[str]) -> Optional[str]:
     base = (settings.FRONTEND_URL or "").rstrip("/")
     return f"{base}/careers/{slug}" if base else f"/careers/{slug}"
 
+
+def _workable_spec(jd_markdown: str, ref_code: str) -> str:
+    """The recruiter copies THIS into the Workable job description. It's the
+    rendered JD with a visible ref line appended — when the job syncs back, the
+    read-sync scans the description for ``ref_code`` and adopts the matching
+    inactive Taali job (Workable has no job-creation API, so the code rides
+    inside the spec the recruiter is already pasting). The wording asks them to
+    keep the line; ``find_ref_code`` tolerates any surrounding prose."""
+    body = (jd_markdown or "").rstrip()
+    ref_line = (
+        f"_Taali ref: {ref_code} — please keep this line so this role links "
+        f"back to your Taali requisition._"
+    )
+    return f"{body}\n\n---\n{ref_line}\n" if body else f"{ref_line}\n"
+
+
 # Multipart upload guards for the chat endpoint.
 _MAX_CHAT_FILES = 6
 _MAX_CHAT_FILE_BYTES = 15 * 1024 * 1024  # 15 MB per file
@@ -86,6 +105,7 @@ _MAX_CHAT_FILE_BYTES = 15 * 1024 * 1024  # 15 MB per file
 _BRIEF_FIELDS = (
     "id",
     "role_id",
+    "ref_code",
     "status",
     "source_kind",
     "title",
@@ -160,6 +180,20 @@ def _serialize_brief(brief: RoleBrief, org: Optional[Organization]) -> dict[str,
     # The org's PUBLIC careers board (lists every published page). None when the
     # org has no slug; lets the recruiter UI link the board.
     payload["careers_url"] = _careers_url(org.slug if org else None)
+    # The INACTIVE Taali job stood up on publish (None until first published).
+    # Carries the lifecycle status (draft -> open once the Workable bridge links
+    # it) so the requisition UI can show "Inactive job created / now Open".
+    role = brief.role
+    payload["job"] = (
+        {
+            "role_id": role.id,
+            "name": role.name,
+            "job_status": role.job_status,
+            "workable_job_id": role.workable_job_id,
+        }
+        if role
+        else None
+    )
     return payload
 
 
@@ -518,14 +552,25 @@ def publish_requisition(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Publish the brief as a shareable PUBLIC job page.
+    """Publish the brief: stand up an INACTIVE Taali job + a shareable spec.
 
-    Takes the FE-rendered ``jd_markdown`` and snapshots the brief's public-safe
-    fields onto a JobPage (idempotent — one per brief; re-publish refreshes it
-    and reuses the token). Does NOT materialize an internal role and does NOT
-    change the brief's status, so the brief stays editable for a re-publish.
+    Three things, all idempotent and re-publish-safe (the brief is NEVER locked,
+    so it stays editable):
+      1. Mint-once a ``ref_code`` (the Workable bridge match key).
+      2. Create/refresh an inactive ``Role`` (``job_status=draft``) linked to the
+         brief and materialize its criteria — this is the job the recruiter sees
+         in Jobs and whose spec they copy into Workable.
+      3. Snapshot public-safe fields onto the PUBLIC careers JobPage (one per
+         brief; re-publish reuses the token).
+
+    Returns the ref code + the ``workable_spec`` (the FE-rendered JD with the ref
+    line appended) so the FE can offer a one-click "Copy for Workable".
     """
     brief = _get_brief(db, current_user.organization_id, brief_id)
+    ref_code = ensure_ref_code(db, brief)
+    role = materialize_brief_to_role(
+        db, brief, mark_applied=False, job_status=JOB_STATUS_DRAFT
+    )
     page = publish_job_page(db, brief, jd_markdown=data.jd_markdown)
     db.commit()
     db.refresh(page)
@@ -535,6 +580,10 @@ def publish_requisition(
         "url": _job_page_url(page.token),
         "status": page.status,
         "published_at": page.published_at.isoformat() if page.published_at else None,
+        "ref_code": ref_code,
+        "role_id": role.id,
+        "job_status": role.job_status,
+        "workable_spec": _workable_spec(data.jd_markdown, ref_code),
     }
 
 

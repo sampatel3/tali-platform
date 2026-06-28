@@ -84,6 +84,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   // consultancy recruiter sends to their client to describe the role).
   const [clientLinking, setClientLinking] = useState(false);
   const [clientCopied, setClientCopied] = useState(false);
+  // Transient "Copied" tick on the "Copy spec for Workable" button.
+  const [workableCopied, setWorkableCopied] = useState(false);
   const [savingKey, setSavingKey] = useState(null);
   const [loadingBrief, setLoadingBrief] = useState(false);
   const [error, setError] = useState('');
@@ -456,6 +458,16 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       setBrief((prev) => ({
         ...(prev || {}),
         status: res?.status ?? prev?.status,
+        // Stage-1 bridge: the ref code + the inactive job publish stood up.
+        ref_code: res?.ref_code ?? prev?.ref_code,
+        job: res?.role_id
+          ? {
+              role_id: res.role_id,
+              name: prev?.title ?? prev?.job?.name ?? null,
+              job_status: res.job_status,
+              workable_job_id: prev?.job?.workable_job_id ?? null,
+            }
+          : (prev?.job || null),
         job_page: res?.token
           ? { token: res.token, url: res.url, status: res.status, published_at: res.published_at }
           : (prev?.job_page || null),
@@ -487,6 +499,35 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       setError('Could not copy the link — select and copy it manually.');
     }
   }, [jobPageUrl]);
+
+  // ---- Workable bridge (Stage 1) ----
+  // The requisition's ref code + the inactive job it stood up on publish, plus
+  // the spec the recruiter pastes into Workable: the rendered JD with a ref line
+  // appended. Mirrors the backend's _workable_spec EXACTLY so the import-side
+  // scan recovers the code; built FE-side so "Copy" works on load without a
+  // re-publish. ``brief.job`` = { role_id, name, job_status, workable_job_id }.
+  const refCode = brief?.ref_code || '';
+  const linkedJob = brief?.job || null;
+  const workableSpec = useMemo(() => {
+    if (!refCode) return '';
+    const jd = (typeof brief?.jd_override === 'string' && brief.jd_override.trim() !== '')
+      ? brief.jd_override
+      : renderJobSpec(template, brief);
+    const body = (jd || '').replace(/\s+$/, '');
+    const refLine = `_Taali ref: ${refCode} — please keep this line so this role links back to your Taali requisition._`;
+    return body ? `${body}\n\n---\n${refLine}\n` : `${refLine}\n`;
+  }, [refCode, brief, template]);
+
+  const copyWorkableSpec = useCallback(async () => {
+    if (!workableSpec) return;
+    try {
+      await navigator.clipboard.writeText(workableSpec);
+      setWorkableCopied(true);
+      setTimeout(() => setWorkableCopied(false), 1800);
+    } catch {
+      setError('Could not copy the spec — select and copy it manually.');
+    }
+  }, [workableSpec]);
 
   // The org's public careers board URL (string or null on the brief). When set,
   // we surface it alongside the published job-page link so the recruiter can
@@ -546,7 +587,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   }, [clientLinkUrl]);
 
   // Reset the transient "Copied" ticks when switching requisitions.
-  useEffect(() => { setCopied(false); setClientCopied(false); setCareersCopied(false); }, [selectedId]);
+  useEffect(() => { setCopied(false); setClientCopied(false); setCareersCopied(false); setWorkableCopied(false); }, [selectedId]);
 
   const published = Boolean(jobPage) || isPublished(brief?.status);
   const canSend = (composer.trim() || attachments.length > 0) && !turnInFlight;
@@ -735,6 +776,27 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                           </button>
                         </div>
                       ) : null}
+
+                      {/* Workable bridge: the inactive Taali job + the spec to post in Workable. */}
+                      <div className="rq-workable-row">
+                        <div className="rq-workable-head">
+                          <span className={`rq-job-status ${linkedJob?.workable_job_id ? 'is-open' : 'is-draft'}`}>
+                            {linkedJob?.workable_job_id ? 'Linked to Workable · Open' : 'Inactive job created · Draft'}
+                          </span>
+                          {refCode ? <code className="rq-ref-code" title="Requisition ref code">{refCode}</code> : null}
+                        </div>
+                        <p className="rq-workable-hint">
+                          Create the job in Workable using this spec — keep the ref line so it links back to this requisition automatically when it syncs in.
+                        </p>
+                        <button
+                          type="button"
+                          className="rq-btn-sm is-ghost"
+                          onClick={copyWorkableSpec}
+                          disabled={!workableSpec}
+                        >
+                          {workableCopied ? <Check size={13} /> : <FileText size={13} />} {workableCopied ? 'Copied' : 'Copy spec for Workable'}
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     <button type="button" className="rq-publish-btn" onClick={publish} disabled={publishing}>

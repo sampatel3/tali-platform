@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom';
 import {
   ArrowRight,
+  Building2,
   Filter,
   Inbox,
   Pause,
@@ -59,6 +60,29 @@ const SOURCE_FILTERS = [
   { key: 'active', label: 'Active' },
   { key: 'draft', label: 'Draft' },
 ];
+
+// Requisition->Workable job lifecycle (role.job_status). Null for legacy /
+// Workable-only roles (their state reads off the Workable pill). The badge shows
+// only when a status is set.
+const JOB_STATUS_META = {
+  draft: { label: 'Draft', tone: 'draft' },
+  open: { label: 'Open', tone: 'open' },
+  filled: { label: 'Filled', tone: 'filled' },
+  filled_external: { label: 'Filled · external', tone: 'ext' },
+  cancelled: { label: 'Cancelled', tone: 'cancelled' },
+};
+
+// Roll a set of roles up by job_status for the per-client summary strip:
+// active (draft+open / "waiting to fill"), filled (us), filled (external).
+const rollupRolesByStatus = (rolesForClient) => rolesForClient.reduce((acc, role) => {
+  const status = role?.job_status;
+  if (status === 'filled') acc.filled += 1;
+  else if (status === 'filled_external') acc.filled_external += 1;
+  else if (status === 'cancelled') acc.cancelled += 1;
+  else if (status === 'draft' || status === 'open') acc.active += 1;
+  acc.total += 1;
+  return acc;
+}, { active: 0, filled: 0, filled_external: 0, cancelled: 0, total: 0 });
 
 const isRoleDraft = (role) => (
   !role?.workable_job_id
@@ -223,6 +247,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   // vs sum of ALL role caps), not a truncated per-role sum.
   const [orgKpis, setOrgKpis] = useState(null);
   const [sourceFilter, setSourceFilter] = useState('all');
+  // Consultancy: filter the grid to one client (mirrors the source filter). A
+  // role's client rides on its requisition (role.client_id/client_name).
+  const [clientFilter, setClientFilter] = useState('all');
   const [roleSheetOpen, setRoleSheetOpen] = useState(false);
   const [savingRole, setSavingRole] = useState(false);
   const [roleSheetError, setRoleSheetError] = useState('');
@@ -492,9 +519,34 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     return new Date(parsed.getTime() + (15 * 60000));
   }, [orgData?.workable_last_sync_at]);
 
+  // Distinct clients present across the loaded roles, for the client dropdown.
+  const clientOptions = useMemo(() => {
+    const byId = new Map();
+    roles.forEach((role) => {
+      if (role?.client_id && !byId.has(role.client_id)) {
+        byId.set(role.client_id, role.client_name || `Client ${role.client_id}`);
+      }
+    });
+    return [...byId.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [roles]);
+
   const filtered = useMemo(() => (
-    roles.filter((role) => filterRoleBySource(role, sourceFilter))
-  ), [roles, sourceFilter]);
+    roles
+      .filter((role) => filterRoleBySource(role, sourceFilter))
+      .filter((role) => clientFilter === 'all' || role?.client_id === clientFilter)
+  ), [roles, sourceFilter, clientFilter]);
+
+  // Per-client rollup (open/waiting · filled · external) for the selected client.
+  const clientRollup = useMemo(() => (
+    clientFilter === 'all'
+      ? null
+      : rollupRolesByStatus(roles.filter((role) => role?.client_id === clientFilter))
+  ), [roles, clientFilter]);
+  const selectedClientName = useMemo(() => (
+    clientOptions.find((c) => c.id === clientFilter)?.name || null
+  ), [clientOptions, clientFilter]);
 
   const handleToggleStar = useCallback(async (role) => {
     if (!role || isShowcase) return;
@@ -776,6 +828,23 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               <span className="ct">{sourceCounts[filter.key]}</span>
             </button>
           ))}
+          {clientOptions.length ? (
+            <label className="jobs-client-filter" title="Filter by client">
+              <span className="filter-row-label">Client</span>
+              <select
+                value={clientFilter === 'all' ? 'all' : String(clientFilter)}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setClientFilter(value === 'all' ? 'all' : Number(value));
+                }}
+              >
+                <option value="all">All clients</option>
+                {clientOptions.map((c) => (
+                  <option key={c.id} value={String(c.id)}>{c.name}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <button type="button" className="f-chip add" disabled title="Additional recruiter filters are coming next.">
             + Add filter
           </button>
@@ -788,6 +857,18 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             </span>
           ) : null}
         </div>
+
+        {clientRollup ? (
+          <div className="client-rollup" role="status">
+            <span className="client-rollup-name">{selectedClientName}</span>
+            <span className="client-rollup-stat"><b>{clientRollup.active}</b> open / waiting</span>
+            <span className="client-rollup-stat"><b>{clientRollup.filled}</b> filled</span>
+            <span className="client-rollup-stat"><b>{clientRollup.filled_external}</b> filled externally</span>
+            {clientRollup.cancelled ? (
+              <span className="client-rollup-stat is-muted"><b>{clientRollup.cancelled}</b> cancelled</span>
+            ) : null}
+          </div>
+        ) : null}
 
         {loading ? (
           <div className="flex min-h-[15rem] items-center justify-center">
@@ -917,6 +998,16 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                             {roleBadgeLabel}
                           </span>
                         )}
+                        {role?.job_status && JOB_STATUS_META[role.job_status] ? (
+                          <span className={`job-status-badge is-${JOB_STATUS_META[role.job_status].tone}`}>
+                            {JOB_STATUS_META[role.job_status].label}
+                          </span>
+                        ) : null}
+                        {role?.client_name ? (
+                          <span className="job-client-chip" title={`Client · ${role.client_name}`}>
+                            <Building2 size={10} strokeWidth={2} /> {role.client_name}
+                          </span>
+                        ) : null}
                       </div>
                       <div className="role-meta">
                         {[

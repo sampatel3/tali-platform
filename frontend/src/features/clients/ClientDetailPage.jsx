@@ -166,7 +166,12 @@ export const ClientDetailPage = ({ onNavigate, NavComponent = null }) => {
 
   const summary = client.summary || {};
   const requisitions = Array.isArray(client.requisitions) ? client.requisitions : [];
-  const openJobs = summary.open_jobs != null ? summary.open_jobs : (client.open_job_count || 0);
+  // Job-lifecycle rollup (open/waiting · filled · external) of the client's
+  // linked roles — the same shape the Jobs page client filter shows.
+  const rollup = client.job_rollup || {};
+  const activeJobs = Number(rollup.active || 0);
+  const filledJobs = Number(rollup.filled || 0);
+  const externalJobs = Number(rollup.filled_external || 0);
   const totalRequisitions = summary.total_requisitions != null ? summary.total_requisitions : requisitions.length;
   const showStatus = client.status && String(client.status).toLowerCase() !== 'active';
 
@@ -211,9 +216,19 @@ export const ClientDetailPage = ({ onNavigate, NavComponent = null }) => {
           {/* ===== Aggregates strip ===== */}
           <div className="cl-detail-stats">
             <div className="cl-detail-stat">
-              <span className="cl-detail-stat-n">{openJobs}</span>
-              <span className="cl-detail-stat-label">Open jobs</span>
+              <span className="cl-detail-stat-n">{activeJobs}</span>
+              <span className="cl-detail-stat-label">Open / waiting</span>
             </div>
+            <div className="cl-detail-stat">
+              <span className="cl-detail-stat-n">{filledJobs}</span>
+              <span className="cl-detail-stat-label">Filled</span>
+            </div>
+            {externalJobs > 0 ? (
+              <div className="cl-detail-stat">
+                <span className="cl-detail-stat-n">{externalJobs}</span>
+                <span className="cl-detail-stat-label">Filled externally</span>
+              </div>
+            ) : null}
             <div className="cl-detail-stat">
               <span className="cl-detail-stat-n">{totalRequisitions}</span>
               <span className="cl-detail-stat-label">Total requisitions</span>

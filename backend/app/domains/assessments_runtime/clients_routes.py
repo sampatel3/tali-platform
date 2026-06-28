@@ -20,6 +20,7 @@ from ...platform.database import get_db
 from ...services.client_service import (
     create_client,
     get_client,
+    job_status_rollup_for_client,
     list_clients,
     open_job_count_for_client,
     serialize_client,
@@ -104,7 +105,12 @@ def get_client_endpoint(
     open_job_count = open_job_count_for_client(
         db, current_user.organization_id, client_id
     )
-    return serialize_client_detail(client, briefs, open_job_count=open_job_count)
+    job_rollup = job_status_rollup_for_client(
+        db, current_user.organization_id, client_id
+    )
+    return serialize_client_detail(
+        client, briefs, open_job_count=open_job_count, job_rollup=job_rollup
+    )
 
 
 @router.patch("/clients/{client_id}")

@@ -1,4 +1,6 @@
 """Requisition: hiring-brief service."""
+import re
+
 import pytest
 from fastapi import HTTPException
 
@@ -9,8 +11,17 @@ from app.models import (
     Organization,
     RoleCriterion,
 )
+from app.models.role import (
+    JOB_STATUS_DRAFT,
+    JOB_STATUS_FILLED,
+    JOB_STATUS_OPEN,
+)
 from app.services.role_brief_service import (
+    REF_CODE_PREFIX,
     create_brief,
+    ensure_ref_code,
+    find_ref_code,
+    generate_ref_code,
     materialize_brief_to_role,
     submit_brief,
     update_brief_fields,
@@ -99,4 +110,73 @@ def test_materialize_creates_criteria_by_bucket(db):
     assert (
         db.query(RoleCriterion).filter(RoleCriterion.role_id == role.id).count() == 4
     )
+
+
+# --------------------------------------------------------------------------- #
+# Ref code + the Workable-bridge match key
+# --------------------------------------------------------------------------- #
+_REF_RE = re.compile(r"^TAL-[23456789ABCDEFGHJKMNPQRSTVWXYZ]{5}$")
+
+
+def test_generate_ref_code_format(db):
+    code = generate_ref_code(db)
+    assert code.startswith(REF_CODE_PREFIX)
+    assert _REF_RE.match(code), code
+    # no ambiguous glyphs
+    assert not set("01OILU") & set(code[len(REF_CODE_PREFIX):])
+
+
+def test_ensure_ref_code_is_mint_once(db):
+    b = create_brief(db, organization_id=_org(db).id)
+    first = ensure_ref_code(db, b)
+    assert b.ref_code == first
+    assert ensure_ref_code(db, b) == first  # idempotent, reused
+
+
+def test_ref_codes_are_unique_across_briefs(db):
+    org = _org(db)
+    codes = {ensure_ref_code(db, create_brief(db, organization_id=org.id)) for _ in range(25)}
+    assert len(codes) == 25
+
+
+def test_find_ref_code_scans_free_text(db):
+    code = generate_ref_code(db)
+    jd = f"Senior Engineer\n\nGreat role.\n\n---\n_Taali ref: {code} — keep this._\n"
+    assert find_ref_code(jd) == code
+    assert find_ref_code("no code in here") is None
+    assert find_ref_code(None) is None
+
+
+def test_publish_variant_keeps_brief_editable_and_sets_draft(db):
+    b = create_brief(db, organization_id=_org(db).id)
+    update_brief_fields(db, b, title="Eng", summary="Build")
+    role = materialize_brief_to_role(db, b, mark_applied=False, job_status=JOB_STATUS_DRAFT)
+    assert role.job_status == JOB_STATUS_DRAFT
+    assert b.status != "applied"  # NOT locked
+    # still editable after a publish
+    update_brief_fields(db, b, title="Eng v2")
+    assert b.title == "Eng v2"
+
+
+def test_republish_does_not_demote_a_linked_or_filled_job(db):
+    b = create_brief(db, organization_id=_org(db).id)
+    update_brief_fields(db, b, title="Eng")
+    role = materialize_brief_to_role(db, b, mark_applied=False, job_status=JOB_STATUS_DRAFT)
+    # bridge linked it + recruiter marked filled
+    role.workable_job_id = "ENGIN001"
+    role.job_status = JOB_STATUS_FILLED
+    db.flush()
+    # a re-publish must not knock it back to draft
+    materialize_brief_to_role(db, b, mark_applied=False, job_status=JOB_STATUS_DRAFT)
+    assert role.job_status == JOB_STATUS_FILLED
+
+
+def test_republish_promotes_open_only_from_draft(db):
+    b = create_brief(db, organization_id=_org(db).id)
+    update_brief_fields(db, b, title="Eng")
+    role = materialize_brief_to_role(db, b, mark_applied=False, job_status=JOB_STATUS_DRAFT)
+    role.job_status = JOB_STATUS_OPEN  # already live (no workable id yet)
+    db.flush()
+    materialize_brief_to_role(db, b, mark_applied=False, job_status=JOB_STATUS_DRAFT)
+    assert role.job_status == JOB_STATUS_OPEN  # not demoted
 
