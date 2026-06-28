@@ -49,6 +49,13 @@ jobs:
           git clone --depth 1 \
             "https://x-access-token:${MS_TOKEN}@github.com/sampatel3/mainspring.git" \
             /tmp/mainspring
+          # Scrub the clone credential so it is NOT left in /tmp/mainspring/.git/config.
+          # The next step runs PR-controlled scripts (check_vendor_drift.sh and
+          # vendor_mainspring_*.sh are in this workflow's trigger paths), and on a
+          # same-repo PR those run with the secret available — a persisted token
+          # would be readable and exfiltratable. The drift check only reads the
+          # local checkout, so a token-less remote is sufficient.
+          git -C /tmp/mainspring remote set-url origin "https://github.com/sampatel3/mainspring.git"
 
       - name: Setup Python
         if: steps.tok.outputs.have == '1'
