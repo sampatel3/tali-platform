@@ -1,11 +1,18 @@
-import { useEffect, useRef } from 'react';
-import { ArrowUp, Square } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ArrowUp, Mic, Square } from 'lucide-react';
 
 const autosize = (el, max = 200) => {
   if (!el) return;
   el.style.height = 'auto';
   el.style.height = `${Math.min(el.scrollHeight, max)}px`;
 };
+
+// Web Speech API (Chrome + Safari, incl. mobile). Absent in Firefox → the mic
+// button simply never renders. Read once at module load.
+const SpeechRecognitionImpl =
+  typeof window !== 'undefined'
+    ? window.SpeechRecognition || window.webkitSpeechRecognition || null
+    : null;
 
 // One composer for every chat surface (Search, Home agent dock, candidate
 // workspace). Surfaces own where it sits; this renders the box + foot + the
@@ -25,12 +32,59 @@ export function ChatComposer({
   submitMode = 'enter',
   foot = true,
   onPaste,
+  // Opt-in voice dictation (off by default so existing surfaces are unchanged).
+  // When true AND the browser supports the Web Speech API, a mic button appears
+  // that dictates into the box — handy for hiring managers briefing on a phone.
+  voice = false,
 }) {
   const ref = useRef(null);
   useEffect(() => autosize(ref.current), [value]);
 
+  // ---- voice dictation ----
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef(null);
+  // The text already in the box when dictation started — recognised speech is
+  // appended to it so typing + talking compose cleanly.
+  const dictateBaseRef = useRef('');
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const voiceSupported = voice && !!SpeechRecognitionImpl;
+
+  const stopVoice = () => {
+    try { recognitionRef.current?.stop(); } catch { /* already stopped */ }
+  };
+
+  // Tear down any live recognition on unmount.
+  useEffect(() => () => {
+    try { recognitionRef.current?.abort?.(); } catch { /* noop */ }
+    recognitionRef.current = null;
+  }, []);
+
+  const toggleVoice = () => {
+    if (!voiceSupported || busy) return;
+    if (listening) { stopVoice(); return; }
+    const rec = new SpeechRecognitionImpl();
+    rec.lang = (typeof navigator !== 'undefined' && navigator.language) || 'en-US';
+    rec.continuous = true;
+    rec.interimResults = true;
+    dictateBaseRef.current = value ? `${value.replace(/\s+$/, '')} ` : '';
+    rec.onresult = (event) => {
+      let transcript = '';
+      for (let i = 0; i < event.results.length; i += 1) {
+        transcript += event.results[i][0].transcript;
+      }
+      onChangeRef.current(dictateBaseRef.current + transcript);
+    };
+    rec.onerror = () => setListening(false);
+    rec.onend = () => { setListening(false); recognitionRef.current = null; };
+    recognitionRef.current = rec;
+    setListening(true);
+    try { rec.start(); } catch { setListening(false); }
+  };
+
   const submit = (e) => {
     e?.preventDefault?.();
+    if (listening) stopVoice();
     const text = (value || '').trim();
     if (!text || busy) return;
     onSubmit(text);
@@ -75,15 +129,31 @@ export function ChatComposer({
         ) : (
           <span />
         )}
-        {streaming ? (
-          <button type="button" className="tk-stop-btn" onClick={onStop}>
-            <Square size={11} fill="currentColor" /> stop
-          </button>
-        ) : (
-          <button type="submit" className="tk-send-btn" disabled={!value.trim() || busy}>
-            <ArrowUp size={13} /> send
-          </button>
-        )}
+        <div className="tk-composer-actions">
+          {voiceSupported ? (
+            <button
+              type="button"
+              className={`tk-mic-btn${listening ? ' is-listening' : ''}`}
+              onClick={toggleVoice}
+              disabled={busy}
+              aria-pressed={listening}
+              aria-label={listening ? 'Stop dictating' : 'Dictate with voice'}
+              title={listening ? 'Stop dictating' : 'Dictate with voice'}
+            >
+              <Mic size={13} />
+              {listening ? <span className="tk-mic-text">listening…</span> : null}
+            </button>
+          ) : null}
+          {streaming ? (
+            <button type="button" className="tk-stop-btn" onClick={onStop}>
+              <Square size={11} fill="currentColor" /> stop
+            </button>
+          ) : (
+            <button type="submit" className="tk-send-btn" disabled={!value.trim() || busy}>
+              <ArrowUp size={13} /> send
+            </button>
+          )}
+        </div>
       </div>
     </form>
   );

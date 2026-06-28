@@ -234,6 +234,10 @@ def run_chat_turn(
                 "suggested_replies": _resolve_suggested_replies(
                     result.value, brief, template
                 ),
+                # Whether those replies are multi-select (pick several + send).
+                # Rides on the message so both the live chat response and a later
+                # GET snapshot can render the right chip behaviour.
+                "suggested_multi": bool(getattr(result.value, "suggested_multi", False)),
             }
         ]
         db.flush()

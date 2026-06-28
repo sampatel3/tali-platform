@@ -331,13 +331,22 @@ def build_chat_system_prompt(
         "done until these are covered. "
         + "Then reply "
         "conversationally — warm, concise, fast — acknowledging what you got and "
-        "asking about the focus gaps next (one or two at a time, never "
-        "interrogate). "
+        "asking about ONE focus gap next. Ask a SINGLE question per turn (never "
+        "bundle two different things into one turn, e.g. don't ask the focus AND "
+        "the number of openings together) — it keeps the tappable options clean "
+        "and the chat easy on a phone. "
         + closing
-        + "ALWAYS set suggested_replies to up to 6 short, "
-        "tappable options for the question you ask: for select fields use the "
-        "template's options verbatim; for numbers, dates or free text offer the "
-        "most likely answers or sensible ranges (they can still type anything)."
+        + "ALWAYS set suggested_replies to up to 6 short, tappable options — and "
+        "EVERY option must be a valid answer to the SINGLE question you just "
+        "asked. Never mix options for different fields in one set (e.g. don't put "
+        "'1 opening' next to 'Research' next to 'High urgency'). For select fields "
+        "use the template's options verbatim; for numbers/dates/free text offer "
+        "the most likely answers or sensible ranges (they can still type "
+        "anything). Set suggested_multi to true ONLY when the question can take "
+        "several answers at once (must-haves, nice-to-haves, tech stack, "
+        "responsibilities, focus areas) so each option is individually "
+        "selectable; set it false for single-choice questions (seniority, "
+        "openings, urgency, one-line summary)."
     )
 
 

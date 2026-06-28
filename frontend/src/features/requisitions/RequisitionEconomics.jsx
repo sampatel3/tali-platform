@@ -122,7 +122,7 @@ export function RequisitionEconomics({
             <Select
               inline
               aria-label="Assign hiring department"
-              className="rq-econ-select"
+              className="rq-econ-dept"
               value={clientId === null || clientId === undefined ? '' : String(clientId)}
               disabled={saving}
               onChange={(e) => onAssignClient?.(e.target.value)}
