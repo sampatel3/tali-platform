@@ -4,8 +4,9 @@
 // (e.g. advanced to Workable). The full audit trail lives on Analytics →
 // Decision log; the rich pending queue lives above this.
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
+import { agent as agentApi } from '../../shared/api';
 import { Avatar, formatRelativeAge, initialsFrom } from './atoms';
 import { pathForPage } from '../../app/routing';
 
@@ -22,9 +23,20 @@ const outcomeFor = (row) => {
   return { label: status === 'overridden' ? 'Overridden' : 'Decided', tone: 'mute' };
 };
 
-export const RecentDecisions = ({ rows = [], collapsedCount = 5 }) => {
+export const RecentDecisions = ({ roleId = null, collapsedCount = 5 }) => {
   const [expanded, setExpanded] = useState(false);
-  // Only resolved HITL calls — pending decisions live in the queue above.
+  // The hub's main feed loads PENDING decisions, so fetch the RESOLVED ones (the
+  // calls already made) ourselves — scoped to the selected role, newest first.
+  const [rows, setRows] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    agentApi
+      .listDecisions({ status: 'resolved', role_id: roleId || undefined, limit: 25 })
+      .then((res) => { if (!cancelled) setRows(Array.isArray(res?.data) ? res.data : []); })
+      .catch(() => { if (!cancelled) setRows([]); });
+    return () => { cancelled = true; };
+  }, [roleId]);
+  // Only resolved HITL calls (defensive — the fetch already scopes to resolved).
   const decided = rows.filter((r) => {
     const s = String(r?.status || '').toLowerCase();
     return s === 'approved' || s === 'overridden';

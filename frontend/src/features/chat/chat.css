@@ -49,8 +49,7 @@
   grid-template-columns: 244px minmax(0, 1fr);
   gap: 16px;
   padding: 16px;
-  max-width: 1320px;
-  margin: 0 auto;
+  /* Full-bleed like /requisitions — no centred max-width band. */
   align-items: stretch;
   /* Bound the single row to the container height so neither column can grow
      the page — each card scrolls internally instead (Home dock style). */

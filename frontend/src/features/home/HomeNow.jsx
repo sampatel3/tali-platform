@@ -1066,7 +1066,7 @@ export const HomeNow = ({
           {/* Minimal recent-decisions list — who, what was decided, when, and a
               link to the report. Find a candidate again after they've moved on;
               the full audit trail lives on Analytics → Decision log. */}
-          <RecentDecisions rows={effDecisions} collapsedCount={5} />
+          <RecentDecisions roleId={filters.role_id} collapsedCount={5} />
         </>
       )}
 
