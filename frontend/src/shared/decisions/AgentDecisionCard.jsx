@@ -67,28 +67,16 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
 
   return (
     <section className="rq-hybrid-detail">
-      <div className="rq-split-detail-head">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <TypeBadge type={decision.decision_type} />
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.6875rem', color: 'var(--mute)', letterSpacing: '.06em' }}>
-            D-{decision.id} · {formatRelativeAge(decision.created_at)} ago
-          </span>
-          {decision.status === 'pending' ? (
-            <span className="rq-stream-pendpill">NEEDS YOU</span>
-          ) : decision.status === 'reverted_for_feedback' ? (
-            <span className="rq-stream-teachpill">+ FEEDBACK</span>
-          ) : null}
-        </div>
-        {decision.confidence != null ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span className="kicker mute">CONFIDENCE</span>
-            <ConfBar value={decision.confidence} />
-          </div>
-        ) : null}
-      </div>
-
-      <div className="rq-detail-identity" style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 14 }}>
-        <Avatar initials={initialsFrom(decision.candidate_name)} size={48} />
+      {/* Compact header (preview): the score ring + name + role, with the scored
+          date/version as clean provenance text underneath — one vertical stack,
+          so nothing overlaps. The decision type is NOT repeated as a top badge;
+          it lives in the recommendation slab below. */}
+      <div className="rq-detail-head2">
+        {decision.taali_score != null ? (
+          <ScoreRing score={decision.taali_score} size={58} label="TALI" />
+        ) : (
+          <Avatar initials={initialsFrom(decision.candidate_name)} size={52} />
+        )}
         <div style={{ flex: 1, minWidth: 0 }}>
           <h2 className="home-title-md" style={{ margin: 0, lineHeight: 1.2, overflowWrap: 'anywhere' }}>
             <a
@@ -102,38 +90,37 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
               {decision.candidate_name || `Application #${decision.application_id}`}
             </a>
           </h2>
-          <div style={{ fontSize: '0.8125rem', color: 'var(--mute)', marginTop: 2 }}>
-            {decision.candidate_email || ''}
+          <div style={{ fontSize: '0.8125rem', color: 'var(--mute)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {[decision.role_name, decision.candidate_email].filter(Boolean).join(' · ')}
           </div>
-          {/* Deep-links sit on their own line below the email so a long name
-              can never collide with them. */}
-          {/* Standard outline buttons (preview), not the bespoke DeepLinkRow. */}
-          <div className="rq-detail-links" style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
-            <a
-              className="btn btn-outline btn-sm"
-              href={pathForPage('candidate-report', { candidateApplicationId: decision.application_id, fromHome: true })}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ flex: 1, justifyContent: 'center' }}
-            >
-              <FileText size={14} aria-hidden="true" /> Candidate report
-            </a>
-            <button
-              type="button"
-              className="btn btn-outline btn-sm"
-              onClick={() => onNavigate?.('job-pipeline', { roleId: decision.role_id })}
-              style={{ flex: 1, justifyContent: 'center' }}
-            >
-              <Eye size={14} aria-hidden="true" /> Job pipeline
-            </button>
-          </div>
+          <ScoreProvenance provenance={decision?.score_summary?.score_provenance} density="full" />
         </div>
-        {decision.taali_score != null ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-            <ScoreRing score={decision.taali_score} size={72} label="TALI" />
-            <ScoreProvenance provenance={decision?.score_summary?.score_provenance} density="full" />
-          </div>
+        {decision.status === 'pending' ? (
+          <span className="rq-stream-pendpill" style={{ alignSelf: 'flex-start' }}>NEEDS YOU</span>
+        ) : decision.status === 'reverted_for_feedback' ? (
+          <span className="rq-stream-teachpill" style={{ alignSelf: 'flex-start' }}>+ FEEDBACK</span>
         ) : null}
+      </div>
+
+      {/* Deep-links on their own row — standard outline buttons (preview). */}
+      <div className="rq-detail-links" style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14 }}>
+        <a
+          className="btn btn-outline btn-sm"
+          href={pathForPage('candidate-report', { candidateApplicationId: decision.application_id, fromHome: true })}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ flex: 1, justifyContent: 'center' }}
+        >
+          <FileText size={14} aria-hidden="true" /> Candidate report
+        </a>
+        <button
+          type="button"
+          className="btn btn-outline btn-sm"
+          onClick={() => onNavigate?.('job-pipeline', { roleId: decision.role_id })}
+          style={{ flex: 1, justifyContent: 'center' }}
+        >
+          <Eye size={14} aria-hidden="true" /> Job pipeline
+        </button>
       </div>
 
       {/* Agent-recommends slab — near the TOP (preview order): the recommendation
@@ -255,7 +242,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
                 </button>
               );
             })}
-            <button type="button" className="btn btn-purple btn-sm" onClick={() => onTeach(decision)} disabled={busy}>
+            <button type="button" className="btn btn-outline btn-sm" onClick={() => onTeach(decision)} disabled={busy}>
               <Brain size={14} strokeWidth={2} aria-hidden="true" />
               Send back &amp; teach
             </button>
