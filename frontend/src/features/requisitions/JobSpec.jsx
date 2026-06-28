@@ -92,6 +92,9 @@ const buildResolvers = (brief) => {
     // custom_fields.responsibilities (NOT a top-level brief column), but render
     // exactly like the other list placeholders (bulleted, TBC when empty).
     responsibilities: formatList(custom.responsibilities),
+    // Role-agnostic benefits (custom list field, auto-standardised from recent
+    // roles). Tolerate a legacy string value too.
+    benefits: Array.isArray(custom.benefits) ? formatList(custom.benefits) : custom.benefits,
   };
 };
 

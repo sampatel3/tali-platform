@@ -206,6 +206,7 @@ def build_chat_system_prompt(
     recent_titles: Optional[list[str]] = None,
     *,
     client_org_name: Optional[str] = None,
+    requirements_guidance: Optional[dict[str, Any]] = None,
 ) -> str:
     """The system prompt: template + captured-so-far + focus gaps (+ a compact
     recent-roles line for warm-start context when ``recent_titles`` is given).
@@ -246,6 +247,31 @@ def build_chat_system_prompt(
         if recent_clean
         else ""
     )
+    # Requirements GUIDANCE: a similar prior role's requirements as a REFERENCE
+    # for the agent's questions — never auto-filled, always confirmed with the
+    # user. Role-specific requirements are gathered live, not copied.
+    guidance_line = ""
+    if requirements_guidance:
+        g = requirements_guidance
+        parts = []
+        if g.get("must_haves"):
+            parts.append("must-haves: " + "; ".join(str(x) for x in g["must_haves"][:8]))
+        if g.get("preferred"):
+            parts.append("nice-to-haves: " + "; ".join(str(x) for x in g["preferred"][:6]))
+        if g.get("dealbreakers"):
+            parts.append("dealbreakers: " + "; ".join(str(x) for x in g["dealbreakers"][:5]))
+        if parts:
+            applicants = g.get("applicants") or 0
+            ref = f" ({applicants} applicants)" if applicants else ""
+            guidance_line = (
+                f"\n\nREFERENCE ONLY — your most similar prior role, "
+                f"\"{g.get('role_name', '')}\"{ref}, was hired on:\n- "
+                + "\n- ".join(parts)
+                + "\nUse this to ask SHARPER requirement questions (e.g. \"is the tech "
+                "stack similar — still Python/Spark, or has it changed?\"). Do NOT "
+                "assume or pre-fill it; confirm each point with the user and capture "
+                "what THEY actually say for THIS role."
+            )
     org = (client_org_name or "").strip()
     if org:
         # CLIENT-framed AND anonymous: the speaker is a client / hiring manager
@@ -291,6 +317,7 @@ def build_chat_system_prompt(
         + "\n\nMost important gaps to close next:\n"
         + focus_lines
         + recent_line
+        + guidance_line
         + "\n\nFrom the user's message and any attached transcript/screenshot, "
         "capture every field you can — use the typed fields for standard columns "
         "and the 'custom' object for any other template key (e.g. 'urgency'); "

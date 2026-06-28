@@ -52,7 +52,7 @@ DEFAULT_JD_TEMPLATE = """# {{title}}
 _Set your company description here in Settings → Requisition template — this boilerplate is reused on every job spec._
 
 ## Benefits
-_Add your standard benefits and perks here._
+{{benefits}}
 
 ---
 _We're committed to an inclusive, accessible hiring process. Add your EEO / reasonable-adjustments statement here._

@@ -180,8 +180,24 @@ def run_chat_turn(
     recent_titles = recent_role_titles(
         db, brief.organization_id, exclude_brief_id=brief.id
     )
+    # Requirements GUIDANCE: hand the agent the most similar prior role's
+    # requirements as a reference so its questions are sharper (captured live,
+    # never auto-filled). Recruiter-side only — the no-login CLIENT intake must
+    # never see the consultancy's other roles (client_org_name set => skip).
+    requirements_guidance = None
+    if client_org_name is None:
+        from .requisition_similar_service import similar_requirements_guidance
+
+        requirements_guidance = similar_requirements_guidance(
+            db, organization_id=brief.organization_id, brief=brief
+        )
     system = build_chat_system_prompt(
-        brief, template, focus, recent_titles, client_org_name=client_org_name
+        brief,
+        template,
+        focus,
+        recent_titles,
+        client_org_name=client_org_name,
+        requirements_guidance=requirements_guidance,
     )
     llm_messages = _history_for_llm(history_before)
     llm_messages.append(
