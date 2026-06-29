@@ -667,7 +667,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
         : [];
 
   return (
-    <>
+    <div className="rq-shell">
       {NavComponent ? <NavComponent currentPage="requisitions" onNavigate={onNavigate} /> : null}
       <div className="rq-root">
         {/* Sidebar — the requisition list (a bordered card: kicker head +
@@ -998,7 +998,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
           )}
         </div>
       </div>
-    </>
+    </div>
   );
 };
 

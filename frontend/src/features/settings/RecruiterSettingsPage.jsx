@@ -1431,26 +1431,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       {workspaceSaving ? 'Saving...' : 'Save organization'}
                     </button>
                   </div>
-
-                  {/* Link out to the dedicated requisition-template editor (its
-                      own page, not a tab here). Defines what a complete
-                      requisition looks like — drives the live brief + the
-                      intake agent's questions. */}
-                  <div className="settings-subcard settings-top-gap">
-                    <div className="settings-subcard-head">
-                      <div>
-                        <h3>Requisition template</h3>
-                        <p>Define what a complete requisition spec looks like — comp, location, logistics, requirements, agent context. Drives the live brief and the questions the intake agent asks.</p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn btn-outline btn-sm"
-                      onClick={() => onNavigate?.('settings-requisition-template')}
-                    >
-                      Edit requisition template →
-                    </button>
-                  </div>
                 </SectionPanel>
               </div>
 
@@ -1461,6 +1441,24 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   subtitle="Whoever a requisition is for — an external client like ADCB or an internal team like Engineering. Add one, then assign it to a requisition to track its rate, margin, and open / filled jobs; filter the Jobs page by department to see each one's pipeline."
                 >
                   <ClientsManager />
+
+                  {/* The role template — what every new role captures + its JD.
+                      Lives here with the hiring setup; links to its own editor. */}
+                  <div className="settings-subcard settings-top-gap">
+                    <div className="settings-subcard-head">
+                      <div>
+                        <h3>Role template</h3>
+                        <p>Define what a complete role brief captures — requirements, responsibilities, success profile, logistics, and the context the agent needs. Drives the live brief, the job spec, and the questions the intake agent asks.</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      onClick={() => onNavigate?.('settings-requisition-template')}
+                    >
+                      Edit role template →
+                    </button>
+                  </div>
                 </SectionPanel>
               </div>
 

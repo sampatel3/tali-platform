@@ -376,11 +376,12 @@ export const RequisitionTemplatePage = ({ onNavigate, NavComponent = null }) => 
       <AgentHeader
         breadcrumbs={[
           { label: 'Settings', page: 'settings' },
-          { label: 'Requisition template' },
+          { label: 'Hiring departments', to: '/settings#clients' },
+          { label: 'Role template' },
         ]}
-        kicker="SETTINGS · REQUISITIONS"
-        title="Requisition template"
-        subtitle="Define what a complete requisition looks like — comp, location, logistics, requirements, agent context. This drives the live brief and the questions the intake agent asks."
+        kicker="SETTINGS · HIRING DEPARTMENTS"
+        title="Role template"
+        subtitle="Define what a complete role brief captures — requirements, responsibilities, success profile, logistics, and agent context. This drives the live brief, the job spec, and the questions the intake agent asks."
         actions={(
           <button type="button" className="rq-publish-btn" onClick={save} disabled={saving || loading}>
             {saving ? <span className="rq-spinner" /> : <Save size={15} />} Save template

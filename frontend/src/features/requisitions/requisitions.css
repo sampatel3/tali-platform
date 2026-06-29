@@ -9,14 +9,26 @@
    requisition rail and the main column sit as separate cards with breathing
    room, not flush divider panes. Fills the viewport under the fixed light
    header (96px) so each card scrolls internally rather than growing the page. */
+/* Full-viewport shell: the in-flow header (its real height, which can exceed
+   the nominal 96px) + the workspace below it. The workspace FLEXES to fill the
+   exact remaining height — no hardcoded header offset to drift out of sync and
+   leave dead space at the bottom. */
+.rq-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--bg);
+}
 .rq-root {
+  flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-columns: 256px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   gap: 16px;
   padding: 16px;
-  height: calc(100vh - 96px);
-  height: calc(100dvh - 96px);
   background: var(--bg);
   color: var(--ink);
   font-family: var(--font-sans);
