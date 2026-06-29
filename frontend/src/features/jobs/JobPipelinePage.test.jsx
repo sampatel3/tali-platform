@@ -283,11 +283,12 @@ Banking transformation experience
     expect(screen.getByText('Dubai, United Arab Emirates')).toBeInTheDocument();
     expect(screen.queryByText(/\*\*Location:\*\*/)).not.toBeInTheDocument();
 
-    // Open the Job spec tab to access the formatted description.
+    // Open the Job Specification tab to access the formatted description. (The
+    // role description is now edited inline via <RoleSpecEditPanel>; the
+    // formatted, non-flattened spec body lives in the "Read full description"
+    // section below — asserted next.)
     fireEvent.click(screen.getByRole('link', { name: /^Job Specification$/i }));
 
-    expect(container.querySelector('.role-desc-summary')).toHaveTextContent(/The Portfolio Lead and Business Manager is a high-impact leadership position/i);
-    expect(container.querySelector('.role-desc-summary')).not.toHaveTextContent(/DeepLight AI is a specialist AI and data consultancy/i);
     expect(screen.queryByText(/keeps recruiter scoring/i)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Read full description/i }));
@@ -303,11 +304,15 @@ Banking transformation experience
     expect(sectionTitle('Description')).toBeInTheDocument();
     expect(sectionTitle('Requirements')).toBeInTheDocument();
     expect(sectionTitle('Benefits')).toBeInTheDocument();
-    expect(screen.getAllByText(/DeepLight AI is a specialist AI and data consultancy/i)).toHaveLength(1);
-    expect(screen.getAllByText(/The Portfolio Lead and Business Manager is a high-impact leadership position/i)).toHaveLength(1);
-    expect(screen.getByText(/Your responsibilities within this role will include/i)).toBeInTheDocument();
-    expect(screen.getByText(/Financial & Resource Management/i).closest('li')).toBeInTheDocument();
-    expect(screen.getByText(/Delivery Governance & Leadership/i).closest('li')).toBeInTheDocument();
+    // Scope the no-duplication checks to the FORMATTED spec body — the role
+    // description is now also editable inline (a textarea) above it, so a global
+    // query would legitimately match twice.
+    const specBody = within(container.querySelector('.role-sections'));
+    expect(specBody.getAllByText(/DeepLight AI is a specialist AI and data consultancy/i)).toHaveLength(1);
+    expect(specBody.getAllByText(/The Portfolio Lead and Business Manager is a high-impact leadership position/i)).toHaveLength(1);
+    expect(specBody.getByText(/Your responsibilities within this role will include/i)).toBeInTheDocument();
+    expect(specBody.getByText(/Financial & Resource Management/i).closest('li')).toBeInTheDocument();
+    expect(specBody.getByText(/Delivery Governance & Leadership/i).closest('li')).toBeInTheDocument();
     expect(querySectionTitle('Full Description')).not.toBeInTheDocument();
     expect(querySectionTitle('Candidate Requirements')).not.toBeInTheDocument();
     const requirementsSection = sectionTitle('Requirements').closest('.role-sec');
@@ -316,7 +321,10 @@ Banking transformation experience
     expect(within(requirementsSection).getByText(/8\+ years leading AI/i).closest('li')).toBeInTheDocument();
     expect(within(requirementsSection).getByText(/Banking transformation experience/i).closest('li')).toBeInTheDocument();
     expect(within(benefitsSection).getByText(/Shape the future of AI implementation/i).closest('li')).toBeInTheDocument();
-    expect(screen.queryByText(/Benefits & Growth Opportunities/i)).not.toBeInTheDocument();
+    // The formatter splits this into a clean "Benefits" section — the raw
+    // "**Benefits** Benefits & Growth Opportunities" run shouldn't appear in the
+    // formatted body (it's still in the editable description textarea above).
+    expect(specBody.queryByText(/Benefits & Growth Opportunities/i)).not.toBeInTheDocument();
     expect(querySectionTitle('What we offer')).not.toBeInTheDocument();
   });
 

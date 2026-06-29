@@ -732,6 +732,32 @@
   color: var(--purple);
   margin-bottom: 5px;
 }
+/* Inline role editor on the Job Specification tab (the retired slide-over,
+   now in-page): a bordered card holding the shared <RoleEditFields/> + a Save. */
+.role-edit-inline {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg-2);
+  padding: 18px;
+  margin-bottom: 18px;
+}
+.role-edit-inline-error {
+  margin-bottom: 14px;
+  padding: 11px 13px;
+  border: 1px solid color-mix(in oklab, var(--red) 35%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--red) 8%, var(--bg-2));
+  color: var(--red-deep);
+  font-size: 0.8125rem;
+}
+.role-edit-inline-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-2);
+}
+
 /* Pointer: scoring requirements now live on the Agent settings tab. */
 .req-reqs-note {
   margin: 14px 0 0;

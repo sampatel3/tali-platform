@@ -37,7 +37,7 @@ import { CandidateSheet } from '../candidates/CandidateSheet';
 import { CandidateTriageDrawer, candidateReportHref } from '../candidates/CandidateTriageDrawer';
 import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import { useCandidateTriage } from './useCandidateTriage';
-import { RoleSheet } from '../candidates/RoleSheet';
+import { RoleSpecEditPanel } from './RoleSpecEditPanel';
 import { getErrorMessage, trimOrUndefined, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
 import {
   formatCount,
@@ -372,7 +372,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // don't silently fire when the recruiter jumps tabs.
   const [selectedAppIds, setSelectedAppIds] = useState(() => new Set());
   useEffect(() => { setSelectedAppIds(new Set()); }, [tableStageFilter]);
-  const [roleSheetOpen, setRoleSheetOpen] = useState(false);
   const [candidateSheetOpen, setCandidateSheetOpen] = useState(false);
   const [roleSheetError, setRoleSheetError] = useState('');
   const [candidateSheetError, setCandidateSheetError] = useState('');
@@ -508,13 +507,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     void loadRoleWorkspace();
   }, [loadRoleWorkspace]);
 
-  // The org-wide task list only feeds the role-edit drawer's task picker
-  // (<RoleSheet>). It's not needed for the candidate table, so defer the
-  // fetch until the drawer is first opened — one fewer request on every
+  // The org-wide task list feeds the role-edit task picker on the Job
+  // Specification tab. It's not needed for the candidate table, so defer the
+  // fetch until that tab is first opened — one fewer request on every
   // role-page load. `loadedAllTasksRef` keeps it to a single fetch.
   const loadedAllTasksRef = useRef(false);
   useEffect(() => {
-    if (!roleSheetOpen || loadedAllTasksRef.current || !tasksApi?.list) return undefined;
+    if (activeView !== 'activity' || loadedAllTasksRef.current || !tasksApi?.list) return undefined;
     let cancelled = false;
     const loadAllTasks = async () => {
       try {
@@ -531,7 +530,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     return () => {
       cancelled = true;
     };
-  }, [roleSheetOpen, tasksApi]);
+  }, [activeView, tasksApi]);
 
   // ── Reload applications when the global context tells us a batch finished ──
   // batchScoreProgress is read from JobStatusContext (single source of truth).
@@ -1023,7 +1022,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         }
       }
 
-      setRoleSheetOpen(false);
       await loadRoleWorkspace();
       setRefreshTick((value) => value + 1);
       showToast('Role updated.', 'success');
@@ -1300,7 +1298,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               className="btn btn-outline btn-sm"
               onClick={() => {
                 setRoleSheetError('');
-                setRoleSheetOpen(true);
+                setActiveView('activity');
               }}
             >
               Edit role
@@ -1564,9 +1562,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           // this one is "Job spec".
           <div className="role-desc">
             <div className="role-desc-main">
-              {!detailsExpanded && roleSummary ? (
-                <p className="role-desc-summary">{roleSummary}</p>
-              ) : null}
+              {/* Edit the job directly here — name, description, job-spec file,
+                  and linked tasks (the old "Edit role" slide-over, inline). The
+                  rich read view (requisition spec + ingested JD) sits below. */}
+              <RoleSpecEditPanel
+                role={role}
+                roleTasks={roleTasks}
+                allTasks={allTasks}
+                saving={savingRoleSheet}
+                error={roleSheetError}
+                onSubmit={handleRoleSheetSubmit}
+              />
 
               {/* Job lifecycle control (mark filled / external / cancelled) —
                   shown for requisition-origin roles that carry a job_status. */}
@@ -1904,17 +1910,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           </>
         )}
 
-        <RoleSheet
-          open={roleSheetOpen}
-          mode="edit"
-          role={role}
-          roleTasks={roleTasks}
-          allTasks={allTasks}
-          saving={savingRoleSheet}
-          error={roleSheetError}
-          onClose={() => setRoleSheetOpen(false)}
-          onSubmit={handleRoleSheetSubmit}
-        />
+        {/* Role editing is now inline on the Job Specification tab
+            (<RoleSpecEditPanel>), so the role-edit slide-over is retired here. */}
 
         <CandidateSheet
           open={candidateSheetOpen}
