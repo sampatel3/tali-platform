@@ -429,9 +429,14 @@ a.rq-btn-sm { text-decoration: none; }
 .rq-split {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);
+  /* One full-height row so both cards stretch to fill the column — without it
+     the implicit auto-row sizes to content and leaves dead space at the bottom
+     of the page. */
+  grid-template-rows: minmax(0, 1fr);
   gap: 16px;
   min-height: 0;
   flex: 1;
+  align-items: stretch;
 }
 
 /* ============ Conversation column ============ */
@@ -1049,86 +1054,55 @@ a.rq-btn-sm { text-decoration: none; }
   .rq-side { display: none; }
 }
 
-/* ============ Internal economics strip ============
-   Recruiter-internal client + rate + margin band on a requisition. NOT
-   candidate-facing — a distinct purple-tinted strip below the header, set
-   apart from the brief/job-spec so the recruiter reads it as "internal". */
-/* The economics strip is the BOTTOM half of the header card — same border, the
-   card's rounded bottom corners, a hairline divider from the header above it. */
-.rq-econ {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 18px;
-  padding: 11px 18px;
-  border: 1px solid var(--line);
-  border-top: 1px solid var(--line-2);
-  border-radius: 0 0 14px 14px;
-  background: color-mix(in oklab, var(--purple) 5%, var(--bg-2));
-  flex-shrink: 0;
-}
-.rq-econ-tag {
+/* ============ Hiring-department control (in the header) ============
+   A compact inline picker folded into the requisition header — assigns the
+   hiring department (an external client or an internal team) or creates one.
+   The old full-width economics band (bill rate + estimated margin) was removed
+   to save vertical space; the salary on the brief covers compensation. */
+.rq-dept {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  align-self: center;
-  padding: 3px 9px;
-  border-radius: 999px;
-  background: var(--purple-soft);
-  color: var(--purple-2);
-  font-family: var(--font-mono);
-  font-size: 0.5625rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 10px;
 }
-.rq-econ-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.rq-econ-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+.rq-dept-glyph { color: var(--purple-2); flex-shrink: 0; }
+.rq-dept-label {
   font-family: var(--font-mono);
   font-size: 0.5625rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--mute);
+  white-space: nowrap;
 }
-.rq-econ-clientpick,
-.rq-econ-newclient { display: flex; align-items: center; gap: 6px; }
-/* The department picker is a Taali <Select> — it styles its OWN trigger (border,
-   36px height, segmented chevron). We only constrain the shell width so the row
-   doesn't jump; no border/padding here or it double-boxes the control. */
-.rq-econ-dept { min-width: 168px; }
-/* Plain inputs (bill rate, new-department name) match the Taali control
-   vocabulary so they line up with the Select on the row. */
-.rq-econ-input {
-  min-height: 36px;
-  padding: 8px 12px;
+.rq-dept-select { min-width: 150px; }
+.rq-dept-new { display: inline-flex; align-items: center; gap: 6px; }
+.rq-dept-input {
+  min-height: 32px;
+  padding: 6px 10px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 9px;
   background: var(--bg-2);
   color: var(--ink);
   font-size: 0.8125rem;
   font-family: var(--font-sans);
+  min-width: 150px;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
-.rq-econ-input { min-width: 150px; }
-.rq-econ-rate { width: 150px; min-width: 0; }
-.rq-econ-input:focus {
+.rq-dept-input:focus {
   outline: 0;
   border-color: var(--purple);
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple) 15%, transparent);
 }
-.rq-econ-input:disabled { background: var(--bg-3); color: var(--mute-2); cursor: not-allowed; }
-
-.rq-econ-newbtn {
+.rq-dept-input:disabled { background: var(--bg-3); color: var(--mute-2); cursor: not-allowed; }
+.rq-dept-newbtn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  min-height: 36px;
-  padding: 7px 12px;
+  gap: 4px;
+  min-height: 32px;
+  padding: 6px 10px;
   border: 1px dashed color-mix(in oklab, var(--purple) 40%, var(--line));
-  border-radius: 10px;
+  border-radius: 9px;
   background: transparent;
   color: var(--purple-2);
   font-size: 0.75rem;
@@ -1138,49 +1112,26 @@ a.rq-btn-sm { text-decoration: none; }
   white-space: nowrap;
   transition: background 0.12s, border-color 0.12s;
 }
-.rq-econ-newbtn:hover { background: var(--purple-soft); border-style: solid; }
-.rq-econ-newbtn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.rq-econ-iconbtn {
+.rq-dept-newbtn:hover { background: var(--purple-soft); border-style: solid; }
+.rq-dept-newbtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.rq-dept-iconbtn {
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   flex-shrink: 0;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 9px;
   background: var(--bg-2);
   color: var(--ink-2);
   cursor: pointer;
   transition: background 0.12s, border-color 0.12s;
 }
-.rq-econ-iconbtn:hover { border-color: var(--purple); color: var(--purple-2); }
-.rq-econ-iconbtn.is-primary { background: var(--purple); border-color: var(--purple); color: #fff; }
-.rq-econ-iconbtn.is-primary:hover { background: var(--purple-2); }
-.rq-econ-iconbtn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-/* Margin read-out — the headline internal figure. */
-.rq-econ-margin {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  margin-left: auto;
-  align-items: flex-end;
-}
-.rq-econ-margin-val {
-  font-family: var(--font-display);
-  font-size: 0.9375rem;
-  font-weight: 700;
-  color: var(--purple-2);
-  white-space: nowrap;
-}
-.rq-econ-margin-val.is-empty { color: var(--mute-2); font-weight: 600; }
-.rq-econ-margin-pct { font-weight: 600; color: var(--purple); }
-.rq-econ-spin { align-self: center; color: var(--purple-2); }
-
-@media (max-width: 720px) {
-  .rq-econ-margin { margin-left: 0; align-items: flex-start; }
-}
+.rq-dept-iconbtn:hover { border-color: var(--purple); color: var(--purple-2); }
+.rq-dept-iconbtn.is-primary { background: var(--purple); border-color: var(--purple); color: #fff; }
+.rq-dept-iconbtn.is-primary:hover { background: var(--purple-2); }
+.rq-dept-iconbtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.rq-dept-spin { color: var(--purple-2); }
 
 /* Multiple-choice quick replies — tappable options under the latest agent
    turn so the recruiter can answer in one click instead of typing. Capped to

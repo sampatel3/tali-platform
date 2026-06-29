@@ -18,7 +18,7 @@ import { requisitionApi } from './api';
 import { clientApi } from '../clients/api';
 import { LiveBrief } from './LiveBrief';
 import { JobSpec, renderJobSpec } from './JobSpec';
-import { RequisitionEconomics } from './RequisitionEconomics';
+import { RequisitionDepartment } from './RequisitionDepartment';
 import './requisitions.css';
 
 const ACCEPT = '.txt,.vtt,.srt,.md,.pdf,image/*';
@@ -422,10 +422,6 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     void saveEconomics({ client_id: Number.isNaN(cid) ? null : cid });
   }, [saveEconomics]);
 
-  const setClientRate = useCallback((rate) => {
-    void saveEconomics({ client_rate: rate });
-  }, [saveEconomics]);
-
   // Inline "+ New client" — create, refetch the list, then assign it here.
   const createAndAssignClient = useCallback(async (clientName) => {
     const name = String(clientName || '').trim();
@@ -735,6 +731,15 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     <span className="rq-status-chip">{statusLabel(brief.status)}</span>
                     <span>{Math.max(0, Math.min(100, Number(brief.completeness) || 0))}% complete</span>
                   </div>
+                  {/* Hiring department folded into the header (no separate
+                      economics band) to keep the chat the focus. */}
+                  <RequisitionDepartment
+                    brief={brief}
+                    clients={clients}
+                    saving={savingEconomics}
+                    onAssignClient={assignClient}
+                    onCreateClient={createAndAssignClient}
+                  />
                 </div>
                 <div className="rq-head-actions">
                   {/* Share with the hiring manager — the no-login intake link
@@ -856,15 +861,6 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   )}
                 </div>
               </header>
-
-              <RequisitionEconomics
-                brief={brief}
-                clients={clients}
-                saving={savingEconomics}
-                onAssignClient={assignClient}
-                onSetClientRate={setClientRate}
-                onCreateClient={createAndAssignClient}
-              />
 
               {error ? <div className="rq-error">{error}</div> : null}
 
