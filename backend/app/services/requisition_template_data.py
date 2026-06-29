@@ -182,25 +182,29 @@ DEFAULT_REQUISITION_TEMPLATE: dict[str, Any] = {
             "key": "compensation",
             "label": "Compensation",
             "fields": [
+                # Compensation is HR/People's call — the intake agent NEVER asks
+                # for it (see comp_instruction in the prompt). Left here, optional,
+                # so a recruiter CAN record it manually + the JD has a slot, but it
+                # is not a gap the agent chases and it never blocks completeness.
                 {
                     "key": "salary_min",
                     "label": "Salary (min)",
                     "type": "number",
-                    "required": True,
+                    "required": False,
                     "question": "What's the bottom of the salary range?",
                 },
                 {
                     "key": "salary_max",
                     "label": "Salary (max)",
                     "type": "number",
-                    "required": True,
+                    "required": False,
                     "question": "And the top of the range?",
                 },
                 {
                     "key": "salary_currency",
                     "label": "Currency",
                     "type": "select",
-                    "required": True,
+                    "required": False,
                     "question": "Which currency?",
                     "options": ["AED", "USD", "GBP", "EUR", "SAR", "INR"],
                 },

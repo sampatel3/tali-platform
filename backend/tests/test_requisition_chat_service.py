@@ -68,7 +68,8 @@ def test_compute_gaps_lists_required_empty_in_template_order(db):
     keys = [g["key"] for g in gaps]
     # All required fields, in template (section→field) order. The intake gathers
     # role substance (domain, seniority, summary, success profile, key
-    # responsibilities) — not just logistics + a must-have list.
+    # responsibilities) — not just logistics + a must-have list. Compensation is
+    # HR/People's call: the agent never asks it, so it's NOT required.
     assert keys == [
         "title",
         "domain",
@@ -78,9 +79,6 @@ def test_compute_gaps_lists_required_empty_in_template_order(db):
         "employment_type",
         "openings",
         "urgency",
-        "salary_min",
-        "salary_max",
-        "salary_currency",
         "must_haves",
         "success_profile",
         "responsibilities",
@@ -139,16 +137,16 @@ def test_completeness_math(db):
     b, _ = _brief(db)
     template = DEFAULT_REQUISITION_TEMPLATE
     assert compute_completeness(b, template) == 0
-    # 14 required fields total. Fill 2 → round(100*2/14) = 14.
+    # 11 required fields total (salary is NOT required — never asked). Fill 2 →
+    # round(100*2/11) = 18.
     update_brief_fields(db, b, title="Eng", openings=1)
-    assert compute_completeness(b, template) == 14
-    # Fill the remaining 12 (domain / urgency / responsibilities are custom keys
-    # → custom_fields; the rest are brief columns).
+    assert compute_completeness(b, template) == 18
+    # Fill the remaining 9 (domain / urgency / responsibilities are custom keys
+    # → custom_fields; the rest are brief columns). Salary stays empty — optional.
     update_brief_fields(
         db, b,
         seniority="Mid", summary="Builds APIs",
         workplace_type="Remote", employment_type="Full-time",
-        salary_min=100, salary_max=150, salary_currency="USD",
         must_haves=["Python"], success_profile="Ships reliably",
         custom_fields={"urgency": "High", "domain": "Banking", "responsibilities": ["Build"]},
     )
@@ -393,8 +391,9 @@ def test_run_chat_turn_applies_capture_appends_messages_shrinks_gaps(db, monkeyp
     keys = [g["key"] for g in compute_gaps(b, resolve_template(_org))]
     assert "title" not in keys and "must_haves" not in keys
     assert "workplace_type" in keys and "openings" in keys
-    # completeness recomputed: 5/14 required filled (title, salary×3, must_haves).
-    assert b.completeness == round(100 * 5 / 14)
+    # completeness recomputed: 2/11 required filled (title + must_haves; salary
+    # is captured but NOT required, so it doesn't count toward completeness).
+    assert b.completeness == round(100 * 2 / 11)
 
 
 def test_run_chat_turn_image_block_reaches_llm(db, monkeypatch):
