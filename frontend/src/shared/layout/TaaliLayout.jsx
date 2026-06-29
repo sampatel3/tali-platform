@@ -222,13 +222,9 @@ export const MarketingNav = ({ onNavigate }) => {
               {tab.label}
             </button>
           ))}
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() => { window.location.href = '/developers'; }}
-          >
+          <PageLink page="developers" className="btn btn-ghost btn-sm" onClick={closeMenu}>
             Developers
-          </button>
+          </PageLink>
           <PageLink page="blog" className="btn btn-ghost btn-sm">
             Blog
           </PageLink>
@@ -275,13 +271,20 @@ export const MarketingNav = ({ onNavigate }) => {
                 {tab.label}
               </button>
             ))}
-            <button
-              type="button"
+            <PageLink
+              page="developers"
               className="w-full rounded-[10px] px-3 py-3 text-left text-[0.9375rem] font-medium text-[var(--ink)] transition hover:bg-[var(--bg-3)]"
-              onClick={() => { closeMenu(); window.location.href = '/developers'; }}
+              onClick={closeMenu}
             >
               Developers
-            </button>
+            </PageLink>
+            <PageLink
+              page="blog"
+              className="w-full rounded-[10px] px-3 py-3 text-left text-[0.9375rem] font-medium text-[var(--ink)] transition hover:bg-[var(--bg-3)]"
+              onClick={closeMenu}
+            >
+              Blog
+            </PageLink>
           </div>
           <div className="mt-3 flex items-center gap-3 border-t border-[var(--line)] pt-4">
             <PageLink

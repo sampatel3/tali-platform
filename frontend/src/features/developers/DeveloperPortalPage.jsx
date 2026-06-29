@@ -126,7 +126,7 @@ export const DeveloperPortalPage = () => {
         <a href="/" className="devx-brand">Taali</a>
         <div className="devx-bar-right">
           <a href="#endpoints" className="devx-bar-link">Endpoints</a>
-          <a href="/settings/developers" className="devx-cta">Get an API key</a>
+          <a href="/settings/developers" className="devx-cta">Sign in for API keys</a>
         </div>
       </nav>
 
@@ -151,7 +151,7 @@ export const DeveloperPortalPage = () => {
             <p>
               The API is a small, curated surface under <code>/public/v1</code>, separate
               from the app’s internal endpoints. Start by{' '}
-              <a className="inline" href="/settings/developers">creating an API key</a>.
+              <a className="inline" href="/settings/developers">signing in to create an API key</a>.
             </p>
           </section>
 
@@ -278,7 +278,7 @@ curl -X POST ${API_BASE}/applications/123/share-links \\
           </section>
 
           <p className="devx-foot">
-            Ready to build? <a className="inline" href="/settings/developers">Create your first key →</a>
+            Ready to build? <a className="inline" href="/settings/developers">Sign in to create your first key →</a>
           </p>
         </main>
       </div>

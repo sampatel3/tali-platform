@@ -72,6 +72,14 @@ describe('Demo flow redesign', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Product' }));
 
     expect(onNavigate).not.toHaveBeenCalled();
+    expect(screen.getByRole('link', { name: 'Developers' })).toHaveAttribute('href', '/developers');
+    expect(screen.getByRole('link', { name: 'Blog' })).toHaveAttribute('href', '/blog');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Developers / API' }));
+    expect(onNavigate).toHaveBeenCalledWith('developers');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Blog' }));
+    expect(onNavigate).toHaveBeenCalledWith('blog');
   });
 
   it('renders the restored candidate workspace and how-it-works sections on landing', async () => {

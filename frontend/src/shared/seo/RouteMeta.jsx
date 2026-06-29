@@ -37,6 +37,16 @@ const PUBLIC_META = {
     description:
       'Book a 20-minute demo of Taali, the agentic hiring platform with AI-native assessments, run on a role of yours.',
   },
+  '/developers': {
+    title: 'Developer Portal — Taali API',
+    description:
+      'Read Taali API documentation, authentication guidance, endpoint references, scopes, errors, and changelog details for building Taali integrations.',
+  },
+  '/blog': {
+    title: 'Taali Blog — AI-native work',
+    description:
+      'Writing from Taali on AI-native work, agentic hiring, and how high-performing teams use AI in engineering and beyond.',
+  },
 };
 
 // /showcase renders the same page as /demo; /demo-walkthrough is the legacy
@@ -49,6 +59,11 @@ const ALIAS = {
 const normalizePath = (pathname) => {
   if (!pathname || pathname === '/') return '/';
   return pathname.replace(/\/+$/, '') || '/';
+};
+
+const resolvePublicMetaPath = (path) => {
+  if (path.startsWith('/blog/')) return '/blog';
+  return ALIAS[path] || path;
 };
 
 const upsertMeta = (selector, attrs) => {
@@ -81,7 +96,7 @@ export function RouteMeta() {
     if (typeof document === 'undefined') return;
 
     const path = normalizePath(pathname);
-    const resolved = ALIAS[path] || path;
+    const resolved = resolvePublicMetaPath(path);
     const meta = PUBLIC_META[resolved];
     const canonicalPath = resolved === '/' ? '/' : resolved;
     const canonicalUrl = `${ORIGIN}${canonicalPath}`;

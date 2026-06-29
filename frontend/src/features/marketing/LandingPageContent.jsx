@@ -174,7 +174,7 @@ const footerColumns = [
       { label: 'AI collab score', section: 'platform' },
       { label: 'Question bank', section: 'platform' },
       { label: 'Integrations', section: 'platform' },
-      { label: 'Developers / API', href: '/developers' },
+      { label: 'Developers / API', page: 'developers' },
       { label: 'Product walkthrough', page: 'showcase' },
     ],
   },
@@ -183,7 +183,7 @@ const footerColumns = [
     items: [
       { label: 'Manifesto', section: 'problem' },
       { label: 'Careers', page: 'demo-lead' },
-      { label: 'Blog', page: 'demo-lead' },
+      { label: 'Blog', page: 'blog' },
       { label: 'Contact', href: 'mailto:hello@taali.ai' },
     ],
   },
