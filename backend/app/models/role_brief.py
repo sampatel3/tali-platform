@@ -123,7 +123,14 @@ class RoleBrief(Base):
     # The captured conversation: a list of
     # ``{"role": "user"|"assistant", "content": str,
     #    "attachments": [{"name": str, "kind": "image"|"transcript"|"file"}]}``.
+    # This is the RECRUITER-side transcript and may contain confidential internal
+    # context — it is NEVER exposed on the public hiring-manager intake link.
     messages = Column(JSON, nullable=False, server_default="[]", default=list)
+    # The SEPARATE hiring-manager intake transcript (public /intake/{token}). Its
+    # own conversation so the manager never sees the recruiter's raw words; both
+    # sides fill the SAME structured brief fields, so captured context still
+    # informs the agent on either side.
+    client_messages = Column(JSON, nullable=False, server_default="[]", default=list)
 
     # --- Provenance / intake working state ---
     raw_input = Column(Text, nullable=True)  # transcript / pasted JD / notes

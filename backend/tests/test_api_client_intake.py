@@ -312,15 +312,43 @@ def test_public_chat_unknown_token_404(client):
 # --------------------------------------------------------------------------- #
 # Anti-abuse: total user-turn cap → 429
 # --------------------------------------------------------------------------- #
+def test_public_intake_never_exposes_recruiter_transcript(client, db):
+    """Privacy: the recruiter's own chat (``brief.messages``) may hold
+    confidential internal context — it must NEVER appear on the public
+    hiring-manager link, which has its OWN transcript (``client_messages``)."""
+    headers, _ = auth_headers(client)
+    brief_id, link = _mint_link(client, headers)
+
+    secret = "INTERNAL: backfill for someone we're managing out; budget flex to 400k"
+    brief = db.query(RoleBrief).filter(RoleBrief.id == brief_id).first()
+    brief.messages = list(brief.messages or []) + [
+        {"role": "user", "content": secret, "attachments": []}
+    ]
+    db.commit()
+
+    body = client.get(f"/api/v1/public/intake/{link['token']}").json()
+    # The recruiter's confidential text is absent from the public transcript.
+    blob = " ".join(m.get("content", "") for m in body["messages"])
+    assert secret not in blob
+    assert "INTERNAL" not in blob
+    # The manager gets their OWN fresh opener instead.
+    assert body["messages"] and body["messages"][0]["role"] == "assistant"
+    assert "in your own words" in body["messages"][0]["content"]
+    # The recruiter transcript still holds it (separated, not destroyed).
+    db.refresh(brief)
+    assert any(secret in (m.get("content") or "") for m in brief.messages)
+
+
 def test_public_chat_turn_cap_returns_429(client, db, monkeypatch):
     headers, _ = auth_headers(client)
     brief_id, link = _mint_link(client, headers)
 
-    # Stuff the transcript with 60 user turns directly (cheaper than 60 calls).
+    # Stuff the HIRING-MANAGER transcript with 60 user turns directly (cheaper
+    # than 60 calls). The cap counts client_messages, not the recruiter's.
     brief = db.query(RoleBrief).filter(RoleBrief.id == brief_id).first()
-    msgs = list(brief.messages or [])
+    msgs = list(brief.client_messages or [])
     msgs += [{"role": "user", "content": f"m{i}", "attachments": []} for i in range(60)]
-    brief.messages = msgs
+    brief.client_messages = msgs
     db.commit()
 
     # No LLM should be reached — the cap rejects before any turn runs.

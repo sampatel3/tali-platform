@@ -136,8 +136,15 @@ def run_chat_turn(
     model: Optional[str] = None,
     feature: str = _CHAT_FEATURE,
     client_org_name: Optional[str] = None,
+    transcript_attr: str = "messages",
 ):
     """Run ONE chat turn end-to-end and fold the result into the brief.
+
+    ``transcript_attr`` selects WHICH transcript this turn reads + appends to:
+    ``messages`` (recruiter, default) or ``client_messages`` (the public
+    hiring-manager intake). They are kept separate so the manager never sees the
+    recruiter's raw words; both fold captures into the SAME structured brief
+    fields, so the agent stays informed on either side.
 
     Returns the ``StructuredResult`` (``.ok`` / ``.value`` / ``.error_reason``).
     On success the brief is mutated (messages appended, fields applied,
@@ -155,10 +162,11 @@ def run_chat_turn(
     if brief.source_kind is None:
         update_brief_fields(db, brief, source_kind="conversational")
 
-    # 1. Append the user message (+ attachment metadata) to the transcript.
-    history_before = list(brief.messages or [])
+    # 1. Append the user message (+ attachment metadata) to the SELECTED
+    # transcript (recruiter ``messages`` or hiring-manager ``client_messages``).
+    history_before = list(getattr(brief, transcript_attr, None) or [])
     persisted_user = build_persisted_user_message(message, attachments)
-    brief.messages = history_before + [persisted_user]
+    setattr(brief, transcript_attr, history_before + [persisted_user])
 
     # 2. Deterministic gap engine.
     gaps = compute_gaps(brief, template)
@@ -198,7 +206,10 @@ def run_chat_turn(
         recent_titles,
         client_org_name=client_org_name,
         requirements_guidance=requirements_guidance,
+        transcript=getattr(brief, transcript_attr, None),
     )
+    # LLM history = ONLY the selected transcript (the manager's own thread for
+    # the client intake), so the recruiter's raw words never reach the model.
     llm_messages = _history_for_llm(history_before)
     llm_messages.append(
         {"role": "user", "content": build_user_turn_content(message, attachments)}
@@ -224,9 +235,9 @@ def run_chat_turn(
     if result.ok and result.value is not None:
         # 4. Apply captured values + recompute completeness.
         apply_capture(db, brief, result.value, template)
-        # Append the assistant reply to the transcript.
+        # Append the assistant reply to the SELECTED transcript.
         reply = (result.value.assistant_reply or "").strip()
-        brief.messages = list(brief.messages) + [
+        setattr(brief, transcript_attr, list(getattr(brief, transcript_attr) or []) + [
             {
                 "role": "assistant",
                 "content": reply,
@@ -239,7 +250,7 @@ def run_chat_turn(
                 # GET snapshot can render the right chip behaviour.
                 "suggested_multi": bool(getattr(result.value, "suggested_multi", False)),
             }
-        ]
+        ])
         db.flush()
     return result
 

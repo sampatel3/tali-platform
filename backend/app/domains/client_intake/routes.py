@@ -35,6 +35,7 @@ from ...services.requisition_chat_service import (
     _captured_brief_values,
     compute_completeness,
     compute_gaps,
+    opening_message,
     run_chat_turn,
 )
 from ...services.requisition_template_service import (
@@ -121,10 +122,32 @@ def _resolve_brief(db: Session, token: str) -> RoleBrief:
     return brief
 
 
+def _ensure_client_opening(
+    db: Session, brief: RoleBrief, client_template: dict[str, Any]
+) -> list:
+    """Seed the hiring-manager transcript (``client_messages``) with its OWN
+    opening turn if empty, so the manager starts a fresh free-text-first
+    conversation and NEVER sees the recruiter's ``messages`` (which may hold
+    confidential internal context). Idempotent; flushes. Returns the transcript."""
+    if not (brief.client_messages or []):
+        brief.client_messages = [
+            {
+                "role": "assistant",
+                "content": opening_message(client_template),
+                "attachments": [],
+                "suggested_replies": [],
+            }
+        ]
+        db.flush()
+    return brief.client_messages or []
+
+
 def _user_turn_count(brief: RoleBrief) -> int:
+    # Count the HIRING-MANAGER transcript only — the recruiter's turns must not
+    # eat the public intake's anti-abuse cap.
     return sum(
         1
-        for m in (brief.messages or [])
+        for m in (brief.client_messages or [])
         if isinstance(m, dict) and m.get("role") == "user"
     )
 
@@ -146,10 +169,16 @@ def view_client_intake(
         .first()
     )
     client_template = client_scoped_template(resolve_template(org))
+    # The hiring manager sees their OWN transcript (seeded with a fresh opener on
+    # first view), never the recruiter's ``messages``.
+    needs_seed = not (brief.client_messages or [])
+    client_messages = _ensure_client_opening(db, brief, client_template)
+    if needs_seed:
+        db.commit()
     return {
         # Intentionally NOT the real org name — the client surface stays generic.
         "organization_name": None,
-        "messages": brief.messages or [],
+        "messages": client_messages,
         "captured": _role_safe_captured(brief, client_template),
         "gaps": compute_gaps(brief, client_template),
         "completeness": compute_completeness(brief, client_template),
@@ -211,6 +240,8 @@ async def chat_client_intake(
         .first()
     )
     client_template = client_scoped_template(resolve_template(org))
+    # Make sure the manager's transcript has its own opener before we append.
+    _ensure_client_opening(db, brief, client_template)
 
     result = run_chat_turn(
         db,
@@ -222,6 +253,8 @@ async def chat_client_intake(
         # Generic, non-empty gate: switches the prompt to CLIENT-framed + no-pay
         # mode WITHOUT passing the real org name (privacy — the prompt is anon).
         client_org_name="client",
+        # Read + append the HIRING-MANAGER transcript, never the recruiter's.
+        transcript_attr="client_messages",
     )
     if not result.ok:
         db.rollback()
@@ -231,7 +264,7 @@ async def chat_client_intake(
     db.commit()
     db.refresh(brief)
 
-    messages = brief.messages or []
+    messages = brief.client_messages or []
     last = messages[-1] if messages else {}
     return {
         "reply": (result.value.assistant_reply if result.value else "") or "",
