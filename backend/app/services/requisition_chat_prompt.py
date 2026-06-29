@@ -207,6 +207,7 @@ def build_chat_system_prompt(
     *,
     client_org_name: Optional[str] = None,
     requirements_guidance: Optional[dict[str, Any]] = None,
+    transcript: Optional[list] = None,
 ) -> str:
     """The system prompt: template + captured-so-far + focus gaps (+ a compact
     recent-roles line for warm-start context when ``recent_titles`` is given).
@@ -311,9 +312,12 @@ def build_chat_system_prompt(
         )
     # Free-text-first nudge: on the user's FIRST substantive turn, absorb their
     # own-words brief and ask one sharp follow-up — don't fall back to a menu.
+    # Count turns in the RELEVANT transcript (the manager's own thread for the
+    # client intake), falling back to the recruiter transcript.
+    msgs_for_count = transcript if transcript is not None else (brief.messages or [])
     user_turns = sum(
         1
-        for m in (brief.messages or [])
+        for m in (msgs_for_count or [])
         if isinstance(m, dict) and m.get("role") == "user"
     )
     early_line = (
