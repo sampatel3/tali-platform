@@ -138,7 +138,11 @@ export const AssessmentRuntimePreviewView = ({
       || ''
   );
   const [claudePrompt, setClaudePrompt] = useState(initialClaudePrompt);
-  const [repoPanelCollapsed, setRepoPanelCollapsed] = useState(false);
+  // In the static showcase/deck snapshot, start with the repo file-tree
+  // collapsed so the workspace reads as the TWO work surfaces — Claude on the
+  // left, the editor on the right — instead of a cramped three-column layout.
+  // The live candidate session still opens with the repo expanded.
+  const [repoPanelCollapsed, setRepoPanelCollapsed] = useState(staticPreview);
   const [assistantPanelCollapsed, setAssistantPanelCollapsed] = useState(false);
   const [terminalPanelOpen, setTerminalPanelOpen] = useState(true);
   const [outputPanelOpen, setOutputPanelOpen] = useState(true);
