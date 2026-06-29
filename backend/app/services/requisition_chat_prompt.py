@@ -302,8 +302,10 @@ def build_chat_system_prompt(
             "the org's spec template you must fill: "
         )
         comp_instruction = (
-            "Salary is in AED by default — don't ask about currency unless the "
-            "recruiter raises it. "
+            "NEVER ask about salary, compensation, pay, or budget — that's set by "
+            "HR / People outside this chat, and the spec is complete without it. "
+            "Don't raise it even if it looks missing. (If they volunteer a figure, "
+            "capture it — just never ask.) "
         )
         closing = (
             "ALWAYS keep momentum: every reply asks the next most useful "
