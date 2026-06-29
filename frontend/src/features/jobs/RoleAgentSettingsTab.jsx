@@ -45,7 +45,6 @@ const RoleAgentSettingsTab = ({
   const above = Math.max(0, total - belowThresholdCount);
   const sliderValue = thresholdDraft !== '' ? Number(thresholdDraft) : (thresholdValue ?? 55);
   const thresholdDisplay = Math.max(0, Math.min(100, sliderValue));
-  const mustHaves = Array.isArray(role?.must_haves) ? role.must_haves : [];
   // Read the cap from the role record (the field PATCH writes, refreshed on
   // save) first; agent/status only echoes it on a 30s poll, so preferring
   // the poll makes a fresh save look like it didn't take. Spend stays live
@@ -450,19 +449,9 @@ const RoleAgentSettingsTab = ({
           )}
         </div>
 
-        <div className="mc-agent-settings-side-card">
-          <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>MUST-HAVE REQUIREMENTS</div>
-          <p className="mc-agent-settings-card-help" style={{ marginBottom: 10 }}>The agent rejects below these — no exceptions.</p>
-          {mustHaves.length ? (
-            <ul className="mc-agent-settings-mustlist">
-              {mustHaves.map((item, idx) => (
-                <li key={`${item}-${idx}`}>· {item}</li>
-              ))}
-            </ul>
-          ) : (
-            <div className="mc-agent-settings-card-help">No must-haves set yet.</div>
-          )}
-        </div>
+        {/* The scoring requirements (must-haves, nice-to-haves, dealbreakers)
+            are edited above in the Role criteria editor — no separate read-only
+            must-have card here, so there's one source of truth. */}
 
         <div className="mc-agent-settings-side-card">
           <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>PAUSE THRESHOLD</div>
