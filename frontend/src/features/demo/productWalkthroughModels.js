@@ -580,8 +580,25 @@ export const AI_SHOWCASE_APPLICATION_EVENTS = [
   { id: 9102, event_type: 'cv_scored', created_at: '2026-04-19T09:14:00.000Z', metadata: { role_fit_score: 78 } },
   { id: 9103, event_type: 'assessment_invited', created_at: '2026-04-19T15:30:00.000Z', metadata: {}, description: 'GenAI Production Readiness Review' },
   { id: 9104, event_type: 'assessment_completed', created_at: '2026-04-21T10:36:00.000Z', metadata: {}, description: 'Scored 84 / 100 · 7 of 8 release-safety tests passing' },
-  { id: 9105, event_type: 'advanced', created_at: '2026-04-21T14:20:00.000Z', metadata: {}, description: 'Advanced to technical panel' },
+  { id: 9105, event_type: 'decision_recommended', created_at: '2026-04-21T14:20:00.000Z', metadata: {}, description: 'Agent recommends advancing to the technical panel' },
 ];
+
+// Pending agent decision for the showcase candidate — the deterministic
+// recommendation the recruiter sees on the standing report. Powers the decision
+// rail's recommendation slab + the "why this verdict" reasoning, so the demo
+// shows a real agent decision instead of the "not yet decided" placeholder.
+export const AI_SHOWCASE_AGENT_DECISION = {
+  id: 9301,
+  application_id: AI_SHOWCASE_APPLICATION.id,
+  status: 'pending',
+  decision_type: 'advance_to_interview',
+  candidate_name: AI_SHOWCASE_APPLICATION.candidate_name,
+  role_name: AI_SHOWCASE_APPLICATION.role_name,
+  taali_score: 81,
+  confidence: 0.92,
+  reasoning:
+    'Strong work sample on the GenAI Production Readiness Review: Priya shipped the smallest safe patch that closes the launch-blocking release-safety failures (7 of 8 tests green) and gated the medium-confidence, high-risk path before touching code. Role-fit 78 with an assessment of 84 clears the bar comfortably — advance to the technical panel.',
+};
 
 export const PRODUCT_WALKTHROUGH = {
   runtime: {

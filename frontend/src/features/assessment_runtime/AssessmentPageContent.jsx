@@ -195,7 +195,14 @@ export default function AssessmentPage({
   const [demoSaveCount, setDemoSaveCount] = useState(0);
   const [outputPanelOpen, setOutputPanelOpen] = useState(false);
   const [assessmentLightMode, setAssessmentLightMode] = useState(readAssessmentLightModePreference);
-  const [repoPanelCollapsed, setRepoPanelCollapsed] = useState(false);
+  // Demo/deck showcase opens TWO-PART: the repo file-tree starts collapsed so
+  // the workspace reads as Claude + the editor (the two work surfaces) rather
+  // than a cramped three-column layout. Live candidates keep the repo expanded.
+  const [repoPanelCollapsed, setRepoPanelCollapsed] = useState(demoMode);
+  // `demoMode` can resolve AFTER the initial mount, so the static initial state
+  // above only catches the synchronous case — collapse the repo once demoMode
+  // is known. (Runs once; the recruiter/candidate can still toggle it open.)
+  useEffect(() => { if (demoMode) setRepoPanelCollapsed(true); }, [demoMode]);
   const [assistantPanelCollapsed, setAssistantPanelCollapsed] = useState(false);
   const [collapsedRepoDirs, setCollapsedRepoDirs] = useState({});
   const codeRef = useRef("");
@@ -227,7 +234,8 @@ export default function AssessmentPage({
     setDemoRunCount(0);
     setDemoSaveCount(0);
     setOutputPanelOpen(false);
-    setRepoPanelCollapsed(false);
+    // Demo/deck opens two-part (repo collapsed to a slim rail); live expands.
+    setRepoPanelCollapsed(demoMode);
     setAssistantPanelCollapsed(false);
     milestoneFlagsRef.current = { halfway: false, warning80: false, warning90: false };
     setTimeMilestoneNotice(null);
@@ -849,7 +857,7 @@ export default function AssessmentPage({
       />
 
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[90rem] px-4 py-4 lg:px-8 lg:py-5">
+        <div className={`${demoMode ? 'w-full' : 'mx-auto max-w-[90rem]'} px-4 py-4 lg:px-8 lg:py-5`}>
           <AssessmentStagePanel twoStage={assessment?.task?.two_stage} />
           <AssessmentContextWindow
             ref={contextWindowRef}
@@ -866,7 +874,7 @@ export default function AssessmentPage({
 
           <AssessmentWorkspace
             className="mt-4"
-            staticAssistantPanelWidth={demoMode ? 480 : undefined}
+            staticAssistantPanelWidth={demoMode ? 620 : undefined}
             hasRepoStructure={hasRepoStructure}
             modifiedRepoPaths={modifiedRepoPaths}
             repoFileTree={repoFileTree}

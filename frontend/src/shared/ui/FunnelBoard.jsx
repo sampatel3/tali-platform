@@ -50,20 +50,20 @@ export const FunnelBoard = ({
             const value = Number(stageCounts?.[stage.key] || 0);
             const tone = funnelStageTone(stage.key, value);
             const chips = decisionRow[stage.key] || [];
-            // Assessment lifecycle sub-counts beneath the Invited stage — the
-            // delivered → opened → in-progress progression (cumulative, each
-            // nests in the previous). Deduped: a step only shows when it exceeds
-            // the more-advanced one, so sparse delivery-webhook data (delivered
-            // == opened == in-progress) collapses to just "in progress". "Sent"
-            // is the stage value itself; "completed" is the Completed stage.
+            // Assessment lifecycle sub-counts beneath the Invited stage. Each
+            // sub-stage is shown EXPLICITLY — delivered, opened, started — so the
+            // recruiter sees the full progression (cumulative: delivered ≥ opened
+            // ≥ started). "Sent" is the stage value itself; "completed" is the
+            // Completed stage. (When delivery-webhook data is sparse the three
+            // can coincide; that's the real data, not a display collapse.)
             const invitedChips = [];
             if (stage.key === 'invited') {
-              const inProg = Number(stageCounts?.in_assessment || 0);
+              const started = Number(stageCounts?.in_assessment || 0);
               const opened = Number(stageCounts?.invited_opened || 0);
               const delivered = Number(stageCounts?.invited_delivered || 0);
-              if (delivered > opened) invitedChips.push({ key: 'delivered', count: delivered, label: 'delivered', tone: 'pending', tip: 'Invites delivered to the candidate (Resend) — a sub-count of Invited' });
-              if (opened > inProg) invitedChips.push({ key: 'opened', count: opened, label: 'opened', tone: 'pending', tip: 'Invite emails opened — a sub-count of Invited' });
-              if (inProg > 0) invitedChips.push({ key: 'inprog', count: inProg, label: 'in progress', tone: 'send', tip: 'Assessments started, not yet completed — a sub-count of Invited' });
+              if (delivered > 0) invitedChips.push({ key: 'delivered', count: delivered, label: 'delivered', tone: 'pending', tip: 'Invites delivered to the candidate (Resend) — a sub-count of Invited' });
+              if (opened > 0) invitedChips.push({ key: 'opened', count: opened, label: 'opened', tone: 'pending', tip: 'Invite emails opened — a sub-count of Invited' });
+              if (started > 0) invitedChips.push({ key: 'started', count: started, label: 'started', tone: 'send', tip: 'Assessments started, not yet completed — a sub-count of Invited' });
             }
             return (
               <div
