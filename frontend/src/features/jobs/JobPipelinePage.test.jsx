@@ -284,7 +284,7 @@ Banking transformation experience
     expect(screen.queryByText(/\*\*Location:\*\*/)).not.toBeInTheDocument();
 
     // Open the Job spec tab to access the formatted description.
-    fireEvent.click(screen.getByRole('link', { name: /^Job spec$/i }));
+    fireEvent.click(screen.getByRole('link', { name: /^Job Specification$/i }));
 
     expect(container.querySelector('.role-desc-summary')).toHaveTextContent(/The Portfolio Lead and Business Manager is a high-impact leadership position/i);
     expect(container.querySelector('.role-desc-summary')).not.toHaveTextContent(/DeepLight AI is a specialist AI and data consultancy/i);
@@ -418,7 +418,7 @@ Banking transformation experience
     // the formatted Workable-ingested description + "At a glance" sidebar.
     // The pipeline-activity timeline that previously lived under this label
     // was a leftover from the v1 5-tab layout and is gone in v2.
-    fireEvent.click(screen.getByRole('link', { name: /^Job spec$/i }));
+    fireEvent.click(screen.getByRole('link', { name: /^Job Specification$/i }));
     expect(await screen.findByRole('button', { name: /Read full description/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /At a glance/i })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /Pipeline activity/i })).not.toBeInTheDocument();

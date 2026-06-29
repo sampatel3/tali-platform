@@ -64,9 +64,6 @@ export function RequisitionSpecSections({ requisition }) {
       </div>
       {r.summary ? <p>{r.summary}</p> : null}
       <SpecList label="What you'll do" items={r.responsibilities} />
-      <SpecList label="Must have" items={r.must_haves} />
-      <SpecList label="Nice to have" items={r.preferred} />
-      <SpecList label="Dealbreakers" items={r.dealbreakers} />
       {r.success_profile ? (
         <div className="req-group">
           <div className="req-subhead">What great looks like</div>
@@ -74,6 +71,13 @@ export function RequisitionSpecSections({ requisition }) {
         </div>
       ) : null}
       <SpecList label="What matters most" items={priorities} />
+      {/* The scoring requirements — must-haves, nice-to-haves, dealbreakers —
+          live on the Agent settings tab now (they drive candidate scoring and
+          are editable there), so they're not duplicated here. */}
+      <p className="req-reqs-note">
+        Must-haves, nice-to-haves &amp; dealbreakers live on the
+        {' '}<strong>Agent settings</strong> tab — they drive scoring and can be edited there.
+      </p>
     </div>
   );
 }
