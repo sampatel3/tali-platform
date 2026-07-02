@@ -47,6 +47,15 @@ done' is the only signal available, and you become the verification loop."*
 Simon Willison's long-standing personal rule is the human version of the same
 idea — don't commit code you couldn't explain to someone else.
 
+Shopify's head of engineering, Farhan Thawar, makes the organizational version
+of the argument in his Compile 26 talk, [*"What Is Your Job
+Now?"*](https://www.youtube.com/watch?v=ByOF8qByGHU) — when AI writes most of
+the code, [**the bottleneck always
+moves**](https://www.youtube.com/watch?v=ByOF8qByGHU&t=273s): generation gets
+cheap, so the constraint shifts downstream to review, judgment, and deciding
+what's worth building. Shopify still doesn't let AI check code into its repos
+unreviewed; a human owns every merge.
+
 **2. AI amplifies expertise; it doesn't replace it.** The most-cited evidence
 here is uncomfortable: in a randomized trial by [METR](https://metr.org/blog/2025-07-10-early-2025-ai-experienced-os-dev-study/),
 experienced open-source developers were **~19% slower** with AI tools on their
@@ -84,6 +93,17 @@ four disciplines.
 ---
 
 # Part 1 — AI-native coding
+
+Start with what the job *is* now. In [*"What Is Your Job
+Now?"*](https://www.youtube.com/watch?v=ByOF8qByGHU) (Compile 26), Shopify's
+Farhan Thawar walks through [how the SDLC itself is
+shifting](https://www.youtube.com/watch?v=ByOF8qByGHU&t=55s) once agents write
+most of the code: the engineer's day moves from authoring lines to directing
+parallel agents, reviewing their output, and merging what survives scrutiny —
+with the hard-won caveat that [a prototype is not
+production](https://www.youtube.com/watch?v=ByOF8qByGHU&t=1179s). The loop
+below — memory, plan, skills, context, verification — is that new job
+description in practice.
 
 ## Give the agent a memory: `CLAUDE.md` and `AGENTS.md`
 
@@ -255,6 +275,11 @@ remarkably consistent across code and knowledge work:
   longer write from scratch… if your ability to read doesn't scale with the
   agent's ability to output, you're not engineering, you're
   hoping."*](https://addyo.substack.com/p/the-80-problem-in-agentic-coding)
+  Thawar's framing of the same risk: [**learning is the
+  collateral**](https://www.youtube.com/watch?v=ByOF8qByGHU&t=193s) — delegate
+  the typing, not the understanding. His rule of thumb is that engineers should
+  still understand the system two or three layers below where they work, and
+  use the agent to accelerate that learning rather than skip it.
 - **Hallucinated facts, generic slop, and lost voice** — the knowledge-work
   equivalents, all preventable with verification and intent.
 
@@ -288,6 +313,14 @@ Individual habits become culture when companies build for them:
   and made technical work "agent-first."
 - **Enablement, not mandates-only.** GitHub runs an internal ["AI for Everyone"
   champions network](https://github.com/resources/insights/activating-internal-ai-champions).
+- **Culture set from the top.** Shopify made [reflexive AI usage a baseline
+  expectation](https://www.youtube.com/watch?v=ByOF8qByGHU&t=478s) via CEO Tobi
+  Lütke's 2025 memo — teams must show why AI *can't* do a job before asking for
+  headcount, AI usage is part of performance reviews, and progress is judged by
+  weekly demos rather than output metrics. The same conviction runs down to
+  hiring: Thawar's team is [hiring ~1,000
+  interns](https://www.youtube.com/watch?v=ByOF8qByGHU&t=677s) on the bet that
+  AI-native juniors plus agents outrun headcount-as-usual.
 - **Non-engineering, too.** McKinsey's [Lilli](https://www.mckinsey.com/capabilities/tech-and-ai/how-we-help-clients/rewiring-the-way-mckinsey-works-with-lilli)
   reaches ~75% of staff monthly; Anthropic's [legal team](https://claude.com/blog/how-anthropic-uses-claude-legal)
   cut a marketing-review turnaround from 2–3 days to 24 hours with a legal
@@ -346,6 +379,8 @@ Everything above, grouped so you can go deeper.
   [AWS Kiro specs](https://kiro.dev/docs/specs/)
 
 **Practitioners**
+- Farhan Thawar (Shopify): [What Is Your Job Now? — Compile 26](https://www.youtube.com/watch?v=ByOF8qByGHU)
+  — how the SDLC shifts when agents write most of the code
 - Simon Willison: [Vibe engineering](https://simonwillison.net/2025/Oct/7/vibe-engineering/) ·
   [Designing agentic loops](https://simonwillison.net/2025/Sep/30/designing-agentic-loops/)
 - Addy Osmani: [The 70% Problem](https://addyo.substack.com/p/the-70-problem-hard-truths-about) ·

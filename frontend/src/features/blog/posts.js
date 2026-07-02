@@ -18,7 +18,7 @@ export const POSTS = [
     title: 'Working AI-Native: A Field Guide to Coding and Knowledge Work in 2026',
     date: '2026-06-27',
     author: 'Taali',
-    readingMinutes: 14,
+    readingMinutes: 15,
     description:
       'The durable craft of working with AI — for engineers and everyone else. What the best practitioners actually do, what separates them from the people producing “workslop”, and the primary sources to learn it from.',
     body: bodyOf(aiNativeRaw),
