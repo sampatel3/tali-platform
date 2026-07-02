@@ -294,8 +294,11 @@ export const extractRequirementEvidence = (item) => {
 
 export const extractRequirementKey = (item, fallbackIndex = 0) => {
   if (!item) return String(fallbackIndex);
-  if (item.requirement_id != null) return String(item.requirement_id);
-  if (item.criterion_id != null) return String(item.criterion_id);
+  // normalizeRequirementRow backfills requirement_id with '' when the row has
+  // no id at all — a blank id is "no id", not a usable key (every row would
+  // share the '' key and React would warn about duplicate children).
+  const id = item.requirement_id ?? item.criterion_id;
+  if (id != null && String(id).trim() !== '') return String(id);
   const label = (item.requirement || '').toString();
   return label ? `${label}-${fallbackIndex}` : String(fallbackIndex);
 };
