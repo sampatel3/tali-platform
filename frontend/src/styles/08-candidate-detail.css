@@ -1232,10 +1232,10 @@ body.interview-view .page {
   backdrop-filter: none;
 }
 
-/* Section kickers above each migrated evidence block (AI usage, code/git,
-   timeline) get a little breathing room so they don't crowd the card above. */
-.report-assessment-evidence > section > .mc-kicker {
-  margin-bottom: 10px;
+/* The raw-evidence kicker gets a little breathing room so it doesn't crowd
+   the scorecard above. */
+.report-assessment-evidence > .mc-kicker {
+  margin-bottom: 8px;
 }
 
 .dim {
