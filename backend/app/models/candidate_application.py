@@ -73,6 +73,15 @@ class CandidateApplication(Base):
     # badge and the candidate can be parked in Tali's terminal `advanced` stage.
     workable_disqualified = Column(Boolean, nullable=True)
     workable_disqualified_at = Column(DateTime(timezone=True), nullable=True)
+    # Per-application Workable context. Workable candidate ids — and their
+    # answers/comments/activities — are per JOB APPLICATION, but Taali dedups
+    # people into one Candidate row, so a person on N roles has N Workable
+    # payloads fighting over the candidate-level fields (last sync wins).
+    # Scoring context and the Notes tab read these per-application copies
+    # first and only fall back to the candidate-level fields for legacy rows.
+    workable_answers = Column(JSON, nullable=True)
+    workable_comments = Column(JSON, nullable=True)
+    workable_activities = Column(JSON, nullable=True)
     rank_score = Column(Float, nullable=True)
     last_synced_at = Column(DateTime(timezone=True), nullable=True)
 

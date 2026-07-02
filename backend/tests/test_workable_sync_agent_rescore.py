@@ -172,8 +172,12 @@ def test_agent_on_role_does_not_rescore_on_context_change(db):
     enqueued, stale_calls = _sync_and_collect_rescore_calls(db, org=org, role=role)
     assert app.id not in enqueued, "sync must never enqueue a paid rescore"
     assert not stale_calls, "sync must never invalidate existing scores"
-    # The new data still lands for display / the next approved evaluation.
+    # The new data still lands for display / the next approved evaluation —
+    # on the application's own per-role copy as well as the shared
+    # candidate-level fallback.
     assert candidate.workable_comments[0]["body"] == "Asking for 65k"
+    assert app.workable_comments[0]["body"] == "Asking for 65k"
+    assert app.workable_activities == []
     # And the existing scores survive (the sync's free field refresh may
     # recompute derived display values, but never NULLs a real score).
     assert app.pre_screen_score_100 is not None
