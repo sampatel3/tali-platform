@@ -99,6 +99,7 @@ export const isPublicPath = (pathname = '', search = '') => {
     || pathname.startsWith('/job/')
     || pathname.startsWith('/careers/')
     || pathname.startsWith('/intake/')
+    || pathname === '/showcase'
     || pathname.startsWith('/showcase/')) {
     return true;
   }
