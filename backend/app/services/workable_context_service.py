@@ -48,6 +48,43 @@ from .workable_context_parsers import (
 logger = logging.getLogger(__name__)
 
 
+# ── Per-application context resolution ─────────────────────────────────
+# Workable candidate ids — and their answers/comments/activities — are per
+# JOB APPLICATION, but people are deduped into one Candidate row, so the
+# candidate-level fields hold whichever application synced last. Readers
+# prefer the application's own copy and fall back to the candidate-level
+# fields only for legacy rows synced before the per-application columns.
+
+
+def _resolved_answers(
+    candidate: Candidate | None, application: CandidateApplication | None
+) -> Any:
+    if application is not None and isinstance(application.workable_answers, list):
+        return application.workable_answers
+    if candidate is None:
+        return None
+    workable_data = (
+        candidate.workable_data if isinstance(candidate.workable_data, dict) else {}
+    )
+    return workable_data.get("answers")
+
+
+def _resolved_comments(
+    candidate: Candidate | None, application: CandidateApplication | None
+) -> Any:
+    if application is not None and isinstance(application.workable_comments, list):
+        return application.workable_comments
+    return candidate.workable_comments if candidate is not None else None
+
+
+def _resolved_activities(
+    candidate: Candidate | None, application: CandidateApplication | None
+) -> Any:
+    if application is not None and isinstance(application.workable_activities, list):
+        return application.workable_activities
+    return candidate.workable_activities if candidate is not None else None
+
+
 def format_workable_context(
     candidate: Candidate | None,
     application: CandidateApplication | None = None,
@@ -103,8 +140,7 @@ def format_workable_context(
         )
 
     # ── Questionnaire answers (this is what LinkedIn applicants fill) ─
-    workable_data = candidate.workable_data if isinstance(candidate.workable_data, dict) else {}
-    answers = workable_data.get("answers")
+    answers = _resolved_answers(candidate, application)
     if isinstance(answers, list) and answers:
         formatted_answers = [
             line for line in (_format_answer(a) for a in answers[:_MAX_ANSWERS]) if line
@@ -187,11 +223,12 @@ def format_workable_context(
             )
 
     # ── Recruiter comments ────────────────────────────────────────────
-    if isinstance(candidate.workable_comments, list) and candidate.workable_comments:
+    ctx_comments = _resolved_comments(candidate, application)
+    if isinstance(ctx_comments, list) and ctx_comments:
         formatted = [
             line
             for line in (
-                _format_comment(c) for c in candidate.workable_comments[:_MAX_COMMENTS]
+                _format_comment(c) for c in ctx_comments[:_MAX_COMMENTS]
             )
             if line
         ]
@@ -203,11 +240,12 @@ def format_workable_context(
             )
 
     # ── Activity log ──────────────────────────────────────────────────
-    if isinstance(candidate.workable_activities, list) and candidate.workable_activities:
+    ctx_activities = _resolved_activities(candidate, application)
+    if isinstance(ctx_activities, list) and ctx_activities:
         formatted = [
             line
             for line in (
-                _format_activity(a) for a in candidate.workable_activities[:_MAX_ACTIVITIES]
+                _format_activity(a) for a in ctx_activities[:_MAX_ACTIVITIES]
             )
             if line
         ]
@@ -228,13 +266,16 @@ def format_workable_context(
 # comment / answer / activity says. Bounded by the same caps as the prompt.
 
 
-def workable_questionnaire_answers(candidate: Candidate | None) -> list[dict[str, str]]:
-    """Structured ``[{question, answer}]`` from the candidate's Workable
-    questionnaire / LinkedIn-apply answers. Empty list when none."""
-    if candidate is None:
+def workable_questionnaire_answers(
+    candidate: Candidate | None,
+    application: CandidateApplication | None = None,
+) -> list[dict[str, str]]:
+    """Structured ``[{question, answer}]`` from the Workable questionnaire /
+    LinkedIn-apply answers — this application's own when stored, otherwise
+    the candidate-level legacy copy. Empty list when none."""
+    if candidate is None and application is None:
         return []
-    workable_data = candidate.workable_data if isinstance(candidate.workable_data, dict) else {}
-    answers = workable_data.get("answers")
+    answers = _resolved_answers(candidate, application)
     if not isinstance(answers, list):
         return []
     out: list[dict[str, str]] = []
@@ -245,16 +286,20 @@ def workable_questionnaire_answers(candidate: Candidate | None) -> list[dict[str
     return out
 
 
-def workable_recruiter_comments(candidate: Candidate | None) -> list[dict[str, str | None]]:
+def workable_recruiter_comments(
+    candidate: Candidate | None,
+    application: CandidateApplication | None = None,
+) -> list[dict[str, str | None]]:
     """Structured ``[{author, created_at, body}]`` recruiter notes synced from
     Workable — true comments plus recruiter ratings that carry a written note.
 
-    Comments come from ``workable_comments``; ratings are pulled from
+    Comments come from ``workable_comments`` (this application's own when
+    stored, candidate-level legacy copy otherwise); ratings are pulled from
     ``workable_activities`` (where the sync stores them) so a recruiter
     evaluation added after the decision still shows on the profile. Ratings are
     surfaced here only — they are deliberately kept out of ``workable_comments``
     storage so they never enter the pre-screen scoring context. Newest first."""
-    if candidate is None:
+    if candidate is None and application is None:
         return []
     out: list[dict[str, str | None]] = []
 
@@ -271,11 +316,11 @@ def workable_recruiter_comments(candidate: Candidate | None) -> list[dict[str, s
             }
         )
 
-    comments = candidate.workable_comments
+    comments = _resolved_comments(candidate, application)
     if isinstance(comments, list):
         for entry in comments:
             _append(entry)
-    activities = candidate.workable_activities
+    activities = _resolved_activities(candidate, application)
     if isinstance(activities, list):
         for entry in activities:
             if _is_rating_note(entry):
@@ -285,12 +330,16 @@ def workable_recruiter_comments(candidate: Candidate | None) -> list[dict[str, s
     return out[:_MAX_COMMENTS]
 
 
-def workable_activity_log(candidate: Candidate | None) -> list[dict[str, str | None]]:
+def workable_activity_log(
+    candidate: Candidate | None,
+    application: CandidateApplication | None = None,
+) -> list[dict[str, str | None]]:
     """Structured ``[{action, stage, body, created_at}]`` activity entries
-    synced from Workable. Empty list when none."""
-    if candidate is None:
+    synced from Workable — this application's own when stored, otherwise the
+    candidate-level legacy copy. Empty list when none."""
+    if candidate is None and application is None:
         return []
-    activities = candidate.workable_activities
+    activities = _resolved_activities(candidate, application)
     if not isinstance(activities, list):
         return []
     out: list[dict[str, str | None]] = []

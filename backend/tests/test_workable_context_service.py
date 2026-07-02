@@ -477,3 +477,57 @@ def test_activity_log_excludes_rating_notes_to_avoid_duplication():
     assert all(not (r["action"] == "rating" and r["body"]) for r in rows)
     # …and it shows up as a note instead.
     assert any(n["body"] == "Strong, hire." for n in workable_recruiter_comments(cand))
+
+
+# ── Per-application context isolation ──────────────────────────────────
+# Workable answers/comments/activities are per JOB APPLICATION; the
+# candidate-level fields hold whichever application synced last. Readers
+# must prefer the application's own copy so a person applying to several
+# roles never has role B's answers scored/displayed against role A.
+
+
+def _answer(question: str, body: str) -> dict:
+    return {"question": {"body": question}, "body": body}
+
+
+def test_application_context_preferred_over_candidate_level():
+    cand = _candidate(
+        # Candidate row currently holds ROLE B's payload (it synced last).
+        workable_data={"answers": [_answer("Salary?", "90k (role B)")]},
+        workable_comments=[{"body": "Role B note", "member": {"name": "R"}}],
+        workable_activities=[{"action": "applied", "stage_name": "Applied (role B)"}],
+    )
+    app_a = CandidateApplication(
+        organization_id=1,
+        candidate_id=1,
+        role_id=1,
+        workable_answers=[_answer("Salary?", "70k (role A)")],
+        workable_comments=[{"body": "Role A note", "member": {"name": "R"}}],
+        workable_activities=[{"action": "applied", "stage_name": "Applied (role A)"}],
+    )
+    out = format_workable_context(cand, app_a)
+    assert "70k (role A)" in out
+    assert "90k (role B)" not in out
+    assert "Role A note" in out
+    assert "Role B note" not in out
+
+    assert workable_questionnaire_answers(cand, app_a)[0]["answer"] == "70k (role A)"
+    assert workable_recruiter_comments(cand, app_a)[0]["body"] == "Role A note"
+    assert workable_activity_log(cand, app_a)[0]["stage"] == "Applied (role A)"
+
+
+def test_legacy_application_falls_back_to_candidate_level():
+    """Apps synced before the per-application columns (all NULL) keep
+    reading the candidate-level copies."""
+    cand = _candidate(
+        workable_data={"answers": [_answer("Salary?", "80k")]},
+        workable_comments=[{"body": "Legacy note", "member": {"name": "R"}}],
+        workable_activities=[{"action": "applied", "stage_name": "Applied"}],
+    )
+    legacy_app = CandidateApplication(organization_id=1, candidate_id=1, role_id=1)
+    out = format_workable_context(cand, legacy_app)
+    assert "80k" in out
+    assert "Legacy note" in out
+    assert workable_questionnaire_answers(cand, legacy_app)[0]["answer"] == "80k"
+    assert workable_recruiter_comments(cand, legacy_app)[0]["body"] == "Legacy note"
+    assert workable_activity_log(cand, legacy_app)[0]["stage"] == "Applied"

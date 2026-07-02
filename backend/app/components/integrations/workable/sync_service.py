@@ -1818,7 +1818,12 @@ class WorkableSyncService:
     # per-candidate API pressure the freeze was built to avoid.
     _RESOLVED_ACTIVITIES_REFRESH_INTERVAL = timedelta(hours=6)
 
-    def _refresh_candidate_activities(self, candidate: Candidate, candidate_id: str) -> None:
+    def _refresh_candidate_activities(
+        self,
+        candidate: Candidate,
+        candidate_id: str,
+        application: CandidateApplication | None = None,
+    ) -> tuple[list, list] | None:
         """Pull the Workable activity feed and store it on the candidate.
 
         Workable's activities feed is the authoritative source for both
@@ -1832,9 +1837,16 @@ class WorkableSyncService:
         serialization time (see ``workable_recruiter_comments``) so they show
         in the UI without leaking recruiter opinion into scoring.
 
+        ``candidate_id`` is the PER-APPLICATION Workable id, so the fetched
+        feed belongs to one application. When ``application`` is given the
+        split is stored on it too — the candidate-level fields are shared
+        across a person's applications (last sync wins) and remain only as
+        a legacy fallback for readers.
+
         ``None`` from the client means the fetch failed; we only overwrite
         stored rows on a successful response so a transient error never
-        clobbers good data. ``WorkableRateLimitError`` is re-raised for the
+        clobbers good data — and return ``None`` so callers can skip their
+        own writes too. ``WorkableRateLimitError`` is re-raised for the
         caller's rate-limit handling.
         """
         try:
@@ -1844,10 +1856,15 @@ class WorkableSyncService:
                 other_entries = [a for a in activities if a.get("action") != "comment"]
                 candidate.workable_comments = sanitize_json_for_storage(comment_entries)
                 candidate.workable_activities = sanitize_json_for_storage(other_entries)
+                if application is not None:
+                    application.workable_comments = candidate.workable_comments
+                    application.workable_activities = candidate.workable_activities
+                return comment_entries, other_entries
         except WorkableRateLimitError:
             raise
         except Exception:
             logger.debug("Workable activities fetch failed for candidate_id=%s", candidate_id)
+        return None
 
     def _activities_refresh_due(self, last_fetch_iso: str | None, now: datetime) -> bool:
         """True when a frozen candidate's activity feed is due for a refresh.
@@ -2051,7 +2068,9 @@ class WorkableSyncService:
                     .first()
                 )
                 if frozen_candidate is not None:
-                    self._refresh_candidate_activities(frozen_candidate, candidate_id)
+                    self._refresh_candidate_activities(
+                        frozen_candidate, candidate_id, application=existing
+                    )
                     activities_fetched_at = now.isoformat()
 
             existing.integration_sync_state = sanitize_json_for_storage(
@@ -2135,8 +2154,10 @@ class WorkableSyncService:
         # Refresh the Workable activity feed (timeline + recruiter
         # comments/ratings) on full enrichment. See
         # ``_refresh_candidate_activities`` for the split and error policy.
+        # The split is applied to the application row below, once it exists.
+        activities_split = None
         if mode == "full":
-            self._refresh_candidate_activities(candidate, candidate_id)
+            activities_split = self._refresh_candidate_activities(candidate, candidate_id)
 
         db.flush()
         counters["candidate_upserted"] += 1
@@ -2190,6 +2211,19 @@ class WorkableSyncService:
                 reason="Imported from Workable",
             )
         app.workable_candidate_id = sanitize_text_for_storage(candidate_id)
+        if mode == "full":
+            # Per-application Workable context. ``candidate_payload`` and the
+            # activities fetch above are keyed by THIS application's Workable
+            # id, so they belong here — the candidate-level copies are shared
+            # across a person's applications and kept only as legacy fallback.
+            if isinstance(candidate_payload, dict) and "answers" in candidate_payload:
+                app.workable_answers = sanitize_json_for_storage(
+                    candidate_payload.get("answers")
+                )
+            if activities_split is not None:
+                comment_entries, other_entries = activities_split
+                app.workable_comments = sanitize_json_for_storage(comment_entries)
+                app.workable_activities = sanitize_json_for_storage(other_entries)
         if not _stage_overwrite_blocked(app, stage):
             app.workable_stage = sanitize_text_for_storage(str(stage or ""))
             app.external_stage_raw = sanitize_text_for_storage(str(stage or ""))
