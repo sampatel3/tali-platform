@@ -78,7 +78,10 @@ const isAuthEndpoint = (url = '') => (
   || url.includes('/auth/sso-')
 );
 
-const isPublicPath = (pathname = '', search = '') => {
+// Exported for tests: the 401 interceptor must never bounce these
+// marketing/public routes to /login (a stale token in localStorage plus a
+// failed bootstrap call would otherwise hijack a public page).
+export const isPublicPath = (pathname = '', search = '') => {
   if (pathname === '/'
     || pathname.startsWith('/login')
     || pathname.startsWith('/register')
@@ -86,6 +89,8 @@ const isPublicPath = (pathname = '', search = '') => {
     || pathname.startsWith('/reset-password')
     || pathname.startsWith('/verify-email')
     || pathname.startsWith('/demo')
+    || pathname.startsWith('/blog')
+    || pathname.startsWith('/developers')
     || pathname.startsWith('/c/')
     || pathname.startsWith('/share/')
     || pathname.startsWith('/report/')
