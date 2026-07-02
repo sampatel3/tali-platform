@@ -1,12 +1,17 @@
-"""Sync's agent-driven rescore trigger.
+"""Syncs never dispatch paid re-scoring.
 
-When an existing application on an agent-on role picks up new
-questionnaire answers, recruiter comments, or activity entries — AND
-the application already has scoring history — sync must enqueue a
-rescore so pre-screen / cv_match see the new context.
+Policy (2026-07-02): a Workable sync stores fresh data (answers,
+comments, activities, profile fields) but NEVER re-scores an
+already-scored application — no matter what changed. Re-evaluation of
+existing scores is recruiter-triggered only, via the agent-chat flow
+that quotes the estimated cost first.
 
-Starred-only roles (no agent) must NOT trigger a rescore. Starring is
-for keeping data fresh; the agent is what acts on changes.
+The old auto-rescore-on-context-change trigger looped forever on
+candidates with applications on multiple agent-on roles (each role's
+sync overwrote the shared candidate row, so the context "changed" on
+every alternate sync) and silently burned API credits. The first three
+tests are the regression guard against reintroducing any sync-driven
+rescore; the rest cover the data-storage semantics that remain.
 """
 
 from __future__ import annotations
@@ -140,26 +145,42 @@ def _run_one_candidate_sync(
     )
 
 
-def test_agent_on_role_with_existing_score_enqueues_rescore_on_comment_change(db):
-    org, role, _, app = _build_org_role_candidate_app(
-        db,
-        org_slug="agent-on-rescore",
-        agentic=True,
-        starred=True,  # agent-on always implies starred via auto-star
-        pre_screen_score=72.0,
-        cv_match_score=None,
-    )
+def _sync_and_collect_rescore_calls(db, *, org, role):
     with patch(
         "app.services.cv_score_orchestrator.enqueue_score",
         return_value=None,
-    ) as mock_enqueue:
+    ) as mock_enqueue, patch(
+        "app.services.cv_score_orchestrator.mark_application_scores_stale",
+        return_value=True,
+    ) as mock_stale:
         _run_one_candidate_sync(db, org=org, role=role, new_comment_body="Asking for 65k")
-        called_app_ids = {call.args[1].id for call in mock_enqueue.call_args_list}
-        assert app.id in called_app_ids, "expected rescore enqueue for agent-on role"
+        enqueued = {call.args[1].id for call in mock_enqueue.call_args_list}
+        return enqueued, mock_stale.call_args_list
 
 
-def test_starred_only_role_does_not_enqueue_rescore(db):
-    """Starred without agent = passive data fetch, no acting on changes."""
+def test_agent_on_role_does_not_rescore_on_context_change(db):
+    """The scored app on an agent-on role stays untouched even though
+    the sync stored a genuinely new recruiter comment."""
+    org, role, candidate, app = _build_org_role_candidate_app(
+        db,
+        org_slug="agent-on-no-auto-rescore",
+        agentic=True,
+        starred=True,  # agent-on always implies starred via auto-star
+        pre_screen_score=72.0,
+        cv_match_score=85.0,
+    )
+    enqueued, stale_calls = _sync_and_collect_rescore_calls(db, org=org, role=role)
+    assert app.id not in enqueued, "sync must never enqueue a paid rescore"
+    assert not stale_calls, "sync must never invalidate existing scores"
+    # The new data still lands for display / the next approved evaluation.
+    assert candidate.workable_comments[0]["body"] == "Asking for 65k"
+    # And the existing scores survive (the sync's free field refresh may
+    # recompute derived display values, but never NULLs a real score).
+    assert app.pre_screen_score_100 is not None
+    assert app.cv_match_score is not None
+
+
+def test_starred_only_role_does_not_rescore_on_context_change(db):
     org, role, _, app = _build_org_role_candidate_app(
         db,
         org_slug="starred-only-norescore",
@@ -168,20 +189,14 @@ def test_starred_only_role_does_not_enqueue_rescore(db):
         pre_screen_score=72.0,
         cv_match_score=85.0,
     )
-    with patch(
-        "app.services.cv_score_orchestrator.enqueue_score",
-        return_value=None,
-    ) as mock_enqueue:
-        _run_one_candidate_sync(db, org=org, role=role, new_comment_body="Asking for 65k")
-        called_app_ids = {call.args[1].id for call in mock_enqueue.call_args_list}
-        assert app.id not in called_app_ids, (
-            "starred-only role must not trigger agent-style rescore"
-        )
+    enqueued, stale_calls = _sync_and_collect_rescore_calls(db, org=org, role=role)
+    assert app.id not in enqueued
+    assert not stale_calls
 
 
-def test_agent_on_role_skips_rescore_when_never_scored(db):
-    """An app the agent hasn't started on yet should be left for the
-    agent's normal scoring pipeline, not auto-rescored on every sync."""
+def test_agent_on_role_never_scored_app_left_for_normal_pipeline(db):
+    """An app the agent hasn't scored yet is left for the agent's normal
+    new-candidate pipeline; the sync itself still dispatches nothing."""
     org, role, _, app = _build_org_role_candidate_app(
         db,
         org_slug="agent-on-norescore-no-history",
@@ -190,15 +205,9 @@ def test_agent_on_role_skips_rescore_when_never_scored(db):
         pre_screen_score=None,
         cv_match_score=None,
     )
-    with patch(
-        "app.services.cv_score_orchestrator.enqueue_score",
-        return_value=None,
-    ) as mock_enqueue:
-        _run_one_candidate_sync(db, org=org, role=role, new_comment_body="Asking for 65k")
-        called_app_ids = {call.args[1].id for call in mock_enqueue.call_args_list}
-        assert app.id not in called_app_ids, (
-            "should not rescore an app that's never been scored"
-        )
+    enqueued, stale_calls = _sync_and_collect_rescore_calls(db, org=org, role=role)
+    assert app.id not in enqueued
+    assert not stale_calls
 
 
 def test_empty_comments_response_overwrites_stale_stored_comments(db):

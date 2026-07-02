@@ -232,17 +232,31 @@ def test_extract_raw_scores_handles_no_override():
 
 
 def test_calibration_beat_tasks_registered_and_scheduled():
-    """Regression guard: both nightly calibration tasks must be (a) registered
-    on the worker (eager-imported in app/tasks/__init__.py) and (b) referenced
-    by the beat schedule. Otherwise beat fires names the worker drops as
-    unregistered and the model-refinement loop silently never runs."""
+    """Regression guard for the calibration tasks' scheduling contract.
+
+    ``recalibrate_cv_match`` is pure math over stored rows — free — so it
+    stays on the nightly beat schedule (and must be registered, or beat
+    fires a name the worker drops). ``score_terminal_for_calibration``
+    dispatches PAID Anthropic scoring, so per the no-auto-paid-jobs
+    policy (2026-07-02) it must be registered for explicit runs but must
+    NOT be on the beat schedule."""
     import app.tasks  # noqa: F401 — triggers the eager task imports
     from app.tasks.celery_app import celery_app
 
     scheduled = {entry["task"] for entry in celery_app.conf.beat_schedule.values()}
-    for name in (
-        "app.tasks.calibration_tasks.score_terminal_for_calibration",
-        "app.tasks.calibration_tasks.recalibrate_cv_match",
-    ):
-        assert name in celery_app.tasks, f"{name} not registered on the worker"
-        assert name in scheduled, f"{name} missing from beat_schedule"
+
+    free_task = "app.tasks.calibration_tasks.recalibrate_cv_match"
+    assert free_task in celery_app.tasks, f"{free_task} not registered on the worker"
+    assert free_task in scheduled, f"{free_task} missing from beat_schedule"
+
+    paid_task = "app.tasks.calibration_tasks.score_terminal_for_calibration"
+    assert paid_task in celery_app.tasks, f"{paid_task} not registered on the worker"
+    assert paid_task not in scheduled, (
+        f"{paid_task} dispatches paid scoring and must not run on a schedule"
+    )
+
+    paid_sweep = "app.tasks.scoring_tasks.sweep_stale_scores"
+    assert paid_sweep in celery_app.tasks, f"{paid_sweep} not registered on the worker"
+    assert paid_sweep not in scheduled, (
+        f"{paid_sweep} dispatches paid scoring and must not run on a schedule"
+    )

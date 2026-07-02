@@ -236,29 +236,18 @@ celery_app.conf.update(
             "task": "app.tasks.agent_tasks.agent_expire_stale_decisions",
             "schedule": 3600.0,
         },
-        # Safety net: find applications whose scores have been invalidated
-        # (NULL pre_screen_score with cv_text present + stale CvScoreJob
-        # row) and re-enqueue them. Hooks at the role-criteria, CV
-        # upload, and Workable-sync sites handle the common cases in
-        # real time; this catches anything that slips through (worker
-        # crash mid-batch, missed hook on a new mutation path, etc.).
-        "sweep-stale-scores-every-30-minutes": {
-            "task": "app.tasks.scoring_tasks.sweep_stale_scores",
-            "schedule": 1800.0,
-        },
-        # Model-refinement data prep. Runs nightly AFTER the 03:15 daily
-        # candidate sync so the day's freshly-decided candidates (Workable
-        # offer/hired/reject) are present. Scores any `advanced` candidate
-        # lacking a Tali score so the cv_match calibrator has (score ->
-        # outcome) pairs. Bounded per run; backlog drains over a few nights.
-        "score-terminal-for-calibration-nightly": {
-            "task": "app.tasks.calibration_tasks.score_terminal_for_calibration",
-            "schedule": crontab(hour=3, minute=45),
-        },
-        # Refit the cv_match calibrators from the day's (score -> outcome)
-        # pairs. Runs AFTER the terminal-scoring task so the fresh scores are
-        # included. Same scoring queue so snapshots land where apply_calibrator
-        # reads them at scoring time.
+        # NO auto re-scoring on a schedule. ``sweep_stale_scores`` and
+        # ``score_terminal_for_calibration`` are deliberately NOT here:
+        # both dispatch paid Anthropic scoring without a recruiter
+        # action. Stale scores stay visibly stale until the recruiter
+        # approves a re-evaluation (agent chat quotes the estimated
+        # cost, then kicks a one-shot ``sweep_stale_scores`` itself);
+        # terminal-outcome scoring for calibration is explicit-run only.
+        #
+        # Refit the cv_match calibrators from stored (score -> outcome)
+        # pairs. Pure math over existing rows — no API spend. Same
+        # scoring queue so snapshots land where apply_calibrator reads
+        # them at scoring time.
         "recalibrate-cv-match-nightly": {
             "task": "app.tasks.calibration_tasks.recalibrate_cv_match",
             "schedule": crontab(hour=4, minute=30),
