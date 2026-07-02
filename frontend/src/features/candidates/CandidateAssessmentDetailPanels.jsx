@@ -95,23 +95,37 @@ const computeAssessmentFormKey = ({
 });
 
 // AI-usage analytics, code/git evidence, and the prompt-by-prompt assessment
-// timeline. These leaf components only need the mapped `candidate` view.
+// timeline. One panel at a time behind a segmented control — stacking all
+// three made the Assessment tab several screens of raw dumps.
+const EVIDENCE_PANELS = [
+  { id: 'prompts', label: 'Prompts', Component: CandidateAiUsageTab },
+  { id: 'code', label: 'Code & git', Component: CandidateCodeGitTab },
+  { id: 'timeline', label: 'Timeline & replay', Component: CandidateTimelineTab },
+];
+
 export const AssessmentEvidencePanels = ({ candidate = null }) => {
+  const [activePanel, setActivePanel] = useState('prompts');
   if (!candidate) return null;
+  const active = EVIDENCE_PANELS.find((panel) => panel.id === activePanel) || EVIDENCE_PANELS[0];
+  const ActiveComponent = active.Component;
   return (
-    <div className="report-assessment-evidence space-y-4">
-      <section>
-        <div className="mc-kicker">AI USAGE &amp; PROMPT QUALITY</div>
-        <CandidateAiUsageTab candidate={candidate} />
-      </section>
-      <section>
-        <div className="mc-kicker">CODE &amp; GIT EVIDENCE</div>
-        <CandidateCodeGitTab candidate={candidate} />
-      </section>
-      <section>
-        <div className="mc-kicker">ASSESSMENT TIMELINE</div>
-        <CandidateTimelineTab candidate={candidate} />
-      </section>
+    <div className="report-assessment-evidence">
+      <div className="mc-kicker">RAW EVIDENCE</div>
+      <div className="evidence-seg" role="tablist" aria-label="Assessment evidence">
+        {EVIDENCE_PANELS.map((panel) => (
+          <button
+            key={panel.id}
+            type="button"
+            role="tab"
+            aria-selected={activePanel === panel.id}
+            className={activePanel === panel.id ? 'on' : ''}
+            onClick={() => setActivePanel(panel.id)}
+          >
+            {panel.label}
+          </button>
+        ))}
+      </div>
+      <ActiveComponent candidate={candidate} />
     </div>
   );
 };

@@ -2172,3 +2172,194 @@ button.eng-badge-button:focus-visible {
 @media (max-width: 720px) {
   .mc-overview-dimensions--stacked .mc-overview-dim-row { grid-template-columns: 120px 1fr 56px; gap: 10px; }
 }
+
+/* ============================================================
+   Assessment tab — 5-Ds scorecard spine, raw-evidence segmented
+   control, overflow actions menu, and the collapsed manual-
+   evaluation drawer.
+   ============================================================ */
+.assessment-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.assessment-head .abar-block { flex: 1; width: auto; margin-bottom: 0; }
+.assessment-actions { position: relative; margin-left: auto; flex-shrink: 0; }
+.assessment-actions > .btn { display: inline-flex; align-items: center; gap: 6px; }
+.assessment-actions-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+  min-width: 210px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md, 0 12px 28px rgba(15, 23, 42, 0.12));
+  padding: 4px;
+}
+.assessment-actions-menu button {
+  appearance: none;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  padding: 8px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.assessment-actions-menu button:hover { background: var(--purple-soft); }
+.assessment-actions-menu button:disabled { opacity: 0.55; cursor: default; }
+.assessment-actions-menu button.danger { color: var(--red); }
+.assessment-actions-menu button.danger:hover { background: var(--danger-soft); }
+
+/* THE 5 Ds — expandable axis rows; the graded criteria nest inside. */
+.sc5 { margin-bottom: 20px; }
+.sc5-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.sc5-head .mc-kicker { margin: 0; }
+.sc5-note { font-size: 0.8125rem; color: var(--mute); }
+.sc5-empty { font-size: 0.875rem; color: var(--mute); margin: 0; }
+.sc5-row {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin-bottom: 6px;
+  background: var(--bg-2);
+  overflow: hidden;
+}
+.sc5-row-head {
+  appearance: none;
+  border: none;
+  background: transparent;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) 64px 18px;
+  gap: 14px;
+  align-items: center;
+  padding: 10px 14px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+.sc5-row-head:hover { background: var(--purple-soft); }
+.sc5-label { font-size: 0.875rem; font-weight: 600; color: var(--ink-2); }
+.sc5-mid { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.sc5-bar {
+  display: block;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--line-2);
+  overflow: hidden;
+}
+.sc5-bar > i { display: block; height: 100%; border-radius: 4px; background: var(--purple); }
+.sc5-bar > i.low { background: var(--purple-lav); }
+.sc5-blurb {
+  font-size: 0.75rem;
+  color: var(--mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sc5-score {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--ink-2);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.sc5-score em {
+  font-style: normal;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--mute);
+  margin-left: 1px;
+}
+.sc5-chev { color: var(--mute); transition: transform 0.15s ease; }
+.sc5-row.open .sc5-chev { transform: rotate(180deg); }
+.sc5-body {
+  border-top: 1px solid var(--line);
+  background: var(--line-2);
+  padding: 12px 14px;
+}
+.sc5-body-note { font-size: 0.8125rem; color: var(--mute); margin: 0 0 8px; }
+.sc5-crit { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.sc5-crit:last-child { border-bottom: none; padding-bottom: 2px; }
+.sc5-crit-row { display: flex; align-items: center; gap: 8px; }
+.sc5-crit-name { font-size: 0.8125rem; font-weight: 600; color: var(--ink-2); flex: 1; }
+.sc5-crit-score {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.sc5-crit-why { font-size: 0.8125rem; line-height: 1.55; color: var(--mute); margin: 4px 0 0; }
+.sc5-crit-cites { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.sc5-crit-cites code {
+  font-size: 0.6875rem;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1px 6px;
+  color: var(--mute);
+}
+@media (max-width: 720px) {
+  .sc5-row-head { grid-template-columns: 104px minmax(0, 1fr) 52px 16px; gap: 8px; }
+  .sc5-blurb { display: none; }
+}
+
+/* Raw-evidence segmented control (Prompts / Code & git / Timeline). */
+.evidence-seg {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow: hidden;
+  margin-bottom: 14px;
+}
+.evidence-seg button {
+  appearance: none;
+  border: none;
+  background: transparent;
+  font-size: 0.8125rem;
+  color: var(--mute);
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.evidence-seg button + button { border-left: 1px solid var(--line); }
+.evidence-seg button.on { background: var(--purple-soft); color: var(--purple); font-weight: 600; }
+
+/* Manual-evaluation drawer — optional input, collapsed by default. */
+.report-eval-drawer {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-2);
+}
+.report-eval-drawer > summary {
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+}
+.report-eval-drawer > summary::-webkit-details-marker { display: none; }
+.report-eval-drawer > summary .mc-kicker { margin: 0; }
+.report-eval-drawer-hint { font-size: 0.8125rem; color: var(--mute); }
+.report-eval-drawer > summary::after {
+  content: "+";
+  margin-left: auto;
+  color: var(--mute);
+  font-size: 1rem;
+  line-height: 1;
+}
+.report-eval-drawer[open] > summary::after { content: "\2212"; }
+.report-eval-drawer[open] > summary { border-bottom: 1px solid var(--line); }
+.report-eval-drawer > .space-y-6 { padding: 14px; }

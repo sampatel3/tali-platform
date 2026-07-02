@@ -422,6 +422,17 @@ export const AI_SHOWCASE_COMPLETED_ASSESSMENT = {
   calibration_score: 8.1,
   prompt_fraud_flags: [],
   time_to_first_prompt_seconds: 47,
+  // Rubric-dimension specs (lens → scorecard axis) so the Assessment tab's
+  // 5-Ds scorecard groups the graded criteria under the right D, exactly as
+  // the backend's fluency_axis_for_dimension does in production.
+  evaluation_rubric: {
+    task_delivery: { weight: 0.2, lens: 'deliverable' },
+    design_decisions: { weight: 0.15, lens: 'delegation' },
+    prompt_quality: { weight: 0.2, lens: 'description' },
+    output_judgement: { weight: 0.2, lens: 'discernment' },
+    verification: { weight: 0.15, lens: 'diligence' },
+    written_communication: { weight: 0.1, lens: 'description' },
+  },
   prompt_analytics: {
     per_prompt_scores: [
       { clarity: 9, specificity: 9, efficiency: 9, word_count: 34, has_context: true, is_vague: false },

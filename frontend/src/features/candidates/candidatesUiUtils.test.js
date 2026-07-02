@@ -192,6 +192,13 @@ describe('extractRequirementKey', () => {
     expect(extractRequirementKey({ requirement: 'Python' }, 3)).toBe('Python-3');
   });
 
+  it('treats a blank requirement_id (normalizeRequirementRow backfill) as no id', () => {
+    // normalizeRequirementRow writes requirement_id: '' for id-less rows —
+    // without the fallback every row would share the '' key.
+    expect(extractRequirementKey({ requirement_id: '', requirement: 'Python' }, 3)).toBe('Python-3');
+    expect(extractRequirementKey({ requirement_id: '  ', requirement: 'Go' }, 1)).toBe('Go-1');
+  });
+
   it('returns the index alone when nothing else is available', () => {
     expect(extractRequirementKey(null, 7)).toBe('7');
   });
