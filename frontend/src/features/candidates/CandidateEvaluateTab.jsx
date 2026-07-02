@@ -69,12 +69,12 @@ export const CandidateEvaluateTab = ({
   recommendation = null,
   recruiterSummary = '',
   actionPanel = null,
-  // PR3 (decision-surface unification): when this rubric is hosted inside the
-  // Assessment tab, the candidate's DECISION lives on the report header strip,
-  // so the in-rubric DecisionRecorder is dead weight. `hideDecision` drops the
-  // recorder (and collapses the two-up grid to a full-width Role-criteria
-  // column), leaving only the assessment EVIDENCE: criteria ratings, manual
-  // rubric, strengths/improvements, and the chat log.
+  // When this rubric is hosted inside the Assessment tab (`hideDecision`),
+  // everything that duplicates another surface is dropped: the DecisionRecorder
+  // (decision lives in the DecisionRail), the role-criteria panel + "Taali
+  // recommends" (the Requirements tab and Overview verdict), and the chat log
+  // (the Prompts evidence panel). What remains is the recruiter's own input:
+  // the manual excellent/good/poor rubric and the strengths/improvements notes.
   hideDecision = false,
 }) => {
   const assessment = candidate?._raw || {};
@@ -140,6 +140,7 @@ export const CandidateEvaluateTab = ({
           />
         )}
 
+        {hideDecision ? null : (
         <Panel className="p-5">
           <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Role criteria</div>
           <div className="mt-2 text-xl font-semibold text-[var(--taali-text)]">Rate how the candidate meets each must-have.</div>
@@ -194,6 +195,7 @@ export const CandidateEvaluateTab = ({
 
           {actionPanel ? <div className="mt-5">{actionPanel}</div> : null}
         </Panel>
+        )}
       </div>
 
       <Panel className="bg-[var(--taali-surface-muted)] p-4">
@@ -288,6 +290,7 @@ export const CandidateEvaluateTab = ({
         </div>
       </Panel>
 
+      {hideDecision ? null : (
       <Panel className="p-4">
         <div className="mb-2 font-mono text-xs font-bold text-gray-600">Chat log (for evidence)</div>
         {prompts.length === 0 ? (
@@ -313,6 +316,7 @@ export const CandidateEvaluateTab = ({
           </div>
         )}
       </Panel>
+      )}
     </div>
   );
 };

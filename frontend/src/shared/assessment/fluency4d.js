@@ -52,6 +52,28 @@ export const FLUENCY_4D_AXES = [
 // Short labels for the radar (kept tight so a 5-spoke chart never overflows).
 export const FLUENCY_4D_LABELS = FLUENCY_4D_AXES.map((a) => a.label);
 
+const AXIS_KEYS = new Set(FLUENCY_4D_AXES.map((a) => a.key));
+
+// Mirror of the backend's fluency_axis_for_dimension (rubric_scoring.py): map
+// one rubric-dimension SPEC (an entry of assessment.evaluation_rubric) to the
+// scorecard axis its grade rolls up into. Explicit ``fluency`` wins, then the
+// grader/lens; unset falls back to delegation (the decision lens), matching
+// the backend so the UI grouping always agrees with the stored fluency_4d.
+export const axisForRubricDimension = (spec) => {
+  if (!spec || typeof spec !== 'object') return 'delegation';
+  const explicit = String(spec.fluency || '').trim().toLowerCase();
+  if (AXIS_KEYS.has(explicit)) return explicit;
+  if (String(spec.grader || '').trim().toLowerCase() === 'interrogation_outcome') {
+    return 'delegation';
+  }
+  const lens = String(spec.lens || '').trim().toLowerCase();
+  if (lens === 'deliverable') return 'deliverable';
+  if (lens === 'discernment' || lens === 'diligence' || lens === 'description' || lens === 'delegation') {
+    return lens;
+  }
+  return 'delegation';
+};
+
 // The backend sends explicit JSON null for a no-signal axis, and
 // Number(null) === 0 (finite), so reject null/undefined up front rather than
 // letting them coerce to a misleading 0.

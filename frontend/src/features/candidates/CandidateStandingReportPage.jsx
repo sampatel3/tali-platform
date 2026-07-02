@@ -1,12 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, Copy, ExternalLink, Eye, Flag, Sparkles } from 'lucide-react';
+import { AlertTriangle, Copy, ExternalLink, Eye, Flag, MoreHorizontal, Sparkles } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
 import { viewShareLink } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import {
-  Badge,
   Button,
   Input,
   Panel,
@@ -26,6 +25,7 @@ import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAs
 // recorder from the report body; the candidate's decision now lives in the
 // DecisionRail (the dossier's left column). The component file is kept for reference.
 import { AssessmentEvidencePanels, EvaluatePanel, InterviewTranscriptCapture } from './CandidateAssessmentDetailPanels';
+import { AssessmentScorecard, readGradedRubricDimensions } from './AssessmentScorecard';
 import { CandidateSnapshotCard } from './CandidateSnapshotCard';
 import { CvDocumentViewer } from './CvDocumentViewer';
 import { CvMatchReview } from './CvMatchReview';
@@ -48,45 +48,6 @@ const resolveAssessmentId = (application) => (
   || application?.valid_assessment_id
   || null
 );
-
-// The ACTUAL graded rubric dimensions — the EVIDENCE that hangs under the
-// 5-axis scorecard. Each is the authoritative per-criterion grade the backend
-// wrote to score_breakdown.rubric_grading.dimensions:
-//   { id, score (0–10), rating ('excellent'|'good'|'poor'), reasoning, … }.
-// Display-only; tolerant of a JSON-string score_breakdown.
-const readGradedRubricDimensions = (assessment) => {
-  let sb = assessment?.score_breakdown;
-  if (typeof sb === 'string') {
-    try {
-      sb = JSON.parse(sb);
-    } catch {
-      return [];
-    }
-  }
-  const dims = sb?.rubric_grading?.dimensions;
-  if (!Array.isArray(dims)) return [];
-  return dims
-    .map((d) => ({
-      id: String(d?.id || '').trim(),
-      // Stored 0–10; the scorecard bars are 0–100, so present ×10 here too.
-      score: Number.isFinite(Number(d?.score)) ? Number(d.score) : null,
-      rating: String(d?.rating || '').trim().toLowerCase(),
-      reasoning: String(d?.reasoning || '').trim(),
-    }))
-    .filter((d) => d.id);
-};
-
-// Turn a rubric dimension id ("design_decisions", "release_safety") into a
-// readable label without a hardcoded vocabulary — these ids are task-defined.
-const humanizeDimensionId = (id) => String(id || '')
-  .replace(/_/g, ' ')
-  .replace(/\b\w/g, (c) => c.toUpperCase());
-
-const RUBRIC_RATING_CLASS = {
-  excellent: 'success',
-  good: 'info',
-  poor: 'danger',
-};
 
 const resolveAssessmentStatus = (application) => (
   String(application?.score_summary?.assessment_status || application?.valid_assessment_status || '').toLowerCase()
@@ -183,6 +144,9 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [busyAction, setBusyAction] = useState('');
+  // Assessment-tab admin actions (resend invite / request CV / delete) live in
+  // a small overflow menu so destructive controls no longer lead the pane.
+  const [assessmentActionsOpen, setAssessmentActionsOpen] = useState(false);
   // Tracks which share button is mid-mint so we can disable it + show a
   // "Copying…" label. '' when idle, 'recruiter' or 'client' when busy.
   const [sharingMode, setSharingMode] = useState('');
@@ -1285,35 +1249,20 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         </div>
 
         <div className={`pane ${activeTab === 'assessment' ? 'active' : ''}`} data-p="assessment">
-          {assessmentId ? (
-            <div className="report-recruiter-actions mb-3 flex flex-wrap gap-2" data-internal-only>
-              {canResendInvite ? (
-                <button type="button" className="btn btn-outline btn-sm" onClick={handleResendInvite} disabled={busyAction !== ''}>
-                  {busyAction === 'resend' ? 'Resending…' : 'Resend invite'}
-                </button>
-              ) : null}
-              {canRequestCvUpload ? (
-                <button type="button" className="btn btn-outline btn-sm" onClick={handleRequestCvUpload} disabled={busyAction !== ''}>
-                  {busyAction === 'request-cv' ? 'Sending…' : 'Request CV upload'}
-                </button>
-              ) : null}
-              <button type="button" className="btn btn-outline btn-sm" onClick={handleDeleteAssessment} disabled={busyAction !== ''}>
-                {busyAction === 'delete' ? 'Deleting…' : 'Delete assessment'}
-              </button>
-            </div>
-          ) : null}
-          {/* EVIDENCE under the scorecard: the ACTUAL graded rubric criteria
-              (score_breakdown.rubric_grading.dimensions) — the authoritative
-              per-criterion grades the scorecard's 5 axes roll up from. This is
-              evidence, not a rival top-level scorecard. */}
+          {/* THE 5 Ds scorecard is the spine of this pane — each axis expands
+              into the graded rubric criteria (score_breakdown.rubric_grading
+              .dimensions) that produced it. Admin actions (resend / request CV
+              / delete) live in an overflow menu so destructive controls no
+              longer lead the page. */}
           {(() => {
             const gradedDimensions = readGradedRubricDimensions(completedAssessment);
             const firstName = String(application?.candidate_name || '').trim().split(/\s+/)[0];
             const score = reportModel?.summaryModel?.assessmentScore;
+            if (gradedDimensions.length === 0 && !assessmentId) return null;
             return (
-              <>
+              <div className="assessment-head" data-internal-only>
                 {gradedDimensions.length > 0 ? (
-                  <div className="abar abar-on abar-block" data-internal-only>
+                  <div className="abar abar-on abar-block">
                     <span className="ab-spark"><Sparkles size={15} strokeWidth={2} /></span>
                     <span className="ab-label">Agent assessed</span>
                     <span className="ab-tick">
@@ -1326,63 +1275,57 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     </span>
                   </div>
                 ) : null}
-                <div className="two-col">
-                  <div className={`panel${gradedDimensions.length > 0 ? ' agent-scored' : ''}`}>
-                    <h2>Evidence · graded <em>criteria</em></h2>
-                    <p className="sub">
-                      The authoritative per-criterion grades the 5-dimension scorecard (the 4 Ds +
-                      Deliverable) rolls up from.
-                    </p>
-                    {gradedDimensions.length > 0 ? gradedDimensions.map((item) => (
-                      <div key={item.id} className="dim">
-                        <div className="dim-row">
-                          <span className="dim-name">{humanizeDimensionId(item.id)}</span>
-                          <span className="dim-score">
-                            {item.score != null ? `${Math.round(item.score * 10)} / 100` : '—'}
-                          </span>
-                        </div>
-                        <div className="bar">
-                          <i style={{ width: `${Math.max(0, Math.min(100, Number(item.score || 0) * 10))}%` }} />
-                        </div>
-                        <p className="dim-note">
-                          {item.rating ? (
-                            <Badge variant={RUBRIC_RATING_CLASS[item.rating] || 'muted'} className="mr-2 font-mono text-[0.625rem] uppercase">
-                              {item.rating}
-                            </Badge>
-                          ) : null}
-                          {item.reasoning || 'Graded from the completed work sample and AI-collaboration trace.'}
-                        </p>
+                {assessmentId ? (
+                  <div className="assessment-actions">
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      aria-haspopup="menu"
+                      aria-expanded={assessmentActionsOpen}
+                      onClick={() => setAssessmentActionsOpen((open) => !open)}
+                    >
+                      <MoreHorizontal size={15} /> Actions
+                    </button>
+                    {assessmentActionsOpen ? (
+                      <div className="assessment-actions-menu" role="menu">
+                        {canResendInvite ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={busyAction !== ''}
+                            onClick={() => { setAssessmentActionsOpen(false); handleResendInvite(); }}
+                          >
+                            {busyAction === 'resend' ? 'Resending…' : 'Resend invite'}
+                          </button>
+                        ) : null}
+                        {canRequestCvUpload ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={busyAction !== ''}
+                            onClick={() => { setAssessmentActionsOpen(false); handleRequestCvUpload(); }}
+                          >
+                            {busyAction === 'request-cv' ? 'Sending…' : 'Request CV upload'}
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="danger"
+                          disabled={busyAction !== ''}
+                          onClick={() => { setAssessmentActionsOpen(false); handleDeleteAssessment(); }}
+                        >
+                          {busyAction === 'delete' ? 'Deleting…' : 'Delete assessment'}
+                        </button>
                       </div>
-                    )) : (
-                      <p className="dim-note">
-                        Per-criterion rubric grades appear here once a rubric-scored assessment is completed.
-                      </p>
-                    )}
+                    ) : null}
                   </div>
-                  <div className="panel">
-                    <h2>Live <em>evidence</em></h2>
-                    <p className="sub">Panel-safe highlights tied to the work sample, not generic screening copy.</p>
-                    <div className="evi">
-                      {[
-                        reportModel?.evidenceSections?.assessment,
-                        reportModel?.evidenceSections?.roleFit,
-                        reportModel?.evidenceSections?.integrity,
-                      ].filter(Boolean).map((item, index) => (
-                        <div key={`${item.title || 'evidence'}-${index}`} className="ev">
-                          <div className="ico">{index + 1}</div>
-                          <div>
-                            <h4>{item.title || 'Evidence'}</h4>
-                            <p>{item.description || 'Evidence is attached to the candidate report.'}</p>
-                            <div className="tag">{item.label || 'Taali signal'}</div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </>
+                ) : null}
+              </div>
             );
           })()}
+
+          <AssessmentScorecard assessment={completedAssessment} />
 
           {/* Full assessment evidence migrated from the legacy /assessments
               page: AI-usage analytics, code/git, and the prompt-by-prompt
@@ -1400,11 +1343,12 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             </ErrorBoundary>
           ) : null}
 
-          {/* Assessment-evaluation evidence migrated from the retired Evaluate
-              tab (PR3): role-criteria ratings, the manual excellent/good/poor
-              rubric, strengths / improvements, and the chat-log evidence. The
-              DECISION recorder is intentionally dropped (`hideDecision`) — the
-              candidate's decision lives on the header strip now. */}
+          {/* The recruiter's own manual evaluation (excellent/good/poor rubric
+              + strengths / improvements), collapsed by default — it's optional
+              input, not evidence, and it cost a screen of scroll. The decision
+              recorder, role criteria and chat log it used to carry are dropped:
+              they duplicate the DecisionRail, the Requirements tab and the
+              Prompts evidence panel. */}
           {candidateView ? (
             <ErrorBoundary
               fallback={
@@ -1414,8 +1358,13 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 </div>
               }
             >
-              <section className="report-assessment-rubric mt-4" data-internal-only>
-                <div className="mc-kicker">ASSESSMENT EVALUATION</div>
+              <details className="report-eval-drawer mt-4" data-internal-only>
+                <summary>
+                  <span className="mc-kicker">YOUR EVALUATION</span>
+                  <span className="report-eval-drawer-hint">
+                    Optional manual rubric, strengths and improvements
+                  </span>
+                </summary>
                 <EvaluatePanel
                   candidate={candidateView}
                   evaluationRubric={evaluationRubric}
@@ -1426,7 +1375,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   recruiterSummary={reportModel?.recruiterSummaryText || ''}
                   hideDecision
                 />
-              </section>
+              </details>
             </ErrorBoundary>
           ) : null}
         </div>
