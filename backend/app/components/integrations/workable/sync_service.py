@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 import json
 import logging
 import re
@@ -58,77 +57,6 @@ logger = logging.getLogger(__name__)
 
 class WorkableSyncCancelled(Exception):
     """Raised when the user requested sync cancellation; sync should stop immediately."""
-
-
-def _workable_context_digest(
-    *,
-    answers: Any,
-    comments: Any,
-    activities: Any,
-    headline: Any = None,
-    summary: Any = None,
-    tags: Any = None,
-    skills: Any = None,
-    education_entries: Any = None,
-    experience_entries: Any = None,
-    social_profiles: Any = None,
-    location_city: Any = None,
-    location_country: Any = None,
-    phone: Any = None,
-    profile_url: Any = None,
-) -> str:
-    """Stable digest of every input the pre-screen Workable context
-    block surfaces. Used to detect whether an agent-on role's sync
-    picked up any change worth rescoring.
-
-    Covers questionnaire answers, recruiter comments, activity log, and
-    every structured profile field the formatter reads (headline,
-    summary, tags, skills, education, experience, social profiles,
-    location, phone, profile URL). When any of those flip, the digest
-    changes and ``_sync_candidate_for_role`` enqueues a rescore.
-
-    Order-insensitive within each list (sorting on a serialised form) so
-    that minor reorderings from the Workable API don't trigger spurious
-    rescores.
-    """
-    def _normalize(value: Any) -> Any:
-        if isinstance(value, list):
-            try:
-                return sorted(
-                    json.dumps(_normalize(v), sort_keys=True, default=str)
-                    for v in value
-                )
-            except TypeError:
-                return [json.dumps(v, sort_keys=True, default=str) for v in value]
-        if isinstance(value, dict):
-            return {k: _normalize(v) for k, v in value.items()}
-        return value
-
-    def _list_or_empty(value: Any) -> list:
-        return value if isinstance(value, list) else []
-
-    def _scalar(value: Any) -> Any:
-        return value if isinstance(value, (str, int, float, bool)) else None
-
-    payload = {
-        "answers": _normalize(_list_or_empty(answers)),
-        "comments": _normalize(_list_or_empty(comments)),
-        "activities": _normalize(_list_or_empty(activities)),
-        "headline": _scalar(headline),
-        "summary": _scalar(summary),
-        "tags": _normalize(_list_or_empty(tags)),
-        "skills": _normalize(_list_or_empty(skills)),
-        "education_entries": _normalize(_list_or_empty(education_entries)),
-        "experience_entries": _normalize(_list_or_empty(experience_entries)),
-        "social_profiles": _normalize(_list_or_empty(social_profiles)),
-        "location_city": _scalar(location_city),
-        "location_country": _scalar(location_country),
-        "phone": _scalar(phone),
-        "profile_url": _scalar(profile_url),
-    }
-    blob = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(blob).hexdigest()
-
 
 
 def _strip_html(html: str) -> str:
@@ -2192,33 +2120,6 @@ class WorkableSyncService:
         fallback_name = candidate.full_name or email or f"Workable candidate {candidate_id}"
         candidate.full_name = _candidate_name(candidate_payload, fallback=fallback_name)
         candidate.position = _candidate_position(candidate_payload, role.name)
-        # Snapshot the Workable surfaces feeding pre-screen BEFORE we
-        # overwrite them. We use the digest later to decide whether a
-        # rescore is warranted for agent-on roles with existing scores.
-        # Includes every field the formatter renders — so a change to
-        # headline/location/skills/etc. also fires the rescore.
-        prev_answers = (
-            candidate.workable_data.get("answers")
-            if isinstance(candidate.workable_data, dict)
-            else None
-        )
-        prev_context_digest = _workable_context_digest(
-            answers=prev_answers,
-            comments=candidate.workable_comments,
-            activities=candidate.workable_activities,
-            headline=candidate.headline,
-            summary=candidate.summary,
-            tags=candidate.tags,
-            skills=candidate.skills,
-            education_entries=candidate.education_entries,
-            experience_entries=candidate.experience_entries,
-            social_profiles=candidate.social_profiles,
-            location_city=candidate.location_city,
-            location_country=candidate.location_country,
-            phone=candidate.phone,
-            profile_url=candidate.profile_url,
-        )
-
 
         candidate.workable_candidate_id = sanitize_text_for_storage(candidate_id)
         candidate.workable_data = sanitize_json_for_storage(candidate_payload)
@@ -2237,31 +2138,6 @@ class WorkableSyncService:
         if mode == "full":
             self._refresh_candidate_activities(candidate, candidate_id)
 
-        new_answers = (
-            candidate.workable_data.get("answers")
-            if isinstance(candidate.workable_data, dict)
-            else None
-        )
-        new_context_digest = _workable_context_digest(
-            answers=new_answers,
-            comments=candidate.workable_comments,
-            activities=candidate.workable_activities,
-            headline=candidate.headline,
-            summary=candidate.summary,
-            tags=candidate.tags,
-            skills=candidate.skills,
-            education_entries=candidate.education_entries,
-            experience_entries=candidate.experience_entries,
-            social_profiles=candidate.social_profiles,
-            location_city=candidate.location_city,
-            location_country=candidate.location_country,
-            phone=candidate.phone,
-            profile_url=candidate.profile_url,
-        )
-        workable_context_changed = (
-            mode == "full" and prev_context_digest != new_context_digest
-        )
-
         db.flush()
         counters["candidate_upserted"] += 1
 
@@ -2274,13 +2150,6 @@ class WorkableSyncService:
             )
             .first()
         )
-        # Snapshot scoring history NOW, before downstream refresh helpers
-        # (``refresh_application_score_cache``, ``refresh_pre_screening_fields``)
-        # get a chance to mutate the fields mid-sync. "Has scoring history"
-        # for the agent-rescore trigger means "had a score when this sync
-        # iteration started," matching the user-facing semantics.
-        prev_app_pre_screen_score = app.pre_screen_score_100 if app is not None else None
-        prev_app_cv_match_score = app.cv_match_score if app is not None else None
         created_application = False
         if not app:
             mapped_stage, mapped_outcome = map_legacy_status_to_pipeline(str(stage or "applied"))
@@ -2427,45 +2296,13 @@ class WorkableSyncService:
                 and getattr(role, "starred_for_auto_sync", False)
             )
             on_application_created(app, score=auto_score)
-
-            # Agent-driven rescore: when an agent-on role's existing
-            # application picks up new questionnaire answers, recruiter
-            # comments, or activities AND already has scoring history,
-            # re-enqueue so the new context flows into pre-screen +
-            # cv_match. Gated on ``agentic_mode_enabled`` because acting
-            # on data changes is what the agent does — starring is for
-            # keeping data fresh, not for triggering actions.
-            #
-            # "Has scoring history" uses the snapshot captured before
-            # this sync iteration started so the trigger isn't fooled by
-            # ``refresh_application_score_cache`` resetting the score
-            # mid-sync.
-            if (
-                not created_application
-                and getattr(role, "agentic_mode_enabled", False)
-                and workable_context_changed
-                and (
-                    prev_app_pre_screen_score is not None
-                    or prev_app_cv_match_score is not None
-                )
-            ):
-                try:
-                    from ....services.cv_score_orchestrator import (
-                        enqueue_score,
-                        mark_application_scores_stale,
-                    )
-                    # Clear scores BEFORE enqueueing the rescore so the
-                    # UI shows "needs rescore" during the window
-                    # between invalidation and the worker landing the
-                    # new score — instead of a stale "Strong match" the
-                    # recruiter could act on.
-                    mark_application_scores_stale(db, app.id)
-                    enqueue_score(db, app, force=True)
-                except Exception:  # pragma: no cover — never block a sync
-                    logger.exception(
-                        "Workable-context rescore enqueue failed for app_id=%s",
-                        app.id,
-                    )
+            # NOTE: syncs never dispatch paid re-scoring. A changed
+            # Workable context (new answers/comments/activities) is
+            # stored for display and for the NEXT recruiter-approved
+            # evaluation; re-scoring an already-scored application is
+            # recruiter-triggered only (agent chat quotes the cost
+            # first). The old auto-rescore-on-context-change trigger
+            # looped on multi-role candidates and burned credits.
         else:
             refresh_pre_screening_fields(app)
         app.rank_score = _rank_score_for_application(app)
