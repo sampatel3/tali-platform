@@ -31,7 +31,7 @@ from .disqualification_reason import (
     DisqualificationReason,
 )
 from .screening_question import QUESTION_KINDS, ScreeningQuestion
-from .offer import OFFER_STATUSES, Offer, OfferApproval
+from .offer import OFFER_STATUSES, Offer, OfferApproval, OfferTemplate
 from .job_hiring_team import TEAM_ROLES, JobHiringTeam
 from .role import Role, role_tasks
 from .org_criterion import (
@@ -209,6 +209,7 @@ __all__ = [
     "QUESTION_KINDS",
     "Offer",
     "OfferApproval",
+    "OfferTemplate",
     "OFFER_STATUSES",
     "JobHiringTeam",
     "TEAM_ROLES",

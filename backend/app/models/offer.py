@@ -1,4 +1,5 @@
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -11,6 +12,17 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from ..platform.database import Base
+
+
+# Compensation fields an offer template carries as defaults — the shape an
+# offer created from the template inherits (each still overridable per offer).
+OFFER_TEMPLATE_COMP_FIELDS = (
+    "base_salary_amount",
+    "currency",
+    "pay_frequency",
+    "signing_bonus",
+    "equity_units",
+)
 
 # Offer lifecycle. draft -> (pending_approval ->) approved -> sent ->
 # accepted/declined/expired. Any non-terminal offer can be 'deprecated' when
@@ -109,3 +121,30 @@ class OfferApproval(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     offer = relationship("Offer", back_populates="approvals")
+
+
+class OfferTemplate(Base):
+    """A reusable, org-level offer template — default compensation for a band /
+    level so recruiters don't re-key it each time. Creating an offer from a
+    template prefills the comp fields (still overridable per offer)."""
+
+    __tablename__ = "offer_templates"
+    __table_args__ = (
+        Index("ix_offer_templates_org", "organization_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id"), nullable=False
+    )
+    name = Column(String, nullable=False)
+    # Same typed comp shape as Offer (so applying a template is a straight copy).
+    base_salary_amount = Column(Integer, nullable=True)
+    currency = Column(String, nullable=True)
+    pay_frequency = Column(String, nullable=True)  # year | month | hour
+    signing_bonus = Column(Integer, nullable=True)
+    equity_units = Column(Integer, nullable=True)
+    custom_fields = Column(JSON, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())

@@ -23,9 +23,11 @@ from ...models.offer import (
     OFFER_STATUS_EXPIRED,
     OFFER_STATUS_PENDING_APPROVAL,
     OFFER_STATUS_SENT,
+    OFFER_TEMPLATE_COMP_FIELDS,
     OFFER_STATUSES,
     Offer,
     OfferApproval,
+    OfferTemplate,
 )
 
 _ALLOWED_TRANSITIONS = {
@@ -58,7 +60,39 @@ def create_offer(
     starts_at: datetime | None = None,
     expires_at: datetime | None = None,
     custom_fields: dict | None = None,
+    template_id: int | None = None,
 ) -> Offer:
+    # Create-from-template: prefill any comp field the caller left unset from the
+    # org's template. Explicit args always win; the template is just defaults.
+    if template_id is not None:
+        template = (
+            db.query(OfferTemplate)
+            .filter(
+                OfferTemplate.id == template_id,
+                OfferTemplate.organization_id == organization_id,
+            )
+            .first()
+        )
+        if template is None:
+            raise HTTPException(status_code=404, detail="Offer template not found")
+        _explicit = {
+            "base_salary_amount": base_salary_amount,
+            "currency": currency,
+            "pay_frequency": pay_frequency,
+            "signing_bonus": signing_bonus,
+            "equity_units": equity_units,
+        }
+        for field in OFFER_TEMPLATE_COMP_FIELDS:
+            if _explicit[field] is None:
+                _explicit[field] = getattr(template, field, None)
+        base_salary_amount = _explicit["base_salary_amount"]
+        currency = _explicit["currency"]
+        pay_frequency = _explicit["pay_frequency"]
+        signing_bonus = _explicit["signing_bonus"]
+        equity_units = _explicit["equity_units"]
+        if custom_fields is None and template.custom_fields is not None:
+            custom_fields = dict(template.custom_fields)
+
     current_max = (
         db.query(sa_func.max(Offer.version))
         .filter(Offer.application_id == application_id)
