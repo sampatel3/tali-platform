@@ -14,6 +14,8 @@ export { tasks } from './tasksClient';
 export { candidates } from './candidatesClient';
 export { team } from './teamClient';
 export { hiringTeam } from './hiringTeamClient';
+export { scorecards } from './scorecardsClient';
+export { offers } from './offersClient';
 export { agent } from './agentClient';
 export { agentChat } from './agentChatClient';
 export {

@@ -21,6 +21,8 @@ import { ScoreProvenance } from './ScoreProvenance';
 import { ErrorBoundary } from '../../shared/ui/ErrorBoundary';
 import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAssessmentToCandidateView } from './assessmentViewModels';
 import { ApplicationDecisionPanel, AssessmentEvidencePanels, EvaluatePanel, InterviewTranscriptCapture } from './CandidateAssessmentDetailPanels';
+import { ScorecardPanel } from './ScorecardPanel';
+import { OfferPanel } from './OfferPanel';
 import { CandidateSnapshotCard } from './CandidateSnapshotCard';
 import {
   getErrorMessage,
@@ -58,6 +60,8 @@ const REPORT_TABS = [
   // shares): with an assessment it's the full rubric evaluation, without one
   // it's a decision-only recorder against the application.
   { id: 'evaluate', label: 'Evaluate', internalOnly: true },
+  { id: 'scorecards', label: 'Scorecards', internalOnly: true },
+  { id: 'offer', label: 'Offer', internalOnly: true },
   { id: 'cv', label: 'CV' },
   { id: 'prep', label: 'Interview prep', recruiterOnly: true },
   { id: 'notes', label: 'Notes & timeline', recruiterOnly: true },
@@ -1828,6 +1832,22 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             />
           ) : (
             <div className="mc-notes-empty">Evaluation opens once a completed assessment is linked.</div>
+          )}
+        </div>
+
+        <div className={`pane ${activeTab === 'scorecards' ? 'active' : ''}`} data-p="scorecards" data-internal-only>
+          {(!isShareRoute && application?.id) ? (
+            <ScorecardPanel applicationId={application.id} />
+          ) : (
+            <div className="mc-notes-empty">Scorecards are available in the recruiter workspace.</div>
+          )}
+        </div>
+
+        <div className={`pane ${activeTab === 'offer' ? 'active' : ''}`} data-p="offer" data-internal-only>
+          {(!isShareRoute && application?.id) ? (
+            <OfferPanel applicationId={application.id} />
+          ) : (
+            <div className="mc-notes-empty">Offers are available in the recruiter workspace.</div>
           )}
         </div>
 
