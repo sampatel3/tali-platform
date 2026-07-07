@@ -136,7 +136,6 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
           first, then reasoning + flags, with the secondary actions at the bottom. */}
       {isPending && !middleSlot ? (
         <div className="rq-rec">
-          <div className="rq-rec-kl"><Sparkles size={12} aria-hidden="true" /> Agent recommends</div>
           <button
             type="button"
             className="rq-rec-btn"
@@ -147,9 +146,10 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
             <PrimaryIcon size={16} strokeWidth={2.4} aria-hidden="true" />
             {spec.primaryLabel}
           </button>
-          {decision.confidence != null ? (
-            <div className="rq-rec-conf">Confidence {Math.round(decision.confidence * 100)}%</div>
-          ) : null}
+          <div className="rq-rec-kl">
+            <Sparkles size={12} aria-hidden="true" /> Agent recommends
+            {decision.confidence != null ? ` · Confidence ${Math.round(decision.confidence * 100)}%` : ''}
+          </div>
         </div>
       ) : null}
 

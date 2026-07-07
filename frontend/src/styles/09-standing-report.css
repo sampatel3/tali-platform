@@ -1707,18 +1707,11 @@ button.eng-badge-button:focus-visible {
 }
 .mc-flags-toggle:hover { text-decoration: underline; }
 
-/* Recommendation slab — the bold dark-purple "agent ON" treatment, with the
-   recommended action as a white CTA. */
+/* Recommended action — the bold dark-purple "agent ON" treatment lives on the
+   button ITSELF (no surrounding slab); the kicker + confidence sit as one quiet
+   caption line under it. Matches the hub's .rq-rec-btn. */
 .dossier-rail .dr-rec {
-  background: linear-gradient(120deg, #3a1d6e, #6a3fb8, #2a1556, #4a2a8a, #3a1d6e);
-  background-size: 300% 300%;
-  animation: drFlow 7s ease-in-out infinite;
-  border: 1px solid color-mix(in oklab, var(--purple) 45%, transparent);
-  border-radius: 16px;
-  padding: 16px 15px;
   text-align: center;
-  color: #efe9fb;
-  box-shadow: 0 8px 24px rgba(36, 17, 71, 0.28);
   margin-bottom: 12px;
 }
 @keyframes drFlow {
@@ -1738,14 +1731,22 @@ button.eng-badge-button:focus-visible {
   color: #cbb8f6;
   margin-bottom: 12px;
 }
+/* On the (now slab-less) recommendation the caption sits on the page bg, so it
+   flips to solid purple; .dr-decided keeps the light-on-dark base above. */
+.dossier-rail .dr-rec .dr-rec-kl {
+  color: var(--purple);
+  margin: 8px 0 0;
+}
 .dossier-rail .dr-rec-btn {
   width: 100%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  background: #fff;
-  color: #2a1854;
+  background: linear-gradient(120deg, #3a1d6e, #6a3fb8, #2a1556, #4a2a8a, #3a1d6e);
+  background-size: 300% 300%;
+  animation: drFlow 7s ease-in-out infinite;
+  color: #fff;
   border: 0;
   border-radius: 12px;
   padding: 13px;
@@ -1753,10 +1754,10 @@ button.eng-badge-button:focus-visible {
   font-size: 0.9375rem;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.14);
-  transition: background 0.12s;
+  box-shadow: 0 3px 12px rgba(36, 17, 71, 0.28);
+  transition: filter 0.12s;
 }
-.dossier-rail .dr-rec-btn:hover { background: #f1ecfb; }
+.dossier-rail .dr-rec-btn:hover { filter: brightness(1.18); }
 .dossier-rail .dr-rec-btn:disabled { opacity: 0.6; cursor: default; }
 .dossier-rail .dr-rec-conf {
   font-family: var(--font-mono);
