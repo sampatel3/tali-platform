@@ -19,4 +19,9 @@ export const analytics = {
   // candidate experience). Without experiment_id, returns the org's experiments
   // so the UI can populate a selector.
   experimentsComparison: (params = {}) => api.get('/analytics/experiments/comparison', { params }),
+  // Native ATS pipeline funnel — current headcount per configured stage (funnel
+  // order) + outcome mix. Distinct from the Workable-stage decisionsBreakdown.
+  pipelineFunnel: (params = {}) => api.get('/analytics/pipeline-funnel', { params }).then((r) => r.data),
+  // Days from application to accepted offer — overall summary + per-role.
+  timeToFill: (params = {}) => api.get('/analytics/time-to-fill', { params }).then((r) => r.data),
 };

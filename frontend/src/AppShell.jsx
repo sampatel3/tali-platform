@@ -117,6 +117,9 @@ const CareersListPage = lazy(() =>
 const CareersJobPage = lazy(() =>
   import('./features/careers/CareersJobPage').then((m) => ({ default: m.CareersJobPage }))
 );
+const PipelineAnalyticsPage = lazy(() =>
+  import('./features/analytics/PipelineAnalyticsPage').then((m) => ({ default: m.PipelineAnalyticsPage }))
+);
 
 const isPublicCandidateSharePath = (pathname, search = '') => {
   if (pathname.startsWith('/c/')) return true;
@@ -166,6 +169,7 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     || pathname.startsWith('/jobs/')
     || pathname.startsWith('/assessments/')
     || pathname.startsWith('/candidates/')
+    || pathname.startsWith('/analytics/')
     || pathname.startsWith('/settings')
   );
 };
@@ -768,6 +772,17 @@ function AppContent() {
       <Route
         path="/reporting"
         element={<Navigate replace to="/home" />}
+      />
+      <Route
+        path="/analytics/pipeline"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <PipelineAnalyticsPage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
       />
 
       <Route
