@@ -182,3 +182,32 @@ def test_create_role_rejects_unknown_field(db, client):
         headers=headers,
     )
     assert resp.status_code == 422, resp.text
+
+
+def test_patch_role_updates_job_spec_text(db, client):
+    """The Job Specification tab edits job_spec_text directly (the field the
+    read-view renders) — PATCH must accept and apply it."""
+    headers, _ = auth_headers(client, organization_name="SpecOrg")
+    me = _current_user(db)
+    role = _seed_role(db, org_id=me.organization_id)
+
+    resp = client.patch(
+        f"/api/v1/roles/{role.id}",
+        json={"name": "Senior AI Engineer", "job_spec_text": "The full, edited spec."},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+
+    db.expire(role)
+    assert role.job_spec_text == "The full, edited spec."
+    assert role.name == "Senior AI Engineer"
+
+    # Empty clears it (read-view falls back to description).
+    resp = client.patch(
+        f"/api/v1/roles/{role.id}",
+        json={"job_spec_text": ""},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    db.expire(role)
+    assert role.job_spec_text is None

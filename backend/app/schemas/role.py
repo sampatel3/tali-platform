@@ -83,6 +83,11 @@ class RoleUpdate(BaseModel):
 
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=ROLE_DESCRIPTION_MAX_LENGTH)
+    # The full job-spec text, edited directly on the Job Specification tab. This
+    # is the field the recruiter read-view renders (job_spec_text || description),
+    # so it must be editable for edits to actually show. Generous cap — a spec is
+    # longer than the short description but not unbounded.
+    job_spec_text: Optional[str] = Field(default=None, max_length=200_000)
     screening_pack_template: Optional[InterviewPack] = None
     tech_interview_pack_template: Optional[InterviewPack] = None
     auto_reject_threshold_mode: Optional[Literal["manual", "auto"]] = None

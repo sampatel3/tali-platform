@@ -449,6 +449,10 @@ def update_role(
         role.name = updates["name"].strip()
     if "description" in updates:
         role.description = updates["description"] or None
+    if "job_spec_text" in updates:
+        # Direct spec edit from the Job Specification tab. Empty clears it so the
+        # read-view falls back to description.
+        role.job_spec_text = updates["job_spec_text"] or None
     if "screening_pack_template" in updates:
         template = updates["screening_pack_template"]
         role.screening_pack_template = template.model_dump() if template else None
