@@ -1676,10 +1676,10 @@ button.eng-badge-button:focus-visible {
 }
 .dossier-rail .dr-id-name {
   font-family: var(--font-display);
-  font-size: 1.125rem;
+  font-size: 1.5rem;
   font-weight: 600;
   color: var(--ink);
-  line-height: 1.25;
+  line-height: 1.2;
   overflow-wrap: anywhere;
 }
 .dossier-rail .dr-id-meta {
