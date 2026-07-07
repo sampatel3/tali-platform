@@ -652,10 +652,10 @@
       <div class="pillar">
         <div class="p-num"><span>01</span><span class="name">SCREEN &amp; SEARCH</span></div>
         <div class="p-title">The agent runs your pipeline.</div>
-        <div class="p-body">One orchestrator plus a deterministic policy works every active role in real time — pre-screen, CV↔JD scoring, ranking, dedupe across your ATS. Then just ask: "top 5 with payments and AI experience" — and re-tune the bar on the fly.</div>
+        <div class="p-body">It starts at the brief: chat a requisition into existence — or send your client a no-login link and let them brief the agent directly. From there one orchestrator plus a deterministic policy works every role in real time — pre-screen, CV↔JD scoring, integrity checks, ranking, dedupe across your ATS. Then just ask: "top 5 with payments and AI experience".</div>
         <div class="p-meta">
           <span><b>Always-on</b> per active role</span>
-          <span><b>Conversational</b> search + role tailoring</span>
+          <span><b>Conversational</b> intake, search + role tailoring</span>
         </div>
       </div>
       <div class="pillar hero">
@@ -777,7 +777,7 @@
         <img class="surf-shot" src="img/surf-report.png" alt="Taali — candidate standing report" />
       </div>
       <div class="surf-out">
-        <span><b>Five evidence-linked dimensions</b>: delegation, description, discernment, diligence, and the deliverable itself — Anthropic's four Ds of AI fluency, plus the outcome.</span>
+        <span><b>Five evidence-linked dimensions</b> — the five Ds: delegation, description, discernment, diligence, and the deliverable itself.</span>
         <span>Every score <b>links back</b> to the moment in the session it came from — defensible, not a black box.</span>
         <span>A <b>shareable, expiring link</b> — no PDFs, no leaks. This is what you hand the client instead of a CV.</span>
       </div>
@@ -824,20 +824,20 @@
     </div>
 
     <div class="pipeline">
-      <!-- 01 Apply -->
+      <!-- 01 Brief & apply -->
       <div class="pipe-col">
-        <div class="pipe-head"><span class="n">01</span><span>Apply</span></div>
+        <div class="pipe-head"><span class="n">01</span><span>Brief &amp; apply</span></div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">Two-way ATS sync</span>
-          <span class="bd">Workable sync. Pulls applicants, dedupes by email + profile, writes decisions back.</span>
+          <span class="ti">Conversational requisition</span>
+          <span class="bd">Chat the brief; the agent probes, drafts the spec, publishes the job page. Clients brief it via a no-login link.</span>
+        </div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">Two-way ATS sync + API</span>
+          <span class="bd">Workable sync plus a public API. Pulls applicants, dedupes by email + profile, writes decisions back.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
           <span class="ti">CV parse + structure</span>
           <span class="bd">Drag-and-drop or API. Work history, skills, education into a clean schema.</span>
-        </div>
-        <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">Public API</span>
-          <span class="bd">Authed endpoints to ingest candidates and roles from your own systems.</span>
         </div>
       </div>
 
@@ -853,8 +853,8 @@
           <span class="bd">Hard filters — location, eligibility, the skills a role can't bend on.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">CV-fraud detection</span>
-          <span class="bd">Flags CVs that copy the job description verbatim and caps the score.</span>
+          <span class="ti">CV-integrity flags</span>
+          <span class="bd">Deterministic checks — JD copy-paste, timeline breaks, unverified claims. Caps the score, follows the candidate into the report.</span>
         </div>
       </div>
 
@@ -866,8 +866,8 @@
           <span class="bd">Per-requirement, evidence-grounded, with a calibrated probability to advance.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
-          <span class="ti">Cohort signals + graph</span>
-          <span class="bd">Top-decile clustering; priors from candidates with shared work history.</span>
+          <span class="ti">Cross-source corroboration</span>
+          <span class="bd">Flagged claims checked against the candidate's own GitHub and peers from the same employer — corroborates or questions, never auto-rejects.</span>
         </div>
         <div class="pipe-card"><span class="badge">Live</span>
           <span class="ti">Conversational search</span>
@@ -1005,7 +1005,11 @@
           <span class="cell no">○</span><span class="cell no">○</span><span class="cell yes">●</span>
         </div>
         <div class="row">
-          <span>Conversational search to tailor roles + find anyone</span>
+          <span>Integrity-checks the CV itself — GitHub + peer corroboration</span>
+          <span class="cell no">○</span><span class="cell no">○</span><span class="cell yes">●</span>
+        </div>
+        <div class="row">
+          <span>Conversational intake + search — brief roles, find anyone</span>
           <span class="cell partial">◐</span><span class="cell no">○</span><span class="cell yes">●</span>
         </div>
         <div class="row">
@@ -1145,11 +1149,14 @@
 [
   "Thanks for the time. I'm Sam — I built Taali from the ground up, and proved it running the hiring at DeepLight, a data & AI consultancy that hires exactly the kind of technical people you place. This isn't a generic HR-tech pitch; it's one operator showing another a platform built for our shared problem. Two things to land today: it makes your consultants faster and your submissions provable, and it works both sides of your desk — placing into your clients and hiring your own teams. Twelve slides, ending on a free pilot.",
   "The ground has shifted under recruitment — worst of all for exactly the roles you place: software, data, AI, change. 78% of CVs now contain AI-generated content and resume fraud costs around $600B a year, so your consultants burn billable hours on a slush pile that looks qualified. Legacy tech tests saw a 5x cheating spike because candidates build with AI all day and the tests pretend they don't. And one in three hiring managers has caught a fake or proxy candidate — so clients no longer trust a CV, which means they no longer trust a CV-based shortlist. Whoever can prove capability, not just forward it, wins the mandate.",
-  "Taali is two things in one. A hiring agent that runs each live mandate end-to-end — and crucially, keeps you in control: it brings decisions to your home hub, you make the call. And an AI-native assessment that produces real evidence. Three pillars: Screen and search — the agent does pre-screen, scoring and ranking, and you can ask it in plain English to tailor a role and pull a shortlist. Prove — every candidate works a real task in a real repo with Claude in hand, scored on five axes including how they work with AI. Control — every advance and reject is queued for your sign-off, evidence-linked and auditable, and your overrides retrain it overnight.",
-  "Two halves here. On the left is the candidate's actual assessment — a real GenAI production-readiness task for a bank, three failing tests including a high-risk action that wrongly skips human review. They work in a real repo with Claude alongside; no terminal, just the repo and the assistant. We capture the whole session — every prompt, paste, edit, test run, even time-to-first-prompt and browser focus — and score it on eight weighted signals. On the right is what you actually send the client: the report. A verdict — recommended — the Taali score, the role-fit and dimension breakdown, and three grounded 'why we're sharing' highlights, with recruiter notes, scoring internals and candidate PII stripped out. It goes as a share link or a PDF. So the client doesn't get a claim on a CV — they get the verified work, in a report they can act on.",
-  "Two things, both straight from the product. A — the decision hub for a role: the agent works the funnel and queues every call for you — here a send-assessment on Imran at 100% confidence with the full reasoning. You send it, reject, skip, or send it back to teach the agent; it never acts alone, which matters when your clients are banks and insurers. B — bespoke candidate search: set any criteria — skills, salary, notice period, even 'Taali score at least 60' — and it returns a ranked top ten, each criterion marked met or partial and grounded in quoted CV and notes. Arjun here meets salary, score and notice, but only partially on banking domain, and you can see exactly why. That's a defensible shortlist in seconds.",
-  "Taali runs every stage of the desk — apply, pre-screen, score and search, assess, decide, submit — and the point of this slide is that this is what's live in production today, not a roadmap. Two-way ATS sync, CV-fraud detection, evidence-grounded scoring, the conversational search, the real-repo assessment with five-axis fluency, the home decision hub with human sign-off, client-ready reports as a share link or PDF, and a public API for clean integration into your stack. The platform is built.",
-  "Why Taali and not what you run today. Your ATS or CRM — Bullhorn, Vincere, Workable — automates workflow but doesn't measure skill. Test vendors bolt AI features onto leetcode formats. Nobody sits top-right: agent-driven, AI-native work sample, human-in-the-loop. The table is the short version — only Taali works each role end-to-end, scores how candidates work with AI, lets you tailor roles and find anyone conversationally, keeps a human on every decision, gives you an auditable verdict your FS clients can defend, and exposes an API for clean integration into your stack.",
+  "Taali is two things in one. A hiring agent that runs each live mandate end-to-end — and crucially, keeps you in control: it brings decisions to your home hub, you make the call. And an AI-native assessment that produces real evidence. Three pillars: Screen and search — it starts at the brief: you chat a requisition into existence, or send your client a no-login link and they brief the agent directly; from there it pre-screens, scores, integrity-checks and ranks, and you can ask it in plain English to pull a shortlist. Prove — every candidate works a real task in a real repo with Claude in hand, scored on five axes including how they work with AI. Control — every advance and reject is queued for your sign-off, evidence-linked and auditable, and your overrides retrain it overnight.",
+  "This is the Hub — mission control, live in front of you. You steer each role's agent in plain English: 'cap salary at ninety', 'drop the cut-off to sixty-five' — it reasons, shows the impact, asks before it spends. Below that, the decision feed: every advance, escalate and pre-screen reject the agents queued, reviewable and reversible, and your overrides become its training signal. One rail for every agent — pending counts, budgets, bulk actions. The point to land: the agent does the volume, you keep every call honest.",
+  "The Jobs board those agents work against — one agent per role, on a leash you set. The live agent bar shows what each role's agent advanced, escalated or rejected in the last hour. Every role carries its own budget, autonomy dial and decision feed — you can run full autonomy on a high-volume role and review-everything on a sensitive one. Click into any role and you see the pipeline the way your team will every morning.",
+  "The work sample itself — the candidate's actual workspace, not a mock-up. A real repo, a real editor, and Claude at the centre, because pairing with AI is the work now. Here it's a GenAI production-readiness task for a bank — three failing tests including a high-risk action that wrongly skips human review. We capture the whole session — every prompt, paste, edit and test run, even time-to-first-prompt and browser focus — plus live misuse detection: prompt-injection or off-task use of the assistant is flagged in real time. No lockdown browser, no webcam — the transcript is the record.",
+  "And this is what you actually send the client: the standing report. Five evidence-linked dimensions — the five Ds: delegation, description, discernment, diligence, and the deliverable itself. Every score links back to the moment in the session it came from, so it's defensible rather than a black box. It travels as a shareable, expiring link — no PDFs floating around. This is what you hand the client instead of a CV.",
+  "Ask your whole pipeline anything in plain English — 'top 3 who've owned a GenAI launch, run Postgres in prod, and led a backend team' — and you get a ranked, grounded shortlist, every verdict backed by a verbatim CV quote. Ask mode searches everything with visible tool calls; agent mode is per-role — it finds, reasons over the evidence, and acts within budget. That's a defensible shortlist in seconds, not an afternoon of keyword search.",
+  "Taali runs every stage of the desk — brief, pre-screen, score and search, assess, decide, submit — and the point of this slide is that this is live in production today, not a roadmap. It starts with the conversational requisition: chat the brief, the agent drafts the spec and publishes the job page, and your client can brief it through a no-login link. Then two-way ATS sync plus a public API, deterministic CV-integrity flags — JD copy-paste, timeline breaks, unverified claims — and cross-source corroboration: a flagged claim gets checked against the candidate's own GitHub and against every peer we've seen from the same employer; it corroborates or raises a question, it never auto-rejects. Then the real-repo assessment, the decision hub with human sign-off, and the client-ready report. What's next: a standalone ATS, more connectors — Bullhorn, Vincere, Greenhouse, Lever — and sourcing.",
+  "Why Taali and not what you run today. Your ATS or CRM — Bullhorn, Vincere, Workable — automates workflow but doesn't measure skill. Test vendors bolt AI features onto leetcode formats. Nobody sits top-right: agent-driven, AI-native work sample, human-in-the-loop. The table is the short version — only Taali works each role end-to-end, scores how candidates work with AI, integrity-checks the CV itself against GitHub and peer evidence, lets you brief roles and find anyone conversationally, keeps a human on every decision, gives you an auditable verdict your FS clients can defend, and exposes an API for clean integration into your stack.",
   "The honest question with any new tool is 'does it work on real roles?' Taali runs DeepLight's hiring end-to-end, in production: 100-plus roles, 58,000-plus applications and 42,000-plus candidates screened, 16,000-plus agent decisions with a human sign-off on every advance and reject, and 70-plus AI-native assessments sent — leading to 24 offers and 18 hires for a roughly thirty-person consultancy. The story is the compression: a huge application flood screened down to a handful of verified hires, with a human in control throughout. DeepLight is a data and AI consultancy getting AI into production for banks and insurers, hiring data scientists, ML and AI engineers — exactly the technical, FS-facing hiring you do. I built Taali from the ground up because every tool I tested measured the wrong thing, then proved it on that operation.",
   "So, the offering — one platform, however you hire. Point it at your client mandates: more placements per consultant, submissions clients trust, mandates won against firms still emailing CVs. And point it at your own bench: hire the consultants and delivery teams your transformation work needs, on the same verifiable bar — 'we hire on Taali too' becomes the strongest reference you can give a client. Commercially it's deliberately simple — one usage-based model, credits, you pay for what you use and we keep our margin underneath, whichever way you point it. And to start, it's free: pick a few live roles, we run them end-to-end at no cost, we measure together, then we agree the model. I'd like to pick those roles before we leave."
 ]
