@@ -28,6 +28,10 @@ from .webhook import (
     WebhookDelivery,
     WebhookSubscription,
 )
+from .data_subject_request import (
+    DSR_TYPES,
+    DataSubjectRequest,
+)
 from .pipeline_stage import (
     CANONICAL_SEED_STAGES,
     LEGACY_STAGE_KIND,
@@ -233,6 +237,8 @@ __all__ = [
     "WebhookSubscription",
     "WebhookDelivery",
     "WEBHOOK_EVENT_TYPES",
+    "DataSubjectRequest",
+    "DSR_TYPES",
     "Role",
     "role_tasks",
     "RoleCriterion",

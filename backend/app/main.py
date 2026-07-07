@@ -309,6 +309,9 @@ from .domains.assessments_runtime.scorecard_routes import (
 from .domains.assessments_runtime.webhook_routes import (
     router as webhook_router,
 )
+from .domains.assessments_runtime.data_subject_routes import (
+    router as data_subject_router,
+)
 from .domains.identity_access.user_routes import router as users_router
 from .api.v1.workable import router as workable_router
 from .api.v1.auth import router as auth_router
@@ -365,6 +368,7 @@ app.include_router(offer_router, prefix="/api/v1")
 app.include_router(pipeline_analytics_router, prefix="/api/v1")
 app.include_router(scorecard_router, prefix="/api/v1")
 app.include_router(webhook_router, prefix="/api/v1")
+app.include_router(data_subject_router, prefix="/api/v1")
 app.include_router(workable_router, prefix="/api/v1")
 app.include_router(background_jobs_router, prefix="/api/v1")
 app.include_router(share_links_router, prefix="/api/v1")
