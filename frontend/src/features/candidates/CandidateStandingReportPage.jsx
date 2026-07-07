@@ -12,7 +12,7 @@ import {
   Select,
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
-import { AgentHeader } from '../../shared/layout/AgentHeader';
+import { BreadcrumbsRow } from '../../shared/ui/Breadcrumbs';
 import { DecisionRail } from './DecisionRail';
 import { OverrideModal } from '../home/OverrideModal';
 import { TeachModal } from '../home/TeachModal';
@@ -939,46 +939,12 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   return (
     <div>
       {NavComponent && !isInterviewView ? <NavComponent currentPage="candidates" onNavigate={onNavigate} /> : null}
-      {!isInterviewView ? (
-        // The candidate's identity (avatar, name, meta) lives on the
-        // DecisionRail card — the one surface every view renders, share
-        // routes included — so the header stays a slim page band: the
-        // breadcrumbs carry the name, the right side carries the actions.
-        <AgentHeader
-          title="Candidate report"
-          breadcrumbs={breadcrumbItems}
-          actions={!isClientView ? (
-            <>
-              {application?.workable_profile_url ? (
-                <button
-                  type="button"
-                  className="btn btn-outline btn-sm"
-                  onClick={() => window.open(application.workable_profile_url, '_blank', 'noopener,noreferrer')}
-                >
-                  <ExternalLink size={13} />
-                  Open in Workable
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                onClick={() => handleMintAndCopyShareLink('recruiter', 'Internal share link copied (expires in 7 days).')}
-                disabled={!application?.id || sharingMode === 'recruiter'}
-              >
-                <Copy size={13} />
-                {sharingMode === 'recruiter' ? 'Copying…' : 'Share internally'}
-              </button>
-              <button
-                type="button"
-                className="btn btn-purple btn-sm"
-                onClick={() => handleMintAndCopyShareLink('client', 'Client share link copied (expires in 7 days).')}
-                disabled={!application?.id || sharingMode === 'client'}
-              >
-                {sharingMode === 'client' ? 'Copying…' : 'Share with client'}
-              </button>
-            </>
-          ) : null}
-        />
+      {/* No page header band — the candidate's identity AND the page
+          actions (Workable / share) all live on the DecisionRail card,
+          the one surface every view renders. Only the breadcrumb strip
+          remains for navigation. */}
+      {!isInterviewView && breadcrumbItems ? (
+        <BreadcrumbsRow items={breadcrumbItems} />
       ) : null}
       {/* The agent's recommendation + decision controls now live in the
           DecisionRail (left column of the dossier below), not a full-width
@@ -1054,6 +1020,37 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             candidateName={candidateLabel}
             candidateInitials={candidateInitials}
             candidateMeta={metaParts}
+            footerActions={!isClientView && !isInterviewView ? (
+              <>
+                {application?.workable_profile_url ? (
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={() => window.open(application.workable_profile_url, '_blank', 'noopener,noreferrer')}
+                  >
+                    <ExternalLink size={13} />
+                    Open in Workable
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={() => handleMintAndCopyShareLink('recruiter', 'Internal share link copied (expires in 7 days).')}
+                  disabled={!application?.id || sharingMode === 'recruiter'}
+                >
+                  <Copy size={13} />
+                  {sharingMode === 'recruiter' ? 'Copying…' : 'Share internally'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-purple btn-sm"
+                  onClick={() => handleMintAndCopyShareLink('client', 'Client share link copied (expires in 7 days).')}
+                  disabled={!application?.id || sharingMode === 'client'}
+                >
+                  {sharingMode === 'client' ? 'Copying…' : 'Share with client'}
+                </button>
+              </>
+            ) : null}
             taaliScore={reportModel?.summaryModel?.taaliScore}
             roleFitScore={reportModel?.summaryModel?.roleFitScore}
             assessmentScore={reportModel?.summaryModel?.assessmentScore}
