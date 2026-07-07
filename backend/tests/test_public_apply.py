@@ -5,6 +5,7 @@ from app.domains.assessments_runtime.screening_service import create_role_questi
 from app.models import Candidate, CandidateApplication, Organization, Role
 from app.models.role import ROLE_STATUS_PUBLISHED
 from app.platform.config import settings
+from app.services import rate_limit
 from app.services.rate_limit import reset_memory_buckets
 
 
@@ -12,6 +13,9 @@ from app.services.rate_limit import reset_memory_buckets
 def _enable_apply(monkeypatch):
     monkeypatch.setattr(settings, "ATS_PUBLIC_APPLY_ENABLED", True)
     monkeypatch.setattr(settings, "ATS_APPLY_RATE_LIMIT_PER_HOUR", 20)
+    # Force the deterministic in-proc limiter — don't depend on an ambient Redis
+    # (which persists counts across tests and windows).
+    monkeypatch.setattr(rate_limit, "_get_redis", lambda: None)
     reset_memory_buckets()
     yield
     reset_memory_buckets()

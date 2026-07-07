@@ -19,6 +19,10 @@ from .candidate import Candidate
 from .candidate_application import CandidateApplication
 from .candidate_application_event import CandidateApplicationEvent
 from .application_interview import ApplicationInterview
+from .interview_scorecard import (
+    SCORECARD_RECOMMENDATIONS,
+    InterviewScorecard,
+)
 from .pipeline_stage import (
     CANONICAL_SEED_STAGES,
     LEGACY_STAGE_KIND,
