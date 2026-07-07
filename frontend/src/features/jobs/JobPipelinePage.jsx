@@ -16,6 +16,7 @@ import { useJobStatus } from '../../contexts/JobStatusContext';
 import { Spinner, Dialog, Button } from '../../shared/ui/TaaliPrimitives';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
+import { HiringTeamPanel } from './HiringTeamPanel';
 import { useRoleProgressPolling } from './useRoleProgressPolling';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { parseJobSpec, FormattedJobSpecSection } from './jobSpecFormatting';
@@ -1523,6 +1524,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               ))}
             </div>
           </div>
+        ) : activeView === 'hiring-team' ? (
+          <HiringTeamPanel roleId={numericRoleId} />
         ) : (
           <>
             {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — KPI row

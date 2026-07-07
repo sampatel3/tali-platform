@@ -8,6 +8,7 @@ const TABS = [
   { id: 'pipeline', label: 'Pipeline' },
   { id: 'activity', label: 'Job spec' },
   { id: 'role-fit', label: 'Agent settings' },
+  { id: 'hiring-team', label: 'Hiring team' },
 ];
 
 // Sticky sub-tab row for the role detail page. Selection is mirrored
