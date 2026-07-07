@@ -940,17 +940,13 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     <div>
       {NavComponent && !isInterviewView ? <NavComponent currentPage="candidates" onNavigate={onNavigate} /> : null}
       {!isInterviewView ? (
+        // The candidate's identity (avatar, name, meta) lives on the
+        // DecisionRail card — the one surface every view renders, share
+        // routes included — so the header stays a slim page band: the
+        // breadcrumbs carry the name, the right side carries the actions.
         <AgentHeader
-          kicker="Candidate standing report"
-          title={candidateLabel}
-          period={false}
-          subtitle={metaParts.length ? metaParts.join(' · ') : 'Candidate standing report'}
+          title="Candidate report"
           breadcrumbs={breadcrumbItems}
-          preTitle={(
-            <div className="ah-cand-pre">
-              <div className="ah-cand-avatar" aria-hidden="true">{candidateInitials}</div>
-            </div>
-          )}
           actions={!isClientView ? (
             <>
               {application?.workable_profile_url ? (
@@ -1055,6 +1051,9 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
 
         <div className="dossier">
           <DecisionRail
+            candidateName={candidateLabel}
+            candidateInitials={candidateInitials}
+            candidateMeta={metaParts}
             taaliScore={reportModel?.summaryModel?.taaliScore}
             roleFitScore={reportModel?.summaryModel?.roleFitScore}
             assessmentScore={reportModel?.summaryModel?.assessmentScore}

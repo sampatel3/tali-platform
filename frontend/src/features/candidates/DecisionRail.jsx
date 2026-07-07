@@ -36,6 +36,13 @@ const resolvedOutcomeLabel = (application) => {
 };
 
 export const DecisionRail = ({
+  // Candidate identity — the rail is the one surface that renders on EVERY
+  // view of the report (recruiter app, recruiter share, client share), so the
+  // name/meta live here rather than the app-only AgentHeader, which share
+  // routes never render.
+  candidateName = '',
+  candidateInitials = '',
+  candidateMeta = [],
   taaliScore,
   roleFitScore,
   assessmentScore,
@@ -68,8 +75,21 @@ export const DecisionRail = ({
   const isScored = application?.cv_match_score != null;
   const postHandover = isPostHandoverWorkableStage(application?.workable_stage);
 
+  const metaItems = (Array.isArray(candidateMeta) ? candidateMeta : []).filter(Boolean);
+
   return (
     <aside className="dossier-rail">
+      {candidateName ? (
+        <div className="dr-id">
+          <div className="dr-id-avatar" aria-hidden="true">{candidateInitials || 'C'}</div>
+          <div className="dr-id-name">{candidateName}</div>
+          {metaItems.length ? (
+            <div className="dr-id-meta">
+              {metaItems.map((item) => <span key={item}>{item}</span>)}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <div className="dr-score">
         <ScoreRing score={Number(taaliScore) || 0} label="" size={104} strokeWidth={9} />
         <div className="dr-score-label">Taali score</div>

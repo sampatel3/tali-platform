@@ -12,6 +12,7 @@ import {
 import {
   ResponsiveContainer,
   LineChart,
+  Legend,
   Line,
   XAxis,
   YAxis,
@@ -60,26 +61,26 @@ export const CandidateAiUsageTab = ({ candidate }) => {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Card className="p-3.5">
-          <div className="font-mono text-xs text-[var(--taali-muted)]">Avg Prompt clarity</div>
-          <div className="text-xl font-bold text-[var(--taali-text)]">{assessment.prompt_quality_score != null ? Math.round(assessment.prompt_quality_score * 10) : '--'}<span className="text-xs text-[var(--taali-muted)]"> / 100</span></div>
+          <div className="text-xs font-medium uppercase tracking-[0.05em] text-[var(--taali-muted)]">Avg prompt clarity</div>
+          <div className="mt-1 text-xl font-bold text-[var(--taali-text)]">{assessment.prompt_quality_score != null ? Math.round(assessment.prompt_quality_score * 10) : '--'}<span className="text-xs font-medium text-[var(--taali-muted)]"> / 100</span></div>
         </Card>
         <Card className="p-3.5">
-          <div className="font-mono text-xs text-[var(--taali-muted)]">Time to First Prompt</div>
-          <div className="text-xl font-bold text-[var(--taali-text)]">{assessment.time_to_first_prompt_seconds ? `${Math.floor(assessment.time_to_first_prompt_seconds / 60)}m ${Math.round(assessment.time_to_first_prompt_seconds % 60)}s` : '--'}</div>
+          <div className="text-xs font-medium uppercase tracking-[0.05em] text-[var(--taali-muted)]">Time to first prompt</div>
+          <div className="mt-1 text-xl font-bold text-[var(--taali-text)]">{assessment.time_to_first_prompt_seconds ? `${Math.floor(assessment.time_to_first_prompt_seconds / 60)}m ${Math.round(assessment.time_to_first_prompt_seconds % 60)}s` : '--'}</div>
         </Card>
         <Card className="p-3.5">
-          <div className="font-mono text-xs text-[var(--taali-muted)]">Browser Focus</div>
+          <div className="text-xs font-medium uppercase tracking-[0.05em] text-[var(--taali-muted)]">Browser focus</div>
           <div
-            className={`text-xl font-bold ${assessment.browser_focus_ratio != null && assessment.browser_focus_ratio < 0.8 ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-text)]'}`}
+            className={`mt-1 text-xl font-bold ${assessment.browser_focus_ratio != null && assessment.browser_focus_ratio < 0.8 ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-text)]'}`}
           >
             {assessment.browser_focus_ratio != null ? `${Math.round(assessment.browser_focus_ratio * 100)}%` : '--'}
           </div>
         </Card>
         <Card className="p-3.5">
-          <div className="font-mono text-xs text-[var(--taali-muted)]">Tab Switches</div>
-          <div className={`text-xl font-bold ${assessment.tab_switch_count > 5 ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-text)]'}`}>{assessment.tab_switch_count ?? '--'}</div>
+          <div className="text-xs font-medium uppercase tracking-[0.05em] text-[var(--taali-muted)]">Tab switches</div>
+          <div className={`mt-1 text-xl font-bold ${assessment.tab_switch_count > 5 ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-text)]'}`}>{assessment.tab_switch_count ?? '--'}</div>
         </Card>
       </div>
 
@@ -92,7 +93,10 @@ export const CandidateAiUsageTab = ({ candidate }) => {
 
       {assessment.prompt_analytics?.per_prompt_scores?.length > 0 ? (
         <Panel className="p-3.5">
-          <div className="mb-4 font-bold">Prompt clarity progression</div>
+          <div className="mb-1 font-bold">Prompt clarity progression</div>
+          <div className="mb-3 text-xs text-[var(--taali-muted)]">
+            Per-prompt scores out of 10 — clarity, specificity and efficiency across the session.
+          </div>
           <div style={{ width: '100%', height: 220 }}>
             <ResponsiveContainer>
               <LineChart
@@ -104,12 +108,13 @@ export const CandidateAiUsageTab = ({ candidate }) => {
                 }))}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="#ebe7f8" />
-                <XAxis dataKey="name" tick={{ fontSize: 10, fontFamily: 'monospace' }} />
-                <YAxis domain={[0, 10]} tick={{ fontSize: 10 }} />
+                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                <YAxis domain={[0, 10]} tick={{ fontSize: 11 }} width={28} />
                 <Tooltip />
-                <Line type="monotone" dataKey="clarity" stroke="var(--taali-purple)" strokeWidth={2} dot={{ r: 3 }} />
-                <Line type="monotone" dataKey="specificity" stroke="#2d2d44" strokeWidth={1.3} />
-                <Line type="monotone" dataKey="efficiency" stroke="#6b7280" strokeWidth={1.3} />
+                <Legend iconType="plainline" wrapperStyle={{ fontSize: 12 }} />
+                <Line type="monotone" dataKey="clarity" name="Clarity" stroke="var(--taali-purple)" strokeWidth={2} dot={{ r: 3 }} />
+                <Line type="monotone" dataKey="specificity" name="Specificity" stroke="#2d2d44" strokeWidth={1.3} dot={false} />
+                <Line type="monotone" dataKey="efficiency" name="Efficiency" stroke="#9ca3af" strokeWidth={1.3} dot={false} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -117,46 +122,54 @@ export const CandidateAiUsageTab = ({ candidate }) => {
       ) : null}
 
       <Panel className="p-3.5">
-        <div className="mb-4 font-bold">Prompt Log ({promptList.length} prompts)</div>
-        <div className="mb-3 font-mono text-xs text-[var(--taali-muted)]">
-          Clarity = clear, structured asks · Specificity = concrete context and references · Efficiency = prompt-to-action quality (all /10)
+        <div className="mb-1 font-bold">Prompt log · {promptList.length} prompt{promptList.length === 1 ? '' : 's'}</div>
+        <div className="mb-3 text-xs text-[var(--taali-muted)]">
+          Every prompt the candidate sent, scored /10 for clarity, specificity and efficiency.
         </div>
-        <div className="space-y-3">
+        <div className="space-y-2.5">
           {promptList.map((p, i) => {
             const perPrompt = assessment.prompt_analytics?.per_prompt_scores?.[i];
+            const promptText = String(p.message || p.text || p.content || '').trim();
+            const promptTime = p.timestamp
+              ? new Date(p.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : null;
             return (
               <Card key={i} className="p-3">
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <Badge variant="purple" className="font-mono text-[0.6875rem]">#{i + 1}</Badge>
-                    {p.timestamp ? <span className="font-mono text-xs text-[var(--taali-muted)]">{new Date(p.timestamp).toLocaleTimeString()}</span> : null}
-                    {perPrompt ? <span className="font-mono text-xs text-[var(--taali-muted)]">{perPrompt.word_count} words</span> : null}
-                  </div>
+                <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                  <Badge variant="muted" className="text-[0.6875rem]">#{i + 1}{promptTime ? ` · ${promptTime}` : ''}</Badge>
                   {perPrompt ? (
-                    <div className="flex items-center gap-1">
-                      <Badge variant="purple" className="font-mono text-[0.6875rem]" title="Clarity: how understandable and structured the prompt is.">
-                        Clarity: {perPrompt.clarity}
+                    <>
+                      <Badge variant="purple" className="text-[0.6875rem]" title="Clarity /10: how understandable and structured the prompt is.">
+                        Clarity {perPrompt.clarity}
                       </Badge>
-                      <Badge variant="muted" className="font-mono text-[0.6875rem]" title="Specificity: how concrete the prompt context is (files, errors, code).">
-                        Specificity: {perPrompt.specificity}
+                      <Badge variant="purple" className="text-[0.6875rem]" title="Specificity /10: how concrete the prompt context is (files, errors, code).">
+                        Specificity {perPrompt.specificity}
                       </Badge>
-                      <Badge variant="muted" className="font-mono text-[0.6875rem]" title="Efficiency: whether the prompt led to actionable iteration.">
-                        Efficiency: {perPrompt.efficiency}
+                      <Badge variant="purple" className="text-[0.6875rem]" title="Efficiency /10: whether the prompt led to actionable iteration.">
+                        Efficiency {perPrompt.efficiency}
                       </Badge>
-                    </div>
+                    </>
+                  ) : null}
+                  {perPrompt?.is_vague ? <Badge variant="warning" className="text-[0.6875rem]">Vague</Badge> : null}
+                  {p.paste_detected ? <Badge variant="warning" className="text-[0.6875rem]" title="Large paste detected in this prompt.">Pasted</Badge> : null}
+                  {perPrompt?.has_context ? <Badge variant="success" className="text-[0.6875rem]" title="The prompt carried concrete context (files, errors, code).">Has context</Badge> : null}
+                  {perPrompt ? (
+                    <span className="ml-auto text-xs text-[var(--taali-muted)]">
+                      {perPrompt.word_count} word{perPrompt.word_count === 1 ? '' : 's'}
+                      {p.response_latency_ms ? ` · ${(p.response_latency_ms / 1000).toFixed(1)}s to respond` : ''}
+                    </span>
                   ) : null}
                 </div>
 
-                <div className="bg-[var(--taali-purple-soft)] p-2 font-mono text-sm text-[var(--taali-text)]">
-                  {p.message || p.text || p.content}
-                </div>
-
-                <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                  {perPrompt?.has_context ? <Badge variant="success" className="font-mono text-[0.6875rem]">Has Context</Badge> : null}
-                  {perPrompt?.is_vague ? <Badge variant="warning" className="font-mono text-[0.6875rem]">Vague</Badge> : null}
-                  {p.paste_detected ? <Badge variant="warning" className="font-mono text-[0.6875rem]">PASTED</Badge> : null}
-                  {p.response_latency_ms ? <Badge variant="muted" className="font-mono text-[0.6875rem]">{p.response_latency_ms}ms</Badge> : null}
-                </div>
+                {promptText ? (
+                  <div className="border-l-2 border-[var(--taali-purple-soft)] pl-3 text-sm leading-relaxed text-[var(--taali-text)]">
+                    {promptText}
+                  </div>
+                ) : (
+                  <div className="border-l-2 border-[var(--taali-border)] pl-3 text-sm italic text-[var(--taali-muted)]">
+                    Empty prompt
+                  </div>
+                )}
               </Card>
             );
           })}
@@ -169,12 +182,12 @@ export const CandidateAiUsageTab = ({ candidate }) => {
 
       {promptList.length > 0 && assessment.prompt_analytics ? (
         <Panel className="p-4">
-          <div className="mb-3 font-bold">Prompt Statistics</div>
-          <div className="grid grid-cols-2 gap-3 font-mono text-sm md:grid-cols-4">
-            <div><span className="text-[var(--taali-muted)]">Avg Words:</span> {assessment.prompt_analytics.metric_details?.word_count_avg || '—'}</div>
-            <div><span className="text-[var(--taali-muted)]">Questions:</span> {assessment.prompt_analytics.metric_details?.question_presence ? `${(assessment.prompt_analytics.metric_details.question_presence * 100).toFixed(0)}%` : '—'}</div>
-            <div><span className="text-[var(--taali-muted)]">Code Context:</span> {assessment.prompt_analytics.metric_details?.code_snippet_rate ? `${(assessment.prompt_analytics.metric_details.code_snippet_rate * 100).toFixed(0)}%` : '—'}</div>
-            <div><span className="text-[var(--taali-muted)]">Paste Detected:</span> {assessment.prompt_analytics.metric_details?.paste_ratio ? `${(assessment.prompt_analytics.metric_details.paste_ratio * 100).toFixed(0)}%` : '0%'}</div>
+          <div className="mb-3 font-bold">Prompt statistics</div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <div className="text-sm"><div className="text-xs text-[var(--taali-muted)]">Avg words</div><div className="mt-0.5 font-semibold text-[var(--taali-text)]">{assessment.prompt_analytics.metric_details?.word_count_avg || '—'}</div></div>
+            <div className="text-sm"><div className="text-xs text-[var(--taali-muted)]">Questions</div><div className="mt-0.5 font-semibold text-[var(--taali-text)]">{assessment.prompt_analytics.metric_details?.question_presence ? `${(assessment.prompt_analytics.metric_details.question_presence * 100).toFixed(0)}%` : '—'}</div></div>
+            <div className="text-sm"><div className="text-xs text-[var(--taali-muted)]">Code context</div><div className="mt-0.5 font-semibold text-[var(--taali-text)]">{assessment.prompt_analytics.metric_details?.code_snippet_rate ? `${(assessment.prompt_analytics.metric_details.code_snippet_rate * 100).toFixed(0)}%` : '—'}</div></div>
+            <div className="text-sm"><div className="text-xs text-[var(--taali-muted)]">Paste detected</div><div className="mt-0.5 font-semibold text-[var(--taali-text)]">{assessment.prompt_analytics.metric_details?.paste_ratio ? `${(assessment.prompt_analytics.metric_details.paste_ratio * 100).toFixed(0)}%` : '0%'}</div></div>
           </div>
         </Panel>
       ) : null}

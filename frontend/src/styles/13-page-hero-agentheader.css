@@ -450,24 +450,6 @@
 .ah-substrip-main { flex: 1; min-width: 0; }
 .ah-substrip-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
-/* Candidate detail avatar (preTitle slot) — inline, left of the title. */
-.ah-cand-pre { display: flex; align-items: center; }
-.ah-cand-pre .ah-cand-avatar {
-  width: 46px;
-  height: 46px;
-  flex-shrink: 0;
-  border-radius: 12px;
-  background: var(--accent-soft);
-  border: 1px solid var(--purple-soft);
-  color: var(--purple);
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 1.2rem;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
 /* Role-detail facts — a horizontal row inside the sub-strip. */
 .ah-facts {
   display: flex;
