@@ -753,9 +753,11 @@ export const HomeNow = ({
   const visiblePending = useMemo(() => effDecisions.filter((d) => d.status === 'pending'), [effDecisions]);
   // "Skip & advance" only makes sense for the assessment decisions — it skips
   // the assessment and re-queues the candidate as an advance. It's meaningless
-  // (and a no-op the server would reject) for an advance or reject decision, so
-  // in the advance / reject queues there are no targets and the bulk button is
-  // hidden. In a mixed "all types" view it acts on just the assessment subset.
+  // (and a no-op the server would reject) for an advance or reject decision.
+  // The bulk button only shows when the queue is filtered to the Send chip
+  // (filters.type === 'assessment'): in a mixed "all types" view the count
+  // would cover an invisible subset of the list, and the recruiter couldn't
+  // tell which cards it was about to act on.
   const skipAdvanceTargets = useMemo(
     () => visiblePending.filter(
       (d) => d.decision_type === 'send_assessment'
@@ -919,7 +921,7 @@ export const HomeNow = ({
         <Check size={13} strokeWidth={2} aria-hidden="true" style={{ marginRight: 6, verticalAlign: '-2px' }} />
         {bulkBusy ? 'Approving…' : `Approve ${visiblePending.length} visible`}
       </button>
-      {skipAdvanceTargets.length > 0 ? (
+      {filters.type === 'assessment' && skipAdvanceTargets.length > 0 ? (
         <button
           type="button"
           className="btn btn-outline btn-sm"
