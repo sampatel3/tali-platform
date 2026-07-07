@@ -197,6 +197,12 @@
   flex-direction: column;
   min-height: 140px;
 }
+/* Drag-and-drop: a column lights up when a chip is dragged over it. */
+.ce-col.is-drop-target {
+  border-color: var(--purple, #7f39fb);
+  border-style: dashed;
+  background: color-mix(in oklab, var(--purple, #7f39fb) 8%, var(--bg-2, #fff));
+}
 .ce-col-head {
   display: flex;
   align-items: center;
@@ -279,6 +285,9 @@
 .ce-chip:hover {
   border-color: color-mix(in oklab, var(--purple, #7f39fb) 30%, var(--line, #e8e2ee));
 }
+/* Grab affordance for the draggable chip (draggable={true} adds the attr). */
+.ce-chip[draggable="true"] { cursor: grab; }
+.ce-chip[draggable="true"]:active { cursor: grabbing; }
 .ce-chip-text {
   flex: 1;
   background: none;

@@ -1,5 +1,5 @@
 /* eslint-disable react/prop-types */
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 
 import './CriteriaEditor.css';
 
@@ -75,6 +75,8 @@ const ChipRow = ({
   mode,
   onEdit,
   onDelete,
+  onDragStartChip,
+  onDragEndChip,
   busy,
 }) => {
   const [editing, setEditing] = useState(false);
@@ -108,8 +110,24 @@ const ChipRow = ({
     setEditing(false);
   };
 
+  // Native HTML5 drag lets a recruiter drop a chip into another bucket
+  // column. Disabled while editing so text selection in the input still
+  // works, and while a mutation is in flight. Click-to-edit remains the
+  // keyboard-accessible path — native DnD is pointer-only.
+  const draggable = !editing && !busy;
+
   return (
-    <li className={`ce-chip ce-chip--${chip.bucket}`} data-source={sourceClass || undefined}>
+    <li
+      className={`ce-chip ce-chip--${chip.bucket}`}
+      data-source={sourceClass || undefined}
+      draggable={draggable}
+      onDragStart={draggable ? (e) => {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', String(chip.id));
+        onDragStartChip(chip);
+      } : undefined}
+      onDragEnd={draggable ? onDragEndChip : undefined}
+    >
       {sourceClass ? (
         <span className={`ce-source-dot ce-source-dot--${sourceClass}`} title={sourceTitle} aria-label={sourceTitle} />
       ) : null}
@@ -160,9 +178,25 @@ const Column = ({
   mode,
   onEdit,
   onDelete,
+  onDragStartChip,
+  onDragEndChip,
+  onDropChip,
+  isDropTarget,
+  onDragEnterColumn,
+  onDragLeaveColumn,
   busy,
 }) => (
-  <div className={`ce-col ce-col--${bucket.key}`}>
+  <div
+    className={`ce-col ce-col--${bucket.key}${isDropTarget ? ' is-drop-target' : ''}`}
+    onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
+    onDragEnter={() => onDragEnterColumn(bucket.key)}
+    onDragLeave={(e) => {
+      // Only clear when the pointer leaves the column, not when it crosses
+      // onto a child element (dragleave fires on every child boundary).
+      if (!e.currentTarget.contains(e.relatedTarget)) onDragLeaveColumn(bucket.key);
+    }}
+    onDrop={(e) => { e.preventDefault(); onDropChip(bucket.key); }}
+  >
     <div className="ce-col-head">
       <span className="ce-col-label">
         <span className={`ce-col-swatch ce-col-swatch--${bucket.key}`} />
@@ -179,6 +213,8 @@ const Column = ({
             mode={mode}
             onEdit={onEdit}
             onDelete={onDelete}
+            onDragStartChip={onDragStartChip}
+            onDragEndChip={onDragEndChip}
             busy={busy}
           />
         ))}
@@ -323,6 +359,34 @@ const CriteriaEditor = ({
 }) => {
   const active = (criteria || []).filter(isActive);
 
+  // Drag-and-drop between bucket columns. The dragged chip is held in a ref
+  // (no re-render needed on drag start); `dragOverBucket` drives the drop
+  // highlight. A drop into a different bucket is one onUpdate bucket change.
+  const draggingRef = useRef(null);
+  const [dragOverBucket, setDragOverBucket] = useState(null);
+
+  const handleDragStartChip = (chip) => { draggingRef.current = chip; };
+  const handleDragEndChip = () => {
+    draggingRef.current = null;
+    setDragOverBucket(null);
+  };
+  const handleDropChip = (bucketKey) => {
+    const chip = draggingRef.current;
+    draggingRef.current = null;
+    setDragOverBucket(null);
+    if (chip && chip.bucket !== bucketKey) {
+      onUpdate(chip.id, { bucket: bucketKey });
+    }
+  };
+  const handleDragEnterColumn = (bucketKey) => {
+    const chip = draggingRef.current;
+    // Don't highlight the column the chip already lives in.
+    if (chip && chip.bucket !== bucketKey) setDragOverBucket(bucketKey);
+  };
+  const handleDragLeaveColumn = (bucketKey) => {
+    setDragOverBucket((cur) => (cur === bucketKey ? null : cur));
+  };
+
   const grouped = useMemo(() => {
     const byBucket = { must: [], preferred: [], constraint: [] };
     active.forEach((c) => {
@@ -361,6 +425,12 @@ const CriteriaEditor = ({
             mode={mode}
             onEdit={onUpdate}
             onDelete={onDelete}
+            onDragStartChip={handleDragStartChip}
+            onDragEndChip={handleDragEndChip}
+            onDropChip={handleDropChip}
+            isDropTarget={dragOverBucket === bucket.key}
+            onDragEnterColumn={handleDragEnterColumn}
+            onDragLeaveColumn={handleDragLeaveColumn}
             busy={busy}
           />
         ))}
