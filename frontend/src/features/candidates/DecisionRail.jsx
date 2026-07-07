@@ -43,6 +43,9 @@ export const DecisionRail = ({
   candidateName = '',
   candidateInitials = '',
   candidateMeta = [],
+  // Page-level actions (Open in Workable / share links) — recruiter-app
+  // only; the page passes null on share routes and client views.
+  footerActions = null,
   taaliScore,
   roleFitScore,
   assessmentScore,
@@ -202,6 +205,10 @@ export const DecisionRail = ({
           <div className="dr-fact"><span>Experience</span><b>{experienceLabel}</b></div>
         ) : null}
       </div>
+
+      {footerActions ? (
+        <div className="dr-page-actions" data-internal-only>{footerActions}</div>
+      ) : null}
 
       {provenance ? (
         <ScoreProvenance provenance={provenance} className="dr-prov" density="full" />

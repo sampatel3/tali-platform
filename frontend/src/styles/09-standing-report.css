@@ -1904,6 +1904,17 @@ button.eng-badge-button:focus-visible {
   color: var(--mute);
 }
 .dossier-rail .dr-fact b { color: var(--ink); font-weight: 600; }
+/* Page-level actions (Workable / share) — moved off the retired header
+   band; stacked full-width between the facts and the provenance line. */
+.dossier-rail .dr-page-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.dossier-rail .dr-page-actions .btn { width: 100%; justify-content: center; }
 .dossier-rail .dr-prov {
   margin-top: 14px;
   justify-content: center;
