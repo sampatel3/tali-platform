@@ -16,6 +16,9 @@ export { team } from './teamClient';
 export { hiringTeam } from './hiringTeamClient';
 export { scorecards } from './scorecardsClient';
 export { offers } from './offersClient';
+export { webhooks } from './webhooksClient';
+export { offerTemplates } from './offerTemplatesClient';
+export { compliance } from './complianceClient';
 export { agent } from './agentClient';
 export { agentChat } from './agentChatClient';
 export {

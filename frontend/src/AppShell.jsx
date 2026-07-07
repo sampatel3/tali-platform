@@ -120,6 +120,9 @@ const CareersJobPage = lazy(() =>
 const PipelineAnalyticsPage = lazy(() =>
   import('./features/analytics/PipelineAnalyticsPage').then((m) => ({ default: m.PipelineAnalyticsPage }))
 );
+const AtsAdminPage = lazy(() =>
+  import('./features/admin/AtsAdminPage').then((m) => ({ default: m.AtsAdminPage }))
+);
 
 const isPublicCandidateSharePath = (pathname, search = '') => {
   if (pathname.startsWith('/c/')) return true;
@@ -165,6 +168,7 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     '/tasks',
     '/tasks/bespoke',
     '/candidate-detail',
+    '/ats-admin',
     ].includes(pathname)
     || pathname.startsWith('/jobs/')
     || pathname.startsWith('/assessments/')
@@ -778,6 +782,17 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <PipelineAnalyticsPage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
+      />
+      <Route
+        path="/ats-admin"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <AtsAdminPage
               onNavigate={navigateToPage}
               NavComponent={DashboardNavWithMode}
             />
