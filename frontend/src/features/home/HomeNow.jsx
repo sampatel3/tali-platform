@@ -84,6 +84,14 @@ const TYPE_OPTIONS = [
   { id: 'skip_assessment_reject', label: 'Pre-screen', hint: 'Rejected at pre-screen, before any assessment' },
 ];
 
+// Client-side mirror of the backend's DECISION_TYPE_CATEGORIES (agentic
+// routes): which decision_types each category chip expands to. Non-category
+// ids ('reject', 'skip_assessment_reject') filter 1:1 on decision_type.
+const TYPE_CATEGORY_EXPANSION = {
+  advance: ['advance_to_interview'],
+  assessment: ['send_assessment', 'resend_assessment_invite'],
+};
+
 const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
   <div className="rq-toolbar">
     <div className="rq-toolbar-l">
@@ -599,6 +607,19 @@ export const HomeNow = ({
     (d) => !filters.role_id || String(d?.role_id) === String(filters.role_id),
     [filters.role_id],
   );
+  // Same guard for the decision-type chips: the server fetch honors
+  // filters.type, but stale-while-revalidate keeps the previous filter's rows
+  // rendered while the switch is in flight — so clamp the displayed rows to
+  // the requested type too. Mirrors the backend's DECISION_TYPE_CATEGORIES
+  // expansion ('advance' / 'assessment' are categories; the rest are 1:1).
+  const inTypeScope = useCallback(
+    (d) => {
+      if (!filters.type) return true;
+      const types = TYPE_CATEGORY_EXPANSION[filters.type] || [filters.type];
+      return types.includes(d?.decision_type);
+    },
+    [filters.type],
+  );
 
   // Overlays applied to the server data: approved-in-flight rows leave the
   // pending sidebar entirely (the queue visibly shrinks) and show as
@@ -612,15 +633,15 @@ export const HomeNow = ({
   const staleOnly = filters.status === 'stale';
   const effPending = useMemo(
     () => pendingOrdered.filter(
-      (d) => inRoleScope(d) && !acted.has(d.id) && (!staleOnly || d.is_stale),
+      (d) => inRoleScope(d) && inTypeScope(d) && !acted.has(d.id) && (!staleOnly || d.is_stale),
     ),
-    [pendingOrdered, acted, inRoleScope, staleOnly],
+    [pendingOrdered, acted, inRoleScope, inTypeScope, staleOnly],
   );
   const effDecisions = useMemo(
     () => decisions
-      .filter(inRoleScope)
+      .filter((d) => inRoleScope(d) && inTypeScope(d))
       .map((d) => (acted.has(d.id) ? { ...d, status: 'processing' } : d)),
-    [decisions, acted, inRoleScope],
+    [decisions, acted, inRoleScope, inTypeScope],
   );
 
   const selected = useMemo(
@@ -753,9 +774,11 @@ export const HomeNow = ({
   const visiblePending = useMemo(() => effDecisions.filter((d) => d.status === 'pending'), [effDecisions]);
   // "Skip & advance" only makes sense for the assessment decisions — it skips
   // the assessment and re-queues the candidate as an advance. It's meaningless
-  // (and a no-op the server would reject) for an advance or reject decision, so
-  // in the advance / reject queues there are no targets and the bulk button is
-  // hidden. In a mixed "all types" view it acts on just the assessment subset.
+  // (and a no-op the server would reject) for an advance or reject decision.
+  // The bulk button only shows when the queue is filtered to the Send chip
+  // (filters.type === 'assessment'): in a mixed "all types" view the count
+  // would cover an invisible subset of the list, and the recruiter couldn't
+  // tell which cards it was about to act on.
   const skipAdvanceTargets = useMemo(
     () => visiblePending.filter(
       (d) => d.decision_type === 'send_assessment'
@@ -919,7 +942,7 @@ export const HomeNow = ({
         <Check size={13} strokeWidth={2} aria-hidden="true" style={{ marginRight: 6, verticalAlign: '-2px' }} />
         {bulkBusy ? 'Approving…' : `Approve ${visiblePending.length} visible`}
       </button>
-      {skipAdvanceTargets.length > 0 ? (
+      {filters.type === 'assessment' && skipAdvanceTargets.length > 0 ? (
         <button
           type="button"
           className="btn btn-outline btn-sm"

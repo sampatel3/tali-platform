@@ -124,7 +124,11 @@ describe('HomeNow — optimistic Send assessment', () => {
     let resolveBulk;
     bulkOverrideDecisions.mockImplementation(() => new Promise((r) => { resolveBulk = r; }));
 
-    const { container, reload } = renderHome();
+    // The bulk button only renders on the Send view (type: 'assessment') —
+    // there the count matches exactly the cards on screen.
+    const { container, reload } = renderHome({
+      filters: { status: 'pending', role_id: null, type: 'assessment', q: null },
+    });
     const sidebar = sidebarOf(container);
     expect(within(sidebar).getByText('Miguel Parracho')).toBeInTheDocument();
     expect(within(sidebar).getByText('Ada Lovelace')).toBeInTheDocument();
@@ -143,6 +147,36 @@ describe('HomeNow — optimistic Send assessment', () => {
 
     await act(async () => { resolveBulk({ data: { requested: 2, accepted: 2, failures: [] } }); });
     await waitFor(() => expect(reload).toHaveBeenCalled());
+  });
+
+  it('clamps rows to the Send filter during revalidation, so the bulk count matches the screen', () => {
+    // Stale-while-revalidate window: the parent still holds the previous
+    // (mixed "All") rows while filters.type has already moved to 'assessment'.
+    // Without a client-side type guard the bulk button would sit over a mixed
+    // list and act on an invisible subset — the mismatch this gate removes.
+    const mixed = [
+      mkDecision(1, 'Sandy Sender'),
+      { ...mkDecision(2, 'Andy Advancer'), decision_type: 'advance_to_interview' },
+    ];
+    const { container } = renderHome({
+      decisions: mixed,
+      pendingOrdered: mixed,
+      filters: { status: 'pending', role_id: null, type: 'assessment', q: null },
+    });
+    const sidebar = sidebarOf(container);
+    expect(within(sidebar).getByText('Sandy Sender')).toBeInTheDocument();
+    expect(within(sidebar).queryByText('Andy Advancer')).not.toBeInTheDocument();
+    expect(within(container).getByRole('button', { name: /skip & advance 1 visible/i })).toBeInTheDocument();
+  });
+
+  it('hides bulk "Skip & advance" outside the Send view — a mixed queue can\'t show which cards it targets', () => {
+    // Same assessment decisions, but the type filter is All (null): the bulk
+    // approve stays, the bulk skip & advance is gone. (The per-card
+    // "Skip & advance" override in the detail pane is unaffected, so match
+    // the bulk button's "N visible" wording.)
+    const { container } = renderHome();
+    expect(within(container).getByRole('button', { name: /approve 2 visible/i })).toBeInTheDocument();
+    expect(within(container).queryByRole('button', { name: /skip & advance \d+ visible/i })).not.toBeInTheDocument();
   });
 });
 
