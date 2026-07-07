@@ -82,13 +82,16 @@ const ChipRow = ({
 
   const isWorkspaceDerived = mode === 'role' && chip.org_criterion_id != null;
   const isCustomized = isWorkspaceDerived && chip.customized_at != null;
+  const isSpecDerived = mode === 'role' && chip.source === 'derived_from_spec';
   const sourceClass = mode === 'role'
-    ? (isCustomized ? 'edited' : isWorkspaceDerived ? 'workspace' : 'role')
+    ? (isSpecDerived ? 'spec' : isCustomized ? 'edited' : isWorkspaceDerived ? 'workspace' : 'role')
     : null;
   const sourceTitle = mode === 'role'
-    ? (isCustomized
-      ? 'From workspace · edited on this role'
-      : isWorkspaceDerived ? 'From workspace' : 'Added on this role')
+    ? (isSpecDerived
+      ? 'From the job spec'
+      : isCustomized
+        ? 'From workspace · edited on this role'
+        : isWorkspaceDerived ? 'From workspace' : 'Added on this role')
     : null;
 
   const startEdit = () => {
@@ -273,6 +276,9 @@ const RoleStateBar = ({ chips, onSync, onReset, busy, syncing, resetting }) => {
 
 const SourceLegend = () => (
   <div className="ce-legend">
+    <span className="ce-legend-item">
+      <span className="ce-source-dot ce-source-dot--spec" aria-hidden="true" /> From the job spec
+    </span>
     <span className="ce-legend-item">
       <span className="ce-source-dot ce-source-dot--workspace" aria-hidden="true" /> From workspace
     </span>
