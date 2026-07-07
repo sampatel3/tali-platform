@@ -297,6 +297,9 @@ from .domains.assessments_runtime.job_hiring_team_routes import (
 from .domains.assessments_runtime.offer_template_routes import (
     router as offer_template_router,
 )
+from .domains.assessments_runtime.offer_routes import (
+    router as offer_router,
+)
 from .domains.assessments_runtime.pipeline_analytics_routes import (
     router as pipeline_analytics_router,
 )
@@ -352,6 +355,7 @@ app.include_router(scoring_router, prefix="/api/v1")
 app.include_router(pipeline_stages_router, prefix="/api/v1")
 app.include_router(job_hiring_team_router, prefix="/api/v1")
 app.include_router(offer_template_router, prefix="/api/v1")
+app.include_router(offer_router, prefix="/api/v1")
 app.include_router(pipeline_analytics_router, prefix="/api/v1")
 app.include_router(workable_router, prefix="/api/v1")
 app.include_router(background_jobs_router, prefix="/api/v1")
