@@ -78,9 +78,6 @@ export const DecisionRail = ({
       {canDecide && isActionable ? (
         <div data-internal-only>
           <div className="dr-rec">
-            <div className="dr-rec-kl">
-              <Sparkles size={14} strokeWidth={2.2} aria-hidden="true" /> Agent recommends
-            </div>
             <button
               type="button"
               className="dr-rec-btn"
@@ -89,7 +86,10 @@ export const DecisionRail = ({
             >
               <PrimaryIcon size={16} strokeWidth={2.2} aria-hidden="true" /> {spec.primaryLabel}
             </button>
-            {confPct != null ? <div className="dr-rec-conf">Confidence {confPct}%</div> : null}
+            <div className="dr-rec-kl">
+              <Sparkles size={14} strokeWidth={2.2} aria-hidden="true" /> Agent recommends
+              {confPct != null ? ` · Confidence ${confPct}%` : ''}
+            </div>
           </div>
 
           {flagCount > 0 ? (
