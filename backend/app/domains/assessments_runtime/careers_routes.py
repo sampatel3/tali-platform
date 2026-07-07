@@ -7,11 +7,14 @@ ships separately behind the Redis anti-abuse gate. Registered WITHOUT the
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from ...platform.config import settings
 from ...platform.database import get_db
+from ...services.rate_limit import check_rate_limit
+from .apply_service import submit_application
 from .careers_service import (
     build_job_posting_jsonld,
     get_published_role,
@@ -83,4 +86,69 @@ def public_get_job(org_slug: str, role_slug: str, db: Session = Depends(get_db))
         salary_currency=role.salary_currency,
         salary_period=role.salary_period,
         job_posting_jsonld=build_job_posting_jsonld(role, org),
+    )
+
+
+class ApplyRequest(BaseModel):
+    full_name: str
+    email: str | None = None
+    phone: str | None = None
+    answers: dict = {}
+    source_name: str | None = None
+    resume_url: str | None = None
+
+
+class ApplyResponse(BaseModel):
+    application_id: int
+    created: bool
+    knockout_passed: bool
+    failed_question_ids: list[int] = []
+
+
+@router.post(
+    "/careers/v1/{org_slug}/jobs/{role_slug}/apply",
+    response_model=ApplyResponse,
+    status_code=201,
+)
+def public_apply(
+    org_slug: str,
+    role_slug: str,
+    payload: ApplyRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Public apply (no auth). Flag-gated (503 when off) and rate-limited per
+    client per role. Requires at least one contact key (email or phone)."""
+    if not settings.ATS_PUBLIC_APPLY_ENABLED:
+        raise HTTPException(status_code=503, detail="Applications are not open")
+    if not (payload.email or payload.phone):
+        raise HTTPException(status_code=422, detail="An email or phone is required")
+
+    client_ip = request.client.host if request.client else "unknown"
+    if not check_rate_limit(
+        f"apply:{org_slug}:{role_slug}:{client_ip}",
+        limit=settings.ATS_APPLY_RATE_LIMIT_PER_HOUR,
+        window_seconds=3600,
+    ):
+        raise HTTPException(status_code=429, detail="Too many applications; try again later")
+
+    org, role = get_published_role(db, org_slug, role_slug)
+    if role is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    result = submit_application(
+        db, org.id, role,
+        full_name=payload.full_name,
+        email=payload.email,
+        phone=payload.phone,
+        answers=payload.answers,
+        source_name=payload.source_name,
+        resume_url=payload.resume_url,
+    )
+    db.commit()
+    return ApplyResponse(
+        application_id=result.application.id,
+        created=result.created,
+        knockout_passed=result.knockout_passed,
+        failed_question_ids=result.failed_question_ids,
     )

@@ -444,6 +444,13 @@ class Settings(BaseSettings):
     # per-environment (staging) once the reader surface is fully migrated.
     ATS_CONFIGURABLE_STAGES_ENABLED: bool = False
 
+    # P1: public careers APPLY (unauth write) — OFF by default. The reader
+    # surface (/careers/v1/.../jobs) is always live; the write endpoint is gated
+    # because it needs the shared-Redis anti-abuse limiter verified on staging
+    # before it faces the open internet. Per-window submit caps below.
+    ATS_PUBLIC_APPLY_ENABLED: bool = False
+    ATS_APPLY_RATE_LIMIT_PER_HOUR: int = 20  # per client key (ip + role)
+
     # TAALI score blending. assessment vs. role-fit (0.0..1.0 each); role-fit
     # is a 50/50 mix of CV fit and requirements fit. Weights are normalized in
     # taali_scoring.weighted_average_100, so any pair that's > 0 works.
