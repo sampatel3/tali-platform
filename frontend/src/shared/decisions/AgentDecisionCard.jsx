@@ -171,7 +171,9 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
           <div className="kicker mute" style={{ margin: '0 0 7px' }}>REQUIREMENTS</div>
           {decision.requirements.map((r, i) => (
             <div className="rq-req" key={`${r.label}-${i}`}>
-              <span className="rq-req-nm" title={r.label}>{r.label}</span>
+              <span className="rq-req-nm" data-tip={r.label}>
+                <span className="rq-req-nm-txt">{r.label}</span>
+              </span>
               <span className="rq-req-track">
                 {r.score != null ? (
                   <span

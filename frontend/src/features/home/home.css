@@ -829,13 +829,46 @@
 .rq-reqs { margin: 0 0 14px; }
 .rq-req { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
 .rq-req-nm {
+  position: relative;
   width: 150px;
   flex: none;
   font-size: 0.8125rem;
   color: var(--ink-2);
+}
+/* Ellipsis lives on an inner span: overflow:hidden on the anchor itself would
+   clip the ::after tooltip. */
+.rq-req-nm-txt {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Taali-native tooltip with the full requirement text — instant on hover,
+   replaces the slow native title tooltip. */
+.rq-req-nm::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 7px);
+  z-index: 40;
+  width: max-content;
+  max-width: 340px;
+  padding: 8px 11px;
+  border-radius: 8px;
+  background: var(--ink-2);
+  color: var(--bg-2);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: normal;
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.rq-req-nm:hover::after {
+  opacity: 1;
+  visibility: visible;
 }
 .rq-req-track { flex: 1; height: 6px; border-radius: 999px; background: var(--bg-3); overflow: hidden; }
 .rq-req-fill { display: block; height: 100%; border-radius: 999px; background: var(--purple); }
