@@ -32,6 +32,7 @@ from .data_subject_request import (
     DSR_TYPES,
     DataSubjectRequest,
 )
+from .eeo_response import EEOResponse
 from .pipeline_stage import (
     CANONICAL_SEED_STAGES,
     LEGACY_STAGE_KIND,
@@ -239,6 +240,7 @@ __all__ = [
     "WEBHOOK_EVENT_TYPES",
     "DataSubjectRequest",
     "DSR_TYPES",
+    "EEOResponse",
     "Role",
     "role_tasks",
     "RoleCriterion",

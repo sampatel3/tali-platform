@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
+from typing import Optional
+
 from ...deps import require_role
 from ...models.user import ROLE_ADMIN, User
 from ...platform.database import get_db
@@ -18,6 +20,7 @@ from .data_subject_service import (
     list_requests,
     reject_request,
 )
+from .eeo_service import aggregate_report
 
 _admin = require_role(ROLE_ADMIN)
 
@@ -98,3 +101,13 @@ def post_reject_request(
     db.commit()
     db.refresh(req)
     return req
+
+
+@router.get("/eeo-report")
+def get_eeo_report(
+    role_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(_admin),
+):
+    """Aggregate EEO self-ID counts (never per-candidate). Admin-only."""
+    return aggregate_report(db, current_user.organization_id, role_id=role_id)

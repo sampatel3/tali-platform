@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from ...models.organization import Organization
 from ...platform.config import settings
 from ...platform.database import get_db
 from ...services.rate_limit import check_rate_limit
@@ -20,6 +21,7 @@ from .careers_service import (
     get_published_role,
     list_published_roles,
 )
+from .eeo_service import record_response
 
 router = APIRouter(tags=["Careers (public)"])
 
@@ -152,3 +154,45 @@ def public_apply(
         knockout_passed=result.knockout_passed,
         failed_question_ids=result.failed_question_ids,
     )
+
+
+class EEORequest(BaseModel):
+    gender: str | None = None
+    race_ethnicity: str | None = None
+    veteran_status: str | None = None
+    disability_status: str | None = None
+    declined_to_answer: bool = False
+
+
+@router.post(
+    "/careers/v1/{org_slug}/applications/{application_id}/eeo", status_code=204
+)
+def public_eeo(
+    org_slug: str,
+    application_id: int,
+    payload: EEORequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Voluntary EEO self-identification for a just-submitted application. Public,
+    flag-gated + rate-limited like apply. Stored segregated from scoring."""
+    if not settings.ATS_PUBLIC_APPLY_ENABLED:
+        raise HTTPException(status_code=503, detail="Applications are not open")
+    client_ip = request.client.host if request.client else "unknown"
+    if not check_rate_limit(
+        f"eeo:{org_slug}:{application_id}:{client_ip}",
+        limit=settings.ATS_APPLY_RATE_LIMIT_PER_HOUR,
+        window_seconds=3600,
+    ):
+        raise HTTPException(status_code=429, detail="Too many requests; try again later")
+
+    org = (
+        db.query(Organization)
+        .filter(Organization.slug == (org_slug or "").strip().lower())
+        .first()
+    )
+    if org is None:
+        raise HTTPException(status_code=404, detail="Unknown organization")
+    record_response(db, org.id, application_id, **payload.model_dump())
+    db.commit()
+    return None
