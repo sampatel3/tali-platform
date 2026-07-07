@@ -569,7 +569,7 @@ describe('CandidatesPage', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Standing Candidate' });
     expect(within(dialog).getByText('Assessment')).toBeInTheDocument();
     expect(within(dialog).getByText('Role fit summary')).toBeInTheDocument();
-    expect(within(dialog).queryByText('Candidate standing report')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Candidate report')).not.toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'View full page' }));
 
     await waitFor(() => {
@@ -577,7 +577,7 @@ describe('CandidatesPage', () => {
     });
 
     expect(await screen.findByRole('button', { name: /Back to candidates/i }, { timeout: 5000 })).toBeInTheDocument();
-    expect(await screen.findByText('Candidate standing report', {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(await screen.findByText('Candidate report', {}, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.getAllByText(/Standing Candidate/i).length).toBeGreaterThan(0);
     // Header now exposes one Share-internally + one Share-with-client
     // button. Each mints a fresh 7-day share link and copies the URL

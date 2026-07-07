@@ -1646,6 +1646,55 @@ button.eng-badge-button:focus-visible {
   border-radius: var(--radius-lg);
   padding: 22px;
 }
+/* Candidate identity — name + meta at the top of the rail card. This is the
+   report's identity block on every view (the AgentHeader above is app-only
+   and never renders on share routes). */
+.dossier-rail .dr-id {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 3px;
+  padding-bottom: 14px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.dossier-rail .dr-id-avatar {
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  border: 1px solid var(--purple-soft);
+  color: var(--purple);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 5px;
+}
+.dossier-rail .dr-id-name {
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.dossier-rail .dr-id-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  column-gap: 4px;
+  font-size: 0.75rem;
+  color: var(--mute);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+/* Interpunct separators between meta items, none after the last. */
+.dossier-rail .dr-id-meta span:not(:last-child)::after { content: ' ·'; }
+
 .dossier-rail .dr-score {
   display: flex;
   flex-direction: column;
