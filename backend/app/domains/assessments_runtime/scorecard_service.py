@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 from ...models.candidate_application import CandidateApplication
 from ...models.interview_scorecard import (
     SCORECARD_NO,
-    SCORECARD_NO_DECISION,
     SCORECARD_RECOMMENDATIONS,
     SCORECARD_STRONG_NO,
     SCORECARD_STRONG_YES,

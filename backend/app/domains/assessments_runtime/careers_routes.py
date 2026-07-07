@@ -97,7 +97,6 @@ class ApplyRequest(BaseModel):
     phone: str | None = None
     answers: dict = {}
     source_name: str | None = None
-    resume_url: str | None = None
 
 
 class ApplyResponse(BaseModel):
@@ -145,7 +144,6 @@ def public_apply(
         phone=payload.phone,
         answers=payload.answers,
         source_name=payload.source_name,
-        resume_url=payload.resume_url,
     )
     db.commit()
     return ApplyResponse(

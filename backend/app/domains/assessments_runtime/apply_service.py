@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session
 
 from ...models.candidate import Candidate
@@ -39,7 +38,6 @@ def submit_application(
     phone: str | None = None,
     answers: dict | None = None,
     source_name: str | None = None,
-    resume_url: str | None = None,
 ) -> ApplyResult:
     """Idempotent per (candidate, role): a second submit returns the existing
     application rather than creating a duplicate (the unique
