@@ -379,6 +379,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // retired — the canvas-spec Agent settings tab on this page owns
   // the same controls inline. See the AgentBar onPause handler below.
   const [savingRoleSheet, setSavingRoleSheet] = useState(false);
+  // Job Specification tab is read-first: it shows the spec, and this flips it
+  // into the inline edit form.
+  const [editingSpec, setEditingSpec] = useState(false);
   const [addingCandidate, setAddingCandidate] = useState(false);
   // Only the most recently started loadRoleWorkspace may write state, so a
   // slow earlier load can't clobber fresher state (e.g. revert an optimistic
@@ -656,10 +659,19 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   ], [activeApplications, rejectedApplications]);
 
   // Recruiter chips on this role (excludes derived_from_spec entries — those
-  // come from the job spec parser and are managed separately).
+  // come from the job spec parser). Used for the read-view "Recruiter
+  // requirements" list + the At-a-glance count.
   const roleCriteria = useMemo(() => (
     Array.isArray(role?.criteria)
       ? role.criteria.filter((c) => !c.deleted_at && c.source !== 'derived_from_spec')
+      : []
+  ), [role]);
+  // Everything the Agent-settings criteria editor should show + let you edit:
+  // the recruiter chips AND the requirements derived from the job spec (so the
+  // spec-sourced criteria are visible and editable, not hidden).
+  const agentCriteria = useMemo(() => (
+    Array.isArray(role?.criteria)
+      ? role.criteria.filter((c) => !c.deleted_at)
       : []
   ), [role]);
   const recruiterCriteria = useMemo(() => roleCriteria.map((c) => c.text).filter(Boolean), [roleCriteria]);
@@ -1025,8 +1037,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       await loadRoleWorkspace();
       setRefreshTick((value) => value + 1);
       showToast('Role updated.', 'success');
+      return true;
     } catch (error) {
       setRoleSheetError(getErrorMessage(error, 'Failed to save role.'));
+      return false;
     } finally {
       setSavingRoleSheet(false);
     }
@@ -1486,7 +1500,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           <RoleAgentSettingsTab
             role={role}
             agentStatus={agentStatus}
-            roleCriteria={roleCriteria}
+            roleCriteria={agentCriteria}
             workspaceCriteria={workspaceCriteria}
             criteriaBusy={criteriaBusy}
             criteriaSyncing={criteriaSyncing}
@@ -1562,17 +1576,36 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           // this one is "Job spec".
           <div className="role-desc">
             <div className="role-desc-main">
-              {/* Edit the job directly here — name, description, job-spec file,
-                  and linked tasks (the old "Edit role" slide-over, inline). The
-                  rich read view (requisition spec + ingested JD) sits below. */}
-              <RoleSpecEditPanel
-                role={role}
-                roleTasks={roleTasks}
-                allTasks={allTasks}
-                saving={savingRoleSheet}
-                error={roleSheetError}
-                onSubmit={handleRoleSheetSubmit}
-              />
+              {/* Read-first Job Specification: show the spec, with a single
+                  Edit button that flips these fields (name, description, tasks)
+                  into the inline form. The spec text is updated by pasting it
+                  into the agent — no file upload here (showJobSpec={false}). */}
+              {editingSpec ? (
+                <RoleSpecEditPanel
+                  role={role}
+                  roleTasks={roleTasks}
+                  allTasks={allTasks}
+                  saving={savingRoleSheet}
+                  error={roleSheetError}
+                  showJobSpec={false}
+                  onSubmit={async (payload) => {
+                    const ok = await handleRoleSheetSubmit(payload);
+                    if (ok) setEditingSpec(false);
+                  }}
+                  onCancel={() => { setRoleSheetError(''); setEditingSpec(false); }}
+                />
+              ) : (
+                <>
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <h3 className="text-lg font-semibold text-[var(--taali-text)]">{role?.name || 'Job specification'}</h3>
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      onClick={() => { setRoleSheetError(''); setEditingSpec(true); }}
+                    >
+                      Edit
+                    </button>
+                  </div>
 
               {/* Job lifecycle control (mark filled / external / cancelled) —
                   shown for requisition-origin roles that carry a job_status. */}
@@ -1645,6 +1678,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   </div>
                 ) : null}
               </div>
+                </>
+              )}
             </div>
 
             <div className="role-highlights">

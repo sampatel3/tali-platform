@@ -387,6 +387,27 @@ Banking transformation experience
     expect(await screen.findByText(/Inheriting from workspace/i)).toBeInTheDocument();
   });
 
+  it('shows job-spec-derived requirements on Agent settings, not just recruiter chips', async () => {
+    apiClient.organizations.listCriteria.mockResolvedValueOnce({ data: [] });
+    apiClient.roles.get.mockResolvedValueOnce({
+      data: {
+        ...baseRole,
+        suppressed_org_criterion_ids: [],
+        criteria: [
+          { id: 60, source: 'derived_from_spec', bucket: 'must', text: 'Ships production ML systems', org_criterion_id: null, customized_at: null, ordering: 0, weight: 1.0, must_have: true },
+          { id: 61, source: 'recruiter', bucket: 'preferred', text: 'Banking domain', org_criterion_id: null, customized_at: null, ordering: 1, weight: 1.0, must_have: false },
+        ],
+      },
+    });
+    renderPipeline();
+    await openAgentSettingsTab();
+
+    // The spec-derived requirement is now visible + editable (previously the
+    // Agent-settings editor filtered out source === 'derived_from_spec').
+    expect(await screen.findByText(/Ships production ML systems/i)).toBeInTheDocument();
+    expect(screen.getByText(/Banking domain/i)).toBeInTheDocument();
+  });
+
   it('shows the customized state when the recruiter has added a role-only chip', async () => {
     apiClient.organizations.listCriteria.mockResolvedValueOnce({
       data: [
@@ -430,6 +451,15 @@ Banking transformation experience
     expect(await screen.findByRole('button', { name: /Read full description/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /At a glance/i })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /Pipeline activity/i })).not.toBeInTheDocument();
+
+    // Read-first: the spec shows with an Edit button; the editable Role name
+    // field is hidden until you click Edit, and the job-spec file upload is
+    // gone entirely (spec is updated by pasting into the agent).
+    const editBtn = screen.getByRole('button', { name: /^Edit$/i });
+    expect(screen.queryByText(/Role name/i)).not.toBeInTheDocument();
+    fireEvent.click(editBtn);
+    expect(await screen.findByText(/Role name/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Choose a job specification file/i)).not.toBeInTheDocument();
   });
 
   it('renders a Last updated column and sorts by it (independent of score) via the header', async () => {

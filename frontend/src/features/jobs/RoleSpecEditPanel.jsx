@@ -6,7 +6,7 @@ import { RoleEditFields } from '../candidates/RoleEditFields';
 // <RoleSheet> slide-over, but edited directly in the tab (no modal). Seeds from
 // the current role + linked tasks; Save calls onSubmit({ name, description,
 // jobSpecFile, taskIds }) — the same contract the slide-over used.
-export const RoleSpecEditPanel = ({ role, roleTasks, allTasks, saving, error, onSubmit }) => {
+export const RoleSpecEditPanel = ({ role, roleTasks, allTasks, saving, error, onSubmit, onCancel, showJobSpec = true }) => {
   const [name, setName] = useState(role?.name || '');
   const [description, setDescription] = useState(role?.description || '');
   const [jobSpecFile, setJobSpecFile] = useState(null);
@@ -66,6 +66,7 @@ export const RoleSpecEditPanel = ({ role, roleTasks, allTasks, saving, error, on
         onToggleTask={toggleTask}
         role={role}
         allTasks={allTasks}
+        showJobSpec={showJobSpec}
       />
 
       <div className="role-edit-inline-actions">
@@ -77,6 +78,16 @@ export const RoleSpecEditPanel = ({ role, roleTasks, allTasks, saving, error, on
         >
           {saving ? 'Saving…' : 'Save changes'}
         </button>
+        {onCancel ? (
+          <button
+            type="button"
+            className="btn btn-outline btn-sm"
+            onClick={onCancel}
+            disabled={saving}
+          >
+            Cancel
+          </button>
+        ) : null}
       </div>
     </div>
   );

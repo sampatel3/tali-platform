@@ -331,6 +331,8 @@
 .ce-source-dot--workspace { background: var(--purple-lav, #a78bfa); }
 .ce-source-dot--edited    { background: color-mix(in oklab, var(--purple-lav, #a78bfa) 50%, var(--purple-2, #6b21e8)); }
 .ce-source-dot--role      { background: var(--purple-2, #6b21e8); }
+/* Requirements auto-derived from the job spec. */
+.ce-source-dot--spec      { background: color-mix(in oklab, var(--purple-2, #6b21e8) 65%, var(--purple-lav, #a78bfa)); box-shadow: 0 0 0 2px color-mix(in oklab, var(--purple-lav, #a78bfa) 40%, transparent); }
 
 /* Hidden chips (suppressed workspace chips) section. */
 .ce-hidden { margin-top: 14px; }

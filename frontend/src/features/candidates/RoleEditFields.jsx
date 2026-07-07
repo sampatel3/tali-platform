@@ -30,6 +30,10 @@ export const RoleEditFields = ({
   onToggleTask,
   role,
   allTasks = [],
+  // The job-spec FILE UPLOAD is only for the create-role slide-over. On the Job
+  // Specification tab the spec is updated by pasting it into the agent, so the
+  // tab passes showJobSpec={false} to hide the upload entirely.
+  showJobSpec = true,
 }) => {
   const hasValidName = name.trim().length > 0;
   const descriptionChars = description.length;
@@ -70,32 +74,34 @@ export const RoleEditFields = ({
         </div>
       </section>
 
-      {/* Job spec */}
-      <section>
-        <SectionHeading hint="Used to auto-generate scoring criteria, pre-screen questions, and interview-focus pointers. You can also edit the job spec and criteria directly in agent chat. CV-scoring criteria live on the Agent settings tab.">
-          Job spec
-        </SectionHeading>
-        <div className="space-y-3">
-          {role?.job_spec_filename ? (
-            <Card className="px-3 py-2 text-sm text-[var(--taali-text)]">
-              Current file: <span className="font-medium">{role.job_spec_filename}</span>
-            </Card>
-          ) : null}
-          <label className="block cursor-pointer rounded-[var(--taali-radius-card)] border border-dashed border-[var(--taali-border-muted)] bg-[var(--taali-surface)] p-6 text-center transition hover:border-[var(--taali-purple)] hover:bg-[var(--taali-purple-soft)]">
-            <UploadCloud size={22} className="mx-auto text-[var(--taali-muted)]" />
-            <span className="mt-2 block text-sm font-medium text-[var(--taali-text)]">
-              {jobSpecFile ? jobSpecFile.name : 'Choose a job specification file'}
-            </span>
-            <span className="mt-1 block text-xs text-[var(--taali-muted)]">PDF, DOCX, or TXT</span>
-            <input
-              type="file"
-              accept=".pdf,.docx,.txt"
-              onChange={(event) => onJobSpecFile(event.target.files?.[0] || null)}
-              className="sr-only"
-            />
-          </label>
-        </div>
-      </section>
+      {/* Job spec — upload only in the create-role slide-over (showJobSpec). */}
+      {showJobSpec ? (
+        <section>
+          <SectionHeading hint="Used to auto-generate scoring criteria, pre-screen questions, and interview-focus pointers. You can also edit the job spec and criteria directly in agent chat. CV-scoring criteria live on the Agent settings tab.">
+            Job spec
+          </SectionHeading>
+          <div className="space-y-3">
+            {role?.job_spec_filename ? (
+              <Card className="px-3 py-2 text-sm text-[var(--taali-text)]">
+                Current file: <span className="font-medium">{role.job_spec_filename}</span>
+              </Card>
+            ) : null}
+            <label className="block cursor-pointer rounded-[var(--taali-radius-card)] border border-dashed border-[var(--taali-border-muted)] bg-[var(--taali-surface)] p-6 text-center transition hover:border-[var(--taali-purple)] hover:bg-[var(--taali-purple-soft)]">
+              <UploadCloud size={22} className="mx-auto text-[var(--taali-muted)]" />
+              <span className="mt-2 block text-sm font-medium text-[var(--taali-text)]">
+                {jobSpecFile ? jobSpecFile.name : 'Choose a job specification file'}
+              </span>
+              <span className="mt-1 block text-xs text-[var(--taali-muted)]">PDF, DOCX, or TXT</span>
+              <input
+                type="file"
+                accept=".pdf,.docx,.txt"
+                onChange={(event) => onJobSpecFile(event.target.files?.[0] || null)}
+                className="sr-only"
+              />
+            </label>
+          </div>
+        </section>
+      ) : null}
 
       {/* Tasks */}
       <section>
