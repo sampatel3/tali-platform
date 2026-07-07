@@ -22,6 +22,7 @@ from .careers_service import (
     list_published_roles,
 )
 from .eeo_service import record_response
+from .screening_service import list_role_questions
 
 router = APIRouter(tags=["Careers (public)"])
 
@@ -41,6 +42,16 @@ class PublicCareersResponse(BaseModel):
     jobs: list[PublicRoleSummary]
 
 
+class PublicScreeningQuestion(BaseModel):
+    # Public-safe subset — deliberately omits knockout / knockout_expected so the
+    # passing answer is never leaked to the applicant.
+    id: int
+    prompt: str
+    kind: str
+    options: list | None = None
+    required: bool = False
+
+
 class PublicRoleDetail(PublicRoleSummary):
     description: str | None = None
     salary_min: int | None = None
@@ -48,6 +59,7 @@ class PublicRoleDetail(PublicRoleSummary):
     salary_currency: str | None = None
     salary_period: str | None = None
     job_posting_jsonld: dict
+    screening_questions: list[PublicScreeningQuestion] = []
 
 
 def _summary(role) -> PublicRoleSummary:
@@ -80,6 +92,12 @@ def public_get_job(org_slug: str, role_slug: str, db: Session = Depends(get_db))
     if role is None:
         raise HTTPException(status_code=404, detail="Job not found")
     summary = _summary(role)
+    questions = [
+        PublicScreeningQuestion(
+            id=q.id, prompt=q.prompt, kind=q.kind, options=q.options, required=q.required
+        )
+        for q in list_role_questions(db, org.id, role.id)
+    ]
     return PublicRoleDetail(
         **summary.model_dump(),
         description=(role.description or role.job_spec_text),
@@ -88,6 +106,7 @@ def public_get_job(org_slug: str, role_slug: str, db: Session = Depends(get_db))
         salary_currency=role.salary_currency,
         salary_period=role.salary_period,
         job_posting_jsonld=build_job_posting_jsonld(role, org),
+        screening_questions=questions,
     )
 
 

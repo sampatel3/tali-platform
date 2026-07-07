@@ -38,6 +38,24 @@ def _apply_url(org, role):
     return f"/careers/v1/{org.slug}/jobs/{role.slug}/apply"
 
 
+def test_public_job_detail_exposes_screening_questions_safely(client, db):
+    org, role = _published_role(db, slug="jd-org", role_slug="jd-role")
+    create_role_question(
+        db, org.id, role.id,
+        prompt="Authorized to work locally?", kind="boolean",
+        required=True, knockout=True, knockout_expected=[True],
+    )
+    db.commit()
+    r = client.get(f"/careers/v1/{org.slug}/jobs/{role.slug}")
+    assert r.status_code == 200, r.text
+    qs = r.json()["screening_questions"]
+    assert len(qs) == 1
+    q = qs[0]
+    assert q["prompt"] == "Authorized to work locally?" and q["required"] is True
+    # The passing answer must never leak to the applicant.
+    assert "knockout_expected" not in q and "knockout" not in q
+
+
 def test_apply_creates_candidate_and_application(client, db):
     org, role = _published_role(db)
     db.commit()

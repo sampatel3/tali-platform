@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = (import.meta.env.VITE_API_URL || '').replace(/[\r\n\s]+/g, '').trim();
+export const API_URL = (import.meta.env.VITE_API_URL || '').replace(/[\r\n\s]+/g, '').trim();
 
 const api = axios.create({
   baseURL: `${API_URL}/api/v1`,
@@ -44,6 +44,7 @@ const isPublicPath = (pathname = '', search = '') => {
     || pathname.startsWith('/report/')
     || pathname.startsWith('/assess/')
     || pathname.startsWith('/assessment/')
+    || pathname.startsWith('/careers/')
     || pathname.startsWith('/showcase/')) {
     return true;
   }

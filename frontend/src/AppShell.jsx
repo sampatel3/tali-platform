@@ -111,6 +111,12 @@ const TokenGate = lazy(() =>
 const DeckIframe = lazy(() =>
   import('./features/_dev/DeckIframe')
 );
+const CareersListPage = lazy(() =>
+  import('./features/careers/CareersListPage').then((m) => ({ default: m.CareersListPage }))
+);
+const CareersJobPage = lazy(() =>
+  import('./features/careers/CareersJobPage').then((m) => ({ default: m.CareersJobPage }))
+);
 
 const isPublicCandidateSharePath = (pathname, search = '') => {
   if (pathname.startsWith('/c/')) return true;
@@ -825,6 +831,16 @@ function AppContent() {
       <Route path="/assess/:token" element={<CandidateWelcomeRoute />} />
       <Route path="/assessment/:assessmentId" element={<CandidateWelcomeWithIdRoute />} />
       <Route path="/assessment/live" element={<AssessmentLiveRoute />} />
+
+      {/* Public careers site (no auth) */}
+      <Route
+        path="/careers/:orgSlug"
+        element={<Suspense fallback={lazyFallback}><CareersListPage /></Suspense>}
+      />
+      <Route
+        path="/careers/:orgSlug/:roleSlug"
+        element={<Suspense fallback={lazyFallback}><CareersJobPage /></Suspense>}
+      />
 
       <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
