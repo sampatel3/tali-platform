@@ -23,6 +23,11 @@ from .interview_scorecard import (
     SCORECARD_RECOMMENDATIONS,
     InterviewScorecard,
 )
+from .webhook import (
+    WEBHOOK_EVENT_TYPES,
+    WebhookDelivery,
+    WebhookSubscription,
+)
 from .pipeline_stage import (
     CANONICAL_SEED_STAGES,
     LEGACY_STAGE_KIND,
@@ -223,6 +228,11 @@ __all__ = [
     "CandidateApplication",
     "CandidateApplicationEvent",
     "ApplicationInterview",
+    "InterviewScorecard",
+    "SCORECARD_RECOMMENDATIONS",
+    "WebhookSubscription",
+    "WebhookDelivery",
+    "WEBHOOK_EVENT_TYPES",
     "Role",
     "role_tasks",
     "RoleCriterion",
