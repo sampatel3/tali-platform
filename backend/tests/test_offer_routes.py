@@ -124,6 +124,29 @@ def test_hris_export_shape_and_ready_flag(client, db):
     assert p["dates"]["accepted_at"] is not None
 
 
+def test_esign_request_shape_and_ready_flag(client, db):
+    headers, email = auth_headers(client)
+    app_id = _seed_application(db, _org_id(db, email))
+    oid = client.post(
+        f"/api/v1/applications/{app_id}/offers",
+        json={"base_salary_amount": 180000, "currency": "AED", "pay_frequency": "year"},
+        headers=headers,
+    ).json()["id"]
+
+    p = client.get(f"/api/v1/offers/{oid}/esign-request", headers=headers).json()
+    assert p["ready_to_send"] is False  # draft
+    assert p["signers"][0] == {"role": "candidate", "name": "Casey R", "email": "c@ofr.test"}
+    assert p["document"]["reference"] == f"offer-{oid}-v1"
+    assert "Staff Engineer" in p["document"]["title"]
+    assert p["prefill_fields"]["currency"] == "AED"
+
+    # Approve (no approvals required) then it's ready to send for signature.
+    client.post(f"/api/v1/offers/{oid}/transition", json={"status": "pending_approval"}, headers=headers)
+    client.post(f"/api/v1/offers/{oid}/transition", json={"status": "approved"}, headers=headers)
+    p = client.get(f"/api/v1/offers/{oid}/esign-request", headers=headers).json()
+    assert p["ready_to_send"] is True
+
+
 def test_offer_is_org_scoped_and_write_gated(client, db):
     headers, email = auth_headers(client)
     org_id = _org_id(db, email)

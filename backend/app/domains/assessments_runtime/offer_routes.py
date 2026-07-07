@@ -18,6 +18,7 @@ from ...models.candidate_application import CandidateApplication
 from ...models.offer import Offer
 from ...models.user import ROLE_ADMIN, ROLE_RECRUITER, User
 from ...platform.database import get_db
+from .offer_esign_service import build_esign_request
 from .offer_hris_service import build_hris_payload
 from .offer_service import (
     add_approval,
@@ -223,3 +224,14 @@ def get_offer_hris_export(
     """The vendor-neutral HRIS import payload for an offer (see offer_hris_service)."""
     offer = _get_offer(db, current_user.organization_id, offer_id)
     return build_hris_payload(offer)
+
+
+@router.get("/offers/{offer_id}/esign-request")
+def get_offer_esign_request(
+    offer_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The vendor-neutral e-sign signature-request payload (see offer_esign_service)."""
+    offer = _get_offer(db, current_user.organization_id, offer_id)
+    return build_esign_request(offer)
