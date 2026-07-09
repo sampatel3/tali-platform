@@ -381,6 +381,12 @@ from .domains.client_intake import public_router as client_intake_public_router 
 
 app.include_router(client_intake_public_router)
 
+# Public demo-lead capture: POST /api/v1/public/demo-lead (no auth) — the
+# marketing "book a demo" form; forwards the lead to hello@ by email.
+from .domains.marketing_leads import public_router as marketing_leads_public_router  # noqa: E402
+
+app.include_router(marketing_leads_public_router)
+
 # cv_match_v3.0 admin + override surface (gated server-side; flag controls runner)
 from .cv_matching.routes import (
     admin_router as cv_match_admin_router,

@@ -12,7 +12,7 @@ import time
 
 import resend
 
-from ...platform.brand import BRAND_NAME, brand_email_from
+from ...platform.brand import BRAND_DOMAIN, BRAND_NAME, brand_email_from
 from .templates import (
     assessment_expiry_reminder_html,
     assessment_invite_html,
@@ -136,6 +136,10 @@ def _send_resend_email(payload: dict, *, recipient: str) -> dict:
     5xx. Returns the raw Resend response on success; re-raises the last
     exception once the in-process attempt budget is spent (the caller maps that
     to a failure result)."""
+    # noreply@ has no mailbox — replies to it bounce. Every send needs a
+    # staffed reply-to unless the caller set one (e.g. the recruiter).
+    if not (payload.get("reply_to") or "").strip():
+        payload["reply_to"] = f"support@{BRAND_DOMAIN}"
     for attempt in range(1, _MAX_SEND_ATTEMPTS + 1):
         try:
             return resend.Emails.send(payload)
@@ -274,6 +278,24 @@ class EmailService:
             return {"success": True, "email_id": email_id}
         except Exception as e:
             logger.error("Failed to send results notification to %s: %s", user_email, str(e))
+            return {"success": False, "email_id": ""}
+
+    def send_internal_alert(self, to_email: str, subject: str, text_body: str) -> dict:
+        """Plain-text notification to an internal inbox (e.g. a demo lead
+        forwarded to hello@). Not for candidate- or recruiter-facing mail —
+        those go through the branded template senders above."""
+        try:
+            email = _send_resend_email({
+                "from": self.from_email,
+                "to": [to_email],
+                "subject": subject,
+                "text": text_body,
+            }, recipient=to_email)
+            email_id = email.get("id", "") if isinstance(email, dict) else str(email)
+            logger.info("Internal alert sent (email_id=%s, to=%s)", email_id, to_email)
+            return {"success": True, "email_id": email_id}
+        except Exception as e:
+            logger.error("Failed to send internal alert to %s: %s", to_email, str(e))
             return {"success": False, "email_id": ""}
 
     def send_email_verification(self, to_email: str, full_name: str, verification_link: str) -> dict:
