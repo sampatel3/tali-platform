@@ -2288,9 +2288,11 @@ def enrich_application_candidate(
     if not org or not org.workable_connected or not org.workable_access_token or not org.workable_subdomain:
         raise HTTPException(status_code=400, detail="Workable is not connected")
 
-    workable = WorkableService(access_token=org.workable_access_token, subdomain=org.workable_subdomain)
+    from ...components.integrations.resolver import resolve_ats_provider
+
+    provider = resolve_ats_provider(org)
     try:
-        full_payload = workable.get_candidate(candidate_wid)
+        full_payload = provider.get_candidate(candidate_wid)
     except WorkableRateLimitError:
         raise HTTPException(status_code=502, detail="Workable rate limited. Please try again shortly.")
 
@@ -2333,15 +2335,17 @@ def _try_fetch_cv_from_workable(
     if not org.workable_connected or not org.workable_access_token or not org.workable_subdomain:
         return False
 
-    workable = WorkableService(access_token=org.workable_access_token, subdomain=org.workable_subdomain)
+    from ...components.integrations.resolver import resolve_ats_provider
+
+    provider = resolve_ats_provider(org)
     try:
-        candidate_payload = workable.get_candidate(candidate_wid)
+        candidate_payload = provider.get_candidate(candidate_wid)
     except WorkableRateLimitError:
         return False
     if not candidate_payload:
         return False
 
-    downloaded = workable.download_candidate_resume(candidate_payload)
+    downloaded = provider.download_candidate_resume(candidate_payload)
     if not downloaded:
         return False
 
@@ -2386,8 +2390,13 @@ def _try_fetch_cv_from_workable(
         candidate.cv_text = extracted
         candidate.cv_uploaded_at = now
 
-    # Best-effort Workable score extraction
-    raw_score, normalized_score, score_source = workable.extract_workable_score(candidate_payload=candidate_payload)
+    # Best-effort Workable score extraction. Workable-response-shaped (walks
+    # Workable score keys) with no cross-ATS analogue, so it stays a direct
+    # WorkableService call rather than a provider op — reached only because the
+    # payload above came back from a Workable-connected org.
+    raw_score, normalized_score, score_source = WorkableService(
+        access_token=org.workable_access_token, subdomain=org.workable_subdomain
+    ).extract_workable_score(candidate_payload=candidate_payload)
     if raw_score is not None or normalized_score is not None:
         app.workable_score_raw = raw_score
         app.workable_score = normalized_score
