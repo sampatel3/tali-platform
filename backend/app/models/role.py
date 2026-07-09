@@ -38,6 +38,7 @@ class Role(Base):
     __tablename__ = "roles"
     __table_args__ = (
         UniqueConstraint("organization_id", "workable_job_id", name="uq_roles_org_workable_job"),
+        UniqueConstraint("organization_id", "bullhorn_job_order_id", name="uq_roles_org_bullhorn_job_order"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -47,6 +48,10 @@ class Role(Base):
     source = Column(String, default="manual", nullable=False)
     workable_job_id = Column(String, nullable=True, index=True)
     workable_job_data = Column(JSON, nullable=True)
+    # Bullhorn JobOrder linkage (see docs/BULLHORN_BUILD_PLAN.md §3). Unique per
+    # org via ``uq_roles_org_bullhorn_job_order`` above.
+    bullhorn_job_order_id = Column(String, nullable=True, index=True)
+    bullhorn_job_data = Column(JSON, nullable=True)
     # Requisition->Workable job lifecycle (see module constants). NULL for
     # legacy/Workable-synced roles (state derived from workable_job_data); set on
     # requisition publish (``draft``), on Workable link (``open``), and by

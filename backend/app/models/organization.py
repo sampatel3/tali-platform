@@ -25,6 +25,33 @@ class Organization(Base):
     workable_sync_started_at = Column(DateTime(timezone=True), nullable=True)
     workable_sync_progress = Column(JSON, nullable=True)
     workable_sync_cancel_requested_at = Column(DateTime(timezone=True), nullable=True)
+    # Bullhorn ATS integration (staging-only until flag-off; see
+    # docs/BULLHORN_BUILD_PLAN.md §3). ``bullhorn_client_secret`` and
+    # ``bullhorn_refresh_token`` hold Fernet CIPHERTEXT — write with
+    # ``encrypt_text(value, settings.SECRET_KEY)`` and read with
+    # ``decrypt_text(...)`` (same mechanism as ``fireflies_api_key_encrypted`` /
+    # ``anthropic_workspace_key_encrypted``); NEVER store or read them raw. The
+    # refresh token is single-use and rotates on every OAuth exchange, so the
+    # rotated value MUST be persisted in the same transaction before the new
+    # access token is used, or the org is stranded.
+    bullhorn_username = Column(String, nullable=True)
+    bullhorn_client_id = Column(String, nullable=True)
+    bullhorn_client_secret = Column(Text, nullable=True)
+    bullhorn_refresh_token = Column(Text, nullable=True)
+    bullhorn_rest_url = Column(String, nullable=True)
+    bullhorn_connected = Column(Boolean, default=False)
+    bullhorn_last_sync_at = Column(DateTime(timezone=True), nullable=True)
+    bullhorn_last_sync_status = Column(String, nullable=True)
+    bullhorn_last_sync_summary = Column(JSON, nullable=True)
+    bullhorn_sync_progress = Column(JSON, nullable=True)
+    bullhorn_event_subscription_id = Column(String, nullable=True)
+    # Checkpoint for the destructive event-queue read: the requestId of the last
+    # fetched batch, so a crash mid-processing can re-fetch the same events
+    # instead of losing them.
+    bullhorn_event_request_id = Column(String, nullable=True)
+    # Mirrors ``workable_config``'s role — poll cadence override, actor defaults
+    # (see BullhornConfigBase in schemas/organization.py).
+    bullhorn_config = Column(JSON, nullable=True)
     fireflies_api_key_encrypted = Column(String, nullable=True)
     fireflies_webhook_secret = Column(String, nullable=True)
     fireflies_owner_email = Column(String, nullable=True)
@@ -92,6 +119,7 @@ class Organization(Base):
     applications = relationship("CandidateApplication", back_populates="organization", cascade="all, delete-orphan")
     credit_ledger_entries = relationship("BillingCreditLedger", back_populates="organization", cascade="all, delete-orphan")
     workable_sync_runs = relationship("WorkableSyncRun", back_populates="organization", cascade="all, delete-orphan")
+    ats_stage_maps = relationship("AtsStageMap", back_populates="organization", cascade="all, delete-orphan")
 
     @property
     def active_claude_model(self) -> str:

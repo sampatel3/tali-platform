@@ -82,6 +82,14 @@ class CandidateApplication(Base):
     workable_answers = Column(JSON, nullable=True)
     workable_comments = Column(JSON, nullable=True)
     workable_activities = Column(JSON, nullable=True)
+    # Bullhorn JobSubmission linkage (see docs/BULLHORN_BUILD_PLAN.md §3).
+    # ``bullhorn_status`` holds the remote (per-org free-text) JobResponse
+    # status; ``bullhorn_status_local_write_at`` is the local-write-wins guard
+    # (set when Taali itself writes the status back), mirroring
+    # ``workable_stage_local_write_at``.
+    bullhorn_job_submission_id = Column(String, nullable=True, index=True)
+    bullhorn_status = Column(String, nullable=True)
+    bullhorn_status_local_write_at = Column(DateTime(timezone=True), nullable=True)
     rank_score = Column(Float, nullable=True)
     last_synced_at = Column(DateTime(timezone=True), nullable=True)
 

@@ -40,6 +40,19 @@ class WorkableConfigUpdate(BaseModel):
     auto_reject_note_template: Optional[str] = Field(default=None, max_length=4000)
 
 
+class BullhornConfigBase(BaseModel):
+    """Per-org Bullhorn integration settings (mirrors WorkableConfigBase's
+    role — a poll cadence override + actor defaults). Minimal by design; the
+    remote status → Taali stage mapping lives in ``ats_stage_map``, not here.
+    """
+
+    # Overrides settings.BULLHORN_EVENT_POLL_SECONDS for this org when set.
+    event_poll_seconds: Optional[int] = Field(default=None, ge=30, le=3600)
+    # Bullhorn CorporateUser id credited for Taali-originated notes / status
+    # write-backs (the acting user on move/reject/note).
+    bullhorn_actor_user_id: Optional[str] = Field(default=None, max_length=200)
+
+
 class FirefliesConfig(BaseModel):
     connected: bool = False
     has_api_key: bool = False
