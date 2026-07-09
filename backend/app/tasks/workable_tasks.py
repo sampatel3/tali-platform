@@ -39,6 +39,36 @@ def _lock_wait_countdown() -> int:
     return random.randint(5, 15)
 
 
+def _op_mutex_namespace(organization_id: int) -> str:
+    """Per-org mutex key prefix for this ATS-write op.
+
+    A Bullhorn-connected org uses the ``bullhorn:{org_id}`` namespace so a
+    Bullhorn write serializes against the Bullhorn sync (not the Workable one);
+    everything else uses the shared Workable default. Best-effort: any resolution
+    error falls back to the default namespace (never wedges a write)."""
+    from .assessment_tasks import _WORKABLE_ORG_MUTEX_KEY_PREFIX
+
+    try:
+        from ..components.integrations.bullhorn.provider import BullhornProvider
+        from ..components.integrations.bullhorn.sync_runner import (
+            BULLHORN_ORG_MUTEX_NAMESPACE,
+        )
+        from ..components.integrations.resolver import resolve_ats_provider
+        from ..models.organization import Organization
+        from ..platform.database import SessionLocal
+
+        db = SessionLocal()
+        try:
+            org = db.query(Organization).filter(Organization.id == organization_id).first()
+            if isinstance(resolve_ats_provider(org, db), BullhornProvider):
+                return BULLHORN_ORG_MUTEX_NAMESPACE
+        finally:
+            db.close()
+    except Exception:  # pragma: no cover — default namespace on any resolution error
+        logger.exception("bullhorn mutex-namespace resolution failed org_id=%s", organization_id)
+    return _WORKABLE_ORG_MUTEX_KEY_PREFIX
+
+
 @celery_app.task(
     bind=True,
     name="app.tasks.workable_tasks.run_workable_op",
@@ -89,12 +119,20 @@ def run_workable_op_task(
     # re-enqueue below — so the periodic syncs keep yielding the per-org mutex
     # for as long as this write is waiting. Self-expires once we stop retrying.
     mark_workable_op_pending(int(organization_id))
+    # Per-org mutex NAMESPACE: a Bullhorn-connected org takes the bullhorn lock
+    # (build plan §6 "namespace bullhorn") so a Bullhorn write and a Bullhorn sync
+    # for the same org never talk to the API concurrently; Workable orgs keep the
+    # default (Workable) namespace. Same shared mutex util either way.
+    mutex_namespace = _op_mutex_namespace(int(organization_id))
     # Short TTL + heartbeat (deploy-safe): if this worker is SIGKILLed
     # mid-write the heartbeat thread dies with it and the lock auto-expires in
     # ~2 min, instead of leaking for the 30-min static TTL and blocking ALL
-    # Workable writes for this org until then.
+    # ATS writes for this org until then.
     lock = _acquire_workable_org_mutex(
-        int(organization_id), source=f"workable_op:{op_type}", heartbeat=True
+        int(organization_id),
+        source=f"workable_op:{op_type}",
+        heartbeat=True,
+        namespace=mutex_namespace,
     )
     if lock is None:
         # Held by another Workable write (often a large approve batch that holds

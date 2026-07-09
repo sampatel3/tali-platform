@@ -307,7 +307,12 @@ def _workable_mutex_heartbeat(client, key: str, ttl_seconds: int, stop_event) ->
 
 
 def _acquire_workable_org_mutex(
-    org_id: int, *, source: str, ttl: int | None = None, heartbeat: bool = False
+    org_id: int,
+    *,
+    source: str,
+    ttl: int | None = None,
+    heartbeat: bool = False,
+    namespace: str = _WORKABLE_ORG_MUTEX_KEY_PREFIX,
 ):
     """Acquire the per-org Workable mutex shared across all sync tasks + ops.
 
@@ -318,6 +323,11 @@ def _acquire_workable_org_mutex(
     ``heartbeat=True`` (op path) acquires with the short op TTL and spawns a
     daemon thread that renews it while the holder lives — deploy-safe. Sync
     callers leave it off and get the static 30-min TTL.
+
+    ``namespace`` is the Redis key prefix; it defaults to the Workable lock so
+    every existing caller is unchanged. The Bullhorn sync passes its own
+    namespace so Bullhorn and Workable syncs for the same org don't contend on
+    one lock (they talk to different APIs with independent rate budgets).
 
     Returns the handle on success, ``None`` if held by another task,
     ``False`` on Redis failure (caller treats as "run unguarded").
@@ -331,7 +341,7 @@ def _acquire_workable_org_mutex(
         import redis  # type: ignore
 
         client = redis.Redis.from_url(settings.REDIS_URL)
-        key = f"{_WORKABLE_ORG_MUTEX_KEY_PREFIX}:{org_id}"
+        key = f"{namespace}:{org_id}"
         if not client.set(key, source, nx=True, ex=ttl_seconds):
             return None
         stop_event = None

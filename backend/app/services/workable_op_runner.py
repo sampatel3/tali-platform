@@ -60,6 +60,42 @@ def _recruiter_actor(user_id: int | None):
     return Actor(type=ACTOR_RECRUITER, user_id=int(user_id) if user_id else None)
 
 
+def _route_bullhorn_op(
+    db: Session, organization_id: int, payload: dict, *, handler_name: str
+) -> dict | None:
+    """Delegate an ATS-write op to the Bullhorn handler when the org routes to
+    Bullhorn; return ``None`` to fall through to the Workable body.
+
+    This is the "op_runner resolves provider through the PR-1 seam" hook (build
+    plan §6): the shared shell (mutex, retry, bookkeeping, surface-on-failure) is
+    unchanged — only the ATS-write body differs by provider. A no-op (returns
+    None) when ``BULLHORN_ENABLED`` is off or the org isn't Bullhorn-connected, so
+    the Workable path is untouched for every non-Bullhorn org.
+    """
+    from ..components.integrations.bullhorn.provider import BullhornProvider
+    from ..components.integrations.resolver import resolve_ats_provider
+    from ..models.organization import Organization
+
+    org = db.query(Organization).filter(Organization.id == organization_id).first()
+    if org is None or not isinstance(resolve_ats_provider(org, db), BullhornProvider):
+        return None
+    application_id = int(payload["application_id"])
+    app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == application_id,
+            CandidateApplication.organization_id == organization_id,
+        )
+        .first()
+    )
+    if app is None:
+        return {"status": "skipped", "reason": "not_linked", "application_id": application_id}
+    from ..components.integrations.bullhorn import op_handlers
+
+    handler = getattr(op_handlers, handler_name)
+    return handler(db, org, app, payload)
+
+
 # ---------------------------------------------------------------------------
 # Op handlers. Each takes (db, organization_id, payload) and returns a result
 # dict. Single-op handlers may raise WorkableWritebackError (the Celery shell
@@ -239,6 +275,10 @@ def _op_move_stage(db: Session, organization_id: int, payload: dict) -> dict:
     from ..models.role import Role
     from .workable_actions_service import move_candidate_in_workable
 
+    routed = _route_bullhorn_op(db, organization_id, payload, handler_name="run_move_stage")
+    if routed is not None:
+        return routed
+
     application_id = int(payload["application_id"])
     target_stage = str(payload.get("target_stage") or "").strip()
     reason = payload.get("reason")
@@ -304,6 +344,10 @@ def _op_manual_outcome(db: Session, organization_id: int, payload: dict) -> dict
         revert_candidate_disqualification_in_workable,
     )
 
+    routed = _route_bullhorn_op(db, organization_id, payload, handler_name="run_manual_outcome")
+    if routed is not None:
+        return routed
+
     application_id = int(payload["application_id"])
     target_outcome = payload.get("target_outcome")
     reason = payload.get("reason")
@@ -347,6 +391,10 @@ def _op_post_note(db: Session, organization_id: int, payload: dict) -> dict:
     from .workable_actions_service import resolve_workable_actor_member_id
     from ..domains.integrations_notifications.adapters import build_workable_adapter
     from ..domains.assessments_runtime.pipeline_service import append_application_event
+
+    routed = _route_bullhorn_op(db, organization_id, payload, handler_name="run_post_note")
+    if routed is not None:
+        return routed
 
     application_id = int(payload["application_id"])
     body = str(payload.get("body") or "").strip()

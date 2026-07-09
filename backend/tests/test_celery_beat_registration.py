@@ -58,3 +58,18 @@ def test_flush_brain_feed_is_scheduled_and_registered():
     task_name = "app.tasks.brain_feed_tasks.flush_brain_feed"
     assert task_name in celery_app.tasks
     assert task_name in _scheduled_task_names().values()
+
+
+def test_bullhorn_incremental_sweeps_are_scheduled_and_registered():
+    # Explicit guard for the Bullhorn incremental layer: the event-poll sweep
+    # (destructive event-queue drain) and the nightly reconcile sweep must each
+    # be BOTH registered and on the beat schedule, or the incremental sync + the
+    # drift check never fire. Both tasks are cheap no-ops when BULLHORN_ENABLED
+    # is off, so scheduling them on the live platform is safe.
+    scheduled = _scheduled_task_names().values()
+    for task_name in (
+        "app.tasks.bullhorn_tasks.bullhorn_event_poll_sweep",
+        "app.tasks.bullhorn_tasks.bullhorn_reconcile_sweep",
+    ):
+        assert task_name in celery_app.tasks, f"{task_name} not registered"
+        assert task_name in scheduled, f"{task_name} not on the beat schedule"

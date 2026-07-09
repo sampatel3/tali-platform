@@ -297,6 +297,27 @@ celery_app.conf.update(
             "task": "app.tasks.workable_provider_tasks.flush_workable_provider",
             "schedule": 120.0,
         },
+        # Bullhorn incremental event poll: drain each connected org's destructive
+        # event queue on the configured cadence (BULLHORN_EVENT_POLL_SECONDS,
+        # default 180s). The task is a cheap early-exit no-op unless
+        # BULLHORN_ENABLED is on (default off), so it's inert on the live
+        # platform until the integration is deliberately enabled. Cadence is read
+        # from settings so a rate-budget adjustment (100k calls/mo default) is a
+        # config change, not a code change.
+        "bullhorn-event-poll": {
+            "task": "app.tasks.bullhorn_tasks.bullhorn_event_poll_sweep",
+            "schedule": float(settings.BULLHORN_EVENT_POLL_SECONDS),
+        },
+        # Bullhorn nightly reconciliation: the dateLastModified fallback sweep +
+        # count-based drift check per connected org. Fixed-time crontab (NOT a
+        # float interval — an interval timer is reset on every beat restart and a
+        # redeploy before the tick silently skips the run; see the Anthropic
+        # reconciliation note above). Same BULLHORN_ENABLED early-exit gate.
+        # 03:30 UTC is off-peak and clear of the other nightly jobs.
+        "bullhorn-reconcile-nightly": {
+            "task": "app.tasks.bullhorn_tasks.bullhorn_reconcile_sweep",
+            "schedule": crontab(hour=3, minute=30),
+        },
     },
 )
 

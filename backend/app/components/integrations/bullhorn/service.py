@@ -44,6 +44,7 @@ _ENTITY_JOB_ORDER = "JobOrder"
 _ENTITY_CANDIDATE = "Candidate"
 _ENTITY_JOB_SUBMISSION = "JobSubmission"
 _ENTITY_JOB_SUBMISSION_HISTORY = "JobSubmissionHistory"
+_ENTITY_NOTE = "Note"
 
 # The three categorization settings that classify a per-org free-text status.
 _CATEGORIZATION_SETTINGS = (
@@ -236,6 +237,16 @@ class BullhornService:
         """JobSubmissionHistory for one submission (JPQL /query, per fact sheet)."""
         where = f"jobSubmission.id={int(job_submission_id)}"
         return self._query(_ENTITY_JOB_SUBMISSION_HISTORY, fields=fields, where=where)
+
+    def query_notes(self, *, candidate_id: str | int, fields: str) -> list[dict]:
+        """Notes ABOUT one candidate (JPQL /query).
+
+        A Bullhorn Note links to the people it concerns via the ``personReference``
+        association; ``personReference.id`` selects the notes about this candidate.
+        Read-only — the write side is :meth:`create_note`.
+        """
+        where = f"personReference.id={int(candidate_id)}"
+        return self._query(_ENTITY_NOTE, fields=fields, where=where)
 
     def get_status_list(self) -> dict[str, Any]:
         """Per-org free-text status list + the 3 categorization settings.

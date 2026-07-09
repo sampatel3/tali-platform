@@ -73,6 +73,80 @@ def _workable_writeback_ready(
     )
 
 
+def _try_bullhorn_advance(
+    db: Session,
+    actor: Actor,
+    *,
+    app: CandidateApplication,
+    org: Optional[Organization],
+    reason: Optional[str],
+) -> Optional[bool]:
+    """Advance via the Bullhorn provider when the org routes to Bullhorn.
+
+    Returns ``None`` when this is NOT a Bullhorn org (caller falls through to the
+    Workable path); ``True``/``False`` when Bullhorn handled it (write ok / failed).
+    Records a ``bullhorn_moved`` / ``bullhorn_writeback_failed`` event and stamps
+    ``bullhorn_status_local_write_at`` (inside the provider). Honours strict mode:
+    the provider raises ``WorkableWritebackError`` on failure so the batch aborts +
+    re-queues, identical to the Workable move.
+    """
+    from ..components.integrations.bullhorn.provider import BullhornProvider
+    from ..components.integrations.resolver import resolve_ats_provider
+    from ..services.workable_actions_service import WorkableWritebackError
+
+    provider = resolve_ats_provider(org, db)
+    if not isinstance(provider, BullhornProvider):
+        return None
+    submission_id = (getattr(app, "bullhorn_job_submission_id", "") or "").strip()
+    if not submission_id:
+        return False  # Bullhorn org but unlinked application — nothing to move.
+    try:
+        result = provider.move_application(
+            candidate_id=submission_id, target_stage="advanced", role=getattr(app, "role", None)
+        )
+    except WorkableWritebackError:
+        raise  # strict (batch) path — propagate so the batch re-queues.
+    except Exception:  # pragma: no cover — defensive
+        logger.exception("bullhorn advance raised unexpectedly (application_id=%s)", app.id)
+        return False
+    if not result.get("success"):
+        append_application_event(
+            db,
+            app=app,
+            event_type="bullhorn_writeback_failed",
+            actor_type=actor.type,
+            actor_id=actor.event_actor_id,
+            reason=result.get("message") or "Bullhorn move failed",
+            metadata={
+                "action": result.get("action"),
+                "code": result.get("code"),
+                "bullhorn_job_submission_id": submission_id,
+                "source": "decision_summary",
+            },
+        )
+        logger.warning(
+            "bullhorn advance failed application_id=%s code=%s message=%s",
+            app.id,
+            result.get("code"),
+            result.get("message"),
+        )
+        return False
+    append_application_event(
+        db,
+        app=app,
+        event_type="bullhorn_moved",
+        actor_type=actor.type,
+        actor_id=actor.event_actor_id,
+        reason=reason or "Advanced by recruiter (decision resolution)",
+        metadata={
+            "bullhorn_status": result.get("config", {}).get("remote_status"),
+            "bullhorn_job_submission_id": submission_id,
+            "source": "decision_summary",
+        },
+    )
+    return True
+
+
 def try_workable_advance(
     db: Session,
     actor: Actor,
@@ -92,6 +166,14 @@ def try_workable_advance(
     succeeded. Failures record a ``workable_writeback_failed`` event and
     return False — the underlying stage change has already committed.
     """
+    # Bullhorn-connected org → advance via the Bullhorn provider (writes the
+    # org's advanced-mapped JobSubmission status). Same gating contract as the
+    # Workable move (strict mode raises so a failed batch re-queues). A no-op for
+    # non-Bullhorn orgs (returns None → fall through to the Workable path).
+    bullhorn = _try_bullhorn_advance(db, actor, app=app, org=org, reason=reason)
+    if bullhorn is not None:
+        return bullhorn
+
     target = (target_stage or "").strip()
     if not target:
         return False
