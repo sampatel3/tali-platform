@@ -47,12 +47,14 @@ const AgentLiveFeed = () => (
 const ROLE_OPTIONS = ['Backend', 'Frontend', 'Full-stack', 'ML / AI', 'Staff+', 'Other'];
 const VOLUME_OPTIONS = ['1–5', '6–20', '21–50', '50+'];
 
+const API_URL = (import.meta.env.VITE_API_URL || '').replace(/[\r\n\s]+/g, '').trim();
+
 // DemoLeadPage — pre-credentials capture before the demo sandbox spins
 // up. v4 spec: dark editorial pane left, streamlined form right.
 //
-// Submit currently routes into /demo (the demo experience). When the
-// sandbox-seeding API ships, the form payload should drive
-// /demo/sandbox?email=... etc.
+// Submit forwards the lead to the backend (which emails it to hello@)
+// and routes into /demo. The send is fire-and-forget — the visitor's
+// path into the walkthrough never blocks on it.
 export const DemoLeadPage = ({ onNavigate }) => {
   const [form, setForm] = useState({
     email: '',
@@ -75,6 +77,13 @@ export const DemoLeadPage = ({ onNavigate }) => {
     event.preventDefault();
     if (!form.email.trim()) return;
     setSubmitting(true);
+    if (API_URL) {
+      fetch(`${API_URL}/api/v1/public/demo-lead`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      }).catch(() => {});
+    }
     window.setTimeout(() => {
       setSubmitting(false);
       onNavigate?.('demo');

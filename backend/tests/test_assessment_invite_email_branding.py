@@ -144,14 +144,16 @@ def test_reply_to_passed_through_when_set():
     assert payload["reply_to"] == "recruiter@acmehiring.com"
 
 
-def test_reply_to_omitted_when_none():
+def test_reply_to_defaults_to_support_when_none():
+    """noreply@ has no mailbox — a send without an explicit reply_to must
+    fall back to support@ so replies never bounce."""
     payload = _send_with_resend_capture(**_base_kwargs(reply_to=None))
-    assert "reply_to" not in payload
+    assert payload["reply_to"] == "support@taali.ai"
 
 
-def test_reply_to_omitted_when_blank():
+def test_reply_to_defaults_to_support_when_blank():
     payload = _send_with_resend_capture(**_base_kwargs(reply_to="  "))
-    assert "reply_to" not in payload
+    assert payload["reply_to"] == "support@taali.ai"
 
 
 def test_html_body_uses_resolved_brand_in_header_and_body():
