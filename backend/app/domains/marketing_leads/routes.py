@@ -49,9 +49,11 @@ def reset() -> None:
 
 
 def _client_ip(request: Request) -> str:
-    # Railway terminates TLS in front of us; the real client is the first
-    # X-Forwarded-For hop, not request.client.
-    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    # Railway terminates TLS in front of us, so request.client is the proxy.
+    # In X-Forwarded-For only the LAST hop is trustworthy on this
+    # unauthenticated route — earlier entries are client-supplied and would
+    # let a caller mint a fresh rate-limit bucket per request.
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[-1].strip()
     if forwarded:
         return forwarded
     return (request.client.host if request.client else "") or "unknown"

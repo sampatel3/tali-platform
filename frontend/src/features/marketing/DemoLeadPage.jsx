@@ -77,13 +77,12 @@ export const DemoLeadPage = ({ onNavigate }) => {
     event.preventDefault();
     if (!form.email.trim()) return;
     setSubmitting(true);
-    if (API_URL) {
-      fetch(`${API_URL}/api/v1/public/demo-lead`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      }).catch(() => {});
-    }
+    // Empty API_URL means same-origin (matches httpClient) — still post.
+    fetch(`${API_URL}/api/v1/public/demo-lead`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(form),
+    }).catch(() => {});
     window.setTimeout(() => {
       setSubmitting(false);
       onNavigate?.('demo');

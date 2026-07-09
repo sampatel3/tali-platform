@@ -74,3 +74,12 @@ def test_rate_limited_per_ip(client, monkeypatch):
     assert _post(client).status_code == 429
     # A different client IP is not affected.
     assert _post(client, ip="198.51.100.9").status_code == 200
+
+
+def test_spoofed_forwarded_prefix_cannot_mint_fresh_buckets(client, monkeypatch):
+    """Only the proxy-appended LAST X-Forwarded-For hop keys the bucket —
+    client-supplied prefixes must not bypass the limit."""
+    monkeypatch.setattr(lead_routes.settings, "RESEND_API_KEY", "")
+    for i in range(lead_routes._MAX_PER_WINDOW):
+        assert _post(client, ip=f"10.0.0.{i}, 203.0.113.99").status_code == 200
+    assert _post(client, ip="10.9.9.9, 203.0.113.99").status_code == 429
