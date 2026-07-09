@@ -22,6 +22,7 @@ import {
   formatRelativeDateTime,
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import BackgroundJobsPanel from './BackgroundJobsPanel';
+import { BullhornConnection } from '../integrations/BullhornConnection';
 import UsagePanel from './UsagePanel';
 import ApiKeysPanel from './ApiKeysPanel';
 import { ClientsManager } from '../clients/ClientsManager';
@@ -72,6 +73,7 @@ const SECTION_ALIASES = {
   departments: 'clients',
   department: 'clients',
   workable: 'workable',
+  bullhorn: 'bullhorn',
   billing: 'billing',
   usage: 'usage',
   team: 'members',
@@ -1367,6 +1369,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 { k: 'members', l: 'Members' },
                 { k: 'agent', l: 'AI agent' },
                 { k: 'workable', l: 'Workable' },
+                // Bullhorn tab only appears once the platform flag exposes it
+                // (bullhorn_enabled in the org payload); off in every env today.
+                ...(orgData?.bullhorn_enabled ? [{ k: 'bullhorn', l: 'Bullhorn' }] : []),
                 { k: 'email', l: 'Email & transcripts' },
                 { k: 'notifications', l: 'Notifications' },
                 { k: 'billing', l: 'Billing' },
@@ -1920,6 +1925,18 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   </datalist>
                 </SectionPanel>
               </div>
+
+              {orgData?.bullhorn_enabled ? (
+                <div ref={(node) => { sectionRefs.current.bullhorn = node; }} hidden={activeSection !== "bullhorn"}>
+                  <SectionPanel
+                    id="bullhorn"
+                    title="Bullhorn integration"
+                    subtitle="Connect your Bullhorn ATS to pull job orders and candidates, then write outcomes back. The API-user password is used once for sign-in and never stored."
+                  >
+                    <BullhornConnection orgData={orgData} />
+                  </SectionPanel>
+                </div>
+              ) : null}
 
               <div ref={(node) => { sectionRefs.current.security = node; }} hidden={activeSection !== "security"}>
                 <SectionPanel

@@ -196,6 +196,14 @@ class OrgResponse(BaseModel):
     workable_last_sync_at: Optional[datetime] = None
     workable_last_sync_status: Optional[str] = None
     workable_last_sync_summary: Optional[dict] = None
+    # Bullhorn ATS integration (staging-only until the platform flag is on).
+    # ``bullhorn_enabled`` is the platform-level gate the FE reads to decide
+    # whether to show the Bullhorn settings section at all; the connection
+    # fields mirror the Workable ones. No credential is ever exposed here.
+    bullhorn_enabled: bool = False
+    bullhorn_connected: bool = False
+    bullhorn_last_sync_at: Optional[datetime] = None
+    bullhorn_last_sync_status: Optional[str] = None
     active_claude_model: str
     active_claude_scoring_model: str
     plan: str
