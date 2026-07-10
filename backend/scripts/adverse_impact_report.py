@@ -28,7 +28,9 @@ value, four selection rates:
 
   (a) agent advance recommendations   — decision_type advance_to_interview
   (b) approved advances               — those with status approved
-  (c) rejects (incl. skip_assessment) — decision_type reject / skip_assessment_reject
+  (c) non-rejections                  — favorable complement of reject /
+                                        skip_assessment_reject (a raw rejection
+                                        rate would invert the 4/5ths lens)
   (d) hires                           — outcome transitions to 'hired'
 
 The 4/5ths (0.80) impact ratio for each group is its selection rate divided by
@@ -284,10 +286,15 @@ def fetch_hired_app_ids(conn, org_id: int, from_dt, to_dt) -> set[int]:
 # Aggregation (pure given the joined records — unit tested)
 # ---------------------------------------------------------------------------
 # The four selection lenses. Each maps to the boolean on a joined record.
+# All lenses are FAVORABLE outcomes: the 4/5ths ratio benchmarks each group
+# against the highest-rate group, so an unfavorable lens (raw rejection rate)
+# would invert the analysis — the most-rejected group would sit at ratio 1.0
+# and never be flagged. Rejection is therefore reported as its favorable
+# complement, the non-rejection rate.
 METRIC_KEYS = [
     ("advance_reco", "agent advance recommendations"),
     ("advance_approved", "approved advances"),
-    ("reject", "rejects (incl. skip-assessment)"),
+    ("non_reject", "non-rejections (survived screen, incl. skip-assessment)"),
     ("hire", "hires"),
 ]
 
@@ -353,7 +360,7 @@ def build_records(
                 "segments": seg_values,
                 "advance_reco": flags["advance_reco"],
                 "advance_approved": flags["advance_approved"],
-                "reject": flags["reject"],
+                "non_reject": not flags["reject"],
                 "hire": app_id in hired_ids,
             }
         )
@@ -423,10 +430,15 @@ def render_report(
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-def _iso(value: Optional[str]):
+def _iso(value: Optional[str], *, end_of_day: bool = False):
     if not value:
         return None
-    return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+    dt = datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+    # A date-only upper bound means "through that day": snap to 23:59:59.999999
+    # so `<= to_dt` doesn't silently drop everything after midnight.
+    if end_of_day and len(value) == 10:
+        dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return dt
 
 
 def main() -> None:
@@ -448,7 +460,7 @@ def main() -> None:
         url = url.replace("postgres://", "postgresql://", 1)
 
     from_dt = _iso(args.from_)
-    to_dt = _iso(args.to)
+    to_dt = _iso(args.to, end_of_day=True)
     threshold = load_impact_ratio_threshold()
     labels = load_labels_file(args.labels_csv)
 

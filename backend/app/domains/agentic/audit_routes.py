@@ -158,6 +158,21 @@ def _build_export_rows(
     return rows, truncated
 
 
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _formula_escape(value: Any) -> Any:
+    """Neutralise spreadsheet formula injection in CSV cells.
+
+    reasoning / evidence / resolution notes carry candidate- and LLM-derived
+    text; a cell starting with = + - @ executes as a formula when the export is
+    opened in Excel/Sheets. Prefix with a quote so it renders as text.
+    """
+    if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
 def _csv_stream(rows: list[dict[str, Any]]):
     """Yield CSV text, header first, one row at a time via stdlib csv."""
     buf = io.StringIO()
@@ -167,7 +182,7 @@ def _csv_stream(rows: list[dict[str, Any]]):
     buf.seek(0)
     buf.truncate(0)
     for row in rows:
-        writer.writerow(row)
+        writer.writerow({k: _formula_escape(v) for k, v in row.items()})
         yield buf.getvalue()
         buf.seek(0)
         buf.truncate(0)

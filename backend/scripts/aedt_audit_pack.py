@@ -499,10 +499,15 @@ def build_pack(
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-def _iso(value: Optional[str]):
+def _iso(value: Optional[str], *, end_of_day: bool = False):
     if not value:
         return None
-    return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+    dt = datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+    # A date-only upper bound means "through that day": snap to 23:59:59.999999
+    # so `<= to_dt` doesn't silently drop everything after midnight.
+    if end_of_day and len(value) == 10:
+        dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return dt
 
 
 def main() -> None:
@@ -523,7 +528,7 @@ def main() -> None:
         url = url.replace("postgres://", "postgresql://", 1)
 
     from_dt = _iso(args.from_)
-    to_dt = _iso(args.to)
+    to_dt = _iso(args.to, end_of_day=True)
 
     engine = create_engine(url, **({} if "sqlite" in url else {"pool_pre_ping": True}))
     with engine.connect() as conn:

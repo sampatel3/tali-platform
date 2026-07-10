@@ -274,3 +274,17 @@ def test_bias_audit_results_happy_path_and_scoping(client, db):
     assert r["passed"] is False
     assert r["metrics"]["gender"]["F"]["selection_rate"] == 0.4
     assert r["violations"] == ["disparate_impact:gender"]
+
+
+def test_csv_export_escapes_formula_cells():
+    """Candidate/LLM-derived text starting with = + - @ must not execute as a
+    spreadsheet formula when the CSV is opened in Excel/Sheets."""
+    from app.domains.agentic.audit_routes import _formula_escape
+
+    assert _formula_escape("=HYPERLINK(...)") == "'=HYPERLINK(...)"
+    assert _formula_escape("+1 (555) 000") == "'+1 (555) 000"
+    assert _formula_escape("@sum") == "'@sum"
+    assert _formula_escape("-5 points") == "'-5 points"
+    assert _formula_escape("plain reasoning") == "plain reasoning"
+    assert _formula_escape(42) == 42
+    assert _formula_escape(None) is None

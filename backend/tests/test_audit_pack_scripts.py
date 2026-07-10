@@ -129,7 +129,12 @@ def test_build_records_joins_and_derives_intersections():
     }
     records = air.build_records(labels, decision_map, hired_ids={100})
     assert len(records) == 2
+    # Rejection is recorded as its favorable complement — a raw rejection rate
+    # would invert the 4/5ths lens (the most-rejected group would never flag).
+    r101 = next(r for r in records if r["application_id"] == 101)
+    assert r101["non_reject"] is False
     r100 = next(r for r in records if r["application_id"] == 100)
+    assert r100["non_reject"] is True
     assert r100["segments"]["gender×race"] == "F × white"
     assert r100["hire"] is True
     assert r100["advance_reco"] is True
@@ -161,9 +166,9 @@ def test_render_report_counts_flags():
     records = []
     for i in range(10):
         records.append({"segments": {"gender": "M"}, "advance_reco": True,
-                        "advance_approved": False, "reject": False, "hire": False})
+                        "advance_approved": False, "non_reject": True, "hire": False})
         records.append({"segments": {"gender": "F"}, "advance_reco": False,
-                        "advance_approved": False, "reject": False, "hire": False})
+                        "advance_approved": False, "non_reject": True, "hire": False})
     text, flags = air.render_report(records, labels, threshold=0.80, min_n=5)
     assert flags >= 1
     assert "SEGMENT: gender" in text
@@ -268,3 +273,25 @@ def test_build_pack_assembles_all_sections():
     for heading in ("## 1.", "## 2.", "## 3.", "## 4.", "## 5.", "## 6.", "## 7."):
         assert heading in pack
     assert "organisation_id: 2" in pack
+
+
+def test_rejection_lens_flags_the_most_rejected_group():
+    """The Codex P1 scenario: 8/10 of one group rejected vs 2/10 of another.
+
+    Under a raw rejection-rate lens the heavily-rejected group would sit at
+    ratio 1.0 and never flag; under the favorable non-rejection lens it is the
+    group below the 4/5ths threshold."""
+    counts = {"A": (10, 2), "B": (10, 8)}  # non-rejected counts: A=2/10, B=8/10
+    cells = {c.group: c for c in air.compute_impact_ratios(counts, threshold=0.80, min_n=5)}
+    assert cells["A"].flagged is True      # 0.2/0.8 = 0.25 < 0.80
+    assert cells["B"].flagged is False
+
+
+def test_iso_to_bound_snaps_date_only_to_end_of_day():
+    dt = air._iso("2026-06-30", end_of_day=True)
+    assert (dt.hour, dt.minute, dt.second) == (23, 59, 59)
+    # Explicit timestamps and lower bounds are untouched.
+    assert air._iso("2026-06-30T10:00:00", end_of_day=True).hour == 10
+    assert air._iso("2026-06-30").hour == 0
+    import scripts.aedt_audit_pack as ap
+    assert ap._iso("2026-06-30", end_of_day=True).hour == 23
