@@ -345,7 +345,7 @@ describe('AssessmentsPage', () => {
     renderAppAt('/jobs');
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /active roles/i })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /live roles/i })).toBeInTheDocument();
     }, { timeout: 5000 });
 
     fireEvent.click(within(screen.getByRole('navigation')).getAllByRole('button', { name: /^Candidates$/ })[0]);
@@ -431,7 +431,7 @@ describe('AssessmentsPage', () => {
     renderAppAt('/jobs');
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /active roles/i })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /live roles/i })).toBeInTheDocument();
     });
     fireEvent.click(within(screen.getByRole('navigation')).getAllByRole('button', { name: /^Candidates$/ })[0]);
 
