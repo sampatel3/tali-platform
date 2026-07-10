@@ -356,7 +356,10 @@ export const TaskPreviewPage = () => {
         <div className="mx-auto max-w-[47.5rem] rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-8 shadow-[var(--shadow-sm)]">
           <div className="kicker">Task preview</div>
           <h1 className="mt-3 font-[var(--font-display)] text-[2.125rem] font-semibold tracking-[-0.03em]">Task not found.</h1>
-          <p className="mt-3 text-[var(--mute)]">Return to the task library and open a current task preview.</p>
+          <p className="mt-3 text-[var(--mute)]">This preview link is no longer valid — the task may have been renamed or removed.</p>
+          {/* This page opens in a new tab (no history to go back through), so a
+              plain anchor to the task library is the only working way out. */}
+          <a href="/tasks" className="btn btn-purple btn-sm mt-4 inline-flex">Back to Tasks</a>
         </div>
       </div>
     );

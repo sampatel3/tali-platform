@@ -21,6 +21,7 @@ import {
 import { pathForPage } from './app/routing';
 import { mapAssessmentToCandidateView } from './features/candidates/assessmentViewModels';
 import { ErrorBoundary } from './shared/ui/ErrorBoundary';
+import { Button, Panel } from './shared/ui/TaaliPrimitives';
 import { ScrollToTop } from './shared/ui/ScrollToTop';
 import { RouteMeta } from './shared/seo/RouteMeta';
 import { KeyboardShortcutsModal } from './shared/ui/KeyboardShortcutsModal';
@@ -215,8 +216,11 @@ function AppContent() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [selectedCandidate, setSelectedCandidate] = useState(null);
-  const [candidateDetailBackTo, setCandidateDetailBackTo] = useState({ page: 'assessments', label: 'Back to Assessments' });
   const [loadingCandidateDetail, setLoadingCandidateDetail] = useState(false);
+  // Only show the "Assessment unavailable" panel after a CONFIRMED fetch
+  // failure — otherwise every deep link flashes the error for a frame before
+  // the spinner appears.
+  const [candidateDetailFetchFailed, setCandidateDetailFetchFailed] = useState(false);
   const [startedAssessmentData, setStartedAssessmentData] = useState(null);
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
 
@@ -378,6 +382,7 @@ function AppContent() {
 
     let cancelled = false;
     setLoadingCandidateDetail(true);
+    setCandidateDetailFetchFailed(false);
     assessmentsApi.get(candidateDetailAssessmentId)
       .then((res) => {
         if (cancelled) return;
@@ -387,6 +392,7 @@ function AppContent() {
       .catch(() => {
         if (cancelled) return;
         setSelectedCandidate(null);
+        setCandidateDetailFetchFailed(true);
         setLoadingCandidateDetail(false);
       });
 
@@ -771,29 +777,31 @@ function AppContent() {
       <Route
         path="/assessments/:assessmentId"
         element={
-          loadingCandidateDetail ? (
-            <div className="min-h-screen flex items-center justify-center">
-              <Loader2 size={28} className="animate-spin" style={{ color: 'var(--purple)' }} />
-            </div>
-          ) : selectedCandidate?._raw?.application_id ? (
+          selectedCandidate?._raw?.application_id ? (
             <Navigate
               replace
               to={`/candidates/${selectedCandidate._raw.application_id}?tab=assessment`}
             />
+          ) : (loadingCandidateDetail || !candidateDetailFetchFailed) ? (
+            // "No candidate loaded yet" is a loading state, not an error — only
+            // the confirmed-failure branch below shows the error panel.
+            <div className="min-h-screen flex items-center justify-center">
+              <Loader2 size={28} className="animate-spin" style={{ color: 'var(--purple)' }} />
+            </div>
           ) : (
             <div>
-              <DashboardNavWithMode currentPage="candidates" onNavigate={navigateToPage} />
+              <DashboardNavWithMode currentPage="jobs" onNavigate={navigateToPage} />
               <div className="page">
-                <div className="panel" style={{ padding: 24, marginTop: 16 }}>
-                  <h2>Assessment unavailable</h2>
-                  <p>
+                <Panel style={{ padding: 24, marginTop: 16 }}>
+                  <h2 className="taali-display text-xl font-semibold text-[var(--taali-text)]">Assessment unavailable</h2>
+                  <p className="mt-2 text-sm text-[var(--taali-muted)]">
                     This assessment couldn’t be opened in the candidate file — it isn’t linked to a
                     candidate application, or it no longer exists.
                   </p>
-                  <button type="button" className="btn btn-outline btn-sm" onClick={() => navigateToPage('jobs')}>
+                  <Button type="button" variant="secondary" className="mt-4" onClick={() => navigateToPage('jobs')}>
                     Back to Jobs
-                  </button>
-                </div>
+                  </Button>
+                </Panel>
               </div>
             </div>
           )
