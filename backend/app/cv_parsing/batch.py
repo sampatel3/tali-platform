@@ -139,24 +139,34 @@ def sweep_pending_applications(
 ) -> dict:
     """Find parse-pending applications and submit per-org batches.
 
-    Only applications on LIVE roles: closed/archived Workable reqs are
-    excluded in SQL (2026-06 audit: 51% of the score line went to reqs
-    nobody recruits — don't repeat that here; the backlog on dead reqs
-    stays unparsed unless those reqs reopen). Roles without Workable data
-    (manual roles) count as live.
+    Only applications on LIVE roles: closed/archived Workable reqs and
+    recruiter-marked filled/cancelled roles are excluded in SQL (2026-06
+    audit: 51% of the score line went to reqs nobody recruits — don't
+    repeat that here; the backlog on dead reqs stays unparsed unless those
+    reqs reopen). Roles without Workable data or a job_status count as live.
 
     Per application: cache hit (success) → applied inline, no API call;
     cache hit (deterministic failure) → skipped, nothing would change;
     prompt-render failure → failure cached so the sweep stops re-picking;
     otherwise → bundled into that org's batch request list.
 
+    ``limit`` bounds ACTIONABLE rows (batched + cache-applied), not rows
+    scanned — otherwise a run of failure-cached rows at the top of the id
+    ordering would eat the whole window every sweep and starve older
+    parseable rows. Scanning is bounded at 4×limit per sweep.
+
     The caller owns the transaction (commits applied cache hits).
     """
-    from sqlalchemy import func
+    from sqlalchemy import func, or_
     from sqlalchemy.orm import joinedload
 
     from ..models.candidate_application import CandidateApplication
-    from ..models.role import Role
+    from ..models.role import (
+        JOB_STATUS_CANCELLED,
+        JOB_STATUS_FILLED,
+        JOB_STATUS_FILLED_EXTERNAL,
+        Role,
+    )
     from ..services.claude_client_resolver import get_metered_client
     from ..services.pricing_service import Feature
     from . import cache as cache_module
@@ -175,18 +185,30 @@ def sweep_pending_applications(
             CandidateApplication.deleted_at.is_(None),
             # Live reqs only. The filter must be in SQL (not post-load):
             # with a large dead-req backlog a Python-side skip could fill
-            # the whole LIMIT window with skipped rows and starve live ones.
+            # the whole scan window with skipped rows and starve live ones.
             func.coalesce(
                 Role.workable_job_data["state"].as_string(), ""
             ).notin_(["closed", "archived"]),
+            # Recruiter fill-marks live on job_status (often with no
+            # Workable payload at all). NULL = never marked = live.
+            or_(
+                Role.job_status.is_(None),
+                Role.job_status.notin_(
+                    [
+                        JOB_STATUS_FILLED,
+                        JOB_STATUS_FILLED_EXTERNAL,
+                        JOB_STATUS_CANCELLED,
+                    ]
+                ),
+            ),
         )
         .order_by(CandidateApplication.id.desc())
-        .limit(limit)
+        .limit(limit * 4)
         .all()
     )
 
     summary = {
-        "candidates": len(apps),
+        "scanned": len(apps),
         "in_flight": 0,
         "cache_applied": 0,
         "cache_failed_skip": 0,
@@ -195,8 +217,11 @@ def sweep_pending_applications(
     }
     requests_by_org: dict[int, list[dict]] = {}
     context_by_org: dict[int, dict[str, dict]] = {}
+    actionable = 0
 
     for app in apps:
+        if actionable >= limit:
+            break
         if app.id in in_flight:
             summary["in_flight"] += 1
             continue
@@ -218,6 +243,7 @@ def sweep_pending_applications(
             else:
                 parse_and_store_cv_sections(app, db=db)
                 summary["cache_applied"] += 1
+                actionable += 1
             continue
 
         request = build_cv_parse_request(app.id, cv_text)
@@ -246,7 +272,13 @@ def sweep_pending_applications(
             "organization_id": org_id,
             "role_id": app.role_id,
             "entity_id": f"application:{app.id}",
+            # The key of the text this request was rendered from. Apply
+            # compares it against the row's CURRENT text so a CV replaced
+            # mid-flight doesn't get stale sections (and the result is
+            # still cached under the text it actually came from).
+            "cache_key": cache_key,
         }
+        actionable += 1
 
     for org_id, requests in requests_by_org.items():
         try:
@@ -283,7 +315,7 @@ def sweep_pending_applications(
     return summary
 
 
-def apply_batch_results(db: Any, entries: Any) -> dict:
+def apply_batch_results(db: Any, entries: Any, context: Optional[dict] = None) -> dict:
     """Apply one ended batch's results to application rows.
 
     Succeeded + valid → ``cv_sections`` written and the parse cache
@@ -291,6 +323,12 @@ def apply_batch_results(db: Any, entries: Any) -> dict:
     Validation failures and errored/expired/canceled entries are handed
     to the live per-application task, which owns the retry-once and
     deterministic-failure-caching semantics. The caller commits.
+
+    ``context`` is the batch row's per-custom_id attribution map. When it
+    carries the submit-time ``cache_key``, results whose application text
+    changed mid-flight (CV re-uploaded/refetched) are NOT stored on the
+    row — the result is cached under the text it came from and the row is
+    left pending for the next sweep to submit with the fresh text.
     """
     from sqlalchemy.orm import joinedload
 
@@ -299,8 +337,9 @@ def apply_batch_results(db: Any, entries: Any) -> dict:
     from . import cache as cache_module
     from .apply import store_parsed_cv_sections
 
+    context = context if isinstance(context, dict) else {}
     _, _, tool_name = structured_tool_params(ParsedCVSections)
-    summary = {"applied": 0, "requeued": 0, "skipped": 0}
+    summary = {"applied": 0, "requeued": 0, "skipped": 0, "stale_skipped": 0}
 
     for entry in entries:
         app_id = application_id_from(str(getattr(entry, "custom_id", "")))
@@ -345,17 +384,29 @@ def apply_batch_results(db: Any, entries: Any) -> dict:
             prompt_version=PROMPT_VERSION,
             model_version=MODEL_VERSION,
         )
+        current_key = cache_module.compute_cache_key(
+            cv_text=cv_text,
+            prompt_version=PROMPT_VERSION,
+            model_version=MODEL_VERSION,
+        )
+        custom_id = str(getattr(entry, "custom_id", ""))
+        submitted_key = (context.get(custom_id) or {}).get("cache_key")
         try:
-            cache_module.set(
-                cache_module.compute_cache_key(
-                    cv_text=cv_text,
-                    prompt_version=PROMPT_VERSION,
-                    model_version=MODEL_VERSION,
-                ),
-                parsed,
-            )
+            # Cache under the text the result actually came from, so a
+            # sibling with the same (old) text still hits.
+            cache_module.set(submitted_key or current_key, parsed)
         except Exception:  # pragma: no cover — defensive
             logger.exception("cv_parse batch cache write failed app_id=%s", app_id)
+        if submitted_key and submitted_key != current_key:
+            # CV changed while the batch was in flight — don't store stale
+            # sections; the next sweep resubmits with the fresh text.
+            logger.info(
+                "cv_parse batch result stale for app_id=%s (CV changed "
+                "mid-flight) — leaving row pending.",
+                app_id,
+            )
+            summary["stale_skipped"] += 1
+            continue
         store_parsed_cv_sections(app, parsed=parsed, cv_text=cv_text)
         summary["applied"] += 1
 

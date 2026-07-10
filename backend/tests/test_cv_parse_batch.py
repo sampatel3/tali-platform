@@ -172,8 +172,10 @@ def test_sweep_submits_per_org_and_dedupes_in_flight(db, monkeypatch):
 
 
 def test_sweep_excludes_closed_and_archived_roles(db, monkeypatch):
-    """Apps on dead Workable reqs are excluded in SQL — the 2026-06 audit's
-    dead-req-spend lesson. Manual roles (no workable_job_data) count as live."""
+    """Apps on dead reqs are excluded in SQL — the 2026-06 audit's
+    dead-req-spend lesson. Covers both Workable states (closed/archived)
+    and recruiter fill-marks on job_status (which often have no Workable
+    payload at all). Manual roles without either count as live."""
     org, live_role, live_app = _seed_app(db, email="live@x.test")
     for state, email in (("archived", "arch@x.test"), ("closed", "closed@x.test")):
         dead_role = Role(
@@ -186,6 +188,21 @@ def test_sweep_excludes_closed_and_archived_roles(db, monkeypatch):
         db.add(dead_role)
         db.flush()
         _seed_app(db, org=org, role=dead_role, email=email)
+    for job_status, email in (
+        ("filled", "filled@x.test"),
+        ("filled_external", "fext@x.test"),
+        ("cancelled", "cxl@x.test"),
+    ):
+        marked_role = Role(
+            organization_id=org.id,
+            name=f"marked-{job_status}",
+            source="manual",
+            job_spec_text="hire",
+            job_status=job_status,
+        )
+        db.add(marked_role)
+        db.flush()
+        _seed_app(db, org=org, role=marked_role, email=email)
     published_role = Role(
         organization_id=org.id,
         name="pub",
@@ -291,7 +308,7 @@ def test_apply_results_writes_sections_and_cache(db):
     summary = apply_batch_results(db, [_succeeded_entry(app.id)])
     db.commit()
 
-    assert summary == {"applied": 1, "requeued": 0, "skipped": 0}
+    assert summary == {"applied": 1, "requeued": 0, "skipped": 0, "stale_skipped": 0}
     db.refresh(app)
     assert app.cv_sections["skills"] == ["Python"]
     assert app.cv_sections["parse_failed"] is False
@@ -334,10 +351,86 @@ def test_apply_results_hands_failures_to_live_task(db, monkeypatch):
     summary = apply_batch_results(db, entries)
     db.commit()
 
-    assert summary == {"applied": 1, "requeued": 2, "skipped": 0}
+    assert summary == {"applied": 1, "requeued": 2, "skipped": 0, "stale_skipped": 0}
     assert sorted(requeued) == sorted([app_bad.id, app_err.id])
     db.refresh(app_bad)
     assert app_bad.cv_sections is None  # untouched; live task owns it
+
+
+def test_sweep_failure_skips_dont_consume_budget(db, monkeypatch):
+    """Failure-cached rows at the top of the id ordering must not eat the
+    sweep limit — older parseable rows would starve every sweep."""
+    org, role, older_app = _seed_app(db, email="older@x.test")
+    newer_text = CV_TEXT + " Newer distinct CV."
+    _, _, newer_app = _seed_app(db, org=org, role=role, cv_text=newer_text, email="newer@x.test")
+    assert newer_app.id > older_app.id
+    db.commit()
+
+    cache_module.set(
+        cache_module.compute_cache_key(
+            cv_text=newer_text[:CV_TEXT_CEILING],
+            prompt_version=PROMPT_VERSION,
+            model_version=MODEL_VERSION,
+        ),
+        ParsedCV.failed(
+            reason="validation_failed_after_retry: nope",
+            prompt_version=PROMPT_VERSION,
+            model_version=MODEL_VERSION,
+        ),
+    )
+
+    fake = _FakeBatches()
+    _patch_client(monkeypatch, fake)
+
+    summary = sweep_pending_applications(db, limit=1)
+    assert summary["cache_failed_skip"] == 1
+    assert len(fake.created) == 1
+    submitted = {r["custom_id"] for r in fake.created[0]["requests"]}
+    assert submitted == {custom_id_for(older_app.id)}  # older row still reached
+
+
+def test_apply_results_skips_stale_cv(db):
+    """A CV replaced while the batch was in flight must not get the stale
+    result; it's cached under the submitted text and the row stays pending."""
+    _, _, app = _seed_app(db)
+    db.commit()
+
+    submitted_key = cache_module.compute_cache_key(
+        cv_text=CV_TEXT[:CV_TEXT_CEILING],
+        prompt_version=PROMPT_VERSION,
+        model_version=MODEL_VERSION,
+    )
+    context = {custom_id_for(app.id): {"cache_key": submitted_key}}
+
+    # CV replaced mid-flight.
+    app.cv_text = "A completely different CV uploaded later."
+    db.commit()
+
+    summary = apply_batch_results(db, [_succeeded_entry(app.id)], context=context)
+    db.commit()
+
+    assert summary["stale_skipped"] == 1
+    assert summary["applied"] == 0
+    db.refresh(app)
+    assert app.cv_sections is None  # row stays pending for the next sweep
+    # Result cached under the text it came from, not the new text.
+    assert cache_module.get(submitted_key) is not None
+
+
+def test_apply_results_matching_key_applies(db):
+    _, _, app = _seed_app(db)
+    db.commit()
+    key = cache_module.compute_cache_key(
+        cv_text=CV_TEXT[:CV_TEXT_CEILING],
+        prompt_version=PROMPT_VERSION,
+        model_version=MODEL_VERSION,
+    )
+    context = {custom_id_for(app.id): {"cache_key": key}}
+    summary = apply_batch_results(db, [_succeeded_entry(app.id)], context=context)
+    db.commit()
+    assert summary["applied"] == 1 and summary["stale_skipped"] == 0
+    db.refresh(app)
+    assert app.cv_sections is not None
 
 
 def test_apply_results_skips_already_parsed(db):
@@ -346,7 +439,7 @@ def test_apply_results_skips_already_parsed(db):
     db.commit()
 
     summary = apply_batch_results(db, [_succeeded_entry(app.id)])
-    assert summary == {"applied": 0, "requeued": 0, "skipped": 1}
+    assert summary == {"applied": 0, "requeued": 0, "skipped": 1, "stale_skipped": 0}
     db.refresh(app)
     assert app.cv_sections == {"skills": ["existing"]}
 
