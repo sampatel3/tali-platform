@@ -2,17 +2,17 @@
 // the page shows is rounded here and falls back cleanly when data is absent —
 // no fabricated numbers, no NaN leaking to the DOM.
 
+import { formatMoneyUsd } from '../../shared/metrics';
+
 export const safeNum = (v, fb = 0) => (Number.isFinite(Number(v)) ? Number(v) : fb);
 
 export const pct = (part, whole) =>
   (safeNum(whole) > 0 ? Math.round((safeNum(part) / safeNum(whole)) * 100) : 0);
 
-// Money: cents → "$61" (>= $100 whole) or "$61" / "$1" (rounded whole < 100).
-// Mirrors the backend _ms_format_dollars so the pulse band matches the API.
-export const fmtUsd = (cents) => {
-  const n = safeNum(cents) / 100;
-  return n >= 100 ? `$${Math.round(n)}` : `$${Math.round(n)}`;
-};
+// Money: whole-dollar USD with thousands separators, from cents. Delegates to
+// the canonical shared formatter so /analytics matches Home and every other
+// KPI surface ("$1,200", not "$1200").
+export const fmtUsd = (cents) => formatMoneyUsd(safeNum(cents));
 
 // Money with cents precision under $100 — used where a finer figure helps
 // (per-agent budgets), still rounded so nothing fabricates trailing noise.

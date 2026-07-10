@@ -2,6 +2,7 @@ import api from './httpClient';
 
 export const assessments = {
   list: (params = {}) => api.get('/assessments/', { params }),
+  stats: () => api.get('/assessments/stats'),
   get: (id) => api.get(`/assessments/${id}`),
   create: (data) => api.post('/assessments/', data),
   startDemo: (data) => api.post('/assessments/demo/start', data),

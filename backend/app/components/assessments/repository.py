@@ -432,6 +432,11 @@ def assessment_to_response(
         "posted_to_workable_at": assessment.posted_to_workable_at,
         "invite_channel": getattr(assessment, "invite_channel", None),
         "invite_sent_at": getattr(assessment, "invite_sent_at", None),
+        # Resend delivery lifecycle so the inbox can surface a bounced invite
+        # instead of showing "Invited" forever. Populated by the Resend webhook.
+        "invite_email_status": getattr(assessment, "invite_email_status", None),
+        "invite_delivered_at": getattr(assessment, "invite_delivered_at", None),
+        "invite_bounced_at": getattr(assessment, "invite_bounced_at", None),
         "credit_consumed_at": getattr(assessment, "credit_consumed_at", None),
         "candidate_cv_filename": (
             assessment.application.cv_filename if getattr(assessment, "application", None) and assessment.application.cv_filename

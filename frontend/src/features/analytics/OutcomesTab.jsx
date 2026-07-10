@@ -9,6 +9,7 @@
 import React, { useMemo } from 'react';
 
 import { safeNum, pct, fmtUsd, monthShort, stageLabel } from './analyticsFormat';
+import { PIPELINE_FUNNEL_STAGES } from '../../shared/metrics';
 
 const FunnelRow = ({ stage, prev, isLast }) => {
   const ofApplied = Math.max(0, Math.min(100, safeNum(stage.percentage)));
@@ -77,13 +78,9 @@ export const OutcomesTab = ({ summary, breakdown, trend, rolesBreakdown }) => {
   const funnel = useMemo(() => (
     Array.isArray(summary?.funnel) && summary.funnel.length
       ? summary.funnel
-      : [
-        { label: 'APPLIED', count: 0, percentage: 0 },
-        { label: 'INVITED', count: 0, percentage: 0 },
-        { label: 'DONE', count: 0, percentage: 0 },
-        { label: 'REVIEW', count: 0, percentage: 0 },
-        { label: 'HIRED', count: 0, percentage: 0 },
-      ]
+      // Empty-state fallback uses the canonical funnel vocabulary (Applied →
+      // Scored → Invited → Completed → Advanced → Rejected) so it matches Home.
+      : PIPELINE_FUNNEL_STAGES.map((s) => ({ label: s.label, key: s.key, count: 0, percentage: 0 }))
   ), [summary]);
 
   const conv = breakdown?.totals?.advance_conversion || {};

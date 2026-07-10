@@ -9,6 +9,7 @@ import * as apiClient from '../../shared/api';
 import { Button, PageContainer, PageHeader, Panel, Select, Spinner, TableShell } from '../../shared/ui/TaaliPrimitives';
 import { PageLink } from '../../shared/ui/PageLink';
 import { useUrlState } from '../../shared/hooks/useUrlState';
+import { getErrorMessage } from '../../shared/getErrorMessage';
 
 const PAGE_SIZE = 10;
 const ONBOARDING_DISMISSED_KEY = 'taali_onboarding_dismissed';
@@ -29,6 +30,24 @@ const normalizeAssessmentStatus = (status) => {
 const isCompletedStatus = (status) => {
   const normalized = normalizeAssessmentStatus(status);
   return normalized === 'completed' || normalized === 'completed_due_to_timeout';
+};
+
+// A submitted assessment is flipped to "completed" the instant it's handed in,
+// but the AI grading runs afterwards. Until scored_at lands there is no real
+// score — surface a distinct "Scoring…" state rather than "Completed" with
+// dash scores (which is indistinguishable from a scoring failure).
+const isAwaitingScore = (raw) => {
+  if (!raw) return false;
+  if (!isCompletedStatus(raw.status)) return false;
+  const scored = raw.scored_at || raw.final_score != null || raw.taali_score != null
+    || raw.assessment_score != null;
+  return !scored;
+};
+
+// Resend delivery lifecycle: sent → delivered → opened, or bounced/complained.
+const isBouncedInvite = (raw) => {
+  const s = String(raw?.invite_email_status || '').toLowerCase();
+  return s === 'bounced' || s === 'complained';
 };
 
 const daysUntil = (value) => {
@@ -82,6 +101,9 @@ export const DashboardPage = ({
   const [assessmentsList, setAssessmentsList] = useState([]);
   const [totalAssessmentsCount, setTotalAssessmentsCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
+  const [loadedOnce, setLoadedOnce] = useState(false);
+  const [stats, setStats] = useState(null);
   const [loadingViewId, setLoadingViewId] = useState(null);
   const [loadingResendId, setLoadingResendId] = useState(null);
   const [statusFilter, setStatusFilter] = useUrlState('status', '');
@@ -144,9 +166,13 @@ export const DashboardPage = ({
     };
   }, [candidatesApi, rolesApi, tasksApi]);
 
+  // Bumping this re-runs the list fetch (used by the error-state Retry button).
+  const [reloadKey, setReloadKey] = useState(0);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setFetchError(false);
     const params = { limit: PAGE_SIZE, offset: page * PAGE_SIZE };
     if (statusFilter) params.status = statusFilter;
     if (taskFilter) params.task_id = taskFilter;
@@ -159,12 +185,15 @@ export const DashboardPage = ({
         const items = Array.isArray(data) ? data : (data.items || []);
         setAssessmentsList(items);
         setTotalAssessmentsCount(typeof data.total === 'number' ? data.total : items.length);
+        setLoadedOnce(true);
       })
       .catch((err) => {
         console.warn('Failed to fetch assessments:', err?.message || err);
         if (!cancelled) {
-          setAssessmentsList([]);
-          setTotalAssessmentsCount(0);
+          // Don't wipe the list to an empty "No assessments yet" state on a
+          // transient failure — that reads as "your data is gone". Flag the
+          // error and offer a retry instead.
+          setFetchError(true);
         }
       })
       .finally(() => {
@@ -174,7 +203,25 @@ export const DashboardPage = ({
     return () => {
       cancelled = true;
     };
-  }, [assessmentsApi, page, roleFilter, statusFilter, taskFilter]);
+  }, [assessmentsApi, page, roleFilter, statusFilter, taskFilter, reloadKey]);
+
+  // Org-wide KPI counts so the stat cards show true totals, not just the
+  // current page. Silent-degrade: if it fails the cards fall back to the
+  // page-scoped counts below.
+  useEffect(() => {
+    let cancelled = false;
+    if (!assessmentsApi.stats) return undefined;
+    assessmentsApi.stats()
+      .then((res) => {
+        if (!cancelled) setStats(res.data || null);
+      })
+      .catch(() => {
+        if (!cancelled) setStats(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [assessmentsApi, reloadKey]);
 
   const userName = user?.full_name?.split(' ')[0] || 'there';
 
@@ -191,16 +238,25 @@ export const DashboardPage = ({
     completedAt: assessment.completed_at || null,
     expiresAt: assessment.expires_at || null,
     token: assessment.token || '',
+    scoring: isAwaitingScore(assessment),
+    bounced: isBouncedInvite(assessment),
     _raw: assessment,
   })), [assessmentsList]);
 
-  const invitedCount = displayAssessments.filter((item) => item.status === 'pending').length;
-  const inProgressCount = displayAssessments.filter((item) => item.status === 'in_progress').length;
-  const completedCount = displayAssessments.filter((item) => isCompletedStatus(item.status)).length;
-  const expiringSoonCount = displayAssessments.filter((item) => {
+  // Prefer org-wide counts from /assessments/stats; fall back to the current
+  // page's rows when the stats call hasn't resolved (or failed).
+  const pageInvited = displayAssessments.filter((item) => item.status === 'pending').length;
+  const pageInProgress = displayAssessments.filter((item) => item.status === 'in_progress').length;
+  const pageCompleted = displayAssessments.filter((item) => isCompletedStatus(item.status)).length;
+  const pageExpiring = displayAssessments.filter((item) => {
     const expiryDays = daysUntil(item.expiresAt);
     return item.status === 'pending' && expiryDays != null && expiryDays > 0 && expiryDays <= 3;
   }).length;
+  const hasGlobalCounts = stats != null;
+  const invitedCount = hasGlobalCounts ? stats.invited : pageInvited;
+  const inProgressCount = hasGlobalCounts ? stats.in_progress : pageInProgress;
+  const completedCount = hasGlobalCounts ? stats.completed : pageCompleted;
+  const expiringSoonCount = hasGlobalCounts ? stats.expiring_soon : pageExpiring;
   const totalPages = Math.max(1, Math.ceil(totalAssessmentsCount / PAGE_SIZE));
   const startRow = totalAssessmentsCount === 0 ? 0 : page * PAGE_SIZE + 1;
   const endRow = totalAssessmentsCount === 0 ? 0 : Math.min((page + 1) * PAGE_SIZE, totalAssessmentsCount);
@@ -228,7 +284,7 @@ export const DashboardPage = ({
       const res = await assessmentsApi.get(assessment.id);
       onViewCandidate(mapAssessmentForDetail(res.data || assessment._raw));
     } catch (err) {
-      showToast(err?.response?.data?.detail || 'Failed to load assessment results.', 'error');
+      showToast(getErrorMessage(err, 'Couldn\'t load the assessment results. Try again in a moment.'), 'error');
     } finally {
       setLoadingViewId(null);
     }
@@ -240,7 +296,7 @@ export const DashboardPage = ({
       await assessmentsApi.resend(assessmentId);
       showToast('Assessment invite resent.', 'success');
     } catch (err) {
-      showToast(err?.response?.data?.detail || 'Failed to resend invite.', 'error');
+      showToast(getErrorMessage(err, 'Couldn\'t resend the invite. Try again in a moment.'), 'error');
     } finally {
       setLoadingResendId(null);
     }
@@ -268,7 +324,7 @@ export const DashboardPage = ({
           subtitle={`Welcome back, ${userName}. Review active invites, candidate progress, and completed assessments in one place.`}
         />
 
-        {totalAssessmentsCount === 0 && !onboardingDismissed ? (
+        {totalAssessmentsCount === 0 && loadedOnce && !fetchError && !onboardingDismissed ? (
           <div
             className="mb-5 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] p-5 shadow-[var(--taali-shadow-soft)]"
             style={{ background: 'var(--taali-card-bg)' }}
@@ -298,11 +354,11 @@ export const DashboardPage = ({
               </li>
               <li className="flex items-center gap-2">
                 <Circle size={14} className="text-[var(--taali-muted)]" aria-label="Not started" />
-                <span>Manage setup in Candidates, then review completed attempts here.</span>
+                <span>Manage setup on the Jobs page, then review completed attempts here.</span>
               </li>
             </ol>
             <div className="mt-3">
-              <Button as={PageLink} page="candidates" variant="secondary" size="sm">Go to Candidates</Button>
+              <Button as={PageLink} page="jobs" variant="secondary" size="sm">Go to Jobs</Button>
             </div>
           </div>
         ) : null}
@@ -311,7 +367,7 @@ export const DashboardPage = ({
           <div className="mb-5 flex min-h-[8.75rem] items-center justify-center">
             <Spinner size={32} />
           </div>
-        ) : (
+        ) : fetchError ? null : (
           <div className="mb-5 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             <StatsCardComponent
               icon={ClipboardList}
@@ -341,9 +397,11 @@ export const DashboardPage = ({
               change="Pending invites expiring in 3 days"
               to="/assessments?status=pending"
             />
-            <p className="col-span-full -mt-2 text-xs text-[var(--taali-muted)]">
-              Counts for the {displayAssessments.length} assessment{displayAssessments.length === 1 ? '' : 's'} on this page. Filter or page through to see more.
-            </p>
+            {!hasGlobalCounts ? (
+              <p className="col-span-full -mt-2 text-xs text-[var(--taali-muted)]">
+                Counts for the {displayAssessments.length} assessment{displayAssessments.length === 1 ? '' : 's'} on this page. Filter or page through to see more.
+              </p>
+            ) : null}
           </div>
         )}
 
@@ -434,6 +492,17 @@ export const DashboardPage = ({
             <div className="flex min-h-[16.25rem] items-center justify-center">
               <Spinner size={32} />
             </div>
+          ) : fetchError ? (
+            <div className="flex min-h-[16.25rem] flex-col items-center justify-center gap-3 px-4 py-10 text-center">
+              <TriangleAlert size={28} className="text-[var(--taali-warning)]" aria-hidden="true" />
+              <p className="text-sm font-semibold text-[var(--taali-text)]">Couldn&apos;t load your assessments.</p>
+              <p className="max-w-sm text-sm text-[var(--taali-muted)]">
+                This is usually a temporary connection issue — your assessments are safe. Try again in a moment.
+              </p>
+              <Button type="button" variant="primary" size="sm" onClick={() => setReloadKey((k) => k + 1)}>
+                Retry
+              </Button>
+            </div>
           ) : (
             <div className="table-scroll">
             <table className="w-full">
@@ -448,7 +517,7 @@ export const DashboardPage = ({
                 {displayAssessments.length === 0 ? (
                   <tr>
                     <td colSpan={9} className="px-4 py-10 text-center font-mono text-sm text-[var(--taali-muted)]">
-                      No assessments yet. Create an assessment from the Candidates page.
+                      No assessments yet. Create an assessment from a candidate&apos;s row on the Jobs page.
                     </td>
                   </tr>
                 ) : (
@@ -466,13 +535,25 @@ export const DashboardPage = ({
                         <td className="px-4 py-3 text-sm text-[var(--taali-text)]">{assessment.roleName}</td>
                         <td className="px-4 py-3 text-sm text-[var(--taali-text)]">{assessment.taskName}</td>
                         <td className="px-4 py-3">
-                          <StatusBadgeComponent status={assessment.status} />
+                          {assessment.scoring ? (
+                            <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--taali-surface-subtle)] px-2.5 py-1 font-mono text-xs text-[var(--taali-muted)]">
+                              <Spinner size={12} />
+                              Scoring…
+                            </span>
+                          ) : (
+                            <StatusBadgeComponent status={assessment.status} />
+                          )}
+                          {assessment.bounced ? (
+                            <div className="mt-1 font-mono text-xs text-[var(--taali-danger)]">
+                              Invite bounced
+                            </div>
+                          ) : null}
                         </td>
                         <td className="px-4 py-3 font-mono text-sm text-[var(--taali-text)]">
-                          {formatScale100Score(assessment.taaliScore, '0-100')}
+                          {assessment.scoring ? <span className="text-[var(--taali-muted)]">Scoring…</span> : formatScale100Score(assessment.taaliScore, '0-100')}
                         </td>
                         <td className="px-4 py-3 font-mono text-sm text-[var(--taali-text)]">
-                          {formatScale100Score(assessment.assessmentScore, '0-100')}
+                          {assessment.scoring ? <span className="text-[var(--taali-muted)]">Scoring…</span> : formatScale100Score(assessment.assessmentScore, '0-100')}
                         </td>
                         <td className="px-4 py-3 font-mono text-xs text-[var(--taali-muted)]">
                           {formatDate(assessment.inviteSentAt)}
@@ -482,7 +563,10 @@ export const DashboardPage = ({
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex flex-wrap items-center gap-2">
-                            {isCompletedStatus(assessment.status) ? (
+                            {isCompletedStatus(assessment.status) && assessment.scoring ? (
+                              <span className="font-mono text-xs text-[var(--taali-muted)]">Results in a moment…</span>
+                            ) : null}
+                            {isCompletedStatus(assessment.status) && !assessment.scoring ? (
                               <Button
                                 type="button"
                                 variant="primary"
@@ -494,7 +578,7 @@ export const DashboardPage = ({
                                 {loadingViewId === assessment.id ? 'Loading…' : 'View results'}
                               </Button>
                             ) : null}
-                            {(assessment.status === 'pending' || assessment.status === 'expired') && assessment.token ? (
+                            {(assessment.status === 'pending' || assessment.status === 'expired' || assessment.bounced) && assessment.token ? (
                               <>
                                 <Button
                                   type="button"
@@ -507,12 +591,12 @@ export const DashboardPage = ({
                                 </Button>
                                 <Button
                                   type="button"
-                                  variant="secondary"
+                                  variant={assessment.bounced ? 'primary' : 'secondary'}
                                   size="xs"
                                   disabled={loadingResendId === assessment.id}
                                   onClick={() => handleResend(assessment.id)}
                                 >
-                                  {loadingResendId === assessment.id ? 'Resending…' : 'Resend'}
+                                  {loadingResendId === assessment.id ? 'Resending…' : (assessment.bounced ? 'Resend invite' : 'Resend')}
                                 </Button>
                               </>
                             ) : null}

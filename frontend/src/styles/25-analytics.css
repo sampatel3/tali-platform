@@ -140,6 +140,23 @@
   line-height: 1.55;
 }
 
+/* Analytics load-failure banner — replaces fake all-zero KPIs. */
+.an-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  font-size: 13px;
+  color: var(--taali-danger, var(--purple-2));
+  background: var(--taali-danger-soft, var(--purple-soft));
+  border: 1px solid var(--taali-danger-border, var(--line-2));
+  border-radius: var(--radius, 14px);
+}
+.an-error p { margin: 0; }
+
 /* ── funnel conversion rows ─────────────────────────────────────────────── */
 .an-conv { display: flex; flex-direction: column; gap: 9px; }
 .an-convrow { display: flex; align-items: center; gap: 12px; }
