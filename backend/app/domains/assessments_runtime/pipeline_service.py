@@ -957,12 +957,18 @@ def role_pipeline_counts(
     role_id: int,
 ) -> dict[str, int]:
     # "Scored" means a candidate carries a REAL role-fit score, not merely a
-    # cv_match_scored_at timestamp — the timestamp is also set on pre-screen
-    # FILTERED candidates (below the cheap cutoff, never holistically scored, so
-    # cv_match_score is NULL). Counting by the timestamp inflated "Scored" with
-    # those phantoms (they have no score and no decision); count by the real
-    # score so it matches the queue and `not_yet_decided` (same basis below).
-    scored_expr = CandidateApplication.cv_match_score.isnot(None)
+    # cv_match_scored_at timestamp — "Scored" means the platform has EVALUATED
+    # the candidate: a real cv_match score OR a pre-screen score (including
+    # pre-screen-filtered candidates, whose cv_match_score stays NULL — they
+    # were evaluated at the cheap gate and screened out, and the pre-screen
+    # reject chip sits under Scored). Counting only cv_match_score dropped the
+    # filtered ones back into "Applied", making a fully pre-screened cohort
+    # read as untouched. "Applied" = no evaluation of any kind yet.
+    # `not_yet_decided` below uses the same basis so the chips reconcile.
+    scored_expr = or_(
+        CandidateApplication.cv_match_score.isnot(None),
+        CandidateApplication.pre_screen_score_100.isnot(None),
+    )
     # A candidate the recruiter has advanced in Workable (interview/offer/hired)
     # shows in the funnel as 'advanced' for alignment — the furthest stage wins —
     # regardless of Tali's pipeline_stage (which stays 'applied' for the backend).
@@ -1025,7 +1031,13 @@ def role_pipeline_counts(
             CandidateApplication.role_id == role_id,
             CandidateApplication.deleted_at.is_(None),
             CandidateApplication.application_outcome == "open",
-            CandidateApplication.cv_match_score.isnot(None),
+            # Same evaluated basis as `scored_expr` above — pre-screen-filtered
+            # candidates count as Scored, and the reconcile emits their reject
+            # decision each agent tick, so any without one are genuinely in limbo.
+            or_(
+                CandidateApplication.cv_match_score.isnot(None),
+                CandidateApplication.pre_screen_score_100.isnot(None),
+            ),
             # "Not yet decided BY THE AGENT" only means anything where the agent
             # is ON for the role (it may be paused — that's the usual case). On a
             # role with the agent OFF the recruiter decides manually, so there's
@@ -1088,10 +1100,12 @@ def role_pipeline_counts_bulk(
     if not role_ids:
         return counts
 
-    # Count by the REAL score, not the cv_match_scored_at timestamp (which is
-    # also set on pre-screen-filtered, null-score candidates) — see the note in
-    # role_pipeline_counts(). Keeps "Scored" matching the queue.
-    scored_expr = CandidateApplication.cv_match_score.isnot(None)
+    # "Scored" = evaluated (real cv_match score OR a pre-screen score, which
+    # includes pre-screen-filtered candidates) — see role_pipeline_counts().
+    scored_expr = or_(
+        CandidateApplication.cv_match_score.isnot(None),
+        CandidateApplication.pre_screen_score_100.isnot(None),
+    )
     # Workable-advanced candidates display as 'advanced' (alignment) regardless of
     # Tali's pipeline_stage — see role_pipeline_counts().
     ph_expr = _post_handover_sql()
@@ -1163,7 +1177,11 @@ def role_pipeline_counts_bulk(
             CandidateApplication.role_id.in_(role_ids),
             CandidateApplication.deleted_at.is_(None),
             CandidateApplication.application_outcome == "open",
-            CandidateApplication.cv_match_score.isnot(None),
+            # Same evaluated basis as `scored_expr` — see role_pipeline_counts().
+            or_(
+                CandidateApplication.cv_match_score.isnot(None),
+                CandidateApplication.pre_screen_score_100.isnot(None),
+            ),
             # Only roles with the agent ON — see role_pipeline_counts(). An
             # agent-off role's candidates aren't awaiting an agent verdict.
             Role.agentic_mode_enabled.is_(True),
