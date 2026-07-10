@@ -258,6 +258,116 @@ def send_assessment_expiry_reminders():
         db.close()
 
 
+@celery_app.task
+def send_assessment_nudges():
+    """Mid-window nudges off the delivery-tracking data (flag-gated).
+
+    Two segments the funnel now distinguishes, each nudged at 48h and at
+    most ONE nudge per assessment ever (the expiry reminder owns the end
+    of the window):
+
+    - ``delivered_not_opened`` — the invite landed but was never opened.
+    - ``opened_not_started`` — opened or previewed, but Start never clicked.
+
+    Assessment-scoped only (consistent with the invite + expiry reminders;
+    Taali never emails candidates about the job). Gated by
+    ``ASSESSMENT_NUDGES_ENABLED`` (default off) so turning the sequence on
+    is a deliberate step once invite volume resumes.
+    """
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy.orm import Session, joinedload
+
+    from ..components.assessments.repository import (
+        append_assessment_timeline_event,
+        ensure_utc,
+    )
+    from ..domains.integrations_notifications.adapters import build_email_adapter
+    from ..models.assessment import Assessment, AssessmentStatus
+    from ..platform.database import SessionLocal
+
+    if not getattr(settings, "ASSESSMENT_NUDGES_ENABLED", False):
+        return {"status": "skipped", "reason": "flag_off"}
+    if not (settings.RESEND_API_KEY or "").strip():
+        return {"status": "skipped", "reason": "resend_not_configured"}
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=48)
+
+    db: Session = SessionLocal()
+    sent = 0
+    failed = 0
+    skipped = 0
+    try:
+        pending = (
+            db.query(Assessment)
+            .options(joinedload(Assessment.candidate), joinedload(Assessment.task))
+            .filter(
+                Assessment.status == AssessmentStatus.PENDING,
+                Assessment.is_voided.is_(False),
+                Assessment.is_demo.is_(False),
+                Assessment.invite_sent_at != None,  # noqa: E711
+                Assessment.invite_sent_at <= cutoff,
+                Assessment.expires_at != None,  # noqa: E711
+                # Leave the final day to the expiry reminder — one voice at a time.
+                Assessment.expires_at > now + timedelta(hours=24),
+            )
+            .all()
+        )
+        email_svc = build_email_adapter()
+        for assessment in pending:
+            already_nudged = any(
+                isinstance(e, dict) and e.get("event_type") == "nudge_sent"
+                for e in (assessment.timeline or [])
+            )
+            if already_nudged:
+                skipped += 1
+                continue
+            opened_at = ensure_utc(assessment.invite_opened_at or assessment.preview_viewed_at)
+            delivered_at = ensure_utc(assessment.invite_delivered_at)
+            if opened_at is not None and opened_at <= cutoff:
+                kind = "opened_not_started"
+            elif opened_at is None and delivered_at is not None and delivered_at <= cutoff:
+                kind = "delivered_not_opened"
+            else:
+                skipped += 1
+                continue
+            candidate_email = (
+                assessment.candidate.email if assessment.candidate else None
+            ) or None
+            if not candidate_email:
+                skipped += 1
+                continue
+            candidate_name = (
+                assessment.candidate.full_name if assessment.candidate else None
+            ) or candidate_email
+            task_name = (assessment.task.name if assessment.task else None) or "Technical assessment"
+            expiry_text = assessment.expires_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            assessment_link = f"{settings.FRONTEND_URL}/assessment/{assessment.id}?token={assessment.token}"
+            result = email_svc.send_assessment_nudge(
+                candidate_email=candidate_email,
+                candidate_name=candidate_name,
+                task_name=task_name,
+                assessment_link=assessment_link,
+                kind=kind,
+                expiry_text=expiry_text,
+            )
+            if result.get("success"):
+                append_assessment_timeline_event(
+                    assessment, "nudge_sent", {"kind": kind, "email_id": result.get("email_id")}
+                )
+                db.commit()
+                sent += 1
+            else:
+                failed += 1
+        logger.info(
+            "Assessment nudges complete: sent=%d failed=%d skipped=%d",
+            sent, failed, skipped,
+        )
+        return {"status": "ok", "sent": sent, "failed": failed, "skipped": skipped}
+    finally:
+        db.close()
+
+
 # Note: ``sync_workable_orgs`` (every-30-min full sync of every job AND
 # every candidate AND every CV download) was removed on 2026-05-20. It
 # was the source of the constant rate-limiting and the starvation bug
