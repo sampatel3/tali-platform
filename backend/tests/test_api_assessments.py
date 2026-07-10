@@ -1208,3 +1208,112 @@ def test_interview_debrief_generation_includes_linked_fireflies_context_from_app
     assert payload["interview_debrief"]["fireflies_context"]["invite_email"] == "taali@fireflies.ai"
     assert "Stage 1 Fireflies transcript is linked" in payload["interview_debrief"]["summary"]
     assert payload["interview_debrief"]["probing_questions"][0]["dimension"] == "Stage 1 screening"
+
+
+def test_preview_stamps_first_view_once(client, db):
+    task = Task(
+        name="Preview stamp task",
+        description="Stamp the first preview view.",
+        task_type="python",
+        difficulty="medium",
+        duration_minutes=30,
+        task_key="preview_stamp_task",
+        scenario="Look before you start.",
+        repo_structure={"files": {"README.md": "hello"}},
+    )
+    db.add(task)
+    db.flush()
+    assessment = Assessment(
+        task_id=task.id,
+        token="preview-stamp-token",
+        duration_minutes=30,
+        status=AssessmentStatus.PENDING,
+    )
+    db.add(assessment)
+    db.commit()
+
+    assert assessment.preview_viewed_at is None
+    resp = client.get(f"/api/v1/assessments/token/{assessment.token}/preview")
+    assert resp.status_code == 200, resp.text
+    db.refresh(assessment)
+    first_stamp = assessment.preview_viewed_at
+    assert first_stamp is not None
+    events = [e for e in (assessment.timeline or []) if e.get("event_type") == "preview_viewed"]
+    assert len(events) == 1
+    assert events[0]["can_start"] in (True, False)
+
+    # A repeat visit neither rewrites the stamp nor appends another event.
+    resp = client.get(f"/api/v1/assessments/token/{assessment.token}/preview")
+    assert resp.status_code == 200
+    db.refresh(assessment)
+    assert assessment.preview_viewed_at == first_stamp
+    events = [e for e in (assessment.timeline or []) if e.get("event_type") == "preview_viewed"]
+    assert len(events) == 1
+
+
+def test_runtime_event_records_once_per_type(client, db):
+    task = Task(
+        name="Runtime event task",
+        description="Beacon test.",
+        task_type="python",
+        difficulty="medium",
+        duration_minutes=30,
+        task_key="runtime_event_task",
+        repo_structure={"files": {"README.md": "hello"}},
+    )
+    db.add(task)
+    db.flush()
+    assessment = Assessment(
+        task_id=task.id,
+        token="runtime-event-token",
+        duration_minutes=30,
+        status=AssessmentStatus.IN_PROGRESS,
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(assessment)
+    db.commit()
+
+    headers = {"X-Assessment-Token": assessment.token}
+    resp = client.post(
+        f"/api/v1/assessments/{assessment.id}/runtime-event",
+        json={"event_type": "runtime_loaded"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"recorded": True}
+    db.refresh(assessment)
+    events = [e for e in (assessment.timeline or []) if e.get("event_type") == "runtime_loaded"]
+    assert len(events) == 1
+    assert events[0]["seconds_since_start"] >= 0
+
+    # Same type again → deduped.
+    resp = client.post(
+        f"/api/v1/assessments/{assessment.id}/runtime-event",
+        json={"event_type": "runtime_loaded"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"recorded": False, "reason": "already_recorded"}
+
+    # A different allowed type still records.
+    resp = client.post(
+        f"/api/v1/assessments/{assessment.id}/runtime-event",
+        json={"event_type": "file_opened"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"recorded": True}
+
+    # Unknown types are rejected; bad tokens are forbidden.
+    resp = client.post(
+        f"/api/v1/assessments/{assessment.id}/runtime-event",
+        json={"event_type": "keylogger"},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+    resp = client.post(
+        f"/api/v1/assessments/{assessment.id}/runtime-event",
+        json={"event_type": "runtime_loaded"},
+        headers={"X-Assessment-Token": "wrong"},
+    )
+    assert resp.status_code == 403

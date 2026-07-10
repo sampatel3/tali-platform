@@ -503,6 +503,24 @@ export default function AssessmentPage({
     contextWindowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
 
+  // First-minutes engagement beacons — fire-and-forget, deduped locally and
+  // once-per-type server-side; never sent from the demo/deck walkthrough.
+  const runtimeEventSentRef = useRef({});
+  const sendRuntimeEvent = useCallback(
+    (eventType) => {
+      const id = assessment?.id ?? assessmentId;
+      if (demoMode || !id || !assessmentTokenForApi) return;
+      if (runtimeEventSentRef.current[eventType]) return;
+      runtimeEventSentRef.current[eventType] = true;
+      assessments.runtimeEvent(id, eventType, assessmentTokenForApi).catch(() => {});
+    },
+    [assessment?.id, assessmentId, assessmentTokenForApi, demoMode],
+  );
+
+  useEffect(() => {
+    if (!loading && assessment) sendRuntimeEvent('runtime_loaded');
+  }, [loading, assessment, sendRuntimeEvent]);
+
   const toggleRepoDir = useCallback((dir) => {
     if (!dir) return;
     setCollapsedRepoDirs((prev) => ({
@@ -529,8 +547,9 @@ export default function AssessmentPage({
       // The freshly-opened buffer matches what's in the workspace snapshot,
       // so it starts clean; edits below will re-flag it.
       setHasUnsavedEdits(false);
+      sendRuntimeEvent('file_opened');
     },
-    [selectedRepoPath, editorContent, repoFilesState],
+    [selectedRepoPath, editorContent, repoFilesState, sendRuntimeEvent],
   );
 
   const handleEditorChange = useCallback((value) => {
