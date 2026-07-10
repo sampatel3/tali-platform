@@ -1,11 +1,10 @@
 import { useState } from 'react';
 
-// Two-stage assessment stepper (Part 1 Practice & Setup → Part 2 Applied Task).
-// Presentational: it frames the candidate's time into the two scored stages and
-// lets them advance the highlighted step. It does NOT lock the workspace, so it
-// can never break the runtime. Renders nothing unless the task ships a
-// `two_stage` config with at least two parts — so normal assessments are
-// completely unaffected.
+// Assessment stage stepper. Renders the task's `two_stage` config (Part 1
+// Practice & Setup → Part 2 Applied Task) or, for normal tasks, the caller's
+// default orientation path. Presentational: it frames the candidate's time and
+// lets them advance the highlighted step. It does NOT lock the workspace, so
+// it can never break the runtime; it renders nothing below two parts.
 export function AssessmentStagePanel({ twoStage }) {
   const parts = Array.isArray(twoStage?.parts) ? twoStage.parts : [];
   const [active, setActive] = useState(0);
