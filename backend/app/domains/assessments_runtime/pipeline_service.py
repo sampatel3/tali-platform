@@ -965,9 +965,17 @@ def role_pipeline_counts(
     # filtered ones back into "Applied", making a fully pre-screened cohort
     # read as untouched. "Applied" = no evaluation of any kind yet.
     # `not_yet_decided` below uses the same basis so the chips reconcile.
+    # The pre-screen side requires a GENUINE run (pre_screen_run_at):
+    # pre_screen_score_100 is also written as a display value from the full
+    # cv_match snapshot, and score invalidation nulls only cv_match_score —
+    # without the guard an invalidated (awaiting re-score) candidate would
+    # keep counting as Scored off the stale display value.
     scored_expr = or_(
         CandidateApplication.cv_match_score.isnot(None),
-        CandidateApplication.pre_screen_score_100.isnot(None),
+        and_(
+            CandidateApplication.pre_screen_score_100.isnot(None),
+            CandidateApplication.pre_screen_run_at.isnot(None),
+        ),
     )
     # A candidate the recruiter has advanced in Workable (interview/offer/hired)
     # shows in the funnel as 'advanced' for alignment — the furthest stage wins —
@@ -1036,7 +1044,10 @@ def role_pipeline_counts(
             # decision each agent tick, so any without one are genuinely in limbo.
             or_(
                 CandidateApplication.cv_match_score.isnot(None),
-                CandidateApplication.pre_screen_score_100.isnot(None),
+                and_(
+                    CandidateApplication.pre_screen_score_100.isnot(None),
+                    CandidateApplication.pre_screen_run_at.isnot(None),
+                ),
             ),
             # "Not yet decided BY THE AGENT" only means anything where the agent
             # is ON for the role (it may be paused — that's the usual case). On a
@@ -1100,11 +1111,15 @@ def role_pipeline_counts_bulk(
     if not role_ids:
         return counts
 
-    # "Scored" = evaluated (real cv_match score OR a pre-screen score, which
-    # includes pre-screen-filtered candidates) — see role_pipeline_counts().
+    # "Scored" = evaluated (real cv_match score OR a genuinely-run pre-screen,
+    # which includes pre-screen-filtered candidates) — see role_pipeline_counts()
+    # for why the pre-screen side requires pre_screen_run_at.
     scored_expr = or_(
         CandidateApplication.cv_match_score.isnot(None),
-        CandidateApplication.pre_screen_score_100.isnot(None),
+        and_(
+            CandidateApplication.pre_screen_score_100.isnot(None),
+            CandidateApplication.pre_screen_run_at.isnot(None),
+        ),
     )
     # Workable-advanced candidates display as 'advanced' (alignment) regardless of
     # Tali's pipeline_stage — see role_pipeline_counts().
@@ -1180,7 +1195,10 @@ def role_pipeline_counts_bulk(
             # Same evaluated basis as `scored_expr` — see role_pipeline_counts().
             or_(
                 CandidateApplication.cv_match_score.isnot(None),
-                CandidateApplication.pre_screen_score_100.isnot(None),
+                and_(
+                    CandidateApplication.pre_screen_score_100.isnot(None),
+                    CandidateApplication.pre_screen_run_at.isnot(None),
+                ),
             ),
             # Only roles with the agent ON — see role_pipeline_counts(). An
             # agent-off role's candidates aren't awaiting an agent verdict.

@@ -148,13 +148,16 @@ export const applicationFunnelBucket = (application) => {
   if (isPostHandoverWorkableStage(application?.workable_stage)) return 'advanced';
   const stage = String(application?.pipeline_stage || '').toLowerCase();
   if (stage === 'applied') {
-    // Evaluated = real cv_match score OR any pre-screen score (the list
-    // payload serializes it as `pre_screen_score`; `pre_screen_score_100` is
-    // the raw column name kept for payloads that carry it). Matches the
-    // backend's scored_expr so per-row grouping equals the funnel counts.
-    const scored = application?.cv_match_score != null
-      || application?.pre_screen_score_100 != null
-      || application?.pre_screen_score != null;
+    // Evaluated = real cv_match score OR a genuinely-RUN pre-screen (the list
+    // payload serializes the score as `pre_screen_score`; `pre_screen_score_100`
+    // is the raw column name kept for payloads that carry it). The
+    // pre_screen_run_at guard matches the backend's scored_expr: the pre-screen
+    // score field is also a display value derived from a full cv_match
+    // snapshot, and score invalidation nulls only cv_match_score — without the
+    // guard an invalidated candidate would keep reading as Scored.
+    const preScreened = (application?.pre_screen_score_100 != null || application?.pre_screen_score != null)
+      && application?.pre_screen_run_at != null;
+    const scored = application?.cv_match_score != null || preScreened;
     return scored ? 'scored' : 'applied';
   }
   if (stage === 'invited' || stage === 'in_assessment') return 'invited';
