@@ -7,8 +7,8 @@ every batch result writes claude_call_log + usage_events at the batch
 tier (50% of standard). ``metered_at`` is the idempotency latch that
 keeps repeated results() calls from double-billing.
 
-Revision ID: 133_add_anthropic_batch_jobs
-Revises: 132_per_application_workable_context
+Revision ID: 135_add_anthropic_batch_jobs
+Revises: 134_add_role_auto_reject_pre_screen
 Create Date: 2026-07-10
 """
 from __future__ import annotations
@@ -16,8 +16,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "133_add_anthropic_batch_jobs"
-down_revision = "132_per_application_workable_context"
+revision = "135_add_anthropic_batch_jobs"
+down_revision = "134_add_role_auto_reject_pre_screen"
 branch_labels = None
 depends_on = None
 
