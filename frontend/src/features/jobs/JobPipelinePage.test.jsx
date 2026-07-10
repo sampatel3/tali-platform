@@ -558,6 +558,58 @@ Banking transformation experience
     expect(apiClient.agent.discardPending).not.toHaveBeenCalled();
   });
 
+  it('New CVs tile counts only auto-scorable candidates, breaking out held-back ones', async () => {
+    // Mirrors backend _auto_enqueue_scoring: unscored apps that were
+    // pre-screened OUT (below the pre-screen cutoff, no newer CV) or have no
+    // CV are NOT "ready to score" — showing them as such made a fully
+    // filtered cohort look like the agent was stuck.
+    const base = {
+      candidate_email: 'x@example.com', pipeline_stage: 'applied',
+      application_outcome: 'open', status: 'applied',
+      created_at: '2026-04-26T01:00:00Z', updated_at: '2026-04-26T01:00:00Z',
+    };
+    apiClient.roles.listApplications.mockResolvedValue({ data: [
+      // Pre-screen filtered: score 12 < 30 cutoff, CV predates the run.
+      { ...base, id: 1, candidate_id: 1, candidate_name: 'Filtered Fay', pre_screen_score: 12, cv_uploaded_at: '2026-04-01T00:00:00Z', pre_screen_run_at: '2026-04-02T00:00:00Z' },
+      // No CV at all — nothing to score.
+      { ...base, id: 2, candidate_id: 2, candidate_name: 'Nocv Ned' },
+      // Never pre-screened, has a CV → scoreable.
+      { ...base, id: 3, candidate_id: 3, candidate_name: 'Ready Ria', cv_uploaded_at: '2026-04-01T00:00:00Z' },
+      // Screened out BUT uploaded a newer CV since the run → scoreable again.
+      { ...base, id: 4, candidate_id: 4, candidate_name: 'Fresh Finn', pre_screen_score: 12, cv_uploaded_at: '2026-04-03T00:00:00Z', pre_screen_run_at: '2026-04-02T00:00:00Z' },
+    ] });
+
+    renderPipeline();
+
+    const tile = (await screen.findByText('New CVs')).closest('.kpi-tile');
+    expect(tile).toBeTruthy();
+    // Value = the 2 genuinely scoreable candidates, not all 4 unscored.
+    expect(within(tile).getByText('2')).toBeInTheDocument();
+    expect(within(tile).getByText('ready to score · 1 pre-screen filtered · 1 no CV')).toBeInTheDocument();
+  });
+
+  it('New CVs tile reads 0 with a breakdown when every unscored candidate is held back', async () => {
+    // The prod role-26 shape: "35 ready to score" with zero the agent would
+    // touch. Must read 0 + the reason, not a big number.
+    const base = {
+      candidate_email: 'x@example.com', pipeline_stage: 'applied',
+      application_outcome: 'open', status: 'applied',
+      created_at: '2026-04-26T01:00:00Z', updated_at: '2026-04-26T01:00:00Z',
+    };
+    apiClient.roles.listApplications.mockResolvedValue({ data: [
+      { ...base, id: 1, candidate_id: 1, candidate_name: 'Filtered Fay', pre_screen_score: 12, cv_uploaded_at: '2026-04-01T00:00:00Z', pre_screen_run_at: '2026-04-02T00:00:00Z' },
+      { ...base, id: 2, candidate_id: 2, candidate_name: 'Filtered Flo', pre_screen_score: 8, cv_uploaded_at: '2026-04-01T00:00:00Z', pre_screen_run_at: '2026-04-02T00:00:00Z' },
+      { ...base, id: 3, candidate_id: 3, candidate_name: 'Nocv Ned' },
+    ] });
+
+    renderPipeline();
+
+    const tile = (await screen.findByText('New CVs')).closest('.kpi-tile');
+    expect(within(tile).getByText('0')).toBeInTheDocument();
+    expect(within(tile).getByText('2 pre-screen filtered · 1 no CV')).toBeInTheDocument();
+    expect(within(tile).queryByText(/ready to score/)).not.toBeInTheDocument();
+  });
+
   it('Turn off with "also discard" ticked disables AND discards the queue', async () => {
     apiClient.roles.get.mockResolvedValue({ data: { ...baseRole, agentic_mode_enabled: true } });
     apiClient.agent.status.mockResolvedValue({
