@@ -10,6 +10,7 @@ from .assessment_tasks import (
     sync_workable_daily_candidates,
     reap_stuck_workable_sync_runs,
     generate_assessment_task_for_role,
+    battle_test_generated_task,
 )
 # Eager-import the canonical email-task module so Celery registers
 # send_assessment_email / send_results_email on the worker. (Taali never
@@ -143,6 +144,7 @@ __all__ = [
     "sync_agent_mode_roles",
     "sync_workable_daily_candidates",
     "reap_stuck_workable_sync_runs",
+    "battle_test_generated_task",
     "score_application_job",
     "batch_score_role",
     "rescore_pool_against_requirement",
