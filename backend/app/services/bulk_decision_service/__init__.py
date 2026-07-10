@@ -43,6 +43,7 @@ from .cohort import (
 )
 from .post_handover import decide_post_handover
 from .score_time import ensure_deterministic_decision
+from .stage_toggle import reconcile_pending_positive_decisions
 
 __all__ = [
     "DEFAULT_PER_TICK_LIMIT",
@@ -52,4 +53,5 @@ __all__ = [
     "decide_role_cohort",
     "ensure_deterministic_decision",
     "recompute_persisted_verdict",
+    "reconcile_pending_positive_decisions",
 ]

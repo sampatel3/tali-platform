@@ -66,6 +66,28 @@ def test_no_gate_auto_executes_send(db):
     assert result == {"status": "sent", "assessment_id": 7}
 
 
+def test_skip_toggle_redirects_send_to_advance_despite_task(db):
+    """auto_skip_assessment=True bypasses the assessment stage even when a
+    task exists — the send tool queues an advance_to_interview decision
+    instead of an assessment invite."""
+    org, role, _, app = make_world(db, send_requires_approval=True, with_task=True)
+    role.auto_skip_assessment = True
+    db.flush()
+    run = _make_run(db, role)
+    args = {"application_id": int(app.id)}
+    with patch("app.agent_runtime.tool_registry.send_assessment.run") as send:
+        result = _tool_send_assessment(db, agent_run=run, role=role, args=args)
+    send.assert_not_called()
+    assert result["redirected_to"] == "advance_to_interview"
+    assert result["status"] == "awaiting_recruiter_approval"
+    rows = db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.decision_type == "advance_to_interview",
+    ).all()
+    assert len(rows) == 1
+    assert (rows[0].evidence or {}).get("reason") == "auto_skip_assessment"
+
+
 def test_hitl_gate_returns_existing_decision_instead_of_duplicating(db):
     """Repeated agent calls for the same candidate hit the dedup branch."""
     org, role, _, app = make_world(db, send_requires_approval=True, with_task=True)

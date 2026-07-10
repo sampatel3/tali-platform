@@ -18,6 +18,7 @@ from ...actions.types import Actor
 from ...agent_runtime.decision_translation import (
     QUEUEABLE_VERDICTS,
     resolve_persisted_decision_type,
+    role_has_assessment_stage,
 )
 from ...decision_policy.engine import evaluate
 from ...domains.assessments_runtime.pipeline_service import (
@@ -55,7 +56,7 @@ def decide_post_handover(db: Session, *, app: CandidateApplication, role: Role) 
         if getattr(app, "application_outcome", None) != "open":
             return None
         eff = resolve_role_fit_threshold(db, role=role)
-        has_task = bool(getattr(role, "tasks", None))
+        has_task = role_has_assessment_stage(role)
         inputs = _inputs_for(
             app, role_id=int(role.id), org_id=int(role.organization_id),
             eff=eff, has_task=has_task,

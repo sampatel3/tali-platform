@@ -1454,3 +1454,45 @@ def test_evaluate_policy_no_task_send_verdict_captures_as_advance(db):
         "no-task send_assessment verdict must capture as advance_to_interview"
     )
     assert tool_registry._is_on_policy(run, int(app.id), "advance_to_interview")[0] is True
+
+
+def test_evaluate_policy_skip_toggle_send_verdict_captures_as_advance(db):
+    """Same capture-side switch for auto_skip_assessment: the role HAS a task,
+    but the recruiter toggled the assessment stage off, so a
+    'queue_send_assessment' engine verdict must capture as
+    'advance_to_interview' — otherwise the skip-toggled advance reads as
+    off-policy and is wrongly withheld."""
+    from app.decision_policy.engine import PolicyDecision
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    task = Task(organization_id=org.id, name="Take-home")
+    db.add(task)
+    db.flush()
+    role.tasks.append(task)
+    role.auto_skip_assessment = True
+    db.flush()
+    app = _make_application(db, org=org, role=role, name="SkipTask", email="st@x.test", taali=85.0)
+    run = _make_agent_run(db, role)
+
+    send_verdict = PolicyDecision(
+        decision_type="queue_send_assessment",
+        confidence=0.9,
+        reasoning="strong candidate; assessments skipped on this role",
+        rule_path=["send_rule"],
+        decision_point="send_assessment",
+    )
+    with patch.object(
+        tool_registry.policy_evaluator,
+        "evaluate_for_application",
+        return_value=(send_verdict, {}),
+    ):
+        tool_registry.dispatch(
+            "evaluate_policy", {"application_id": app.id},
+            db=db, agent_run=run, role=role,
+        )
+
+    assert run.__engine_verdicts__[int(app.id)] == "advance_to_interview", (
+        "skip-toggled send_assessment verdict must capture as advance_to_interview"
+    )
+    assert tool_registry._is_on_policy(run, int(app.id), "advance_to_interview")[0] is True

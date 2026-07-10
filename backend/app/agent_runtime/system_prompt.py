@@ -120,6 +120,9 @@ ALLOWLIST — you may ONLY call tools in this list:
     and returns status="awaiting_recruiter_approval"; the recruiter
     approves on the Home Review queue and the approve path dispatches
     the invite. When auto_promote=True the invite fires immediately.
+    When the role has no assessment task OR auto_skip_assessment=True,
+    the tool redirects to an advance_to_interview decision instead —
+    don't fight the redirect, it's the recruiter's configuration.
   - resend_assessment_invite: same shape, decision_type='resend_assessment_invite'.
 
   ASK RECRUITER (third lane — when you genuinely need input):

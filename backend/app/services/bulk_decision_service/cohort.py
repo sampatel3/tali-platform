@@ -23,6 +23,7 @@ from ...actions.types import Actor
 from ...agent_runtime.decision_translation import (
     QUEUEABLE_VERDICTS,
     resolve_persisted_decision_type,
+    role_has_assessment_stage,
 )
 from ...decision_policy.engine import evaluate
 from ...domains.assessments_runtime.pipeline_service import (
@@ -33,7 +34,7 @@ from ...models.agent_run import AgentRun
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ..auto_threshold_service import resolve_role_fit_threshold
-from ._shared import _inputs_for, _recruiter_reasoning
+from ._shared import _inputs_for, _no_assessment_note, _recruiter_reasoning
 
 logger = logging.getLogger("taali.bulk_decision")
 
@@ -116,7 +117,7 @@ def decide_role_cohort(
     """
     org_id = int(role.organization_id)
     eff = resolve_role_fit_threshold(db, role=role)
-    has_task = bool(getattr(role, "tasks", None))
+    has_task = role_has_assessment_stage(role)
 
     summary: Counter = Counter()
     # First, re-flow existing bulk decisions against the (possibly
@@ -217,7 +218,7 @@ def decide_role_cohort(
             f"role-fit {role_fit:.0f} vs threshold "
             f"{eff if eff is not None else 'default'} (pre-screen {pre_screen:.0f}) "
             f"→ {decision_type}"
-            + ("" if has_task else "; role has no assessment task, advancing directly")
+            + _no_assessment_note(role, has_task)
         )
         # Recruiter headline = the CV-match narrative (same source as the
         # report hero); fall back to the audit basis when none exists so

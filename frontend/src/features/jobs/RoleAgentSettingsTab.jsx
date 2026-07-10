@@ -62,12 +62,15 @@ const RoleAgentSettingsTab = ({
   const dayOfMonth = new Date().getDate();
   const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
   const projectedCents = dayOfMonth ? Math.round((monthlySpentCents * daysInMonth) / dayOfMonth) : monthlySpentCents;
-  // Two real HITL toggles, persisted on the role record. Default off
+  // Three real HITL toggles, persisted on the role record. Default off
   // (= every candidate-affecting decision goes to the Decision Hub for
-  // human approval). Flipping on lets the agent execute that family of
-  // actions immediately and audit-log the result.
+  // human approval). Auto-reject/auto-promote let the agent execute that
+  // family of actions immediately; auto-skip-assessment reroutes strong
+  // candidates past the assessment stage into the advance queue.
   const autoReject = Boolean(role?.auto_reject);
+  const autoRejectPreScreen = Boolean(role?.auto_reject_pre_screen);
   const autoPromote = Boolean(role?.auto_promote);
+  const autoSkipAssessment = Boolean(role?.auto_skip_assessment);
   // When the linked Workable req is archived/closed/draft, Workable refuses
   // candidate write-backs (disqualify/move) with a 403 — so Taali acts locally
   // instead (rejects still complete here, just not synced upstream). The agent
@@ -304,10 +307,22 @@ const RoleAgentSettingsTab = ({
               sub: 'Below-threshold candidates are rejected immediately (pre-screen, scoring, and assessment stages). Off: every reject lands in the Decision Hub for one-click approval.',
             },
             {
+              key: 'auto_reject_pre_screen',
+              value: autoRejectPreScreen,
+              title: 'Auto-reject pre-screen only',
+              sub: 'Only candidates failing the cheap pre-screen gate are rejected immediately. Rejects of fully-scored candidates still queue in the Decision Hub. Auto-reject above covers this and more.',
+            },
+            {
               key: 'auto_promote',
               value: autoPromote,
               title: 'Auto-promote',
               sub: 'Sending an assessment and advancing to interview happen without approval. Off: each invite/advance queues as a Decision Hub card.',
+            },
+            {
+              key: 'auto_skip_assessment',
+              value: autoSkipAssessment,
+              title: 'Auto skip assessment',
+              sub: 'Bypass the assessment stage: strong candidates queue as advance-to-interview cards in the Decision Hub instead of receiving an assessment invite. Combine with Auto-promote to advance them without approval.',
             },
           ].map((rule, idx) => (
             <label key={rule.key} className={`mc-agent-settings-rule ${idx === 0 ? '' : 'is-divided'}`}>
