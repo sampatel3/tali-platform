@@ -25,10 +25,13 @@ const AgentLiveFeed = () => (
         <span
           className="mc-demo-feed-event"
           style={{
+            // Match the real Hub decision-feed vocabulary: purple tones on the
+            // dark panel, never traffic-light green/amber. Advance = bright
+            // lavender, pending = a dimmer lavender, everything else muted.
             color:
-              row.tone === 'good' ? '#7dd0a8'
-                : row.tone === 'pend' ? '#e8b167'
-                  : 'var(--purple-lav)',
+              row.tone === 'good' ? 'var(--purple-lav)'
+                : row.tone === 'pend' ? 'color-mix(in oklab, var(--purple-lav) 70%, rgba(255,255,255,0.4))'
+                  : 'rgba(255,255,255,0.5)',
           }}
         >
           {row.type}

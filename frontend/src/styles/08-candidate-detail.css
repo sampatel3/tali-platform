@@ -1318,7 +1318,7 @@ body.interview-view .page {
    (matching .abar-on), so the agent visibly owns the scoring. Same fill +
    lavender accents as the agent strip; lavender bars on a translucent track. */
 .panel.agent-scored {
-  background: linear-gradient(160deg, #3a1d6e 0%, #241147 100%);
+  background: var(--grad-agent-on);
   border-color: rgba(196, 165, 253, .28);
   box-shadow: 0 18px 44px -26px rgba(58, 29, 110, .85);
   color: #fff;

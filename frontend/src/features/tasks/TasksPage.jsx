@@ -248,7 +248,10 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
                             <div className="tcard-key"><Lock size={12} />Secure assessment task</div>
                             <h3>{task.name || 'Assessment task'}</h3>
                           </div>
-                          <span className={`chip ${difficulty === 'easy' ? 'green' : difficulty === 'hard' ? 'red' : 'amber'}`}>
+                          {/* Difficulty is a tier, not a status — use the purple
+                              chip vocabulary (hard=purple, medium=ink, easy=neutral),
+                              never traffic-light green/amber/red. */}
+                          <span className={`chip ${difficulty === 'hard' ? 'purple' : difficulty === 'medium' ? 'ink' : ''}`}>
                             {difficulty}
                           </span>
                         </div>

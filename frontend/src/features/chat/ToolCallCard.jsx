@@ -15,30 +15,19 @@ const TOOL_LABELS = {
   screen_pool_against_requirement: 'Screening the pool',
 };
 
-// Render an arg value the way search-preview does: string values quoted
-// ("Senior Backend"), numbers/booleans bare, arrays bracketed.
-const fmtVal = (v) => {
-  if (Array.isArray(v)) return `[${v.join(',')}]`;
-  if (typeof v === 'string') return `"${v}"`;
-  return String(v);
-};
-
-// search-preview shows args as `key="value" · key=value` — the parts joined by
-// a mono middot, not a bare space.
+// Human-friendly one-line summary of the most meaningful call arguments — a
+// recruiter reads "for 'Senior Backend', top 10", not a key="value" dump of
+// internal field names and IDs.
 const summarizeArgs = (args) => {
   if (!args || typeof args !== 'object') return '';
-  const entries = Object.entries(args).filter(([, v]) => v != null);
-  const pieces = [];
-  entries.forEach(([k, v], i) => {
-    pieces.push(
-      <span key={k}>
-        <b>{k}=</b>
-        {typeof v === 'object' && !Array.isArray(v) ? '{…}' : fmtVal(v)}
-      </span>,
-    );
-    if (i < entries.length - 1) pieces.push(<span key={`${k}-sep`}> · </span>);
-  });
-  return pieces;
+  const parts = [];
+  // Lead with the search subject if present.
+  const subject = args.role_name || args.query || args.requirement || args.role || args.name;
+  if (typeof subject === 'string' && subject.trim()) parts.push(`for "${subject.trim()}"`);
+  // Then a count, if present.
+  const count = args.limit ?? args.top_n ?? args.count;
+  if (typeof count === 'number' && count > 0) parts.push(`top ${count}`);
+  return parts.join(', ');
 };
 
 const resultCount = (toolName, result) => {
@@ -107,21 +96,29 @@ const ToolCallCard = ({ part }) => {
       </button>
       {open ? (
         <div className="cp-tool-body">
-          <div className="cp-tool-kv">
-            <div className="k">tool</div><div className="v">{toolName}</div>
-            <div className="k">args</div>
-            <div className="v">
-              <pre className="cp-tool-raw">{JSON.stringify(args || {}, null, 2)}</pre>
-            </div>
-            {result !== undefined ? (
-              <>
-                <div className="k">result</div>
-                <div className="v">
-                  <pre className="cp-tool-raw">{JSON.stringify(result, null, 2)}</pre>
-                </div>
-              </>
-            ) : null}
+          <div className="cp-tool-summary">
+            {TOOL_LABELS[toolName] || String(toolName).replace(/_/g, ' ')}
+            {summarizeArgs(args || {}) ? ` ${summarizeArgs(args || {})}` : ''}
+            {count ? ` — ${count}` : ''}
           </div>
+          {/* Raw args/result are developer internals — behind the dev flag only,
+              never shown to recruiters. */}
+          {import.meta.env.DEV ? (
+            <div className="cp-tool-kv">
+              <div className="k">args</div>
+              <div className="v">
+                <pre className="cp-tool-raw">{JSON.stringify(args || {}, null, 2)}</pre>
+              </div>
+              {result !== undefined ? (
+                <>
+                  <div className="k">result</div>
+                  <div className="v">
+                    <pre className="cp-tool-raw">{JSON.stringify(result, null, 2)}</pre>
+                  </div>
+                </>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

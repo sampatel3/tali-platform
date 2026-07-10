@@ -286,7 +286,7 @@
   align-items: center;
   justify-content: center;
 }
-.cp-agent-stat-on { background: linear-gradient(150deg, #3a1d6e, #241147); color: #fff; box-shadow: 0 0 0 3px var(--c-purple-soft); }
+.cp-agent-stat-on { background: var(--grad-agent-on); color: #fff; box-shadow: 0 0 0 3px var(--c-purple-soft); }
 .cp-agent-stat-paused { background: var(--amber-soft, #fbf0dd); color: var(--c-amber); }
 .cp-agent-stat-off { background: var(--c-bg-3); color: var(--c-mute); }
 .cp-agent-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
@@ -708,6 +708,11 @@
   background: var(--c-bg);
 }
 .cp-tool-open .cp-tool-body { display: block; }
+.cp-tool-summary {
+  font-size: 0.78125rem;
+  color: var(--c-ink);
+  line-height: 1.5;
+}
 .cp-tool-kv {
   display: grid;
   grid-template-columns: 160px 1fr;

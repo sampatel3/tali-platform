@@ -35,7 +35,7 @@
   justify-content: center;
 }
 .job-agent-pill.is-on {
-  background: linear-gradient(135deg, #3a1d6e, #241147);
+  background: var(--grad-agent-on);
   color: #fff;
   box-shadow: 0 2px 8px -2px rgba(58, 29, 110, 0.5);
 }
