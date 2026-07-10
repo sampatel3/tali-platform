@@ -262,3 +262,104 @@ def test_retrieve_passes_through(db):
     client, _, _ = _client(db)
     batch = client.messages.batches.retrieve("msgbatch_test_1")
     assert batch.processing_status == "ended"
+
+
+def test_swallowed_write_failure_does_not_latch(db, monkeypatch):
+    """A metering write that fails-and-swallows must NOT set metered_at —
+    the next results() call retries the batch instead of permanently
+    under-counting (Codex P2 on PR #869)."""
+    from app.services import metered_anthropic_client as mac
+
+    entries = _entries(2)
+    client, _, org_id = _client(db, entries=entries)
+    client.messages.batches.create(
+        requests=_requests(),
+        metering={"feature": Feature.CV_PARSE, "organization_id": org_id},
+    )
+
+    calls = {"n": 0}
+    real = mac._MeteredMessages._record_call_log_safe
+
+    def _flaky(self, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return False  # first write swallowed a failure
+        return real(self, **kwargs)
+
+    monkeypatch.setattr(mac._MeteredMessages, "_record_call_log_safe", _flaky)
+
+    list(client.messages.batches.results("msgbatch_test_1"))
+    row = db.query(AnthropicBatchJob).filter_by(batch_id="msgbatch_test_1").one()
+    db.refresh(row)
+    assert row.metered_at is None  # not latched
+
+    # Next poll retries and, with writes healthy, latches.
+    list(client.messages.batches.results("msgbatch_test_1"))
+    db.expire_all()
+    row = db.query(AnthropicBatchJob).filter_by(batch_id="msgbatch_test_1").one()
+    assert row.metered_at is not None
+    assert row.metered_count == 2
+
+
+def test_batch_create_rejects_unknown_feature(db):
+    client, _, _ = _client(db)
+    with pytest.raises(MeteringRequiredError):
+        client.messages.batches.create(
+            requests=_requests(), metering={"feature": "not_a_real_feature"}
+        )
+
+
+def test_poll_retrieve_falls_back_to_shared_key():
+    """With per-org keys enabled, a batch submitted on the shared-key
+    fallback 404s under the org's workspace key — the poll must retry with
+    the shared client (Codex P2 on PR #869)."""
+    from types import SimpleNamespace
+
+    from app.tasks.anthropic_batch_tasks import _retrieve_with_key_fallback
+
+    class _NotFound(Exception):
+        status_code = 404
+
+    org_client_calls = []
+    shared_client_calls = []
+
+    def _make_client(*, calls, fail):
+        def _retrieve(batch_id):
+            calls.append(batch_id)
+            if fail:
+                raise _NotFound()
+            return SimpleNamespace(processing_status="ended")
+
+        return SimpleNamespace(
+            messages=SimpleNamespace(
+                batches=SimpleNamespace(retrieve=_retrieve)
+            )
+        )
+
+    def _get_metered_client(*, organization_id=None):
+        if organization_id is not None:
+            return _make_client(calls=org_client_calls, fail=True)
+        return _make_client(calls=shared_client_calls, fail=False)
+
+    row = SimpleNamespace(batch_id="msgbatch_x", organization_id=2)
+    client, batch = _retrieve_with_key_fallback(_get_metered_client, row)
+    assert batch.processing_status == "ended"
+    assert org_client_calls == ["msgbatch_x"]
+    assert shared_client_calls == ["msgbatch_x"]  # fallback used
+
+    # Non-404 errors propagate — no silent fallback.
+    def _get_boom_client(*, organization_id=None):
+        def _retrieve(batch_id):
+            raise RuntimeError("boom")
+
+        return SimpleNamespace(
+            messages=SimpleNamespace(
+                batches=SimpleNamespace(retrieve=_retrieve)
+            )
+        )
+
+    try:
+        _retrieve_with_key_fallback(_get_boom_client, row)
+        assert False, "expected RuntimeError"
+    except RuntimeError:
+        pass

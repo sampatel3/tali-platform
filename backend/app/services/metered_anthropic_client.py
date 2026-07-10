@@ -424,9 +424,12 @@ class _MeteredMessages:
         parent_call_log_id: Optional[int] = None,
         trace_id: Optional[str] = None,
         service_tier: str = "standard",
-    ) -> None:
+    ) -> bool:
         """Write one ``ClaudeCallLog`` row. Never raises — call_log failures
         must not break Claude calls. Logs at WARNING so ops sees them.
+        Returns True when the row committed, False when the failure was
+        swallowed (the batch path uses this to skip its idempotency latch
+        so a failed write is retried on the next results() call).
 
         Unconditional by design. This is the structural guarantee that
         every call lands a row, regardless of whether the application
@@ -484,6 +487,7 @@ class _MeteredMessages:
             with SessionLocal() as session:
                 session.add(row)
                 session.commit()
+            return True
         except Exception:
             logger.exception(
                 "metered_anthropic: claude_call_log write failed (model=%s, "
@@ -492,6 +496,7 @@ class _MeteredMessages:
                 model,
                 status,
             )
+            return False
 
     # ----- usage_event recording (existing path) --------------------------
 
@@ -763,6 +768,15 @@ class _MeteredBatches:
                 "Feature.OTHER for unclassified batches)"
             )
         feature_str = feature.value if isinstance(feature, Feature) else str(feature)
+        try:
+            Feature(feature_str)
+        except ValueError:
+            # Fail fast at submit: an unknown feature would make every
+            # results()-time usage_event write fail deterministically,
+            # leaving the batch permanently unlatched and re-metered.
+            raise MeteringRequiredError(
+                f"unknown metering feature {feature_str!r} for batch submit"
+            )
 
         requests = kwargs.get("requests") or []
         batch = self._inner.create(**kwargs)
@@ -834,10 +848,13 @@ class _MeteredBatches:
         """Write call_log + usage_event rows for one batch's results.
 
         Never raises. Idempotency: the batch row is locked (FOR UPDATE),
-        ``metered_at`` checked, rows written, latch set, one commit. A
-        crash mid-way re-meters the whole batch on the next call — the
-        over-count-on-crash trade is deliberate (reconciliation surfaces
-        it; silent under-count would not).
+        ``metered_at`` checked, rows written, latch set, one commit. The
+        latch is only set when EVERY entry's writes landed — a swallowed
+        write failure (or a crash mid-way) leaves the batch unlatched so
+        the next results() call re-meters it. Retry-after-partial-write
+        over-counts the entries that did land; that trade is deliberate
+        (reconciliation surfaces an over-count; a silent under-count it
+        would not).
         """
         from datetime import datetime, timezone
 
@@ -872,11 +889,28 @@ class _MeteredBatches:
 
                 context = row.context if isinstance(row.context, dict) else {}
                 metered = 0
+                failed = 0
                 for entry in entries:
-                    if self._meter_one_result(
+                    outcome = self._meter_one_result(
                         entry, batch_row=row, context=context
-                    ):
+                    )
+                    if outcome == "metered":
                         metered += 1
+                    elif outcome == "failed":
+                        failed += 1
+
+                if failed:
+                    logger.error(
+                        "metered_anthropic: %d of %d batch result(s) failed "
+                        "their metering writes (batch_id=%s) — NOT latching; "
+                        "the next results() call retries the whole batch "
+                        "(already-written rows will double-count until then).",
+                        failed,
+                        len(entries),
+                        batch_id,
+                    )
+                    session.rollback()
+                    return
 
                 row.metered_at = datetime.now(timezone.utc)
                 row.metered_count = metered
@@ -893,19 +927,21 @@ class _MeteredBatches:
 
     def _meter_one_result(
         self, entry: Any, *, batch_row: Any, context: dict
-    ) -> bool:
-        """Meter one result entry. Returns True when a row was written.
+    ) -> str:
+        """Meter one result entry. Returns ``"metered"``, ``"skipped"``
+        (nothing billable) or ``"failed"`` (a metering write was swallowed
+        — the caller must not latch, so the next results() call retries).
 
         Non-succeeded entries (errored / canceled / expired) carry no
         usage and are not billed by Anthropic — skipped.
         """
         result = getattr(entry, "result", None)
         if getattr(result, "type", None) != "succeeded":
-            return False
+            return "skipped"
         message = getattr(result, "message", None)
         usage = getattr(message, "usage", None)
         if usage is None:
-            return False
+            return "skipped"
 
         custom_id = str(getattr(entry, "custom_id", "") or "")
         per = context.get(custom_id) or {}
@@ -936,7 +972,11 @@ class _MeteredBatches:
                 metadata={"batch_id": batch_row.batch_id},
                 service_tier="batch",
             )
-        self._messages._record_call_log_safe(
+            if usage_event is None:
+                # _write_event swallowed a failure — don't latch, retry
+                # on the next results() call.
+                return "failed"
+        wrote = self._messages._record_call_log_safe(
             organization_id=int(org_id) if org_id is not None else None,
             model=model,
             usage=usage,
@@ -949,7 +989,7 @@ class _MeteredBatches:
             usage_event_id=int(usage_event.id) if usage_event is not None else None,
             service_tier="batch",
         )
-        return True
+        return "metered" if wrote else "failed"
 
 
 class MeteredAnthropicClient:

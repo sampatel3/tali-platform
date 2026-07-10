@@ -52,6 +52,35 @@ def submit_cv_parse_batches() -> dict:
         db.close()
 
 
+def _retrieve_with_key_fallback(get_metered_client, row):
+    """Retrieve a batch with the org-routed client, falling back to the
+    shared-key client when the org's key can't see it.
+
+    A batch is tied to the API key that created it. With per-org workspace
+    keys enabled, the submit-time resolver can fall back to the shared key
+    (e.g. provisioning failure) while the poll-time resolver later resolves
+    the org's workspace key — the workspace key then 404s on a batch the
+    shared key owns, and the row would sit in-flight forever. On a
+    not-found from the org-routed client, retry once with the shared
+    client and use whichever one succeeded for results() too.
+    """
+    client = get_metered_client(organization_id=row.organization_id)
+    try:
+        return client, client.messages.batches.retrieve(row.batch_id)
+    except Exception as exc:
+        status_code = getattr(exc, "status_code", None)
+        if row.organization_id is None or status_code != 404:
+            raise
+        logger.warning(
+            "batch %s not visible to org %s's key (404) — retrying with "
+            "the shared key (batch likely submitted on shared-key fallback).",
+            row.batch_id,
+            row.organization_id,
+        )
+        shared = get_metered_client()
+        return shared, shared.messages.batches.retrieve(row.batch_id)
+
+
 @celery_app.task(name="app.tasks.anthropic_batch_tasks.poll_cv_parse_batches")
 def poll_cv_parse_batches() -> dict:
     """Poll open cv_parse batches; apply results for the ended ones.
@@ -83,8 +112,9 @@ def poll_cv_parse_batches() -> dict:
         polled = []
         for row in rows:
             try:
-                client = get_metered_client(organization_id=row.organization_id)
-                batch = client.messages.batches.retrieve(row.batch_id)
+                client, batch = _retrieve_with_key_fallback(
+                    get_metered_client, row
+                )
                 processing_status = str(
                     getattr(batch, "processing_status", "") or ""
                 )
