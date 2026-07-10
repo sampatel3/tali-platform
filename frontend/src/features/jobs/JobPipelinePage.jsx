@@ -23,6 +23,7 @@ import { RequisitionSpecSections, JobStatusControl, ClientControl } from './Requ
 import { clientApi } from '../clients/api';
 import { RoleAgentSettingsTab } from './RoleAgentSettingsTab';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
+import SubmittalPackDialog from './SubmittalPackDialog';
 import { useAgentStatus } from '../../shared/layout/AgentBar';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 // AgentRail (the legacy left "cockpit rail") was retired with the v3
@@ -308,6 +309,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [fetchCvsProgress, setFetchCvsProgress] = useState(EMPTY_FETCH_PROGRESS);
   const [preScreenProgress, setPreScreenProgress] = useState(EMPTY_PRE_SCREEN_PROGRESS);
   const [processDialogOpen, setProcessDialogOpen] = useState(false);
+  const [submittalDialogOpen, setSubmittalDialogOpen] = useState(false);
   const [syncingStages, setSyncingStages] = useState(false);
   const [loading, setLoading] = useState(true);
   // Set only on a cold-load failure with nothing cached to paint — drives the
@@ -1830,6 +1832,19 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   )}
                 </button>
               ) : null}
+              {/* WS2 — curated multi-candidate client submittal. Only offered
+                  once the recruiter has ticked the candidates to include, so it
+                  reads as an action on the current selection. */}
+              {selectedAppIds.size > 0 ? (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={() => setSubmittalDialogOpen(true)}
+                  title="Share a curated, client-safe shortlist for this role as one link"
+                >
+                  <Share2 size={12} />Create submittal pack
+                </button>
+              ) : null}
               {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — primary
                   recruiter action: cascade Process opened via
                   ProcessCandidatesDialog. Label flips live during runs. */}
@@ -2059,6 +2074,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             )}
           </div>
         </Dialog>
+
+        <SubmittalPackDialog
+          open={submittalDialogOpen}
+          roleId={numericRoleId}
+          roleTitle={role?.name || ''}
+          applications={roleApplications.filter((a) => selectedAppIds.has(a.id))}
+          onClose={() => setSubmittalDialogOpen(false)}
+        />
 
         <ProcessCandidatesDialog
           open={processDialogOpen}

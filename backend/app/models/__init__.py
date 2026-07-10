@@ -165,6 +165,7 @@ from .share_link import (
     ShareLink,
 )
 from .top_candidates_report import TopCandidatesReport
+from .submittal_pack import SubmittalPack
 from .threshold_calibration import ThresholdCalibration
 from .api_key import (
     API_KEY_SCOPES,
@@ -306,6 +307,7 @@ __all__ = [
     "BRAIN_FEED_STATUSES",
     "ShareLink",
     "TopCandidatesReport",
+    "SubmittalPack",
     "ThresholdCalibration",
     "SHARE_LINK_MODE_RECRUITER",
     "SHARE_LINK_MODE_CLIENT",

@@ -89,6 +89,7 @@ const HomeShowcaseView = lazy(() =>
   import('./features/home/HomeShowcaseView').then((m) => ({ default: m.HomeShowcaseView }))
 );
 const TopReportPage = lazy(() => import('./features/chat/TopReportPage'));
+const SubmittalPackPage = lazy(() => import('./features/jobs/SubmittalPackPage'));
 const CandidateStandingReportPage = lazy(() =>
   import('./features/candidates/CandidateStandingReportPage').then((m) => ({ default: m.CandidateStandingReportPage }))
 );
@@ -143,6 +144,7 @@ const BlogPostPage = lazy(() =>
 
 const isPublicCandidateSharePath = (pathname, search = '') => {
   if (pathname.startsWith('/c/')) return true;
+  if (pathname.startsWith('/submittal/')) return true;
   const params = new URLSearchParams(search || '');
   const hasInterviewToken = params.get('view') === 'interview' && Boolean(String(params.get('k') || '').trim());
   if (pathname.startsWith('/candidates/') && hasInterviewToken) return true;
@@ -754,6 +756,18 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <TopReportPage />
+          </Suspense>
+        )}
+      />
+
+      {/* Public, no-auth curated client submittal — renders a persisted,
+          role-scoped shortlist snapshot (client-safe candidate cards) by
+          token. No /api/v1 prefix and no recruiter session required. */}
+      <Route
+        path="/submittal/:submittalToken"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <SubmittalPackPage />
           </Suspense>
         )}
       />
