@@ -846,14 +846,19 @@ def test_job_spec_upload_generates_interview_focus(client, db, monkeypatch):
     assert payload["interview_focus_pending"] is True
 
     # The stubbed handler ran inline before the response, so the next
-    # listing call should already see the populated focus.
+    # listing call should already see the focus was generated.
     list_resp = client.get("/api/v1/roles", headers=headers)
     assert list_resp.status_code == 200, list_resp.text
     roles = list_resp.json()
     assert len(roles) >= 1
     role_payload = next(r for r in roles if r["id"] == role["id"])
-    assert role_payload["interview_focus"]["questions"][0]["question"] == "Describe an API you designed end-to-end."
+    # The list is a slim serialization — interview_focus is detail-only — but the
+    # generated-at timestamp stays so the list can show a "focus ready" badge.
     assert role_payload["interview_focus_generated_at"] is not None
+    # The full interview_focus is served by the role detail endpoint.
+    detail = client.get(f"/api/v1/roles/{role['id']}", headers=headers)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["interview_focus"]["questions"][0]["question"] == "Describe an API you designed end-to-end."
 
 
 def test_job_spec_upload_succeeds_when_interview_focus_cannot_run(client, monkeypatch):

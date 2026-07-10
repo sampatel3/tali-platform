@@ -30,6 +30,7 @@ from ._hub_shared import (
     RoleBreakdownRow,
     month_start_utc,
     now_utc,
+    org_header_extras,
     pending_filter,
     role_pending_decisions_by_type_bulk,
     short_role_name,
@@ -228,17 +229,24 @@ def org_status(
     Scoped to ``current_user.organization_id``. Cheap enough to poll on a
     30-second cadence: counts + sums only.
     """
-    base = _compute_kpis(db, organization_id=current_user.organization_id, range_days=7)
+    org_id = current_user.organization_id
+    base = _compute_kpis(db, organization_id=org_id, range_days=7)
     last_decision = (
         db.query(AgentDecision.created_at)
-        .filter(AgentDecision.organization_id == current_user.organization_id)
+        .filter(AgentDecision.organization_id == org_id)
         .order_by(desc(AgentDecision.created_at))
         .limit(1)
         .scalar()
     )
+    # Additive header fields (current_run / last_activity / paused_reason) for
+    # the global AgentBar — all org-scoped aggregates so the bar can drop its
+    # /roles + per-role /agent/status fan-out. Computed in _hub_shared.
+    extras = org_header_extras(db, organization_id=org_id)
+
     return OrgStatusPayload(
         **base.model_dump(),
         last_decision_at=last_decision,
+        **extras,
     )
 
 

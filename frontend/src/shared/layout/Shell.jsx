@@ -79,10 +79,21 @@ const useHomePendingCount = (isAuthenticated) => {
       }
     };
     void tick();
-    const id = window.setInterval(tick, 30_000);
+    // Skip the poll while the tab is hidden so background tabs don't hit the
+    // us-east4 API every 30s; refetch once on becoming visible again (mirrors
+    // AgentBar's document.hidden guard).
+    const id = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void tick();
+    }, 30_000);
+    const onVisibility = () => {
+      if (typeof document !== 'undefined' && !document.hidden) void tick();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       cancelled = true;
       window.clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [isAuthenticated]);
   return count;

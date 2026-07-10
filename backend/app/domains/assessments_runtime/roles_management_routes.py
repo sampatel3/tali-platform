@@ -146,13 +146,12 @@ def list_roles(
     # over older roles that have never been updated.
     roles_query = (
         db.query(Role)
-        # selectinload both collections: without it, role_to_response
-        # lazy-loads ``role.criteria`` once PER role — an N+1 that, on an org
-        # with ~100 roles, fired ~100 extra sequential queries and dominated
-        # /roles latency (107 → 8 queries with this). selectin (not joined)
-        # also keeps ``.limit()`` below applying cleanly to roles rather than
-        # to a tasks/criteria cartesian product.
-        .options(selectinload(Role.tasks), selectinload(Role.criteria))
+        # selectinload tasks for the per-role task count. Criteria are NOT
+        # loaded here: the list serializes with summary=True (see below), which
+        # drops the criteria array entirely, so hydrating it would only transfer
+        # rows we discard. selectin (not joined) keeps ``.limit()`` below
+        # applying cleanly to roles rather than to a tasks cartesian product.
+        .options(selectinload(Role.tasks))
         .filter(
             Role.organization_id == current_user.organization_id,
             Role.deleted_at.is_(None),
@@ -246,6 +245,7 @@ def list_roles(
     return [
         role_to_response(
             role,
+            summary=True,
             tasks_count=len(role.tasks or []),
             applications_count=app_counts.get(role.id, 0),
             stage_counts=stage_counts_by_role.get(role.id, {}),

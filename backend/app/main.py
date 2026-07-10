@@ -8,6 +8,7 @@ _API_ERROR_MESSAGES = {
     "REGISTER_USER_ALREADY_EXISTS": "An account with this email already exists. Sign in instead or use a different email.",
 }
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response as StarletteResponse
@@ -174,6 +175,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(SecurityHeadersMiddleware)
+
+# Compress large JSON responses. UAE users hit a us-east4 API, so the network
+# hop is the documented bottleneck; repetitive list JSON compresses ~80-90%.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 def _normalize_origin(origin: str | None) -> str | None:
     cleaned = (origin or "").strip().rstrip("/")
