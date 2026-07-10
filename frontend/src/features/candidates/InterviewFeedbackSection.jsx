@@ -101,7 +101,7 @@ const emptyForm = (kitProbes) => ({
   notes: '',
 });
 
-const FeedbackEntry = ({ entry, onEdit, onDelete, busy }) => {
+const FeedbackEntry = ({ entry, onEdit, onDelete, busy, readOnly }) => {
   const [open, setOpen] = useState(false);
   const probes = Array.isArray(entry.probe_results) ? entry.probe_results : [];
   const ratings = entry.dimension_ratings && typeof entry.dimension_ratings === 'object'
@@ -170,19 +170,21 @@ const FeedbackEntry = ({ entry, onEdit, onDelete, busy }) => {
           ) : null}
         </div>
       ) : null}
-      <div className="mc-notes-input-actions" style={{ marginTop: 8, gap: 8, display: 'flex' }}>
-        <button type="button" className="btn btn-outline btn-sm" onClick={() => onEdit(entry)} disabled={busy}>
-          Edit
-        </button>
-        <button type="button" className="btn btn-outline btn-sm" onClick={() => onDelete(entry)} disabled={busy}>
-          Delete
-        </button>
-      </div>
+      {!readOnly ? (
+        <div className="mc-notes-input-actions" style={{ marginTop: 8, gap: 8, display: 'flex' }}>
+          <button type="button" className="btn btn-outline btn-sm" onClick={() => onEdit(entry)} disabled={busy}>
+            Edit
+          </button>
+          <button type="button" className="btn btn-outline btn-sm" onClick={() => onDelete(entry)} disabled={busy}>
+            Delete
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 };
 
-const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initialFeedback }) => {
+const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initialFeedback, readOnly = false }) => {
   const kitProbes = useMemo(() => probesFromKit(interviewKit), [interviewKit]);
   const [entries, setEntries] = useState(Array.isArray(initialFeedback) ? initialFeedback : []);
   const [formOpen, setFormOpen] = useState(false);
@@ -196,7 +198,9 @@ const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initi
     if (Array.isArray(initialFeedback)) setEntries(initialFeedback);
   }, [initialFeedback]);
 
-  const canSubmit = Boolean(applicationId && rolesApi?.createInterviewFeedback);
+  // Read-only on recruiter share links: the payload carries the entries but the
+  // viewer is unauthenticated, so no record/edit/delete (and no API calls).
+  const canSubmit = Boolean(!readOnly && applicationId && rolesApi?.createInterviewFeedback);
 
   const refresh = async () => {
     if (!applicationId || !rolesApi?.listInterviewFeedback) return;
@@ -307,15 +311,16 @@ const InterviewFeedbackSection = ({ applicationId, interviewKit, rolesApi, initi
       <div style={{ display: 'grid', gap: 10, marginTop: 10 }}>
         {entries.length === 0 ? (
           <div className="mc-notes-empty">
-            No interview feedback recorded yet. After an interview, record the round,
-            recommendation, and how the probes landed — it feeds the score↔outcome
-            calibration.
+            {readOnly
+              ? 'No interview feedback recorded.'
+              : 'No interview feedback recorded yet. After an interview, record the round, recommendation, and how the probes landed — it feeds the score↔outcome calibration.'}
           </div>
         ) : (
           entries.map((entry) => (
             <FeedbackEntry
               key={entry.id}
               entry={entry}
+              readOnly={readOnly}
               onEdit={openEdit}
               onDelete={handleDelete}
               busy={busy}

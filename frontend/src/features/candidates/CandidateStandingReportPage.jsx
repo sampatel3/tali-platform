@@ -1585,14 +1585,16 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
 
           {/* Structured interview feedback — recruiters record what actually
               happened (round, recommendation, 5-Ds ratings, probe results,
-              notes). Recruiter-only + needs a real application id (the endpoint
-              is application-scoped), so it's hidden on client/interview views. */}
-          {!isClientView && !isInterviewView && application?.id ? (
+              notes). Hidden on client shares (the payload strips it anyway);
+              read-only on recruiter share links (entries arrive with the
+              payload but the viewer is unauthenticated, so no record/edit). */}
+          {!isClientView && application?.id ? (
             <InterviewFeedbackSection
               applicationId={application.id}
               interviewKit={application?.candidate_interview_kit}
               initialFeedback={application?.interview_feedback}
               rolesApi={rolesApi}
+              readOnly={isInterviewView}
             />
           ) : null}
         </div>

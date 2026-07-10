@@ -105,4 +105,12 @@ describe('InterviewFeedbackSection', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Delete$/i }));
     await waitFor(() => expect(api.deleteInterviewFeedback).toHaveBeenCalledWith(5, 11));
   });
+
+  it('read-only mode (recruiter share links) lists entries without record/edit/delete', () => {
+    renderSection({ initialFeedback: [existingEntry], readOnly: true });
+    expect(screen.getByText(/Dana Recruiter/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Record feedback/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Edit$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Delete$/i })).not.toBeInTheDocument();
+  });
 });
