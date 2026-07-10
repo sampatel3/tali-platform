@@ -1,10 +1,14 @@
-import React, { useEffect, useRef } from 'react';
+import React, { Suspense, lazy, useEffect, useRef } from 'react';
 import { ChatMessage, ChatMarkdown, ThinkingDots } from '../../shared/chat';
 import ToolCallCard from './ToolCallCard';
 import CandidateGrid from './CandidateGrid';
 import ComparisonTable from './ComparisonTable';
-import GraphView from './GraphView';
 import CandidateEvidenceCard from './CandidateEvidenceCard';
+
+// GraphView pulls in cytoscape (~455 kB) — lazy-load it so the ~455 kB
+// graph vendor chunk only lands when a tool result actually carries a
+// ``graph`` payload, instead of riding the chat path for every session.
+const GraphView = lazy(() => import('./GraphView'));
 
 const ToolResultRender = ({ part }) => {
   // Decide which custom renderer(s) to show for this tool's payload. A
@@ -38,14 +42,22 @@ const ToolResultRender = ({ part }) => {
         {Array.isArray(part.result.applications) ? (
           <CandidateGrid rows={part.result.applications} />
         ) : null}
-        {part.result.graph ? <GraphView graph={part.result.graph} /> : null}
+        {part.result.graph ? (
+          <Suspense fallback={null}>
+            <GraphView graph={part.result.graph} />
+          </Suspense>
+        ) : null}
       </>
     );
   }
   return null;
 };
 
-const Message = ({ msg, isStreaming }) => {
+// Memoized per message: useChatStream replaces the streaming message's
+// object immutably on every SSE delta while every other message keeps its
+// reference, so React.memo re-renders only the one message being streamed
+// instead of re-parsing every ChatMarkdown in the thread on each token.
+const Message = React.memo(({ msg, isStreaming }) => {
   if (msg.role === 'user') {
     const text = msg.parts.find((p) => p.type === 'text')?.text || '';
     return <ChatMessage role="user" text={text} />;
@@ -74,7 +86,7 @@ const Message = ({ msg, isStreaming }) => {
       })}
     </ChatMessage>
   );
-};
+});
 
 const friendlyError = (raw) => {
   if (!raw) return null;
@@ -104,10 +116,42 @@ const friendlyError = (raw) => {
   return { title: "Something went wrong", detail: "Please try again. If it keeps happening, contact support." };
 };
 
+// Nearest scrollable ancestor of the thread (``.cp-scroll``). We autoscroll
+// only when the user is already pinned near the bottom — a recruiter who
+// scrolls up to re-read an evidence card mid-stream keeps their position
+// instead of being yanked back down on every SSE delta.
+const NEAR_BOTTOM_PX = 80;
+const scrollParentOf = (el) => {
+  let node = el?.parentElement;
+  while (node) {
+    const oy = getComputedStyle(node).overflowY;
+    if (oy === 'auto' || oy === 'scroll') return node;
+    node = node.parentElement;
+  }
+  return null;
+};
+
 const Thread = ({ messages, isStreaming, error }) => {
   const endRef = useRef(null);
+  // Whether the user was pinned to the bottom *before* this render grew the
+  // thread. Tracked on scroll so a mid-stream scroll-up is respected while
+  // someone sitting at the bottom keeps following the answer as it streams.
+  const pinnedRef = useRef(true);
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    const scroller = scrollParentOf(endRef.current);
+    if (!scroller) return undefined;
+    const onScroll = () => {
+      pinnedRef.current =
+        scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <
+        NEAR_BOTTOM_PX;
+    };
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => scroller.removeEventListener('scroll', onScroll);
+  }, []);
+  useEffect(() => {
+    if (pinnedRef.current) {
+      endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
   }, [messages, isStreaming]);
 
   const fr = friendlyError(error);

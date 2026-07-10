@@ -24,6 +24,7 @@ export default defineConfig({
           charts_vendor: ['recharts'],
           monaco_vendor: ['@monaco-editor/react'],
           icons_vendor: ['lucide-react'],
+          graph_vendor: ['cytoscape'],
         },
       },
     },

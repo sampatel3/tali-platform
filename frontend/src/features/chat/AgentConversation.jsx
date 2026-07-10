@@ -47,9 +47,24 @@ const AgentConversation = ({
   const activeRoleRef = useRef(roleId);
   useEffect(() => { activeRoleRef.current = roleId; }, [roleId]);
 
+  // Whether the user was at the bottom *before* the latest timeline update —
+  // tracked on scroll so a recruiter reading back through evidence cards
+  // mid-turn keeps their position instead of being yanked down on every
+  // 2.5s poll tick, while someone at the bottom keeps following the turn.
+  const pinnedRef = useRef(true);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return undefined;
+    const onScroll = () => {
+      pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
   }, []);
 
   const load = useCallback(async (opts = {}) => {
@@ -59,7 +74,17 @@ const AgentConversation = ({
     try {
       const { data } = await agentChat.getTimeline(roleId);
       if (activeRoleRef.current !== forRole) return;
-      setTimeline(data.timeline || []);
+      const next = data.timeline || [];
+      // Skip the state churn when a silent poll returns an unchanged
+      // timeline — a fresh array reference would re-render and re-scroll
+      // the whole thread every 2.5s even though nothing moved. The last
+      // item can still grow in place during a turn (text streams in, action
+      // cards attach), so the signature covers its text + action count too.
+      const sig = (t) => {
+        const last = t[t.length - 1];
+        return `${t.length}|${last?.id ?? ''}|${last?.text?.length ?? 0}|${last?.actions?.length ?? 0}`;
+      };
+      setTimeline((prev) => (sig(prev) === sig(next) ? prev : next));
       setAgentWorking(Boolean(data.agent_working));
     } catch {
       if (!opts.silent && activeRoleRef.current === forRole) setTimeline([]);

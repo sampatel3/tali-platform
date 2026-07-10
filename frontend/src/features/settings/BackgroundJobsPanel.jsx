@@ -350,6 +350,12 @@ export default function BackgroundJobsPanel() {
     let cancelled = false;
     let timer = null;
     const load = async () => {
+      // Skip the round-trip while the tab is backgrounded — the loop keeps
+      // rescheduling and a visibilitychange listener refreshes on refocus.
+      if (typeof document !== 'undefined' && document.hidden) {
+        if (!cancelled) timer = setTimeout(load, HISTORY_POLL_MS);
+        return;
+      }
       try {
         const [bg, wk] = await Promise.allSettled([
           rolesApi.backgroundJobsRuns(20),
@@ -363,11 +369,20 @@ export default function BackgroundJobsPanel() {
       if (!cancelled) timer = setTimeout(load, HISTORY_POLL_MS);
     };
     load();
+    // Refresh immediately on refocus — cancel the pending tick first so we
+    // don't fork a second poll loop.
+    const onVisible = () => {
+      if (document.hidden) return;
+      if (timer) clearTimeout(timer);
+      load();
+    };
+    document.addEventListener('visibilitychange', onVisible);
     const heartbeat = setInterval(() => setTick((t) => t + 1), HISTORY_POLL_MS);
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
       clearInterval(heartbeat);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, []);
 

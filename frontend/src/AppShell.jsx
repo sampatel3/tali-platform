@@ -26,7 +26,6 @@ import { RouteMeta } from './shared/seo/RouteMeta';
 import { KeyboardShortcutsModal } from './shared/ui/KeyboardShortcutsModal';
 import { useKeyboardShortcut } from './shared/hooks/useKeyboardShortcut';
 
-import { LandingPage } from './features/marketing/LandingPage';
 import {
   ForgotPasswordPage,
   LoginPage,
@@ -42,6 +41,9 @@ import {
 } from './features/integrations/WorkableConnection';
 import { StatsCard, StatusBadge } from './shared/ui/DashboardAtoms';
 
+const LandingPage = lazy(() =>
+  import('./features/marketing/LandingPage').then((m) => ({ default: m.LandingPage }))
+);
 const HomePage = lazy(() =>
   import('./features/home/HomePage').then((m) => ({ default: m.HomePage }))
 );
@@ -477,7 +479,14 @@ function AppContent() {
         onClose={() => setShortcutsModalOpen(false)}
       />
       <Routes>
-      <Route path="/" element={<LandingPage onNavigate={navigateToPage} />} />
+      <Route
+        path="/"
+        element={
+          <Suspense fallback={lazyFallback}>
+            <LandingPage onNavigate={navigateToPage} />
+          </Suspense>
+        }
+      />
       {/* /demo is the showcase. /showcase kept as an alias. The legacy
           DemoExperiencePage walkthrough lives at /demo-walkthrough until
           we decide to retire it entirely. */}
