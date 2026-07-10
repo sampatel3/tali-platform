@@ -230,6 +230,9 @@ export const RequisitionTemplatePage = ({ onNavigate, NavComponent = null }) => 
   const [generatingBlurb, setGeneratingBlurb] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // Serialized snapshot of the last loaded/saved state — compared against the
+  // live form to detect unsaved edits (dirty guard).
+  const [savedSnapshot, setSavedSnapshot] = useState('');
 
   // Attach stable client ids so React keys survive reorders/edits, and seed
   // the *Touched flags so auto-keying only applies to genuinely new rows.
@@ -316,6 +319,30 @@ export const RequisitionTemplatePage = ({ onNavigate, NavComponent = null }) => 
     })),
   }), [sections, version, jdTemplate]);
 
+  // Current form as a comparable string (template + blurb). Dirty = differs
+  // from the last loaded/saved snapshot AND we've finished the initial load.
+  const currentSnapshot = useMemo(
+    () => JSON.stringify({ tpl: serialize(), blurb: companyBlurb }),
+    [serialize, companyBlurb],
+  );
+  const isDirty = !loading && savedSnapshot !== '' && currentSnapshot !== savedSnapshot;
+
+  // Once the initial load has hydrated state, capture the baseline snapshot so
+  // subsequent edits register as dirty.
+  useEffect(() => {
+    if (!loading && savedSnapshot === '') {
+      setSavedSnapshot(currentSnapshot);
+    }
+  }, [loading, savedSnapshot, currentSnapshot]);
+
+  // Warn before leaving/reloading with unsaved edits.
+  useEffect(() => {
+    if (!isDirty) return undefined;
+    const onBeforeUnload = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [isDirty]);
+
   const validate = (template) => {
     for (const s of template.sections) {
       if (!s.label.trim() || !s.key.trim()) return 'Every section needs a label and a key.';
@@ -336,16 +363,25 @@ export const RequisitionTemplatePage = ({ onNavigate, NavComponent = null }) => 
     const err = validate(template);
     if (err) { showToast(err, 'error'); return; }
     setSaving(true);
-    try {
-      const res = await requisitionApi.saveTemplate(template);
-      hydrate(res?.template || template);
-      // Persist the About-the-company blurb alongside the template.
-      await requisitionApi.saveCompanyBlurb(companyBlurb);
+    // Two independent writes — report each outcome accurately instead of a
+    // single "failed" that hides a template that actually saved.
+    const [tplResult, blurbResult] = await Promise.allSettled([
+      requisitionApi.saveTemplate(template),
+      requisitionApi.saveCompanyBlurb(companyBlurb),
+    ]);
+    setSaving(false);
+    const tplOk = tplResult.status === 'fulfilled';
+    const blurbOk = blurbResult.status === 'fulfilled';
+    if (tplOk) hydrate(tplResult.value?.template || template);
+    if (tplOk && blurbOk) {
+      setSavedSnapshot(JSON.stringify({ tpl: serialize(), blurb: companyBlurb }));
       showToast('Requisition template saved.', 'success');
-    } catch {
+    } else if (tplOk && !blurbOk) {
+      showToast('Template saved, but the company description failed — try saving again.', 'error');
+    } else if (!tplOk && blurbOk) {
+      showToast('Company description saved, but the template failed — try saving again.', 'error');
+    } else {
       showToast('Failed to save the requisition template.', 'error');
-    } finally {
-      setSaving(false);
     }
   };
 

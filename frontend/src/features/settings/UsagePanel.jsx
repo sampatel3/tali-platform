@@ -369,19 +369,23 @@ const GAP_PERIOD_DAYS = 7;
 export default function UsagePanel() {
   const [timeseries, setTimeseries] = useState(null);
   const [loadingSeries, setLoadingSeries] = useState(false);
+  const [seriesError, setSeriesError] = useState(false);
   // Admin-only metering-gap summary (claude_call_log). null when the
   // endpoint 403s for non-admins or hasn't loaded — section stays hidden.
   const [meteringGap, setMeteringGap] = useState(null);
 
   const loadTimeseries = useCallback(async () => {
     setLoadingSeries(true);
+    setSeriesError(false);
     try {
       // Always feature-grouped — we collapse the per-feature buckets into
       // the three customer-facing surfaces below.
       const res = await billingApi.usageTimeseries(PERIOD_DAYS, 'feature');
       setTimeseries(res?.data || null);
     } catch {
-      setTimeseries(null);
+      // Don't render $0.00 / "No activity" for a failed load — that's
+      // indistinguishable from a genuinely quiet window on a money surface.
+      setSeriesError(true);
     } finally {
       setLoadingSeries(false);
     }
@@ -417,6 +421,22 @@ export default function UsagePanel() {
     () => [...surfaceSummary].sort((a, b) => b.cost_usd - a.cost_usd)[0] || null,
     [surfaceSummary],
   );
+
+  if (seriesError && !loadingSeries) {
+    return (
+      <div className="settings-banner warning">
+        <div>
+          <div className="settings-banner-title">Couldn&apos;t load usage</div>
+          <div className="settings-banner-copy">
+            This is usually a temporary connection issue — your usage history is safe.
+          </div>
+          <button type="button" className="btn btn-outline btn-sm settings-top-gap" onClick={() => void loadTimeseries()}>
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
