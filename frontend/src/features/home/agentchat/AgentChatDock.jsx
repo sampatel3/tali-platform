@@ -9,7 +9,7 @@ import { MessageSquare, PanelRightClose, Users, X } from 'lucide-react';
 import { agentChat } from '../../../shared/api';
 import { useToast } from '../../../context/ToastContext';
 import { ChatComposer, ChatEmptyState, ChatMarkdown, ChatMessage, ThinkingDots } from '../../../shared/chat';
-import { DraftTaskCard, ImpactCard, NeedsInputCard } from './cards.jsx';
+import { DraftTaskCard, ImpactCard, NeedsInputCard, PendingRejectSweepCard } from './cards.jsx';
 import CandidateEvidenceCard from '../../chat/CandidateEvidenceCard';
 
 // Role-scoped empty-state prompts. Off roles get an activation suggestion that
@@ -189,6 +189,36 @@ export function AgentChatDock({
     [roleId, sending, onReload, showToast, load]
   );
 
+  const applyPendingRejects = useCallback(async () => {
+    if (!roleId || sending) return;
+    setSending(true);
+    try {
+      const { data } = await agentChat.applyPendingRejects(roleId);
+      setTimeline(data.timeline || []);
+      // The pending queue just went in-flight — refresh the feed counts.
+      onReload?.();
+    } catch (err) {
+      showToast?.(err?.response?.data?.detail || 'Couldn’t apply that to the pending queue.', 'error');
+      load();
+    } finally {
+      setSending(false);
+    }
+  }, [roleId, sending, onReload, showToast, load]);
+
+  const dismissPendingRejects = useCallback(async () => {
+    if (!roleId || sending) return;
+    setSending(true);
+    try {
+      const { data } = await agentChat.dismissPendingRejects(roleId);
+      setTimeline(data.timeline || []);
+    } catch (err) {
+      showToast?.(err?.response?.data?.detail || 'Couldn’t dismiss that.', 'error');
+      load();
+    } finally {
+      setSending(false);
+    }
+  }, [roleId, sending, showToast, load]);
+
   // One submit path for both modes: bulk fans out to the selection, otherwise
   // the message runs on the active role.
   const submitComposer = useCallback(
@@ -309,6 +339,14 @@ export function AgentChatDock({
             const cards = (it.actions || []).map((card, i) =>
               card.type === 'candidate_evidence' ? (
                 <CandidateEvidenceCard key={i} data={card} />
+              ) : card.type === 'pending_reject_sweep' ? (
+                <PendingRejectSweepCard
+                  key={i}
+                  card={card}
+                  onApply={applyPendingRejects}
+                  onDismiss={dismissPendingRejects}
+                  busy={sending}
+                />
               ) : card.type === 'draft_task_review' ? (
                 <DraftTaskCard
                   key={i}

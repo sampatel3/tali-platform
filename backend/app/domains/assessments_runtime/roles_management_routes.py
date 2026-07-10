@@ -537,6 +537,10 @@ def update_role(
         # threshold changes from the UI silently no-op'd on existing
         # roles. Allow ``None`` to clear back to the org default.
         role.score_threshold = updates["score_threshold"]
+    # Pre-screen rejects auto-execute when EITHER toggle is on (OR semantics
+    # at emit time). Snapshot the effective value before applying the PATCH so
+    # we can tell below whether this request actually turned it on.
+    _pre_screen_auto_before = bool(role.auto_reject) or bool(role.auto_reject_pre_screen)
     if "auto_reject" in updates and updates["auto_reject"] is not None:
         role.auto_reject = bool(updates["auto_reject"])
     if "auto_reject_pre_screen" in updates and updates["auto_reject_pre_screen"] is not None:
@@ -637,6 +641,25 @@ def update_role(
                 logger.exception(
                     "stale-scores chat heads-up failed for role_id=%s", role.id
                 )
+    # Turning pre-screen auto-reject ON is forward-only: cards already pending
+    # in the Decision Hub were surfaced under the old policy and executing
+    # them writes to Workable, so they are never swept silently. Instead the
+    # agent offers the sweep in the role's chat — one explicit click applies
+    # the new policy to the existing queue (POST …/pending-rejects/apply),
+    # or the recruiter keeps the cards for manual review. Best-effort: a
+    # failure here never fails the PATCH.
+    _pre_screen_auto_after = bool(role.auto_reject) or bool(role.auto_reject_pre_screen)
+    if _pre_screen_auto_after and not _pre_screen_auto_before:
+        try:
+            from ...agent_chat.pending_sweep import offer_pending_reject_sweep
+
+            if offer_pending_reject_sweep(db, role=role):
+                db.commit()
+        except Exception:
+            logger.exception(
+                "Pending-reject sweep offer failed for role_id=%s", role.id
+            )
+            db.rollback()
     # When the effective pre-screen threshold actually moved, re-align the
     # deterministic skip_assessment_reject queue so the Decision Hub, the
     # role's pending count, and the "below threshold" stat all agree with

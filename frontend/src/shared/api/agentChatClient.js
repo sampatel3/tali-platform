@@ -40,4 +40,13 @@ export const agentChat = {
       answers: answers || {},
       note: note || null,
     }),
+
+  // The pending_reject_sweep card (posted when auto-reject is turned on with
+  // pre-screen reject cards already pending). Apply funnels the CURRENT
+  // pending queue through the normal bulk-approve path; dismiss keeps the
+  // cards for manual review. Both return { ok, timeline }.
+  applyPendingRejects: (roleId) =>
+    api.post(`/agent-chat/conversations/${roleId}/pending-rejects/apply`),
+  dismissPendingRejects: (roleId) =>
+    api.post(`/agent-chat/conversations/${roleId}/pending-rejects/dismiss`),
 };

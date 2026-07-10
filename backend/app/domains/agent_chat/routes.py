@@ -23,6 +23,13 @@ from ...agent_chat.draft_tasks import (
     revise_draft,
 )
 from ...agent_chat.engine import persist_user_message
+from ...agent_chat.pending_sweep import (
+    SWEEP_STATUS_APPLIED,
+    SWEEP_STATUS_DISMISSED,
+    find_open_sweep_offer,
+    pending_pre_screen_reject_ids,
+    resolve_sweep_offer,
+)
 from ...agent_chat.service import (
     conversation_agent_working,
     ensure_conversation,
@@ -307,6 +314,98 @@ def revise_draft_task(
     timeline = build_timeline(db, conversation=conversation, role=role)
     db.commit()
     return {"ok": True, "role_id": role.id, "summary": summary, "timeline": timeline}
+
+
+@router.post("/conversations/{role_id}/pending-rejects/apply")
+def apply_pending_rejects(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Apply a just-enabled auto-reject policy to the role's EXISTING pending
+    pre-screen reject cards (the ``pending_reject_sweep`` offer's Approve).
+
+    Re-queries the role's current pending ``skip_assessment_reject`` rows at
+    click time — never ids captured when the offer was posted — and funnels
+    them through ``approve_decision.enqueue_batch``: same status flips, same
+    serialized per-org Workable writeback, same requeue-on-failure as the
+    Hub's bulk approve. Narrates the outcome into the thread."""
+    org_id = _require_org(current_user)
+    role = _require_role(db, role_id, org_id)
+    conversation = ensure_conversation(db, organization_id=org_id, role=role)
+    offer = find_open_sweep_offer(db, conversation)
+
+    decision_ids = pending_pre_screen_reject_ids(db, role)
+    if not decision_ids:
+        if offer is not None:
+            resolve_sweep_offer(offer, status=SWEEP_STATUS_APPLIED, applied_count=0)
+        post_agent_message(
+            db,
+            conversation=conversation,
+            text="The review queue is already clear — nothing left to apply.",
+        )
+        timeline = build_timeline(db, conversation=conversation, role=role)
+        db.commit()
+        return {"ok": True, "role_id": role.id, "applied": 0, "timeline": timeline}
+
+    from ...actions import approve_decision
+    from ...actions.types import Actor
+
+    result = approve_decision.enqueue_batch(
+        db,
+        Actor.recruiter(current_user),
+        organization_id=org_id,
+        decision_ids=decision_ids,
+        note="Applied to the pending queue when auto-reject was turned on",
+    )
+    applied = len(result["accepted"])
+    if offer is not None:
+        resolve_sweep_offer(offer, status=SWEEP_STATUS_APPLIED, applied_count=applied)
+    post_agent_message(
+        db,
+        conversation=conversation,
+        text=(
+            f"On it — rejecting {applied} pending candidate{'s' if applied != 1 else ''} "
+            "through the normal flow now. Anything Workable refuses comes straight "
+            "back to your review queue."
+        ),
+    )
+    timeline = build_timeline(db, conversation=conversation, role=role)
+    db.commit()
+    return {
+        "ok": True,
+        "role_id": role.id,
+        "applied": applied,
+        "failures": result["failures"],
+        "timeline": timeline,
+    }
+
+
+@router.post("/conversations/{role_id}/pending-rejects/dismiss")
+def dismiss_pending_rejects(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Decline the sweep offer — the pending cards stay in the Hub for manual
+    review; auto-reject still applies to new candidates going forward."""
+    org_id = _require_org(current_user)
+    role = _require_role(db, role_id, org_id)
+    conversation = ensure_conversation(db, organization_id=org_id, role=role)
+    offer = find_open_sweep_offer(db, conversation)
+    if offer is not None:
+        resolve_sweep_offer(offer, status=SWEEP_STATUS_DISMISSED)
+    post_agent_message(
+        db,
+        conversation=conversation,
+        text=(
+            "Okay — I'll leave those in your review queue to action by hand. "
+            "New pre-screen fails are auto-rejected from here."
+        ),
+    )
+    timeline = build_timeline(db, conversation=conversation, role=role)
+    db.commit()
+    return {"ok": True, "role_id": role.id, "timeline": timeline}
 
 
 @router.post("/conversations/{role_id}/read")
