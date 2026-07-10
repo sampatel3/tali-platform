@@ -19,15 +19,17 @@ handlers so behaviour stays consistent.
 from typing import Any, Literal, Optional
 
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from sqlalchemy.orm import Session, joinedload
 
+from ..models.api_key import SCOPE_APPLICATIONS_READ, SCOPE_ROLES_READ
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..platform.database import SessionLocal
 from ..services.role_criteria_service import render_role_intent_block
 from . import handlers
-from .auth import MCPAuthError, authenticate_request
+from .auth import MCPAuthError, authenticate_request, enforce_scope
 
 ScoreType = Literal["taali", "pre_screen", "rank", "cv_match"]
 SortBy = Literal["taali_score", "pre_screen_score", "rank_score", "cv_match_score", "created_at"]
@@ -62,6 +64,15 @@ mcp_app = FastMCP(
     instructions=_INSTRUCTIONS,
     stateless_http=True,
     streamable_http_path="/",
+    # This server is mounted under ``/mcp`` on the public FastAPI app and reached
+    # through our own reverse proxy, so real clients (claude.ai) arrive with the
+    # deployment's Host, not ``127.0.0.1``. FastMCP would otherwise auto-enable
+    # DNS-rebinding protection (default host ``127.0.0.1``) and 421 every request
+    # whose Host isn't localhost. Host validation belongs at our edge; disable the
+    # library's rebinding check here so the mounted endpoint is reachable.
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+    ),
 )
 
 
@@ -71,10 +82,15 @@ mcp_app = FastMCP(
 
 
 class _open_session:  # noqa: N801 — context-manager-as-class is intentional
-    """Sync DB session + authenticated User scoped to one MCP tool call."""
+    """Sync DB session + authenticated principal scoped to one MCP tool call.
 
-    def __init__(self, ctx: Context) -> None:
+    ``require_scope`` gates API-key principals; JWT (session) principals are
+    exempt. Handlers read only ``.organization_id`` off the returned principal.
+    """
+
+    def __init__(self, ctx: Context, require_scope: str) -> None:
         self._ctx = ctx
+        self._require_scope = require_scope
         self._db: Session | None = None
 
     def __enter__(self) -> tuple[Session, Any]:
@@ -83,12 +99,13 @@ class _open_session:  # noqa: N801 — context-manager-as-class is intentional
             request = getattr(self._ctx.request_context, "request", None)
             if request is None:
                 raise MCPAuthError("MCP context has no HTTP request bound")
-            user = authenticate_request(request, self._db)
+            principal = authenticate_request(request, self._db)
+            enforce_scope(principal, self._require_scope)
         except Exception:
             self._db.close()
             self._db = None
             raise
-        return self._db, user
+        return self._db, principal
 
     def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
         if self._db is not None:
@@ -99,6 +116,18 @@ class _open_session:  # noqa: N801 — context-manager-as-class is intentional
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
+
+
+def _strip_application_counts(role_payload: dict[str, Any]) -> dict[str, Any]:
+    """Remove funnel-volume fields from a role payload.
+
+    ``applications_count`` / ``stage_counts`` are application metrics — the
+    public REST API gates the analogous role-metrics endpoint behind
+    ``applications:read``, so a roles-only key must not read them here either.
+    """
+    role_payload.pop("applications_count", None)
+    role_payload.pop("stage_counts", None)
+    return role_payload
 
 
 @mcp_app.tool(
@@ -114,8 +143,16 @@ def list_roles(
     ctx: Context,
     include_stage_counts: bool = False,
 ) -> list[dict[str, Any]]:
-    with _open_session(ctx) as (db, user):
-        return handlers.list_roles(db, user, include_stage_counts=include_stage_counts)
+    with _open_session(ctx, SCOPE_ROLES_READ) as (db, user):
+        can_read_applications = user.has_scope(SCOPE_APPLICATIONS_READ)
+        roles = handlers.list_roles(
+            db,
+            user,
+            include_stage_counts=include_stage_counts and can_read_applications,
+        )
+        if not can_read_applications:
+            roles = [_strip_application_counts(r) for r in roles]
+        return roles
 
 
 @mcp_app.tool(
@@ -126,8 +163,11 @@ def list_roles(
     ),
 )
 def get_role(ctx: Context, role_id: int) -> dict[str, Any]:
-    with _open_session(ctx) as (db, user):
-        return handlers.get_role(db, user, role_id=role_id)
+    with _open_session(ctx, SCOPE_ROLES_READ) as (db, user):
+        role = handlers.get_role(db, user, role_id=role_id)
+        if not user.has_scope(SCOPE_APPLICATIONS_READ):
+            role = _strip_application_counts(role)
+        return role
 
 
 @mcp_app.tool(
@@ -152,7 +192,7 @@ def search_applications(
     sort_order: SortOrder = "desc",
     limit: int = 25,
 ) -> list[dict[str, Any]]:
-    with _open_session(ctx) as (db, user):
+    with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
         return handlers.search_applications(
             db,
             user,
@@ -182,7 +222,7 @@ def get_application(
     application_id: int,
     include_cv_text: bool = False,
 ) -> dict[str, Any]:
-    with _open_session(ctx) as (db, user):
+    with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
         return handlers.get_application(
             db, user, application_id=application_id, include_cv_text=include_cv_text
         )
@@ -197,7 +237,7 @@ def get_application(
     ),
 )
 def get_candidate(ctx: Context, candidate_id: int) -> dict[str, Any]:
-    with _open_session(ctx) as (db, user):
+    with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
         return handlers.get_candidate(db, user, candidate_id=candidate_id)
 
 
@@ -213,7 +253,7 @@ def compare_applications(
     ctx: Context,
     application_ids: list[int],
 ) -> dict[str, Any]:
-    with _open_session(ctx) as (db, user):
+    with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
         return handlers.compare_applications(db, user, application_ids=application_ids)
 
 
@@ -238,7 +278,7 @@ def nl_search_candidates(
     rerank: bool = True,
     limit: int = 25,
 ) -> dict[str, Any]:
-    with _open_session(ctx) as (db, user):
+    with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
         return handlers.nl_search_candidates(
             db, user, query=query, role_id=role_id, rerank=rerank, limit=limit
         )
@@ -263,7 +303,7 @@ def graph_search_candidates(
     query: str,
     limit: int = 25,
 ) -> dict[str, Any]:
-    with _open_session(ctx) as (db, user):
+    with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
         return handlers.graph_search_candidates(db, user, query=query, limit=limit)
 
 
@@ -278,7 +318,7 @@ def graph_search_candidates(
     ),
 )
 def get_candidate_cv(ctx: Context, candidate_id: int) -> dict[str, Any]:
-    with _open_session(ctx) as (db, user):
+    with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
         return handlers.get_candidate_cv(db, user, candidate_id=candidate_id)
 
 
@@ -343,7 +383,7 @@ def _markdown_application(app: CandidateApplication) -> str:
 )
 def role_resource(role_id: str) -> str:
     ctx = mcp_app.get_context()
-    with _open_session(ctx) as (db, user):
+    with _open_session(ctx, SCOPE_ROLES_READ) as (db, user):
         role = (
             db.query(Role)
             .filter(
@@ -366,7 +406,7 @@ def role_resource(role_id: str) -> str:
 )
 def application_resource(application_id: str) -> str:
     ctx = mcp_app.get_context()
-    with _open_session(ctx) as (db, user):
+    with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
         app = (
             db.query(CandidateApplication)
             .options(
@@ -393,7 +433,7 @@ def application_resource(application_id: str) -> str:
 )
 def candidate_cv_resource(candidate_id: str) -> str:
     ctx = mcp_app.get_context()
-    with _open_session(ctx) as (db, user):
+    with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
         candidate = (
             db.query(Candidate)
             .filter(

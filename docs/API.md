@@ -306,6 +306,55 @@ Both endpoints verify request signatures. Do not call these directly — they ar
 
 ---
 
+## MCP (agent-native surface)
+
+Taali exposes its read-only recruiting data over the [Model Context Protocol](https://modelcontextprotocol.io) so agents (e.g. Claude) can query roles, applications, and candidates directly. It is the same tool surface the in-product copilot uses.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/mcp/` | Yes | Streamable-HTTP MCP endpoint (JSON-RPC over SSE). |
+
+### Auth
+
+The endpoint accepts **either** credential type on the same URL:
+
+- A **Taali API key** (`tali_live_…` / `tali_test_…`) — the public, machine-to-machine path. Send it as `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+- A **fastapi-users JWT** (from `POST /api/v1/auth/jwt/login`) as `Authorization: Bearer <token>` — the session path used inside the app.
+
+Both resolve to the caller's organization; every tool is org-scoped, so a key only ever sees its own org's data.
+
+**Scopes (API keys only).** A key is gated on its scopes; JWT sessions have implicit full read access.
+
+| Scope | Grants |
+|-------|--------|
+| `roles:read` | `list_roles`, `get_role`, and the `tali://role/{id}` resource |
+| `applications:read` | `search_applications`, `get_application`, `get_candidate`, `compare_applications`, `nl_search_candidates`, `graph_search_candidates`, `get_candidate_cv`, and the `tali://application/{id}` + `tali://candidate/{id}/cv` resources |
+
+A key minted without explicit scopes gets both read scopes by default. A call missing the required scope returns a tool error.
+
+### Tools
+
+`list_roles`, `get_role`, `search_applications`, `get_application`, `get_candidate`, `compare_applications`, `nl_search_candidates`, `graph_search_candidates`, `get_candidate_cv`.
+
+All are read-only. There are no write tools. Resources (`tali://role/{id}`, `tali://application/{id}`, `tali://candidate/{id}/cv`) return markdown/plain-text snapshots for @-mention context.
+
+### Example Claude config
+
+```json
+{
+  "mcpServers": {
+    "taali": {
+      "url": "https://<your-taali-host>/mcp/",
+      "headers": {
+        "Authorization": "Bearer tali_live_xxxxxxxxxxxxxxxx"
+      }
+    }
+  }
+}
+```
+
+---
+
 ## Interactive Docs
 
 Swagger UI is available at:
