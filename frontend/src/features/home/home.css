@@ -530,6 +530,19 @@
   opacity: 0.72;
 }
 
+/* Re-score in flight: grey the whole detail card EXCEPT the banner that says
+   what's happening, so "being worked on" is unmissable and nothing invites a
+   click on the soon-to-be-replaced score. */
+.rq-hybrid-detail.is-rescoring > *:not(.rq-rescore-banner) {
+  opacity: 0.55;
+}
+@keyframes rq-spin {
+  to { transform: rotate(360deg); }
+}
+.rq-spin {
+  animation: rq-spin 1.4s linear infinite;
+}
+
 /* Invited-candidate tracker ("Assessment pending" view) */
 .rq-invited-row {
   display: flex;

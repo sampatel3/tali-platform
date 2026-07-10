@@ -93,6 +93,35 @@ def test_re_evaluate_old_engine_triggers_rescore(client, db, monkeypatch):
     assert d.status == "pending"            # decision left intact for reconciliation
 
 
+def test_feed_surfaces_rescore_in_flight(client, db):
+    # A pending/running CvScoreJob for the candidate must surface as
+    # rescore_in_flight on the decision payload — the queue greys that row
+    # and freezes its actions until the fresh score lands.
+    from app.models.cv_score_job import CvScoreJob
+
+    headers, email = auth_headers(client)
+    org_id = db.query(User).filter(User.email == email).first().organization_id
+    role = Role(
+        organization_id=org_id, name="R3", source="manual",
+        agentic_mode_enabled=True, job_spec_text="hire",
+    )
+    db.add(role); db.flush()
+    app_hot = _app(db, org_id, role.id, "hot@x.test", cv_match_score=70.0)
+    app_cold = _app(db, org_id, role.id, "cold@x.test", cv_match_score=71.0)
+    _pending(db, org_id, role.id, app_hot.id)
+    _pending(db, org_id, role.id, app_cold.id)
+    db.add(CvScoreJob(application_id=app_hot.id, role_id=role.id, status="pending"))
+    # A finished job must NOT flag the other candidate.
+    db.add(CvScoreJob(application_id=app_cold.id, role_id=role.id, status="done"))
+    db.commit()
+
+    resp = client.get("/api/v1/agent-decisions?status=pending", headers=headers)
+    assert resp.status_code == 200, resp.text
+    by_app = {d["application_id"]: d for d in resp.json()}
+    assert by_app[app_hot.id]["rescore_in_flight"] is True
+    assert by_app[app_cold.id]["rescore_in_flight"] is False
+
+
 def test_re_evaluate_input_change_still_discards(client, db, monkeypatch):
     # An app with no engine staleness (no cv_match_details) falls through to the
     # existing discard path; a paused role just discards without re-running.
