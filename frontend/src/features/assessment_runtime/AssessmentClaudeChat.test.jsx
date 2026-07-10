@@ -44,7 +44,7 @@ describe('AssessmentClaudeChat', () => {
   it('renders an empty conversation with the input visible and send disabled when empty', () => {
     renderChat();
 
-    expect(screen.getByText(/Your AI assistant is ready/i)).toBeInTheDocument();
+    expect(screen.getByText(/Claude is ready/i)).toBeInTheDocument();
     expect(screen.getByRole('textbox')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /send/i })).toBeDisabled();
   });

@@ -808,9 +808,9 @@ export default function AssessmentPage({
     if (isTimerPaused) {
       flags.push('Session paused');
     } else if (isClaudeBudgetExhausted) {
-      flags.push('AI budget used up');
+      flags.push('Claude budget used up');
     } else {
-      flags.push('AI budget OK');
+      flags.push('Claude budget OK');
     }
     return flags;
   }, [isClaudeBudgetExhausted, isTimerPaused, proctoringEnabled]);
@@ -961,7 +961,7 @@ export default function AssessmentPage({
 
           <footer className="mt-4 mb-6 flex flex-col gap-3 px-1 text-[0.71875rem] text-[var(--mute)] md:flex-row md:items-center md:justify-between">
             <div>
-              We record your editor and AI chat for this session only. <a href={reportIssueHref} className="text-[var(--purple)]">Need help?</a>
+              We record your editor and Claude chat for this session only. <a href={reportIssueHref} className="text-[var(--purple)]">Need help?</a>
             </div>
             <div className="flex flex-wrap items-center gap-4">
               {privacyFlags.map((flag) => (

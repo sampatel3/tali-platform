@@ -58,7 +58,7 @@ const SHOWCASE_TABS = [
     why: {
       headline: 'Step into the chat-first workspace the candidate drives.',
       outcomes: [
-        'Taali\'s AI at the centre, a real editor + sandboxed runtime alongside — the agent is the work',
+        'Claude at the centre, a real editor + sandboxed runtime alongside — the agent is the work',
         'Every prompt, paste, and edit captured for replay',
         'No proctoring overlay — the transcript is the record',
       ],

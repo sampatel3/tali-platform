@@ -611,7 +611,7 @@ export const CandidateTimelineTab = ({ candidate }) => {
       <Panel className="p-4">
         <div className="mb-2 font-bold text-[var(--taali-text)]">AI Usage Summary</div>
         <div className="grid grid-cols-2 gap-3 font-mono text-xs text-[var(--taali-text)] md:grid-cols-3">
-          <div>AI prompts: <span className="font-bold">{totalPrompts || 0}</span></div>
+          <div>Claude prompts: <span className="font-bold">{totalPrompts || 0}</span></div>
           <div>Avg prompt size: <span className="font-bold">{avgPromptWords != null ? `${avgPromptWords} words` : '—'}</span></div>
         </div>
       </Panel>

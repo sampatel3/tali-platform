@@ -160,7 +160,7 @@ async def chat_with_claude_agentic(
     if not api_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"message": "The AI assistant isn't available right now. Please contact your recruiter."},
+            detail={"message": "Claude isn't available right now. Please contact your recruiter."},
         )
 
     # Pre-spend role-budget gate — same hard cap the legacy ``/claude`` uses.
@@ -172,7 +172,7 @@ async def chat_with_claude_agentic(
     if not can_spend_on_role(db, role=role):
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={"message": "The AI assistant limit for this assessment has been reached. You can keep working and submit when you're ready."},
+            detail={"message": "Your Claude budget for this assessment has been reached. You can keep working and submit when you're ready."},
         )
 
     if not assessment.e2b_session_id:
@@ -306,7 +306,7 @@ async def chat_with_claude_agentic(
         db.commit()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"message": "The AI assistant hit a problem. Please retry."},
+            detail={"message": "Claude hit a problem. Please retry."},
         ) from exc
     latency_ms = int((time.perf_counter() - started_at) * 1000)
 
