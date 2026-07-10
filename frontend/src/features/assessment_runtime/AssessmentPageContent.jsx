@@ -302,8 +302,8 @@ export default function AssessmentPage({
         setIsTimerPaused(Boolean(normalized.is_timer_paused));
         setPauseReason(normalized.pause_reason || null);
         setClaudeBudget(normalized.claude_budget || null);
-      } catch (err) {
-        setOutput(`Error starting assessment: ${err.message}`);
+      } catch {
+        setOutput("Couldn't load the assessment. Refresh the page to try again.");
       } finally {
         setLoading(false);
       }
@@ -567,7 +567,7 @@ export default function AssessmentPage({
   const handleExecute = useCallback(
     async (code) => {
       if (isTimerPaused) {
-        setOutput("Assessment is paused. Retry Claude to resume execution.");
+        setOutput("Assessment is paused and your timer is stopped. Running code will be available again when the session resumes.");
         return;
       }
       setOutputPanelOpen(true);
@@ -603,7 +603,8 @@ export default function AssessmentPage({
           setPauseMessage(detail.message || "Assessment is paused.");
         }
         setOutput(
-          `Execution error: ${detail?.message || detail || err.message}`,
+          detail?.message
+            || (typeof detail === 'string' ? detail : 'Something went wrong running your code. Try again — your work is saved.'),
         );
       } finally {
         setExecuting(false);
@@ -648,7 +649,8 @@ export default function AssessmentPage({
       return { success: true, repoSnapshot };
     } catch (err) {
       const detail = err?.response?.data?.detail;
-      const errorMessage = `Save error: ${detail?.message || detail || err.message}`;
+      const errorMessage = detail?.message
+        || (typeof detail === 'string' ? detail : "Couldn't save your changes. Try again.");
       if (announceSuccess) {
         setOutput(errorMessage);
       }
@@ -681,7 +683,8 @@ export default function AssessmentPage({
       return { success: true, repoSnapshot };
     } catch (err) {
       const detail = err?.response?.data?.detail;
-      const errorMessage = `Save error: ${detail?.message || detail || err.message}`;
+      const errorMessage = detail?.message
+        || (typeof detail === 'string' ? detail : "Couldn't save your changes. Try again.");
       return { success: false, repoSnapshot, errorMessage };
     } finally {
       setSavingRepoFile(false);
@@ -705,7 +708,7 @@ export default function AssessmentPage({
       // route through handleSubmit.
       if (demoMode) return;
       if (isTimerPaused) {
-        setOutput("Assessment is paused. Retry Claude before submitting.");
+        setOutput("Assessment is paused and your timer is stopped. You can submit once the session resumes.");
         return;
       }
 
@@ -749,7 +752,10 @@ export default function AssessmentPage({
           setPauseReason(detail.pause_reason || "claude_outage");
           setPauseMessage(detail.message || "Assessment is paused.");
         }
-        setOutput(`Submit error: ${detail?.message || detail || err.message}`);
+        setOutput(
+          detail?.message
+            || (typeof detail === 'string' ? detail : "Couldn't submit. Check your connection and try again — your work is saved."),
+        );
         setSubmitted(false);
         setSubmittedAtIso(null);
       }
@@ -802,9 +808,9 @@ export default function AssessmentPage({
     if (isTimerPaused) {
       flags.push('Session paused');
     } else if (isClaudeBudgetExhausted) {
-      flags.push('Claude credit exhausted');
+      flags.push('AI budget used up');
     } else {
-      flags.push('Claude credit OK');
+      flags.push('AI budget OK');
     }
     return flags;
   }, [isClaudeBudgetExhausted, isTimerPaused, proctoringEnabled]);
@@ -955,7 +961,7 @@ export default function AssessmentPage({
 
           <footer className="mt-4 mb-6 flex flex-col gap-3 px-1 text-[0.71875rem] text-[var(--mute)] md:flex-row md:items-center md:justify-between">
             <div>
-              We record your editor and Claude chat for this session only. <a href={reportIssueHref} className="text-[var(--purple)]">Need help?</a>
+              We record your editor and AI chat for this session only. <a href={reportIssueHref} className="text-[var(--purple)]">Need help?</a>
             </div>
             <div className="flex flex-wrap items-center gap-4">
               {privacyFlags.map((flag) => (

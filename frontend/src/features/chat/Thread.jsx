@@ -83,26 +83,25 @@ const friendlyError = (raw) => {
   // pointed message so the user knows where to go.
   if (/credit balance is too low/i.test(text) || /insufficient_quota/i.test(text)) {
     return {
-      title: "Anthropic credit balance is empty",
+      title: "Taali's AI is unavailable",
       detail:
-        "The chat backend hit Anthropic's API but the org's workspace has no credits. " +
-        "Top up at https://console.anthropic.com → Plans & Billing, then try again.",
+        "The AI service can't take requests right now. Try again shortly — contact support if it keeps happening.",
     };
   }
   if (/invalid_api_key|authentication_error/i.test(text)) {
     return {
-      title: "Anthropic auth failed",
+      title: "Couldn't reach Taali's AI",
       detail:
-        "The org's workspace API key was rejected. Re-provision via the Anthropic Console.",
+        "There's a configuration problem with AI access for your workspace. Contact support.",
     };
   }
   if (/rate_limit|429/i.test(text)) {
     return {
-      title: "Rate limited by Anthropic",
-      detail: "Wait a moment and retry. Heavy usage triggers a short cool-down.",
+      title: "Too many requests",
+      detail: "Wait a moment and try again.",
     };
   }
-  return { title: "Something went wrong", detail: text };
+  return { title: "Something went wrong", detail: "Please try again. If it keeps happening, contact support." };
 };
 
 const Thread = ({ messages, isStreaming, error }) => {

@@ -686,6 +686,20 @@ def test_application_cv_match_score_is_returned(client, monkeypatch):
         )
 
     monkeypatch.setattr(cv_match_runner, "run_cv_match", _stub_run)
+    # The holistic Sonnet engine is default-on for every org
+    # (HOLISTIC_SCORING_ENABLED=True, allowlist "*"), so scoring routes
+    # through run_holistic_match, not run_cv_match — stub it too so no
+    # live Anthropic call escapes the test.
+    from app.cv_matching import holistic as cv_match_holistic
+
+    monkeypatch.setattr(cv_match_holistic, "run_holistic_match", _stub_run)
+    # upload-cv also enqueues the async CV-sections parse (eager in tests);
+    # stub its entry point so that path stays offline as well.
+    from app.cv_parsing import apply as cv_parse_apply
+
+    monkeypatch.setattr(
+        cv_parse_apply, "parse_and_store_cv_sections", lambda *a, **k: False
+    )
 
     cv_file = {"file": ("resume.pdf", io.BytesIO(b"%PDF-1.4 python sql backend api"), "application/pdf")}
     upload_resp = client.post(f"/api/v1/applications/{app['id']}/upload-cv", files=cv_file, headers=headers)

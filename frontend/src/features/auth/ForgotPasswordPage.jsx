@@ -23,7 +23,7 @@ export const ForgotPasswordPage = ({ onNavigate }) => {
       await auth.forgotPassword(email.trim());
       setSent(true);
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || 'Request failed');
+      setError('We couldn\'t send the reset link. Please try again.');
     } finally {
       setLoading(false);
     }

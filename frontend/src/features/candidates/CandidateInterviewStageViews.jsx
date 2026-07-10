@@ -479,7 +479,7 @@ export const TranscriptPanel = ({
                 Screening Coverage Review
               </div>
               <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
-                This build shows the linked screening question set and transcript evidence. Per-question asked/not-asked transcript coverage is not yet stored in the backend.
+                The linked screening questions and transcript evidence are shown here. Per-question coverage (asked vs not asked) is coming soon.
               </p>
             </div>
             <Badge variant="muted" className="font-mono text-[0.6875rem]">

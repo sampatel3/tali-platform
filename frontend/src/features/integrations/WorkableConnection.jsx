@@ -13,7 +13,7 @@ const normalizeWorkableError = (input) => {
     return 'Workable integration is not available on your current plan. Contact support to upgrade.';
   }
   if (lower.includes('oauth failed')) {
-    return 'Workable OAuth failed. Verify callback URL and scopes in your Workable app, then try again.';
+    return 'We couldn\'t connect to Workable. Try again, or contact support if it keeps failing.';
   }
   return raw || 'Workable connection failed.';
 };
@@ -41,7 +41,7 @@ export const ConnectWorkableButton = ({ authorizeUrl = '', setupError = '', onCl
     try {
       const res = await orgsApi.getWorkableAuthorizeUrl();
       if (res.data?.url) window.location.href = res.data.url;
-      else setError('Could not get authorization URL');
+      else setError('Couldn\'t start the Workable connection. Please try again.');
     } catch (err) {
       setError(normalizeWorkableError(err?.response?.data?.detail || err.message));
     } finally {
@@ -78,7 +78,7 @@ export const WorkableCallbackPage = ({
   useEffect(() => {
     if (error) {
       setStatus('error');
-      setMessage(errorDescription || `Workable returned an OAuth error: ${error}`);
+      setMessage('Workable couldn\'t complete the connection. Please try again, or contact support if it keeps failing.');
       return;
     }
     if (!code) {

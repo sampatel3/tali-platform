@@ -121,7 +121,7 @@ export const GlobalSearch = ({ onNavigate }) => {
       });
       setStaticLoaded(true);
     } catch (err) {
-      setError(err?.message || 'Failed to load search index.');
+      setError('Search isn’t available right now. Try again in a moment.');
     } finally {
       setStaticLoading(false);
     }
@@ -151,7 +151,7 @@ export const GlobalSearch = ({ onNavigate }) => {
         setCandidateMatches(itemsBody(res));
       } catch (err) {
         if (candidateRequestRef.current !== requestId) return;
-        setError(err?.message || 'Candidate search failed.');
+        setError('Candidate search isn’t working right now. Try again in a moment.');
       } finally {
         if (candidateRequestRef.current === requestId) setCandidateLoading(false);
       }

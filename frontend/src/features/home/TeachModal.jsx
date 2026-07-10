@@ -41,8 +41,8 @@ const ATTRIBUTED_TO = [
   { id: 'pre_screen', l: 'Pre-screen', d: 'Missed must-haves / disqualifiers' },
   { id: 'cv_scoring', l: 'CV scoring', d: 'Mis-scored fit vs criteria' },
   { id: 'assessment_scoring', l: 'Assessment', d: 'Wrong grade on the submission' },
-  { id: 'graph_priors', l: 'Graph priors', d: 'Got referral / similar-hire signal wrong' },
-  { id: 'policy_combination', l: 'Policy composer', d: 'Sub-agents fine, composition was wrong' },
+  { id: 'graph_priors', l: 'Referral & history signals', d: 'Got referral / similar-hire signal wrong' },
+  { id: 'policy_combination', l: 'Overall call', d: 'Each check was fine — the overall call was wrong' },
 ];
 
 const DIRECTIONS = [
@@ -99,7 +99,7 @@ export const TeachModal = ({ decision, onClose, onSubmitted, defaultScope = 'rol
       onSubmitted?.(res?.data || null);
       onClose?.();
     } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Failed to submit feedback');
+      setError(typeof err?.response?.data?.detail === 'string' ? err.response.data.detail : "Couldn't submit the feedback — try again.");
     } finally {
       setSubmitting(false);
     }
@@ -222,7 +222,7 @@ export const TeachModal = ({ decision, onClose, onSubmitted, defaultScope = 'rol
             <ul style={{ margin: '8px 0 0', padding: 0, listStyle: 'none', fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.6 }}>
               <li>· Decision <span style={{ fontFamily: 'var(--font-mono)' }}>D-{decision.id}</span> goes back to <strong>Pending</strong> with your note attached.</li>
               <li>· Your correction is logged in the Signal section.</li>
-              <li>· {attributedTo === 'policy_combination' ? 'Policy composer' : ATTRIBUTED_TO.find((a) => a.id === attributedTo)?.l} gets a training example tagged "{direction === 'over' ? 'too high' : 'too low'}".</li>
+              <li>· {attributedTo === 'policy_combination' ? 'Overall call' : ATTRIBUTED_TO.find((a) => a.id === attributedTo)?.l} gets a training example tagged "{direction === 'over' ? 'too high' : 'too low'}".</li>
               <li>· You can revert it within 1 hour.</li>
             </ul>
           </div>

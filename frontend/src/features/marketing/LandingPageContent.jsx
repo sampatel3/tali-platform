@@ -30,7 +30,6 @@ const _NOW = Date.now();
 const _prov = (hoursAgo) => ({
   engine_version: '2.1.0',
   scored_at: new Date(_NOW - hoursAgo * 60 * 60 * 1000).toISOString(),
-  model: 'Sonnet',
 });
 const MARKETING_DECISION_FEED_ROWS = [
   {
@@ -154,7 +153,7 @@ const proofItems = [
   },
   {
     title: 'Real AI',
-    body: 'Claude, Cursor, Copilot in-browser. We do not block them - we score how they use them.',
+    body: 'Real AI assistants in-browser — the same tools engineers use every day. We do not block them - we score how candidates use them.',
   },
   {
     title: 'Every keystroke',
@@ -466,7 +465,7 @@ export const LandingPage = ({ onNavigate }) => {
               {
                 n: '02',
                 t: 'Assess — for the AI era',
-                d: "Hands-on, role-relevant tasks in a chat-first workspace — Claude in the candidate's hands. We track every prompt, paste, and decision — then score AI collaboration alongside craft. The only platform that tells you whether a candidate can actually ship with AI.",
+                d: "Hands-on, role-relevant tasks in a chat-first workspace — a real AI assistant in the candidate's hands. We track every prompt, paste, and decision — then score AI collaboration alongside craft. The only platform that tells you whether a candidate can actually ship with AI.",
               },
               {
                 n: '03',
@@ -525,9 +524,9 @@ export const LandingPage = ({ onNavigate }) => {
                 We&apos;re the only platform that measures it.
               </h2>
               <p className="mt-5 text-[1rem] leading-[1.6] text-[var(--ink-2)]">
-                Every assessment opens a chat-first workspace — Claude at the centre, your repo, a real editor, and a live terminal around it — exactly the way engineers ship now.
+                Every assessment opens a chat-first workspace — an AI assistant at the centre, your repo, a real editor, and a live terminal around it — exactly the way engineers ship now.
                 Behind the scenes the runtime captures every prompt, paste, edit, file open, test run, and commit, time-stamped to the second.
-                Those traces feed one scorecard — five dimensions anchored on Anthropic&apos;s AI-Fluency framework: Delegation, Description, Discernment, Diligence, and the Deliverable itself — so how a candidate works with AI is scored as a first-class dimension alongside the result they ship.
+                Those traces feed one scorecard — five dimensions, the 5 Ds: Delegation, Description, Discernment, Diligence, and the Deliverable itself — so how a candidate works with AI is scored as a first-class dimension alongside the result they ship.
               </p>
               <ul className="mt-7 flex flex-col gap-3.5">
                 {[
@@ -557,7 +556,7 @@ export const LandingPage = ({ onNavigate }) => {
             <div className="overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
               <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3 font-[var(--font-mono)] text-[0.71875rem] text-[var(--mute)]">
                 <span>MAYA CHEN · CANDIDATE REPORT</span>
-                <span className="font-semibold text-[var(--purple)]">Strong Hire · Tali 86</span>
+                <span className="font-semibold text-[var(--purple)]">Strong Hire · Taali 86</span>
               </div>
               <div className="space-y-4 px-5 py-6">
                 {[
@@ -594,7 +593,7 @@ export const LandingPage = ({ onNavigate }) => {
               scrollbar (the snapshot has no internal scroll). */}
           <p className="mt-12 mb-3 text-[0.875rem] text-[var(--ink-2)]">
             <strong className="text-[var(--ink)]">Candidates work here.</strong>{' '}
-            Claude sits at the centre — they drive the task in conversation, open and edit files beside it, run tests in a live terminal. We watch every prompt.
+            The AI assistant sits at the centre — they drive the task in conversation, open and edit files beside it, run tests in a live terminal. We watch every prompt.
           </p>
           <div className="overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
             <div className="flex items-center gap-2 border-b border-[var(--line)] px-4 py-2.5 font-[var(--font-mono)] text-[0.6875rem] text-[var(--mute)]">

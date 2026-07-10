@@ -48,7 +48,7 @@ export const GeneratedDraftsPanel = ({ onNavigate }) => {
             {drafts.length} generated task {drafts.length === 1 ? 'draft' : 'drafts'} awaiting review
           </div>
           <div className="text-xs text-[var(--mute)]">
-            Auto-authored from the role JD. Review, approve, or reject-with-feedback with each role’s agent.
+            Drafted from the role’s job description. Review, approve, or send back with feedback in each role’s agent chat.
           </div>
         </div>
         <button

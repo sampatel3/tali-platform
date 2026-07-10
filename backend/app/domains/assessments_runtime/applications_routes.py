@@ -4281,7 +4281,7 @@ def sync_graph_org(
         }
 
     if not graph_client.is_configured():
-        raise HTTPException(status_code=400, detail="Neo4j is not configured for this deployment.")
+        raise HTTPException(status_code=400, detail="Semantic search isn't enabled for this workspace.")
 
     existing = _sync_graph_progress.get(org_id, {})
     if existing.get("status") == "running":

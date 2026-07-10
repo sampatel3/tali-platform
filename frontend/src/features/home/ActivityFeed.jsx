@@ -10,7 +10,7 @@
 import React, { useState } from 'react';
 import { Check, X } from 'lucide-react';
 
-import { Avatar, RolePill, ScoreChip, TypeBadge, formatRelativeAge, initialsFrom } from './atoms';
+import { Avatar, RolePill, ScoreChip, TypeBadge, formatRelativeAge, initialsFrom, humanizeStatusInline } from './atoms';
 import { pathForPage } from '../../app/routing';
 import { ScoreProvenance } from '../candidates/ScoreProvenance';
 
@@ -27,7 +27,7 @@ import './home.css';
 // panel that surround the feed at /home). Marketing surfaces pass an
 // override since they render the feed standalone.
 const DEFAULT_SUBTITLE =
-  'Reverse-chronological. Filtered by the toolbar above. Pending rows jump into the detail panel.';
+  'Newest first, filtered by the toolbar above. Click a pending row to review it in the detail panel.';
 
 export const ActivityFeed = ({
   rows,
@@ -149,7 +149,7 @@ export const ActivityFeed = ({
                   >
                     {row.candidate_name || `Application #${row.application_id}`}
                   </a>
-                  <span style={{ color: 'var(--mute)' }}> — {row.status} </span>
+                  <span style={{ color: 'var(--mute)' }}> — {humanizeStatusInline(row.status)} </span>
                   {row.resolution_note ? <span>· {row.resolution_note}</span> : null}
                 </div>
                 {(row.role_name || row.role_id != null) ? (

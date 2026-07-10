@@ -287,7 +287,7 @@ Banking transformation experience
     // role description is now edited inline via <RoleSpecEditPanel>; the
     // formatted, non-flattened spec body lives in the "Read full description"
     // section below — asserted next.)
-    fireEvent.click(screen.getByRole('link', { name: /^Job Specification$/i }));
+    fireEvent.click(screen.getByRole('link', { name: /^Job spec$/i }));
 
     expect(screen.queryByText(/keeps recruiter scoring/i)).not.toBeInTheDocument();
 
@@ -447,7 +447,7 @@ Banking transformation experience
     // the formatted Workable-ingested description + "At a glance" sidebar.
     // The pipeline-activity timeline that previously lived under this label
     // was a leftover from the v1 5-tab layout and is gone in v2.
-    fireEvent.click(screen.getByRole('link', { name: /^Job Specification$/i }));
+    fireEvent.click(screen.getByRole('link', { name: /^Job spec$/i }));
     expect(await screen.findByRole('button', { name: /Read full description/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /At a glance/i })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /Pipeline activity/i })).not.toBeInTheDocument();

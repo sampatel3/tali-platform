@@ -137,7 +137,7 @@ export const OverrideModal = ({
       onSubmitted?.(res?.data || null);
       onClose?.();
     } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || `${mode === 'approve' ? 'Approve' : 'Override'} failed`);
+      setError(typeof err?.response?.data?.detail === 'string' ? err.response.data.detail : `${mode === 'approve' ? "Couldn't approve — try again." : "Couldn't override — try again."}`);
     } finally {
       setSubmitting(false);
     }
@@ -174,7 +174,7 @@ export const OverrideModal = ({
               </span>
               {stageOptions.length === 0 ? (
                 <span style={{ fontSize: 12, color: 'var(--mute)' }}>
-                  This Workable job has no advance stages — only pre-application stages (Sourced / Applied) exist. The candidate advances on Tali's internal stage; nothing posts to Workable. Add interview/offer stages to the job in Workable to move them there.
+                  This Workable job has no advance stages — only pre-application stages (Sourced / Applied) exist. The candidate advances on Taali's internal stage; nothing posts to Workable. Add interview/offer stages to the job in Workable to move them there.
                 </span>
               ) : (
                 <div

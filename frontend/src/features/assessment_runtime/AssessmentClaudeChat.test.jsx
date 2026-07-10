@@ -44,7 +44,7 @@ describe('AssessmentClaudeChat', () => {
   it('renders an empty conversation with the input visible and send disabled when empty', () => {
     renderChat();
 
-    expect(screen.getByText(/Claude is ready/i)).toBeInTheDocument();
+    expect(screen.getByText(/Your AI assistant is ready/i)).toBeInTheDocument();
     expect(screen.getByRole('textbox')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /send/i })).toBeDisabled();
   });
@@ -61,11 +61,10 @@ describe('AssessmentClaudeChat', () => {
     expect(screen.getByText('Why is this failing?')).toBeInTheDocument();
     const pendingRow = screen.getByTestId('assessment-claude-chat-pending');
     expect(pendingRow).toBeInTheDocument();
-    // Working indicator is a live status line (elapsed + tokens), not a static
-    // "Claude is working" string — mirrors Claude Code.
+    // Working indicator is a live status line (elapsed seconds), not a static
+    // "working" string.
     expect(pendingRow).toHaveTextContent('Working');
     expect(screen.getByTestId('assessment-claude-chat-pending-elapsed')).toHaveTextContent(/^\d+s$/);
-    expect(screen.getByTestId('assessment-claude-chat-pending-tokens')).toHaveTextContent(/tokens$/);
     expect(mockClaudeChat).toHaveBeenCalledTimes(1);
     const [assessmentId, payload, token] = mockClaudeChat.mock.calls[0];
     expect(assessmentId).toBe(42);
@@ -111,7 +110,9 @@ describe('AssessmentClaudeChat', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('assessment-claude-chat-pending')).not.toBeInTheDocument();
     });
-    expect(screen.getByText(/\[Error\] network blew up/i)).toBeInTheDocument();
+    // Raw err.message is never surfaced — a friendly, distinct error row shows instead.
+    expect(screen.queryByText(/network blew up/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/didn't go through/i)).toBeInTheDocument();
     // user row still there
     expect(screen.getByText(/^Help$/)).toBeInTheDocument();
   });

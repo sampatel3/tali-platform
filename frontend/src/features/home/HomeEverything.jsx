@@ -16,7 +16,7 @@ import {
 } from 'recharts';
 
 import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
-import { formatRelativeAge, FeedbackPill, TypeBadge } from './atoms';
+import { formatRelativeAge, FeedbackPill, TypeBadge, humanizeStatus } from './atoms';
 import { pathForPage } from '../../app/routing';
 
 const safeNumber = (v, fb = 0) => (Number.isFinite(Number(v)) ? Number(v) : fb);
@@ -72,7 +72,7 @@ export const HistoryTable = ({ rows, onSelect, onNavigate }) => (
             </span>
           </span>
           <span style={{ fontSize: 12, color: row.status === 'pending' ? 'var(--purple)' : 'var(--ink-2)', fontWeight: row.status === 'pending' ? 600 : 400 }}>
-            {row.status}
+            {humanizeStatus(row.status)}
           </span>
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600, color: 'var(--ink-2)' }}>
             {row.confidence != null ? `${Math.round(row.confidence * 100)}%` : '—'}
@@ -291,11 +291,11 @@ export const DecisionsByRole = ({ data }) => {
       </div>
 
       <div className="hbr-caption">
-        Conversion columns (→&nbsp;Final / Offer / Hired) count <b>only candidates Tali advanced</b>; expand a role to
+        Conversion columns (→&nbsp;Final / Offer / Hired) count <b>only candidates Taali advanced</b>; expand a role to
         see where that cohort sits now plus the full Workable stage mix for everyone in the role.
         {totalFinalPlus > 0 ? (
           <> Of {totalFinalPlus.toLocaleString()} candidate{totalFinalPlus === 1 ? '' : 's'} now at final interview or beyond,{' '}
-            <b>{totalReachedFinal.toLocaleString()}</b> {totalReachedFinal === 1 ? 'was' : 'were'} advanced by Tali.</>
+            <b>{totalReachedFinal.toLocaleString()}</b> {totalReachedFinal === 1 ? 'was' : 'were'} advanced by Taali.</>
         ) : null}
       </div>
 

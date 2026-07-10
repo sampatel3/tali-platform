@@ -29,7 +29,7 @@ const fmtDate = (v) => {
  */
 export function ScoreProvenance({ provenance, density = 'full', className = '' }) {
   if (!provenance) return null;
-  const { engine_version: version, scored_at: scoredAt, model } = provenance;
+  const { engine_version: version, scored_at: scoredAt } = provenance;
   if (!version && !scoredAt) return null;
 
   const date = fmtDate(scoredAt);
@@ -53,14 +53,11 @@ export function ScoreProvenance({ provenance, density = 'full', className = '' }
       ) : null}
       {version ? (
         <span
-          title={[
+          title={
             isStale
               ? `Scored by an older engine (v${version}) — may need re-scoring`
-              : `Scoring engine v${version}`,
-            model ? `model: ${model}` : null,
-          ]
-            .filter(Boolean)
-            .join(' · ')}
+              : `Scoring engine v${version}`
+          }
           className={`${pillBase} font-mono ${
             isStale
               ? 'bg-[var(--taali-surface-muted)] text-[var(--taali-muted)]'

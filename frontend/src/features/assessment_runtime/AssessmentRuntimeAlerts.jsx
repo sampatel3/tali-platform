@@ -62,8 +62,7 @@ export const AssessmentRuntimeAlerts = ({
     {isTimerPaused && (
       <div className="flex items-center justify-between gap-3 border-b border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] px-4 py-2">
         <div className="font-mono text-xs text-[var(--taali-danger)]">
-          Assessment paused{pauseReason ? ` (${pauseReason})` : ''}.
-          {pauseMessage ? ` ${pauseMessage}` : ''}
+          Assessment paused.{pauseMessage ? ` ${pauseMessage}` : " Your timer is stopped — you won't lose time."}
         </div>
         {onRetryClaude && (
           <button
@@ -72,7 +71,7 @@ export const AssessmentRuntimeAlerts = ({
             onClick={onRetryClaude}
             disabled={retryingClaude}
           >
-            {retryingClaude ? 'Retrying...' : 'Retry Claude'}
+            {retryingClaude ? 'Retrying...' : 'Retry AI assistant'}
           </button>
         )}
       </div>
@@ -81,7 +80,7 @@ export const AssessmentRuntimeAlerts = ({
     {isClaudeBudgetExhausted && (
       <div className="border-b border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] px-4 py-2">
         <div className="font-mono text-xs text-[var(--taali-warning)]">
-          Claude budget exhausted for this task
+          AI budget used up for this task
           {claudeBudget?.limit_usd ? ` (${formatUsd(claudeBudget.limit_usd)} cap reached)` : ''}.
           Continue coding and submit when ready.
         </div>

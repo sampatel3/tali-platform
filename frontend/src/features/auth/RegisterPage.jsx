@@ -50,11 +50,11 @@ export const RegisterPage = ({ onNavigate }) => {
           if (e.type === 'string_too_short' && e.ctx?.min_length === 8 && e.loc?.includes?.('password')) {
             return 'Password must be at least 8 characters long.';
           }
-          return m ? String(m) : JSON.stringify(e);
+          return m ? String(m) : 'Please check your details and try again.';
         });
         msg = parts.join('. ');
       } else if (status === 404 || status === 0) {
-        msg = 'Cannot reach server. The app may be misconfigured - please try again later.';
+        msg = 'We can\'t reach Taali right now. Please try again in a few minutes.';
       } else if (err.message && !err.message.includes('Network Error')) {
         msg = err.message;
       } else if (err.code === 'ERR_NETWORK' || err.message === 'Network Error') {
@@ -194,7 +194,7 @@ export const RegisterPage = ({ onNavigate }) => {
         placeholder="••••••••"
         value={form.password}
         onChange={updateField('password')}
-        helper="Strong · 12+ chars, 1 number"
+        helper="At least 8 characters — longer is stronger."
       />
 
       <div style={{ display: 'flex', gap: 4, margin: '-8px 0 14px' }}>

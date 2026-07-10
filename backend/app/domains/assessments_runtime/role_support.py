@@ -611,14 +611,10 @@ def _score_provenance(app: CandidateApplication) -> dict[str, Any]:
 
     details = app.cv_match_details if isinstance(app.cv_match_details, dict) else {}
     scored_at = getattr(app, "cv_match_scored_at", None)
-    model = details.get("model_version") or None
-    tier = None
-    if model:
-        tier = "Sonnet" if "sonnet" in model else "Haiku" if "haiku" in model else model
     return {
         "engine_version": resolve_engine_version(details) or None,
         "scored_at": scored_at.isoformat() if scored_at else None,
-        "model": tier,
+        "model": None,
     }
 
 

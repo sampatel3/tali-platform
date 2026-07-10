@@ -157,7 +157,7 @@ const resolvePipelineCardFooterStatus = (application, pendingDecision = null) =>
     if (pendingDecision) return 'Decision ready';
     return resolveAssessmentId(application) ? 'Completed — your decision' : 'With recruiter';
   }
-  return resolveAssessmentId(application) ? 'Assessment linked' : 'No task yet';
+  return resolveAssessmentId(application) ? 'Assessment linked' : 'No assessment yet';
 };
 
 export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = null }) => {
@@ -234,7 +234,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     setResolvingDecisionId(decisionId);
     try {
       await apiClient.agent.approveDecision(decisionId);
-      showToast(`Approved agent recommendation #${decisionId}`, 'success');
+      showToast('Recommendation approved.', 'success');
       setRoleApplications((apps) => apps.map((a) => (a?.pending_decision?.id === decisionId ? { ...a, pending_decision: null } : a)));
       await fetchPendingDecisions();
     } catch (err) {
@@ -248,7 +248,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     setResolvingDecisionId(decisionId);
     try {
       await apiClient.agent.overrideDecision(decisionId, { override_action: 'manual_review' });
-      showToast(`Overrode agent recommendation #${decisionId}`, 'info');
+      showToast('Recommendation overridden — the candidate stays in your queue for manual review.', 'info');
       setRoleApplications((apps) => apps.map((a) => (a?.pending_decision?.id === decisionId ? { ...a, pending_decision: null } : a)));
       await fetchPendingDecisions();
     } catch (err) {
@@ -1386,7 +1386,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             <div className="f"><span className="k">Location</span><span className="v">{roleFactValues.location}</span></div>
             <div className="f"><span className="k">Department</span><span className="v">{roleFactValues.department}</span></div>
             <div className="f"><span className="k">Employment</span><span className="v">{roleFactValues.employment}</span></div>
-            <div className="f"><span className="k">{roleTasks.length > 1 ? 'Tasks · A/B' : 'Linked task'}</span><span className="v purple">{roleTasks.length ? roleTasks.map((t) => t.name).join(' · ') : 'Task not linked'}</span></div>
+            <div className="f"><span className="k">{roleTasks.length > 1 ? 'Tasks · A/B' : 'Linked task'}</span><span className="v purple">{roleTasks.length ? roleTasks.map((t) => t.name).join(' · ') : 'Not linked yet'}</span></div>
           </div>
         )}
         agent={roleAgent}

@@ -80,7 +80,7 @@ const ExperimentCard = ({ experiment }) => {
           <div className="ct2">{experiment.name || experiment.key}</div>
           <div className="cd">
             {totalCompleted} completion{totalCompleted === 1 ? '' : 's'}
-            {anySmall ? ' · not yet significant' : ' · sample gate met'}
+            {anySmall ? ' · needs more results before a leader is shown' : ' · enough results to compare'}
           </div>
         </div>
         <span className="an-runtag">
@@ -89,9 +89,9 @@ const ExperimentCard = ({ experiment }) => {
         </span>
       </div>
       {loading && !data ? (
-        <div className="an-empty"><Loader2 size={13} className="animate-spin" aria-hidden="true" /> Loading arms…</div>
+        <div className="an-empty"><Loader2 size={13} className="animate-spin" aria-hidden="true" /> Loading results…</div>
       ) : arms.length === 0 ? (
-        <div className="an-empty">No arm data yet for this experiment.</div>
+        <div className="an-empty">No results for this comparison yet.</div>
       ) : (
         <div className="an-abrow">
           {arms.slice(0, 2).map((arm) => (

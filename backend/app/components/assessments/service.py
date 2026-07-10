@@ -811,7 +811,8 @@ def start_or_resume_assessment(
     try:
         required_ai_mode = resolve_ai_mode()
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Assessment AI runtime is not configured: {exc}") from exc
+        logger.exception("Assessment AI runtime is not configured")
+        raise HTTPException(status_code=503, detail="The assessment isn't available right now. Please try again later.") from exc
 
     sandbox = None
     sandbox_id = None

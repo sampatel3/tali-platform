@@ -34,7 +34,7 @@ const CandidateCard = ({ row }) => (
     </div>
     <div className="cp-cand-row">
       <ScorePill label="taali" value={row.taali_score} />
-      <ScorePill label="prescreen" value={row.pre_screen_score} />
+      <ScorePill label="pre-screen" value={row.pre_screen_score} />
       {row.pipeline_stage ? (
         <span className="cp-stage-pill">{row.pipeline_stage}</span>
       ) : null}

@@ -5,14 +5,14 @@
 Taali combines two things no other hiring tool puts together:
 
 - **Agentic hiring** — an autonomous AI agent triages, pre-screens, scores, and queues advances or rejects across your open roles continuously. It paces itself within a monthly budget and pauses to ask you whenever a decision needs human judgment. The agent recommends; you decide.
-- **AI-native assessments** — instead of banning AI, Taali puts candidates in a real, browser-based workspace with AI tools (such as Claude) in hand, the way engineers ship today. It captures every prompt, paste, edit, and test run, and scores AI collaboration and AI fluency as a first-class dimension alongside code craft.
+- **AI-native assessments** — instead of banning AI, Taali puts candidates in a real, browser-based workspace with AI tools in hand, the way engineers ship today. It captures every prompt, paste, edit, and test run, and scores AI collaboration and AI fluency as a first-class dimension alongside code craft.
 
 ## Key facts
 
 - Taali is an agentic hiring platform — recruiting run by an autonomous, budget-bounded AI agent with a human in the loop on every consequential call.
 - Taali is an AI-native assessment platform — it measures how well candidates use AI on the job, not whether they can code without it.
-- AI fluency is scored across six axes: prompt quality, error recovery, context utilization, independence, design thinking, and debugging strategy.
-- Every assessment produces a prompt-by-prompt session replay and a six-axis candidate standing report.
+- AI fluency is scored across five dimensions — the 5 Ds: delegation, description, discernment, diligence, and the deliverable.
+- Every assessment produces a prompt-by-prompt session replay and a candidate standing report scored on the 5 Ds.
 - Candidates work on real, role-relevant tasks in a live IDE with a terminal and real AI tools.
 
 ## Definitions

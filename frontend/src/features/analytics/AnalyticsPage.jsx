@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 
 import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
+import { useToast } from '../../context/ToastContext';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { Select } from '../../shared/ui/TaaliPrimitives';
 import {
@@ -37,7 +38,7 @@ import { OutcomesTab } from './OutcomesTab';
 import { FleetTab } from './FleetTab';
 import { TeachingTab } from './TeachingTab';
 import { ExperimentsTab } from './ExperimentsTab';
-import { DecisionLogTab } from './DecisionLogTab';
+import { DecisionLogTab, outcomeOf } from './DecisionLogTab';
 
 const WINDOWS = [
   { key: '7d', label: '7d', days: 7 },
@@ -66,6 +67,7 @@ const csvEscape = (v) => {
 };
 
 export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
+  const { showToast } = useToast();
   const [roleId, setRoleId] = useState('');
   const [windowKey, setWindowKey] = useState('30d');
   const [tab, setTab] = useState('outcomes');
@@ -165,7 +167,7 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
         r.role_name || `Role #${r.role_id}`,
         decisionTypeLabel(r.decision_type),
         r.candidate_name || `Application #${r.application_id}`,
-        r.status || '',
+        outcomeOf(r).text,
         r.override_action ? decisionTypeLabel(r.override_action) : '',
       ].map(csvEscape).join(','));
       const csv = [header.join(','), ...lines].join('\n');
@@ -179,11 +181,11 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch {
-      /* non-fatal — the button simply does nothing if the fetch fails */
+      showToast('Export failed — try again.', 'error');
     } finally {
       setExporting(false);
     }
-  }, [roleId]);
+  }, [roleId, showToast]);
 
   const headerActions = (
     <div className="an-controls">
@@ -221,7 +223,7 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
         breadcrumbs={[{ label: `Analytics · ${windowLabel(windowKey).toLowerCase()}` }]}
         kicker={`ANALYTICS · ${windowLabel(windowKey).toUpperCase()}${roleId ? '' : ' · ALL ROLES'}`}
         title="Analytics"
-        subtitle="Outcomes, the agent fleet, and the teaching history that keeps the agent calibrated — the reporting layer that lives off the home review loop."
+        subtitle="Outcomes, your agent fleet, and the teaching history that keeps the agent calibrated."
         actions={headerActions}
       />
       <div className="an-page">

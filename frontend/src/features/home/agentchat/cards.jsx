@@ -247,7 +247,7 @@ export function DraftTaskCard({ card, onApprove, onRevise, busy }) {
           <div className="ac-draft-meta">
             {d.deliverable_kind && <span className="ac-draft-tag">{d.deliverable_kind}</span>}
             <span>{(d.decisions || []).length} decisions</span>
-            <span>{(d.rubric || []).length} rubric dims</span>
+            <span>{(d.rubric || []).length} rubric criteria</span>
             <span>{d.repo_file_count || 0} files</span>
           </div>
           {(d.decisions || []).length > 0 && (

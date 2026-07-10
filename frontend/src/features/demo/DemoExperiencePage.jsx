@@ -15,7 +15,7 @@ const initialForm = {
   marketingConsent: true,
 };
 
-const companySizeOptions = ['1-10', '11-50', '51–200', '201–1,000', '1,000+'];
+const companySizeOptions = ['1–10', '11–50', '51–200', '201–1,000', '1,000+'];
 const assessmentTracks = ['AI Engineer', 'Frontend Engineer', 'Backend Engineer', 'Data Engineer'];
 
 const requiredFieldLabels = {

@@ -16,6 +16,7 @@ shared serializer + lookups in ``requisition_shared``.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -57,6 +58,8 @@ from .requisition_settings_routes import router as _settings_router
 from .requisition_shared import _get_brief, _org, _serialize_brief
 
 router = APIRouter(tags=["Requisitions"])
+
+logger = logging.getLogger(__name__)
 
 # Multipart upload guards for the chat endpoint.
 _MAX_CHAT_FILES = 6
@@ -215,8 +218,9 @@ async def chat_requisition(
     )
     if not result.ok:
         db.rollback()
+        logger.error("Intake chat failed: %s", result.error_reason)
         raise HTTPException(
-            status_code=502, detail=f"Intake chat failed: {result.error_reason}"
+            status_code=502, detail="The intake assistant hit a problem. Please try again."
         )
     db.commit()
     db.refresh(brief)
@@ -315,8 +319,9 @@ def run_requisition_intake(
     result = run_intake_extraction(db, brief, data.input, source_kind=data.source_kind)
     if not result.ok:
         db.rollback()
+        logger.error("Intake extraction failed: %s", result.error_reason)
         raise HTTPException(
-            status_code=502, detail=f"Intake extraction failed: {result.error_reason}"
+            status_code=502, detail="The intake assistant hit a problem. Please try again."
         )
     db.commit()
     db.refresh(brief)
@@ -341,9 +346,10 @@ def draft_requisition_responsibilities(
     result = draft_responsibilities(db, brief)
     if not result.ok:
         db.rollback()
+        logger.error("Responsibilities draft failed: %s", result.error_reason)
         raise HTTPException(
             status_code=502,
-            detail=f"Responsibilities draft failed: {result.error_reason}",
+            detail="Drafting responsibilities hit a problem. Please try again.",
         )
     db.commit()
     db.refresh(brief)

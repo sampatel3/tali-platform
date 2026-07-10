@@ -106,7 +106,7 @@ function JobRow({ entry, onCancel, onDismiss }) {
   const isTerminal = isCancelled || isComplete || isFailed;
 
   const errors = Number(data?.errors ?? 0);
-  const roleName = String(data?.role_name ?? '') || (kind === 'graph' ? 'Knowledge graph' : `Role #${roleId}`);
+  const roleName = String(data?.role_name ?? '') || (kind === 'graph' ? 'Candidate search' : `Role #${roleId}`);
 
   // Process (cascade) jobs report a multi-step progress structure.
   // We compute total/processed differently for them and surface per-step
@@ -147,12 +147,12 @@ function JobRow({ entry, onCancel, onDismiss }) {
         if (step === 'fetch') return 'Fetching CVs';
         if (step === 'pre_screen') return 'Pre-screening';
         if (step === 'score') return 'Scoring';
-        if (step === 'graph_sync') return 'Syncing to knowledge graph';
+        if (step === 'graph_sync') return 'Updating candidate search';
         return 'Processing';
       }
       if (kind === 'fetch') return 'Fetching CVs';
       if (kind === 'pre_screen') return data?.refresh ? 'Refreshing pre-screen' : 'Pre-screening';
-      if (kind === 'graph') return 'Syncing to graph';
+      if (kind === 'graph') return 'Updating candidate search';
       // score
       const preScreenEnabled = Boolean(data?.pre_screen_enabled);
       return preScreenEnabled && processed === 0 ? 'Pre-screening CVs' : 'Scoring CVs';
@@ -187,20 +187,20 @@ function JobRow({ entry, onCancel, onDismiss }) {
         if (fetchFetched && fetchFetched < fetchAttempted) f += ` (${fetchFetched} got CV`;
         else if (fetchFetched) f += ` (${fetchFetched} got CV`;
         if (fetchUnavailable) f += `, ${fetchUnavailable} unavailable`;
-        if (fetchErrors) f += `, ${fetchErrors} err`;
+        if (fetchErrors) f += `, ${fetchErrors} errors`;
         if (fetchFetched || fetchUnavailable || fetchErrors) f += ')';
         parts.push(f);
       }
       if (preTotal > 0) {
         let p = `Pre-screen ${prePros}/${preTotal}`;
-        if (preErrors) p += ` (${preErrors} err)`;
+        if (preErrors) p += ` (${preErrors} errors)`;
         parts.push(p);
       }
       if (scoreTotal > 0) {
         let s = `Score ${scorePros}/${scoreTotal}`;
         const annot = [];
         if (scoreFiltered) annot.push(`${scoreFiltered} filtered`);
-        if (scoreErrors) annot.push(`${scoreErrors} err`);
+        if (scoreErrors) annot.push(`${scoreErrors} errors`);
         if (annot.length) s += ` (${annot.join(', ')})`;
         parts.push(s);
       }
@@ -208,8 +208,8 @@ function JobRow({ entry, onCancel, onDismiss }) {
       const graphPros = Number(data?.graph_sync?.synced ?? 0);
       const graphErrors = Number(data?.graph_sync?.errors ?? 0);
       if (graphTotal > 0) {
-        let g = `Graph ${graphPros}/${graphTotal}`;
-        if (graphErrors) g += ` (${graphErrors} err)`;
+        let g = `Search index ${graphPros}/${graphTotal}`;
+        if (graphErrors) g += ` (${graphErrors} errors)`;
         parts.push(g);
       }
       if (parts.length === 0) return 'starting…';

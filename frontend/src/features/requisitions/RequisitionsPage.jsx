@@ -268,7 +268,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       }));
       void loadList(); // title / completeness may have changed in the sidebar
     } catch {
-      setError('The agent could not process that turn. Your message is preserved above — try again.');
+      setError('The agent couldn\'t process that message. It\'s still shown above — try sending it again.');
     } finally {
       setTurnInFlight(false);
     }
@@ -837,7 +837,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                       <div className="rq-workable-row">
                         <div className="rq-workable-head">
                           <span className={`rq-job-status ${linkedJob?.workable_job_id ? 'is-open' : 'is-draft'}`}>
-                            {linkedJob?.workable_job_id ? 'Linked to Workable · Open' : 'Inactive job created · Draft'}
+                            {linkedJob?.workable_job_id ? 'Linked to Workable · Open' : 'Not linked to Workable yet · Draft'}
                           </span>
                           {refCode ? <code className="rq-ref-code" title="Requisition ref code">{refCode}</code> : null}
                         </div>

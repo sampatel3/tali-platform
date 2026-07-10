@@ -155,7 +155,7 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
           }))}
         >
           <RefreshCw size={12} strokeWidth={2.2} aria-hidden="true" />
-          {staleCount.toLocaleString()} need re-eval
+          {staleCount.toLocaleString()} scores out of date
         </button>
       ) : null}
     </div>
@@ -259,7 +259,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
             key={p.id}
             role="button"
             tabIndex={0}
-            className={`rq-split-row rq-qrow ${selectedId === p.id ? 'on' : ''} ${p.status === 'processing' ? 'is-processing' : ''}`.trim()}
+            className={`rq-split-row rq-qrow ${selectedId === p.id ? 'on' : ''} ${p.status === 'processing' || p.rescore_in_flight ? 'is-processing' : ''}`.trim()}
             onClick={() => onSelect(p.id)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
@@ -291,7 +291,14 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
               </div>
               <div className="rq-qverdict">
                 <VerdictPill type={p.decision_type} />
-                {p.is_stale ? (
+                {p.rescore_in_flight ? (
+                  <span
+                    className="rq-qstale"
+                    title="Re-scoring in progress — refreshes automatically"
+                  >
+                    <RefreshCw size={9} strokeWidth={2.4} aria-hidden="true" className="rq-spin" /> re-scoring
+                  </span>
+                ) : p.is_stale ? (
                   <span
                     className="rq-qstale"
                     title="Score out of date — re-evaluate"
@@ -595,6 +602,13 @@ export const HomeNow = ({
   const actedRef = useRef(acted);
   useEffect(() => { actedRef.current = acted; }, [acted]);
 
+  // Optimistic re-scores. Clicking Re-evaluate on an old-engine score enqueues
+  // an async re-score and the decision STAYS in the queue until the fresh
+  // score lands — so grey it immediately. This set covers the gap between the
+  // click and the next fetch; after that the server's ``rescore_in_flight``
+  // flag (from the live score job) takes over and the poll un-greys the card.
+  const [rescoring, setRescoring] = useState(() => new Set());
+
   // Client-side role-scope guard. The parent fetches role-scoped data, but
   // while a role switch is mid-flight it keeps the *previous* scope's rows on
   // screen (stale-while-revalidate — see HomePage.loadDecisions) to avoid a
@@ -632,17 +646,22 @@ export const HomeNow = ({
   // the capped page — counting client-side here silently under-reports a deep
   // backlog.
   const staleOnly = filters.status === 'stale';
+  // Overlay the optimistic re-score mark onto server rows (see ``rescoring``).
+  const withRescoring = useCallback(
+    (d) => (rescoring.has(d.id) && !d.rescore_in_flight ? { ...d, rescore_in_flight: true } : d),
+    [rescoring],
+  );
   const effPending = useMemo(
-    () => pendingOrdered.filter(
-      (d) => inRoleScope(d) && inTypeScope(d) && !acted.has(d.id) && (!staleOnly || d.is_stale),
-    ),
-    [pendingOrdered, acted, inRoleScope, inTypeScope, staleOnly],
+    () => pendingOrdered
+      .filter((d) => inRoleScope(d) && inTypeScope(d) && !acted.has(d.id) && (!staleOnly || d.is_stale))
+      .map(withRescoring),
+    [pendingOrdered, acted, inRoleScope, inTypeScope, staleOnly, withRescoring],
   );
   const effDecisions = useMemo(
     () => decisions
       .filter((d) => inRoleScope(d) && inTypeScope(d))
-      .map((d) => (acted.has(d.id) ? { ...d, status: 'processing' } : d)),
-    [decisions, acted, inRoleScope, inTypeScope],
+      .map((d) => (acted.has(d.id) ? { ...d, status: 'processing' } : withRescoring(d))),
+    [decisions, acted, inRoleScope, inTypeScope, withRescoring],
   );
 
   const selected = useMemo(
@@ -736,13 +755,22 @@ export const HomeNow = ({
   };
 
   // A4: discard a stale decision and re-run the agent on fresh inputs.
+  // Engine-stale decisions instead get an async re-score and STAY in the
+  // queue — mark them rescoring immediately so the row + card grey out;
+  // the server's rescore_in_flight flag takes over on the next fetch.
   const handleReEvaluate = async (decision) => {
     setBusyId(decision.id);
+    setRescoring((prev) => new Set(prev).add(decision.id));
     try {
       await agentApi.reEvaluateDecision(decision.id);
       showToast?.('Re-evaluating with fresh inputs…', 'success');
       await reload?.();
+      // Fresh data is in: the live score job now reports rescore_in_flight
+      // itself (or the decision left the queue), so drop the optimistic mark —
+      // keeping it would grey the refreshed card forever.
+      setRescoring((prev) => { const next = new Set(prev); next.delete(decision.id); return next; });
     } catch (err) {
+      setRescoring((prev) => { const next = new Set(prev); next.delete(decision.id); return next; });
       showToast?.(apiErrorMessage(err, 'Re-evaluate failed'), 'error');
     } finally {
       setBusyId(null);
@@ -772,7 +800,12 @@ export const HomeNow = ({
   // Pending decisions matching the current filter scope. Used by the
   // bulk-approve action: we only ever approve what's visible, so the
   // recruiter's confirmation matches the rows they see on screen.
-  const visiblePending = useMemo(() => effDecisions.filter((d) => d.status === 'pending'), [effDecisions]);
+  // Rows mid-re-score are excluded: their score is being replaced, so a bulk
+  // approve must not act on them (mirrors the card's frozen action bar).
+  const visiblePending = useMemo(
+    () => effDecisions.filter((d) => d.status === 'pending' && !d.rescore_in_flight),
+    [effDecisions],
+  );
   // "Skip & advance" only makes sense for the assessment decisions — it skips
   // the assessment and re-queues the candidate as an advance. It's meaningless
   // (and a no-op the server would reject) for an advance or reject decision.
@@ -1205,7 +1238,7 @@ export const HomeNow = ({
                           </span>
                         ) : stages.length === 0 ? (
                           <span style={{ fontSize: '0.75rem', color: 'var(--mute)' }}>
-                            No advance stages in this Workable job — only Sourced / Applied. These candidates advance on Tali's internal stage; nothing posts to Workable. Add interview/offer stages to the job in Workable to move them there.
+                            No advance stages in this Workable job — only Sourced / Applied. These candidates advance on Taali's internal stage; nothing posts to Workable. Add interview/offer stages to the job in Workable to move them there.
                           </span>
                         ) : (
                           <div className="rq-modal-pills" role="radiogroup" aria-label={`Workable stage for ${r.role_name}`}>

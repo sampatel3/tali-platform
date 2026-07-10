@@ -86,7 +86,7 @@ const AskList = ({ conversations, activeId, onSelect, onNew, onDelete }) => {
             >
               <div className="cp-conv-q">{r.title || 'New conversation'}</div>
               <div className="cp-conv-meta">
-                {r.message_count} msg · {formatTime(r.updated_at || r.created_at)}
+                {r.message_count} message{r.message_count === 1 ? '' : 's'} · {formatTime(r.updated_at || r.created_at)}
               </div>
             </button>
             <button

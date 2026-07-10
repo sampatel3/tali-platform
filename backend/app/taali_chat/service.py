@@ -249,7 +249,7 @@ def run_chat_turn(
             )
         except Exception as exc:
             logger.exception("Anthropic stream failed: %s", exc)
-            yield streaming.error(f"Model call failed: {exc}")
+            yield streaming.error("Sorry — I hit a problem answering that. Please try again.")
             final_stop_reason = "stop"
             break
 

@@ -2,15 +2,17 @@ import React, { useState } from 'react';
 import { ChevronRight, Loader2, Search, AlertTriangle } from 'lucide-react';
 
 const TOOL_LABELS = {
-  list_roles: 'list_roles',
-  get_role: 'get_role',
-  search_applications: 'search_applications',
-  nl_search_candidates: 'nl_search_candidates',
-  graph_search_candidates: 'graph_search_candidates',
-  get_application: 'get_application',
-  get_candidate: 'get_candidate',
-  get_candidate_cv: 'get_candidate_cv',
-  compare_applications: 'compare_applications',
+  list_roles: 'Listing roles',
+  get_role: 'Fetching role',
+  search_applications: 'Searching applications',
+  nl_search_candidates: 'Searching candidates',
+  graph_search_candidates: 'Searching the skills graph',
+  get_application: 'Fetching application',
+  get_candidate: 'Fetching candidate',
+  get_candidate_cv: 'Fetching CV',
+  compare_applications: 'Comparing candidates',
+  find_top_candidates: 'Ranking top candidates',
+  screen_pool_against_requirement: 'Screening the pool',
 };
 
 // Render an arg value the way search-preview does: string values quoted
@@ -92,7 +94,7 @@ const ToolCallCard = ({ part }) => {
             <Search size={13} strokeWidth={2.2} />
           )}
         </span>
-        <span className="cp-tool-tname">{TOOL_LABELS[toolName] || toolName}</span>
+        <span className="cp-tool-tname">{TOOL_LABELS[toolName] || String(toolName).replace(/_/g, ' ')}</span>
         <span className="cp-tool-args">{summarizeArgs(args || {})}</span>
         <span className={[
           'cp-tool-count',

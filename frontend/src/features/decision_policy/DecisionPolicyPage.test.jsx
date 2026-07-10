@@ -57,7 +57,7 @@ describe('DecisionPolicyPage', () => {
       expect(screen.getByText('Decision Policy')).toBeInTheDocument();
     });
     expect(decisionPolicyApi.active).toHaveBeenCalled();
-    expect(screen.getByText('send_assessment')).toBeInTheDocument();
-    expect(screen.getByText('role_fit_min')).toBeInTheDocument();
+    expect(screen.getByText('Send assessment')).toBeInTheDocument();
+    expect(screen.getByText('Role fit min')).toBeInTheDocument();
   });
 });
