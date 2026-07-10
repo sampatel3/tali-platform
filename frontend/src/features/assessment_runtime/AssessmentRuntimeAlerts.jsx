@@ -71,7 +71,7 @@ export const AssessmentRuntimeAlerts = ({
             onClick={onRetryClaude}
             disabled={retryingClaude}
           >
-            {retryingClaude ? 'Retrying...' : 'Retry AI assistant'}
+            {retryingClaude ? 'Retrying...' : 'Retry Claude'}
           </button>
         )}
       </div>
@@ -80,7 +80,7 @@ export const AssessmentRuntimeAlerts = ({
     {isClaudeBudgetExhausted && (
       <div className="border-b border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] px-4 py-2">
         <div className="font-mono text-xs text-[var(--taali-warning)]">
-          AI budget used up for this task
+          Claude budget used up for this task
           {claudeBudget?.limit_usd ? ` (${formatUsd(claudeBudget.limit_usd)} cap reached)` : ''}.
           Continue coding and submit when ready.
         </div>

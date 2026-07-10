@@ -60,7 +60,7 @@ const MessageRow = ({ entry }) => {
           isUser ? 'justify-end' : 'justify-start'
         }`}
       >
-        <span>{isUser ? 'You' : 'Taali AI'}</span>
+        <span>{isUser ? 'You' : 'Claude'}</span>
       </div>
       <div
         className={`inline-block max-w-[94%] rounded-[12px] px-4 py-2.5 text-left ${
@@ -260,9 +260,9 @@ export const AssessmentClaudeChat = ({
 
   const placeholder = useMemo(() => {
     if (locked) return 'Read-only demo — this transcript is from a real candidate session. Book a demo to try it live.';
-    if (isBudgetExhausted) return 'Your AI budget for this assessment is used up.';
-    if (disabled) return 'The AI assistant is unavailable right now.';
-    return 'Ask the AI assistant to inspect the repo, explain a failure, or suggest a patch path…';
+    if (isBudgetExhausted) return 'Your Claude budget for this assessment is used up.';
+    if (disabled) return 'Claude is unavailable right now.';
+    return 'Ask Claude to inspect the repo, explain a failure, or suggest a patch path…';
   }, [disabled, isBudgetExhausted, locked]);
 
   // Auto-scroll the message list as new turns arrive.
@@ -314,9 +314,9 @@ export const AssessmentClaudeChat = ({
             <div className="rounded-[12px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-4 py-3.5 text-[0.84375rem] leading-[1.55] text-[var(--ink-2)]">
               <div className="mb-2 flex items-center gap-2 font-mono text-[0.65625rem] uppercase tracking-[0.1em] text-[var(--purple)]">
                 <FileSearch size={12} />
-                Your AI assistant is ready
+                Claude is ready
               </div>
-              Ask the AI assistant to inspect the repo, explain a failure, or suggest the smallest safe patch path before you edit.
+              Ask Claude to inspect the repo, explain a failure, or suggest the smallest safe patch path before you edit.
             </div>
           ) : null}
 
@@ -327,7 +327,7 @@ export const AssessmentClaudeChat = ({
           {pending ? (
             <div className="text-[0.875rem]" data-testid="assessment-claude-chat-pending">
               <div className="mb-1.5 flex gap-2 font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[var(--mute)]">
-                <span>Taali AI</span>
+                <span>Claude</span>
                 <span>working</span>
               </div>
               <div className="inline-block max-w-[94%] rounded-[12px] rounded-tl-[4px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-4 py-2.5 text-left">

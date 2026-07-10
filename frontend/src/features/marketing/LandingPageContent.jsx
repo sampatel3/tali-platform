@@ -153,7 +153,7 @@ const proofItems = [
   },
   {
     title: 'Real AI',
-    body: 'Real AI assistants in-browser — the same tools engineers use every day. We do not block them - we score how candidates use them.',
+    body: 'Claude, Cursor, Copilot in-browser. We do not block them - we score how candidates use them.',
   },
   {
     title: 'Every keystroke',
@@ -465,7 +465,7 @@ export const LandingPage = ({ onNavigate }) => {
               {
                 n: '02',
                 t: 'Assess — for the AI era',
-                d: "Hands-on, role-relevant tasks in a chat-first workspace — a real AI assistant in the candidate's hands. We track every prompt, paste, and decision — then score AI collaboration alongside craft. The only platform that tells you whether a candidate can actually ship with AI.",
+                d: "Hands-on, role-relevant tasks in a chat-first workspace — Claude in the candidate's hands. We track every prompt, paste, and decision — then score AI collaboration alongside craft. The only platform that tells you whether a candidate can actually ship with AI.",
               },
               {
                 n: '03',
@@ -524,7 +524,7 @@ export const LandingPage = ({ onNavigate }) => {
                 We&apos;re the only platform that measures it.
               </h2>
               <p className="mt-5 text-[1rem] leading-[1.6] text-[var(--ink-2)]">
-                Every assessment opens a chat-first workspace — an AI assistant at the centre, your repo, a real editor, and a live terminal around it — exactly the way engineers ship now.
+                Every assessment opens a chat-first workspace — Claude at the centre, your repo, a real editor, and a live terminal around it — exactly the way engineers ship now.
                 Behind the scenes the runtime captures every prompt, paste, edit, file open, test run, and commit, time-stamped to the second.
                 Those traces feed one scorecard — five dimensions, the 5 Ds: Delegation, Description, Discernment, Diligence, and the Deliverable itself — so how a candidate works with AI is scored as a first-class dimension alongside the result they ship.
               </p>

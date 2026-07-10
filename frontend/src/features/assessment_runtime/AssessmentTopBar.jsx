@@ -68,7 +68,7 @@ export const AssessmentTopBar = ({
               background: 'var(--purple-soft)',
             }}
           >
-            <span style={{ letterSpacing: '0.08em', textTransform: 'uppercase', fontSize: 10 }}>AI budget</span>
+            <span style={{ letterSpacing: '0.08em', textTransform: 'uppercase', fontSize: 10 }}>Claude</span>
             <span>{formatBudgetUsd(claudeBudget.remaining_usd)} of {formatUsd(claudeBudget.limit_usd)}</span>
           </div>
         ) : null}

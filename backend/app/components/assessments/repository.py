@@ -193,7 +193,7 @@ def build_results(assessment: Assessment) -> List[Dict[str, Any]]:
         results.append({
             "title": "Code quality",
             "score": f"{assessment.code_quality_score}/10",
-            "description": "AI code quality analysis applied.",
+            "description": "Claude code quality analysis applied.",
         })
     return results
 

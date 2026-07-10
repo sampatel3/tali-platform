@@ -225,7 +225,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
               <div className="mt-6 space-y-3">
                 {[
                   'A real prompt, not a riddle.',
-                  'Work the way you normally do with an AI assistant and the live repo.',
+                  'Work the way you normally do with Claude and the live repo.',
                   'You are scored on how you steer and the design decisions you make — not on whether you reach working code. The agent can write code; the judgment is yours to show.',
                   'The session transcript is reviewed — not your screen, mic, or camera.',
                 ].map((item) => (
@@ -271,7 +271,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
             <div className="rounded-[var(--radius-xl)] bg-[var(--ink)] p-6 text-[var(--bg)] shadow-[var(--shadow-lg)]">
               <div className="font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--purple-2)]">What to expect</div>
               <h2 className="mt-4 font-[var(--font-display)] text-[1.875rem] font-semibold leading-[1] tracking-[-0.03em]">
-                Repo, editor, and your AI assistant — all in one workspace.
+                Repo, editor, and Claude — all in one workspace.
               </h2>
               <p className="mt-4 text-[0.875rem] leading-7 text-white/72">
                 We record prompts, accept/reject decisions, and validation runs so the hiring team can review your process with context.
@@ -288,7 +288,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
                   ['Browser', systemCheck.browser, Monitor],
                   ['Connection', systemCheck.connection, Wifi],
                   ['Screen', systemCheck.screen, Monitor],
-                  ['AI assistant', isStartBlocked ? 'Blocked' : 'Ready', Sparkles],
+                  ['Claude access', isStartBlocked ? 'Blocked' : 'Ready', Sparkles],
                 ].map(([label, value, Icon]) => (
                   <div key={label} className="flex items-center justify-between border-b border-[var(--line-2)] pb-3 last:border-b-0 last:pb-0">
                     <span className="text-[var(--mute)]">{label}</span>
@@ -307,7 +307,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
                 <div className="flex items-start gap-3">
                   <Shield size={18} className="mt-0.5 shrink-0 text-[var(--purple)]" />
                   <div>
-                    We record your prompts, AI responses, accepted edits, and validation runs. We do not record your screen, microphone, or camera.
+                    We record your prompts, Claude responses, accepted edits, and validation runs. We do not record your screen, microphone, or camera.
                   </div>
                 </div>
               </div>

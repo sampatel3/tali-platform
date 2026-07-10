@@ -57,7 +57,7 @@ logger = logging.getLogger(__name__)
 _PRE_SPEND_FLOOR_USD = 0.05
 
 _BUDGET_EXHAUSTED_TEXT = (
-    "You've used all the AI assistant time for this assessment. "
+    "You've used your Claude budget for this assessment. "
     "Submit when you're ready."
 )
 

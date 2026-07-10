@@ -93,7 +93,7 @@ export const AssessmentContextWindow = forwardRef(({
               <div className="font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--mute)]">How to work</div>
               <ul className="mt-3 space-y-2 text-[0.8125rem] leading-6 text-[var(--ink-2)]">
                 <li>Read the task brief and inspect the repo before changing code.</li>
-                <li>Use the AI assistant for scoped help, then validate the patch path yourself.</li>
+                <li>Use Claude for scoped help, then validate the patch path yourself.</li>
                 <li>Run relevant checks in the live workspace before you submit.</li>
               </ul>
             </div>
@@ -115,7 +115,7 @@ export const AssessmentContextWindow = forwardRef(({
               <div className="mt-3 rounded-[10px] border border-[var(--line)] bg-[var(--bg-2)] px-3 py-3 text-[0.75rem] leading-5 text-[var(--mute)]">
                 The hiring team reviews two things: the code in the
                 workspace when you submit, and your chat transcript with
-                the AI assistant — how you steered the work counts as evidence.
+                Claude — how you steered the work counts as evidence.
               </div>
               {/* The clone-command (``git clone --branch …``) was
                   previously rendered here. It's a backend artifact
@@ -131,7 +131,7 @@ export const AssessmentContextWindow = forwardRef(({
             {repoFileCount > 0 ? `${repoFileCount} repo files ready` : 'Live workspace'}
           </div>
           <div className="rounded-full border border-[var(--line)] bg-[var(--bg)] px-3 py-1.5 text-[0.75rem] text-[var(--ink-2)]">
-            Use the AI assistant for scoped help, then validate in the dock before you submit.
+            Use Claude for scoped help, then validate in the dock before you submit.
           </div>
           {/* "Clone command available" chip removed 2026-05-26 — the
               clone URL is a backend artifact, not candidate-facing. */}
