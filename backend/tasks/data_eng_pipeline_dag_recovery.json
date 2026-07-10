@@ -4,13 +4,13 @@
   "role": "data_engineer",
   "duration_minutes": 30,
   "calibration_prompt": "You have 2 minutes. Ask Claude to help you specify the Airflow dependency between two tasks so a 'publish' task can never run when an upstream 'quality_check' task has failed. State the two tasks, the dependency direction, and what happens to publish when quality_check fails.",
-  "scenario": "It's 09:00. The daily orders pipeline (an Airflow DAG on MWAA:\nextract -> transform -> load -> quality_check -> publish) failed mid-run on\n2026-02-25 and has been paused for two days. While it was broken it also\n*published a batch that failed quality_check*, and a manual re-run doubled a\npartition. `diagnostics/audit_findings.md` lists the stubbed/wrong pieces in\n`dag/`.\n\nThe mechanical fix \u2014 wiring the DAG, the backfill window, the retry policy,\nthe idempotent load and the publish gate \u2014 is what the model can help with.\nThe judgment is what your team is hiring you for:\n\n**The catchup decision is yours.** The DAG is paused with `catchup=True`.\nUn-pausing it backfills all the missed days at once \u2014 a resource spike on MWAA\nand the downstream warehouse, and it will re-run days that partially loaded.\n`catchup=False` skips the gap entirely and leaves a hole in the data. You\ndecide, and you name the cost you accept. Justify in `RECOVERY_DECISION.md`.\n\n**The reload decision is yours.** The failed run *partially* loaded the\n2026-02-25 partition before it died. On recovery you can overwrite the whole\nday's partition (idempotent, safe, but reprocesses good data and costs\ncompute) or surgically delete-and-reload only the bad slice (faster, but you\nhave to know exactly what landed, and getting it wrong leaves corruption).\nPick one and name the failure mode you accept.\n\n**What the rubric grades:**\n1. Did you fix the DAG primitives? (dependencies, backfill, retries,\n   idempotent load, publish gate)\n2. Did you make the catchup call and name the cost? (you're paid for THIS)\n3. Did you make the reload call and own its failure mode? (THIS too)\n\n`RECOVERY_DECISION.md` is required. All tests passing with an empty or vague\ndecision doc scores in the *good* band, not *excellent* \u2014 the doc is 40% of\nthe grade.\n\n\n**How this is leveled \u2014 climb as far as you can; the report shows the highest level you reach, and the judgment (L3) is weighted most:**\n- **L1 \u2014 basics:** wire build_dependencies + set retries/SLA \u2014 the Airflow basics.\n- **L2 \u2014 core:** backfill window, idempotent load, and the publish gate \u2014 the pipeline recovers safely.\n- **L3 \u2014 judgment:** own the catchup and partial-reload decisions in RECOVERY_DECISION.md; name what's left (transactional writes, surgical reload tooling).\n\nTools: `Read`, `Write`, `Edit`, `Bash` against the live repo. 30 minutes.",
+  "scenario": "It's 09:00. The daily orders pipeline (an Airflow DAG on MWAA:\nextract -> transform -> load -> quality_check -> publish) failed mid-run on\n2026-02-25 and has been paused for two days. While it was broken it also\n*published a batch that failed quality_check*, and a manual re-run doubled a\npartition. `diagnostics/audit_findings.md` lists the stubbed/wrong pieces in\n`dag/`.\n\nThe mechanical fix — wiring the DAG, the backfill window, the retry policy,\nthe idempotent load and the publish gate — is what the model can help with.\nThe judgment is what your team is hiring you for:\n\n**The catchup decision is yours.** The DAG is paused with `catchup=True`.\nUn-pausing it backfills all the missed days at once — a resource spike on MWAA\nand the downstream warehouse, and it will re-run days that partially loaded.\n`catchup=False` skips the gap entirely and leaves a hole in the data. You\ndecide, and you name the cost you accept. Justify in `RECOVERY_DECISION.md`.\n\n**The reload decision is yours.** The failed run *partially* loaded the\n2026-02-25 partition before it died. On recovery you can overwrite the whole\nday's partition (idempotent, safe, but reprocesses good data and costs\ncompute) or surgically delete-and-reload only the bad slice (faster, but you\nhave to know exactly what landed, and getting it wrong leaves corruption).\nPick one and name the failure mode you accept.\n\n**What the rubric grades:**\n1. Did you fix the DAG primitives? (dependencies, backfill, retries,\n   idempotent load, publish gate)\n2. Did you make the catchup call and name the cost? (you're paid for THIS)\n3. Did you make the reload call and own its failure mode? (THIS too)\n\n`RECOVERY_DECISION.md` is required. All tests passing with an empty or vague\ndecision doc scores in the *good* band, not *excellent* — the doc is 40% of\nthe grade.\n\n\n**How this is leveled — climb as far as you can; the report shows the highest level you reach, and the judgment (L3) is weighted most:**\n- **L1 — basics:** wire build_dependencies + set retries/SLA — the Airflow basics.\n- **L2 — core:** backfill window, idempotent load, and the publish gate — the pipeline recovers safely.\n- **L3 — judgment:** own the catchup and partial-reload decisions in RECOVERY_DECISION.md; name what's left (transactional writes, surgical reload tooling).\n\nTools: `Read`, `Write`, `Edit`, `Bash` against the live repo. 30 minutes.",
   "repo_structure": {
     "name": "pipeline-dag-recovery",
     "files": {
       ".gitignore": ".venv/\n.pytest_cache/\n__pycache__/\n",
       "requirements.txt": "pytest>=8.0.0\n",
-      "README.md": "# Pipeline DAG Recovery\n\nThe daily orders pipeline is an Airflow DAG (extract -> transform -> load ->\nquality_check -> publish). It failed mid-run two nights ago and has been\npaused since. The DAG wiring, backfill logic, retry policy, load idempotency,\nand the publish gate are all stubbed or wrong (`dag/`).\n\n## The problem\n`diagnostics/dag_run.log` shows publish ran while quality_check was failing,\nthe backfill plan is empty, and a re-run double-loaded a partition.\n\n## Local workflow\n1. Create a virtualenv\n2. Install `requirements.txt`\n3. Run `pytest -q --tb=short`\n\nThis strips the Airflow/MWAA runtime \u2014 you implement the DAG *decisions*\n(dependencies, backfill window, retry policy, idempotent load, publish gate)\nas plain Python the DAG would drive.\n",
+      "README.md": "# Pipeline DAG Recovery\n\nThe daily orders pipeline is an Airflow DAG (extract -> transform -> load ->\nquality_check -> publish). It failed mid-run two nights ago and has been\npaused since. The DAG wiring, backfill logic, retry policy, load idempotency,\nand the publish gate are all stubbed or wrong (`dag/`).\n\n## The problem\n`diagnostics/dag_run.log` shows publish ran while quality_check was failing,\nthe backfill plan is empty, and a re-run double-loaded a partition.\n\n## Local workflow\n1. Create a virtualenv\n2. Install `requirements.txt`\n3. Run `pytest -q --tb=short`\n\nThis strips the Airflow/MWAA runtime — you implement the DAG *decisions*\n(dependencies, backfill window, retry policy, idempotent load, publish gate)\nas plain Python the DAG would drive.\n",
       "ARCHITECTURE.md": "# DAG shape\n\nStages (daily, in order): **extract -> transform -> load -> quality_check ->\npublish**. ``publish`` MUST be downstream of ``quality_check`` so a failing\nbatch is never published. The DAG runs on a managed Airflow (MWAA) with\n``catchup`` controlling whether a gap is backfilled.\n\n`dag/dependencies.py` wires the graph, `dag/backfill.py` plans the missed\nruns, `dag/config.py` sets retry/SLA defaults, `dag/recovery.py` does the\nidempotent partition load, `dag/pipeline.py` holds the publish gate.\n",
       "RUNBOOK.md": "# Incident runbook\n\n## Immediate expectations\n- Re-wire the DAG so publish is gated behind quality_check.\n- Plan the correct backfill window for the paused days.\n- Make the load idempotent so a backfill doesn't double-count.\n- Set a retry/SLA policy so a transient failure self-heals + pages on-call.\n\n## Mental model\nTrustworthy publishes + safe re-runs first; throughput tuning second.\n",
       "diagnostics/dag_run.log": "2026-02-25T02:04:11Z ERROR task 'load' failed (source timeout) after 0 retries -- no retry policy set\n2026-02-25T02:04:12Z WARNING task 'publish' has no upstream dependency on 'quality_check'; ran anyway\n2026-02-25T02:04:12Z ERROR published batch 2026-02-25 with quality_check=FAILED\n2026-02-25T02:05:40Z WARNING DAG paused by on-call; catchup=True\n2026-02-27T09:00:00Z WARNING manual re-run of 2026-02-25 appended rows again -> partition row count doubled\n2026-02-27T09:01:10Z WARNING backfill plan for 2026-02-25..2026-02-27 came back empty\n",
@@ -31,7 +31,7 @@
   },
   "evaluation_rubric": {
     "situational_assessment": {
-      "weight": 0.2,
+      "weight": 0.15,
       "lens": "decision",
       "criteria": {
         "excellent": "The candidate diagnoses the failures themselves from the log + audit findings: publish wasn't gated behind quality_check, there's no retry/SLA policy, the load isn't idempotent, and the backfill plan is empty. They drive the fix rather than handing the repo to the agent.",
@@ -40,11 +40,29 @@
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.4,
+      "weight": 0.35,
       "grader": "interrogation_outcome"
     },
+    "output_scrutiny": {
+      "weight": 0.1,
+      "lens": "discernment",
+      "criteria": {
+        "excellent": "Catches at least one materially wrong or risky agent proposal (e.g. a planted trap) and overrides it with reasoning — reads diffs and tool output critically instead of accepting on faith.",
+        "good": "Reviews the agent's output (re-reads diffs, questions a suggestion) but misses the planted pitfalls or challenges only cosmetic details.",
+        "poor": "Accepts the agent's proposals at face value; no evidence of reading the diff or questioning any output."
+      }
+    },
+    "verification_before_done": {
+      "weight": 0.1,
+      "lens": "diligence",
+      "criteria": {
+        "excellent": "Runs the test suite (or targeted checks) after material changes AND before submitting, reads the failures, and only claims done on green or understood results.",
+        "good": "Runs tests at least once before submitting but doesn't chase failures, or verifies so late there is no time to act on the result.",
+        "poor": "Never runs the tests, or submits on the agent's say-so with no verification of any kind."
+      }
+    },
     "dag_correctness": {
-      "weight": 0.22,
+      "weight": 0.18,
       "lens": "deliverable",
       "criteria": {
         "excellent": "Shipped build_dependencies (linear, publish gated behind quality_check), plan_backfill (correct missed-day window), and task_default_args (retries/SLA/failure callback) are correct against the spec/tests. Credit the working artifact regardless of who typed it.",
@@ -53,10 +71,10 @@
       }
     },
     "recovery_correctness": {
-      "weight": 0.18,
+      "weight": 0.12,
       "lens": "deliverable",
       "criteria": {
-        "excellent": "Shipped idempotent_load (overwrites the partition, no double-count on re-run) and should_publish (gated on quality AND load) are correct. These are the safety-critical recovery primitives \u2014 credit the working artifact.",
+        "excellent": "Shipped idempotent_load (overwrites the partition, no double-count on re-run) and should_publish (gated on quality AND load) are correct. These are the safety-critical recovery primitives — credit the working artifact.",
         "good": "Works with a gap (e.g. publish gate right but load still appends).",
         "poor": "Idempotency / publish gate wrong, not implemented, or nothing functional shipped."
       }
@@ -138,12 +156,12 @@
     "jd_to_signal_map": [
       {
         "job_requirement": "Diagnose a failed orchestration run under deadline (bad publish, doubled partition, no retry policy).",
-        "task_artifact": "Chat transcript + diagnostics \u2014 candidate identifies the ungated publish + non-idempotent load + empty backfill themselves.",
+        "task_artifact": "Chat transcript + diagnostics — candidate identifies the ungated publish + non-idempotent load + empty backfill themselves.",
         "rubric_dimension": "situational_assessment"
       },
       {
         "job_requirement": "Diagnose + recover pipeline failures under time pressure.",
-        "task_artifact": "Chat transcript \u2014 candidate owns the catchup + reload decisions.",
+        "task_artifact": "Chat transcript — candidate owns the catchup + reload decisions.",
         "rubric_dimension": "design_decisions_articulated"
       },
       {
@@ -155,6 +173,16 @@
         "job_requirement": "Build idempotent, safe-to-re-run pipeline loads + publish gates.",
         "task_artifact": "Shipped idempotent_load + should_publish + tests.",
         "rubric_dimension": "recovery_correctness"
+      },
+      {
+        "job_requirement": "Reviews automation and AI output critically before it reaches production orchestration",
+        "task_artifact": "Challenges to the agent's proposals in the chat transcript and process trace (planted traps)",
+        "rubric_dimension": "output_scrutiny"
+      },
+      {
+        "job_requirement": "Operates production pipelines — verifies recovery changes before declaring an incident closed",
+        "task_artifact": "Test runs and diff review captured in the process trace before submission",
+        "rubric_dimension": "verification_before_done"
       }
     ]
   },
@@ -208,7 +236,7 @@
         },
         {
           "label": "Surgical delete + reload the bad slice",
-          "summary": "cheap + fast; depends on knowing exactly what landed \u2014 wrong and you leave corruption"
+          "summary": "cheap + fast; depends on knowing exactly what landed — wrong and you leave corruption"
         },
         {
           "label": "Overwrite now, optimise later",
@@ -230,19 +258,19 @@
   ],
   "tiers": {
     "L1": {
-      "label": "Competency baseline \u2014 the DAG basics",
+      "label": "Competency baseline — the DAG basics",
       "min_tests_ratio": 0.35,
       "assesses": [
         "python",
         "airflow dag dependencies",
         "retry/SLA policy"
       ],
-      "summary": "wire build_dependencies + set retries/SLA \u2014 the Airflow basics."
+      "summary": "wire build_dependencies + set retries/SLA — the Airflow basics."
     },
     "L2": {
       "label": "Core recovery + safe re-runs",
       "min_tests_ratio": 0.85,
-      "summary": "backfill window, idempotent load, and the publish gate \u2014 the pipeline recovers safely."
+      "summary": "backfill window, idempotent load, and the publish gate — the pipeline recovers safely."
     },
     "L3": {
       "label": "Judgment + stretch",
@@ -250,5 +278,19 @@
       "requires_design": true,
       "summary": "own the catchup and partial-reload decisions in RECOVERY_DECISION.md; name what's left (transactional writes, surgical reload tooling)."
     }
-  }
+  },
+  "traps": [
+    {
+      "id": "catchup_flood",
+      "planted": "Flipping catchup=True (or triggering a full-history backfill) looks like the obvious way to heal the gap; it floods the scheduler and warehouse with every run since the start date instead of the missed window.",
+      "tell": "The candidate bounds the backfill to the missed dates from plan_backfill and keeps catchup deliberate; accepting an unbounded catchup/backfill from the agent is the trap taken.",
+      "where": "dag/config.py + dag/backfill.py"
+    },
+    {
+      "id": "full_table_reload",
+      "planted": "Re-loading the whole table (or re-publishing every partition) after recovery is the plausible 'safe' fix; it duplicates data and breaks idempotency — only missed partitions should reload behind the publish gate.",
+      "tell": "The candidate scopes reloads to the missed partitions and checks the publish gate; accepting a full reload is the trap taken.",
+      "where": "dag/recovery.py"
+    }
+  ]
 }
