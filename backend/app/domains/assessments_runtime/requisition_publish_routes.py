@@ -5,7 +5,7 @@ Split out of ``requisition_routes`` and re-composed there via
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -13,12 +13,14 @@ from ...deps import get_current_user
 from ...models.role import JOB_STATUS_DRAFT
 from ...models.user import User
 from ...platform.database import get_db
+from ...services.requisition_chat_capture import compute_gaps
+from ...services.requisition_template_service import resolve_template
 from ...services.role_brief_service import (
     ensure_ref_code,
     materialize_brief_to_role,
     publish_job_page,
 )
-from .requisition_shared import _get_brief, _job_page_url, _workable_spec
+from .requisition_shared import _get_brief, _job_page_url, _org, _workable_spec
 
 router = APIRouter(tags=["Requisitions"])
 
@@ -49,6 +51,20 @@ def publish_requisition(
     line appended) so the FE can offer a one-click "Copy for Workable".
     """
     brief = _get_brief(db, current_user.organization_id, brief_id)
+    # Enforce the same "required brief fields must be filled" gate the frontend
+    # applies — the API is the source of truth, so a direct call can't publish a
+    # half-filled requisition that skips the UI guard.
+    org = _org(db, current_user.organization_id)
+    gaps = compute_gaps(brief, resolve_template(org))
+    if gaps:
+        labels = [g.get("label") or g.get("key") or "a required field" for g in gaps]
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "This requisition can't be published yet — fill the required fields first: "
+                + ", ".join(labels)
+            ),
+        )
     ref_code = ensure_ref_code(db, brief)
     role = materialize_brief_to_role(
         db, brief, mark_applied=False, job_status=JOB_STATUS_DRAFT
