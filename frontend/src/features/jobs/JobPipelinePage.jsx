@@ -39,6 +39,7 @@ import { CandidateTriageDrawer, candidateReportHref } from '../candidates/Candid
 import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSpecEditPanel } from './RoleSpecEditPanel';
+import { ROLE_DESCRIPTION_MAX_LENGTH } from '../candidates/RoleEditFields';
 import { getErrorMessage, trimOrUndefined, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
 import {
   formatCount,
@@ -1028,15 +1029,25 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     description,
     jobSpecFile,
     taskIds,
+    specText,
   }) => {
-    if (!Number.isFinite(numericRoleId)) return;
+    if (!Number.isFinite(numericRoleId)) return false;
     setSavingRoleSheet(true);
     setRoleSheetError('');
     try {
-      await rolesApi.update(numericRoleId, {
-        name,
-        description: trimOrUndefined(description),
-      });
+      // Job Specification tab: a direct spec edit (specText). Save to
+      // job_spec_text — the field the read-view renders — and mirror it into
+      // description when it fits, so every surface reflects the edit.
+      if (specText !== undefined) {
+        const patch = { name, job_spec_text: specText };
+        if (specText.length <= ROLE_DESCRIPTION_MAX_LENGTH) patch.description = specText || null;
+        await rolesApi.update(numericRoleId, patch);
+      } else {
+        await rolesApi.update(numericRoleId, {
+          name,
+          description: trimOrUndefined(description),
+        });
+      }
 
       if (jobSpecFile && rolesApi.uploadJobSpec) {
         await rolesApi.uploadJobSpec(numericRoleId, jobSpecFile);
@@ -1660,7 +1671,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   allTasks={allTasks}
                   saving={savingRoleSheet}
                   error={roleSheetError}
-                  showJobSpec={false}
                   onSubmit={async (payload) => {
                     const ok = await handleRoleSheetSubmit(payload);
                     if (ok) setEditingSpec(false);
