@@ -124,7 +124,7 @@ def poll_cv_parse_batches() -> dict:
                 # results() meters every entry and latches the batch row to
                 # status='ended' in its own session.
                 entries = client.messages.batches.results(row.batch_id)
-                summary = apply_batch_results(db, entries)
+                summary = apply_batch_results(db, entries, context=row.context)
                 db.commit()
                 polled.append(
                     {"batch_id": row.batch_id, "status": "ended", **summary}
