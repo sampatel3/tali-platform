@@ -67,3 +67,26 @@
   color: var(--muted, #6b6480);
   padding: 48px 0;
 }
+.pjp-apply {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line, #e6e6ea);
+}
+.pjp-apply .pjp-muted {
+  padding: 0;
+}
+.pjp-apply-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 22px;
+  border-radius: 999px;
+  background: var(--purple, #5b2ca8);
+  color: #fff;
+  font-weight: 600;
+  font-size: 14px;
+  text-decoration: none;
+}
+.pjp-apply-btn:hover {
+  filter: brightness(1.05);
+}

@@ -96,3 +96,49 @@ def submit_demo_lead(lead: DemoLeadIn, request: Request, background: BackgroundT
     # waits on (or learns about) the Resend call.
     background.add_task(_forward_lead, lead)
     return {"ok": True}
+
+
+class BespokeTaskIn(BaseModel):
+    role: str = Field(default="", max_length=200)
+    seniority: str = Field(default="", max_length=50)
+    skills: str = Field(default="", max_length=500)
+    scenario: str = Field(default="", max_length=4000)
+    deadline: str = Field(default="", max_length=200)
+    requester_email: str = Field(default="", max_length=200)
+
+
+def _forward_bespoke_task(req: BespokeTaskIn) -> None:
+    from ...components.notifications.email_client import EmailService
+
+    if not (settings.RESEND_API_KEY or "").strip():
+        logger.info("RESEND_API_KEY not set — bespoke task request not forwarded")
+        return
+    body = "\n".join([
+        f"Requester: {req.requester_email or '—'}",
+        f"Role:      {req.role or '—'}",
+        f"Seniority: {req.seniority or '—'}",
+        f"Skills:    {req.skills or '—'}",
+        f"Deadline:  {req.deadline or '—'}",
+        "",
+        "Scenario / context:",
+        req.scenario or "—",
+    ])
+    subject = f"Bespoke task request: {req.role or 'role TBC'}"
+    EmailService(api_key=settings.RESEND_API_KEY).send_internal_alert(
+        to_email=LEAD_INBOX,
+        subject=subject,
+        text_body=body,
+    )
+
+
+@public_router.post("/bespoke-task")
+def submit_bespoke_task(req: BespokeTaskIn, request: Request, background: BackgroundTasks):
+    """Recruiter-submitted bespoke-task request, forwarded to hello@ (same
+    pattern as the demo-lead form). Replaces the mailto-only flow that failed
+    silently on machines with no default mail client."""
+    if not _allow(_client_ip(request)):
+        raise HTTPException(status_code=429, detail="Too many requests")
+    if not (req.role.strip() and req.scenario.strip()):
+        raise HTTPException(status_code=422, detail="Role and scenario are required.")
+    background.add_task(_forward_bespoke_task, req)
+    return {"ok": True}
