@@ -6,6 +6,11 @@ import { organizations as orgsApi } from '../../shared/api';
 const normalizeWorkableError = (input) => {
   const raw = (input || '').toString();
   const lower = raw.toLowerCase();
+  // Keep infra/ops details (deploy, migration, railway) out of the
+  // recruiter-facing callback page — same guard as the Settings copy.
+  if (lower.includes('deploy') || lower.includes('migration') || lower.includes('endpoint not available') || lower.includes('railway')) {
+    return 'This feature is temporarily unavailable. Please try again later or contact support.';
+  }
   if (lower.includes('not configured')) {
     return 'Workable integration is not yet set up for this account. Please contact support to enable it.';
   }
@@ -55,13 +60,13 @@ export const ConnectWorkableButton = ({ authorizeUrl = '', setupError = '', onCl
         type="button"
         onClick={handleClick}
         disabled={loading}
-        className="flex items-center gap-2 px-4 py-2 font-mono text-sm font-bold border-2 border-black bg-black text-white hover:bg-gray-800 disabled:opacity-60"
+        className="btn btn-purple btn-sm"
       >
-        {loading ? <Loader2 size={18} className="animate-spin" /> : null}
+        {loading ? <Loader2 size={16} className="animate-spin" /> : null}
         {loading ? 'Redirecting…' : 'Connect Workable'}
       </button>
-      {setupError && !error && <p className="font-mono text-sm text-red-600 mt-2">{normalizeWorkableError(setupError)}</p>}
-      {error && <p className="font-mono text-sm text-red-600 mt-2">{error}</p>}
+      {setupError && !error && <p className="settings-hint mt-2" style={{ color: 'var(--taali-danger)' }}>{normalizeWorkableError(setupError)}</p>}
+      {error && <p className="settings-hint mt-2" style={{ color: 'var(--taali-danger)' }}>{error}</p>}
     </div>
   );
 };
@@ -107,28 +112,36 @@ export const WorkableCallbackPage = ({
   }, [code, error, errorDescription, onNavigate]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6">
-      <div className="border-2 border-black p-8 max-w-md text-center">
+    <div className="min-h-screen flex items-center justify-center p-6" style={{ background: 'var(--taali-bg, var(--bg))' }}>
+      <div
+        className="p-8 max-w-md text-center"
+        style={{
+          background: 'var(--taali-card-bg, var(--surface))',
+          border: '1px solid var(--taali-border-soft, var(--line))',
+          borderRadius: 'var(--radius-card, 22px)',
+          boxShadow: 'var(--taali-shadow-soft)',
+        }}
+      >
         {status === 'connecting' && (
           <>
             <Loader2 size={32} className="animate-spin mx-auto mb-4 text-[var(--taali-purple)]" />
-            <p className="font-mono text-sm">Connecting Workable…</p>
+            <p className="text-sm text-[var(--taali-text)]">Connecting Workable…</p>
           </>
         )}
         {status === 'success' && (
           <>
-            <CheckCircle size={32} className="mx-auto mb-4 text-green-600" />
-            <p className="font-mono text-sm">Workable connected. Taking you to Settings…</p>
+            <CheckCircle size={32} className="mx-auto mb-4 text-[var(--taali-purple)]" />
+            <p className="text-sm text-[var(--taali-text)]">Workable connected. Taking you to Settings…</p>
           </>
         )}
         {status === 'error' && (
           <>
-            <AlertTriangle size={32} className="mx-auto mb-4 text-red-600" />
-            <p className="font-mono text-sm text-red-600 mb-4">{message}</p>
+            <AlertTriangle size={32} className="mx-auto mb-4" style={{ color: 'var(--taali-danger)' }} />
+            <p className="text-sm mb-4" style={{ color: 'var(--taali-danger)' }}>{message}</p>
             <button
               type="button"
               onClick={() => onNavigate('settings')}
-              className="px-4 py-2 font-mono text-sm font-bold border-2 border-black hover:bg-gray-100"
+              className="btn btn-outline btn-sm"
             >
               Back to Settings
             </button>

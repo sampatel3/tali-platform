@@ -29,7 +29,12 @@ from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ...models.user import User
-from .pipeline_service import normalize_pipeline_key
+from .pipeline_service import (
+    FUNNEL_BUCKETS,
+    funnel_bucket_for,
+    normalize_pipeline_key,
+    _post_handover_sql,
+)
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
@@ -357,17 +362,19 @@ def get_task_benchmarks(
 # - Score distribution buckets (re-uses the existing decile binning)
 # ----------------------------------------------------------------------------
 
-# Pipeline stages map to the canvas's funnel rows. We display "DONE" as the
-# label for `in_assessment` since the funnel narrates *what was scored*, not
-# *what is in flight*; and "HIRED" as the terminal step from
-# application_outcome rather than pipeline_stage. APPLIED + INVITED + DONE
-# map directly from pipeline_stage; REVIEW maps to pipeline_stage="review".
-_FUNNEL_STAGES = (
-    ("APPLIED", "applied"),
-    ("INVITED", "invited"),
-    ("DONE", "in_assessment"),
-    ("REVIEW", "review"),
-    ("HIRED", "_hired"),
+# Canonical funnel stages (locked Option B2) — the SAME vocabulary and
+# bucketing every other funnel surface uses (shared/metrics.js
+# PIPELINE_FUNNEL_STAGES and pipeline_service.role_pipeline_counts). Analytics
+# previously invented its own APPLIED/INVITED/DONE/REVIEW/HIRED labels, so the
+# same org saw contradictory funnels on Home vs Analytics. Labels here are the
+# display strings; bucket keys come from funnel_bucket_for().
+_FUNNEL_STAGE_LABELS = (
+    ("applied", "Applied"),
+    ("scored", "Scored"),
+    ("invited", "Invited"),
+    ("completed", "Completed"),
+    ("advanced", "Advanced"),
+    ("rejected", "Rejected"),
 )
 
 
@@ -632,27 +639,61 @@ def get_reporting_summary(
     # One GROUP BY over pipeline_stage + a single hired count, instead of
     # hydrating every CandidateApplication row (cv_text etc.) just to bucket
     # them in Python. total_applied is every application in scope.
+    # Canonical bucketing: mirror role_pipeline_counts so Analytics agrees with
+    # Home/Jobs. "Scored" = evaluated (real cv_match score OR a genuine
+    # pre-screen run); post-handover candidates (advanced in Workable) roll into
+    # "advanced"; "rejected" is an application_outcome counted separately.
+    scored_expr = or_(
+        CandidateApplication.cv_match_score.isnot(None),
+        and_(
+            CandidateApplication.pre_screen_score_100.isnot(None),
+            CandidateApplication.pre_screen_run_at.isnot(None),
+        ),
+    )
+    ph_expr = _post_handover_sql()
     funnel_base = db.query(CandidateApplication).filter(
         CandidateApplication.organization_id == org_id,
+        CandidateApplication.deleted_at.is_(None),
+        CandidateApplication.application_outcome == "open",
     )
     if role_id is not None:
         funnel_base = funnel_base.filter(CandidateApplication.role_id == role_id)
-    stage_count_rows = (
+    bucket_rows = (
         funnel_base.with_entities(
-            func.lower(CandidateApplication.pipeline_stage),
+            CandidateApplication.pipeline_stage,
+            scored_expr,
+            ph_expr,
             func.count(CandidateApplication.id),
         )
-        .group_by(func.lower(CandidateApplication.pipeline_stage))
+        .group_by(CandidateApplication.pipeline_stage, scored_expr, ph_expr)
         .all()
     )
-    stage_counts_map = {str(stage or ""): int(count or 0) for stage, count in stage_count_rows}
-    total_applied = sum(stage_counts_map.values())
-    hired_count = (
-        funnel_base.filter(func.lower(CandidateApplication.application_outcome) == "hired").count()
+    bucket_counts = {bucket: 0 for bucket in FUNNEL_BUCKETS}
+    for stage, is_scored, is_post_handover, total in bucket_rows:
+        n = int(total or 0)
+        if is_post_handover:
+            bucket_counts["advanced"] += n
+            continue
+        bucket = funnel_bucket_for(normalize_pipeline_key(stage), bool(is_scored))
+        if bucket:
+            bucket_counts[bucket] += n
+    # rejected is orthogonal to pipeline_stage (an outcome), counted across all
+    # stages — same as role_pipeline_counts.
+    rejected_base = db.query(func.count(CandidateApplication.id)).filter(
+        CandidateApplication.organization_id == org_id,
+        CandidateApplication.deleted_at.is_(None),
+        CandidateApplication.application_outcome == "rejected",
     )
+    if role_id is not None:
+        rejected_base = rejected_base.filter(CandidateApplication.role_id == role_id)
+    bucket_counts["rejected"] = int(rejected_base.scalar() or 0)
+
+    # Percentage is share-of-applied-cohort; "applied" here is the total across
+    # active buckets (everyone who entered the pipeline).
+    total_applied = sum(bucket_counts[b] for b in FUNNEL_BUCKETS if b != "rejected")
     funnel: List[Dict[str, Any]] = []
-    for label, key in _FUNNEL_STAGES:
-        count = hired_count if key == "_hired" else stage_counts_map.get(key, 0)
+    for key, label in _FUNNEL_STAGE_LABELS:
+        count = bucket_counts.get(key, 0)
         pct = round((count / total_applied) * 100.0, 1) if total_applied else 0.0
         funnel.append({"label": label, "key": key, "count": count, "percentage": pct})
 

@@ -136,4 +136,5 @@ def org_response_payload(org: Organization) -> OrgResponse:
     response.ai_tooling_config = AiToolingConfig(**resolved_ai_tooling_config(org))
     response.notification_preferences = NotificationPreferences(**resolved_notification_preferences(org))
     response.workable_mode = resolved_workable_mode(org)
+    response.has_billing_account = bool(getattr(org, "stripe_customer_id", None))
     return response

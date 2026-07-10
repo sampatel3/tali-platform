@@ -196,11 +196,11 @@ export function ProcessCandidatesDialog({
           <div className="process-dialog__error" role="alert">{previewError}</div>
         ) : null}
         {applicationIds && applicationIds.length > 0 ? (
-          <div className="process-dialog__scope" style={{ padding: '8px 12px', marginBottom: 12, borderRadius: 6, background: 'var(--purple-50, #f5f3ff)', color: 'var(--purple-700, #6d28d9)', fontSize: 12, fontWeight: 500 }}>
+          <div className="process-dialog__scope" style={{ padding: '8px 12px', marginBottom: 12, borderRadius: 6, background: 'var(--purple-soft)', color: 'var(--purple-2)', fontSize: 12, fontWeight: 500 }}>
             Scoped to <strong>{applicationIds.length} selected candidate{applicationIds.length === 1 ? '' : 's'}</strong> — other rows won't be touched.
           </div>
         ) : (stage && stage !== 'all' && stageLabel ? (
-          <div className="process-dialog__scope" style={{ padding: '8px 12px', marginBottom: 12, borderRadius: 6, background: 'var(--purple-50, #f5f3ff)', color: 'var(--purple-700, #6d28d9)', fontSize: 12, fontWeight: 500 }}>
+          <div className="process-dialog__scope" style={{ padding: '8px 12px', marginBottom: 12, borderRadius: 6, background: 'var(--purple-soft)', color: 'var(--purple-2)', fontSize: 12, fontWeight: 500 }}>
             Scoped to <strong>{stageLabel}</strong> only — other stages won't be touched.
           </div>
         ) : null)}

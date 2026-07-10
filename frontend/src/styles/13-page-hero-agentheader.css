@@ -264,7 +264,7 @@
 }
 /* ON fill = the signed-off flowing dark-purple gradient (design-language pass).
    5 stops + 300% sizing so the animation drifts the colour across the bar. */
-.abar::before { background: linear-gradient(120deg, #3a1d6e, #6a3fb8, #2a1556, #4a2a8a, #3a1d6e); background-size: 300% 300%; }
+.abar::before { background: var(--grad-agent-on-animated); background-size: 300% 300%; }
 .abar::after  { background: color-mix(in oklab, var(--amber) 13%, var(--bg-2)); }
 .abar-on::before    { opacity: 1; animation: abarFlow 7s ease-in-out infinite; }
 .abar-paused::after { opacity: 1; }

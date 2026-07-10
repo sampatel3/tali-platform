@@ -1,7 +1,30 @@
 import React from 'react';
-import { CheckCircle2, Loader2, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Loader2, X } from 'lucide-react';
 
 import { useJobStatus } from '../../contexts/JobStatusContext';
+
+// Turn a raw backend job error_message (e.g. "v3_failed: rate_limit",
+// "missing_inputs", "cancelled_by_recruiter") into a short plain-English
+// reason. We never want a recruiter to see an internal error code with no
+// idea what to do next.
+const failureReason = (data) => {
+  const raw = String(data?.error_message || data?.error || '').trim().toLowerCase();
+  if (!raw) return 'Something went wrong. Try running it again.';
+  if (raw.includes('cancelled')) return 'Cancelled.';
+  if (raw.includes('missing_inputs') || raw.includes('missing inputs')) {
+    return "Some candidates were missing a CV or role details, so they couldn't be processed.";
+  }
+  if (raw.includes('rate') && raw.includes('limit')) {
+    return 'The AI service was busy. Wait a moment and run it again.';
+  }
+  if (raw.includes('timeout') || raw.includes('timed out')) {
+    return 'It took too long and stopped. Try running it again.';
+  }
+  if (raw.includes('client init') || raw.includes('unconfigured') || raw.includes('not configured')) {
+    return 'The service is temporarily unavailable. Try again shortly or contact support.';
+  }
+  return 'Something went wrong. Try running it again.';
+};
 
 /**
  * BackgroundJobsToaster
@@ -165,6 +188,9 @@ function JobRow({ entry, onCancel, onDismiss }) {
   })();
 
   const detail = (() => {
+    // A failed job's counts are meaningless — show the recruiter what went
+    // wrong and what to do next, for every job kind.
+    if (isFailed) return failureReason(data);
     if (kind === 'process') {
       // Render per-step counts so the user sees fetch, pre-screen, and
       // score progress at once. Each step shows "M/N" (processed/total).
@@ -231,10 +257,12 @@ function JobRow({ entry, onCancel, onDismiss }) {
 
   return (
     <div className="bg-jobs-row">
-      <div className="bg-jobs-icon">
-        {isTerminal
-          ? <CheckCircle2 size={18} />
-          : <Loader2 size={18} className="animate-spin" />}
+      <div className={`bg-jobs-icon${isFailed ? ' bg-jobs-icon-failed' : ''}`}>
+        {isFailed
+          ? <AlertTriangle size={18} />
+          : isTerminal
+            ? <CheckCircle2 size={18} />
+            : <Loader2 size={18} className="animate-spin" />}
       </div>
       <div className="bg-jobs-body">
         <div className="bg-jobs-title">{title}</div>

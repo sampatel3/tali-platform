@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 
 import { publicJobApi } from '../requisitions/api';
 import { ChatMarkdown } from '../../shared/chat';
+import { useDocumentMeta } from '../../shared/seo/useDocumentMeta';
 import './jobpage.css';
 
 // Public, no-auth careers-style job posting. Reached via /job/:token — the
@@ -56,6 +57,13 @@ export function PublicJobPage() {
   const { token } = useParams();
   const [state, setState] = useState({ loading: true, error: null, job: null });
 
+  const jobTitle = state.job?.title;
+  const jobOrg = state.job?.organization_name;
+  useDocumentMeta(jobTitle ? {
+    title: jobOrg ? `${jobTitle} at ${jobOrg} — Taali` : `${jobTitle} — Taali`,
+    description: `${jobTitle}${jobOrg ? ` at ${jobOrg}` : ''}. View the role and how to apply.`,
+  } : undefined);
+
   useEffect(() => {
     let alive = true;
     setState({ loading: true, error: null, job: null });
@@ -91,6 +99,7 @@ export function PublicJobPage() {
 
   const job = state.job;
   const meta = buildMeta(job);
+  const applyHref = job.apply_url || (job.apply_email ? `mailto:${job.apply_email}` : null);
 
   return (
     <div className="pjp-wrap">
@@ -111,6 +120,17 @@ export function PublicJobPage() {
       <div className="pjp-body">
         <ChatMarkdown>{job.jd_markdown || ''}</ChatMarkdown>
       </div>
+      <footer className="pjp-apply">
+        {applyHref ? (
+          <a className="pjp-apply-btn" href={applyHref} target="_blank" rel="noreferrer noopener">
+            Apply for this role →
+          </a>
+        ) : (
+          <p className="pjp-muted">
+            Applications for this role are handled directly by {job.organization_name || 'the employer'}.
+          </p>
+        )}
+      </footer>
     </div>
   );
 }

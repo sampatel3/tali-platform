@@ -28,6 +28,7 @@ import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { Select } from '../../shared/ui/TaaliPrimitives';
+import { Skeleton } from '../../shared/ui/Skeleton';
 import {
   safeNum,
   pct,
@@ -79,6 +80,11 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
   const [rolesBreakdown, setRolesBreakdown] = useState([]);
   const [feedback, setFeedback] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  // True after the first successful load — lets us tell "cold load" (show
+  // skeleton) apart from "refetching after a scope change" (dim + keep prior).
+  const [hasLoaded, setHasLoaded] = useState(false);
 
   const days = useMemo(
     () => (WINDOWS.find((w) => w.key === windowKey) || WINDOWS[1]).days,
@@ -100,6 +106,11 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
   }, []);
 
   // Windowed/scoped feeds — refetched whenever role or window changes.
+  //
+  // allSettled (not all): one flaky endpoint must not wipe the other three, and
+  // must not blank a scope's numbers to fake zeros. Each feed keeps its prior
+  // value on failure; we only surface a hard error banner when the primary
+  // summary feed fails (there's genuinely nothing real to show then).
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -107,7 +118,7 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
       ...(roleId ? { role_id: roleId } : {}),
       ...(dateFrom ? { date_from: dateFrom } : {}),
     };
-    Promise.all([
+    Promise.allSettled([
       analyticsApi.reportingSummary(scope),
       analyticsApi.decisionsBreakdown(scope),
       analyticsApi.decisionTrend(roleId ? { role_id: roleId } : {}),
@@ -115,17 +126,17 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
     ])
       .then(([s, b, t, f]) => {
         if (cancelled) return;
-        setSummary(s?.data || null);
-        setBreakdown(b?.data || null);
-        setTrend(t?.data || null);
-        setFeedback(Array.isArray(f?.data) ? f.data : []);
-      })
-      .catch(() => {
-        if (!cancelled) { setSummary(null); setBreakdown(null); setTrend(null); setFeedback([]); }
+        const summaryOk = s.status === 'fulfilled';
+        if (summaryOk) setSummary(s.value?.data || null);
+        if (b.status === 'fulfilled') setBreakdown(b.value?.data || null);
+        if (t.status === 'fulfilled') setTrend(t.value?.data || null);
+        if (f.status === 'fulfilled') setFeedback(Array.isArray(f.value?.data) ? f.value.data : []);
+        setLoadError(!summaryOk);
+        if (summaryOk) setHasLoaded(true);
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [roleId, dateFrom]);
+  }, [roleId, dateFrom, reloadKey]);
 
   // ── Pulse band values (all real KPIs from reporting-summary +
   //    decisions-breakdown) ──────────────────────────────────────────────
@@ -227,8 +238,21 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
         actions={headerActions}
       />
       <div className="an-page">
-        {/* 6-stat pulse band. */}
-        <div className="an-pulse">
+        {loadError ? (
+          <div className="an-error" role="alert">
+            <p>Couldn&apos;t load analytics. This is usually a temporary connection issue.</p>
+            <button type="button" className="btn sm" onClick={() => setReloadKey((k) => k + 1)}>
+              Retry
+            </button>
+          </div>
+        ) : null}
+        {/* 6-stat pulse band. Dims + shows a spinner while a scope change is
+            in-flight so the numbers under the new label aren't read as final. */}
+        <div
+          className="an-pulse"
+          aria-busy={loading && hasLoaded ? 'true' : undefined}
+          style={loading && hasLoaded ? { opacity: 0.5, transition: 'opacity 120ms' } : undefined}
+        >
           <div className="an-pcell">
             <div className="k">Decisions</div>
             <div className="v">{decisions.toLocaleString()}</div>
@@ -286,7 +310,13 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
 
         {tab === 'outcomes' ? (
           loading && !summary
-            ? <div className="an-empty">Loading…</div>
+            ? (
+              <div className="an-empty" aria-busy="true" aria-label="Loading outcomes" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <Skeleton width="100%" height="8rem" />
+                <Skeleton width="90%" height="1.2rem" />
+                <Skeleton width="100%" height="6rem" />
+              </div>
+            )
             : <OutcomesTab summary={summary} breakdown={breakdown} trend={trend} rolesBreakdown={rolesBreakdown} />
         ) : tab === 'fleet' ? (
           <FleetTab />

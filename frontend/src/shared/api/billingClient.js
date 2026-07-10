@@ -32,4 +32,7 @@ export const billing = {
     }),
   // Replaces createCheckoutSession (Lemon). Returns { url } from Stripe.
   topup: (data) => api.post('/billing/topup', data),
+  // Stripe Billing Portal session for the org's customer. Returns { url }.
+  // 409 = no Stripe customer yet (nothing purchased) — the UI hides the link.
+  portalSession: (returnUrl) => api.post('/billing/portal', { return_url: returnUrl }),
 };

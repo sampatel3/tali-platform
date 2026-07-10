@@ -271,13 +271,16 @@ export const Shell = ({ currentPage, onNavigate }) => {
   const homePending = useHomePendingCount(Boolean(user));
   const navLocked = isPreviewNavSurface();
 
-  // Map legacy page identifiers onto canonical tabs.
-  // 'reporting' / 'analytics' fold into 'home' (the Hub) — keep the icon
-  // highlighted while users on those legacy paths still hit the redirect.
-  const resolvedPage = (currentPage === 'assessments')
-    ? 'candidates'
-    : (currentPage === 'reporting' || currentPage === 'analytics')
-      ? 'home'
+  // Map non-tab page identifiers onto the canonical nav tab that owns them.
+  //   - 'analytics' IS a real tab now — keep it (do NOT fold into Home).
+  //   - legacy 'reporting' → the Analytics tab (its route redirects there).
+  //   - candidate detail, assessments inbox, and requisitions all live under
+  //     the Jobs tab, so highlight Jobs on those surfaces.
+  const JOBS_TAB_PAGES = new Set(['assessments', 'candidates', 'requisitions']);
+  const resolvedPage = JOBS_TAB_PAGES.has(currentPage)
+    ? 'jobs'
+    : currentPage === 'reporting'
+      ? 'analytics'
       : currentPage;
   const handleLogout = () => {
     setMenuOpen(false);
@@ -308,7 +311,7 @@ export const Shell = ({ currentPage, onNavigate }) => {
       title={navLocked ? 'Preview — navigation disabled' : undefined}
     >
       <PageLink
-        page="jobs"
+        page="home"
         className="mc-nav-logo"
         aria-label="Taali home"
       >

@@ -14,7 +14,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  background: var(--taali-bg-elev, #ffffff);
+  background: var(--bg-2);
   border: 1px solid var(--taali-border, #e2e2e8);
   border-radius: 14px;
   padding: 8px 10px 8px 14px;
@@ -71,7 +71,7 @@
   font-size: 0.65625rem;
   letter-spacing: 0.04em;
   color: var(--taali-muted, #9099a6);
-  background: var(--taali-bg-soft, #f3f3f7);
+  background: var(--taali-surface-subtle);
   border: 1px solid var(--taali-border, #e2e2e8);
   border-bottom-width: 2px;
   border-radius: 6px;
@@ -96,7 +96,7 @@
 }
 
 .nl-search__clear:hover {
-  background: var(--taali-bg-soft, #f3f3f7);
+  background: var(--taali-surface-subtle);
   color: var(--taali-text, #1a1a2e);
 }
 
@@ -127,7 +127,7 @@
 }
 
 .nl-search__pill {
-  background: var(--taali-bg-soft, #f3f3f7);
+  background: var(--taali-surface-subtle);
   border: 1px solid var(--taali-border, #e2e2e8);
   color: var(--taali-text, #1a1a2e);
   font-size: 0.78125rem;
@@ -212,7 +212,7 @@
 .nl-search__warning {
   font-size: 0.75rem;
   color: var(--taali-muted, #9099a6);
-  background: var(--taali-bg-soft, #f3f3f7);
+  background: var(--taali-surface-subtle);
   padding: 6px 10px;
   border-radius: 6px;
   border-left: 3px solid var(--taali-border, #e2e2e8);
@@ -250,7 +250,7 @@
   height: 640px;
   border: 1px solid var(--taali-border, #e2e2e8);
   border-radius: 12px;
-  background: var(--taali-bg-elev, #ffffff);
+  background: var(--bg-2);
   overflow: hidden;
 }
 
@@ -301,7 +301,7 @@
   bottom: 0;
   width: 360px;
   max-width: 40%;
-  background: var(--taali-bg-elev, #ffffff);
+  background: var(--bg-2);
   border-left: 1px solid var(--taali-border, #e2e2e8);
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.06);
   display: flex;
@@ -322,7 +322,7 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--taali-muted, #9099a6);
-  background: var(--taali-bg-soft, #f3f3f7);
+  background: var(--taali-surface-subtle);
   padding: 2px 8px;
   border-radius: 999px;
 }
@@ -344,7 +344,7 @@
 }
 
 .graph-side__head button:hover {
-  background: var(--taali-bg-soft, #f3f3f7);
+  background: var(--taali-surface-subtle);
   color: var(--taali-text, #1a1a2e);
 }
 
@@ -637,19 +637,19 @@
   align-items: center;
 }
 .bg-jobs-panel-type {
-  font-family: var(--taali-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
   font-size: 0.65625rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--taali-muted);
   padding: 2px 8px;
   border-radius: 4px;
-  background: var(--taali-bg-soft, #f3f4f6);
+  background: var(--taali-surface-subtle);
   white-space: nowrap;
 }
 .bg-jobs-panel-row:last-child { border-bottom: none; }
 .bg-jobs-panel-head {
-  background: var(--taali-bg-soft, #f7f7f9);
+  background: var(--taali-surface-subtle);
   text-transform: uppercase;
   font-size: 0.625rem;
   letter-spacing: 0.05em;
@@ -741,7 +741,7 @@
   align-items: center;
 }
 .bg-jobs-panel-icon-btn:hover {
-  background: var(--taali-bg-soft, rgba(0,0,0,0.04));
+  background: var(--taali-surface-subtle);
   color: var(--taali-text);
 }
 

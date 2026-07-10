@@ -2,23 +2,10 @@ import React, { useEffect, useState } from 'react';
 
 import { apiKeys as apiKeysApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
+import { getErrorMessage } from '../../shared/getErrorMessage';
 
 // Read-only defaults when minting a key without touching the scope list.
 const READ_ONLY_DEFAULTS = ['roles:read', 'applications:read', 'assessments:read'];
-
-const getErrorMessage = (error, fallback) => {
-  const detail = error?.response?.data?.detail;
-  if (
-    typeof detail === 'string'
-    && detail.length > 0
-    && detail.length < 200
-    && !detail.trim().startsWith('{')
-    && !detail.trim().startsWith('[')
-  ) {
-    return detail;
-  }
-  return fallback;
-};
 
 const fmtDate = (value) => {
   if (!value) return '—';
@@ -36,17 +23,17 @@ const S = {
     marginTop: 14,
     padding: 16,
     borderRadius: 14,
-    border: '1px solid var(--purple, #6d28d9)',
-    background: 'var(--purple-soft, rgba(109,40,217,0.06))',
+    border: '1px solid var(--purple)',
+    background: 'var(--purple-soft)',
   },
   secretValue: {
     display: 'block',
     margin: '10px 0',
     padding: 12,
     borderRadius: 10,
-    background: 'var(--bg, #0b0b12)',
-    color: 'var(--fg, #f5f5fa)',
-    fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+    background: 'var(--bg)',
+    color: 'var(--ink)',
+    fontFamily: 'var(--font-mono)',
     fontSize: 13,
     wordBreak: 'break-all',
   },
@@ -56,21 +43,21 @@ const S = {
     gap: 12,
     alignItems: 'center',
     padding: '12px 0',
-    borderTop: '1px solid var(--line, rgba(0,0,0,0.08))',
+    borderTop: '1px solid var(--line)',
     fontSize: 13,
   },
-  head: { fontSize: 11, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--mute, #6b7280)' },
+  head: { fontSize: 11, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--mute)' },
   chip: {
     display: 'inline-block',
     padding: '2px 8px',
     margin: '2px 4px 2px 0',
     borderRadius: 999,
     fontSize: 11,
-    fontFamily: 'var(--font-mono, ui-monospace, monospace)',
-    background: 'var(--purple-soft, rgba(109,40,217,0.10))',
-    color: 'var(--purple, #6d28d9)',
+    fontFamily: 'var(--font-mono)',
+    background: 'var(--purple-soft)',
+    color: 'var(--purple)',
   },
-  mono: { fontFamily: 'var(--font-mono, ui-monospace, monospace)', color: 'var(--mute, #6b7280)' },
+  mono: { fontFamily: 'var(--font-mono)', color: 'var(--mute)' },
 };
 
 export const ApiKeysPanel = () => {

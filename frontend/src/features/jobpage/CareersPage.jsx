@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
 import { publicCareersApi } from '../requisitions/api';
+import { useDocumentMeta } from '../../shared/seo/useDocumentMeta';
 import './jobpage.css';
 import './careers.css';
 
@@ -32,15 +33,24 @@ const buildMeta = (job) => {
     .filter(Boolean);
 };
 
+// Returns a real destination, or null when the job has no linkable target — a
+// null card renders as plain (non-clickable) text rather than an href="#" that
+// navigates nowhere.
 const jobHref = (job) => {
   const url = (job?.url == null ? '' : String(job.url)).trim();
   if (url) return url;
-  return job?.token ? `/job/${job.token}` : '#';
+  return job?.token ? `/job/${job.token}` : null;
 };
 
 export function CareersPage() {
   const { slug } = useParams();
   const [state, setState] = useState({ loading: true, error: null, board: null });
+
+  const orgName = state.board?.organization_name;
+  useDocumentMeta(orgName ? {
+    title: `Careers at ${orgName} — Taali`,
+    description: `Open roles at ${orgName}.`,
+  } : undefined);
 
   useEffect(() => {
     let alive = true;
@@ -94,21 +104,29 @@ export function CareersPage() {
         <ul className="crs-list">
           {jobs.map((job, i) => {
             const meta = buildMeta(job);
+            const href = jobHref(job);
+            const inner = (
+              <>
+                <h2 className="crs-card-title">{job.title || 'Open role'}</h2>
+                {meta.length > 0 ? (
+                  <div className="crs-card-meta">
+                    {meta.map((item, j) => (
+                      <span key={j} className="crs-card-meta-item">{item}</span>
+                    ))}
+                  </div>
+                ) : null}
+                {job.salary ? (
+                  <div className="crs-card-salary">{job.salary}</div>
+                ) : null}
+              </>
+            );
             return (
               <li key={job.token || i} className="crs-card">
-                <a className="crs-card-link" href={jobHref(job)}>
-                  <h2 className="crs-card-title">{job.title || 'Open role'}</h2>
-                  {meta.length > 0 ? (
-                    <div className="crs-card-meta">
-                      {meta.map((item, j) => (
-                        <span key={j} className="crs-card-meta-item">{item}</span>
-                      ))}
-                    </div>
-                  ) : null}
-                  {job.salary ? (
-                    <div className="crs-card-salary">{job.salary}</div>
-                  ) : null}
-                </a>
+                {href ? (
+                  <a className="crs-card-link" href={href}>{inner}</a>
+                ) : (
+                  <div className="crs-card-link">{inner}</div>
+                )}
               </li>
             );
           })}

@@ -783,7 +783,7 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  background: linear-gradient(120deg, #3a1d6e, #6a3fb8, #2a1556, #4a2a8a, #3a1d6e);
+  background: var(--grad-agent-on-animated);
   background-size: 300% 300%;
   animation: rqRecFlow 7s ease-in-out infinite;
   color: #fff;
@@ -950,7 +950,7 @@
 /* Approve = the bold "agent on" dark-purple treatment (design-language pass) —
    the recommended action wears the signature look, not a traffic-light green. */
 .rq-btn.rq-approve {
-  background: linear-gradient(180deg, #3a1d6e, #241147);
+  background: var(--grad-agent-on);
   border-color: rgba(196, 165, 253, 0.5);
   color: #f1ecfb;
   font-weight: 600;

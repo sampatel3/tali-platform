@@ -181,7 +181,7 @@ const footerColumns = [
     title: 'Company',
     items: [
       { label: 'Manifesto', section: 'problem' },
-      { label: 'Careers', page: 'demo-lead' },
+      { label: 'Careers', href: 'mailto:hello@taali.ai?subject=Careers%20at%20Taali' },
       { label: 'Blog', page: 'blog' },
       { label: 'Contact', href: 'mailto:hello@taali.ai' },
     ],
@@ -423,7 +423,10 @@ export const LandingPage = ({ onNavigate }) => {
               </div>
             </div>
             <div className="px-6 py-5 bg-[var(--bg-2)]">
-              <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
+              {/* Use the existing responsive KPI grid (2 cols default, 4 at
+                  >=900px) instead of an inline 4-col grid that can't respond —
+                  4 cols was unreadable on phones. */}
+              <div className="mc-jobs-kpis">
                 {[
                   { k: 'CANDIDATES PROCESSED', v: '847', d: 'this week' },
                   { k: 'INVITATIONS SENT', v: '312', d: 'auto-paced' },
@@ -603,15 +606,8 @@ export const LandingPage = ({ onNavigate }) => {
               <span className="ml-3">app.taali.ai/assess/preview</span>
               <span className="ml-auto rounded-full bg-[color:var(--bg)] px-2 py-0.5 text-[0.625rem] font-semibold text-[var(--mute)]">Locked preview</span>
             </div>
-            <div style={{ height: 740, overflow: 'hidden', position: 'relative' }}>
-              <div
-                style={{
-                  width: '140%',
-                  height: 'calc(100% / 0.714)',
-                  transform: 'scale(0.714)',
-                  transformOrigin: 'top left',
-                }}
-              >
+            <div className="mc-landing-ide">
+              <div className="mc-landing-ide-scale">
                 <AssessmentRuntimePreviewView
                   staticPreview
                   heightClass="h-full"
@@ -651,7 +647,7 @@ export const LandingPage = ({ onNavigate }) => {
                 </h2>
                 <p className="mt-3 max-w-[35rem] text-[1rem] leading-[1.55] opacity-85">
                   Take the full product walkthrough — pre-loaded with a real role, no card, no install.
-                  Or book a 20-minute demo with a founder and we&apos;ll run it on a role of yours.
+                  Or tell us what you&apos;re hiring for and we&apos;ll follow up by email.
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-3">
@@ -669,7 +665,7 @@ export const LandingPage = ({ onNavigate }) => {
                   style={{ boxShadow: '0 10px 28px -8px rgba(0,0,0,0.3)' }}
                   onClick={() => onNavigate('demo-lead')}
                 >
-                  Book a demo →
+                  Get in touch →
                 </button>
               </div>
             </div>

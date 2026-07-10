@@ -1401,6 +1401,10 @@ button.eng-badge-button:focus-visible {
   margin-top: 2px;
   color: var(--taali-purple, #7d56f3);
 }
+/* A failed job must not read as a purple/success completion — flag it. */
+.bg-jobs-icon-failed {
+  color: var(--taali-danger);
+}
 .bg-jobs-body {
   flex: 1 1 auto;
   min-width: 0;
@@ -1854,7 +1858,7 @@ button.eng-badge-button:focus-visible {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  background: linear-gradient(120deg, #3a1d6e, #6a3fb8, #2a1556, #4a2a8a, #3a1d6e);
+  background: var(--grad-agent-on-animated);
   background-size: 300% 300%;
   animation: drFlow 7s ease-in-out infinite;
   color: #fff;
@@ -1882,7 +1886,7 @@ button.eng-badge-button:focus-visible {
    slab, but STATIC + read-only: it surfaces the decision that was MADE (the
    outcome), not an action to take. */
 .dossier-rail .dr-decided {
-  background: linear-gradient(150deg, #3a1d6e, #241147);
+  background: var(--grad-agent-on);
   border: 1px solid color-mix(in oklab, var(--purple) 45%, transparent);
   border-radius: 16px;
   padding: 16px 15px;

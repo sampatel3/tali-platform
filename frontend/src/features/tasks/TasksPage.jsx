@@ -4,16 +4,12 @@ import { useParams } from 'react-router-dom';
 
 import { useToast } from '../../context/ToastContext';
 import { tasks as tasksApi } from '../../shared/api';
+import { getErrorMessage } from '../../shared/getErrorMessage';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { Select, Spinner } from '../../shared/ui/TaaliPrimitives';
 import { GeneratedDraftsPanel } from './GeneratedDraftsPanel';
 
 const AssessmentPage = lazy(() => import('../assessment_runtime/AssessmentPage'));
-
-const getErrorMessage = (error, fallback) => (
-  error?.response?.data?.detail
-  || fallback
-);
 
 const normalizeTaskRole = (task) => (
   String(task?.role || task?.role_name || task?.category || 'General engineering').trim()
@@ -252,7 +248,10 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
                             <div className="tcard-key"><Lock size={12} />Secure assessment task</div>
                             <h3>{task.name || 'Assessment task'}</h3>
                           </div>
-                          <span className={`chip ${difficulty === 'easy' ? 'green' : difficulty === 'hard' ? 'red' : 'amber'}`}>
+                          {/* Difficulty is a tier, not a status — use the purple
+                              chip vocabulary (hard=purple, medium=ink, easy=neutral),
+                              never traffic-light green/amber/red. */}
+                          <span className={`chip ${difficulty === 'hard' ? 'purple' : difficulty === 'medium' ? 'ink' : ''}`}>
                             {difficulty}
                           </span>
                         </div>
@@ -357,7 +356,10 @@ export const TaskPreviewPage = () => {
         <div className="mx-auto max-w-[47.5rem] rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-8 shadow-[var(--shadow-sm)]">
           <div className="kicker">Task preview</div>
           <h1 className="mt-3 font-[var(--font-display)] text-[2.125rem] font-semibold tracking-[-0.03em]">Task not found.</h1>
-          <p className="mt-3 text-[var(--mute)]">Return to the task library and open a current task preview.</p>
+          <p className="mt-3 text-[var(--mute)]">This preview link is no longer valid — the task may have been renamed or removed.</p>
+          {/* This page opens in a new tab (no history to go back through), so a
+              plain anchor to the task library is the only working way out. */}
+          <a href="/tasks" className="btn btn-purple btn-sm mt-4 inline-flex">Back to Tasks</a>
         </div>
       </div>
     );
