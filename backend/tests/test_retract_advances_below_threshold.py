@@ -122,8 +122,11 @@ def test_skip_assessment_reject_card_is_untouched(db):
     assert d.status == "pending"
 
 
-def test_post_handover_workable_stage_is_never_retracted(db):
-    # A recruiter advanced them past handover in Workable — human-validated.
+def test_post_handover_workable_stage_is_retracted_like_everyone(db):
+    # A post-handover Workable stage no longer exempts the candidate: the
+    # stale advance is retracted so the reject reconcile can put the
+    # deterministic reject card in its place (approve surfaces warn the
+    # recruiter that acting on it hits someone already advanced in Workable).
     org, role = _seed_org_role(db, threshold=70)
     app = _seed_app(db, org=org, role=role, score=50, stage="hired")
     d = _seed_decision(db, org=org, role=role, app=app, dtype="advance_to_interview")
@@ -132,8 +135,8 @@ def test_post_handover_workable_stage_is_never_retracted(db):
         db, role=role, organization_id=org.id, threshold=70.0
     )
     db.refresh(d)
-    assert out["discarded"] == 0
-    assert d.status == "pending"
+    assert out["discarded"] == 1
+    assert d.status == "discarded"
 
 
 def test_none_threshold_is_noop(db):

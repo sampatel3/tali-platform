@@ -66,6 +66,18 @@ def evaluate_auto_reject_decision(
     # is eligible the reject is carded for manual review instead of written back.
     agentic_eligible = bool(getattr(role, "agentic_mode_enabled", False)) if role is not None else False
     auto_disqualify_eligible = bool(config["enabled"]) or agentic_eligible
+    # HARD RAIL: never auto-disqualify a candidate a human recruiter has
+    # already advanced in Workable (phone/technical/final interview, offer,
+    # hired) — e.g. moved forward there before the application ever synced
+    # into Taali. The reject verdict still surfaces as a HITL card (the
+    # caller diverts to the Decision Hub when not eligible) where the UI
+    # warns the recruiter; the automated Workable write-back must not fire.
+    from ..domains.assessments_runtime.pipeline_service import (
+        is_post_handover_workable_stage,
+    )
+
+    if is_post_handover_workable_stage(getattr(app, "workable_stage", None)):
+        auto_disqualify_eligible = False
 
     if app.application_outcome != "open":
         return {

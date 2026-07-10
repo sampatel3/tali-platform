@@ -35,6 +35,7 @@ from ..models.role import Role
 from ..services.auto_threshold_service import resolve_role_fit_threshold
 from ..sub_agents.base import SubAgentRequest, SubAgentResult
 from ..sub_agents.registry import get_sub_agent
+from .decision_translation import role_has_assessment_stage
 from .manual_action_reader import read_recent_manual_actions
 from .role_intent import fetch_active_intent
 
@@ -179,7 +180,7 @@ def _flags_from_application(
         # set it True from intent_parser ``disqualifying_signals`` once
         # the matching pass is implemented (Phase 5+).
         "must_have_blocked": False,
-        "has_assessment_task": bool(getattr(role, "tasks", None)),
+        "has_assessment_task": role_has_assessment_stage(role),
     }
 
 

@@ -92,10 +92,12 @@ class RoleUpdate(BaseModel):
     agent_action_allowlist: Optional[list[str]] = None
     agent_token_budget_per_cycle: Optional[int] = Field(default=None, ge=1_000, le=500_000)
     agent_decision_budget_per_cycle: Optional[int] = Field(default=None, ge=1, le=200)
-    # HITL toggles. Both default False on the model — sending `null`
+    # HITL toggles. All default False on the model — sending `null`
     # leaves the existing value unchanged.
     auto_reject: Optional[bool] = None
+    auto_reject_pre_screen: Optional[bool] = None
     auto_promote: Optional[bool] = None
+    auto_skip_assessment: Optional[bool] = None
     # Universal monthly USD cap (cents) for ALL Anthropic spend on the role.
     monthly_usd_budget_cents: Optional[int] = Field(default=None, ge=0, le=10_000_000)
     score_threshold: Optional[int] = Field(default=None, ge=0, le=100)
@@ -193,7 +195,9 @@ class RoleResponse(BaseModel):
     agent_token_budget_per_cycle: Optional[int] = None
     agent_decision_budget_per_cycle: Optional[int] = None
     auto_reject: bool = False
+    auto_reject_pre_screen: bool = False
     auto_promote: bool = False
+    auto_skip_assessment: bool = False
     monthly_usd_budget_cents: Optional[int] = None
     score_threshold: Optional[int] = None
     agent_paused_at: Optional[datetime] = None
@@ -292,6 +296,11 @@ class ApplicationResponse(BaseModel):
     role_name: Optional[str] = None
     cv_filename: Optional[str] = None
     cv_uploaded_at: Optional[datetime] = None
+    # True when the application row has extracted CV text — what scoring and
+    # pre-screening actually consume. A CV file can exist while extraction
+    # produced nothing; the role page "New CVs" tile needs the distinction to
+    # mirror the auto-scorer's cv_text filter.
+    has_cv_text: bool = False
     cv_match_score: Optional[float] = None
     cv_match_details: Optional[dict] = None
     cv_match_scored_at: Optional[datetime] = None

@@ -539,8 +539,16 @@ def update_role(
         role.score_threshold = updates["score_threshold"]
     if "auto_reject" in updates and updates["auto_reject"] is not None:
         role.auto_reject = bool(updates["auto_reject"])
+    if "auto_reject_pre_screen" in updates and updates["auto_reject_pre_screen"] is not None:
+        role.auto_reject_pre_screen = bool(updates["auto_reject_pre_screen"])
     if "auto_promote" in updates and updates["auto_promote"] is not None:
         role.auto_promote = bool(updates["auto_promote"])
+    skip_assessment_changed = False
+    if "auto_skip_assessment" in updates and updates["auto_skip_assessment"] is not None:
+        skip_assessment_changed = bool(role.auto_skip_assessment) != bool(
+            updates["auto_skip_assessment"]
+        )
+        role.auto_skip_assessment = bool(updates["auto_skip_assessment"])
     if "suppressed_org_criterion_ids" in updates:
         raw = updates["suppressed_org_criterion_ids"] or []
         role.suppressed_org_criterion_ids = [int(x) for x in raw]
@@ -550,6 +558,23 @@ def update_role(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update role")
+    # An assessment-stage flip must re-flow already-pending send/advance
+    # cards right away — otherwise a skip-toggled role still has assessment
+    # invites sitting in the Decision Hub for one-click approval (Codex #866).
+    # Best-effort: the save already committed; a reconcile failure only means
+    # the next cohort tick converts them instead.
+    if skip_assessment_changed:
+        try:
+            from ...services.bulk_decision_service import (
+                reconcile_pending_positive_decisions,
+            )
+            reconcile_pending_positive_decisions(db, role=role)
+            db.commit()
+        except Exception:
+            logger.exception(
+                "Assessment-stage reconcile failed for role_id=%s", role.id
+            )
+            db.rollback()
     # On activation, surface every missing-config gap as a NeedsInput row
     # on the Home hub in one shot — the recruiter sees the full checklist
     # rather than discovering gaps one cycle at a time. Idempotent on

@@ -96,10 +96,12 @@ def test_emitter_defers_when_fully_scored(db):
     assert db.query(AgentDecision).filter(AgentDecision.application_id == app.id).count() == 0
 
 
-def test_emitter_suppresses_for_post_handover_workable_stage(db):
-    """A candidate a human advanced to Technical Interview in Workable must not
-    get a pre-screen reject card — score alone can't reject a human-validated
-    candidate (mirrors the agent's EXTERNAL PIPELINE STAGE rule)."""
+def test_emitter_cards_post_handover_workable_stage(db):
+    """A candidate a human advanced to Technical Interview in Workable (e.g.
+    before the application entered Taali) is decided like everyone else: the
+    below-threshold verdict becomes a normal pending HITL card. Approve
+    surfaces warn the recruiter; only the AUTOMATED Workable disqualify is
+    hard-blocked (auto_disqualify_eligible rail)."""
     org, role, app = _seed(db, score=15.0, threshold=50.0)
     app.workable_stage = "Technical Interview"
     db.flush()
@@ -107,8 +109,7 @@ def test_emitter_suppresses_for_post_handover_workable_stage(db):
         db, organization_id=int(org.id), role=role, application=app,
         pre_screen_score=15.0, threshold=50.0,
     )
-    assert result is None
-    assert db.query(AgentDecision).filter(AgentDecision.application_id == app.id).count() == 0
+    assert result is not None and result.status == "pending"
 
 
 def test_emitter_still_cards_pre_handover_stage(db):
@@ -123,10 +124,11 @@ def test_emitter_still_cards_pre_handover_stage(db):
     assert result is not None and result.status == "pending"
 
 
-def test_reconcile_discards_post_handover_card(db):
-    """An existing pending reject card self-heals (gets discarded) once the
-    candidate is advanced past handover in Workable, even though their score is
-    still below the threshold."""
+def test_reconcile_keeps_post_handover_card(db):
+    """A pending pre-screen reject card stays LIVE when the candidate moves to
+    a post-handover Workable stage while still below the threshold — Taali's
+    second opinion is kept as a HITL card (approve surfaces warn), never
+    silently discarded just because a human advanced them."""
     org, role, app = _seed(db, score=15.0, threshold=50.0)
     card = _direct_card(db, org, role, app, threshold=50.0)
     app.workable_stage = "Technical Interview"
@@ -135,18 +137,8 @@ def test_reconcile_discards_post_handover_card(db):
         db, role=role, organization_id=int(org.id), threshold=50.0,
     )
     db.refresh(card)
-    assert card.status == "discarded"
-    assert out["discarded"] >= 1
-    # And it is NOT re-created by the emit loop's guard.
-    assert (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.application_id == app.id,
-            AgentDecision.status == "pending",
-        )
-        .count()
-        == 0
-    )
+    assert card.status == "pending"
+    assert out["discarded"] == 0
 
 
 def test_supersede_on_full_score_discards_when_cleared(db):

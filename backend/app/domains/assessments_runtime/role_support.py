@@ -322,7 +322,9 @@ def role_to_response(
         tech_interview_pack_template=tech_interview_pack_template,
         auto_reject_threshold_mode=getattr(role, "auto_reject_threshold_mode", "manual") or "manual",
         auto_reject=bool(getattr(role, "auto_reject", False)),
+        auto_reject_pre_screen=bool(getattr(role, "auto_reject_pre_screen", False)),
         auto_promote=bool(getattr(role, "auto_promote", False)),
+        auto_skip_assessment=bool(getattr(role, "auto_skip_assessment", False)),
         workable_actor_member_id=role.workable_actor_member_id,
         starred_for_auto_sync=bool(getattr(role, "starred_for_auto_sync", False)),
         agentic_mode_enabled=bool(getattr(role, "agentic_mode_enabled", False)),
@@ -1082,6 +1084,9 @@ def application_to_response(
         role_name=(getattr(app.role, "name", None) if getattr(app, "role", None) else None),
         cv_filename=app.cv_filename or (candidate.cv_filename if candidate else None),
         cv_uploaded_at=app.cv_uploaded_at or (candidate.cv_uploaded_at if candidate else None),
+        # Application-level cv_text only (no candidate fallback) — this is the
+        # exact column the auto-scorer filters on.
+        has_cv_text=bool(app.cv_text),
         cv_match_score=cv_match_score,
         cv_match_details=cv_match_details or None,
         cv_match_scored_at=app.cv_match_scored_at,

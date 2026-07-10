@@ -10,6 +10,8 @@ and stay org-scoped.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from app.domains.assessments_runtime.pipeline_service import (
     FUNNEL_BUCKETS,
     role_pipeline_counts,
@@ -22,11 +24,22 @@ from app.models.role import Role
 from tests.conftest import TestingSessionLocal
 
 
-def _seed_app(db, *, organization_id, role_id, stage, outcome="open", n=1):
+def _seed_app(
+    db,
+    *,
+    organization_id,
+    role_id,
+    stage,
+    outcome="open",
+    n=1,
+    cv_match_score=None,
+    pre_screen_score_100=None,
+    pre_screen_run_at=None,
+):
     for i in range(n):
         cand = Candidate(
             organization_id=organization_id,
-            email=f"{stage}-{outcome}-{role_id}-{i}@x.test",
+            email=f"{stage}-{outcome}-{role_id}-{cv_match_score}-{pre_screen_score_100}-{i}@x.test",
             full_name=f"{stage} {i}",
         )
         db.add(cand)
@@ -41,6 +54,9 @@ def _seed_app(db, *, organization_id, role_id, stage, outcome="open", n=1):
                 pipeline_stage_source="recruiter",
                 application_outcome=outcome,
                 source="manual",
+                cv_match_score=cv_match_score,
+                pre_screen_score_100=pre_screen_score_100,
+                pre_screen_run_at=pre_screen_run_at,
             )
         )
 
@@ -70,6 +86,21 @@ def test_bulk_matches_per_role_and_counts_advanced_and_rejected(db):
         # Rejected is an outcome, orthogonal to stage — counted across all.
         _seed_app(sess, organization_id=org_id, role_id=role_a, stage="advanced",
                   outcome="rejected", n=5)
+        # The applied/scored split: "Scored" = EVALUATED — a real cv_match
+        # score OR a genuinely-RUN pre-screen (pre-screen-FILTERED candidates
+        # keep cv_match_score NULL but were evaluated at the cheap gate). Only
+        # candidates with no evaluation of any kind stay "Applied".
+        _seed_app(sess, organization_id=org_id, role_id=role_a, stage="applied", n=2)
+        _seed_app(sess, organization_id=org_id, role_id=role_a, stage="applied",
+                  cv_match_score=81.0, pre_screen_score_100=81.0, n=1)
+        _seed_app(sess, organization_id=org_id, role_id=role_a, stage="applied",
+                  pre_screen_score_100=15.0,
+                  pre_screen_run_at=datetime(2026, 7, 9, tzinfo=timezone.utc), n=7)
+        # Stale display value: score invalidation nulls cv_match_score but
+        # leaves the snapshot-derived pre_screen_score_100 behind, with NO
+        # genuine pre-screen run — awaiting re-score, so still "Applied".
+        _seed_app(sess, organization_id=org_id, role_id=role_a, stage="applied",
+                  pre_screen_score_100=55.0, n=1)
         sess.commit()
 
         bulk = role_pipeline_counts_bulk(
@@ -81,6 +112,12 @@ def test_bulk_matches_per_role_and_counts_advanced_and_rejected(db):
         assert bulk[role_a] == per_role
         # The number the Hub cares about: already-advanced (open) candidates.
         assert bulk[role_a]["advanced"] == 10
+        # Untouched (2) + the stale-display invalidated candidate (1) — no
+        # genuine evaluation on any of them.
+        assert bulk[role_a]["applied"] == 3
+        # Evaluated: 1 fully scored + 7 pre-screen-filtered (pre-screen score
+        # set AND a genuine run, cv_match_score NULL) all count as Scored.
+        assert bulk[role_a]["scored"] == 8
         # `review` stage surfaces as the "completed" funnel bucket.
         assert bulk[role_a]["completed"] == 3
         # Both `invited` (2) and `in_assessment` (4) roll up into the funnel's
