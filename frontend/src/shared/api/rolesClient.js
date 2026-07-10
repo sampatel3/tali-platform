@@ -70,6 +70,19 @@ export const roles = {
   createApplicationShareLink: (applicationId, { mode, expiry }) =>
     api.post(`/applications/${applicationId}/share-links`, { mode, expiry }),
   revokeShareLink: (linkId) => api.delete(`/share-links/${linkId}`),
+  // WS2 — curated multi-candidate client submittal packs. POST mints a frozen,
+  // client-safe snapshot of the selected candidates for one role and returns
+  // { id, token, url_path, expires_at }; GET lists packs for the role (audit +
+  // revoke); DELETE revokes one pack by id (org-scoped).
+  listSubmittalPacks: (roleId) => api.get(`/roles/${roleId}/submittal-packs`),
+  createSubmittalPack: (roleId, { applicationIds, title, notes, expiresIn = '7d' }) =>
+    api.post(`/roles/${roleId}/submittal-packs`, {
+      application_ids: applicationIds,
+      title: title || null,
+      notes: notes || null,
+      expires_in: expiresIn,
+    }),
+  revokeSubmittalPack: (packId) => api.delete(`/submittal-packs/${packId}`),
   listApplicationEvents: (applicationId, params = {}) => api.get(`/applications/${applicationId}/events`, { params }),
   // Drop a recruiter note on the candidate's timeline. Works with or without
   // a linked assessment. `forAgent` (default true) makes the note visible to
