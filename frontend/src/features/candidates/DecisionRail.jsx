@@ -115,6 +115,18 @@ export const DecisionRail = ({
             </div>
           </div>
 
+          {/* Reject recommended for a candidate already advanced in Workable:
+              warn before the one-click approve. Advice, never a block. */}
+          {postHandover
+            && (decision.decision_type === 'reject' || decision.decision_type === 'skip_assessment_reject') ? (
+              <div className="dr-hint" role="alert">
+                <span>
+                  <strong>Heads up —</strong> in <strong>{application.workable_stage}</strong> in
+                  Workable. Approving this reject disqualifies them there.
+                </span>
+              </div>
+            ) : null}
+
           {flagCount > 0 ? (
             <div className="dr-flags-chip">
               <Flag size={13} strokeWidth={2.2} aria-hidden="true" />
@@ -184,8 +196,9 @@ export const DecisionRail = ({
             <span>No agent decision yet — score this candidate to get a recommendation.</span>
           ) : postHandover ? (
             <span>
-              In <strong>{application.workable_stage}</strong> in Workable — Taali defers to you on
-              candidates you&apos;re interviewing.
+              In <strong>{application.workable_stage}</strong> in Workable — the deterministic
+              decision will appear here once it&apos;s computed. Taali advises; acting on a reject
+              here is always your call.
             </span>
           ) : (
             <span>Scored — the deterministic decision will appear here once it&apos;s computed.</span>

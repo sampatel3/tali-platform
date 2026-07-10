@@ -231,7 +231,10 @@ def test_role_pipeline_counts_not_yet_decided(db):
     # a_interviewing displays as 'advanced' (Workable hand-off), NOT in its
     # normal bucket, even though its Tali pipeline_stage is still 'applied'.
     assert counts["advanced"] == 1
-    assert counts["applied"] == 2  # a_undecided + a_decided (no cv_match_scored_at)
+    # Post-#653 the funnel buckets by the REAL cv_match_score, so these two
+    # scored candidates sit in 'scored', leaving 'applied' empty.
+    assert counts["scored"] == 2  # a_undecided + a_decided
+    assert counts["applied"] == 0
     assert a_undecided.id is not None and a_interviewing.id is not None
 
 

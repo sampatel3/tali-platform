@@ -70,24 +70,21 @@ def ensure_deterministic_decision(
         if existing is not None:
             return None
         # Cheap band guards so we never mint a useless AgentRun for a candidate
-        # queue_decision.run would refuse (terminal/post-handover/external freeze).
+        # queue_decision.run would refuse (terminal/external freeze).
         if getattr(app, "application_outcome", None) != "open":
             return None
         if getattr(app, "pipeline_stage", None) not in ("applied", "review"):
             return None
         if getattr(app, "workable_disqualified_at", None) is not None:
             return None
-        if is_post_handover_workable_stage(getattr(app, "workable_stage", None)):
-            # The recruiter is interviewing this candidate in Workable — DON'T
-            # withhold a decision (the old behaviour stranded them as "not yet
-            # decided"). Surface Taali's read as a HITL card via the post-handover
-            # second opinion: a below-bar verdict becomes a reject card ("you're
-            # interviewing someone I'd have passed on"); a positive verdict
-            # reflects the advance. Still HITL — the recruiter approves/overrides,
-            # never auto-applied. Lazy import: post_handover imports this package.
-            from .post_handover import decide_post_handover
-
-            return decide_post_handover(db, app=app, role=role)
+        # A post-handover Workable stage (the recruiter moved them forward
+        # there, possibly before the application ever entered Taali) does NOT
+        # suppress the decision — the candidate is decided like everyone else.
+        # The card carries the Workable stage so approve surfaces warn the
+        # recruiter; execution stays HITL, never automated.
+        post_handover = is_post_handover_workable_stage(
+            getattr(app, "workable_stage", None)
+        )
 
         eff = resolve_role_fit_threshold(db, role=role)
         has_task = bool(getattr(role, "tasks", None))
@@ -128,6 +125,8 @@ def ensure_deterministic_decision(
             "policy_basis": policy_basis,
             "source": "score_time_decision",
         }
+        if post_handover:
+            evidence["workable_stage"] = app.workable_stage
         run = AgentRun(
             organization_id=int(role.organization_id),
             role_id=int(role.id),

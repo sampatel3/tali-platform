@@ -8,6 +8,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Select } from '../../shared/ui/TaaliPrimitives';
 import {
+  AlertTriangle,
   ArrowRight,
   Check,
   ClipboardList,
@@ -833,8 +834,21 @@ export const HomeNow = ({
       advanceRolesMap.get(key).count += 1;
     }
     const advanceRoles = [...advanceRolesMap.values()];
+    // Rejects on candidates already advanced in Workable (live interview /
+    // offer stage): still approvable in bulk — Taali warns, never blocks —
+    // but the recruiter must see exactly who they'd be disqualifying there
+    // before confirming (no silent irreversible write-backs in a batch).
+    const postHandoverRejects = visiblePending
+      .filter(
+        (d) => (d.decision_type === 'reject' || d.decision_type === 'skip_assessment_reject')
+          && d.candidate_post_handover,
+      )
+      .map((d) => ({
+        name: d.candidate_name || `#${d.id}`,
+        stage: d.candidate_workable_stage || 'a live interview stage',
+      }));
     setBulkStages({});
-    setBulkConfirm({ count, typeLabel, roleScope, sample, more, ids, advanceRoles });
+    setBulkConfirm({ count, typeLabel, roleScope, sample, more, ids, advanceRoles, postHandoverRejects });
   };
 
   const runBulkApprove = async () => {
@@ -1147,6 +1161,19 @@ export const HomeNow = ({
             </div>
 
             <div className="rq-modal-body">
+              {(bulkConfirm.postHandoverRejects || []).length > 0 ? (
+                <div className="rq-modal-section" role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: '0.8125rem', fontWeight: 500, lineHeight: 1.5 }}>
+                  <AlertTriangle size={14} strokeWidth={2} aria-hidden="true" style={{ marginTop: 2, flexShrink: 0 }} />
+                  <span>
+                    <strong>Heads up —</strong> this batch rejects{' '}
+                    {bulkConfirm.postHandoverRejects.length === 1 ? 'a candidate' : `${bulkConfirm.postHandoverRejects.length} candidates`}{' '}
+                    already advanced in Workable (
+                    {bulkConfirm.postHandoverRejects.slice(0, 3).map((p) => `${p.name} · ${p.stage}`).join(', ')}
+                    {bulkConfirm.postHandoverRejects.length > 3 ? ` and ${bulkConfirm.postHandoverRejects.length - 3} more` : ''}
+                    ). Approving disqualifies them there.
+                  </span>
+                </div>
+              ) : null}
               {bulkConfirm.advanceRoles.length > 0 ? (
                 <div className="rq-modal-section">
                   <span className="rq-modal-label">

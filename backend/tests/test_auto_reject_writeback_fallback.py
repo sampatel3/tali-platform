@@ -176,3 +176,44 @@ def test_workable_success_still_disqualifies(db):
     assert result["performed"] is True
     assert app.application_outcome == "rejected"
     assert _pending_card(db, app) is None
+
+
+def test_post_handover_stage_never_auto_disqualifies(db):
+    """HARD RAIL: a below-threshold candidate a recruiter already advanced in
+    Workable (e.g. moved to Technical Interview before the application entered
+    Taali) must NEVER be auto-disqualified there — even on an
+    ``auto_reject=True`` agentic role. The reject surfaces as a HITL card
+    instead; the Workable write-back is not attempted."""
+    org = _seed_org(db, workable=True)
+    role = _seed_role(db, org, auto_reject=True, agentic=True)
+    app = _seed_app(db, org, role)
+    app.workable_stage = "Technical Interview"
+    db.flush()
+
+    verdict = svc.evaluate_auto_reject_decision(app, org=org, role=role, db=db)
+    assert verdict.get("auto_disqualify_eligible") is False
+
+    with patch.object(
+        svc, "disqualify_candidate_in_workable"
+    ) as disqualify:
+        result = svc.run_auto_reject_if_needed(
+            db=db, org=org, app=app, role=role, actor_type="system"
+        )
+
+    disqualify.assert_not_called()
+    assert result["performed"] is False
+    assert app.application_outcome == "open"  # never closed automatically
+    card = _pending_card(db, app)
+    assert card is not None  # HITL card for the recruiter (warned in the UI)
+
+
+def test_pre_handover_stage_keeps_auto_disqualify_eligible(db):
+    """Control: a neutral pre-handover stage keeps the opt-in write-back path."""
+    org = _seed_org(db, workable=True)
+    role = _seed_role(db, org, auto_reject=True, agentic=True)
+    app = _seed_app(db, org, role)
+    app.workable_stage = "Applied"
+    db.flush()
+
+    verdict = svc.evaluate_auto_reject_decision(app, org=org, role=role, db=db)
+    assert verdict.get("auto_disqualify_eligible") is True

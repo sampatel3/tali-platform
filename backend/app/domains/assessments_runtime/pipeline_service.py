@@ -637,32 +637,38 @@ def reconcile_post_handover_advanced(
     )
 
     if not terminal:
-        # Mid-interview: stay decidable (no freeze). But a reject card queued
-        # before the recruiter moved them into a live interview is now stale and
-        # dangerous — discard only those, leaving advance/send cards untouched so
-        # the agent can still act on a candidate who may yet wash out.
-        try:
-            discard_pending_decisions_for_app(
-                db,
-                application_id=int(app.id),
-                reason=f"superseded: interviewing in Workable ({app.workable_stage})",
-                decision_types=("reject", "skip_assessment_reject"),
-            )
-        except Exception:  # pragma: no cover — never block the reconcile
-            import logging
-
-            logging.getLogger("taali.pipeline_service").exception(
-                "post-handover reject discard failed (application_id=%s)", app.id,
-            )
-
+        # Mid-interview: stay decidable (no freeze). A pending reject card on a
+        # candidate the recruiter is interviewing is KEPT — it is Taali's honest
+        # second opinion, surfaced as a HITL card whose approve surfaces warn
+        # the recruiter (advice, never auto-executed). Verdict-flip staleness is
+        # owned by the cohort tick's ``_reconcile_stale_pending``, not by the
+        # sync's stage reflection.
+        #
         # Heal a candidate STRANDED in 'review' by an earlier agent reject
-        # second-opinion (the advanced→review pull-back, source='agent'). Now that
-        # the reject card is gone, they'd otherwise sit in 'review' looking like
-        # they await a Taali decision — when in truth they're being interviewed in
-        # Workable. Reflect that honestly as 'advanced' (handed off). Genuine
-        # assessment-completion review is source='system' and is left untouched.
+        # second-opinion (the advanced→review pull-back, source='agent') whose
+        # card has since been resolved/discarded — they'd otherwise sit in
+        # 'review' looking like they await a Taali decision when in truth
+        # they're being interviewed in Workable. Reflect that honestly as
+        # 'advanced' (handed off). Never fires while a reject card is still
+        # pending (advancing under a live reject card would contradict it).
+        # Genuine assessment-completion review is source='system', untouched.
+        from ...models.agent_decision import AgentDecision
+
+        has_pending_reject = (
+            db.query(AgentDecision.id)
+            .filter(
+                AgentDecision.application_id == int(app.id),
+                AgentDecision.status.in_(("pending", "processing")),
+                AgentDecision.decision_type.in_(
+                    ("reject", "skip_assessment_reject")
+                ),
+            )
+            .first()
+            is not None
+        )
         if (
-            normalize_pipeline_stage(app.pipeline_stage) == "review"
+            not has_pending_reject
+            and normalize_pipeline_stage(app.pipeline_stage) == "review"
             and normalize_pipeline_key(app.pipeline_stage_source) == "agent"
         ):
             transition_stage(
@@ -673,7 +679,7 @@ def reconcile_post_handover_advanced(
                 actor_type="sync",
                 reason=(
                     f"Reflecting Workable interview hand-off ({app.workable_stage}); "
-                    "cleared stale Taali reject second-opinion"
+                    "no live Taali reject second-opinion remains"
                 ),
                 idempotency_key=f"posthandover_heal_advanced:{app.id}",
             )

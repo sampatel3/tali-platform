@@ -178,14 +178,15 @@ def decide_role_cohort(
     actor = Actor.agent(int(run.id))
 
     for app in candidates:
-        # A human recruiter has already advanced this candidate past Tali's
-        # handover point in Workable (phone screen / interview / offer). That's
-        # a strong positive signal — Tali must NOT reject them on role-fit
-        # alone (the agent prompt's EXTERNAL PIPELINE STAGE rule). Leave them
-        # to the recruiter / agent, don't deterministically decide.
-        if is_post_handover_workable_stage(getattr(app, "workable_stage", None)):
-            summary["skipped_post_handover"] += 1
-            continue
+        # A candidate may already sit in a post-handover Workable stage (the
+        # recruiter moved them forward there before the application entered
+        # Taali). They are decided like everyone else — the verdict is a HITL
+        # card, never auto-executed — but the card carries the Workable stage
+        # so every approve surface can warn "you're rejecting someone already
+        # advanced in Workable" (advice, not a block).
+        post_handover = is_post_handover_workable_stage(
+            getattr(app, "workable_stage", None)
+        )
         inputs = _inputs_for(app, role_id=role.id, org_id=org_id, eff=eff, has_task=has_task)
         if inputs is None:
             summary["skipped_missing_score"] += 1
@@ -232,6 +233,8 @@ def decide_role_cohort(
             "policy_basis": policy_basis,
             "source": "bulk_decision",
         }
+        if post_handover:
+            evidence["workable_stage"] = app.workable_stage
         try:
             decision = queue_decision.run(
                 db,
