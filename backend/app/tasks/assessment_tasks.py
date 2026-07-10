@@ -1028,9 +1028,44 @@ def generate_assessment_task_for_role(self, role_id: int, organization_id: int):
         )
         if task is None:
             return {"status": "noop"}
+        # Battle-test the fresh draft so the review card carries a report
+        # card (repo boots, baseline fails meaningfully) instead of raw JSON.
+        battle_test_generated_task.delay(int(task.id), int(organization_id))
         return {"status": "generated", "task_id": int(task.id), "task_key": task.task_key, "needs_review": True}
     except Exception as exc:  # pragma: no cover — defensive
         logger.exception("generate_assessment_task_for_role failed role=%s", role_id)
+        raise self.retry(exc=exc)
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True, max_retries=1, default_retry_delay=120)
+def battle_test_generated_task(self, task_id: int, organization_id: int):
+    """Run the E2B battle-test on a generated draft and stamp the report card.
+
+    Sandbox-only (no Anthropic calls). The report lands at
+    ``task.extra_data.battle_test`` where the agent-chat draft review card
+    surfaces it. Safe to re-run — the report is overwritten in place.
+    """
+    from sqlalchemy.orm import Session
+    from ..platform.database import SessionLocal
+    from ..models.task import Task
+    from ..services.task_battle_test import persist_battle_test, run_battle_test
+
+    db: Session = SessionLocal()
+    try:
+        task = (
+            db.query(Task)
+            .filter(Task.id == task_id, Task.organization_id == organization_id)
+            .first()
+        )
+        if task is None:
+            return {"status": "skipped", "reason": "task_not_found"}
+        report = run_battle_test(task)
+        persist_battle_test(db, task, report)
+        return {"status": "done", "task_id": int(task.id), "verdict": report.get("verdict")}
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.exception("battle_test_generated_task failed task=%s", task_id)
         raise self.retry(exc=exc)
     finally:
         db.close()
