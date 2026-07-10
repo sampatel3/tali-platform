@@ -1288,6 +1288,10 @@ def application_detail_payload(
                 "internal_notes",
                 "claude_chat_log",
                 "judge_rationale",
+                # Integrity/fraud readout (trust band, warnings, corroborations)
+                # is a recruiter-only "verify before deciding" signal — an
+                # external client share must never see who we flagged or why.
+                "integrity",
             ):
                 ss.pop(k, None)
             payload["score_summary"] = ss

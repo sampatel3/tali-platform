@@ -1,6 +1,6 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, Copy, ExternalLink, Eye, Flag, MoreHorizontal, Sparkles } from 'lucide-react';
+import { AlertTriangle, Copy, ExternalLink, Eye, Flag, MoreHorizontal, ShieldAlert, Sparkles } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
 import { viewShareLink } from '../../shared/api';
@@ -132,6 +132,60 @@ const OverviewFlags = ({ flags }) => {
         <button type="button" className="mc-flags-toggle" onClick={() => setShowAll((v) => !v)}>
           {showAll ? 'Show fewer' : `+ ${hidden} more flag${hidden === 1 ? '' : 's'}`}
         </button>
+      ) : null}
+    </section>
+  );
+};
+
+// Compact "Integrity" chip — the recruiter-facing trust readout that sits BESIDE
+// the match score (never lowers it). Renders ONLY when the server's triangulation
+// verdict is `review` (one soft disagreement) or `strong_review` (a deterministic
+// artifact or >=2 disagreements); a clean `ok` verdict shows nothing. Purple-scale
+// intensity, never red/green (per the design system). Click to expand the
+// canonical warnings + corroboration notes + unverified employer names.
+export const IntegrityChip = ({ verdict, trustBand, warnings, corroborations, unverifiedEmployers }) => {
+  const [open, setOpen] = useState(false);
+  if (verdict !== 'review' && verdict !== 'strong_review') return null;
+  const strong = verdict === 'strong_review';
+  const count = (warnings?.length || 0) + (unverifiedEmployers?.length || 0);
+  const bandLabel = trustBand === 'low' ? 'Low' : (trustBand === 'medium' ? 'Medium' : 'High');
+  return (
+    <section className={`mc-integrity ${strong ? 'mc-integrity-strong' : ''}`.trim()} aria-label="Integrity check">
+      <button
+        type="button"
+        className="mc-integrity-chip"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <ShieldAlert size={14} aria-hidden="true" />
+        <span className="mc-integrity-label">Integrity</span>
+        <span className="mc-integrity-band">{bandLabel} trust</span>
+        {count > 0 ? <span className="mc-integrity-count">{count} to verify</span> : null}
+      </button>
+      {open ? (
+        <div className="mc-integrity-body">
+          {warnings?.length ? (
+            <ul className="mc-integrity-list">
+              {warnings.map((w, i) => (
+                <li key={`iw-${i}`}><AlertTriangle size={13} aria-hidden="true" /> {w}</li>
+              ))}
+            </ul>
+          ) : null}
+          {unverifiedEmployers?.length ? (
+            <p className="mc-integrity-emp">
+              Employer{unverifiedEmployers.length === 1 ? '' : 's'} not verbatim in the CV text:{' '}
+              {unverifiedEmployers.map((c) => `"${c}"`).join(', ')}.
+            </p>
+          ) : null}
+          {corroborations?.length ? (
+            <ul className="mc-integrity-corrob">
+              {corroborations.map((c, i) => (
+                <li key={`ic-${i}`}>{c}</li>
+              ))}
+            </ul>
+          ) : null}
+          <p className="mc-integrity-note">Advisory only — this never changes the match score. Verify before deciding.</p>
+        </div>
       ) : null}
     </section>
   );
@@ -1252,6 +1306,20 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 if (!flags.length) return null;
                 return <OverviewFlags flags={flags} />;
               })() : null}
+
+              {/* (1c) Integrity chip — the compact trust readout beside the score.
+                  Renders only on a review / strong_review verdict; expands to the
+                  canonical warnings + corroborations + unverified employers.
+                  Recruiter-only (stripped from client shares server-side). */}
+              {!isClientView ? (
+                <IntegrityChip
+                  verdict={reportModel?.roleFitModel?.integrityVerdict}
+                  trustBand={reportModel?.roleFitModel?.integrityTrustBand}
+                  warnings={reportModel?.roleFitModel?.integrityFlags}
+                  corroborations={reportModel?.roleFitModel?.corroborations}
+                  unverifiedEmployers={reportModel?.roleFitModel?.unverifiedEmployers}
+                />
+              ) : null}
 
               {/* (2) CV match review moved to its own Requirements tab (matches
                   report-preview's 6-tab layout). The Overview keeps the verdict,

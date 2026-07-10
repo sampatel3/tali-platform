@@ -776,6 +776,16 @@ def _to_output(
     )
     apply_penalty = bool(settings.HOLISTIC_INTEGRITY_PENALTY_ENABLED)
     score = apply_integrity_penalty(overall, integrity.penalty) if apply_penalty else overall
+    # Decision-2 requirement: when the penalty is actually deducted, log one
+    # structured before/after line so the flip's live impact is auditable (which
+    # candidates dropped, by how much, and whether it crossed a decision cutoff).
+    if apply_penalty and integrity.penalty > 0:
+        logger.info(
+            "holistic integrity penalty applied trace=%s pre_penalty=%.2f "
+            "penalty=%.2f post_penalty=%.2f timeline_issues=%d unverified_claims=%d",
+            trace_id, overall, integrity.penalty, score,
+            integrity.timeline_issue_count, integrity.unverified_claim_count,
+        )
     integrity_signals = build_integrity_signals_payload(integrity, timeline_result)
     integrity_signals["applied"] = apply_penalty
     integrity_signals["penalty_computed"] = round(integrity.penalty, 2)

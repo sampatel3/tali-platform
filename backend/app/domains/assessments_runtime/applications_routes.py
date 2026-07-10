@@ -2384,6 +2384,13 @@ def _try_fetch_cv_from_workable(
     app.cv_filename = filename
     app.cv_text = extracted
     app.cv_uploaded_at = now
+    # Flag-only PDF-bytes hygiene scan (metadata stuffing + invisible-render
+    # text). Stashed on the application; the score-time integrity merge promotes
+    # it into integrity_signals.document_hygiene.pdf. Best-effort, never blocks.
+    if ext == "pdf":
+        from ...services.document_hygiene import stash_pdf_hygiene_on_application
+
+        stash_pdf_hygiene_on_application(app, content, ext)
     if candidate:
         candidate.cv_file_url = file_url
         candidate.cv_filename = filename

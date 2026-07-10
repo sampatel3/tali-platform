@@ -482,6 +482,26 @@ export const buildRoleFitEvidenceModel = ({ application, completedAssessment }) 
     integrityFlags: Array.isArray(application?.score_summary?.integrity?.warnings)
       ? application.score_summary.integrity.warnings.filter((w) => typeof w === 'string' && w.trim())
       : [],
+    // The server's triangulation verdict + trust band drive the compact
+    // Integrity chip (rendered only for review / strong_review). null when the
+    // server computed nothing (or stripped it for a client share).
+    integrityVerdict: String(application?.score_summary?.integrity?.verdict || '').trim().toLowerCase() || null,
+    integrityTrustBand: String(application?.score_summary?.integrity?.trust_band || '').trim().toLowerCase() || null,
+    // Positive cross-source corroborations (server-canonical, same single source
+    // as warnings) — shown inside the expanded chip alongside the warnings.
+    corroborations: Array.isArray(application?.score_summary?.integrity?.corroborations)
+      ? application.score_summary.integrity.corroborations.filter((c) => typeof c === 'string' && c.trim())
+      : [],
+    // Employer names the parser could not verify verbatim in the CV text
+    // (cv_sections.experience[].company_unverified) — quoted in the chip so a
+    // recruiter can eyeball the specific companies. Derived from the CV sections
+    // already on the payload; no new server field.
+    unverifiedEmployers: Array.isArray(application?.cv_sections?.experience)
+      ? application.cv_sections.experience
+        .filter((e) => e && e.company_unverified && String(e.company || '').trim())
+        .map((e) => String(e.company).trim())
+        .slice(0, 10)
+      : [],
     summaryText,
     hasAnyEvidence: Boolean(
       payload.roleFitScore != null
