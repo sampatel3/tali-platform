@@ -84,6 +84,33 @@ def create_topup_checkout_session(
     return str(url)
 
 
+def create_billing_portal_session(*, customer_id: str, return_url: str) -> str:
+    """Create a Stripe Billing Portal session for an existing customer.
+
+    Returns the portal URL, which is tied to the org's Stripe customer — unlike
+    the generic ``billing.stripe.com/p/login`` page, which asks the visitor to
+    enter an email and dead-ends for anyone whose email doesn't match Stripe.
+    """
+    if not settings.STRIPE_API_KEY:
+        raise StripeTopupError("STRIPE_API_KEY is not configured")
+    if not customer_id:
+        raise StripeTopupError("no stripe customer for this organization")
+
+    stripe.api_key = settings.STRIPE_API_KEY
+    try:
+        session = stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url=return_url,
+        )
+    except stripe.error.StripeError as exc:
+        raise StripeTopupError(f"stripe error: {exc}") from exc
+
+    url = getattr(session, "url", None) or (session.get("url") if isinstance(session, dict) else None)
+    if not url:
+        raise StripeTopupError("Stripe portal returned no url")
+    return str(url)
+
+
 def derive_pack_from_event_metadata(metadata: dict | None) -> Optional[CreditPack]:
     if not metadata:
         return None
