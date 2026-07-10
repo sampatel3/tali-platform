@@ -17,7 +17,7 @@ import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../sha
 import { requisitionApi } from './api';
 import { clientApi } from '../clients/api';
 import { LiveBrief } from './LiveBrief';
-import { JobSpec, renderJobSpec } from './JobSpec';
+import { JobSpec, renderJobSpec, stripPlaceholderLines } from './JobSpec';
 import { RequisitionDepartment } from './RequisitionDepartment';
 import './requisitions.css';
 
@@ -35,6 +35,20 @@ const stageFile = (file) => ({
 
 const statusLabel = (status) => String(status || 'draft').replace(/_/g, ' ');
 const isPublished = (status) => String(status || '').toLowerCase() === 'published';
+
+// Prefer the backend's human-readable `detail` (e.g. the 409 "Brief already
+// applied to a role") over a generic fallback, so the error banner tells the
+// recruiter what actually happened. Only surfaces `detail` when it's a plain
+// string (FastAPI validation errors hand back arrays/objects we don't want raw).
+const errorDetail = (err, fallback) => {
+  const detail = err?.response?.data?.detail;
+  return typeof detail === 'string' && detail.trim() ? detail : fallback;
+};
+
+// A brief that's already been applied to a live role is FROZEN on the backend
+// (update_brief_fields raises 409). Render it read-only rather than offering
+// edits that can only 409.
+const isBriefApplied = (brief) => String(brief?.status || '').toLowerCase() === 'applied';
 
 // One conversation turn rendered with the shared message bubbles. Assistant
 // turns render Markdown under a mono "AGENT" kicker (the same attribution the
@@ -97,6 +111,9 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const [workableCopied, setWorkableCopied] = useState(false);
   const [savingKey, setSavingKey] = useState(null);
   const [loadingBrief, setLoadingBrief] = useState(false);
+  // True while the sidebar list is still loading its FIRST response, so we can
+  // show skeleton rows instead of the "No requisitions yet" empty copy.
+  const [listLoading, setListLoading] = useState(true);
   const [error, setError] = useState('');
   // Internal economics: the org's clients (for the assign dropdown) + the
   // in-flight save flag for the client/rate strip.
@@ -114,6 +131,9 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const threadEndRef = useRef(null);
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
+  // The most-recently-requested requisition id, so a slow get() that resolves
+  // after the user switches again doesn't clobber the newer brief.
+  const selectingRef = useRef(null);
 
   const messages = useMemo(() => (Array.isArray(brief?.messages) ? brief.messages : []), [brief]);
 
@@ -137,10 +157,31 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       setBriefs(Array.isArray(list) ? list : []);
     } catch {
       setError('Could not load requisitions.');
+    } finally {
+      // First response is in (empty or not) — the sidebar can stop showing
+      // skeletons and, if the list really is empty, show the empty copy.
+      setListLoading(false);
     }
   }, []);
 
   useEffect(() => { void loadList(); }, [loadList]);
+
+  // Patch the selected requisition's sidebar row in place from a turn/answer/
+  // save response — the only sidebar-visible fields are title/status/
+  // completeness. This replaces a full loadList() after every chat turn / quick
+  // reply / field save (list MEMBERSHIP only changes on create/publish, which
+  // still call loadList).
+  const patchListRow = useCallback((id, patch) => {
+    if (id == null || !patch) return;
+    setBriefs((prev) => prev.map((b) => (b.id === id
+      ? {
+          ...b,
+          ...(patch.title !== undefined ? { title: patch.title } : {}),
+          ...(patch.status !== undefined ? { status: patch.status } : {}),
+          ...(patch.completeness !== undefined ? { completeness: patch.completeness } : {}),
+        }
+      : b)));
+  }, []);
 
   // Load the org's clients once for the assign dropdown (best-effort — the
   // economics strip still renders, just without options, if this fails).
@@ -176,14 +217,27 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     setError('');
     setComposer('');
     clearAttachments();
+    // Drop the previous requisition's brief the moment we switch, so the header
+    // (title/status/completeness) and the thread don't keep showing the OLD
+    // requisition under the newly-selected item. `loadingBrief` then gates a
+    // skeleton over the whole panel — and, because `brief` is null, sends and
+    // quick-replies are blocked until the new brief arrives (no reply can post
+    // to the wrong requisition).
+    setBrief(null);
     setLoadingBrief(true);
+    selectingRef.current = id;
     try {
-      setBrief(await requisitionApi.get(id));
+      const next = await requisitionApi.get(id);
+      // Ignore a response for a requisition the user has since switched away
+      // from — otherwise a slow get() would clobber the newer brief.
+      if (selectingRef.current !== id) return;
+      setBrief(next);
     } catch {
+      if (selectingRef.current !== id) return;
       setError('Could not load this requisition.');
       setBrief(null);
     } finally {
-      setLoadingBrief(false);
+      if (selectingRef.current === id) setLoadingBrief(false);
     }
   }, [selectedId, clearAttachments]);
 
@@ -195,6 +249,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       await loadList();
       // create() returns the serialized brief (with the opening assistant
       // message) directly — adopt it without a second round-trip.
+      selectingRef.current = created.id;
       setSelectedId(created.id);
       setBrief(created);
       setComposer('');
@@ -245,56 +300,96 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   // ---- send a turn ----
   // Core: post one turn (message + files) with an optimistic user echo. Used by
   // both the composer and the tappable quick replies.
-  const runTurn = useCallback(async (message, files, echoAttachments) => {
-    if (!selectedId || turnInFlight) return;
+  //
+  // `restore` (optional) is the staged-attachment objects for a COMPOSER send:
+  // we hold them (and their object URLs) until the POST SUCCEEDS, so a failed
+  // send can put the recruiter's text + attachments back in the composer
+  // instead of losing them. Quick-replies pass no restore (no attachments).
+  const runTurn = useCallback(async (message, files, echoAttachments, restore) => {
+    if (!selectedId || turnInFlight || loadingBrief || !brief) return;
     if (!message && (!files || files.length === 0)) return;
 
     setTurnInFlight(true);
     setError('');
 
-    // Optimistic echo so the recruiter's turn shows immediately.
+    // Optimistic echo so the recruiter's turn shows immediately. Flagged
+    // `__pending` so we can strip it again if the send fails (the text +
+    // attachments are restored to the composer instead — see the catch).
     setBrief((prev) => (prev
-      ? { ...prev, messages: [...(prev.messages || []), { role: 'user', content: message, attachments: echoAttachments || [] }] }
+      ? { ...prev, messages: [...(prev.messages || []), { role: 'user', content: message, attachments: echoAttachments || [], __pending: true }] }
       : prev));
 
     try {
       const res = await requisitionApi.chat(selectedId, { message, files: files || [] });
       // The response is authoritative for the brief + the full message log.
+      const merged = {
+        ...(res.brief || {}),
+        messages: res.messages || res.brief?.messages,
+        gaps: res.gaps ?? res.brief?.gaps,
+      };
       setBrief((prev) => ({
         ...(prev || {}),
-        ...(res.brief || {}),
-        messages: res.messages || res.brief?.messages || (prev?.messages ?? []),
-        gaps: res.gaps ?? res.brief?.gaps ?? prev?.gaps,
+        ...merged,
+        messages: merged.messages ?? (prev?.messages ?? []),
+        gaps: merged.gaps ?? prev?.gaps,
       }));
-      void loadList(); // title / completeness may have changed in the sidebar
+      // Sidebar row (title/status/completeness) may have moved — patch it in
+      // place rather than refetching the whole list.
+      patchListRow(selectedId, res.brief || {});
+      // Success: the staged attachments are now sent — revoke their URLs.
+      (restore?.attachments || []).forEach((a) => a.url && URL.revokeObjectURL(a.url));
     } catch {
-      setError('The agent couldn\'t process that message. It\'s still shown above — try sending it again.');
+      if (restore) {
+        // Composer send: put the text + staged attachments back in the box (URLs
+        // were kept alive above) and drop the pending echo, so the message lives
+        // in exactly ONE place — the composer — ready to resend.
+        setBrief((prev) => (prev
+          ? { ...prev, messages: (prev.messages || []).filter((m) => !m.__pending) }
+          : prev));
+        if (restore.composer) setComposer((prev) => (prev ? prev : restore.composer));
+        if (restore.attachments?.length) setAttachments((prev) => [...restore.attachments, ...prev]);
+        setError('The agent couldn\'t process that message. Your text and attachments are back in the box — try sending again.');
+      } else {
+        // Quick-reply / no restore: leave the echo in place so it can be resent.
+        setBrief((prev) => (prev
+          ? { ...prev, messages: (prev.messages || []).map((m) => (m.__pending ? { ...m, __pending: false } : m)) }
+          : prev));
+        setError('The agent couldn\'t process that message. It\'s still shown above — try again.');
+      }
     } finally {
       setTurnInFlight(false);
     }
-  }, [selectedId, turnInFlight, loadList]);
+  }, [selectedId, turnInFlight, loadingBrief, brief, patchListRow]);
 
-  // Send from the composer (text + staged attachments).
+  // Send from the composer (text + staged attachments). Clear the composer
+  // OPTIMISTICALLY but hand the staged attachment objects to runTurn so a
+  // failed send can restore them; we DON'T revoke their URLs here (runTurn
+  // revokes only on success).
   const sendTurn = useCallback(() => {
     const message = composer.trim();
-    const files = attachments.map((a) => a.file);
+    const staged = attachments;
+    const files = staged.map((a) => a.file);
     if (!message && files.length === 0) return;
-    const echoAttachments = attachments.map((a) => ({ name: a.file.name, kind: isImage(a.file) ? 'image' : 'file' }));
+    const echoAttachments = staged.map((a) => ({ name: a.file.name, kind: isImage(a.file) ? 'image' : 'file' }));
     setComposer('');
-    clearAttachments();
-    void runTurn(message, files, echoAttachments);
-  }, [composer, attachments, clearAttachments, runTurn]);
+    setAttachments([]); // clear the box WITHOUT revoking — runTurn owns the URLs now
+    void runTurn(message, files, echoAttachments, { composer: message, attachments: staged });
+  }, [composer, attachments, runTurn]);
 
   // Record ONE field DETERMINISTICALLY (no LLM) when the recruiter taps a
-  // quick reply — a clean structured answer maps to exactly one field=value.
-  // We optimistically echo the tapped value as a user turn (like runTurn),
-  // POST it to /answer, then merge the authoritative response into state the
-  // SAME way the chat-turn merge does. If there's no required gap pending,
-  // fall back to the LLM /chat path so an answer still goes somewhere.
+  // TEMPLATE-OPTION quick reply — a clean structured answer maps to exactly one
+  // field=value on the CURRENT gap. We optimistically echo the tapped value as
+  // a user turn (like runTurn), POST it to /answer against the currently-loaded
+  // brief's first gap, then merge the authoritative response the SAME way the
+  // chat-turn merge does. Only called when the rendered chips ARE the current
+  // gap's options (see sendQuickReply) — free-form suggested_replies route
+  // through runTurn instead, so an answer is never recorded against the wrong
+  // field.
   const answerGap = useCallback(async (value) => {
-    if (!selectedId || turnInFlight) return;
+    if (!selectedId || turnInFlight || loadingBrief || !brief) return;
+    // Bind to the CURRENTLY-loaded brief's first gap; if none (or we're mid
+    // switch and brief is null), fall back to the LLM path so it still lands.
     const gap = (brief?.gaps || [])[0] || null;
-    // No pending required field → let the LLM handle it (existing behaviour).
     if (!gap) {
       const t = String(value ?? '').trim();
       if (t) void runTurn(t, [], []);
@@ -319,20 +414,25 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
         messages: res.messages || res.brief?.messages || (prev?.messages ?? []),
         gaps: res.gaps ?? res.brief?.gaps ?? prev?.gaps,
       }));
-      void loadList(); // title / completeness may have changed in the sidebar
+      patchListRow(selectedId, res.brief || {}); // title/completeness may move
     } catch {
       setError('Could not record that answer. Your reply is preserved above — try again.');
     } finally {
       setTurnInFlight(false);
     }
-  }, [selectedId, turnInFlight, brief, runTurn, loadList]);
+  }, [selectedId, turnInFlight, loadingBrief, brief, runTurn, patchListRow]);
 
-  // Tap a multiple-choice quick reply → record the current gap deterministically
-  // (no LLM); falls back to the LLM /chat path when nothing required is pending.
-  const sendQuickReply = useCallback((text) => {
+  // Tap a quick reply. `deterministic` = the chip IS one of the current gap's
+  // template options, so record it against that field with no LLM (answerGap).
+  // Otherwise the chip is an LLM-generated suggested_reply — possibly for a
+  // DIFFERENT question — so route it through the LLM /chat path (runTurn), which
+  // handles free-form routing, rather than force it onto gaps[0].
+  const sendQuickReply = useCallback((text, deterministic) => {
     const t = String(text ?? '').trim();
-    if (t) void answerGap(t);
-  }, [answerGap]);
+    if (!t) return;
+    if (deterministic) void answerGap(t);
+    else void runTurn(t, [], []);
+  }, [answerGap, runTurn]);
 
   // ChatComposer's onSubmit only fires with non-empty text; we also need an
   // attachments-only send, so the composer's submit defers to sendTurn and we
@@ -352,13 +452,13 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
         : { [key]: value };
       const updated = await requisitionApi.update(selectedId, payload);
       setBrief((prev) => ({ ...(prev || {}), ...(updated || {}) }));
-      void loadList();
-    } catch {
-      setError('Could not save that field. Try again.');
+      patchListRow(selectedId, updated || {}); // title/completeness may move
+    } catch (err) {
+      setError(errorDetail(err, 'Could not save that field. Try again.'));
     } finally {
       setSavingKey(null);
     }
-  }, [selectedId, loadList, brief]);
+  }, [selectedId, patchListRow, brief]);
 
   // ---- internal economics: assign a client / set the client rate ----
   // Both go through the EXISTING requisitionApi.update — the serialized brief
@@ -371,8 +471,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     try {
       const updated = await requisitionApi.update(selectedId, payload);
       setBrief((prev) => ({ ...(prev || {}), ...(updated || {}) }));
-    } catch {
-      setError('Could not save the hiring-department details. Try again.');
+    } catch (err) {
+      setError(errorDetail(err, 'Could not save the hiring-department details. Try again.'));
     } finally {
       setSavingEconomics(false);
     }
@@ -389,8 +489,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     try {
       const updated = await requisitionApi.update(selectedId, { jd_override: textOrNull });
       setBrief((prev) => ({ ...(prev || {}), ...(updated || {}) }));
-    } catch {
-      setError('Could not save the job spec. Try again.');
+    } catch (err) {
+      setError(errorDetail(err, 'Could not save the job spec. Try again.'));
     } finally {
       setSavingOverride(false);
     }
@@ -450,12 +550,25 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   // the serialized brief, which drives the published-state UI below.
   const publish = useCallback(async () => {
     if (!selectedId) return;
+    // Frontend gate: don't publish a brief with required fields still open — the
+    // rendered JD would carry "(to be captured)" markers onto the public,
+    // candidate-facing page. (The backend has NO such validation today; a real
+    // fix would gate this server-side too — see note.)
+    const remaining = Array.isArray(brief?.gaps) ? brief.gaps.length : 0;
+    if (remaining > 0) {
+      setError(`${remaining} required field${remaining === 1 ? '' : 's'} still needed before you can publish — fill them in on the Brief tab or answer the agent.`);
+      return;
+    }
     setPublishing(true);
     setError('');
     try {
-      const jdMarkdown = (typeof brief?.jd_override === 'string' && brief.jd_override.trim() !== '')
+      const rawMarkdown = (typeof brief?.jd_override === 'string' && brief.jd_override.trim() !== '')
         ? brief.jd_override
         : renderJobSpec(template, brief);
+      // Belt-and-braces: even if a placeholder slips through, never ship a
+      // "(to be captured)" line to candidates — strip any such line before
+      // sending the markdown the backend stores on the public page.
+      const jdMarkdown = stripPlaceholderLines(rawMarkdown);
       const res = await requisitionApi.publish(selectedId, jdMarkdown);
       // The publish response carries the job_page fields (token/url/status/…);
       // fold them into brief.job_page so the published state renders without a
@@ -478,8 +591,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
           : (prev?.job_page || null),
       }));
       await loadList();
-    } catch {
-      setError('Publish failed — resolve any missing required fields and try again.');
+    } catch (err) {
+      setError(errorDetail(err, 'Publish failed — please try again.'));
     } finally {
       setPublishing(false);
     }
@@ -594,39 +707,67 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   // Reset the transient "Copied" ticks when switching requisitions.
   useEffect(() => { setCopied(false); setClientCopied(false); setCareersCopied(false); setWorkableCopied(false); }, [selectedId]);
 
-  // Auto-surface the client-collect link the moment a requisition opens, so the
-  // recruiter can immediately send it to the client / hiring manager to gather
-  // the role data — no extra "Share with client" click. Idempotent (the mint
-  // endpoint returns the existing token); fires once per opened requisition.
-  useEffect(() => {
-    if (selectedId && brief && !brief.client_link && !clientLinking) {
-      makeClientLink();
-    }
-    // Keyed on the opened requisition only — re-minting is a no-op anyway.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, brief?.id]);
+  // NOTE: the hiring-manager link is minted ONLY when the recruiter clicks
+  // "Share with hiring manager" (makeClientLink) — NOT auto-minted on open. That
+  // keeps requisitions the recruiter isn't sharing off the polling path below
+  // (which only runs while a link exists), so we don't background-poll every
+  // opened requisition.
 
   // Live sync from the client link: the client fills the role from their no-login
   // link and the backend persists each turn to THIS brief — so poll every 5s
   // while a client link is live (and the requisition isn't finalized) so the
   // recruiter sees the client's input appear WITHOUT waiting for them to submit.
-  // Skips while the tab is hidden or a recruiter turn is in flight (no clobber).
+  //
+  // Bounded, not forever: we only poll while a hiring-manager link EXISTS (the
+  // recruiter is actively sharing/watching), the tab is visible, and the brief
+  // isn't already complete or applied. We back off to 20s and STOP after a run
+  // of idle polls with no change — so an opened-but-idle requisition doesn't
+  // poll in the background indefinitely.
+  const IDLE_POLL_LIMIT = 6; // ~2 min of no change → stop
+  const briefComplete = (brief?.completeness ?? 0) >= 100
+    || (Array.isArray(brief?.gaps) && brief.gaps.length === 0 && (brief?.completeness ?? 0) > 0);
+  const shouldPoll = Boolean(selectedId) && Boolean(clientLink)
+    && brief?.status !== 'applied' && !briefComplete;
   useEffect(() => {
-    if (!selectedId || !clientLink || brief?.status === 'applied') return undefined;
+    if (!shouldPoll) return undefined;
+    let idle = 0;
+    let stopped = false;
+    let timer = null;
+    // Signature of the last-seen brief so we can count "no change" polls.
+    let lastSig = `${brief?.completeness ?? ''}|${Array.isArray(brief?.messages) ? brief.messages.length : 0}`;
     const tick = async () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      if (turnInFlight) return;
+      if (stopped) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') { schedule(); return; }
+      if (turnInFlight) { schedule(); return; }
       try {
         const fresh = await requisitionApi.get(selectedId);
-        setBrief((prev) => (prev && fresh && prev.id === fresh.id ? { ...prev, ...fresh } : prev));
+        if (stopped) return;
+        const sig = `${fresh?.completeness ?? ''}|${Array.isArray(fresh?.messages) ? fresh.messages.length : 0}`;
+        if (sig === lastSig) {
+          idle += 1;
+        } else {
+          idle = 0;
+          lastSig = sig;
+          setBrief((prev) => (prev && fresh && prev.id === fresh.id ? { ...prev, ...fresh } : prev));
+        }
       } catch { /* transient — keep polling */ }
+      if (idle >= IDLE_POLL_LIMIT) { stopped = true; return; } // give up until the effect re-runs
+      schedule();
     };
-    const id = setInterval(tick, 5000);
-    return () => clearInterval(id);
-  }, [selectedId, clientLink, brief?.status, turnInFlight]);
+    const schedule = () => { timer = setTimeout(tick, 20000); };
+    schedule();
+    return () => { stopped = true; if (timer) clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shouldPoll, selectedId, turnInFlight]);
 
   const published = Boolean(jobPage) || isPublished(brief?.status);
-  const canSend = (composer.trim() || attachments.length > 0) && !turnInFlight;
+  // Block sends while a switch is in flight (brief null / loadingBrief) so a
+  // reply can't post to the wrong requisition, and while a turn is in flight.
+  const canSend = Boolean(brief) && !loadingBrief && (composer.trim() || attachments.length > 0) && !turnInFlight;
+  // Required fields still open → publish is gated (see publish()). Drives the
+  // Publish button's disabled state + hint.
+  const requiredRemaining = Array.isArray(brief?.gaps) ? brief.gaps.length : 0;
+  const applied = isBriefApplied(brief);
 
   // The next required field the agent wants (gaps are ordered; first = current).
   const currentGap = (brief?.gaps || [])[0] || null;
@@ -658,12 +799,17 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   // opener in their own words, so the brief is grounded in what they say rather
   // than a menu they click through.
   const hasUserTurn = messages.some((m) => m && m.role === 'user');
-  const quickReplies = (turnInFlight || !hasUserTurn)
+  // Each chip carries whether it's DETERMINISTIC (a current-gap template option
+  // → record via /answer) or an LLM suggested_reply (→ route via /chat). This
+  // keeps a suggested_reply for a different question from being recorded against
+  // gaps[0]. Also suppressed mid-switch (loadingBrief) so a tap can't post to
+  // the wrong requisition.
+  const quickReplies = (turnInFlight || loadingBrief || !hasUserTurn)
     ? []
     : gapOptions.length > 0
-      ? gapOptions
+      ? gapOptions.map((q) => ({ text: q, deterministic: true }))
       : (lastMsg && lastMsg.role === 'assistant' && Array.isArray(lastMsg.suggested_replies))
-        ? lastMsg.suggested_replies.filter(Boolean)
+        ? lastMsg.suggested_replies.filter(Boolean).map((q) => ({ text: q, deterministic: false }))
         : [];
 
   return (
@@ -685,7 +831,16 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
             </button>
           </div>
           <ul className="rq-side-list">
-            {briefs.length === 0 ? (
+            {listLoading && briefs.length === 0 ? (
+              // First load — show a few skeleton rows so the rail doesn't flash
+              // the "No requisitions yet" empty copy before the list arrives.
+              [0, 1, 2].map((i) => (
+                <li key={`sk-${i}`} className="rq-side-item is-skeleton" aria-hidden="true">
+                  <span className="rq-skel-line rq-skel-title" />
+                  <span className="rq-skel-line rq-skel-meta" />
+                </li>
+              ))
+            ) : briefs.length === 0 ? (
               <li className="rq-side-empty">No requisitions yet. Start one and tell the agent about the role.</li>
             ) : (
               briefs.map((b) => (
@@ -710,7 +865,21 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
 
         {/* Main — header + the two columns */}
         <div className="rq-main">
-          {!brief ? (
+          {loadingBrief ? (
+            // Switching requisitions — skeleton over the WHOLE panel (header +
+            // thread), not just the right column, so the previous requisition's
+            // title/status/conversation never shows under the new selection.
+            <div className="rq-switching" aria-busy="true" aria-live="polite">
+              <div className="rq-switching-head">
+                <span className="rq-skel-line rq-skel-h1" />
+                <span className="rq-skel-line rq-skel-sub" />
+              </div>
+              <div className="rq-switching-body">
+                <span className="rq-spinner" />
+                <span className="rq-switching-note">Loading requisition…</span>
+              </div>
+            </div>
+          ) : !brief ? (
             <div className="rq-blank">
               <div className="rq-blank-card">
                 <div className="rq-blank-glyph"><FileText size={22} /></div>
@@ -720,6 +889,12 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   paste a kickoff-call transcript, or screenshot a JD. The brief fills in beside
                   the conversation as you go.
                 </p>
+                {/* On narrow viewports the sidebar (and its "New requisition"
+                    button) is hidden, so this CTA is the only way in — keep it
+                    reachable here so the empty state isn't a dead end. */}
+                <button type="button" className="rq-publish-btn rq-blank-cta" onClick={createReq} disabled={creating}>
+                  {creating ? <span className="rq-spinner" /> : <Plus size={15} />} Start a requisition
+                </button>
               </div>
             </div>
           ) : (
@@ -812,7 +987,13 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                         >
                           <ExternalLink size={13} /> View job page
                         </a>
-                        <button type="button" className="rq-btn-sm is-ghost" onClick={publish} disabled={publishing}>
+                        <button
+                          type="button"
+                          className="rq-btn-sm is-ghost"
+                          onClick={publish}
+                          disabled={publishing || requiredRemaining > 0}
+                          title={requiredRemaining > 0 ? `${requiredRemaining} required field${requiredRemaining === 1 ? '' : 's'} still needed` : undefined}
+                        >
                           {publishing ? <span className="rq-spinner" /> : <RefreshCw size={13} />} Re-publish
                         </button>
                       </div>
@@ -855,14 +1036,47 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                       </div>
                     </div>
                   ) : (
-                    <button type="button" className="rq-publish-btn" onClick={publish} disabled={publishing}>
-                      {publishing ? <span className="rq-spinner" /> : <Rocket size={15} />} Publish job page
-                    </button>
+                    <div className="rq-publish-wrap">
+                      <button
+                        type="button"
+                        className="rq-publish-btn"
+                        onClick={publish}
+                        disabled={publishing || requiredRemaining > 0}
+                        title={requiredRemaining > 0 ? `${requiredRemaining} required field${requiredRemaining === 1 ? '' : 's'} still needed` : undefined}
+                      >
+                        {publishing ? <span className="rq-spinner" /> : <Rocket size={15} />} Publish job page
+                      </button>
+                      {requiredRemaining > 0 ? (
+                        <span className="rq-publish-hint">
+                          {requiredRemaining} required field{requiredRemaining === 1 ? '' : 's'} still needed
+                        </span>
+                      ) : null}
+                    </div>
                   )}
                 </div>
               </header>
 
-              {error ? <div className="rq-error">{error}</div> : null}
+              {error ? (
+                <div className="rq-error" role="alert">
+                  <span className="rq-error-text">{error}</span>
+                  <button
+                    type="button"
+                    className="rq-error-dismiss"
+                    aria-label="Dismiss message"
+                    onClick={() => setError('')}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : null}
+
+              {/* Applied brief — frozen on the backend (edits 409). Explain
+                  why fields are read-only instead of letting saves fail. */}
+              {applied ? (
+                <div className="rq-applied-note" role="note">
+                  This requisition has been applied to a live role, so the brief is now read-only.
+                </div>
+              ) : null}
 
               <div className="rq-split">
                 {/* Conversation */}
@@ -918,13 +1132,13 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                       <div className="rq-quick-replies">
                         {quickReplies.map((q, i) => (
                           <button
-                            key={`${q}-${i}`}
+                            key={`${q.text}-${i}`}
                             type="button"
                             className="rq-quick-chip"
-                            onClick={() => sendQuickReply(q)}
+                            onClick={() => sendQuickReply(q.text, q.deterministic)}
                             disabled={turnInFlight}
                           >
-                            {q}
+                            {q.text}
                           </button>
                         ))}
                       </div>
@@ -979,9 +1193,11 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     <JobSpec
                       template={template}
                       brief={brief}
-                      onSaveOverride={saveOverride}
+                      // Applied briefs are frozen (backend 409s edits) — omit the
+                      // save/draft handlers so JobSpec renders view-only.
+                      onSaveOverride={applied ? undefined : saveOverride}
                       savingOverride={savingOverride}
-                      onDraftResponsibilities={draftResponsibilities}
+                      onDraftResponsibilities={applied ? undefined : draftResponsibilities}
                       draftingResponsibilities={draftingResponsibilities}
                     />
                   ) : (
@@ -990,6 +1206,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                       brief={brief}
                       onSave={saveField}
                       savingKey={savingKey}
+                      readOnly={applied}
                     />
                   )}
                 </div>

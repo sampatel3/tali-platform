@@ -4,7 +4,7 @@ import { Activity, FileSearch, Loader2 } from 'lucide-react';
 import { assessments } from '../../shared/api';
 import { ChatComposer, ChatMarkdown } from '../../shared/chat';
 
-const MESSAGE_BUFFER_LIMIT = 30;
+const MESSAGE_BUFFER_LIMIT = 60;
 
 const formatCostUsd = (usd) => {
   const safe = Math.max(0, Number(usd) || 0);
@@ -26,6 +26,12 @@ const generateRequestId = () => {
 };
 
 const errorMessageFromException = (err) => {
+  // A stalled connection trips the per-request timeout in assessmentsClient
+  // (axios raises ECONNABORTED). There's no response body to read, so give
+  // the candidate a clear "try again" rather than the generic network line.
+  if (err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT') {
+    return 'Claude took too long — try again.';
+  }
   const detail = err?.response?.data?.detail;
   if (typeof detail === 'string' && detail.trim()) return detail;
   if (detail && typeof detail === 'object' && typeof detail.message === 'string' && detail.message.trim()) {
@@ -140,6 +146,23 @@ export const AssessmentClaudeChat = ({
   const [pending, setPending] = useState(false);
   const [inputValue, setInputValue] = useState('');
   const [pasteDetected, setPasteDetected] = useState(false);
+  // Flips true the first time the transcript overflows MESSAGE_BUFFER_LIMIT
+  // and older turns are dropped, so we can tell the candidate their earlier
+  // history was trimmed rather than silently losing it.
+  const [historyTrimmed, setHistoryTrimmed] = useState(false);
+
+  // Append a row and keep only the last MESSAGE_BUFFER_LIMIT turns. Flags
+  // historyTrimmed whenever the append actually drops an older message.
+  const appendMessage = useCallback((row) => {
+    setMessages((prev) => {
+      const next = [...prev, row];
+      if (next.length > MESSAGE_BUFFER_LIMIT) {
+        setHistoryTrimmed(true);
+        return next.slice(-MESSAGE_BUFFER_LIMIT);
+      }
+      return next;
+    });
+  }, []);
 
   const lastPromptAtRef = useRef(null);
 
@@ -210,13 +233,13 @@ export const AssessmentClaudeChat = ({
       request_id: generateRequestId(),
     };
 
+    // Remember the paste signal for this send so a failure can restore the
+    // exact same anti-cheat context when the candidate retries.
+    const pasteDetectedForSend = pasteDetected;
     setInputValue('');
     setPasteDetected(false);
     setPending(true);
-    setMessages((prev) => {
-      const next = [...prev, { role: 'user', content: message }];
-      return next.slice(-MESSAGE_BUFFER_LIMIT);
-    });
+    appendMessage({ role: 'user', content: message });
 
     try {
       const res = await assessments.claudeChat(assessmentId, requestPayload, token);
@@ -231,20 +254,21 @@ export const AssessmentClaudeChat = ({
         }
       }
 
-      setMessages((prev) => {
-        const next = [...prev, { role: 'assistant', content: reply }];
-        return next.slice(-MESSAGE_BUFFER_LIMIT);
-      });
+      appendMessage({ role: 'assistant', content: reply });
     } catch (err) {
       const errorText = errorMessageFromException(err);
-      setMessages((prev) => {
-        const next = [...prev, { role: 'error', content: errorText }];
-        return next.slice(-MESSAGE_BUFFER_LIMIT);
-      });
+      appendMessage({ role: 'error', content: errorText });
+      // Restore the message into the composer so the candidate can retry
+      // without retyping. This is a programmatic set (not an onPaste), so it
+      // does NOT retrip paste detection — we re-apply the original paste flag
+      // explicitly so the retry carries the same signal.
+      setInputValue((current) => (current.trim() ? current : message));
+      setPasteDetected(pasteDetectedForSend);
     } finally {
       setPending(false);
     }
   }, [
+    appendMessage,
     assessmentId,
     codeContext,
     disabled,
@@ -310,6 +334,15 @@ export const AssessmentClaudeChat = ({
         data-testid="assessment-claude-chat-messages"
       >
         <div className="space-y-3">
+          {historyTrimmed ? (
+            <div
+              className="text-center font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[var(--mute)]"
+              data-testid="assessment-claude-chat-history-trimmed"
+            >
+              Older messages are hidden
+            </div>
+          ) : null}
+
           {messages.length === 0 && !pending ? (
             <div className="rounded-[12px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-4 py-3.5 text-[0.84375rem] leading-[1.55] text-[var(--ink-2)]">
               <div className="mb-2 flex items-center gap-2 font-mono text-[0.65625rem] uppercase tracking-[0.1em] text-[var(--purple)]">

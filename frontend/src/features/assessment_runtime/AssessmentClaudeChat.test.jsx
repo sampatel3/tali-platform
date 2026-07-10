@@ -113,8 +113,13 @@ describe('AssessmentClaudeChat', () => {
     // Raw err.message is never surfaced — a friendly, distinct error row shows instead.
     expect(screen.queryByText(/network blew up/i)).not.toBeInTheDocument();
     expect(screen.getByText(/didn't go through/i)).toBeInTheDocument();
-    // user row still there
-    expect(screen.getByText(/^Help$/)).toBeInTheDocument();
+    // user row still there (scoped to the transcript so it doesn't collide
+    // with the restored composer text below)
+    const list = screen.getByTestId('assessment-claude-chat-messages');
+    expect(within(list).getByText(/^Help$/)).toBeInTheDocument();
+    // The failed message is restored into the composer so the candidate can
+    // retry without retyping.
+    expect(screen.getByRole('textbox')).toHaveValue('Help');
   });
 
   it('hides raw tool-call internals from the candidate (only the model text shows)', async () => {
@@ -144,16 +149,18 @@ describe('AssessmentClaudeChat', () => {
     expect(screen.queryByText('grep_search')).not.toBeInTheDocument();
   });
 
-  it('caps the rolling buffer at the last 30 messages', async () => {
-    // Each turn adds one user + one assistant row (2 messages). Send 20
-    // turns → 40 messages → only the last 30 survive.
+  it('caps the rolling buffer at the last 60 messages and marks trimmed history', async () => {
+    // Each turn adds one user + one assistant row (2 messages). Send 31
+    // turns → 62 messages → only the last 60 survive, and the candidate
+    // sees an "Older messages are hidden" marker so nothing is dropped
+    // silently.
     mockClaudeChat.mockImplementation(async (_id, payload) => ({
       data: { content: `reply-${payload.message}`, tool_calls_made: [] },
     }));
 
     renderChat();
 
-    for (let i = 1; i <= 20; i += 1) {
+    for (let i = 1; i <= 31; i += 1) {
       // sequentially submit
       // eslint-disable-next-line no-await-in-loop
       await typeAndSend(`msg-${i}`);
@@ -164,15 +171,15 @@ describe('AssessmentClaudeChat', () => {
     }
 
     const list = screen.getByTestId('assessment-claude-chat-messages');
-    // Earliest 10 turns (msg-1 .. msg-5 and their replies) should be
-    // pruned. msg-6's reply is the oldest survivor.
+    // The earliest turn (msg-1 + its reply) is pruned; msg-2's row is the
+    // oldest survivor.
     expect(within(list).queryByText('msg-1')).not.toBeInTheDocument();
     expect(within(list).queryByText('reply-msg-1')).not.toBeInTheDocument();
-    expect(within(list).queryByText('msg-5')).not.toBeInTheDocument();
-    expect(within(list).queryByText('reply-msg-5')).not.toBeInTheDocument();
-    expect(within(list).getByText('msg-6')).toBeInTheDocument();
-    expect(within(list).getByText('reply-msg-6')).toBeInTheDocument();
-    expect(within(list).getByText('msg-20')).toBeInTheDocument();
-    expect(within(list).getByText('reply-msg-20')).toBeInTheDocument();
+    expect(within(list).getByText('msg-2')).toBeInTheDocument();
+    expect(within(list).getByText('reply-msg-2')).toBeInTheDocument();
+    expect(within(list).getByText('msg-31')).toBeInTheDocument();
+    expect(within(list).getByText('reply-msg-31')).toBeInTheDocument();
+    // Trim marker is shown once older turns are dropped.
+    expect(screen.getByTestId('assessment-claude-chat-history-trimmed')).toBeInTheDocument();
   });
 });

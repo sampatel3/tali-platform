@@ -23,10 +23,13 @@ const outcomeFor = (row) => {
   return { label: status === 'overridden' ? 'Overridden' : 'Decided', tone: 'mute' };
 };
 
-export const RecentDecisions = ({ roleId = null, collapsedCount = 5 }) => {
+export const RecentDecisions = ({ roleId = null, collapsedCount = 5, refreshKey = 0 }) => {
   const [expanded, setExpanded] = useState(false);
   // The hub's main feed loads PENDING decisions, so fetch the RESOLVED ones (the
   // calls already made) ourselves — scoped to the selected role, newest first.
+  // refreshKey is bumped by the hub after every approve/override/snooze so the
+  // decision the recruiter just made appears here without a page reload — the
+  // whole point of "find a candidate again after they've moved on".
   const [rows, setRows] = useState([]);
   useEffect(() => {
     let cancelled = false;
@@ -35,7 +38,7 @@ export const RecentDecisions = ({ roleId = null, collapsedCount = 5 }) => {
       .then((res) => { if (!cancelled) setRows(Array.isArray(res?.data) ? res.data : []); })
       .catch(() => { if (!cancelled) setRows([]); });
     return () => { cancelled = true; };
-  }, [roleId]);
+  }, [roleId, refreshKey]);
   // Only resolved HITL calls (defensive — the fetch already scopes to resolved).
   const decided = rows.filter((r) => {
     const s = String(r?.status || '').toLowerCase();

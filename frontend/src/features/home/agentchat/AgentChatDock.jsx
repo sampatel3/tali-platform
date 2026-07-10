@@ -48,6 +48,11 @@ export function AgentChatDock({
   // driven by the server and survives navigation / an agent switch, resuming
   // when you reopen the thread.
   const [agentWorking, setAgentWorking] = useState(false);
+  // Set when the in-flight poll hits its time cap without the reply landing —
+  // rather than freezing "Working…" forever with a locked composer, we surface
+  // a "taking longer than expected" notice, unlock the composer, and keep
+  // polling at a slower cadence so a late reply still lands.
+  const [stalled, setStalled] = useState(false);
   const scrollRef = useRef(null);
   // Guards async results against an agent switch: a slow turn or fetch that
   // resolves after you've moved to another agent must not clobber the new
@@ -69,6 +74,9 @@ export function AgentChatDock({
       if (activeRoleRef.current !== forRole) return; // switched away mid-fetch
       setTimeline(data.timeline || []);
       setAgentWorking(Boolean(data.agent_working));
+      // A successful timeline read means the poll is healthy again — clear any
+      // stalled notice (the reply either landed, or work is genuinely ongoing).
+      setStalled(false);
     } catch {
       if (!opts.silent && activeRoleRef.current === forRole) setTimeline([]);
     } finally {
@@ -87,10 +95,13 @@ export function AgentChatDock({
   const send = useCallback(
     async (text) => {
       const msg = (text || '').trim();
-      if (!msg || sending || agentWorking || !roleId) return;
+      // A stalled turn is unblocked on purpose — let the recruiter send again
+      // (the previous turn keeps running server-side and its reply still lands).
+      if (!msg || sending || (agentWorking && !stalled) || !roleId) return;
       const forRole = roleId;
       setInput('');
       setSending(true);
+      setStalled(false);
       // Optimistic: show the recruiter's message immediately.
       setTimeline((t) => [
         ...t,
@@ -124,7 +135,7 @@ export function AgentChatDock({
         if (activeRoleRef.current === forRole) setSending(false);
       }
     },
-    [roleId, sending, agentWorking, onReload, showToast, load]
+    [roleId, sending, agentWorking, stalled, onReload, showToast, load]
   );
 
   const answer = useCallback(
@@ -227,14 +238,33 @@ export function AgentChatDock({
   // Poll while a turn is in flight (fast, so the reply feels prompt) or while a
   // re-screen's proactive follow-up is pending (slower). The reply landing flips
   // agentWorking off via load(), which stops the poll.
+  // Poll fast while a turn is fresh; once past the 6-minute cap the turn is
+  // "taking longer than expected" — we don't give up (a worker turn can still
+  // land), but we stop the fast poll, mark it stalled (which unlocks the
+  // composer and shows a notice), and keep polling slowly so a late reply still
+  // arrives. A successful load() clears `stalled` and resumes normal state.
   const livePoll = agentWorking || rescreenPending;
   useEffect(() => {
     if (!livePoll) return undefined;
-    const every = agentWorking ? 2500 : 5000;
-    const poll = window.setInterval(() => { void load({ silent: true }); }, every);
-    const stop = window.setTimeout(() => window.clearInterval(poll), 6 * 60 * 1000);
+    const fast = agentWorking ? 2500 : 5000;
+    let poll = window.setInterval(() => { void load({ silent: true }); }, fast);
+    const stop = window.setTimeout(() => {
+      window.clearInterval(poll);
+      setStalled(true);
+      // Keep a slow heartbeat so a late reply still lands, without hammering.
+      poll = window.setInterval(() => { void load({ silent: true }); }, 20000);
+    }, 6 * 60 * 1000);
     return () => { window.clearInterval(poll); window.clearTimeout(stop); };
   }, [livePoll, agentWorking, load]);
+
+  // A stalled turn re-checks once when the recruiter returns to the tab, so a
+  // reply that landed while backgrounded surfaces without waiting for the poll.
+  useEffect(() => {
+    if (!stalled) return undefined;
+    const onFocus = () => { if (document.visibilityState === 'visible') void load({ silent: true }); };
+    document.addEventListener('visibilitychange', onFocus);
+    return () => document.removeEventListener('visibilitychange', onFocus);
+  }, [stalled, load]);
 
   // Notify when the agent's reply lands while you're not looking at this thread
   // (tab hidden). Only fires on a real same-thread working→idle transition, so
@@ -342,10 +372,15 @@ export function AgentChatDock({
             );
           })
         )}
-        {(sending || agentWorking) && (
+        {(sending || agentWorking) && !stalled && (
           <ChatMessage role="assistant">
             <ThinkingDots label="Working…" />
           </ChatMessage>
+        )}
+        {stalled && !sending && (
+          <div className="ac-rescreen-live">
+            <span className="ac-pulse" /> This is taking longer than expected — still running. You can send another message, or check back shortly.
+          </div>
         )}
         {rescreenPending && !sending && (
           <div className="ac-rescreen-live">
@@ -362,7 +397,7 @@ export function AgentChatDock({
           placeholder={
             isBulk
               ? `Message ${bulkSelectedRoles.length} agents at once…`
-              : agentWorking
+              : (agentWorking && !stalled)
                 ? 'The agent is working on your last message…'
                 // Matches the home-preview composer ("Message the {role} agent…");
                 // falls back to a generic prompt when no role name is loaded.
@@ -370,7 +405,7 @@ export function AgentChatDock({
                   ? `Message the ${roleName} agent…`
                   : "Message this role's agent…"
           }
-          busy={(sending || agentWorking) && !isBulk}
+          busy={(sending || (agentWorking && !stalled)) && !isBulk}
         />
       </div>
     </aside>

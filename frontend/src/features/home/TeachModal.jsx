@@ -107,7 +107,17 @@ export const TeachModal = ({ decision, onClose, onSubmitted, defaultScope = 'rol
 
   return (
     <div className="rq-modal-backdrop" onClick={() => !submitting && onClose?.()}>
-      <div className="rq-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="rq-modal"
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+        tabIndex={-1}
+        // Move focus into the dialog on open (nothing here is autofocused), so
+        // keyboard/screen-reader users land inside it rather than on the trigger
+        // behind the backdrop.
+        ref={(el) => { if (el && !el.contains(document.activeElement)) el.focus(); }}
+      >
         <div className="rq-modal-head">
           <div>
             <span className="kicker">TEACH THE AGENT</span>

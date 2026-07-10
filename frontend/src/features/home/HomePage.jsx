@@ -327,10 +327,16 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   const loadDecisionsRef = useRef(loadDecisions);
   useEffect(() => { loadDecisionsRef.current = loadDecisions; }, [loadDecisions]);
   useEffect(() => {
+    // `focus` and `visibilitychange` both fire on a tab return, which used to
+    // issue two near-simultaneous fetches; a small guard collapses back-to-back
+    // triggers into one so the tab return costs a single round-trip.
+    let lastRun = 0;
     const refresh = () => {
-      if (document.visibilityState === 'visible') {
-        void loadDecisionsRef.current({ silent: true });
-      }
+      if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (now - lastRun < 1000) return;
+      lastRun = now;
+      void loadDecisionsRef.current({ silent: true });
     };
     const id = window.setInterval(refresh, DECISIONS_POLL_MS);
     window.addEventListener('focus', refresh);

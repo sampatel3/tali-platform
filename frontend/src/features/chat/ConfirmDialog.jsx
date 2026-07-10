@@ -18,19 +18,38 @@ const ConfirmDialog = ({
   onCancel,
 }) => {
   const confirmRef = useRef(null);
+  const cancelRef = useRef(null);
 
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => {
-      if (e.key === 'Escape') onCancel?.();
-      if (e.key === 'Enter') onConfirm?.();
+      if (e.key === 'Escape') {
+        onCancel?.();
+        return;
+      }
+      // Trap Tab between the two buttons so focus can't wander out of the
+      // modal onto the page behind it. We deliberately do NOT bind Enter to
+      // confirm — plain Enter already activates whichever button has focus,
+      // so binding it here would confirm even when Cancel is focused.
+      if (e.key === 'Tab') {
+        const first = cancelRef.current;
+        const last = confirmRef.current;
+        if (!first || !last) return;
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     };
     document.addEventListener('keydown', onKey);
-    // Autofocus the destructive primary so Enter triggers it without a
+    // Autofocus the destructive primary so plain Enter triggers it without a
     // detour through the cancel button.
     confirmRef.current?.focus();
     return () => document.removeEventListener('keydown', onKey);
-  }, [open, onCancel, onConfirm]);
+  }, [open, onCancel]);
 
   if (!open) return null;
 
@@ -52,7 +71,7 @@ const ConfirmDialog = ({
         ) : null}
         {detail ? <div className="cp-modal-detail">{detail}</div> : null}
         <div className="cp-modal-actions">
-          <button type="button" className="cp-btn-ghost" onClick={onCancel}>
+          <button ref={cancelRef} type="button" className="cp-btn-ghost" onClick={onCancel}>
             {cancelLabel}
           </button>
           <button

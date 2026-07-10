@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { PanelLeft } from 'lucide-react';
 import './chat.css';
 import EmptyState from './EmptyState';
-import { ChatComposer } from '../../shared/chat';
+import { ChatComposer, ChatMessage, ThinkingDots } from '../../shared/chat';
 import Thread from './Thread';
 import Sidebar from './Sidebar';
 import ConfirmDialog from './ConfirmDialog';
@@ -11,12 +11,7 @@ import AgentConversation from './AgentConversation';
 import useChatStream from './useChatStream';
 import { conversationsApi } from './api';
 import { agentChat } from '../../shared/api';
-
-// The MCP tool surface the chat exposes. This mirrors the real backend
-// registry (``TAALI_CHAT_TOOLS`` in backend/app/taali_chat/tool_registry.py)
-// so the header pill reports the *actual* tool count, not a placeholder — the
-// search-preview's "9" is illustrative. Bump this if the registry changes.
-const TAALI_CHAT_TOOL_COUNT = 14;
+import { useToast } from '../../context/ToastContext';
 
 // Backend persists messages with Anthropic-shaped content blocks. The
 // chat hook works with a slightly flatter shape (parts: text/tool_call).
@@ -45,6 +40,7 @@ const hydrateMessage = (m) => {
     id: `m_${m.id}`,
     role: m.role === 'assistant' ? 'assistant' : 'user',
     parts,
+    createdAt: m.created_at || null,
     _isToolResultEcho: blocks.length > 0 && blocks.every((b) => b.type === 'tool_result'),
     _toolResults: blocks.filter((b) => b.type === 'tool_result'),
   };
@@ -90,10 +86,23 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
   const conversationId = !isAgents && params.conversationId ? Number(params.conversationId) : null;
   const agentRoleId = isAgents && params.roleId ? Number(params.roleId) : null;
   const [searchParams, setSearchParams] = useSearchParams();
+  const { showToast } = useToast() || { showToast: () => {} };
 
   const [conversations, setConversations] = useState([]);
   const [composer, setComposer] = useState('');
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
+  // Hydration state for the center pane while we fetch a conversation's
+  // history: ``hydrating`` shows the loading dots, ``hydrateError`` shows a
+  // small failure row. Both are cleared once a fetch resolves.
+  const [hydrating, setHydrating] = useState(false);
+  const [hydrateError, setHydrateError] = useState(false);
+  // Set when the sidebar list fetch fails so we keep the previous list on
+  // screen (and show a quiet retry row) rather than collapsing to the
+  // "no conversations yet" empty state for a user who has some.
+  const [conversationsError, setConversationsError] = useState(false);
+  // Bumped by the hydrate-error "Try again" button to re-run the hydration
+  // effect while the route id stays the same.
+  const [hydrateNonce, setHydrateNonce] = useState(0);
 
   // Agents tab: the per-role agent list (same source the Home dock polls).
   // Kept here so the sidebar can list them and the center can resolve the
@@ -102,12 +111,15 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
   // Mobile: the conversation/agent list is an off-canvas drawer.
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
+  // On error, keep the last agent list on screen — resetting to [] would
+  // flash the empty two-pane shell (and yank the auto-select) on a transient
+  // blip. The 30s interval retries on its own.
   const refreshAgents = useCallback(async () => {
     try {
       const { data } = await agentChat.listConversations();
       setAgents(Array.isArray(data?.agents) ? data.agents : []);
     } catch {
-      setAgents([]);
+      /* keep previous agents */
     }
   }, []);
 
@@ -184,15 +196,18 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
     [conversationId, navigate],
   );
 
-  const { messages, isStreaming, error, send, stop, setHistory, reset } =
+  const { messages, isStreaming, error, send, stop, setHistory, reset, clearError } =
     useChatStream({ conversationId, onConversationId });
 
   const refreshConversations = useCallback(async () => {
     try {
       const list = await conversationsApi.list();
       setConversations(Array.isArray(list) ? list : []);
+      setConversationsError(false);
     } catch {
-      setConversations([]);
+      // Keep the previous list on screen and flag the error — clearing to []
+      // would show "no conversations yet" to a user who has some.
+      setConversationsError(true);
     }
   }, []);
 
@@ -204,14 +219,30 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
   // conversation was just created by the current send() flow, in which
   // case the chat hook's local state is the source of truth (it has the
   // streaming assistant placeholder; the API only has the user turn).
+  //
+  // We reset() first so a *different* conversation never renders the prior
+  // thread's messages under its heading — either while the fetch is in
+  // flight or, on a 404, permanently. That also clears any error banner
+  // left over from the conversation we're leaving.
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
       if (!conversationId) {
         reset();
+        setHydrating(false);
+        setHydrateError(false);
         return;
       }
-      if (locallyCreated.current.has(conversationId)) return;
+      // Just created by send(): its history lives in the hook already; don't
+      // wipe the streaming placeholder or refetch.
+      if (locallyCreated.current.has(conversationId)) {
+        setHydrating(false);
+        setHydrateError(false);
+        return;
+      }
+      reset();
+      setHydrateError(false);
+      setHydrating(true);
       try {
         const data = await conversationsApi.get(conversationId);
         if (cancelled) return;
@@ -220,19 +251,24 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
         );
         setHistory(hydrated);
       } catch {
-        /* 404 → leave empty */
+        if (!cancelled) setHydrateError(true);
+      } finally {
+        if (!cancelled) setHydrating(false);
       }
     };
     run();
     return () => {
       cancelled = true;
     };
-  }, [conversationId, reset, setHistory]);
+  }, [conversationId, reset, setHistory, hydrateNonce]);
 
   // After a streaming turn ends, refresh the sidebar so the new
-  // conversation (or updated_at on the existing one) shows up.
+  // conversation (or updated_at on the existing one) shows up, and drop the
+  // conversation from ``locallyCreated`` — the API now has the full turn, so
+  // re-opening it later must hydrate normally instead of being skipped.
   useEffect(() => {
     if (!isStreaming && messages.length) {
+      if (conversationId != null) locallyCreated.current.delete(conversationId);
       refreshConversations();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -264,10 +300,17 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
     const id = pendingDeleteId;
     if (id == null) return;
     setPendingDeleteId(null);
-    await conversationsApi.remove(id);
+    try {
+      await conversationsApi.remove(id);
+    } catch {
+      // A failed remove used to close the dialog silently and leave the row.
+      // Tell the user and keep the row where it is.
+      showToast?.('Couldn’t delete that conversation. Try again.', 'error');
+      return;
+    }
     if (id === conversationId) navigate('/chat');
     refreshConversations();
-  }, [pendingDeleteId, conversationId, navigate, refreshConversations]);
+  }, [pendingDeleteId, conversationId, navigate, refreshConversations, showToast]);
 
   const cancelDelete = useCallback(() => {
     setPendingDeleteId(null);
@@ -286,10 +329,27 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
     [send],
   );
 
+  // "Try again" on the error card: re-send the last user message. The failed
+  // turn left the user's text committed to the thread and cleared from the
+  // composer, so there's nothing for them to press Enter on otherwise.
+  const retryLastTurn = useCallback(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (m.role !== 'user') continue;
+      const text = m.parts.find((p) => p.type === 'text')?.text;
+      if (text) {
+        clearError();
+        send(text);
+      }
+      return;
+    }
+  }, [messages, send, clearError]);
+
   const heading = useMemo(() => {
     if (!conversationId) return 'New conversation';
     const found = conversations.find((c) => c.id === conversationId);
-    return found?.title || `Conversation ${conversationId}`;
+    // Neutral fallback — never leak the internal numeric id into the UI.
+    return found?.title || 'Conversation';
   }, [conversationId, conversations]);
 
   return (
@@ -304,6 +364,7 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
         onNew={onNew}
         onSelect={onSelect}
         onDelete={onDelete}
+        conversationsError={conversationsError}
         agents={agents}
         activeRoleId={agentRoleId}
         onSelectAgent={onSelectAgent}
@@ -344,17 +405,37 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
           <div className="cp-head-grow" />
           <span className="cp-head-pill">
             <span className="cp-pill-glyph" aria-hidden="true" />
-            {TAALI_CHAT_TOOL_COUNT} tools connected
+            Connected to your pipeline
           </span>
         </header>
         <div className="cp-scroll">
-          {messages.length === 0 ? (
+          {hydrating && messages.length === 0 ? (
+            <div className="cp-thread">
+              <ChatMessage role="assistant">
+                <ThinkingDots label="Loading the conversation…" />
+              </ChatMessage>
+            </div>
+          ) : hydrateError && messages.length === 0 ? (
+            <div className="cp-thread">
+              <div className="cp-refresh-row">
+                Couldn’t load this conversation.
+                <button
+                  type="button"
+                  className="cp-refresh-retry"
+                  onClick={() => setHydrateNonce((n) => n + 1)}
+                >
+                  Try again
+                </button>
+              </div>
+            </div>
+          ) : messages.length === 0 ? (
             <EmptyState onPick={(t) => submit(t)} />
           ) : (
             <Thread
               messages={messages}
               isStreaming={isStreaming}
               error={error}
+              onRetry={retryLastTurn}
             />
           )}
         </div>
@@ -368,11 +449,11 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
             streaming={isStreaming}
             onStop={stop}
           />
-          {/* search-preview composer foot tail — Search-specific (citations are
-              the chat's grounded-evidence promise), so it lives here rather
-              than in the shared composer used by other surfaces. */}
+          {/* search-preview composer foot tail — Search-specific (grounded
+              evidence is the chat's promise), so it lives here rather than in
+              the shared composer used by other surfaces. */}
           <div className="cp-composer-note">
-            citations link back to the underlying record
+            Every claim links back to the candidate’s CV.
           </div>
         </div>
       </div>

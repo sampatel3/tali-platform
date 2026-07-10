@@ -18,10 +18,14 @@ export const assessments = {
     }),
   // HTTP-based agentic Claude chat — the only candidate-facing assistant
   // transport (the legacy PTY terminal + non-tool `claude` helper were
-  // removed alongside their backend routes).
+  // removed alongside their backend routes). A per-request 120s timeout
+  // (Claude turns are long, but a stalled connection must not freeze the
+  // chat in "Working…" forever) so the composer always unlocks even when
+  // the shared httpClient default doesn't apply to this long-poll call.
   claudeChat: (assessmentId, payload, assessmentToken) =>
     api.post(`/assessments/${assessmentId}/claude/chat`, payload, {
       headers: { 'X-Assessment-Token': assessmentToken },
+      timeout: 120000,
     }),
   submit: (id, payloadOrFinalCode, assessmentToken, metadata = {}) =>
     api.post(

@@ -64,6 +64,27 @@ describe('Auth page redesign', () => {
     });
   });
 
+  it('submits sign-in when Enter is pressed inside a field (form submit)', async () => {
+    auth.login.mockResolvedValue({ data: { access_token: 'tok_123' } });
+    auth.me.mockResolvedValue({ data: { id: 1, email: 'sam@taali.ai', full_name: 'Sam Patel' } });
+
+    const { container } = renderWithAuth(<LoginPage onNavigate={vi.fn()} />);
+
+    fireEvent.change(screen.getByPlaceholderText('you@company.com'), {
+      target: { value: 'sam@taali.ai' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+      target: { value: 'password123' },
+    });
+    // Submitting the form (what Enter-in-a-field does) must sign in — the two
+    // primary auth pages previously had no <form>, so Enter did nothing.
+    fireEvent.submit(container.querySelector('form'));
+
+    await waitFor(() => {
+      expect(auth.login).toHaveBeenCalledWith('sam@taali.ai', 'password123');
+    });
+  });
+
   it('shows the redesigned verification recovery state on sign-in failure', async () => {
     auth.login.mockRejectedValue({
       response: { status: 403, data: { detail: 'Please verify your email before logging in' } },

@@ -85,12 +85,40 @@ function formatStructRow(row) {
   return vals.slice(0, 2).join(': ');
 }
 
+// struct_list rows come from the agent in one of a few real shapes:
+//   Weighted priorities   → { factor, weight }
+//   Calibration examples   → { kind, description }
+//   generic / hand-added   → { label, detail }
+// The inline editor is two columns; this maps a field key + existing rows onto
+// the right key PAIR so we read/write the ORIGINAL keys (never blank a
+// populated row by reading label/detail off a factor/weight row). Detect by
+// the field key first (stable), then by the shape of an existing row, then
+// fall back to label/detail.
+const STRUCT_SHAPES = {
+  priorities: ['factor', 'weight'],
+  calibration_exemplars: ['kind', 'description'],
+};
+const structKeysFor = (fieldKey, rows) => {
+  if (STRUCT_SHAPES[fieldKey]) return STRUCT_SHAPES[fieldKey];
+  const sample = Array.isArray(rows) ? rows.find((r) => r && typeof r === 'object') : null;
+  if (sample) {
+    if ('factor' in sample || 'weight' in sample) return ['factor', 'weight'];
+    if ('kind' in sample || 'description' in sample) return ['kind', 'description'];
+  }
+  return ['label', 'detail'];
+};
+
 // Inline editor — shape depends on the field type.
 function FieldEditor({ field, value, onCancel, onSave, saving }) {
-  const [draft, setDraft] = useState(() => seedDraft(field, value));
+  // For struct_list, resolve the real {factor,weight}/{kind,description}/
+  // {label,detail} key pair ONCE from the field key + existing rows, and reuse
+  // it for both seeding the editor and writing back — so a populated row never
+  // opens blank and Save never wipes data by writing the wrong keys.
+  const structKeys = field.type === 'struct_list' ? structKeysFor(field.key, value) : null;
+  const [draft, setDraft] = useState(() => seedDraft(field, value, structKeys));
   const [chipInput, setChipInput] = useState('');
 
-  const commit = () => onSave(normalizeDraft(field, draft));
+  const commit = () => onSave(normalizeDraft(field, draft, structKeys, value));
 
   if (field.type === 'longtext') {
     return (
@@ -158,7 +186,13 @@ function FieldEditor({ field, value, onCancel, onSave, saving }) {
   }
 
   if (field.type === 'struct_list') {
+    // draft rows are internal { col1, col2 }; the real keys are re-applied in
+    // normalizeDraft. Column placeholders are labelled from the real key pair
+    // so the recruiter sees "Factor / Weight" vs "Kind / Description".
     const rows = Array.isArray(draft) ? draft : [];
+    const [k1, k2] = structKeys || ['label', 'detail'];
+    const ph1 = k1.charAt(0).toUpperCase() + k1.slice(1);
+    const ph2 = k2.charAt(0).toUpperCase() + k2.slice(1);
     const setRow = (i, patch) => setDraft(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
     return (
       <div className="rq-edit">
@@ -166,14 +200,14 @@ function FieldEditor({ field, value, onCancel, onSave, saving }) {
           {rows.map((row, i) => (
             <div key={i} className="rq-struct-row">
               <input
-                value={row.label ?? ''}
-                placeholder="Label"
-                onChange={(e) => setRow(i, { label: e.target.value })}
+                value={row.col1 ?? ''}
+                placeholder={ph1}
+                onChange={(e) => setRow(i, { col1: e.target.value })}
               />
               <input
-                value={row.detail ?? ''}
-                placeholder="Detail"
-                onChange={(e) => setRow(i, { detail: e.target.value })}
+                value={row.col2 ?? ''}
+                placeholder={ph2}
+                onChange={(e) => setRow(i, { col2: e.target.value })}
               />
               <button type="button" className="rq-chip-x" aria-label="Remove row" onClick={() => setDraft(rows.filter((_, j) => j !== i))}>
                 <X size={13} />
@@ -181,7 +215,7 @@ function FieldEditor({ field, value, onCancel, onSave, saving }) {
             </div>
           ))}
         </div>
-        <button type="button" className="rq-btn-sm is-ghost" onClick={() => setDraft([...rows, { label: '', detail: '' }])}>
+        <button type="button" className="rq-btn-sm is-ghost" onClick={() => setDraft([...rows, { col1: '', col2: '' }])}>
           <Plus size={13} /> Add row
         </button>
         <EditActions onCancel={onCancel} onSave={commit} saving={saving} />
@@ -216,22 +250,36 @@ function EditActions({ onCancel, onSave, saving }) {
   );
 }
 
-function seedDraft(field, value) {
+function seedDraft(field, value, structKeys) {
   if (field.type === 'list') return Array.isArray(value) ? [...value] : [];
   if (field.type === 'struct_list') {
+    const [k1, k2] = structKeys || ['label', 'detail'];
+    // Map each real row onto the editor's internal { col1, col2 } off the
+    // resolved key pair — so a { factor, weight } / { kind, description } row
+    // shows its populated values instead of opening blank.
     return Array.isArray(value)
-      ? value.map((r) => (typeof r === 'string' ? { label: r, detail: '' } : { ...r }))
+      ? value.map((r) => (typeof r === 'string'
+        ? { col1: r, col2: '' }
+        : { col1: r?.[k1] == null ? '' : String(r[k1]), col2: r?.[k2] == null ? '' : String(r[k2]) }))
       : [];
   }
   return value == null ? '' : String(value);
 }
 
-function normalizeDraft(field, draft) {
+function normalizeDraft(field, draft, structKeys, existingValue) {
   if (field.type === 'list') return (Array.isArray(draft) ? draft : []).filter((s) => String(s).trim());
   if (field.type === 'struct_list') {
-    return (Array.isArray(draft) ? draft : [])
-      .map((r) => ({ label: String(r.label || '').trim(), detail: String(r.detail || '').trim() }))
-      .filter((r) => r.label || r.detail);
+    const [k1, k2] = structKeys || ['label', 'detail'];
+    const rows = (Array.isArray(draft) ? draft : [])
+      .map((r) => ({ [k1]: String(r.col1 || '').trim(), [k2]: String(r.col2 || '').trim() }))
+      .filter((r) => r[k1] || r[k2]);
+    // Guard: never save an all-empty draft over data that was already there —
+    // that would silently wipe captured rows. Refuse the save (signalled by
+    // returning undefined so the caller keeps the existing value + editor).
+    if (rows.length === 0 && Array.isArray(existingValue) && existingValue.length > 0) {
+      return undefined;
+    }
+    return rows;
   }
   if (field.type === 'number') {
     const n = Number(draft);
@@ -241,8 +289,25 @@ function normalizeDraft(field, draft) {
   return s === '' ? null : s;
 }
 
-function Field({ field, brief, isGap, editing, onEdit, onCancel, onSave, saving }) {
+function Field({ field, brief, isGap, editing, onEdit, onCancel, onSave, saving, readOnly }) {
   const value = readValue(brief, field.key);
+  // Applied briefs are frozen — show values as plain text, no click-to-edit.
+  if (readOnly) {
+    return (
+      <div className="rq-field">
+        <div className="rq-field-head">
+          <span className="rq-field-label">{field.label}</span>
+        </div>
+        {field.type === 'list' || field.type === 'struct_list' ? (
+          <div className="rq-field-value"><ValueDisplay field={field} value={value} /></div>
+        ) : (
+          <div className={`rq-field-value${isEmptyValue(value) ? ' is-empty' : ''}`}>
+            {isEmptyValue(value) ? '—' : String(value)}
+          </div>
+        )}
+      </div>
+    );
+  }
   return (
     <div className="rq-field">
       <div className="rq-field-head">
@@ -276,7 +341,7 @@ function Field({ field, brief, isGap, editing, onEdit, onCancel, onSave, saving 
   );
 }
 
-export function LiveBrief({ template, brief, onSave, savingKey }) {
+export function LiveBrief({ template, brief, onSave, savingKey, readOnly = false }) {
   const [editingKey, setEditingKey] = useState(null);
   const sections = Array.isArray(template?.sections) ? template.sections : [];
   const completeness = Math.max(0, Math.min(100, Number(brief?.completeness) || 0));
@@ -284,6 +349,10 @@ export function LiveBrief({ template, brief, onSave, savingKey }) {
   const gapKeys = new Set(gaps.map((g) => g.key));
 
   const handleSave = async (field, value) => {
+    // normalizeDraft returns undefined to REFUSE a save that would wipe
+    // populated struct_list data with an all-empty draft — keep the editor open
+    // and the existing value untouched.
+    if (value === undefined) return;
     const custom = isCustomKey(field.key);
     // Column fields PATCH under their real column name (e.g. target_start_date
     // → target_start); custom fields PATCH under their template key.
@@ -299,7 +368,14 @@ export function LiveBrief({ template, brief, onSave, savingKey }) {
             <span className="rq-meter-label">Brief completeness</span>
             <span className="rq-meter-pct">{completeness}%</span>
           </div>
-          <div className="rq-meter-track">
+          <div
+            className="rq-meter-track"
+            role="progressbar"
+            aria-label="Brief completeness"
+            aria-valuenow={completeness}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
             <div className="rq-meter-fill" style={{ width: `${completeness}%` }} />
           </div>
           {gaps.length > 0 ? (
@@ -329,6 +405,7 @@ export function LiveBrief({ template, brief, onSave, savingKey }) {
                   onCancel={() => setEditingKey(null)}
                   onSave={handleSave}
                   saving={savingKey === field.key}
+                  readOnly={readOnly}
                 />
               ))}
             </div>
