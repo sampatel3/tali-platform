@@ -47,3 +47,30 @@ def test_integrity_stripped_from_client_share(db):
     # — who we flagged and why — must be gone.
     assert isinstance(payload["score_summary"], dict)
     assert "integrity" not in payload["score_summary"]
+
+
+def test_raw_scoring_blobs_stripped_from_client_share(db):
+    """The UI hiding the chip isn't enough — the payload itself must not carry
+    the raw integrity/fraud blobs (cv_match_details.integrity_signals etc. and
+    pre_screen_evidence.fraud_signals) on a client share."""
+    _, _, _, app = make_full_application(db, cv_match_details=_SIGNALS)
+    app.cv_match_score = 72.0
+    app.pre_screen_evidence = {"fraud_signals": {"duplicate_identity": {"triggered": True}}}
+    db.flush()
+
+    payload = application_detail_payload(app, include_cv_text=False, client_safe=True)
+    cvd = payload.get("cv_match_details") or {}
+    for key in (
+        "integrity_signals",
+        "timeline_flags",
+        "claims_to_verify",
+        "integrity_penalty",
+        "pending_document_hygiene_pdf",
+    ):
+        assert key not in cvd
+    assert payload.get("pre_screen_evidence") is None
+
+    # Recruiter view keeps them.
+    recruiter = application_detail_payload(app, include_cv_text=False, client_safe=False)
+    assert "integrity_signals" in (recruiter.get("cv_match_details") or {})
+    assert recruiter.get("pre_screen_evidence") is not None

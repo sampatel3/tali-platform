@@ -1002,6 +1002,12 @@ def aggregate_triangulation(integrity_signals: dict[str, Any] | None) -> dict[st
     dh = _get("document_hygiene")
     if dh.get("injection_detected") or dh.get("has_tag_chars"):
         deterministic.append("hidden_text")
+    # Bytes-level PDF scan promoted from ingest (document_hygiene.pdf).
+    # Invisible render-mode text is a deterministic tamper artifact; metadata
+    # keyword-stuffing stays advisory (warning-only — higher FP).
+    pdf = dh.get("pdf") if isinstance(dh.get("pdf"), dict) else {}
+    if (pdf.get("render") or {}).get("triggered"):
+        deterministic.append("hidden_text_pdf")
     tl = _get("timeline")
     if tl.get("triggered") or tl.get("issues"):
         deterministic.append("impossible_timeline")
@@ -1085,6 +1091,12 @@ def build_integrity_warnings(integrity_signals: dict[str, Any] | None) -> list[s
         out.append("Invisible Unicode (Tags-block) characters were embedded in the CV file.")
     elif int(dh.get("invisible_char_count") or 0) >= 8:
         out.append(f"{dh['invisible_char_count']} invisible characters were embedded in the CV file.")
+
+    pdf = dh.get("pdf") if isinstance(dh.get("pdf"), dict) else {}
+    if (pdf.get("render") or {}).get("triggered"):
+        out.append("Text drawn in an invisible render mode was found inside the PDF file.")
+    if (pdf.get("metadata") or {}).get("metadata_keyword_stuffing"):
+        out.append("The PDF's hidden metadata is stuffed with keywords that don't appear in the visible document.")
 
     for issue in (_g("timeline").get("issues") or [])[:6]:
         detail = (issue.get("detail") if isinstance(issue, dict) else str(issue)) or ""

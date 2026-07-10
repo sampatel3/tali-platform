@@ -80,3 +80,42 @@ def test_stash_preserves_existing_cv_match_details():
         stash_pdf_hygiene_on_application(app, b"%PDF-1.4", "pdf")
     assert app.cv_match_details["existing"] == 1
     assert app.cv_match_details[PENDING_PDF_HYGIENE_KEY] == fake
+
+
+def test_pdf_scan_feeds_triangulation_and_warnings():
+    """The promoted document_hygiene.pdf block must surface: invisible
+    render-mode text is a deterministic artifact (strong_review), metadata
+    stuffing is advisory (warning only)."""
+    from app.services.fraud_detection import aggregate_triangulation, build_integrity_warnings
+
+    signals = {
+        "document_hygiene": {
+            "pdf": {
+                "triggered": True,
+                "render": {"checked": True, "triggered": True, "invisible_render_chars": 240},
+                "metadata": {"checked": True, "metadata_keyword_stuffing": True},
+            }
+        }
+    }
+    tri = aggregate_triangulation(signals)
+    assert tri["verdict"] == "strong_review"
+    warnings = build_integrity_warnings(signals)
+    assert any("invisible render mode" in w for w in warnings)
+    assert any("metadata is stuffed" in w for w in warnings)
+
+
+def test_pdf_metadata_stuffing_alone_is_advisory():
+    from app.services.fraud_detection import aggregate_triangulation, build_integrity_warnings
+
+    signals = {
+        "document_hygiene": {
+            "pdf": {
+                "triggered": True,
+                "render": {"checked": True, "triggered": False},
+                "metadata": {"checked": True, "metadata_keyword_stuffing": True},
+            }
+        }
+    }
+    tri = aggregate_triangulation(signals)
+    assert tri["verdict"] == "ok"
+    assert any("metadata is stuffed" in w for w in build_integrity_warnings(signals))
