@@ -326,7 +326,7 @@ export const CandidateCodeGitTab = ({ candidate }) => {
 
       {headSha ? (
         <Panel className="p-4">
-          <div className="mb-1 font-mono text-xs font-bold text-[var(--taali-muted)]">Final HEAD (SHA)</div>
+          <div className="mb-1 font-mono text-xs font-bold text-[var(--taali-muted)]">Final commit</div>
           <pre className="overflow-x-auto bg-[#151122] p-2 font-mono text-xs text-gray-200">{headSha}</pre>
         </Panel>
       ) : null}
@@ -340,7 +340,7 @@ export const CandidateCodeGitTab = ({ candidate }) => {
 
       {diffMain ? (
         <Panel className="p-4">
-          <div className="mb-1 font-mono text-xs font-bold text-[var(--taali-muted)]">Diff (main...HEAD)</div>
+          <div className="mb-1 font-mono text-xs font-bold text-[var(--taali-muted)]">Changes vs starting code</div>
           <pre className="max-h-96 overflow-auto whitespace-pre-wrap bg-[#151122] p-2 font-mono text-xs text-green-300">{diffMain}</pre>
         </Panel>
       ) : null}
@@ -354,13 +354,13 @@ export const CandidateCodeGitTab = ({ candidate }) => {
 
       {statusPorcelain ? (
         <Panel className="p-4">
-          <div className="mb-1 font-mono text-xs font-bold text-[var(--taali-muted)]">Status (porcelain)</div>
+          <div className="mb-1 font-mono text-xs font-bold text-[var(--taali-muted)]">Uncommitted changes</div>
           <pre className="overflow-x-auto bg-[#151122] p-2 font-mono text-xs text-gray-200">{statusPorcelain}</pre>
         </Panel>
       ) : null}
 
       {error ? (
-        <Panel className="border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-3 text-sm text-[var(--taali-danger)]">{error}</Panel>
+        <Panel className="border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-3 text-sm text-[var(--taali-danger)]">Some code evidence could not be captured for this attempt.</Panel>
       ) : null}
     </div>
   );
@@ -588,7 +588,6 @@ export const CandidateTimelineTab = ({ candidate }) => {
   }, [candidate?.id, replayFrames.length]);
   const selectedReplayFrame = replayFrames[Math.max(0, Math.min(activeReplayIndex, replayFrames.length - 1))] || null;
   const totalPrompts = Number(assessment.total_prompts ?? (candidate?.promptsList || []).length ?? 0);
-  const totalTokens = Number((assessment.total_input_tokens || 0) + (assessment.total_output_tokens || 0));
   const avgPromptWords = (() => {
     const prompts = Array.isArray(candidate?.promptsList) ? candidate.promptsList : [];
     if (!prompts.length) return null;
@@ -612,8 +611,7 @@ export const CandidateTimelineTab = ({ candidate }) => {
       <Panel className="p-4">
         <div className="mb-2 font-bold text-[var(--taali-text)]">AI Usage Summary</div>
         <div className="grid grid-cols-2 gap-3 font-mono text-xs text-[var(--taali-text)] md:grid-cols-3">
-          <div>Claude prompts: <span className="font-bold">{totalPrompts || 0}</span></div>
-          <div>Total tokens: <span className="font-bold">{totalTokens.toLocaleString()}</span></div>
+          <div>AI prompts: <span className="font-bold">{totalPrompts || 0}</span></div>
           <div>Avg prompt size: <span className="font-bold">{avgPromptWords != null ? `${avgPromptWords} words` : '—'}</span></div>
         </div>
       </Panel>

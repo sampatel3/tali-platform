@@ -24,7 +24,7 @@ const actionLabel = (row) => {
   return decisionTypeLabel(row.decision_type);
 };
 
-const outcomeOf = (row) => {
+export const outcomeOf = (row) => {
   const s = String(row.status || '').toLowerCase();
   if (s === 'overridden') {
     return { text: row.override_action ? `overridden → ${decisionTypeLabel(row.override_action).toLowerCase()}` : 'overridden', tone: 'warn' };

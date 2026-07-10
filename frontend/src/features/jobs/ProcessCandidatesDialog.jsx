@@ -92,9 +92,9 @@ export function ProcessCandidatesDialog({
         }
         const res = await rolesApi.processRole(roleId, body, { dry_run: true });
         setCounts(res?.data ?? null);
-      } catch (err) {
+      } catch {
         setCounts(null);
-        setPreviewError(err?.response?.data?.detail || err?.message || 'Preview failed.');
+        setPreviewError('Couldn\'t load the preview counts — try again.');
       } finally {
         setLoadingPreview(false);
       }

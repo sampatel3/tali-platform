@@ -7,6 +7,8 @@
 
 import { Check, CheckSquare, Layers, MessageSquare, Pause, Sparkles } from 'lucide-react';
 
+import { humanizePausedReason } from '../atoms';
+
 const fmtCount = (n) => (n > 999 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 const fmtUsd = (cents) => `$${((cents || 0) / 100).toFixed(2)}`;
 
@@ -59,7 +61,7 @@ export function AgentSidebar({
     // activity → a "{n} decisions waiting" summary when it has a queue but no
     // fresher message → an idle/off fallback. All real fields — no fabrication.
     const preview = a.agent_paused
-      ? `Paused · ${a.agent_paused_reason || 'budget reached'}`
+      ? `Paused · ${humanizePausedReason(a.agent_paused_reason) || 'budget reached'}`
       : a.last_message_preview
         || (decisions > 0
           ? `${fmtCount(decisions)} decision${decisions === 1 ? '' : 's'} waiting`

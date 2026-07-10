@@ -122,7 +122,7 @@ const normalizeWorkableError = (input) => {
     return 'Workable integration is not available on your current plan. Contact support to upgrade.';
   }
   if (lower.includes('oauth failed')) {
-    return 'Workable OAuth failed. Verify callback URL and scopes in your Workable app, then try again.';
+    return 'We couldn\'t connect to Workable. Try again, or contact support if it keeps failing.';
   }
   return raw || 'Workable connection failed.';
 };
@@ -156,11 +156,19 @@ const workableStageLabel = (stage) => (
   || ''
 );
 
-const getErrorMessage = (error, fallback) => (
-  error?.response?.data?.detail
-  || error?.message
-  || fallback
-);
+const getErrorMessage = (error, fallback) => {
+  const detail = error?.response?.data?.detail;
+  if (
+    typeof detail === 'string'
+    && detail.length > 0
+    && detail.length < 200
+    && !detail.trim().startsWith('{')
+    && !detail.trim().startsWith('[')
+  ) {
+    return detail;
+  }
+  return fallback;
+};
 
 const initialsFor = (value) => {
   const letters = String(value || '')
@@ -1164,7 +1172,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     const autoRejectNoteTemplate = String(workableForm.autoRejectNoteTemplate || '').trim();
 
     if ((emailMode === 'workable_preferred_fallback_manual' || autoRejectEnabled) && !hasWriteScope) {
-      showToast('Reconnect Workable with `w_candidates` scope to enable Workable invite, reject, and reopen actions.', 'error');
+      showToast('Reconnect Workable with the "Write candidates" (w_candidates) permission to enable invite, reject, and reopen actions.', 'error');
       return;
     }
     if (emailMode === 'workable_preferred_fallback_manual' && !inviteStageName) {
@@ -1603,7 +1611,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 <SectionPanel
                   id="jobs"
                   title="Background jobs"
-                  subtitle="Recent infrastructure runs — decision approvals, scoring, CV fetch, Workable sync, and graph sync. The agent fleet lives on the Analytics page."
+                  subtitle="Recent infrastructure runs — decision approvals, scoring, CV fetch, Workable sync, and talent data sync. The agent fleet lives on the Analytics page."
                 >
                   <BackgroundJobsPanel />
                 </SectionPanel>
@@ -2196,7 +2204,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         <div className="settings-billing-card">
                           <div className="settings-summary-label">Card on file</div>
                           <div className="settings-summary-value">
-                            {orgData?.stripe_customer_id ? 'Stripe customer' : 'No card yet'}
+                            {orgData?.stripe_customer_id ? 'Connected' : 'No card yet'}
                           </div>
                           <div className="settings-summary-note">
                             <a
@@ -2271,7 +2279,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
                       <div className="settings-usage-table">
                         <div className="settings-usage-head">
-                          <h3>Recent invoices</h3>
+                          <h3>Recent usage charges</h3>
                         </div>
                         <table>
                           <thead>
@@ -2310,7 +2318,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 <SectionPanel
                   id="usage"
                   title="Usage"
-                  subtitle="Per-feature Claude spend, daily breakdowns, and reconciliation against Anthropic billing."
+                  subtitle="AI spend across your workspace — daily totals and a breakdown by surface."
                 >
                   <UsagePanel />
                 </SectionPanel>
@@ -2355,7 +2363,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     />
                     <ToggleCard
                       title="Agent paused"
-                      description="Fires when the autonomous agent stops on its own — bad sample, recruiter intervention, or ratelimit."
+                      description="Get an alert when a role's agent pauses itself — for example after hitting its budget or running into repeated errors."
                       checked={notificationPreferencesForm.agent_paused}
                       onChange={(value) => setNotificationPreferencesForm((prev) => ({ ...prev, agent_paused: value }))}
                     />
@@ -2443,7 +2451,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 <input
                   value={workableTokenForm.subdomain}
                   onChange={(event) => setWorkableTokenForm((prev) => ({ ...prev, subdomain: event.target.value }))}
-                  placeholder="deeplight-ai"
+                  placeholder="your-company"
                 />
               </label>
               <label className="field">

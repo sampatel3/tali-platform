@@ -1,5 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { decisionPolicyApi } from './api';
+import { prettyKey } from '../analytics/analyticsFormat';
+
+const CAUSE_LABELS = {
+  feedback_retune: 'Feedback update',
+  manual_edit: 'Manual edit',
+  initial: 'Initial policy',
+  rollback: 'Rollback',
+};
+const causeLabel = (cause) => CAUSE_LABELS[cause] || prettyKey(cause);
 
 // Active policy + revision timeline. Recruiters can drill from here
 // into the pending-retune review when there's something awaiting
@@ -15,8 +24,8 @@ export default function PolicyView() {
       .then((d) => {
         if (!cancelled) setData(d);
       })
-      .catch((e) => {
-        if (!cancelled) setError(e.response?.data?.detail || e.message);
+      .catch(() => {
+        if (!cancelled) setError(true);
       });
     return () => {
       cancelled = true;
@@ -24,7 +33,7 @@ export default function PolicyView() {
   }, []);
 
   if (error) {
-    return <div className="dp-error">Failed to load policy: {error}</div>;
+    return <div className="dp-error">Couldn&rsquo;t load the decision policy. Try refreshing the page.</div>;
   }
   if (!data) return <div className="dp-loading">Loading active policy…</div>;
 
@@ -44,7 +53,7 @@ export default function PolicyView() {
         <h3>Decision points</h3>
         {Object.entries(points).map(([name, point]) => (
           <details key={name} className="dp-point" open>
-            <summary>{name}</summary>
+            <summary>{prettyKey(name)}</summary>
             <div className="dp-point-body">
               <div className="table-scroll">
               <table>
@@ -57,7 +66,7 @@ export default function PolicyView() {
                 <tbody>
                   {Object.entries(point.thresholds || {}).map(([k, v]) => (
                     <tr key={k}>
-                      <td>{k}</td>
+                      <td>{prettyKey(k)}</td>
                       <td>{Number(v).toFixed(1)}</td>
                     </tr>
                   ))}
@@ -76,7 +85,7 @@ export default function PolicyView() {
                   <tbody>
                     {Object.entries(point.weights).map(([k, v]) => (
                       <tr key={k}>
-                        <td>{k}</td>
+                        <td>{prettyKey(k)}</td>
                         <td>{Number(v).toFixed(2)}</td>
                       </tr>
                     ))}
@@ -85,9 +94,9 @@ export default function PolicyView() {
                 </div>
               )}
               {(point.rules || []).map((r, idx) => (
-                <pre key={idx} className="dp-rule">
-                  if {r.if} → {r.then} (priority {r.priority})
-                </pre>
+                <div key={idx} className="dp-rule">
+                  If {prettyKey(r.if)} → {prettyKey(r.then)} (priority {r.priority})
+                </div>
               ))}
             </div>
           </details>
@@ -99,7 +108,7 @@ export default function PolicyView() {
         <ol className="dp-timeline">
           {(data.timeline || []).map((rev) => (
             <li key={rev.id}>
-              <strong>#{rev.id}</strong> · {rev.cause} ·{' '}
+              <strong>#{rev.id}</strong> · {causeLabel(rev.cause)} ·{' '}
               {new Date(rev.created_at).toLocaleString()}
               {rev.notes && (
                 <pre className="dp-rev-notes">{rev.notes}</pre>

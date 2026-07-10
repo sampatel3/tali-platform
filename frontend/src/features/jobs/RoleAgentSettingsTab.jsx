@@ -208,7 +208,7 @@ const RoleAgentSettingsTab = ({
           </div>
           {thresholdMode === 'auto' ? (
             <p className="mc-agent-settings-card-help" style={{ marginTop: 4 }}>
-              Agent-managed — no fixed number. A general quality bar (top candidates across all your roles), recalibrated as you hire; weak pipelines surface fewer.
+              Agent-managed — no fixed number. The agent holds candidates to a quality bar set by your top candidates across all roles, and recalibrates it as you hire.
             </p>
           ) : (
             <div className="mc-agent-settings-slider">
@@ -310,7 +310,7 @@ const RoleAgentSettingsTab = ({
               key: 'auto_reject_pre_screen',
               value: autoRejectPreScreen,
               title: 'Auto-reject pre-screen only',
-              sub: 'Only candidates failing the cheap pre-screen gate are rejected immediately. Rejects of fully-scored candidates still queue in the Decision Hub. Auto-reject above covers this and more.',
+              sub: 'Only candidates failing the initial pre-screen are rejected immediately. Rejects of fully-scored candidates still queue in the Decision Hub. Auto-reject above covers this and more.',
             },
             {
               key: 'auto_promote',
@@ -371,13 +371,6 @@ const RoleAgentSettingsTab = ({
             EOM PROJECTION ≈ {fmtUsd(projectedCents)} ·{' '}
             {projectedCents > monthlyBudgetCents ? 'over budget' : 'paced under budget'}
           </div>
-          {usageBreakdown?.monthly_raw_anthropic_cost_cents != null ? (
-            <div className="mc-agent-settings-budget-foot">
-              ANTHROPIC COST ≈ {fmtUsd(usageBreakdown.monthly_raw_anthropic_cost_cents)} ·{' '}
-              MARGIN {fmtUsd(usageBreakdown.monthly_margin_cents)}
-              {usageBreakdown.margin_pct ? ` (${Math.round(usageBreakdown.margin_pct)}%)` : ''}
-            </div>
-          ) : null}
           {Array.isArray(usageBreakdown?.by_feature) && usageBreakdown.by_feature.length > 0 ? (
             <ul className="mc-agent-settings-budget-breakdown">
               {(() => {
@@ -470,12 +463,7 @@ const RoleAgentSettingsTab = ({
 
         <div className="mc-agent-settings-side-card">
           <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>PAUSE THRESHOLD</div>
-          <p className="mc-agent-settings-card-help" style={{ marginBottom: 10 }}>Agent pauses itself when budget reaches this %.</p>
-          <select className="mc-agent-settings-select" defaultValue={80}>
-            <option value={70}>70%</option>
-            <option value={80}>80%</option>
-            <option value={90}>90%</option>
-          </select>
+          <p className="mc-agent-settings-card-help" style={{ marginBottom: 10 }}>The agent pauses itself when spend reaches 80% of the monthly cap.</p>
         </div>
 
         <div className="mc-agent-settings-audit-callout">

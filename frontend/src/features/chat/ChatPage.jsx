@@ -344,7 +344,7 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
           <div className="cp-head-grow" />
           <span className="cp-head-pill">
             <span className="cp-pill-glyph" aria-hidden="true" />
-            MCP · {TAALI_CHAT_TOOL_COUNT} tools
+            {TAALI_CHAT_TOOL_COUNT} tools connected
           </span>
         </header>
         <div className="cp-scroll">

@@ -23,6 +23,16 @@ const TYPE_BADGE = {
     color: 'var(--purple)',
     Icon: CheckCircle2,
   },
+  send_assessment: {
+    label: 'SEND ASSESSMENT',
+    color: 'var(--purple)',
+    Icon: Send,
+  },
+  resend_assessment_invite: {
+    label: 'RESEND INVITE',
+    color: 'var(--purple)',
+    Icon: Send,
+  },
   advance: {
     label: 'ADVANCE',
     color: 'var(--purple)',
@@ -154,7 +164,7 @@ export const ScoreChip = ({ score, size = 'md' }) => {
   const small = size === 'sm';
   return (
     <span
-      title={`Tali score ${value} / 100`}
+      title={`Taali score ${value} / 100`}
       style={{
         display: 'inline-flex',
         alignItems: 'baseline',
@@ -322,3 +332,49 @@ export const formatUsd = (cents) => {
 };
 
 export const TeachIcon = Brain;
+
+// Map raw backend pause reasons to short, recruiter-friendly labels. The
+// backend writes implementation-detail strings like "monthly USD cap reached:
+// 5012c >= 5000c"; we don't want that surfaced. Returns null for anything
+// unrecognized so callers can fall back to a plain "PAUSED" / "budget
+// reached". Shared by HomeRoles (per-role table) and AgentSidebar (agent
+// rail) so the two surfaces can't drift.
+export const humanizePausedReason = (reason) => {
+  if (!reason) return null;
+  const r = String(reason).toLowerCase();
+  if (r.startsWith('monthly usd cap')) return 'monthly budget reached';
+  if (r.startsWith('role paused')) return null;
+  if (r.includes('decision budget')) return 'cycle limit reached';
+  return null;
+};
+
+// Turn a raw backend decision status into recruiter-readable copy. Known
+// statuses get a fixed label; anything else has underscores replaced and its
+// first letter capitalized. Shared by the History table (HomeEverything) and
+// the resolved feed rows (ActivityFeed) so the two surfaces stay in sync.
+const STATUS_LABELS = {
+  approved: 'Approved',
+  overridden: 'Overridden',
+  reverted_for_feedback: 'Sent back to teach',
+  auto_applied: 'Auto-applied',
+  discarded: 'Discarded',
+  expired: 'Expired',
+  pending: 'Pending',
+};
+
+export const humanizeStatus = (status) => {
+  if (!status) return '';
+  const key = String(status);
+  if (STATUS_LABELS[key]) return STATUS_LABELS[key];
+  const spaced = key.replace(/_/g, ' ');
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+};
+
+// Lowercase sentence form of a status for inline interpolation ("— approved",
+// "— auto-applied"). Shares STATUS_LABELS with humanizeStatus so the wording
+// can't drift between the History table and the feed rows.
+export const humanizeStatusInline = (status) => {
+  const label = humanizeStatus(status);
+  if (!label) return '';
+  return label.charAt(0).toLowerCase() + label.slice(1);
+};

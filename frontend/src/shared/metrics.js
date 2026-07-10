@@ -227,7 +227,7 @@ export const budgetTile = (spentCents, capCents) => {
     value: formatMoneyUsd(spent),
     unit: hasCap ? `/ ${formatMoneyUsd(cap)}` : null,
     pct: barPct,
-    sub: hasCap ? `${rawPct}% · proj ${formatMoneyUsd(projectedCents)} EOM` : 'no cap',
+    sub: hasCap ? `${rawPct}% used · projected ${formatMoneyUsd(projectedCents)} this month` : 'no cap set',
     over: rawPct != null && rawPct > 100,
   };
 };

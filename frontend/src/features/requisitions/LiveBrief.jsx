@@ -55,7 +55,7 @@ function ValueDisplay({ field, value }) {
     return (
       <div className="rq-chips">
         {items.map((it, i) => (
-          <span key={i} className="rq-chip">{typeof it === 'string' ? it : JSON.stringify(it)}</span>
+          <span key={i} className="rq-chip">{typeof it === 'string' ? it : formatStructRow(it)}</span>
         ))}
       </div>
     );

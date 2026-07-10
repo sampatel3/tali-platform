@@ -451,7 +451,7 @@ export function ClientIntakePage() {
           </h1>
           <p className="ci-lede">
             Chat with our assistant the way you'd brief a colleague — what the role is, what great looks
-            like, must-haves and nice-to-haves. Paste notes or a draft JD if you have one. It fills in
+            like, must-haves and nice-to-haves. Paste notes or a draft job description if you have one. It fills in
             beside the conversation as you go.
           </p>
         </header>
@@ -497,7 +497,7 @@ export function ClientIntakePage() {
                 >
                   <Paperclip size={14} /> Attach
                 </button>
-                <span className="ci-attach-hint">notes or a JD · or paste an image</span>
+                <span className="ci-attach-hint">notes or a job description · or paste an image</span>
                 <input
                   ref={fileInputRef}
                   type="file"

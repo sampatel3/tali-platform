@@ -12,7 +12,6 @@ const AssessmentPage = lazy(() => import('../assessment_runtime/AssessmentPage')
 
 const getErrorMessage = (error, fallback) => (
   error?.response?.data?.detail
-  || error?.message
   || fallback
 );
 
@@ -33,7 +32,7 @@ const formatDisplayLabel = (value) => {
       if (lower === 'ai') return 'AI';
       if (lower === 'aws') return 'AWS';
       if (lower === 'api') return 'API';
-      if (lower === 'llm') return 'LLM';
+      if (lower === 'llm') return 'AI';
       return lower.charAt(0).toUpperCase() + lower.slice(1);
     })
     .join(' ');
@@ -211,7 +210,25 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
             <Spinner size={32} />
           </div>
         ) : filteredTasks.length === 0 ? (
-          <div className="tasks-empty-panel">No tasks available</div>
+          tasks.length === 0 ? (
+            <div className="tasks-empty-panel">No tasks in the library yet.</div>
+          ) : (
+            <div className="tasks-empty-panel">
+              No tasks match your filters.{' '}
+              <button
+                type="button"
+                className="underline"
+                onClick={() => {
+                  setQuery('');
+                  setRoleFilter('all');
+                  setDifficultyFilter('all');
+                  setTypeFilter('all');
+                }}
+              >
+                Clear filters
+              </button>
+            </div>
+          )
         ) : (
           <div className="space-y-9">
             {groupedTasks.map(([role, items]) => (

@@ -513,7 +513,7 @@ export const AssessmentWorkspace = ({
             {editorVisible ? (
               <div
                 role="separator"
-                aria-label="Resize Claude panel"
+                aria-label="Resize AI panel"
                 aria-orientation="vertical"
                 tabIndex={0}
                 onMouseDown={handleResizeStart}
@@ -529,10 +529,10 @@ export const AssessmentWorkspace = ({
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <div className="grid h-6 w-6 place-items-center rounded-[7px] bg-[linear-gradient(135deg,var(--purple)_0%,var(--purple-soft)_100%)] font-mono text-[0.625rem] font-semibold text-[var(--taali-inverse-text)]">
-                      C
+                      T
                     </div>
                     <div className="min-w-0">
-                      <div className="truncate text-[0.75rem] font-semibold text-[var(--ink)]">Claude</div>
+                      <div className="truncate text-[0.75rem] font-semibold text-[var(--ink)]">Taali AI</div>
                       <div className="truncate font-mono text-[0.5625rem] uppercase tracking-[0.08em] text-[var(--mute)]">
                         Live repo assistant
                       </div>

@@ -145,7 +145,7 @@ export const CandidateEvaluateTab = ({
           <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Role criteria</div>
           <div className="mt-2 text-xl font-semibold text-[var(--taali-text)]">Rate how the candidate meets each must-have.</div>
           <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
-            TAALI keeps the underlying role-fit evidence beside the recruiter decision.
+            Taali keeps the underlying role-fit evidence beside the recruiter decision.
           </p>
 
           <div className="mt-5 space-y-4">
@@ -202,7 +202,7 @@ export const CandidateEvaluateTab = ({
         <div className="mb-2 font-mono text-xs font-bold text-gray-600">Manual rubric evaluation (excellent / good / poor). Add evidence per category.</div>
 
         {categories.length === 0 ? (
-          <p className="font-mono text-sm text-gray-500">No evaluation rubric for this task. Rubric comes from the task definition.</p>
+          <p className="font-mono text-sm text-gray-500">This task doesn&apos;t have an evaluation rubric yet. Once one is added to the task, you can grade the assessment here.</p>
         ) : (
           <>
             {categories.map(([key, config]) => {

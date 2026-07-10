@@ -876,7 +876,7 @@ describe('AssessmentsPage', () => {
       expect(screen.getAllByText('Role').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Task').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Status').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText('TAALI Score').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Taali Score').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Assessment Score').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Sent').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Completed').length).toBeGreaterThanOrEqual(1);

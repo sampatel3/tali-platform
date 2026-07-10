@@ -193,7 +193,7 @@ def test_batch_requeues_failed_decision_to_queue(db):
     db.expire_all()
     refreshed = db.query(AgentDecision).get(decision.id)
     assert refreshed.status == "pending", "must return to the queue, not be lost"
-    assert "Workable writeback failed" in (refreshed.resolution_note or "")
+    assert "Workable didn't accept the update" in (refreshed.resolution_note or "")
     job = db.query(BackgroundJobRun).get(job_id)
     assert job.status == "completed_with_errors" and job.counters["requeued"] == 1
 

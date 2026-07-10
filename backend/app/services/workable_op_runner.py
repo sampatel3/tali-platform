@@ -155,7 +155,7 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
                 db,
                 decision_id,
                 organization_id,
-                note=f"Returned to queue: Workable writeback failed ({exc.code}). {exc.message}",
+                note=f"Returned to queue: Workable didn't accept the update. {exc.message}",
             )
             counters["requeued"] += 1
         except HTTPException as exc:
@@ -178,7 +178,7 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
                 db,
                 decision_id,
                 organization_id,
-                note=f"Returned to queue after an unexpected error: {str(exc)[:180]}",
+                note="Returned to queue after an unexpected error. Please try approving it again.",
             )
             counters["failed"] += 1
     return counters
@@ -460,7 +460,7 @@ def surface_op_failure(
     trail so a dropped Workable write is never silent."""
     from ..domains.assessments_runtime.pipeline_service import append_application_event
 
-    note = f"Workable writeback failed ({error.code}) after retries: {error.message}"
+    note = f"Workable didn't accept the update after several tries. {error.message}"
     try:
         if op_type == OP_OVERRIDE_DECISION:
             _requeue_decision(db, int(payload["decision_id"]), int(organization_id), note=note)

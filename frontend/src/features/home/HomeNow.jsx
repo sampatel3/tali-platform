@@ -155,7 +155,7 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
           }))}
         >
           <RefreshCw size={12} strokeWidth={2.2} aria-hidden="true" />
-          {staleCount.toLocaleString()} need re-eval
+          {staleCount.toLocaleString()} scores out of date
         </button>
       ) : null}
     </div>
@@ -1205,7 +1205,7 @@ export const HomeNow = ({
                           </span>
                         ) : stages.length === 0 ? (
                           <span style={{ fontSize: '0.75rem', color: 'var(--mute)' }}>
-                            No advance stages in this Workable job — only Sourced / Applied. These candidates advance on Tali's internal stage; nothing posts to Workable. Add interview/offer stages to the job in Workable to move them there.
+                            No advance stages in this Workable job — only Sourced / Applied. These candidates advance on Taali's internal stage; nothing posts to Workable. Add interview/offer stages to the job in Workable to move them there.
                           </span>
                         ) : (
                           <div className="rq-modal-pills" role="radiogroup" aria-label={`Workable stage for ${r.role_name}`}>

@@ -37,9 +37,8 @@ export default function RoleFeedbackNotes({ roleId }) {
     try {
       const resp = await roles.listFeedbackNotes(roleId);
       setNotes(Array.isArray(resp?.data) ? resp.data : []);
-    } catch (err) {
-      const msg = err?.response?.data?.detail || err?.message || 'Failed to load feedback notes.';
-      setLoadError(typeof msg === 'string' ? msg : 'Failed to load feedback notes.');
+    } catch {
+      setLoadError('Couldn\'t load feedback notes — try again.');
     } finally {
       setLoading(false);
     }
@@ -63,9 +62,8 @@ export default function RoleFeedbackNotes({ roleId }) {
         await refresh();
       }
       setDraft('');
-    } catch (err) {
-      const msg = err?.response?.data?.detail || err?.message || 'Failed to save feedback.';
-      setSaveError(typeof msg === 'string' ? msg : 'Failed to save feedback.');
+    } catch {
+      setSaveError('Couldn\'t save your feedback — try again.');
     } finally {
       setSaving(false);
     }

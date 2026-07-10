@@ -73,7 +73,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
   const spec = DECISION_ACTIONS[decision.decision_type] || DEFAULT_ACTIONS;
   const PrimaryIcon = spec.primaryIcon || Check;
   const primaryTitle = staleEngineOnly
-    ? 'Scored by an older model — this approves the old score as-is. Re-evaluate to re-score first.'
+    ? 'Scored by an older version of Taali’s scoring — this approves the old score as-is. Re-evaluate first to refresh it.'
     : isStale
       ? 'Inputs changed since this was decided — this acts on them anyway. Re-evaluate first to refresh.'
       : undefined;
@@ -86,7 +86,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
           it lives in the recommendation slab below. */}
       <div className="rq-detail-head2">
         {decision.taali_score != null ? (
-          <ScoreRing score={decision.taali_score} size={58} label="TALI" />
+          <ScoreRing score={decision.taali_score} size={58} label="TAALI" />
         ) : (
           <Avatar initials={initialsFrom(decision.candidate_name)} size={52} />
         )}
@@ -215,7 +215,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
           <RefreshCw size={14} strokeWidth={2} aria-hidden="true" />
           <span>
             {staleEngineOnly
-              ? 'This score is from an older model. Re-evaluate to re-score on the current engine.'
+              ? 'This score came from an older version of Taali’s scoring. Re-evaluate to refresh it.'
               : `Inputs changed since this was decided${stalenessSummary ? ` · ${stalenessSummary}` : ''}. Re-evaluate before approving.`}
           </span>
         </div>
@@ -312,7 +312,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
         <div className="home-empty" style={{ marginTop: 12 }}>
           {decision.status === 'approved' ? 'Approved — actions are read-only.'
             : decision.status === 'overridden' ? 'Overridden — actions are read-only.'
-              : `Decision is ${decision.status}.`}
+              : `Decision is ${String(decision.status || '').replace(/_/g, ' ')} — actions are read-only.`}
         </div>
       )}
     </section>

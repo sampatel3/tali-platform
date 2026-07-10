@@ -222,7 +222,7 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
       {warnings.length ? (
         <div className="ev-warn">
           {warnings.map((w, i) => (
-            <span key={i}>{w.message || w.code}</span>
+            <span key={i}>{w.message || 'Some results may be incomplete.'}</span>
           ))}
         </div>
       ) : null}

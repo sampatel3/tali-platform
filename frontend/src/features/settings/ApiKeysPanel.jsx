@@ -6,8 +6,19 @@ import { useToast } from '../../context/ToastContext';
 // Read-only defaults when minting a key without touching the scope list.
 const READ_ONLY_DEFAULTS = ['roles:read', 'applications:read', 'assessments:read'];
 
-const getErrorMessage = (error, fallback) =>
-  error?.response?.data?.detail || error?.message || fallback;
+const getErrorMessage = (error, fallback) => {
+  const detail = error?.response?.data?.detail;
+  if (
+    typeof detail === 'string'
+    && detail.length > 0
+    && detail.length < 200
+    && !detail.trim().startsWith('{')
+    && !detail.trim().startsWith('[')
+  ) {
+    return detail;
+  }
+  return fallback;
+};
 
 const fmtDate = (value) => {
   if (!value) return '—';
@@ -251,7 +262,7 @@ export const ApiKeysPanel = () => {
                     ))}
                   </span>
                   <span>{fmtDate(key.last_used_at)}</span>
-                  <span>{revoked ? 'revoked' : (key.is_test ? 'test' : 'active')}</span>
+                  <span>{revoked ? 'Revoked' : (key.is_test ? 'Test' : 'Active')}</span>
                   <span>
                     {!revoked ? (
                       <button type="button" className="btn btn-sm" onClick={() => handleRevoke(key)}>Revoke</button>

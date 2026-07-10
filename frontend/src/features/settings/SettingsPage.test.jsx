@@ -261,7 +261,7 @@ describe('SettingsPage recruiter surface', () => {
 
     await waitFor(() => {
       expect(showToast).toHaveBeenCalledWith(
-        'Reconnect Workable with `w_candidates` scope to enable Workable invite, reject, and reopen actions.',
+        'Reconnect Workable with the "Write candidates" (w_candidates) permission to enable invite, reject, and reopen actions.',
         'error'
       );
     });
