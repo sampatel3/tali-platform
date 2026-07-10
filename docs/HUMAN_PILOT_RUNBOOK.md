@@ -1,14 +1,13 @@
 # Human Pilot Runbook
 
-Date: 2026-03-03 (canonical task set updated 2026-05-09 from 2 → 5 tasks)
+Date: 2026-03-03 (canonical set refreshed 2026-07-10; earlier revisions said 2, then 5 tasks)
 
-This runbook is for human pilots of the canonical assessment tasks:
-
-- `ai_eng_genai_production_readiness`
-- `data_eng_aws_glue_pipeline_recovery`
-- `platform_eng_aws_eks_misconfig_triage`
-- `platform_eng_azure_aks_misconfig_triage`
-- `scrum_master_sprint_recovery_scenario`
+This runbook is for human pilots of the canonical assessment tasks. The
+canonical set is exactly the specs in `backend/tasks/*.json` (10 as of
+2026-07-10) — that directory is the source of truth, enforced by
+`backend/tests/test_task_spec_contract.py`. Role-specific generated drafts
+(org-owned, `extra_data.generated`) are additional to this set and carry
+their own automated battle-test report (`scripts/battle_test_drafts.py`).
 
 ## Goal
 
@@ -22,20 +21,22 @@ Confirm that real candidate sessions behave correctly in production:
 
 ## Preflight
 
-Confirm the catalog is still exactly the canonical tasks:
+Confirm every catalog spec still satisfies the design contract, and that
+prod's active templates match the catalog (`check_two_task_rollout.py` was
+removed in the 2026-07 backend de-bloat; use these instead):
 
 ```bash
-PUBLIC_DB_URL=$(railway variables --service Postgres --json | /Users/sampatel/tali-platform/backend/.venv/bin/python -c "import json,sys; print(json.load(sys.stdin)['DATABASE_PUBLIC_URL'])")
-DATABASE_PUBLIC_URL="$PUBLIC_DB_URL" /Users/sampatel/tali-platform/backend/.venv/bin/python /Users/sampatel/tali-platform/scripts/check_two_task_rollout.py --since 2026-03-03T07:09:00Z
+# Contract: every backend/tasks/*.json validates (rubric sums to 1.0,
+# interrogation dim ↔ decision_points, jd_to_signal_map coverage, ...)
+cd backend && .venv/bin/python -m pytest tests/test_task_spec_contract.py -q
+
+# Prod: active org-less templates == catalog task_keys
+psql "$DATABASE_PUBLIC_URL" -c "SELECT task_key FROM tasks WHERE organization_id IS NULL AND is_active ORDER BY task_key;"
 ```
 
-Expected preflight state:
-
-- `active_template_count` is `5`
-- `active_task_keys` are the five canonical task keys above
-- `alerts` is empty
-
-Use a later `--since` timestamp once the pilot starts if you want the report to show only pilot-era sessions.
+Expected preflight state: the SQL list equals the catalog filenames; legacy
+templates (pre-catalog ids) stay `is_active = false` — they anchor historical
+assessments and must not be deleted.
 
 ## Expected Runtime Shape
 
@@ -71,11 +72,12 @@ During the session, verify manually:
 
 ## Live Monitoring
 
-Check the rollout health summary:
+Check funnel health (per-status counts + the first-minutes events shipped
+2026-07-10: `preview_viewed`, `runtime_loaded`, `file_opened`, `first_prompt`):
 
 ```bash
-PUBLIC_DB_URL=$(railway variables --service Postgres --json | /Users/sampatel/tali-platform/backend/.venv/bin/python -c "import json,sys; print(json.load(sys.stdin)['DATABASE_PUBLIC_URL'])")
-DATABASE_PUBLIC_URL="$PUBLIC_DB_URL" /Users/sampatel/tali-platform/backend/.venv/bin/python /Users/sampatel/tali-platform/scripts/check_two_task_rollout.py --since 2026-03-03T07:09:00Z
+psql "$DATABASE_PUBLIC_URL" -c "SELECT status, count(*) FROM assessments WHERE created_at > now() - interval '7 days' AND is_voided IS NOT TRUE GROUP BY 1;"
+curl -s https://resourceful-adaptation-production.up.railway.app/healthz/github   # {ok:true} or provisioning is down
 ```
 
 Pull backend logs if a session looks wrong:
@@ -88,7 +90,7 @@ railway logs --service resourceful-adaptation --environment production --lines 2
 
 Pause the pilot immediately if any of these appear:
 
-- active template count drops below `5` (or grows unexpectedly without an update to `CANONICAL_TASK_KEYS`)
+- prod's active org-less templates stop matching `backend/tasks/*.json` (drop OR unexplained growth)
 - any bootstrap failure is recorded
 - any completed assessment has `tests_total = 0`
 - candidate start fails for any canonical task
