@@ -1149,6 +1149,29 @@ def generate_assessment_task_for_role(self, role_id: int, organization_id: int):
         db.close()
 
 
+@celery_app.task
+def recompute_task_calibrations():
+    """Weekly per-(task, role_family) calibration sweep.
+
+    ``sub_agents.task_calibration.recompute_all`` (predictive quality =
+    correlation of assessment score vs realised outcome, with retire
+    flagging) existed but was never on the beat schedule, so calibrations
+    only moved when someone ran it by hand. Pure SQL/python — no model
+    calls, no score changes; writes ``task_calibrations`` rows only.
+    """
+    from sqlalchemy.orm import Session
+    from ..platform.database import SessionLocal
+    from ..sub_agents.task_calibration import recompute_all
+
+    db: Session = SessionLocal()
+    try:
+        summary = recompute_all(db)
+        logger.info("Task calibration sweep: %s", summary)
+        return {"status": "ok", **summary}
+    finally:
+        db.close()
+
+
 @celery_app.task(bind=True, max_retries=1, default_retry_delay=120)
 def battle_test_generated_task(self, task_id: int, organization_id: int):
     """Run the E2B battle-test on a generated draft and stamp the report card.
