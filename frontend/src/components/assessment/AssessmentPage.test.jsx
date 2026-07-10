@@ -207,7 +207,7 @@ describe('AssessmentPage live agentic runtime', () => {
     render(<AssessmentPage token="tok4" startData={startData} />);
 
     expect(await screen.findByText('Assessment brief')).toBeInTheDocument();
-    expect(screen.getByText(/Use Claude for scoped help, then validate the patch path yourself/i)).toBeInTheDocument();
+    expect(screen.getByText(/Use the AI assistant for scoped help, then validate the patch path yourself/i)).toBeInTheDocument();
     // Clone command + "Clone command available" chip were removed
     // 2026-05-26 (Sam: "hide it for candidates"). The repo URL is a
     // backend artifact — candidates work in-browser. The replacement
@@ -245,7 +245,7 @@ describe('AssessmentPage live agentic runtime', () => {
 
     expect(await screen.findByText('Assessment brief')).toBeInTheDocument();
     expect(screen.getAllByText(/Investigate and patch the backfill job/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/Use Claude for scoped help, then validate the patch path yourself/i)).toBeInTheDocument();
+    expect(screen.getByText(/Use the AI assistant for scoped help, then validate the patch path yourself/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Rubric$/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Tests$/ })).not.toBeInTheDocument();
     expect(screen.queryByText(/Candidate-safe rubric/i)).not.toBeInTheDocument();
@@ -304,7 +304,7 @@ describe('AssessmentPage live agentic runtime', () => {
       fireEvent.click(await screen.findByRole('button', { name: /^main\.py$/i }));
     });
 
-    const promptInput = await screen.findByPlaceholderText(/Ask Claude to inspect the repo/i);
+    const promptInput = await screen.findByPlaceholderText(/Ask the AI assistant to inspect the repo/i);
     fireEvent.change(promptInput, { target: { value: 'What files matter?' } });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /Send/i }));
@@ -474,7 +474,7 @@ describe('AssessmentPage live agentic runtime', () => {
 
     render(<AssessmentPage token="tok9" startData={startData} />);
 
-    expect(await screen.findByText(/Claude budget exhausted for this task/i)).toBeInTheDocument();
+    expect(await screen.findByText(/AI budget used up for this task/i)).toBeInTheDocument();
   });
 
   it('updates Claude credit display after an agentic chat response', async () => {
@@ -515,7 +515,7 @@ describe('AssessmentPage live agentic runtime', () => {
 
     expect(await screen.findByText(/\$1\.00 of \$1\.00/i)).toBeInTheDocument();
 
-    const promptInput = await screen.findByPlaceholderText(/Ask Claude to inspect the repo/i);
+    const promptInput = await screen.findByPlaceholderText(/Ask the AI assistant to inspect the repo/i);
     fireEvent.change(promptInput, { target: { value: 'Help me debug' } });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /Send/i }));

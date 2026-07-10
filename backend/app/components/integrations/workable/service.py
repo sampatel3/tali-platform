@@ -535,12 +535,12 @@ class WorkableService:
         time_taken = assessment_data.get("time_taken", "N/A")
         results_url = assessment_data.get("results_url", "")
         body = (
-            "TAALI Assessment Complete\n\n"
+            "Taali assessment complete\n\n"
             f"Overall score: {score}/10\n"
             f"Tests passed: {tests_passed}/{tests_total}\n"
             f"Time taken: {time_taken} minutes\n"
             f"Full recruiter report: {results_url}\n\n"
-            "This result was posted automatically by TAALI."
+            "Posted automatically by Taali."
         )
         return self.post_candidate_comment(candidate_id, member_id, body)
 

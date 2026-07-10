@@ -61,7 +61,7 @@ export const FunnelBoard = ({
               const started = Number(stageCounts?.in_assessment || 0);
               const opened = Number(stageCounts?.invited_opened || 0);
               const delivered = Number(stageCounts?.invited_delivered || 0);
-              if (delivered > 0) invitedChips.push({ key: 'delivered', count: delivered, label: 'delivered', tone: 'pending', tip: 'Invites delivered to the candidate (Resend) — a sub-count of Invited' });
+              if (delivered > 0) invitedChips.push({ key: 'delivered', count: delivered, label: 'delivered', tone: 'pending', tip: 'Invite emails delivered to the candidate — a sub-count of Invited' });
               if (opened > 0) invitedChips.push({ key: 'opened', count: opened, label: 'opened', tone: 'pending', tip: 'Invite emails opened — a sub-count of Invited' });
               if (started > 0) invitedChips.push({ key: 'started', count: started, label: 'started', tone: 'send', tip: 'Assessments started, not yet completed — a sub-count of Invited' });
             }

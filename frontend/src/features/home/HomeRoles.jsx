@@ -6,19 +6,7 @@
 import React, { useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 
-import { formatUsd } from './atoms';
-
-// Map raw backend pause reasons to short, recruiter-friendly labels.
-// The backend writes implementation-detail strings like "monthly USD cap
-// reached: 5012c >= 5000c"; we don't want that uppercased on the home page.
-const humanizePausedReason = (reason) => {
-  if (!reason) return null;
-  const r = String(reason).toLowerCase();
-  if (r.startsWith('monthly usd cap')) return 'Monthly budget reached';
-  if (r.startsWith('role paused')) return null;
-  if (r.includes('decision budget')) return 'Cycle limit reached';
-  return String(reason).slice(0, 32);
-};
+import { formatUsd, humanizePausedReason } from './atoms';
 
 export const HomeRoles = ({ rows, loading, onNavigate, embedded = false }) => {
   const [open, setOpen] = useState(false);

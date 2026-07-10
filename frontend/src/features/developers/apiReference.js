@@ -2,7 +2,7 @@
 // Adding a public endpoint = one entry here; the portal renders from this.
 // When a custom API domain is set up, change API_BASE in this one place.
 
-export const API_BASE = 'https://resourceful-adaptation-production.up.railway.app/public/v1';
+export const API_BASE = 'https://api.taali.ai/public/v1';
 
 export const SECTIONS = [
   { id: 'overview', label: 'Overview' },

@@ -122,7 +122,7 @@ const GraphView = ({ graph }) => {
   return (
     <div className="cp-graph">
       <div className="cp-graph-head">
-        <span>{graph.nodes.length} nodes · {graph.edges.length} edges</span>
+        <span>{graph.nodes.length} entries · {graph.edges.length} connections</span>
         <span className="cp-graph-legend">
           <span className="cp-graph-dot" style={{ background: NODE_COLOR.Person }} /> Person
           <span className="cp-graph-dot" style={{ background: NODE_COLOR.Company }} /> Company

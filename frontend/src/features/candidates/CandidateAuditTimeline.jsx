@@ -3,6 +3,7 @@ import { Bot, RefreshCw, User, Cpu, GitMerge } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
 import { Button, Panel, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { formatStatusLabel } from './candidatesUiUtils';
 
 const ACTOR_META = {
   recruiter: { label: 'Recruiter', Icon: User, tone: 'text-blue-600' },
@@ -24,12 +25,17 @@ const formatStageEdge = (event) => {
 
 const renderMetadata = (metadata) => {
   if (!metadata || typeof metadata !== 'object') return null;
-  const entries = Object.entries(metadata);
+  const entries = Object.entries(metadata).filter(([, value]) => value != null);
   if (!entries.length) return null;
   return (
-    <pre className="mt-1 max-h-40 overflow-auto rounded bg-taali-bg-muted/40 p-2 text-[0.6875rem] leading-snug text-taali-fg">
-      {JSON.stringify(metadata, null, 2)}
-    </pre>
+    <dl className="mt-1 max-h-40 overflow-auto rounded bg-taali-bg-muted/40 p-2 text-[0.6875rem] leading-snug text-taali-fg">
+      {entries.map(([key, value]) => (
+        <div key={key} className="flex gap-2">
+          <dt className="font-medium text-taali-fg-muted">{key.replace(/_/g, ' ')}:</dt>
+          <dd className="min-w-0 break-words">{typeof value === 'object' ? JSON.stringify(value) : String(value)}</dd>
+        </div>
+      ))}
+    </dl>
   );
 };
 
@@ -47,7 +53,7 @@ export const CandidateAuditTimeline = ({ applicationId }) => {
       setEvents(Array.isArray(res.data) ? res.data : []);
       setError(null);
     } catch (err) {
-      setError(err?.response?.data?.detail || err.message || 'Failed to load audit timeline');
+      setError(err?.response?.data?.detail || 'Failed to load audit timeline');
     } finally {
       setLoading(false);
     }
@@ -96,7 +102,7 @@ export const CandidateAuditTimeline = ({ applicationId }) => {
                 <div className="flex min-w-0 items-start gap-2">
                   <ActorIcon size={14} className={`mt-0.5 ${actor.tone}`} aria-hidden />
                   <div className="min-w-0">
-                    <div className="font-medium">{event.event_type}</div>
+                    <div className="font-medium">{formatStatusLabel(event.event_type)}</div>
                     {stageEdge ? <div className="text-taali-fg-muted">{stageEdge}</div> : null}
                     {event.reason ? <div className="mt-0.5 text-taali-fg">{event.reason}</div> : null}
                   </div>

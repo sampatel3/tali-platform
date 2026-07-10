@@ -32,7 +32,7 @@ export const ResetPasswordPage = ({ onNavigate, token }) => {
       await auth.resetPassword(token, password);
       setSuccess(true);
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || 'Reset failed');
+      setError('We couldn\'t update your password. The link may have expired — request a new one below.');
     } finally {
       setLoading(false);
     }
@@ -63,7 +63,7 @@ export const ResetPasswordPage = ({ onNavigate, token }) => {
       onNavigate={onNavigate}
       kicker="SET A NEW PASSWORD"
       title="Choose something memorable"
-      sub="Use a passphrase, not a word. Mix at least 12 characters; we won't make you add a symbol."
+      sub="Use a passphrase, not a word. At least 8 characters; we won't make you add a symbol."
       topRight={(
         <span>
           Back to{' '}
@@ -93,7 +93,7 @@ export const ResetPasswordPage = ({ onNavigate, token }) => {
           placeholder="••••••••"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          helper="12+ characters. Strong: a string of words you'll remember."
+          helper="At least 8 characters. Strong: a string of words you'll remember."
         />
         <AuthField
           label="Confirm new password"

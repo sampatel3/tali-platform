@@ -629,7 +629,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       {
         question: 'Where did AI help, and where did you deliberately slow down or reject its suggestion?',
         listenFor: 'Clear boundaries around AI assistance, verification, and accountability.',
-        source: 'Taali + Fireflies',
+        source: 'Taali',
       },
     ].slice(0, 4);
     return { stageOne, stageTwo };
@@ -806,7 +806,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       // Clipboard API unavailable / blocked — surface the URL so the
       // user can copy it manually instead of silently throwing away a
       // minted link.
-      showToast(`Link ready, copy failed: ${url}`, 'info');
+      showToast(`Couldn't copy automatically — here's your link: ${url}`, 'info');
     } finally {
       setSharingMode('');
     }
@@ -979,7 +979,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           >
             <div style={{ fontSize: '13.5px', color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 600 }}>
               <strong>Filtered out by pre-screen{preScreenScore != null ? ` · ${Math.round(preScreenScore)}/100` : ''}.</strong>{' '}
-              {preScreenReason || 'A cheap pre-screen decided this CV did not plausibly meet the role must-haves.'}
+              {preScreenReason || 'Pre-screening found this CV unlikely to meet the role’s must-haves.'}
             </div>
             <button
               type="button"
@@ -1001,7 +1001,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             <p style={{ fontSize: '14px', color: 'var(--ink-2)', margin: '0 0 12px' }}>
               {`Shared for ${application.client_share_summary.role}.`}
               {Number.isFinite(Number(application.client_share_summary.score_100))
-                ? ` TAALI score: ${Math.round(Number(application.client_share_summary.score_100))}/100.`
+                ? ` Taali score: ${Math.round(Number(application.client_share_summary.score_100))}/100.`
                 : ''}
             </p>
             {Array.isArray(application.client_share_summary.highlights)
@@ -1934,7 +1934,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           onClose={() => setAlternativeFor(null)}
           onSubmitted={async () => {
             showToast(
-              `${alternativeFor.alternative.confirmLabel || 'Decision'} dispatched.`,
+              `${alternativeFor.alternative.confirmLabel || 'Decision'} done.`,
               'success',
             );
             await Promise.all([loadAgentDecision(), loadStandingReport()]);

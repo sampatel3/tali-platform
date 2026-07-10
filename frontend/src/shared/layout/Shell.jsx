@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Bell,
   Briefcase,
   CheckSquare,
   ChevronDown,
@@ -354,10 +353,6 @@ export const Shell = ({ currentPage, onNavigate }) => {
           </PageLink>
         ) : null}
         <GlobalSearch onNavigate={onNavigate} />
-        <button type="button" className="mc-icon-btn" aria-label="Notifications">
-          <Bell size={15} strokeWidth={1.7} />
-          <span className="mc-dot" aria-hidden="true" />
-        </button>
         <div className="mc-nav-avatar-wrap">
           <button
             type="button"

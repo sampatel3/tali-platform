@@ -149,7 +149,6 @@ const AgentStrip = ({
       const r = String(pausedReason || '').toLowerCase();
       if (r.startsWith('monthly usd cap')) message = 'Monthly budget reached';
       else if (r.includes('decision budget')) message = 'Cycle limit reached';
-      else if (pausedReason) message = String(pausedReason).slice(0, 36);
       else message = 'Auto-paused';
     }
   } else if (!onActivate) {
@@ -427,8 +426,7 @@ const tickFromActivity = (activity) => {
       prefix = `Paused — ${activity.reason || 'budget reached'}`;
       break;
     default:
-      prefix = activity.reason
-        || (activity.event_type ? String(activity.event_type).replace(/_/g, ' ') : null);
+      prefix = activity.reason ? String(activity.reason) : null;
   }
   if (!prefix) return null;
   const ago = activity.created_at ? formatRelative(activity.created_at) : null;
@@ -446,7 +444,7 @@ const tickFromCurrentRun = (run) => {
     case 'queue_advance_decision': return 'Drafting an advance recommendation';
     case 'get_application': return 'Reading a candidate';
     case 'get_candidate_cv': return 'Inspecting a CV';
-    default: return String(last.name).replace(/_/g, ' ');
+    default: return 'Working…';
   }
 };
 

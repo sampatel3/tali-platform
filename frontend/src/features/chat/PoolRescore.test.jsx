@@ -26,7 +26,6 @@ test('shows the re-score button with the cost estimate', () => {
 });
 
 test('confirm → start → poll → renders true scores ranked', async () => {
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
   rolesApi.startPoolRescore.mockResolvedValue({ data: { job_id: 7 } });
   rolesApi.getPoolRescore.mockResolvedValue({
     data: {
@@ -39,7 +38,9 @@ test('confirm → start → poll → renders true scores ranked', async () => {
   });
 
   render(<PoolRescore requirementText="banking domain" candidates={candidates} />);
+  // Open the in-app confirm dialog, then confirm.
   fireEvent.click(screen.getByText(/Re-score top 2/));
+  fireEvent.click(screen.getByRole('button', { name: 'Re-score' }));
 
   await waitFor(() => expect(screen.getByText('True fit vs your requirement')).toBeInTheDocument());
   expect(rolesApi.startPoolRescore).toHaveBeenCalledWith('banking domain', [1, 2]);
@@ -51,8 +52,8 @@ test('confirm → start → poll → renders true scores ranked', async () => {
 });
 
 test('does nothing if the user cancels the confirm', () => {
-  vi.spyOn(window, 'confirm').mockReturnValue(false);
   render(<PoolRescore requirementText="banking domain" candidates={candidates} />);
   fireEvent.click(screen.getByText(/Re-score top 2/));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   expect(rolesApi.startPoolRescore).not.toHaveBeenCalled();
 });

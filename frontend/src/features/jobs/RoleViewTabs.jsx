@@ -6,7 +6,7 @@ import { useUrlState } from '../../shared/hooks/useUrlState';
 const TABS = [
   { id: 'table', label: 'Candidates' },
   { id: 'pipeline', label: 'Pipeline' },
-  { id: 'activity', label: 'Job Specification' },
+  { id: 'activity', label: 'Job spec' },
   { id: 'role-fit', label: 'Agent settings' },
 ];
 

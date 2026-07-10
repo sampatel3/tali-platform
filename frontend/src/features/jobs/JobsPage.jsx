@@ -24,7 +24,7 @@ import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 import { useAgentStatusOrg } from '../../shared/layout/AgentBar';
 import { RoleSheet } from '../candidates/RoleSheet';
-import { trimOrUndefined } from '../candidates/candidatesUiUtils';
+import { getErrorMessage, trimOrUndefined } from '../candidates/candidatesUiUtils';
 import {
   EmptyState,
   Select,
@@ -601,7 +601,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       setRoleSheetOpen(false);
       await loadJobsHub();
     } catch (err) {
-      setRoleSheetError(err?.response?.data?.detail || 'Failed to save role.');
+      setRoleSheetError(getErrorMessage(err, 'Failed to save role.'));
     } finally {
       setSavingRole(false);
     }
@@ -845,9 +845,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               </Select>
             </label>
           ) : null}
-          <button type="button" className="f-chip add" disabled title="Additional recruiter filters are coming next.">
-            + Add filter
-          </button>
           {rolesPartial ? (
             <span
               className="flex items-center gap-1 text-xs text-[var(--mute)]"
@@ -1011,7 +1008,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                           roleDept || null,
                           roleLoc || null,
                           lastRoleActivity ? `updated ${formatRelativeDateTime(lastRoleActivity)}` : null,
-                        ].filter(Boolean).join(' · ') || 'No metadata yet'}
+                        ].filter(Boolean).join(' · ') || 'No details yet'}
                       </div>
                     </div>
                     {agentPaused ? (

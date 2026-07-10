@@ -931,7 +931,8 @@ def re_evaluate(
             db.commit()
         except Exception as exc:
             db.rollback()
-            raise HTTPException(status_code=500, detail=f"re-score failed: {exc}")
+            logger.exception("re-score failed decision_id=%s", decision_id)
+            raise HTTPException(status_code=500, detail="Re-score failed. Please try again.")
         return ReEvaluateResult(
             decision_id=decision_id,
             role_id=int(decision.role_id),

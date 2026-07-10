@@ -58,7 +58,7 @@ const SHOWCASE_TABS = [
     why: {
       headline: 'Step into the chat-first workspace the candidate drives.',
       outcomes: [
-        'Claude at the centre, a real editor + sandboxed runtime alongside — the agent is the work',
+        'Taali\'s AI at the centre, a real editor + sandboxed runtime alongside — the agent is the work',
         'Every prompt, paste, and edit captured for replay',
         'No proctoring overlay — the transcript is the record',
       ],
@@ -74,7 +74,7 @@ const SHOWCASE_TABS = [
     why: {
       headline: 'The standing report your hiring manager opens.',
       outcomes: [
-        'Five evidence-linked axes — the 4 Ds + Deliverable: Delegation, Description, Discernment, Diligence, Deliverable',
+        'Five evidence-linked axes — the 5 Ds: Delegation, Description, Discernment, Diligence, Deliverable',
         'Every score links back to the moment in the session it came from',
         'Shareable link, expiring, no PDFs, no leaks',
       ],
@@ -294,7 +294,7 @@ export const DemoShowcasePage = ({ onNavigate }) => {
               Wire your <em>real pipeline</em> into Taali. Start with $1.50 in free credits.
             </h2>
             <p className="mc-show-cta-sub">
-              Connect Workable, point the agent at one role, and watch it triage your next batch of CVs by morning. Usage-based — like Anthropic, OpenAI, Cursor. No card, no subscription, no monthly minimum.
+              Connect Workable, point the agent at one role, and watch it triage your next batch of CVs by morning. Usage-based — pay only for what you use. No card, no subscription, no monthly minimum.
             </p>
           </div>
           <div className="mc-show-cta-side">

@@ -6,15 +6,6 @@ import { ChatComposer, ChatMarkdown } from '../../shared/chat';
 
 const MESSAGE_BUFFER_LIMIT = 30;
 
-// Compact token-count formatter (12000 → "12.0k", 8 → "8"). Used in
-// the token-tracker pill so the candidate sees activity without a
-// big four-digit number stealing focus.
-const formatTokenCount = (n) => {
-  const safe = Math.max(0, Number(n) || 0);
-  if (safe < 1000) return String(Math.round(safe));
-  return `${(safe / 1000).toFixed(safe < 10_000 ? 1 : 0)}k`;
-};
-
 const formatCostUsd = (usd) => {
   const safe = Math.max(0, Number(usd) || 0);
   // Always two decimals so the pill width stays stable as the number
@@ -40,13 +31,27 @@ const errorMessageFromException = (err) => {
   if (detail && typeof detail === 'object' && typeof detail.message === 'string' && detail.message.trim()) {
     return detail.message;
   }
-  if (typeof err?.message === 'string' && err.message.trim()) return err.message;
-  return 'Claude prompt failed.';
+  return "Your message didn't go through. Check your connection and try again.";
 };
 
 const MessageRow = ({ entry }) => {
-  const isUser = String(entry?.role || '').toLowerCase() === 'user';
+  const role = String(entry?.role || '').toLowerCase();
+  const isUser = role === 'user';
+  const isError = role === 'error';
   const content = String(entry?.content || '');
+
+  if (isError) {
+    return (
+      <div className="text-[0.875rem]">
+        <div className="mb-1.5 flex gap-2 font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[var(--taali-danger)]">
+          <span>Message not sent</span>
+        </div>
+        <div className="inline-block max-w-[94%] rounded-[12px] rounded-tl-[4px] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] px-4 py-2.5 text-left">
+          <p className="whitespace-pre-wrap text-[0.875rem] leading-[1.55] text-[var(--taali-danger)]">{content}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`text-[0.875rem] ${isUser ? 'text-right' : ''}`}>
@@ -55,7 +60,7 @@ const MessageRow = ({ entry }) => {
           isUser ? 'justify-end' : 'justify-start'
         }`}
       >
-        <span>{isUser ? 'You' : 'Claude'}</span>
+        <span>{isUser ? 'You' : 'Taali AI'}</span>
       </div>
       <div
         className={`inline-block max-w-[94%] rounded-[12px] px-4 py-2.5 text-left ${
@@ -216,7 +221,7 @@ export const AssessmentClaudeChat = ({
     try {
       const res = await assessments.claudeChat(assessmentId, requestPayload, token);
       const payload = res?.data || {};
-      const reply = String(payload.content || '').trim() || 'No response from Claude.';
+      const reply = String(payload.content || '').trim() || 'No response — try asking again.';
 
       if (payload.claude_budget && typeof payload.claude_budget === 'object') {
         try {
@@ -233,7 +238,7 @@ export const AssessmentClaudeChat = ({
     } catch (err) {
       const errorText = errorMessageFromException(err);
       setMessages((prev) => {
-        const next = [...prev, { role: 'assistant', content: `[Error] ${errorText}` }];
+        const next = [...prev, { role: 'error', content: errorText }];
         return next.slice(-MESSAGE_BUFFER_LIMIT);
       });
     } finally {
@@ -254,10 +259,10 @@ export const AssessmentClaudeChat = ({
 
 
   const placeholder = useMemo(() => {
-    if (locked) return 'Read-only demo — the transcript above is a real candidate session. Book a demo to drive Claude yourself.';
-    if (isBudgetExhausted) return 'Claude budget exhausted for this assessment.';
-    if (disabled) return 'Claude is unavailable right now.';
-    return 'Ask Claude to inspect the repo, explain a failure, or suggest a patch path…';
+    if (locked) return 'Read-only demo — this transcript is from a real candidate session. Book a demo to try it live.';
+    if (isBudgetExhausted) return 'Your AI budget for this assessment is used up.';
+    if (disabled) return 'The AI assistant is unavailable right now.';
+    return 'Ask the AI assistant to inspect the repo, explain a failure, or suggest a patch path…';
   }, [disabled, isBudgetExhausted, locked]);
 
   // Auto-scroll the message list as new turns arrive.
@@ -274,17 +279,17 @@ export const AssessmentClaudeChat = ({
       className="flex h-full min-h-0 flex-col rounded-[var(--radius-lg)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)]"
       data-testid="assessment-claude-chat"
     >
-      {/* Token tracker. Always visible so the candidate has a persistent
-          read on accumulating spend; pulses briefly after each Claude
-          response so they SEE the system ticking. Data comes from the
-          same claude_budget snapshot the workspace top-bar uses. */}
+      {/* Activity tracker. Always visible so the candidate has a persistent
+          read on accumulating spend; pulses briefly after each response so
+          they SEE the system ticking. Data comes from the same claude_budget
+          snapshot the workspace top-bar uses. */}
       <div
         className={`flex items-center justify-between gap-3 border-b border-[var(--taali-runtime-border)] px-5 py-2.5 font-mono text-[0.6875rem] transition-colors duration-700 ${
           trackerHighlight
             ? 'bg-[var(--purple-soft)] text-[var(--purple)]'
             : 'text-[var(--mute)]'
         }`}
-        data-testid="assessment-claude-chat-token-tracker"
+        data-testid="assessment-claude-chat-activity-tracker"
       >
         <div className="flex items-center gap-2">
           <Activity size={12} className={trackerHighlight ? 'animate-pulse' : ''} />
@@ -293,11 +298,7 @@ export const AssessmentClaudeChat = ({
           </span>
         </div>
         <div className="flex items-center gap-3">
-          <span data-testid="token-tracker-tokens">
-            {formatTokenCount(tokensUsed)} tokens
-          </span>
-          <span aria-hidden="true">·</span>
-          <span data-testid="token-tracker-usd">
+          <span data-testid="activity-tracker-usd">
             {formatCostUsd(usedUsd)}
           </span>
         </div>
@@ -313,9 +314,9 @@ export const AssessmentClaudeChat = ({
             <div className="rounded-[12px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-4 py-3.5 text-[0.84375rem] leading-[1.55] text-[var(--ink-2)]">
               <div className="mb-2 flex items-center gap-2 font-mono text-[0.65625rem] uppercase tracking-[0.1em] text-[var(--purple)]">
                 <FileSearch size={12} />
-                Claude is ready
+                Your AI assistant is ready
               </div>
-              Ask Claude to inspect the repo, explain a failure, or suggest the smallest safe patch path before you edit.
+              Ask the AI assistant to inspect the repo, explain a failure, or suggest the smallest safe patch path before you edit.
             </div>
           ) : null}
 
@@ -326,7 +327,7 @@ export const AssessmentClaudeChat = ({
           {pending ? (
             <div className="text-[0.875rem]" data-testid="assessment-claude-chat-pending">
               <div className="mb-1.5 flex gap-2 font-mono text-[0.65625rem] uppercase tracking-[0.08em] text-[var(--mute)]">
-                <span>Claude</span>
+                <span>Taali AI</span>
                 <span>working</span>
               </div>
               <div className="inline-block max-w-[94%] rounded-[12px] rounded-tl-[4px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-4 py-2.5 text-left">
@@ -339,13 +340,6 @@ export const AssessmentClaudeChat = ({
                     className="tabular-nums"
                   >
                     {elapsedSec}s
-                  </span>
-                  <span aria-hidden="true">·</span>
-                  <span
-                    data-testid="assessment-claude-chat-pending-tokens"
-                    className="tabular-nums"
-                  >
-                    {formatTokenCount(tokensUsed)} tokens
                   </span>
                 </div>
               </div>

@@ -18,15 +18,19 @@ const getLoginErrorMessage = (err) => {
   if (typeof detail === 'string') {
     const normalizedDetail = detail.trim();
     const mappedMessage = LOGIN_ERROR_MESSAGES[normalizedDetail.toUpperCase()];
-    return mappedMessage || normalizedDetail;
+    if (mappedMessage) return mappedMessage;
+    if (/^[A-Z0-9_]+$/.test(normalizedDetail)) {
+      return 'Unable to sign in. Please try again.';
+    }
+    return normalizedDetail;
   }
 
   if (err?.code === 'ERR_NETWORK' || message === 'Network Error') {
-    return 'Unable to reach the Taali API. Please refresh and try again.';
+    return 'Can\'t reach Taali right now. Please check your connection and try again.';
   }
 
   if (err?.response?.status === 404 || err?.response?.status === 502 || err?.response?.status === 503) {
-    return 'Unable to reach the Taali API. Please try again in a moment.';
+    return 'Can\'t reach Taali right now. Please try again in a moment.';
   }
 
   if (Array.isArray(detail) && detail.length > 0) {
@@ -40,7 +44,11 @@ const getLoginErrorMessage = (err) => {
   if (typeof message === 'string' && message.trim()) {
     const normalizedMessage = message.trim();
     const mappedMessage = LOGIN_ERROR_MESSAGES[normalizedMessage.toUpperCase()];
-    return mappedMessage || normalizedMessage;
+    if (mappedMessage) return mappedMessage;
+    if (/^[A-Z0-9_]+$/.test(normalizedMessage)) {
+      return 'Unable to sign in. Please try again.';
+    }
+    return normalizedMessage;
   }
 
   return 'Unable to sign in. Please try again.';

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { decisionPolicyApi } from './api';
+import { prettyKey } from '../analytics/analyticsFormat';
 
 // Pending feedback_retune policies awaiting admin activation. Shows
 // the diff against the current active policy plus any per-shift
@@ -13,7 +14,7 @@ export default function PendingRetuneReview() {
     decisionPolicyApi
       .pending()
       .then(setPending)
-      .catch((e) => setError(e.response?.data?.detail || e.message));
+      .catch(() => setError('Couldn’t load pending policy updates. Try refreshing.'));
   };
 
   useEffect(() => {
@@ -21,7 +22,7 @@ export default function PendingRetuneReview() {
   }, []);
 
   if (error) {
-    return <div className="dp-error">Failed to load pending retunes: {error}</div>;
+    return <div className="dp-error">{error}</div>;
   }
   if (!pending) return <div className="dp-loading">Loading…</div>;
   if (pending.length === 0) {
@@ -38,8 +39,8 @@ export default function PendingRetuneReview() {
     try {
       await decisionPolicyApi.activate(policyId);
       load();
-    } catch (e) {
-      setError(e.response?.data?.detail || e.message);
+    } catch {
+      setError('Couldn’t complete that. Try again.');
     } finally {
       setBusy(null);
     }
@@ -50,8 +51,8 @@ export default function PendingRetuneReview() {
     try {
       await decisionPolicyApi.discard(policyId);
       load();
-    } catch (e) {
-      setError(e.response?.data?.detail || e.message);
+    } catch {
+      setError('Couldn’t complete that. Try again.');
     } finally {
       setBusy(null);
     }
@@ -83,7 +84,7 @@ export default function PendingRetuneReview() {
             <tbody>
               {Object.entries(p.diff || {}).map(([field, change]) => (
                 <tr key={field}>
-                  <td><code>{field}</code></td>
+                  <td>{prettyKey(field)}</td>
                   <td>{stringify(change.old)}</td>
                   <td>{stringify(change.new)}</td>
                   <td>{change.cause_summary || '—'}</td>
@@ -117,6 +118,10 @@ export default function PendingRetuneReview() {
 function stringify(v) {
   if (v === null || v === undefined) return '—';
   if (typeof v === 'number') return v.toFixed(2);
-  if (typeof v === 'object') return JSON.stringify(v);
+  if (typeof v === 'object') {
+    return Object.entries(v)
+      .map(([k, val]) => `${prettyKey(k)}: ${stringify(val)}`)
+      .join(', ') || '—';
+  }
   return String(v);
 }

@@ -274,7 +274,7 @@ export const DashboardPage = ({
             style={{ background: 'var(--taali-card-bg)' }}
           >
             <div className="mb-3 flex items-start justify-between gap-4">
-              <h2 className="taali-display text-xl font-semibold text-[var(--taali-text)]">Get started with TAALI</h2>
+              <h2 className="taali-display text-xl font-semibold text-[var(--taali-text)]">Get started with Taali</h2>
               <Button variant="ghost" size="sm" onClick={dismissOnboarding}>Dismiss</Button>
             </div>
             <ol className="space-y-2 text-sm text-[var(--taali-text)]">
@@ -341,6 +341,9 @@ export const DashboardPage = ({
               change="Pending invites expiring in 3 days"
               to="/assessments?status=pending"
             />
+            <p className="col-span-full -mt-2 text-xs text-[var(--taali-muted)]">
+              Counts for the {displayAssessments.length} assessment{displayAssessments.length === 1 ? '' : 's'} on this page. Filter or page through to see more.
+            </p>
           </div>
         )}
 
@@ -436,7 +439,7 @@ export const DashboardPage = ({
             <table className="w-full">
               <thead>
                 <tr className="border-b border-[var(--taali-border-soft)] bg-[var(--taali-table-header)]">
-                  {['Candidate', 'Role', 'Task', 'Status', 'TAALI Score', 'Assessment Score', 'Sent', 'Completed', 'Actions'].map((label) => (
+                  {['Candidate', 'Role', 'Task', 'Status', 'Taali Score', 'Assessment Score', 'Sent', 'Completed', 'Actions'].map((label) => (
                     <th key={label} className="px-4 py-2.5 text-left font-mono text-[0.6875rem] font-bold uppercase tracking-[0.08em]">{label}</th>
                   ))}
                 </tr>
@@ -488,7 +491,7 @@ export const DashboardPage = ({
                                 onClick={() => handleViewResults(assessment)}
                               >
                                 <Eye size={14} />
-                                {loadingViewId === assessment.id ? 'Loading...' : 'View results'}
+                                {loadingViewId === assessment.id ? 'Loading…' : 'View results'}
                               </Button>
                             ) : null}
                             {(assessment.status === 'pending' || assessment.status === 'expired') && assessment.token ? (
@@ -509,7 +512,7 @@ export const DashboardPage = ({
                                   disabled={loadingResendId === assessment.id}
                                   onClick={() => handleResend(assessment.id)}
                                 >
-                                  {loadingResendId === assessment.id ? 'Resending...' : 'Resend'}
+                                  {loadingResendId === assessment.id ? 'Resending…' : 'Resend'}
                                 </Button>
                               </>
                             ) : null}

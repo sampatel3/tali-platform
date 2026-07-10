@@ -210,7 +210,7 @@ def run_agent_response(
             )
         except Exception as exc:
             logger.exception("agent_chat model call failed: %s", exc)
-            final_text = f"Sorry — I hit an error reaching the model: {exc}"
+            final_text = "Sorry — I hit a problem answering that. Please try again."
             final_stop = "error"
             break
 

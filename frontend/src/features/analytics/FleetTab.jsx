@@ -26,15 +26,16 @@ import {
   decisionTypeLabel,
   decisionChipClass,
 } from './analyticsFormat';
+import { outcomeOf } from './DecisionLogTab';
 
 const PANEL_POLL_MS = 5000;
 const ACTIVITY_POLL_MS = 15000;
 const COHORT_BEAT_SECS = 1800;
 
 const nextCycleLabel = (lastCycleAt) => {
-  if (!lastCycleAt) return 'on beat';
+  if (!lastCycleAt) return 'soon';
   const last = new Date(lastCycleAt).getTime();
-  if (Number.isNaN(last)) return 'on beat';
+  if (Number.isNaN(last)) return 'soon';
   const remaining = COHORT_BEAT_SECS - (Date.now() - last) / 1000;
   if (remaining <= 0) return 'due';
   return `${Math.ceil(remaining / 60)}m`;
@@ -154,7 +155,7 @@ export const FleetTab = () => {
       {/* Cohort cycle banner. */}
       <div className="an-cohort">
         <span className="gp" aria-hidden="true" />
-        Agent cohort cycle · last run <b>{pulse.last_cycle_at ? fmtRelAgo(pulse.last_cycle_at) : '—'}</b>
+        Agent review cycle · last run <b>{pulse.last_cycle_at ? fmtRelAgo(pulse.last_cycle_at) : '—'}</b>
         {' · '}next <b>{nextCycleLabel(pulse.last_cycle_at)}</b>
         {' · '}last activity <b>{lastActivity}</b>
       </div>
@@ -244,7 +245,7 @@ export const FleetTab = () => {
                         <td className="an-stt ok">{fmtRelShort(d.created_at)}</td>
                         <td>{d.role_name || `Role #${d.role_id}`}</td>
                         <td><span className={`an-dchip ${decisionChipClass(d.decision_type)}`}>{decisionTypeLabel(d.decision_type)}</span></td>
-                        <td><span className={`an-stt ${tone}`}>{d.status}</span></td>
+                        <td><span className={`an-stt ${tone}`}>{outcomeOf(d).text}</span></td>
                       </tr>
                     );
                   })}
@@ -260,7 +261,7 @@ export const FleetTab = () => {
         <Lock size={14} className="ti" aria-hidden="true" />
         <span>
           <b>Shown:</b> agent state, live activity, decision outcomes, cycles &amp; errors, and your billed
-          spend vs. cap. <b>Hidden by design:</b> raw model cost, model names, and internal reasoning labels.
+          spend vs. cap. <b>Hidden by design:</b> internal system details.
         </span>
       </div>
     </div>

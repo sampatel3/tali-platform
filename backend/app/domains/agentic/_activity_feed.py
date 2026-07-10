@@ -81,11 +81,38 @@ def confidence_to_float(value: Any) -> Optional[float]:
 _DECISION_VERB = {
     "advance_to_interview": "Recommended advance",
     "reject": "Recommended reject",
-    "skip_assessment_reject": "Recommended skip-assessment reject",
+    "skip_assessment_reject": "Recommended reject at pre-screen",
     "send_assessment": "Recommended send assessment",
     "resend_assessment_invite": "Recommended resend assessment",
     "escalate_low_confidence": "Escalated — low confidence",
 }
+
+# Human labels for agent run triggers and needs-input kinds — recruiters
+# see these in the activity feed, so map internal codes to plain words.
+_TRIGGER_LABEL = {
+    "cron": "scheduled",
+    "manual": "started manually",
+    "event": "new activity",
+}
+
+_NEED_KIND_LABEL = {
+    "intent_slot_missing": "Role setup question",
+    "intent_clarification": "Role intent question",
+    "monthly_budget_missing": "Budget not set",
+    "threshold_ambiguous": "Score threshold question",
+    "task_assignment_missing": "No assessment linked",
+    "candidate_tie_break": "Candidate tie-break",
+    "missing_job_spec": "Missing job description",
+    "missing_cv": "Missing CV",
+    "cv_unreadable": "Unreadable CV",
+    "confirm_material_change": "Job spec changed",
+    "other": "Question",
+}
+
+_CYCLE_FAILED_DETAIL = (
+    "Something went wrong during this cycle. The agent will pick this up "
+    "again on its next run."
+)
 
 
 def build_activity_feed(
@@ -161,7 +188,8 @@ def build_activity_feed(
 
     for run in runs:
         if run.status == "running":
-            title = f"Cycle started ({run.trigger})"
+            trigger_label = _TRIGGER_LABEL.get(str(run.trigger), str(run.trigger))
+            title = f"Cycle started ({trigger_label})"
         elif run.status == "succeeded":
             n = int(run.decisions_emitted or 0)
             title = f"Cycle finished — {n} decision{'s' if n != 1 else ''}"
@@ -173,7 +201,7 @@ def build_activity_feed(
             title = "Cycle aborted"
         else:
             title = f"Cycle · {run.status}"
-        detail = (run.error or None) if run.status in ("failed", "aborted") else None
+        detail = _CYCLE_FAILED_DETAIL if run.status in ("failed", "aborted") else None
         entries.append(
             AgentActivityEntry(
                 kind="run",
@@ -191,7 +219,10 @@ def build_activity_feed(
 
     for decision, candidate in decisions:
         cand_name = getattr(candidate, "full_name", None) if candidate else None
-        verb = _DECISION_VERB.get(str(decision.decision_type), str(decision.decision_type))
+        verb = _DECISION_VERB.get(
+            str(decision.decision_type),
+            str(decision.decision_type).replace("_", " ").title(),
+        )
         title = f"{verb} · {cand_name}" if cand_name else verb
         entries.append(
             AgentActivityEntry(
@@ -250,7 +281,7 @@ def build_activity_feed(
                 kind="needs_input",
                 id=int(need.id),
                 created_at=need.created_at,
-                title=f"{title_prefix} · {need.kind}",
+                title=f"{title_prefix} · {_NEED_KIND_LABEL.get(str(need.kind), str(need.kind).replace('_', ' ').title())}",
                 detail=(need.prompt or "")[:240] or None,
                 actor_type="agent",
                 status=(

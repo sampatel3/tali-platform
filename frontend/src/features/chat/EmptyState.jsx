@@ -16,7 +16,7 @@ const SUGGESTIONS = [
 const EmptyState = ({ onPick }) => (
   <ChatEmptyState
     title={<>What are you looking for<em>?</em></>}
-    sub="Ask in plain language. Taali can search your candidates, compare them, walk through reject reasons, or traverse the skills graph. Citations link back to the underlying record."
+    sub="Ask in plain language. Taali can search your candidates, compare them, walk through reject reasons, or explore the skills graph. Citations link back to the underlying record."
     suggestions={SUGGESTIONS}
     onPick={onPick}
   />

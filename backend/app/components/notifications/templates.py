@@ -547,8 +547,8 @@ def results_notification_html(
     intro = _taali_intro(
         _taali_paragraph(
             f'<strong style="color:#1d1730;font-weight:600;">{cand}</strong> has '
-            f'completed their technical assessment. The full breakdown — radar, '
-            f'prompt log, fit analysis — is ready in the dashboard.'
+            f'completed their technical assessment. The full breakdown — skills radar, '
+            f'AI chat transcript, fit analysis — is ready in the dashboard.'
         )
     )
     body = (

@@ -196,12 +196,11 @@ export const DecisionRail = ({
             <span>No agent decision yet — score this candidate to get a recommendation.</span>
           ) : postHandover ? (
             <span>
-              In <strong>{application.workable_stage}</strong> in Workable — the deterministic
-              decision will appear here once it&apos;s computed. Taali advises; acting on a reject
-              here is always your call.
+              In <strong>{application.workable_stage}</strong> in Workable — the recommendation
+              will appear here shortly. Taali advises; acting on a reject here is always your call.
             </span>
           ) : (
-            <span>Scored — the deterministic decision will appear here once it&apos;s computed.</span>
+            <span>Scored — the recommendation will appear here shortly.</span>
           )}
         </div>
       ) : null}

@@ -1,6 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { decisionPolicyApi } from './api';
 import { Select } from '../../shared/ui/TaaliPrimitives';
+import { FAILURE_LABEL } from '../analytics/TeachingTab';
+import { prettyKey } from '../analytics/analyticsFormat';
+
+const failureLabel = (key) => FAILURE_LABEL[key] || prettyKey(key);
 
 // Per-bucket teach / override / manual disagreement counts + top
 // failure modes. Lightweight v1 — no charting library; the table is
@@ -17,8 +21,8 @@ export default function SignalsDashboard() {
       .then((d) => {
         if (!cancelled) setData(d);
       })
-      .catch((e) => {
-        if (!cancelled) setError(e.response?.data?.detail || e.message);
+      .catch(() => {
+        if (!cancelled) setError(true);
       });
     return () => {
       cancelled = true;
@@ -26,7 +30,7 @@ export default function SignalsDashboard() {
   }, [days]);
 
   if (error) {
-    return <div className="dp-error">Failed to load signals: {error}</div>;
+    return <div className="dp-error">Couldn&rsquo;t load signals. Try refreshing the page.</div>;
   }
   if (!data) return <div className="dp-loading">Loading…</div>;
 
@@ -84,7 +88,7 @@ export default function SignalsDashboard() {
         <ul className="dp-failure-modes">
           {data.top_failure_modes.map((fm) => (
             <li key={fm.failure_mode}>
-              <strong>{fm.failure_mode}</strong>: {fm.count}
+              <strong>{failureLabel(fm.failure_mode)}</strong>: {fm.count}
             </li>
           ))}
         </ul>

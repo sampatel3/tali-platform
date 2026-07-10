@@ -281,7 +281,7 @@ describe('TasksPage', () => {
     await renderAppOnTasksPage();
 
     await waitFor(() => {
-      expect(screen.getByText('No tasks available')).toBeInTheDocument();
+      expect(screen.getByText('No tasks in the library yet.')).toBeInTheDocument();
     });
   });
 

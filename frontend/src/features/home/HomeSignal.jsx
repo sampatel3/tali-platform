@@ -47,7 +47,7 @@ const PendingCosignTray = ({ rows, currentUserId, onCosign }) => {
             <div key={row.id} className="signal-cosign-row">
               <div>
                 <div style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 500 }}>
-                  Org-wide retune from <strong>{row.reviewer_name || `User #${row.reviewer_id}`}</strong>
+                  Org-wide correction from <strong>{row.reviewer_name || `User #${row.reviewer_id}`}</strong>
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--mute)', marginTop: 2 }}>
                   {FAILURE_LABEL[row.failure_mode] || row.failure_mode} · D-{row.decision_id} · {formatRelativeAge(row.created_at)} ago
@@ -61,7 +61,7 @@ const PendingCosignTray = ({ rows, currentUserId, onCosign }) => {
                 className="rq-btn rq-teach"
                 onClick={() => onCosign(row.id)}
                 disabled={isOwn}
-                title={isOwn ? "You can't co-sign your own submission" : 'Co-sign and queue the retune'}
+                title={isOwn ? "You can't co-sign your own submission" : 'Co-sign to apply this correction'}
               >
                 <ShieldCheck size={13} aria-hidden="true" />
                 Co-sign
@@ -200,7 +200,7 @@ export const HomeSignal = ({ feedback, outcomes, loading, reload, embedded = fal
   const handleCosign = async (id) => {
     try {
       await agentApi.cosignFeedback(id);
-      showToast?.('Co-signed. Retune queued for tonight.', 'success');
+      showToast?.('Co-signed. The agent will apply this correction overnight.', 'success');
       await reload?.();
     } catch (err) {
       showToast?.(err?.response?.data?.detail || 'Co-sign failed', 'error');

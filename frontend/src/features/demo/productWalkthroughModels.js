@@ -200,7 +200,7 @@ export const AI_SHOWCASE_APPLICATION = {
     taali_score: 81,
     // Provenance line shown under the score on the standing report + role-fit
     // summary ("Scored 20 Apr 2026 · v2.1.0 · Sonnet"). Holistic engine v2.1.0.
-    score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-20T08:14:00.000Z', model: 'Sonnet' },
+    score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-20T08:14:00.000Z' },
   },
   screening_interview_summary: {
     fireflies: {
@@ -283,7 +283,7 @@ export const AI_SHOWCASE_APPLICATION = {
         evidence: 'CV · Senior AI Engineer, Helix Health · "Reduced unsafe completions on the launch checklist from 6.1% to 0.4%". Also covered in the recruiter screen transcript.',
       },
       {
-        question: 'In the assessment you rejected a default-allow fallback that Claude proposed. Talk me through the moment you decided to push back, and what would have made you accept it.',
+        question: 'In the assessment you rejected a default-allow fallback that the AI assistant proposed. Talk me through the moment you decided to push back, and what would have made you accept it.',
         source: 'Taali assessment · Prompt 04',
         context: 'Probes whether the rejection was reflexive or reasoned. We want her to be willing to accept a fallback under the right conditions.',
         listenFor: [
@@ -295,7 +295,7 @@ export const AI_SHOWCASE_APPLICATION = {
           '"You should never have a default-allow" — too absolute; she is being dogmatic rather than reasoned.',
           'Cannot name a scenario where a default-allow is the right call.',
         ],
-        evidence: 'Assessment prompt 04 + Claude turn 04 (workspace pane). Standing-report Assessment tab also shows the rejection.',
+        evidence: 'Assessment prompt 04 + AI assistant turn 04 (workspace pane). Standing-report Assessment tab also shows the rejection.',
       },
       {
         question: 'You mentioned at Lighthouse you ran a prompt registry with red-team review. What broke the first time you tried to run that process, and what did you change?',
@@ -349,7 +349,7 @@ export const AI_SHOWCASE_APPLICATION = {
       {
         question: 'You shipped three patches in the assessment in 36 minutes. Pick the one you would most want to revisit before merging to main, and tell me why.',
         source: 'Assessment · Self-critique',
-        context: 'Tests whether she can hold her own work to the same standard she held Claude\'s suggestions to. This is a strong-engineer differentiator.',
+        context: 'Tests whether she can hold her own work to the same standard she held the AI\'s suggestions to. This is a strong-engineer differentiator.',
         listenFor: [
           'Picks the medium-confidence high-risk gating patch and names a specific concern (e.g. HIGH_CONFIDENCE_FLOOR was not parameterised by action class).',
           'Or: picks the regression test for LLM failure and names a coverage gap (e.g. only one failure mode covered).',
@@ -448,7 +448,7 @@ export const AI_SHOWCASE_COMPLETED_ASSESSMENT = {
   },
   score_breakdown: {
     heuristic_summary:
-      'Priya treats AI as a reviewer rather than an autopilot. The strongest signal across the 36-minute session is how she sequences risk: she opens the repo by reading RISKS.md and the launch checklist before touching any code, names the medium-confidence high-risk gating as the highest-blast-radius failure, and explicitly names what she will NOT ship past — even though the brief presents launch pressure.\n\nHer prompts to Claude are short, scoped, and load context deliberately. When the model suggested a broader retrieval refactor, she pushed back, scoped the change to a smaller patch set, and asked Claude to draft only the regression test for the failing case. She caught two unsafe defaults the model proposed (a silent fallback to cached completions on LLM failure; a default-allow on medium-confidence outputs) and rejected both with explicit reasoning.\n\nWritten communication is the one dimension where the signal is clearly weaker than the rest: her commit messages and the README patch are accurate but compressed; the handoff language for non-engineering stakeholders would need to be sharper before she could lead a regulated launch on her own. This is the single area worth probing in the loop.',
+      'Priya treats AI as a reviewer rather than an autopilot. The strongest signal across the 36-minute session is how she sequences risk: she opens the repo by reading RISKS.md and the launch checklist before touching any code, names the medium-confidence high-risk gating as the highest-blast-radius failure, and explicitly names what she will NOT ship past — even though the brief presents launch pressure.\n\nHer prompts to the AI assistant are short, scoped, and load context deliberately. When the model suggested a broader retrieval refactor, she pushed back, scoped the change to a smaller patch set, and asked it to draft only the regression test for the failing case. She caught two unsafe defaults the model proposed (a silent fallback to cached completions on LLM failure; a default-allow on medium-confidence outputs) and rejected both with explicit reasoning.\n\nWritten communication is the one dimension where the signal is clearly weaker than the rest: her commit messages and the README patch are accurate but compressed; the handoff language for non-engineering stakeholders would need to be sharper before she could lead a regulated launch on her own. This is the single area worth probing in the loop.',
     category_scores: {
       task_completion: 8.4,
       prompt_clarity: 8.6,
@@ -475,7 +475,7 @@ export const AI_SHOWCASE_COMPLETED_ASSESSMENT = {
       dimensions: [
         { id: 'task_delivery', score: 8.4, rating: 'good', reasoning: 'Shipped the smallest safe patch set that closes the launch-blocking release-safety failures; 7/8 tests passing.' },
         { id: 'design_decisions', score: 8.2, rating: 'good', reasoning: 'Sequenced the work by blast radius — read RISKS.md before touching code, named the medium-confidence high-risk gating as the highest-priority failure.' },
-        { id: 'prompt_quality', score: 8.6, rating: 'excellent', reasoning: 'Prompts to Claude are short, scoped, and load context deliberately rather than dumping the whole repo.' },
+        { id: 'prompt_quality', score: 8.6, rating: 'excellent', reasoning: 'Prompts to the AI assistant are short, scoped, and load context deliberately rather than dumping the whole repo.' },
         { id: 'output_judgement', score: 8.8, rating: 'excellent', reasoning: 'Caught two unsafe defaults the model proposed (silent cache fallback; default-allow on medium confidence) and rejected both with explicit reasoning.' },
         { id: 'verification', score: 8.0, rating: 'good', reasoning: 'Wrote the regression test for the failing release-safety case before patching, and named the residual risk left out of scope.' },
         { id: 'written_communication', score: 7.8, rating: 'good', reasoning: 'Commit messages and README patch are accurate but compressed; stakeholder hand-off language would need sharpening before leading a regulated launch solo.' },
@@ -760,8 +760,8 @@ export const PRODUCT_WALKTHROUGH_TASK = {
   title: aiGenaiProductionReadinessTask.name,
   role: 'AI Engineer',
   durationLabel: `${aiGenaiProductionReadinessTask.duration_minutes} min`,
-  stack: 'Python · Claude · Release safety',
-  tools: 'Repo · Editor · Terminal · Claude',
+  stack: 'Python · AI collaboration · Release safety',
+  tools: 'Repo · Editor · Terminal · AI assistant',
   description:
     'Review a regulated GenAI launch, tighten the safety guardrails, and show how the candidate works with AI when the repo and launch pressure are both real.',
 };
@@ -880,7 +880,7 @@ export const CANDIDATES_DIRECTORY_SHOWCASE = [
     pre_screen_score: 86,
     taali_score: 81,
     // Re-scored on the current holistic engine — fresh v2.1.0 provenance.
-    score_summary: { taali_score: 81, assessment_status: 'completed', assessment_id: 1042, score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-20T08:14:00.000Z', model: 'Sonnet' } },
+    score_summary: { taali_score: 81, assessment_status: 'completed', assessment_id: 1042, score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-20T08:14:00.000Z' } },
     score_status: 'done',
     source: 'workable',
     workable_candidate_id: 'wkbl-cand-91',
@@ -984,7 +984,7 @@ export const CANDIDATES_DIRECTORY_SHOWCASE = [
     // Scored before the engine cutover — legacy v1.18.0 (graded Haiku). Renders
     // muted on every surface so a recruiter can spot it needs re-scoring at a
     // glance; demonstrates the stale half of the provenance feature.
-    score_summary: { taali_score: 79, assessment_status: 'completed', assessment_id: 1101, score_provenance: { engine_version: '1.18.0', scored_at: '2026-04-15T11:30:00.000Z', model: 'Haiku' } },
+    score_summary: { taali_score: 79, assessment_status: 'completed', assessment_id: 1101, score_provenance: { engine_version: '1.18.0', scored_at: '2026-04-15T11:30:00.000Z' } },
     score_status: 'done',
     source: 'workable',
     workable_candidate_id: 'wkbl-cand-96',

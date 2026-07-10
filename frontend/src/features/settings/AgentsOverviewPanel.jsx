@@ -36,6 +36,22 @@ const TYPE_LABEL = {
   escalate_low_confidence: 'Escalate',
 };
 
+// Friendly labels for the Decision log status column, so it never surfaces a
+// raw enum like ``reverted_for_feedback``. Anything unmapped falls back to a
+// humanized form (underscores → spaces, first letter capped).
+const STATUS_LABEL = {
+  approved: 'Approved',
+  pending: 'Pending',
+  overridden: 'Overridden',
+  reverted_for_feedback: 'Reverted',
+};
+
+const prettyStatus = (s) => {
+  const key = String(s || '').toLowerCase();
+  if (STATUS_LABEL[key]) return STATUS_LABEL[key];
+  return key.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+};
+
 // Chart palette — literal tokens (SVG fill can't read CSS custom properties).
 // In-scheme only: purple / lavender / amber / grey. No traffic-light
 // green/red — "decisions" reads as lavender (a positive second series),
@@ -113,7 +129,7 @@ function AgentCard({ a }) {
   const act = a.activity || { label: 'IDLE', text: 'idle' };
   const actCls = act.label === 'WORKING' ? 'work' : act.label === 'PAUSED' ? 'paused' : 'idle';
   const idleText = act.label === 'IDLE'
-    ? `last run ${fmtRelShort(a.last_run_at)} · next on beat`
+    ? `last run ${fmtRelShort(a.last_run_at)} · next run on schedule`
     : act.text;
   return (
     <div className={`agz-agent ${a.running ? 'run' : 'paused'}`}>
@@ -130,7 +146,7 @@ function AgentCard({ a }) {
         <span>budget <b>{fmtMoney(a.budget_spent_cents)} / {fmtMoney(a.budget_cap_cents)}</b> ({pct}%)</span>
         <span>cycles 24h <b>{a.cycles_24h}</b></span>
         <span>last run <b>{fmtClock(a.last_run_at)}</b></span>
-        <span>next run <b>{a.running ? 'on beat' : '—'}</b></span>
+        <span>next run <b>{a.running ? 'on schedule' : '—'}</b></span>
         <span>pending <b>{a.pending}</b></span>
         <span />
       </div>
@@ -224,7 +240,7 @@ export default function AgentsOverviewPanel() {
   return (
     <div className="agz">
       <div className="agz-pulse">
-        Agent cohort cycle: last <b>{fmtClock(pulse.last_cycle_at)}{pulse.last_cycle_at ? ` (${fmtRelShort(pulse.last_cycle_at)})` : ''}</b>
+        Agent cycle: last <b>{fmtClock(pulse.last_cycle_at)}{pulse.last_cycle_at ? ` (${fmtRelShort(pulse.last_cycle_at)})` : ''}</b>
         {' · '}next <b>{nextCycleLabel(pulse.last_cycle_at)}</b>
         {' · '}last activity <b>{fmtRelShort(pulse.last_activity_at)}</b>
       </div>
@@ -329,7 +345,7 @@ export default function AgentsOverviewPanel() {
                     <td className="agz-dim">{fmtClock(d.created_at)}</td>
                     <td>{d.role_name || `Role #${d.role_id}`}</td>
                     <td><span className="agz-chip">{prettyType(d.decision_type)}</span></td>
-                    <td className={`agz-st-${decisionStatusTone(d.status)}`}>{d.status}</td>
+                    <td className={`agz-st-${decisionStatusTone(d.status)}`}>{prettyStatus(d.status)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -341,8 +357,7 @@ export default function AgentsOverviewPanel() {
 
       <div className="agz-privacy">
         <b>Shown:</b> agent state, live activity, pending/decision counts, cycles &amp; errors over time,
-        and your billed spend vs. cap. <b>Hidden by design:</b> raw model cost, model names, and internal
-        reasoning labels — this view is for operating the agents, not their internals.
+        and your billed spend vs. cap.
       </div>
     </div>
   );
