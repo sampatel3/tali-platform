@@ -68,18 +68,22 @@ logger = logging.getLogger(__name__)
 DEMO_ORG_SLUG = "taali-demo"
 DEMO_ORG_NAME = "TAALI Demo Leads"
 DEMO_TRACK_TASK_KEYS = {
-    # Primary demo track: canonical tasks for product demos.
-    "data_eng_aws_glue_pipeline_recovery": "data_eng_aws_glue_pipeline_recovery",
+    # Primary demo tracks → the current flagship tasks. The data demo runs
+    # the battle-tested bronze-ingestion flagship; the old glue task is
+    # retired (superseded by the 36/37 A/B) and its track key is kept only
+    # as an alias so existing demo links keep working.
+    "data_eng_bronze_ingestion": "data_eng_bronze_ingestion",
     "ai_eng_genai_production_readiness": "ai_eng_genai_production_readiness",
     # Backward-compatible aliases (route to current tasks; legacy keys removed from repo).
-    "data_eng_super_platform_crisis": "data_eng_aws_glue_pipeline_recovery",
+    "data_eng_aws_glue_pipeline_recovery": "data_eng_bronze_ingestion",
+    "data_eng_super_platform_crisis": "data_eng_bronze_ingestion",
     "ai_eng_super_production_launch": "ai_eng_genai_production_readiness",
-    "data_eng_a_pipeline_reliability": "data_eng_aws_glue_pipeline_recovery",
-    "data_eng_b_cdc_fix": "data_eng_aws_glue_pipeline_recovery",
-    "data_eng_c_backfill_schema": "data_eng_aws_glue_pipeline_recovery",
-    "backend-reliability": "data_eng_aws_glue_pipeline_recovery",
-    "frontend-debugging": "data_eng_aws_glue_pipeline_recovery",
-    "data-pipeline": "data_eng_aws_glue_pipeline_recovery",
+    "data_eng_a_pipeline_reliability": "data_eng_bronze_ingestion",
+    "data_eng_b_cdc_fix": "data_eng_bronze_ingestion",
+    "data_eng_c_backfill_schema": "data_eng_bronze_ingestion",
+    "backend-reliability": "data_eng_bronze_ingestion",
+    "frontend-debugging": "data_eng_bronze_ingestion",
+    "data-pipeline": "data_eng_bronze_ingestion",
 }
 DEMO_TRACK_KEYS = set(DEMO_TRACK_TASK_KEYS.keys())
 _MAX_RUNTIME_REPO_FILES = 200

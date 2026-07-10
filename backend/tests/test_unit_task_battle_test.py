@@ -101,6 +101,24 @@ def test_fail_when_bootstrap_fails(monkeypatch):
     assert "tests_collect" not in {c["id"] for c in report["checks"]}
 
 
+def test_no_deliverable_declared_is_ok(monkeypatch):
+    # Legacy code-kind catalog specs don't declare a deliverable block —
+    # the contract treats it as optional (test runner verifies), so the
+    # structural check must not fail them.
+    _patch_sandbox(
+        monkeypatch,
+        baseline={"passed": 2, "failed": 5, "total": 7, "parse_error": False, "exit_code": 1},
+    )
+    task = _make_task()
+    extra = dict(task.extra_data)
+    del extra["deliverable"]
+    task.extra_data = extra
+    report = run_battle_test(task)
+    checks = {c["id"]: c["ok"] for c in report["checks"]}
+    assert checks["deliverable_in_repo"] is True
+    assert report["verdict"] == "pass"
+
+
 def test_structural_failures_flagged(monkeypatch):
     _patch_sandbox(
         monkeypatch,

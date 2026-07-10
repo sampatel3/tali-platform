@@ -43,13 +43,20 @@ def _structural_checks(task: Task) -> List[Dict[str, Any]]:
 
     checks: List[Dict[str, Any]] = []
 
+    # ``deliverable`` is optional in the central contract (absent = code-kind
+    # default; the test runner verifies the submission) — mirror that here.
+    # Fail only when a deliverable IS declared but its artifact is missing.
     deliverable = extra.get("deliverable") if isinstance(extra.get("deliverable"), dict) else {}
     primary = str(deliverable.get("primary_artifact") or "").strip()
     checks.append(
         {
             "id": "deliverable_in_repo",
-            "ok": bool(primary and primary in files),
-            "detail": f"primary_artifact={primary or '(none)'}",
+            "ok": (primary in files) if primary else True,
+            "detail": (
+                f"primary_artifact={primary}"
+                if primary
+                else "no deliverable declared (code-kind default; test runner verifies)"
+            ),
         }
     )
 

@@ -367,14 +367,14 @@ def test_preview_assessment_includes_workspace_shape_without_file_contents(clien
 def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
     canonical_task = Task(
         organization_id=None,
-        name="AWS Glue Pipeline Recovery",
+        name="Source-to-Bronze Ingestion",
         description="Canonical demo task",
         task_type="python",
         difficulty="medium",
         duration_minutes=15,
         starter_code="print('demo')",
         test_code="def test_placeholder():\n    assert True\n",
-        task_key="data_eng_aws_glue_pipeline_recovery",
+        task_key="data_eng_bronze_ingestion",
     )
     db.add(canonical_task)
     db.commit()
@@ -447,20 +447,20 @@ def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
     assert assessment.task_id == canonical_task.id
     assert assessment.demo_profile["work_email"] == "demo-user@company.com"
     assert assessment.demo_profile["marketing_consent"] is True
-    assert body["task"]["task_key"] == "data_eng_aws_glue_pipeline_recovery"
+    assert body["task"]["task_key"] == "data_eng_bronze_ingestion"
 
 
 def test_demo_start_uses_selected_track_task(client, db, monkeypatch):
     platform_task = Task(
         organization_id=None,
-        name="AWS Glue Pipeline Recovery",
+        name="Source-to-Bronze Ingestion",
         description="Data platform demo task",
         task_type="python",
         difficulty="medium",
         duration_minutes=30,
         starter_code="print('demo')",
         test_code="",
-        task_key="data_eng_aws_glue_pipeline_recovery",
+        task_key="data_eng_bronze_ingestion",
     )
     ai_task = Task(
         organization_id=None,
@@ -509,7 +509,7 @@ def test_demo_start_uses_selected_track_task(client, db, monkeypatch):
 
     monkeypatch.setattr(candidate_runtime_module, "start_or_resume_assessment", fake_start_or_resume)
 
-    # Legacy track "data_eng_c_backfill_schema" aliases to the canonical Glue task.
+    # Legacy track "data_eng_c_backfill_schema" aliases to the bronze-ingestion flagship.
     payload = {
         "full_name": "Frontend Demo User",
         "position": "Engineering Director",
@@ -528,20 +528,20 @@ def test_demo_start_uses_selected_track_task(client, db, monkeypatch):
     assert assessment is not None
     assert assessment.demo_track == "data_eng_c_backfill_schema"
     assert assessment.task_id == platform_task.id
-    assert body["task"]["task_key"] == "data_eng_aws_glue_pipeline_recovery"
+    assert body["task"]["task_key"] == "data_eng_bronze_ingestion"
 
 
 def test_demo_start_falls_back_to_local_repo_when_branch_init_fails(client, db, monkeypatch):
     demo_task = Task(
         organization_id=None,
-        name="AWS Glue Pipeline Recovery",
+        name="Source-to-Bronze Ingestion",
         description="Data platform demo task",
         task_type="python",
         difficulty="medium",
         duration_minutes=30,
         starter_code="print('demo')",
         test_code="",
-        task_key="data_eng_aws_glue_pipeline_recovery",
+        task_key="data_eng_bronze_ingestion",
         repo_structure={"files": {"src/main.py": "def run():\n    return 1\n"}},
     )
     db.add(demo_task)
@@ -625,7 +625,7 @@ def test_demo_start_falls_back_to_local_repo_when_branch_init_fails(client, db, 
 
     body = resp.json()
     assert body["sandbox_id"] == "demo-fallback-sandbox"
-    assert body["task"]["task_key"] == "data_eng_aws_glue_pipeline_recovery"
+    assert body["task"]["task_key"] == "data_eng_bronze_ingestion"
 
     sandbox = holder["sandbox"]
     assert any(path.endswith("/src/main.py") for path, _ in sandbox.files.writes)
@@ -640,14 +640,14 @@ def test_demo_start_falls_back_to_local_repo_when_branch_init_fails(client, db, 
 def test_demo_start_accepts_legacy_track_keys(client, db, monkeypatch):
     platform_task = Task(
         organization_id=None,
-        name="AWS Glue Pipeline Recovery",
+        name="Source-to-Bronze Ingestion",
         description="Demo task (legacy alias backend-reliability)",
         task_type="python",
         difficulty="medium",
         duration_minutes=30,
         starter_code="print('demo')",
         test_code="",
-        task_key="data_eng_aws_glue_pipeline_recovery",
+        task_key="data_eng_bronze_ingestion",
     )
     db.add(platform_task)
     db.commit()
@@ -701,7 +701,7 @@ def test_demo_start_accepts_legacy_track_keys(client, db, monkeypatch):
     assert assessment is not None
     assert assessment.demo_track == "backend-reliability"
     assert assessment.task_id == platform_task.id
-    assert body["task"]["task_key"] == "data_eng_aws_glue_pipeline_recovery"
+    assert body["task"]["task_key"] == "data_eng_bronze_ingestion"
 
 
 def test_demo_start_rejects_invalid_track(client):
