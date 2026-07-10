@@ -894,6 +894,7 @@ def test_list_role_applications_supports_score_sort_and_source_filter(client, db
     row_manual.source = "manual"
     row_manual.cv_match_score = 6.2
     row_manual.rank_score = 6.2
+    row_manual.cv_text = "Manual Rank\nPython backend engineer"
     row_workable.source = "workable"
     row_workable.workable_score = 8.7
     row_workable.rank_score = 8.7
@@ -908,6 +909,10 @@ def test_list_role_applications_supports_score_sort_and_source_filter(client, db
     assert len(data) == 2
     assert data[0]["rank_score"] >= data[1]["rank_score"]
     assert data[0]["source"] == "workable"
+    # has_cv_text tracks the application-level cv_text column (what the
+    # auto-scorer filters on) — True only for the row we gave text.
+    assert data[0]["has_cv_text"] is False
+    assert data[1]["has_cv_text"] is True
 
     workable_only = client.get(
         f"/api/v1/roles/{role['id']}/applications?source=workable&min_workable_score=8",

@@ -1082,6 +1082,9 @@ def application_to_response(
         role_name=(getattr(app.role, "name", None) if getattr(app, "role", None) else None),
         cv_filename=app.cv_filename or (candidate.cv_filename if candidate else None),
         cv_uploaded_at=app.cv_uploaded_at or (candidate.cv_uploaded_at if candidate else None),
+        # Application-level cv_text only (no candidate fallback) — this is the
+        # exact column the auto-scorer filters on.
+        has_cv_text=bool(app.cv_text),
         cv_match_score=cv_match_score,
         cv_match_details=cv_match_details or None,
         cv_match_scored_at=app.cv_match_scored_at,
