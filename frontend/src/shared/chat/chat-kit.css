@@ -295,3 +295,10 @@
   0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
   40% { opacity: 1; transform: translateY(-2px); }
 }
+
+/* iOS Safari zooms the page when a focused input is under 16px. Lift the chat
+   composer to 16px on touch-width viewports so focusing it never zooms the
+   carefully-built mobile chat layout. Desktop density unchanged. */
+@media (max-width: 720px) {
+  .tk-composer textarea { font-size: 16px; }
+}

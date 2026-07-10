@@ -551,3 +551,11 @@
   position: relative;
   display: inline-flex;
 }
+
+/* iOS Safari zooms on focus when an input is under 16px. Lift the global nav
+   search input to 16px on touch-width viewports. Desktop density unchanged. */
+@media (max-width: 720px) {
+  .mc-nav-search-input,
+  .mc-demo-search input,
+  .mc-nav-search-form input { font-size: 16px; }
+}

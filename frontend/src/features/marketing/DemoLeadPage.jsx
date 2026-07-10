@@ -146,11 +146,11 @@ export const DemoLeadPage = ({ onNavigate }) => {
           </span>
 
           <h2 className="mc-demo-lead-form-title">
-            See it run on <em>your</em> role.
+            See it run on a <em>realistic</em> role.
           </h2>
           <p className="mc-demo-lead-form-sub">
-            Tell us what you're hiring for. We'll preload realistic candidates and walk you through
-            the agent end-to-end — in the next two minutes.
+            Tell us what you're hiring for and we'll walk you through the agent end-to-end on a
+            realistic role — in the next two minutes. We'll follow up by email too.
           </p>
 
           <form className="mc-demo-lead-form" onSubmit={handleSubmit}>
@@ -164,7 +164,9 @@ export const DemoLeadPage = ({ onNavigate }) => {
                 value={form.email}
                 onChange={update('email')}
                 required
-                autoFocus
+                // Desktop only — on touch, autoFocus pops the keyboard on load
+                // and covers the pitch copy.
+                autoFocus={typeof window !== 'undefined' && !window.matchMedia?.('(pointer: coarse)').matches}
               />
             </label>
 

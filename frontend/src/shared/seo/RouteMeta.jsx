@@ -33,9 +33,9 @@ const PUBLIC_META = {
       'Take an interactive, no-signup walkthrough of Taali: the autonomous hiring agent and the AI-native assessment runtime that scores how candidates use AI.',
   },
   '/demo-lead': {
-    title: 'Book a demo — Taali',
+    title: 'See Taali run — interactive walkthrough',
     description:
-      'Book a 20-minute demo of Taali, the agentic hiring platform with AI-native assessments, run on a role of yours.',
+      'Take the interactive Taali walkthrough — the agentic hiring platform with AI-native assessments. No call, no card. We follow up by email.',
   },
   '/developers': {
     title: 'Developer Portal — Taali API',
