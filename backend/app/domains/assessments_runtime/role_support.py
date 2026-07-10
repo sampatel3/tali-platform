@@ -1288,9 +1288,30 @@ def application_detail_payload(
                 "internal_notes",
                 "claude_chat_log",
                 "judge_rationale",
+                # Integrity/fraud readout (trust band, warnings, corroborations)
+                # is a recruiter-only "verify before deciding" signal — an
+                # external client share must never see who we flagged or why.
+                "integrity",
             ):
                 ss.pop(k, None)
             payload["score_summary"] = ss
+        # The raw scoring blobs also carry the integrity/fraud readout
+        # (integrity_signals incl. document-hygiene scans, timeline flags,
+        # claims to verify) and pre-screen fraud signals (copy-paste,
+        # duplicate-identity). The UI never renders them client-side, but the
+        # payload itself must not expose who we flagged or why.
+        if isinstance(payload.get("cv_match_details"), dict):
+            cvd = dict(payload["cv_match_details"])
+            for k in (
+                "integrity_signals",
+                "timeline_flags",
+                "claims_to_verify",
+                "integrity_penalty",
+                "pending_document_hygiene_pdf",
+            ):
+                cvd.pop(k, None)
+            payload["cv_match_details"] = cvd
+        payload["pre_screen_evidence"] = None
         payload["recruiter_notes"] = None
         payload["client_share_summary"] = _build_client_share_summary(app, payload)
     return payload

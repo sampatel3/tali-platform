@@ -88,6 +88,52 @@ describe('assessmentViewModels', () => {
     expect(model.integrityFlags).toEqual([]);
   });
 
+  it('exposes the server verdict + trust band + corroborations for the chip', () => {
+    const application = {
+      cv_match_score: 70,
+      cv_match_details: { score_scale: '0-100', summary: 'ok' },
+      score_summary: {
+        integrity: {
+          verdict: 'strong_review',
+          trust_band: 'low',
+          warnings: ['Timeline: Acme: ends 2018 before it starts 2020'],
+          corroborations: ['GitHub profile matches the candidate named on the CV.'],
+        },
+      },
+    };
+    const model = buildRoleFitEvidenceModel({ application, completedAssessment: null });
+    expect(model.integrityVerdict).toBe('strong_review');
+    expect(model.integrityTrustBand).toBe('low');
+    expect(model.corroborations).toEqual(['GitHub profile matches the candidate named on the CV.']);
+  });
+
+  it('derives unverified employers from cv_sections.experience[].company_unverified', () => {
+    const application = {
+      cv_match_score: 70,
+      cv_match_details: { score_scale: '0-100', summary: 'ok' },
+      cv_sections: {
+        experience: [
+          { company: 'Ghost Corp', company_unverified: true },
+          { company: 'Real Inc', company_unverified: false },
+          { company: 'Faketron', company_unverified: true },
+        ],
+      },
+    };
+    const model = buildRoleFitEvidenceModel({ application, completedAssessment: null });
+    expect(model.unverifiedEmployers).toEqual(['Ghost Corp', 'Faketron']);
+  });
+
+  it('leaves the chip fields empty/null when the server sent no integrity object', () => {
+    const model = buildRoleFitEvidenceModel({
+      application: { cv_match_score: 80, cv_match_details: { summary: 'x' } },
+      completedAssessment: null,
+    });
+    expect(model.integrityVerdict).toBeNull();
+    expect(model.integrityTrustBand).toBeNull();
+    expect(model.corroborations).toEqual([]);
+    expect(model.unverifiedEmployers).toEqual([]);
+  });
+
   it('prefers completed assessment evidence over application CV-fit data', () => {
     const application = {
       cv_match_score: 61,

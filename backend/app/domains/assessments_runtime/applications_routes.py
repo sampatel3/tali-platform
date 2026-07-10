@@ -2193,7 +2193,17 @@ def generate_taali_cv_ai(
             raise HTTPException(status_code=404, detail="No resume found on the Workable candidate profile")
 
     app.cv_match_score = None
-    app.cv_match_details = None
+    # Reset the scoring blob but carry the ingest-time PDF hygiene stash across
+    # — the Workable CV fetch above may have just written it, and score-time
+    # promotion reads it from this column.
+    from ...services.document_hygiene import PENDING_PDF_HYGIENE_KEY
+
+    _pending_pdf = (
+        app.cv_match_details.get(PENDING_PDF_HYGIENE_KEY)
+        if isinstance(app.cv_match_details, dict)
+        else None
+    )
+    app.cv_match_details = {PENDING_PDF_HYGIENE_KEY: _pending_pdf} if _pending_pdf else None
     app.cv_match_scored_at = None
     try:
         job = enqueue_score(db, app, force=True)
@@ -2384,6 +2394,13 @@ def _try_fetch_cv_from_workable(
     app.cv_filename = filename
     app.cv_text = extracted
     app.cv_uploaded_at = now
+    # Flag-only PDF-bytes hygiene scan (metadata stuffing + invisible-render
+    # text). Stashed on the application; the score-time integrity merge promotes
+    # it into integrity_signals.document_hygiene.pdf. Best-effort, never blocks.
+    if ext == "pdf":
+        from ...services.document_hygiene import stash_pdf_hygiene_on_application
+
+        stash_pdf_hygiene_on_application(app, content, ext)
     if candidate:
         candidate.cv_file_url = file_url
         candidate.cv_filename = filename

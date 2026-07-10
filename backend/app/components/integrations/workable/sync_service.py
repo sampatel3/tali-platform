@@ -663,6 +663,12 @@ def _store_candidate_resume(
     app.cv_filename = sanitize_text_for_storage(filename)
     app.cv_text = extracted
     app.cv_uploaded_at = now
+    # Flag-only PDF-bytes hygiene scan; promoted at score time into
+    # integrity_signals.document_hygiene.pdf. Best-effort, never blocks the sync.
+    if ext == "pdf":
+        from ....services.document_hygiene import stash_pdf_hygiene_on_application
+
+        stash_pdf_hygiene_on_application(app, content, ext)
     candidate.cv_file_url = file_url
     candidate.cv_filename = sanitize_text_for_storage(filename)
     candidate.cv_text = extracted

@@ -376,6 +376,10 @@ def execute_pre_screen_only(
         "flagged": pre.unverified_claim,
         "penalty_applied": unverified_penalised,
     }
+    # Cross-candidate duplicate / mass-apply tells (flag-only, bounded, no LLM).
+    from .fraud_cross_candidate import detect_cross_candidate_signals
+
+    fraud_signals.update(detect_cross_candidate_signals(db, app))
     if fraud_capped:
         # Replace the LLM rationale with a fraud-specific one so the
         # directory and report copy doesn't claim the candidate is a poor

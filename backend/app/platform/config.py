@@ -448,7 +448,14 @@ class Settings(BaseSettings):
     # but does NOT deduct from the score. Restoring the penalty lowers some live
     # scores platform-wide, so the deduction is gated; the legacy run_cv_match
     # path is unaffected (it always applies its penalty). Set True to activate.
-    HOLISTIC_INTEGRITY_PENALTY_ENABLED: bool = False
+    #
+    # Default aligned with prod (2026-07-10): Railway has had
+    # HOLISTIC_INTEGRITY_PENALTY_ENABLED=true on the API + scoring worker for a
+    # while (1,193 applied scores at alignment time, zero pending shadow rows),
+    # so the code default now matches reality instead of silently depending on
+    # an env var. Bounded −5/issue, cap −15; cache-keyed (``+ip``); existing
+    # scores never re-scored. Audit tool: ``scripts/integrity_shadow_impact.py``.
+    HOLISTIC_INTEGRITY_PENALTY_ENABLED: bool = True
 
     # Document hygiene — scan CVs for hidden text, metadata keyword-stuffing and
     # prompt-injection payloads aimed at the scoring LLM. Detection + persistence

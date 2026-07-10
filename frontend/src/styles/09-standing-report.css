@@ -1756,6 +1756,62 @@ button.eng-badge-button:focus-visible {
 }
 .mc-flags-toggle:hover { text-decoration: underline; }
 
+/* Integrity chip — the trust readout beside the score. Purple-scale intensity
+   only (never red/green): `review` uses the soft purple; `strong_review` deepens
+   it. Advisory, never a verdict. */
+.mc-integrity { margin: 0 0 20px; }
+.mc-integrity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--purple);
+  background: color-mix(in oklab, var(--purple) 12%, var(--bg-2));
+  border: 1px solid color-mix(in oklab, var(--purple) 28%, transparent);
+  border-radius: 999px;
+  padding: 4px 12px;
+}
+.mc-integrity-chip svg { color: var(--purple); flex: none; }
+.mc-integrity-band { font-weight: 500; color: var(--purple-2, var(--purple)); }
+.mc-integrity-count {
+  font-weight: 600;
+  color: var(--purple);
+  padding-left: 7px;
+  border-left: 1px solid color-mix(in oklab, var(--purple) 28%, transparent);
+}
+.mc-integrity-strong .mc-integrity-chip {
+  color: #fff;
+  background: var(--purple);
+  border-color: var(--purple);
+}
+.mc-integrity-strong .mc-integrity-chip svg,
+.mc-integrity-strong .mc-integrity-band { color: #fff; }
+.mc-integrity-strong .mc-integrity-count { color: #fff; border-left-color: color-mix(in oklab, #fff 40%, transparent); }
+.mc-integrity-body {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-2);
+}
+.mc-integrity-list { list-style: none; margin: 0; padding: 0; }
+.mc-integrity-list li {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  padding: 6px 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.mc-integrity-list svg { color: var(--purple); flex: none; margin-top: 3px; }
+.mc-integrity-emp { font-size: 0.8125rem; color: var(--ink); margin: 8px 0 0; }
+.mc-integrity-corrob { list-style: disc; margin: 8px 0 0; padding-left: 20px; }
+.mc-integrity-corrob li { font-size: 0.8125rem; color: var(--mute); line-height: 1.5; }
+.mc-integrity-note { font-size: 0.75rem; color: var(--mute); margin: 10px 0 0; font-style: italic; }
+
 /* Recommended action — the bold dark-purple "agent ON" treatment lives on the
    button ITSELF (no surrounding slab); the kicker + confidence sit as one quiet
    caption line under it. Matches the hub's .rq-rec-btn. */
