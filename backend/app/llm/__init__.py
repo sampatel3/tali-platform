@@ -15,9 +15,11 @@ from .structured import (
     StructuredResult,
     ValidationFailure,
     default_retry_message_builder,
+    extract_structured_tool_input,
     generate_structured,
     parse_structured,
     strip_json_fences,
+    structured_tool_params,
 )
 
 __all__ = [
@@ -31,7 +33,9 @@ __all__ = [
     "StructuredResult",
     "ValidationFailure",
     "default_retry_message_builder",
+    "extract_structured_tool_input",
     "generate_structured",
     "parse_structured",
     "strip_json_fences",
+    "structured_tool_params",
 ]

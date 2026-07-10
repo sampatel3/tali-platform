@@ -68,6 +68,7 @@ from .billing_credit_ledger import BillingCreditLedger
 from .usage_event import UsageEvent
 from .claude_call_log import ClaudeCallLog
 from .anthropic_wire_log import AnthropicWireLog
+from .anthropic_batch_job import AnthropicBatchJob
 from .usage_grant import (
     GRANT_FREE_TIER,
     GRANT_MANUAL,
@@ -238,6 +239,7 @@ __all__ = [
     "UsageEvent",
     "ClaudeCallLog",
     "AnthropicWireLog",
+    "AnthropicBatchJob",
     "UsageGrant",
     "GRANT_FREE_TIER",
     "GRANT_PROMO",

@@ -41,6 +41,12 @@ from .automation_tasks import (
     parse_application_cv_sections,
     run_application_auto_reject,
 )
+# Eager-import anthropic_batch_tasks so the worker registers the Message
+# Batches submit/poll beat tasks — same unregistered-drop trap as above.
+from .anthropic_batch_tasks import (
+    poll_cv_parse_batches,
+    submit_cv_parse_batches,
+)
 # Eager-import workable_tasks so the worker registers the sync runner AND the
 # disqualify-retry task. Without this, the retry enqueued from the reject path
 # (on a transient Workable 429) would NotRegistered on the worker and drop —
@@ -144,6 +150,8 @@ __all__ = [
     "generate_application_interview_pack",
     "parse_application_cv_sections",
     "run_application_auto_reject",
+    "submit_cv_parse_batches",
+    "poll_cv_parse_batches",
     "run_workable_sync_run_task",
     "retry_workable_disqualify_task",
     "run_workable_op_task",

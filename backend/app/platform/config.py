@@ -140,6 +140,14 @@ class Settings(BaseSettings):
     # allocation in anthropic_reconciliation_allocation). Keep OFF until
     # ANTHROPIC_ADMIN_API_KEY is set and provisioning has been validated.
     ANTHROPIC_WORKSPACE_KEYS_ENABLED: bool = False
+    # Route background CV parsing through the Message Batches API (50% of
+    # standard pricing). When ON, freshly-ingested applications are swept
+    # into per-org batch submissions by the beat task instead of getting a
+    # per-application live call; results typically land within minutes but
+    # the API allows up to 24h. When OFF (default), the per-application
+    # live path runs exactly as before. The poll task is not gated, so
+    # flipping this off still drains in-flight batches.
+    CV_PARSE_BATCH_ENABLED: bool = False
     E2B_COST_PER_HOUR_USD: float = 0.30
     EMAIL_COST_PER_SEND_USD: float = 0.01
     STORAGE_COST_PER_GB_MONTH_USD: float = 0.023

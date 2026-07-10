@@ -26,6 +26,10 @@ logger = logging.getLogger("taali.cv_parsing.runner")
 OUTPUT_TOKEN_CEILING = 4096
 MAX_RETRIES = 1
 TEMPERATURE = 0.0
+# Truncate absurdly long CVs. Most are <8KB; 30KB comfortably covers ~6000
+# words and keeps the prompt under Haiku's input budget. Shared with the
+# batch path — both must truncate identically or their cache keys diverge.
+CV_TEXT_CEILING = 30_000
 
 _SYSTEM_PROMPT = "You are a CV parser. Respond ONLY with valid JSON."
 
@@ -75,11 +79,8 @@ def parse_cv(
             model_version=MODEL_VERSION,
         )
 
-    # Truncate if absurdly long. Most CVs are <8KB; cap at 30KB which
-    # comfortably covers ~6000 words and keeps the prompt under Haiku's
-    # input budget.
-    if len(cv_text) > 30_000:
-        cv_text = cv_text[:30_000]
+    if len(cv_text) > CV_TEXT_CEILING:
+        cv_text = cv_text[:CV_TEXT_CEILING]
 
     from . import cache as cache_module
 

@@ -222,6 +222,43 @@ def _parse_and_validate(
     return _validate_parsed_dict(parsed, output_model, semantic_validators)
 
 
+def structured_tool_params(
+    output_model: type[BaseModel], tool_name: Optional[str] = None
+) -> tuple[list[dict[str, Any]], dict[str, Any], str]:
+    """The ``tools`` / ``tool_choice`` request params forced tool-use mode
+    sends, plus the resolved tool name.
+
+    Exposed for callers that render request params without making the call
+    themselves — e.g. the Batches API path, which submits requests and
+    parses results asynchronously. Using this (rather than hand-building
+    the tool) keeps the batch request bit-identical to the sync path's.
+    """
+    tool_def, name = _build_structured_tool(output_model, tool_name)
+    return [tool_def], {"type": "tool", "name": name}, name
+
+
+def extract_structured_tool_input(
+    response: Any,
+    output_model: type[TModel],
+    *,
+    tool_name: str,
+    semantic_validators: Sequence[SemanticValidator] = (),
+) -> TModel:
+    """Pull + validate a forced-tool-use response into ``output_model``.
+
+    The parse/validate half of tool-use mode, for callers that already hold
+    the raw message (the Batches API results path). Raises
+    ``ValidationFailure`` when the tool_use block is missing or the input
+    fails schema / semantic validation.
+    """
+    tool_input = _extract_tool_input(response, tool_name)
+    if tool_input is None:
+        raise ValidationFailure(
+            f"Model did not emit the expected '{tool_name}' tool_use block"
+        )
+    return _validate_parsed_dict(tool_input, output_model, semantic_validators)
+
+
 def parse_structured(
     raw_text: str,
     output_model: type[TModel],
