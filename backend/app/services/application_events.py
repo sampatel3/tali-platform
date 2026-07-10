@@ -106,9 +106,19 @@ def on_application_created(
     try:
         cv_text = (getattr(app, "cv_text", "") or "").strip()
         if cv_text and getattr(app, "cv_sections", None) is None:
-            from ..tasks.automation_tasks import parse_application_cv_sections
+            from ..platform.config import settings
 
-            parse_application_cv_sections.apply_async((application_id,), countdown=15)
+            if settings.CV_PARSE_BATCH_ENABLED:
+                # The Message Batches sweep (submit_cv_parse_batches beat
+                # task) picks up parse-pending rows every 15 min at 50% of
+                # live pricing — no per-application enqueue needed.
+                pass
+            else:
+                from ..tasks.automation_tasks import parse_application_cv_sections
+
+                parse_application_cv_sections.apply_async(
+                    (application_id,), countdown=15
+                )
     except Exception:  # pragma: no cover — defensive
         logger.exception(
             "on_application_created cv-parse scheduling failed application_id=%s",

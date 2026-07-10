@@ -128,16 +128,17 @@ class _MeteredMessages:
         self._inner = inner
         self._organization_id = organization_id
 
-    # Pass-through for nested resources we don't intercept yet — most
-    # importantly ``messages.batches.*``. Without this, accessing
-    # ``client.messages.batches`` would fail because ``_MeteredMessages``
-    # is not the SDK's real Messages resource. Batch usage is rare and
-    # not yet metered through the wrapper; surfaced un-metered for now
-    # with a TODO to instrument it once the batch metering shape lands.
+    # ``messages.batches`` is intercepted (see ``batches`` property below)
+    # so batch spend is metered like everything else. Any other nested
+    # resource passes through unwrapped.
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
             raise AttributeError(name)
         return getattr(self._inner, name)
+
+    @property
+    def batches(self) -> "_MeteredBatches":
+        return _MeteredBatches(messages=self)
 
     # ----- public API -----------------------------------------------------
 
@@ -422,6 +423,7 @@ class _MeteredMessages:
         retry_attempt: int = 0,
         parent_call_log_id: Optional[int] = None,
         trace_id: Optional[str] = None,
+        service_tier: str = "standard",
     ) -> None:
         """Write one ``ClaudeCallLog`` row. Never raises — call_log failures
         must not break Claude calls. Logs at WARNING so ops sees them.
@@ -453,6 +455,7 @@ class _MeteredMessages:
                 cache_creation_tokens=cache_creation_tokens,
                 cache_creation_1h_tokens=cache_creation_1h_tokens,
                 model=model,
+                service_tier=service_tier,
             )
         except Exception:
             cost_micro = 0
@@ -563,6 +566,7 @@ class _MeteredMessages:
         role_id: Optional[int],
         entity_id: Optional[str],
         metadata: Optional[dict],
+        service_tier: str = "standard",
     ) -> Optional[UsageEvent]:
         """Write a usage_event row in a fresh, independently-committed
         session and return it with a populated id. Always swallows errors
@@ -588,6 +592,7 @@ class _MeteredMessages:
                     cache_creation_tokens=cache_creation_tokens,
                     cache_creation_1h_tokens=cache_creation_1h_tokens,
                     cache_hit=cache_hit,
+                    service_tier=service_tier,
                     user_id=user_id,
                     role_id=role_id,
                     entity_id=entity_id,
@@ -693,6 +698,258 @@ class _MeteredStreamCtx:
         # Delegate to the messages helper so org-resolution stays in
         # one place (handles both client-bound and per-call org_id).
         return self._messages._call_org_id(metering)
+
+
+class _MeteredBatches:
+    """Wraps ``messages.batches`` so Message Batches API spend is metered.
+
+    A batch splits one logical operation across processes and time: the
+    submitter knows the attribution but has no usage; the poller sees the
+    usage but (natively) no attribution. The bridge is an
+    ``anthropic_batch_jobs`` row written at ``create()`` and read back at
+    ``results()``:
+
+    * ``create(requests=[...], metering={...})`` — strips the ``metering``
+      kwarg (same policy as ``messages.create``: missing → ``Feature.OTHER``
+      with a warning), submits, then records an ``AnthropicBatchJob`` row
+      carrying feature / org / per-custom_id attribution. ``metering`` may
+      include ``by_custom_id`` — ``{custom_id: {"entity_id": ..., "role_id":
+      ..., "user_id": ...}}`` — for per-request usage_event attribution.
+    * ``results(batch_id)`` — materialises the result stream, then writes
+      one claude_call_log row (always) and one usage_events row (when org
+      context exists) per succeeded entry, both priced at
+      ``service_tier="batch"`` (50% of standard). Idempotent: the batch
+      row's ``metered_at`` is a latch, so polling / re-reading an ended
+      batch never double-bills. A batch unknown to the table (submitted
+      outside the wrapper) is still captured — as ``Feature.OTHER`` with
+      no org — so reconciliation against Anthropic billing stays tight.
+
+    A batch runs on ONE API key, so callers must only submit single-org
+    batches when per-org workspace keys are enabled (multi-org batches
+    would need splitting; deliberately unsupported).
+
+    ``retrieve`` / ``cancel`` / ``list`` pass through unwrapped — they
+    carry no token usage.
+    """
+
+    def __init__(self, *, messages: _MeteredMessages):
+        self._messages = messages
+        self._inner = messages._inner.batches
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._inner, name)
+
+    # ----- submit ---------------------------------------------------------
+
+    def create(self, **kwargs: Any) -> Any:
+        metering = kwargs.pop("metering", None)
+        if metering is None:
+            logger.warning(
+                "metered_anthropic: messages.batches.create called without "
+                "`metering=` — batch spend will be recorded as Feature.OTHER "
+                "with no org attribution."
+            )
+            metering = {"feature": Feature.OTHER}
+        if not isinstance(metering, dict):
+            raise TypeError(
+                f"`metering` must be a dict, got {type(metering).__name__}"
+            )
+        feature = metering.get("feature")
+        if feature is None:
+            raise MeteringRequiredError(
+                "batch metering={...} must include a `feature` key (use "
+                "Feature.OTHER for unclassified batches)"
+            )
+        feature_str = feature.value if isinstance(feature, Feature) else str(feature)
+
+        requests = kwargs.get("requests") or []
+        batch = self._inner.create(**kwargs)
+        self._record_submission_safe(
+            batch_id=str(getattr(batch, "id", "") or ""),
+            feature=feature_str,
+            organization_id=self._messages._call_org_id(metering),
+            by_custom_id=metering.get("by_custom_id"),
+            requests=requests,
+        )
+        return batch
+
+    def _record_submission_safe(
+        self,
+        *,
+        batch_id: str,
+        feature: str,
+        organization_id: Optional[int],
+        by_custom_id: Optional[dict],
+        requests: list,
+    ) -> None:
+        """Write the AnthropicBatchJob anchor row. Never raises — the batch
+        is already submitted, so failing the caller would strand it; a
+        missing row degrades to Feature.OTHER capture at results() time."""
+        from ..models.anthropic_batch_job import AnthropicBatchJob
+
+        model = None
+        try:
+            model = str(requests[0]["params"]["model"])
+        except (IndexError, KeyError, TypeError):
+            pass
+        try:
+            with SessionLocal() as session:
+                session.add(
+                    AnthropicBatchJob(
+                        batch_id=batch_id,
+                        organization_id=organization_id,
+                        feature=feature,
+                        model=model,
+                        request_count=len(requests),
+                        status="submitted",
+                        context=by_custom_id if isinstance(by_custom_id, dict) else None,
+                    )
+                )
+                session.commit()
+        except Exception:
+            logger.exception(
+                "metered_anthropic: anthropic_batch_jobs write failed "
+                "(batch_id=%s feature=%s) — batch submitted OK; its results "
+                "will be metered as Feature.OTHER without attribution.",
+                batch_id,
+                feature,
+            )
+
+    # ----- retrieve + meter -------------------------------------------------
+
+    def results(self, batch_id: str, **kwargs: Any) -> Any:
+        """Fetch batch results and meter every succeeded entry exactly once.
+
+        Materialises the SDK's result stream first so metering is all-or-
+        nothing under the batch row's lock, then returns an iterator over
+        the entries — same consumption shape as the bare SDK.
+        """
+        entries = list(self._inner.results(batch_id, **kwargs))
+        self._meter_results_safe(batch_id=str(batch_id), entries=entries)
+        return iter(entries)
+
+    def _meter_results_safe(self, *, batch_id: str, entries: list) -> None:
+        """Write call_log + usage_event rows for one batch's results.
+
+        Never raises. Idempotency: the batch row is locked (FOR UPDATE),
+        ``metered_at`` checked, rows written, latch set, one commit. A
+        crash mid-way re-meters the whole batch on the next call — the
+        over-count-on-crash trade is deliberate (reconciliation surfaces
+        it; silent under-count would not).
+        """
+        from datetime import datetime, timezone
+
+        from ..models.anthropic_batch_job import AnthropicBatchJob
+
+        try:
+            with SessionLocal() as session:
+                row = (
+                    session.query(AnthropicBatchJob)
+                    .filter_by(batch_id=batch_id)
+                    .with_for_update()
+                    .first()
+                )
+                if row is None:
+                    logger.warning(
+                        "metered_anthropic: results for unknown batch_id=%s "
+                        "(submitted outside the wrapper?) — metering as "
+                        "Feature.OTHER with no org attribution.",
+                        batch_id,
+                    )
+                    row = AnthropicBatchJob(
+                        batch_id=batch_id,
+                        feature=Feature.OTHER.value,
+                        request_count=len(entries),
+                        status="submitted",
+                        context=None,
+                    )
+                    session.add(row)
+                    session.flush()
+                if row.metered_at is not None:
+                    return
+
+                context = row.context if isinstance(row.context, dict) else {}
+                metered = 0
+                for entry in entries:
+                    if self._meter_one_result(
+                        entry, batch_row=row, context=context
+                    ):
+                        metered += 1
+
+                row.metered_at = datetime.now(timezone.utc)
+                row.metered_count = metered
+                row.status = "ended"
+                session.commit()
+        except Exception:
+            logger.exception(
+                "metered_anthropic: batch results metering failed "
+                "(batch_id=%s) — results were still returned to the caller, "
+                "but reconciliation against Anthropic billing will "
+                "undercount until results() is called again.",
+                batch_id,
+            )
+
+    def _meter_one_result(
+        self, entry: Any, *, batch_row: Any, context: dict
+    ) -> bool:
+        """Meter one result entry. Returns True when a row was written.
+
+        Non-succeeded entries (errored / canceled / expired) carry no
+        usage and are not billed by Anthropic — skipped.
+        """
+        result = getattr(entry, "result", None)
+        if getattr(result, "type", None) != "succeeded":
+            return False
+        message = getattr(result, "message", None)
+        usage = getattr(message, "usage", None)
+        if usage is None:
+            return False
+
+        custom_id = str(getattr(entry, "custom_id", "") or "")
+        per = context.get(custom_id) or {}
+        model = str(getattr(message, "model", None) or batch_row.model or "")
+        org_id = per.get("organization_id")
+        if org_id is None:
+            org_id = batch_row.organization_id
+
+        usage_event: Optional[UsageEvent] = None
+        if org_id is not None:
+            usage_event = self._messages._write_event(
+                organization_id=int(org_id),
+                feature=batch_row.feature,
+                model=model,
+                input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+                output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+                cache_read_tokens=int(
+                    getattr(usage, "cache_read_input_tokens", 0) or 0
+                ),
+                cache_creation_tokens=int(
+                    getattr(usage, "cache_creation_input_tokens", 0) or 0
+                ),
+                cache_creation_1h_tokens=_extract_cache_creation_1h(usage),
+                cache_hit=False,
+                user_id=per.get("user_id"),
+                role_id=per.get("role_id"),
+                entity_id=per.get("entity_id") or custom_id,
+                metadata={"batch_id": batch_row.batch_id},
+                service_tier="batch",
+            )
+        self._messages._record_call_log_safe(
+            organization_id=int(org_id) if org_id is not None else None,
+            model=model,
+            usage=usage,
+            feature_hint=str(batch_row.feature),
+            status="ok",
+            error_reason=None,
+            anthropic_request_id=(
+                str(getattr(message, "id", None)) if getattr(message, "id", None) else None
+            ),
+            usage_event_id=int(usage_event.id) if usage_event is not None else None,
+            service_tier="batch",
+        )
+        return True
 
 
 class MeteredAnthropicClient:

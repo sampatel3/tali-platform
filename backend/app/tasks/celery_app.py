@@ -113,6 +113,20 @@ celery_app.conf.update(
             "task": "app.tasks.workable_tasks.expire_stuck_decision_batches",
             "schedule": 300.0,
         },
+        # Message Batches API pipelines (cv_parse today). Submit sweeps
+        # parse-pending applications into per-org batches every 15 min
+        # (no-op unless CV_PARSE_BATCH_ENABLED); poll drains ended batches
+        # every 5 min (never gated, so in-flight batches finish even after
+        # the flag is turned off). Most batches end within minutes, so a
+        # fresh parse lands ~15-20 min after ingest at 50% of live pricing.
+        "submit-cv-parse-batches-every-15-minutes": {
+            "task": "app.tasks.anthropic_batch_tasks.submit_cv_parse_batches",
+            "schedule": 900.0,
+        },
+        "poll-cv-parse-batches-every-5-minutes": {
+            "task": "app.tasks.anthropic_batch_tasks.poll_cv_parse_batches",
+            "schedule": 300.0,
+        },
         "assessment-expiry-reminders-daily": {
             "task": "app.tasks.assessment_tasks.send_assessment_expiry_reminders",
             "schedule": 86400.0,
