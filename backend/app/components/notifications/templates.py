@@ -571,6 +571,56 @@ def results_notification_html(
     )
 
 
+def assessment_nudge_html(
+    candidate_name: str,
+    task_name: str,
+    assessment_link: str,
+    kind: str,
+    expiry_text: str,
+) -> str:
+    """One mid-window nudge. ``kind``: 'delivered_not_opened' (invite landed,
+    never opened) or 'opened_not_started' (opened/previewed, never clicked
+    Start). Copy leads with the two facts that move completion: it's short,
+    and you pair with Claude."""
+    cand = _h(candidate_name) or "there"
+    task = _h(task_name)
+    link = _h(assessment_link)
+    expiry = _h(expiry_text)
+    if kind == "opened_not_started":
+        lead = (
+            f'Your <strong style="color:#1d1730;font-weight:600;">{task}</strong> '
+            f'assessment is ready when you are. It&rsquo;s designed for about '
+            f'30 minutes, you pair with Claude the whole way (nothing to set '
+            f'up), and you can start any time before '
+            f'<strong style="color:#1d1730;font-weight:600;">{expiry}</strong>.'
+        )
+    else:
+        lead = (
+            f'Your invite to the '
+            f'<strong style="color:#1d1730;font-weight:600;">{task}</strong> '
+            f'assessment is waiting. It takes about 30 minutes, you work with '
+            f'Claude on a real task — not a puzzle — and the link is open until '
+            f'<strong style="color:#1d1730;font-weight:600;">{expiry}</strong>.'
+        )
+    body = (
+        _taali_intro(_taali_paragraph(f"Hi {cand},") + _taali_paragraph(lead))
+        + _taali_cta_row("Open the assessment", link)
+        + _taali_link_fallback(link)
+    )
+    return _render_taali_email(
+        title=f"Your {BRAND_NAME} assessment is waiting",
+        preview="About 30 minutes, pairing with Claude on a real task.",
+        eyebrow_left="Assessment",
+        eyebrow_right="Reminder",
+        subtitle=BRAND_NAME,
+        headline="Your assessment is waiting",
+        body=body,
+        footer=_taali_footer_brand(
+            "If you&rsquo;ve decided not to take part, you can ignore this email."
+        ),
+    )
+
+
 def assessment_expiry_reminder_html(
     candidate_name: str,
     task_name: str,
