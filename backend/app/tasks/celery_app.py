@@ -131,6 +131,19 @@ celery_app.conf.update(
             "task": "app.tasks.assessment_tasks.send_assessment_expiry_reminders",
             "schedule": 86400.0,
         },
+        # Mid-window nudges (delivered-not-opened / opened-not-started at 48h,
+        # one per assessment). No-op unless ASSESSMENT_NUDGES_ENABLED is set.
+        "assessment-nudges-daily": {
+            "task": "app.tasks.assessment_tasks.send_assessment_nudges",
+            "schedule": 86400.0,
+        },
+        # Per-(task, role_family) predictive-quality calibration. The engine
+        # (sub_agents.task_calibration.recompute_all) predates this entry but
+        # was never scheduled. Weekly is plenty at current volume.
+        "recompute-task-calibrations-weekly": {
+            "task": "app.tasks.assessment_tasks.recompute_task_calibrations",
+            "schedule": 604800.0,
+        },
         # Reap abandoned assessments: mark PENDING-past-expiry as EXPIRED and
         # close IN_PROGRESS sessions left open > 2h. The task existed and was
         # registered but was never on the beat schedule, so abandoned rows piled

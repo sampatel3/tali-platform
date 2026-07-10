@@ -10,7 +10,7 @@
     "files": {
       ".gitignore": ".venv/\n.pytest_cache/\n__pycache__/\n",
       "requirements.txt": "pytest>=8.0.0\n",
-      "README.md": "# Pipeline DAG Recovery\n\nThe daily orders pipeline is an Airflow DAG (extract -> transform -> load ->\nquality_check -> publish). It failed mid-run two nights ago and has been\npaused since. The DAG wiring, backfill logic, retry policy, load idempotency,\nand the publish gate are all stubbed or wrong (`dag/`).\n\n## The problem\n`diagnostics/dag_run.log` shows publish ran while quality_check was failing,\nthe backfill plan is empty, and a re-run double-loaded a partition.\n\n## Local workflow\n1. Create a virtualenv\n2. Install `requirements.txt`\n3. Run `pytest -q --tb=short`\n\nThis strips the Airflow/MWAA runtime — you implement the DAG *decisions*\n(dependencies, backfill window, retry policy, idempotent load, publish gate)\nas plain Python the DAG would drive.\n",
+      "README.md": "# Pipeline DAG Recovery\n\nThe daily orders pipeline is an Airflow DAG (extract -> transform -> load ->\nquality_check -> publish). It failed mid-run two nights ago and has been\npaused since. The DAG wiring, backfill logic, retry policy, load idempotency,\nand the publish gate are all stubbed or wrong (`dag/`).\n\n## The problem\n`diagnostics/dag_run.log` shows publish ran while quality_check was failing,\nthe backfill plan is empty, and a re-run double-loaded a partition.\n\n## Local workflow\n1. Create a virtualenv\n2. Install `requirements.txt`\n3. Run `pytest -q --tb=short`\n\nThis strips the Airflow/MWAA runtime — you implement the DAG *decisions*\n(dependencies, backfill window, retry policy, idempotent load, publish gate)\nas plain Python the DAG would drive.\n\n## Working with the agent\n\nWork the way you genuinely work. If keeping a short `CLAUDE.md`/`AGENTS.md`\ncontext file, sketching a `PLAN.md` before building, or re-running the tests\nas you go is part of your practice, do it here — load-bearing practice is\nnoticed. Nothing here requires it, and ritual files written for show don't\nhelp you.\n",
       "ARCHITECTURE.md": "# DAG shape\n\nStages (daily, in order): **extract -> transform -> load -> quality_check ->\npublish**. ``publish`` MUST be downstream of ``quality_check`` so a failing\nbatch is never published. The DAG runs on a managed Airflow (MWAA) with\n``catchup`` controlling whether a gap is backfilled.\n\n`dag/dependencies.py` wires the graph, `dag/backfill.py` plans the missed\nruns, `dag/config.py` sets retry/SLA defaults, `dag/recovery.py` does the\nidempotent partition load, `dag/pipeline.py` holds the publish gate.\n",
       "RUNBOOK.md": "# Incident runbook\n\n## Immediate expectations\n- Re-wire the DAG so publish is gated behind quality_check.\n- Plan the correct backfill window for the paused days.\n- Make the load idempotent so a backfill doesn't double-count.\n- Set a retry/SLA policy so a transient failure self-heals + pages on-call.\n\n## Mental model\nTrustworthy publishes + safe re-runs first; throughput tuning second.\n",
       "diagnostics/dag_run.log": "2026-02-25T02:04:11Z ERROR task 'load' failed (source timeout) after 0 retries -- no retry policy set\n2026-02-25T02:04:12Z WARNING task 'publish' has no upstream dependency on 'quality_check'; ran anyway\n2026-02-25T02:04:12Z ERROR published batch 2026-02-25 with quality_check=FAILED\n2026-02-25T02:05:40Z WARNING DAG paused by on-call; catchup=True\n2026-02-27T09:00:00Z WARNING manual re-run of 2026-02-25 appended rows again -> partition row count doubled\n2026-02-27T09:01:10Z WARNING backfill plan for 2026-02-25..2026-02-27 came back empty\n",
@@ -40,7 +40,7 @@
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.35,
+      "weight": 0.3,
       "grader": "interrogation_outcome"
     },
     "output_scrutiny": {
@@ -61,8 +61,14 @@
         "poor": "Never runs the tests, or submits on the agent's say-so with no verification of any kind."
       }
     },
+    "ai_native_practice": {
+      "weight": 0.1,
+      "grader": "practice_outcome",
+      "part": "applied",
+      "fluency": "description"
+    },
     "dag_correctness": {
-      "weight": 0.18,
+      "weight": 0.15,
       "lens": "deliverable",
       "criteria": {
         "excellent": "Shipped build_dependencies (linear, publish gated behind quality_check), plan_backfill (correct missed-day window), and task_default_args (retries/SLA/failure callback) are correct against the spec/tests. Credit the working artifact regardless of who typed it.",
@@ -71,7 +77,7 @@
       }
     },
     "recovery_correctness": {
-      "weight": 0.12,
+      "weight": 0.1,
       "lens": "deliverable",
       "criteria": {
         "excellent": "Shipped idempotent_load (overwrites the partition, no double-count on re-run) and should_publish (gated on quality AND load) are correct. These are the safety-critical recovery primitives — credit the working artifact.",
@@ -183,6 +189,11 @@
         "job_requirement": "Operates production pipelines — verifies recovery changes before declaring an incident closed",
         "task_artifact": "Test runs and diff review captured in the process trace before submission",
         "rubric_dimension": "verification_before_done"
+      },
+      {
+        "job_requirement": "Works AI-natively — sets up context, plans, and verifies as part of normal delivery",
+        "task_artifact": "Context file / plan artifacts in the final repo + verification in the process trace",
+        "rubric_dimension": "ai_native_practice"
       }
     ]
   },

@@ -571,6 +571,12 @@ class Settings(BaseSettings):
     # auto-authored. Generated tasks are is_active=False until approved.
     AUTO_GENERATE_ASSESSMENT_TASKS: bool = False
 
+    # Mid-window assessment nudges (delivered-not-opened / opened-not-started
+    # at 48h, max one per assessment). Default OFF: turning the sequence on is
+    # a deliberate step once invite volume resumes and the delivery-tracking
+    # webhook is populating real data.
+    ASSESSMENT_NUDGES_ENABLED: bool = False
+
     @property
     def mvp_flags(self) -> MvpFeatureFlags:
         return MvpFeatureFlags(

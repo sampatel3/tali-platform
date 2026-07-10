@@ -28,6 +28,12 @@ export const viewShareLink = (token) =>
 export const viewTopReport = (token) =>
   axios.get(`${API_URL}/report/${encodeURIComponent(token)}`);
 
+// Public unauth curated client submittal pack — same pattern: a role-scoped
+// shortlist frozen at mint time, served read-only by token. Bare axios so the
+// recruiter's JWT is never attached — anyone with the link can read it.
+export const viewSubmittalPack = (token) =>
+  axios.get(`${API_URL}/submittal/${encodeURIComponent(token)}`);
+
 // Public unauth job posting — the careers-style page a published requisition
 // links to. Lives UNDER /api/v1 (unlike the share/report endpoints), but we
 // still use a bare axios.get rather than the shared `api` instance so the
@@ -101,6 +107,7 @@ export const isPublicPath = (pathname = '', search = '') => {
     || pathname.startsWith('/c/')
     || pathname.startsWith('/share/')
     || pathname.startsWith('/report/')
+    || pathname.startsWith('/submittal/')
     || pathname.startsWith('/assess/')
     || pathname.startsWith('/assessment/')
     || pathname.startsWith('/job/')
