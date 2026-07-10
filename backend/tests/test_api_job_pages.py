@@ -15,14 +15,36 @@ from app.models.role_brief import RoleBrief
 from tests.conftest import auth_headers
 
 
+# Publish now enforces the same required-fields gate the UI does, so fill every
+# required template field by default. Column-backed fields go top-level;
+# template-only fields (domain / urgency / responsibilities) go in custom_fields.
+_REQUIRED_COLUMN_FIELDS = {
+    "title": "Backend Engineer",
+    "seniority": "senior",
+    "summary": "Build and own the payments API.",
+    "workplace_type": "remote",
+    "employment_type": "full_time",
+    "openings": 1,
+    "must_haves": ["Python", "Postgres"],
+    "success_profile": "Ships reliable services end-to-end.",
+}
+_REQUIRED_CUSTOM_FIELDS = {
+    "domain": "Fintech",
+    "urgency": "high",
+    "responsibilities": ["Design APIs", "On-call rotation"],
+}
+
+
 def _make_requisition(client, headers, **fields):
-    """Create a requisition and PATCH the given public fields onto it."""
+    """Create a requisition and PATCH the given public fields onto it. Required
+    fields are pre-filled so publish passes the server-side gate."""
     brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
-    if fields:
-        resp = client.patch(
-            f"/api/v1/requisitions/{brief_id}", json=fields, headers=headers
-        )
-        assert resp.status_code == 200, resp.text
+    resp = client.patch(
+        f"/api/v1/requisitions/{brief_id}",
+        json={**_REQUIRED_COLUMN_FIELDS, **fields, "custom_fields": _REQUIRED_CUSTOM_FIELDS},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
     return brief_id
 
 

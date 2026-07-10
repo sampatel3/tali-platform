@@ -11,6 +11,25 @@ from app.services.client_service import compute_margin
 from tests.conftest import auth_headers
 
 
+# Publish now enforces the required-fields gate — spread these into a PATCH
+# before publishing so the brief passes. Column fields at top level; template-
+# only fields (domain / urgency / responsibilities) under custom_fields.
+_REQUIRED_COLUMN_FIELDS = {
+    "seniority": "senior",
+    "summary": "Build and own the payments API.",
+    "workplace_type": "remote",
+    "employment_type": "full_time",
+    "openings": 1,
+    "must_haves": ["Python", "Postgres"],
+    "success_profile": "Ships reliable services end-to-end.",
+}
+_REQUIRED_CUSTOM_FIELDS = {
+    "domain": "Fintech",
+    "urgency": "high",
+    "responsibilities": ["Design APIs", "On-call rotation"],
+}
+
+
 # --------------------------------------------------------------------------- #
 # Margin helper (pure)
 # --------------------------------------------------------------------------- #
@@ -125,11 +144,13 @@ def test_get_client_detail_summary_and_enriched_requisitions(client):
     client.patch(
         f"/api/v1/requisitions/{with_margin_id}",
         json={
+            **_REQUIRED_COLUMN_FIELDS,
             "title": "Data Engineer",
             "client_id": client_id,
             "client_rate": 240000,
             "salary_min": 120000,
             "salary_max": 180000,
+            "custom_fields": _REQUIRED_CUSTOM_FIELDS,
         },
         headers=headers,
     )
@@ -225,7 +246,12 @@ def test_open_job_count_counts_published_job_pages(client, db):
     for b in (published_id, draft_id):
         client.patch(
             f"/api/v1/requisitions/{b}",
-            json={"client_id": client_id, "title": "Eng"},
+            json={
+                **_REQUIRED_COLUMN_FIELDS,
+                "client_id": client_id,
+                "title": "Eng",
+                "custom_fields": _REQUIRED_CUSTOM_FIELDS,
+            },
             headers=headers,
         )
 
@@ -273,7 +299,12 @@ def test_open_job_count_excludes_other_clients_pages(client):
     brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
     client.patch(
         f"/api/v1/requisitions/{brief_id}",
-        json={"client_id": a, "title": "Eng"},
+        json={
+            **_REQUIRED_COLUMN_FIELDS,
+            "client_id": a,
+            "title": "Eng",
+            "custom_fields": _REQUIRED_CUSTOM_FIELDS,
+        },
         headers=headers,
     )
     client.post(
