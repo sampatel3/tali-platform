@@ -551,26 +551,45 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // Patch a SINGLE application row after a single-candidate mutation instead
   // of reloading the whole workspace (which refetches up to 2×2000 rows over
   // the UAE→us-east4 link for one rejected/moved candidate). Refetches just
-  // that application and merges it in; derived buckets (active/rejected) and
-  // the funnel re-derive from the merged row automatically. A missing id or a
-  // failed refetch is a no-op — the periodic polls reconcile eventually.
+  // that application AND the (cheap) role record so the FunnelBoard + KPI strip
+  // aggregates don't stay stale all session — the idle page has no periodic
+  // workspace reload to reconcile them. A missing id or a failed refetch is a
+  // no-op; the derived buckets (active/rejected) re-derive from the merged row.
   const patchApplicationRow = useCallback(async (applicationId) => {
     const numericId = Number(applicationId);
     if (!Number.isFinite(numericId) || !rolesApi?.getApplication) return;
     try {
-      const res = await rolesApi.getApplication(numericId);
-      const fresh = res?.data;
-      if (!fresh?.id) return;
-      setRoleApplications((apps) => {
-        const exists = apps.some((a) => Number(a?.id) === numericId);
-        return exists
-          ? apps.map((a) => (Number(a?.id) === numericId ? fresh : a))
-          : [...apps, fresh];
-      });
+      const [appRes, roleRes] = await Promise.all([
+        rolesApi.getApplication(numericId),
+        Number.isFinite(numericRoleId) && rolesApi?.get
+          ? rolesApi.get(numericRoleId).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+      const fresh = appRes?.data;
+      if (fresh?.id) {
+        setRoleApplications((apps) => {
+          const exists = apps.some((a) => Number(a?.id) === numericId);
+          return exists
+            ? apps.map((a) => (Number(a?.id) === numericId ? fresh : a))
+            : [...apps, fresh];
+        });
+      }
+      // Merge ONLY the aggregate fields the funnel/KPIs read — a full setRole
+      // would revert optimistic role edits (agent on/off, budget) that the
+      // /agent/status poll hasn't caught up to yet.
+      const nextRole = roleRes?.data;
+      if (nextRole) {
+        setRole((cur) => (cur ? {
+          ...cur,
+          stage_counts: nextRole.stage_counts ?? cur.stage_counts,
+          active_candidates_count: nextRole.active_candidates_count ?? cur.active_candidates_count,
+          pending_decisions_by_type: nextRole.pending_decisions_by_type ?? cur.pending_decisions_by_type,
+        } : cur));
+      }
     } catch {
       // Quiet — the row keeps its last-known state until the next full load.
     }
-  }, [rolesApi]);
+  }, [rolesApi, numericRoleId]);
 
   // Pull this role's candidates' CURRENT Workable stages on demand — the manual
   // recovery for when the periodic sync lags or a Taali-side move raced a stale

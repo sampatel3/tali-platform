@@ -36,6 +36,20 @@ export function useReportInFlight({
   const shouldPollScore = !isShareRoute && (evaluating || rescoreInFlight);
   const hadScore = application?.cv_match_score != null;
 
+  // When a re-score finishes, the decision poll clears rescore_in_flight — but
+  // the score ring / requirements / provenance are all application-derived, so
+  // the report must be silently reloaded on that clear, not just the decision.
+  // Track the previous in-flight state to catch the true→false transition.
+  const wasRescoringRef = useRef(false);
+  useEffect(() => {
+    if (isShareRoute) return;
+    if (wasRescoringRef.current && !rescoreInFlight) {
+      // Re-score just completed — refresh the whole dossier in place.
+      void loadStandingReport({ silent: true });
+    }
+    wasRescoringRef.current = rescoreInFlight;
+  }, [rescoreInFlight, isShareRoute, loadStandingReport]);
+
   useEffect(() => {
     if (!shouldPollScore || !rolesApi?.getApplication || !Number.isFinite(numericApplicationId)) {
       return undefined;
@@ -48,10 +62,10 @@ export function useReportInFlight({
         const fresh = res?.data;
         if (cancelled || !fresh) return;
         // A full evaluation is done the moment a real cv_match_score appears
-        // (the pre-screen-out path had none). For a re-evaluate, the decision
-        // poll clears rescore_in_flight — refetch it too and let the derived
-        // flags settle. Either way, a silent reload brings the fresh dossier
-        // in without a spinner.
+        // (the pre-screen-out path had none). For a re-evaluate, we refetch the
+        // decision; when rescore_in_flight clears the effect above does the
+        // silent report reload. Either way the fresh dossier lands with no
+        // spinner and no manual refresh.
         const scored = fresh.cv_match_score != null;
         if (evaluating && scored && !hadScore) {
           setEvaluating(false);
@@ -75,20 +89,26 @@ export function useReportInFlight({
   useEffect(() => {
     if (activeTab !== 'cv' || isShareRoute || cvTextFetchedRef.current) return undefined;
     if (!rolesApi?.getApplication || !Number.isFinite(numericApplicationId)) return undefined;
-    if (application?.cv_text) { cvTextFetchedRef.current = true; return undefined; }
-    cvTextFetchedRef.current = true;
+    // Wait for the cold load to populate `application` before firing — if this
+    // request beats the initial wave, merging into a null application would
+    // discard the CV text and the one-shot guard would block any retry.
+    if (!application) return undefined;
+    if (application.cv_text) { cvTextFetchedRef.current = true; return undefined; }
     let cancelled = false;
     rolesApi.getApplication(numericApplicationId, { params: { include_cv_text: true } })
       .then((res) => {
         const fresh = res?.data;
         if (cancelled || !fresh) return;
+        // Only mark fetched once the merge actually lands, so a failed/empty
+        // response can be retried on the next CV-tab activation.
+        cvTextFetchedRef.current = true;
         setApplication((cur) => (cur
           ? { ...cur, cv_text: fresh.cv_text, cv_sections: fresh.cv_sections ?? cur.cv_sections }
           : cur));
       })
-      .catch(() => { /* leave the viewer's download-original fallback */ });
+      .catch(() => { /* leave the viewer's download-original fallback; allow retry */ });
     return () => { cancelled = true; };
-  }, [activeTab, isShareRoute, application?.cv_text, numericApplicationId, rolesApi, setApplication]);
+  }, [activeTab, isShareRoute, application, numericApplicationId, rolesApi, setApplication]);
 }
 
 export default useReportInFlight;
