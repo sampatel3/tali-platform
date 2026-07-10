@@ -26,8 +26,13 @@ vi.mock('../../shared/api/httpClient', () => ({
 vi.mock('../../shared/api', () => ({
   roles: {
     get: vi.fn(),
+    getApplication: vi.fn(),
     listTasks: vi.fn(),
     listApplications: vi.fn(),
+    updateApplicationOutcome: vi.fn(),
+    updateApplicationStage: vi.fn(),
+    createAssessment: vi.fn(),
+    moveApplicationToWorkableStage: vi.fn(),
     batchScoreStatus: vi.fn(),
     fetchCvsStatus: vi.fn(),
     batchPreScreenStatus: vi.fn(),
@@ -239,6 +244,41 @@ describe('JobPipelinePage', () => {
     // the redesigned drawer.
     expect(await screen.findByText(/Closes the application/i)).toBeInTheDocument();
     expect(onNavigate).not.toHaveBeenCalledWith('candidate-report', expect.anything());
+  });
+
+  it('patches just the rejected row instead of re-downloading the whole workspace', async () => {
+    apiClient.roles.updateApplicationOutcome.mockResolvedValue({ data: null });
+    // The single-row patch refetches ONLY the affected application.
+    apiClient.roles.getApplication.mockResolvedValue({
+      data: { ...baseApplications[0], application_outcome: 'rejected' },
+    });
+    renderPipeline();
+    await switchToPipelineView();
+
+    // Open the triage drawer for Sam, then reject.
+    const appliedCard = (await screen.findByText('Sam Patel')).closest('.kanban-card');
+    fireEvent.click(appliedCard);
+    await screen.findByText(/Closes the application/i);
+
+    // listApplications ran twice on cold load (open + rejected). Rejecting must
+    // NOT trigger a third/fourth call — the row is patched via getApplication.
+    const beforeRejectCalls = apiClient.roles.listApplications.mock.calls.length;
+    // Select the Reject option card, then confirm.
+    fireEvent.click((await screen.findByText('Closes the application')).closest('button'));
+    fireEvent.click(screen.getByRole('button', { name: /Reject candidate/i }));
+
+    await waitFor(() => {
+      expect(apiClient.roles.updateApplicationOutcome).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({ application_outcome: 'rejected' }),
+      );
+    });
+    await waitFor(() => {
+      expect(apiClient.roles.getApplication).toHaveBeenCalledWith(1);
+    });
+    // No full-workspace refetch: the 2×2000-row listApplications call count is
+    // unchanged after the reject.
+    expect(apiClient.roles.listApplications.mock.calls.length).toBe(beforeRejectCalls);
   });
 
   it('formats Workable job specs instead of showing flattened markdown', async () => {
