@@ -171,6 +171,44 @@ def test_sweep_submits_per_org_and_dedupes_in_flight(db, monkeypatch):
     assert len(fake.created) == 2
 
 
+def test_sweep_excludes_closed_and_archived_roles(db, monkeypatch):
+    """Apps on dead Workable reqs are excluded in SQL — the 2026-06 audit's
+    dead-req-spend lesson. Manual roles (no workable_job_data) count as live."""
+    org, live_role, live_app = _seed_app(db, email="live@x.test")
+    for state, email in (("archived", "arch@x.test"), ("closed", "closed@x.test")):
+        dead_role = Role(
+            organization_id=org.id,
+            name=f"dead-{state}",
+            source="manual",
+            job_spec_text="hire",
+            workable_job_data={"state": state},
+        )
+        db.add(dead_role)
+        db.flush()
+        _seed_app(db, org=org, role=dead_role, email=email)
+    published_role = Role(
+        organization_id=org.id,
+        name="pub",
+        source="manual",
+        job_spec_text="hire",
+        workable_job_data={"state": "published"},
+    )
+    db.add(published_role)
+    db.flush()
+    _, _, pub_app = _seed_app(db, org=org, role=published_role, email="pub@x.test")
+    db.commit()
+
+    fake = _FakeBatches()
+    _patch_client(monkeypatch, fake)
+
+    sweep_pending_applications(db)
+    db.commit()
+
+    assert len(fake.created) == 1
+    submitted = {r["custom_id"] for r in fake.created[0]["requests"]}
+    assert submitted == {custom_id_for(live_app.id), custom_id_for(pub_app.id)}
+
+
 def test_sweep_applies_cache_hits_without_api_call(db, monkeypatch):
     _, _, app = _seed_app(db)
     db.commit()

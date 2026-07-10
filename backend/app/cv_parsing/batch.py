@@ -139,6 +139,12 @@ def sweep_pending_applications(
 ) -> dict:
     """Find parse-pending applications and submit per-org batches.
 
+    Only applications on LIVE roles: closed/archived Workable reqs are
+    excluded in SQL (2026-06 audit: 51% of the score line went to reqs
+    nobody recruits — don't repeat that here; the backlog on dead reqs
+    stays unparsed unless those reqs reopen). Roles without Workable data
+    (manual roles) count as live.
+
     Per application: cache hit (success) → applied inline, no API call;
     cache hit (deterministic failure) → skipped, nothing would change;
     prompt-render failure → failure cached so the sweep stops re-picking;
@@ -146,9 +152,11 @@ def sweep_pending_applications(
 
     The caller owns the transaction (commits applied cache hits).
     """
+    from sqlalchemy import func
     from sqlalchemy.orm import joinedload
 
     from ..models.candidate_application import CandidateApplication
+    from ..models.role import Role
     from ..services.claude_client_resolver import get_metered_client
     from ..services.pricing_service import Feature
     from . import cache as cache_module
@@ -159,11 +167,18 @@ def sweep_pending_applications(
     apps = (
         db.query(CandidateApplication)
         .options(joinedload(CandidateApplication.candidate))
+        .join(Role, Role.id == CandidateApplication.role_id)
         .filter(
             CandidateApplication.cv_sections.is_(None),
             CandidateApplication.cv_text.isnot(None),
             CandidateApplication.cv_text != "",
             CandidateApplication.deleted_at.is_(None),
+            # Live reqs only. The filter must be in SQL (not post-load):
+            # with a large dead-req backlog a Python-side skip could fill
+            # the whole LIMIT window with skipped rows and starve live ones.
+            func.coalesce(
+                Role.workable_job_data["state"].as_string(), ""
+            ).notin_(["closed", "archived"]),
         )
         .order_by(CandidateApplication.id.desc())
         .limit(limit)
