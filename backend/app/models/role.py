@@ -178,6 +178,15 @@ class Role(Base):
     auto_promote = Column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    # ``auto_skip_assessment``: when True the assessment stage is bypassed
+    # entirely — a ``send_assessment`` verdict is translated to
+    # ``advance_to_interview`` (the same switch a role with no assessment
+    # task gets), so strong candidates land in the Decision Hub advance
+    # queue instead of receiving an assessment invite. Still HITL unless
+    # ``auto_promote`` is also on.
+    auto_skip_assessment = Column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     deleted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

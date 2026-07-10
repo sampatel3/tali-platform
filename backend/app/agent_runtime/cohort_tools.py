@@ -136,6 +136,7 @@ def survey_role_state(db: Session, *, organization_id: int, role_id: int) -> dic
         "agent_paused_at": role.agent_paused_at.isoformat() if role.agent_paused_at else None,
         "auto_reject": bool(getattr(role, "auto_reject", False)),
         "auto_promote": bool(getattr(role, "auto_promote", False)),
+        "auto_skip_assessment": bool(getattr(role, "auto_skip_assessment", False)),
         "monthly_usd_budget_cents": role.monthly_usd_budget_cents,
         "score_threshold": role.score_threshold,
         # Effective values fold in the recruiter's latest answer when the

@@ -323,6 +323,7 @@ def role_to_response(
         auto_reject_threshold_mode=getattr(role, "auto_reject_threshold_mode", "manual") or "manual",
         auto_reject=bool(getattr(role, "auto_reject", False)),
         auto_promote=bool(getattr(role, "auto_promote", False)),
+        auto_skip_assessment=bool(getattr(role, "auto_skip_assessment", False)),
         workable_actor_member_id=role.workable_actor_member_id,
         starred_for_auto_sync=bool(getattr(role, "starred_for_auto_sync", False)),
         agentic_mode_enabled=bool(getattr(role, "agentic_mode_enabled", False)),

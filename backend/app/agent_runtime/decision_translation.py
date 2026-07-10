@@ -41,4 +41,22 @@ def resolve_persisted_decision_type(
     return persisted
 
 
-__all__ = ["QUEUEABLE_VERDICTS", "resolve_persisted_decision_type"]
+def role_has_assessment_stage(role) -> bool:
+    """Whether this role's pipeline actually runs an assessment: it has at
+    least one assessment task AND the recruiter hasn't flipped the
+    ``auto_skip_assessment`` toggle. Every caller that feeds
+    ``has_assessment_task`` into the engine or into
+    ``resolve_persisted_decision_type`` goes through this, so a skip-toggled
+    role behaves exactly like a role with no task — ``send_assessment``
+    verdicts become ``advance_to_interview`` (still HITL under
+    ``auto_promote``)."""
+    if bool(getattr(role, "auto_skip_assessment", False)):
+        return False
+    return bool(getattr(role, "tasks", None))
+
+
+__all__ = [
+    "QUEUEABLE_VERDICTS",
+    "resolve_persisted_decision_type",
+    "role_has_assessment_stage",
+]

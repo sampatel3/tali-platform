@@ -962,13 +962,15 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
     actor = Actor.agent(int(agent_run.id))
     application_id = int(args["application_id"])
 
-    # No assessment task on this role → there is nothing to send. Rather
-    # than dead-end (the approve/dispatch path would 422 on a missing
-    # task), advance the strong candidate straight to interview. This
-    # keeps a positive verdict actionable and mirrors the deterministic
+    # No assessment stage on this role — either no task is configured, or
+    # the recruiter flipped auto_skip_assessment — so there is nothing to
+    # send. Rather than dead-end (the approve/dispatch path would 422 on a
+    # missing task), advance the strong candidate straight to interview.
+    # This keeps a positive verdict actionable and mirrors the deterministic
     # bulk-decision pass's send→advance switch. Runs before the HITL gate
     # so it applies in both auto_promote modes (advance needs no task).
-    if not bool(getattr(role, "tasks", None)):
+    if not decision_translation.role_has_assessment_stage(role):
+        skip_toggled = bool(getattr(role, "auto_skip_assessment", False))
         result = _queue(
             db,
             agent_run=agent_run,
@@ -977,12 +979,19 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
                 "application_id": application_id,
                 "reasoning": str(
                     args.get("reasoning")
-                    or "Strong candidate; role has no assessment task configured, "
-                    "advancing directly to interview."
+                    or (
+                        "Strong candidate; assessments are skipped on this role "
+                        "(auto-skip), advancing directly to interview."
+                        if skip_toggled
+                        else "Strong candidate; role has no assessment task "
+                        "configured, advancing directly to interview."
+                    )
                 ),
                 "evidence": {
                     "redirected_from": "send_assessment",
-                    "reason": "no_assessment_task",
+                    "reason": (
+                        "auto_skip_assessment" if skip_toggled else "no_assessment_task"
+                    ),
                 },
                 "confidence": float(args.get("confidence") or 0.85),
             },
@@ -1678,13 +1687,14 @@ def _tool_evaluate_policy(
     # (``advance_to_interview``). Translate through the same map the bulk path uses
     # so the two vocabularies line up — without this, ``queue_advance_decision`` is
     # compared to ``{"advance_to_interview"}`` and EVERY on-policy advance reads as
-    # off-policy and is wrongly withheld. The no-assessment-task switch (send →
-    # advance) is honoured via ``role.tasks``. Non-queueable / escalated verdicts
+    # off-policy and is wrongly withheld. The no-assessment-stage switch (send →
+    # advance; no task OR auto_skip_assessment) is honoured via
+    # ``role_has_assessment_stage``. Non-queueable / escalated verdicts
     # (escalate_low_confidence / skip / no_action) translate to ``None`` -> stored as
     # None -> ``_is_on_policy`` fails SAFE (off-policy -> human review).
     _verdicts[int(application_id)] = decision_translation.resolve_persisted_decision_type(
         str(verdict.decision_type),
-        has_assessment_task=bool(getattr(role, "tasks", None)),
+        has_assessment_task=decision_translation.role_has_assessment_stage(role),
     )
     # Telemetry: structured log so the Hub's signals dashboard can
     # bucket evaluations per (org, role, decision_type, revision).

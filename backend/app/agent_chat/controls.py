@@ -36,6 +36,7 @@ def _state(role: Role) -> dict[str, Any]:
         "monthly_budget_cents": role.monthly_usd_budget_cents,
         "auto_reject": bool(role.auto_reject),
         "auto_promote": bool(role.auto_promote),
+        "auto_skip_assessment": bool(role.auto_skip_assessment),
     }
 
 
@@ -109,10 +110,11 @@ def adjust_agent_settings(
     monthly_budget_cents: int | None = None,
     auto_reject: bool | None = None,
     auto_promote: bool | None = None,
+    auto_skip_assessment: bool | None = None,
 ) -> dict[str, Any]:
-    """Update budget / auto-reject / auto-promote. Only the fields passed are
-    changed. Raising the budget over month-to-date spend resumes a
-    budget-paused role (same helper as the settings UI)."""
+    """Update budget / auto-reject / auto-promote / auto-skip-assessment. Only
+    the fields passed are changed. Raising the budget over month-to-date spend
+    resumes a budget-paused role (same helper as the settings UI)."""
     changed: list[str] = []
     if monthly_budget_cents is not None:
         role.monthly_usd_budget_cents = max(0, int(monthly_budget_cents))
@@ -123,6 +125,9 @@ def adjust_agent_settings(
     if auto_promote is not None:
         role.auto_promote = bool(auto_promote)
         changed.append("auto_promote")
+    if auto_skip_assessment is not None:
+        role.auto_skip_assessment = bool(auto_skip_assessment)
+        changed.append("auto_skip_assessment")
 
     resumed = False
     if monthly_budget_cents is not None:

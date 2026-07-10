@@ -541,6 +541,8 @@ def update_role(
         role.auto_reject = bool(updates["auto_reject"])
     if "auto_promote" in updates and updates["auto_promote"] is not None:
         role.auto_promote = bool(updates["auto_promote"])
+    if "auto_skip_assessment" in updates and updates["auto_skip_assessment"] is not None:
+        role.auto_skip_assessment = bool(updates["auto_skip_assessment"])
     if "suppressed_org_criterion_ids" in updates:
         raw = updates["suppressed_org_criterion_ids"] or []
         role.suppressed_org_criterion_ids = [int(x) for x in raw]

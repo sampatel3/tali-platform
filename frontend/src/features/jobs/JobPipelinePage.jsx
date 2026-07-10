@@ -1547,14 +1547,23 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             }}
             onAutonomyChange={async (key, value) => {
               if (!Number.isFinite(numericRoleId)) return;
-              if (key !== 'auto_reject' && key !== 'auto_promote') return;
+              const labels = {
+                auto_reject: 'Auto-reject',
+                auto_promote: 'Auto-promote',
+                auto_skip_assessment: 'Auto skip assessment',
+              };
+              if (!labels[key]) return;
               setRole((cur) => (cur ? { ...cur, [key]: value } : cur));
               try {
                 await rolesApi.update(numericRoleId, { [key]: value });
                 showToast(
-                  value
-                    ? `${key === 'auto_reject' ? 'Auto-reject' : 'Auto-promote'} on — agent will execute without approval.`
-                    : `${key === 'auto_reject' ? 'Auto-reject' : 'Auto-promote'} off — every decision goes to the Decision Hub.`,
+                  key === 'auto_skip_assessment'
+                    ? (value
+                      ? 'Auto skip assessment on — strong candidates queue for advance instead of receiving an assessment.'
+                      : 'Auto skip assessment off — assessment invites resume for this role.')
+                    : (value
+                      ? `${labels[key]} on — agent will execute without approval.`
+                      : `${labels[key]} off — every decision goes to the Decision Hub.`),
                   'success',
                 );
               } catch (error) {

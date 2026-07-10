@@ -275,7 +275,10 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "Adjust this role agent's settings. Only set the fields the recruiter "
             "asks to change. monthly_budget_cents = monthly spend cap in cents "
             "(e.g. 5000 = $50/mo). auto_reject = execute reject decisions without "
-            "review. auto_promote = send assessments without review. Raising the "
+            "review. auto_promote = send assessments without review. "
+            "auto_skip_assessment = bypass the assessment stage entirely; strong "
+            "candidates queue as advance-to-interview decisions instead of "
+            "receiving an assessment invite. Raising the "
             "budget can resume a budget-paused agent."
         ),
         "input_schema": {
@@ -284,6 +287,7 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
                 "monthly_budget_cents": {"type": ["integer", "null"]},
                 "auto_reject": {"type": ["boolean", "null"]},
                 "auto_promote": {"type": ["boolean", "null"]},
+                "auto_skip_assessment": {"type": ["boolean", "null"]},
             },
         },
     },
@@ -502,6 +506,7 @@ def _role_overview(db: Session, role: Role) -> dict[str, Any]:
             "monthly_budget_cents": role.monthly_usd_budget_cents,
             "auto_reject": bool(role.auto_reject),
             "auto_promote": bool(role.auto_promote),
+            "auto_skip_assessment": bool(role.auto_skip_assessment),
         },
         "threshold": {
             "effective": effective,
@@ -822,6 +827,7 @@ def dispatch_tool(
             monthly_budget_cents=int(mbc) if mbc is not None else None,
             auto_reject=args.get("auto_reject"),
             auto_promote=args.get("auto_promote"),
+            auto_skip_assessment=args.get("auto_skip_assessment"),
         )
     if name == "list_draft_tasks":
         return _draft_tasks.draft_review_card(db, role)
