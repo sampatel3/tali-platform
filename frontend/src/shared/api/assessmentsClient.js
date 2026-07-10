@@ -27,6 +27,12 @@ export const assessments = {
       headers: { 'X-Assessment-Token': assessmentToken },
       timeout: 120000,
     }),
+  // Fire-and-forget first-minutes engagement beacon (runtime_loaded /
+  // file_opened); the server records each type once per assessment.
+  runtimeEvent: (id, eventType, assessmentToken) =>
+    api.post(`/assessments/${id}/runtime-event`, { event_type: eventType }, {
+      headers: { 'X-Assessment-Token': assessmentToken },
+    }),
   submit: (id, payloadOrFinalCode, assessmentToken, metadata = {}) =>
     api.post(
       `/assessments/${id}/submit`,
