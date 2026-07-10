@@ -21,7 +21,6 @@ from ...agent_runtime.decision_translation import (
 )
 from ...decision_policy.engine import evaluate
 from ...domains.assessments_runtime.pipeline_service import (
-    is_terminal_workable_stage,
     normalize_pipeline_stage,
     transition_stage,
 )
@@ -72,21 +71,12 @@ def decide_post_handover(db: Session, *, app: CandidateApplication, role: Role) 
         if decision_type not in ("reject", "skip_assessment_reject"):
             return "advance"  # positive verdict — caller reflects the hand-off
 
-        # Reject verdict on a candidate the recruiter is actively INTERVIEWING in
-        # Workable (a non-terminal post-handover stage: phone / technical / final).
-        # This is a warning, not an action — and surfacing it as a live reject card
-        # is exactly the dangerous case the reconcile (rightly) refuses to keep
-        # ("don't reject someone in a live interview"). Pulling them advanced→review
-        # just to host that card STRANDS them in 'review' the moment the card is
-        # discarded — looking like they await a Taali decision when they don't.
-        # So defer entirely: leave them 'advanced' (handed off to the recruiter's
-        # interview), queue nothing. Only a TERMINAL hand-off (offer / hired) — a
-        # decision that's imminent — still surfaces the reject below.
-        if not is_terminal_workable_stage(getattr(app, "workable_stage", None)):
-            return None
-
-        # Reject on a terminal hand-off: don't leave them silently 'advanced'.
-        # Pull back to the review queue so it's a live reject card.
+        # Reject verdict on a candidate the recruiter has advanced in Workable:
+        # surface it as a normal HITL reject card — "you're interviewing someone
+        # I'd have passed on". The card is advice; every approve surface warns
+        # that acting on it disqualifies a candidate the recruiter already
+        # advanced, and nothing auto-executes it. Only a candidate Taali itself
+        # froze as 'advanced' is pulled back to review to host the card.
         if normalize_pipeline_stage(app.pipeline_stage) == "advanced":
             # source='agent', not 'sync': this is Taali's agent overriding its
             # own earlier auto-advance, and the sync guard (rightly) blocks sync

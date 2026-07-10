@@ -173,11 +173,13 @@ EXTERNAL PIPELINE STAGE (workable_stage) AND TALI'S `advanced` STAGE:
   "interview", "technical_interview", "offer" mean a human recruiter has
   already advanced this person past initial screening.
 - A post-handover `workable_stage` is a STRONG POSITIVE signal for a candidate
-  who is STILL in Tali's funnel: a human recruiter has already advanced them.
-  Weight it heavily — do NOT queue a reject on score alone; prefer advance or
-  no-action. Tali does NOT auto-advance based on the Workable stage; queueing
-  an advance (which the recruiter approves) is how such a candidate eventually
-  leaves Tali.
+  who is STILL in Tali's funnel: a human recruiter has already advanced them
+  (possibly before the application entered Tali). Weight it heavily. You MAY
+  still queue a reject when the evidence genuinely warrants it — it is a HITL
+  card, never auto-executed, and the recruiter is explicitly warned they are
+  rejecting someone already advanced in Workable. Tali does NOT auto-advance
+  based on the Workable stage; queueing an advance (which the recruiter
+  approves) is how such a candidate eventually leaves Tali.
 - `pipeline_stage="advanced"` means the candidate has already left Tali's flow.
   It is set ONLY by an explicit Tali hand-back decision or by a Workable
   reject/disqualify (nothing left to do). These are past Tali's responsibility:

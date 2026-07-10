@@ -14,6 +14,7 @@
 // by the bundler.
 import React from 'react';
 import {
+  AlertTriangle,
   Brain,
   Check,
   Eye,
@@ -63,6 +64,12 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
   const staleEngineOnly = stalenessReasons.length > 0 && stalenessReasons.every((r) => r === 'engine_outdated');
 
   const isPending = decision.status === 'pending' || decision.status === 'reverted_for_feedback';
+  // Post-handover warning: the candidate already sits in a live Workable
+  // interview/offer stage (possibly moved there before the application ever
+  // reached Taali). Rejects stay fully approvable — Taali warns, never
+  // blocks — but the recruiter must see what approving does before one click.
+  const isRejectType = decision.decision_type === 'reject' || decision.decision_type === 'skip_assessment_reject';
+  const postHandoverWarn = isRejectType && Boolean(decision.candidate_post_handover);
   const spec = DECISION_ACTIONS[decision.decision_type] || DEFAULT_ACTIONS;
   const PrimaryIcon = spec.primaryIcon || Check;
   const primaryTitle = staleEngineOnly
@@ -131,6 +138,21 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
 
       {/* Invited mode: the assessment stage tracker takes the slab's place. */}
       {middleSlot}
+
+      {/* Reject on a candidate already advanced in Workable: warn BEFORE the
+          approve button. Advice, never a block — approving disqualifies them
+          in Workable, so the recruiter must knowingly confirm. */}
+      {!hideDecisionParts && isPending && postHandoverWarn ? (
+        <div className="rq-posthandover-banner" role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, margin: '0 0 12px', padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: '0.8125rem', fontWeight: 500, lineHeight: 1.45 }}>
+          <AlertTriangle size={14} strokeWidth={2} aria-hidden="true" style={{ marginTop: 1, flexShrink: 0 }} />
+          <span>
+            <strong>Heads up —</strong> this candidate is in{' '}
+            <strong>{decision.candidate_workable_stage || 'a live interview stage'}</strong> in
+            Workable. Approving this reject will disqualify them there. You can still
+            approve — just make sure that&apos;s intended.
+          </span>
+        </div>
+      ) : null}
 
       {/* Agent-recommends slab — near the TOP (preview order): the recommendation
           first, then reasoning + flags, with the secondary actions at the bottom. */}
