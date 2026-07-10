@@ -203,6 +203,15 @@ def validate_traps(traps: Any) -> List[str]:
 # Opener renderer
 # ---------------------------------------------------------------------------
 
+# The greeting is the candidate's first impression of the whole runtime —
+# half of assessment dropout happens in the first minutes, so it offers a
+# zero-stakes first move before the decision contract below.
+_OPENER_GREETING = (
+    "Hi — I'm Claude, and I'll be pairing with you on this. I already have "
+    "the repo open and I've read the brief, so there's nothing to set up. "
+    "If you'd like to see where things stand first, just ask me to run the "
+    "tests and I'll walk you through what's failing."
+)
 _OPENER_PREAMBLE = (
     "Before we start, {n} {decision_word} that need to come from you — "
     "not from me. These shape everything else; I'm not going to do the "
@@ -228,7 +237,11 @@ def render_opener(decision_points: List[Dict[str, Any]]) -> str:
         return ""
     n = len(decision_points)
     decision_word = "decision" if n == 1 else "decisions"
-    sections: List[str] = [_OPENER_PREAMBLE.format(n=n, decision_word=decision_word)]
+    sections: List[str] = [
+        _OPENER_GREETING,
+        "",
+        _OPENER_PREAMBLE.format(n=n, decision_word=decision_word),
+    ]
     for idx, dp in enumerate(decision_points, start=1):
         headline = str(dp.get("headline") or "").strip()
         tension = str(dp.get("tension") or "").strip()

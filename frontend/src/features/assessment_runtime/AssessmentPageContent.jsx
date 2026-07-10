@@ -22,6 +22,31 @@ import {
 
 const ASSESSMENT_THEME_STORAGE_KEY = 'taali_assessment_theme';
 
+// Default orientation path shown when a task ships no two_stage config —
+// a visible way through the first minutes (where most drop-off happens).
+// Purely presentational: the stepper never locks the workspace.
+const DEFAULT_ORIENTATION_STAGES = {
+  parts: [
+    {
+      title: 'Get oriented',
+      minutes: 5,
+      blurb:
+        "Skim the brief, then ask Claude to run the tests to see where things stand — it already has the repo open and knows the task.",
+    },
+    {
+      title: 'Decide & direct',
+      blurb:
+        'Own the key decisions Claude raises, then direct it to build to your calls. You are scored on how you steer, not on typing the code yourself.',
+    },
+    {
+      title: 'Verify & submit',
+      blurb:
+        'Re-run the tests, check the result matches your decisions, then submit. Verifying before you call it done is part of the score.',
+    },
+  ],
+  note: 'This path is guidance, not a lock — work however suits you.',
+};
+
 const readAssessmentLightModePreference = () => {
   if (typeof window === 'undefined') return true;
   try {
@@ -916,7 +941,7 @@ export default function AssessmentPage({
 
       <div className="flex-1 overflow-y-auto">
         <div className={`${demoMode ? 'w-full' : 'mx-auto max-w-[90rem]'} px-4 py-4 lg:px-8 lg:py-5`}>
-          <AssessmentStagePanel twoStage={assessment?.task?.two_stage} />
+          <AssessmentStagePanel twoStage={assessment?.task?.two_stage || DEFAULT_ORIENTATION_STAGES} />
           <AssessmentContextWindow
             ref={contextWindowRef}
             taskName={assessment?.task_name || 'Assessment brief'}

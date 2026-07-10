@@ -151,6 +151,13 @@ class TestRenderOpener:
         assert "whatever you think" in text  # the polite-pushback contract
         assert "these need" in text
 
+    def test_opens_with_orientation_greeting_before_decisions(self):
+        text = render_opener(_two_dp_block())
+        # The greeting must come first and offer the zero-stakes first move.
+        assert text.startswith("Hi — I'm Claude")
+        assert "ask me to run the tests" in text
+        assert text.index("I'm Claude") < text.index("Before we start")
+
 
 # ---------------------------------------------------------------------------
 # State derivation + merge + resolved-check
