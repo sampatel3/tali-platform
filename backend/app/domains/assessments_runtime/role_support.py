@@ -253,6 +253,7 @@ def _loaded_relationship_items(entity: Any, relationship_name: str) -> list[Any]
 def role_to_response(
     role: Role,
     *,
+    summary: bool = False,
     tasks_count: int | None = None,
     applications_count: int | None = None,
     stage_counts: dict[str, int] | None = None,
@@ -262,6 +263,12 @@ def role_to_response(
     requisition: dict | None = None,
     client: dict | None = None,
 ) -> RoleResponse:
+    # ``summary`` is the list serialization: the /roles list carries dozens of
+    # roles, and no list consumer (Jobs, Dashboard, AgentBar, GlobalSearch) reads
+    # the job spec, interview-pack templates, description or criteria — those are
+    # detail-only. Nulling them here keeps the list response small (a multi-KB
+    # spec + two generated packs per role otherwise dominates the payload) and
+    # lets the list query skip hydrating the criteria relationship entirely.
     if tasks_count is None:
         loaded_tasks = _loaded_relationship_items(role, "tasks")
         tasks_count = len(loaded_tasks or [])
@@ -271,34 +278,39 @@ def role_to_response(
             [a for a in loaded_applications if getattr(a, "deleted_at", None) is None]
         )
 
-    role_templates = build_role_interview_pack_templates(role)
-    screening_pack_template = (
-        role.screening_pack_template
-        if isinstance(role.screening_pack_template, dict)
-        else role_templates.get("screening")
-    )
-    tech_interview_pack_template = (
-        role.tech_interview_pack_template
-        if isinstance(role.tech_interview_pack_template, dict)
-        else role_templates.get("tech_stage_2")
-    )
-    loaded_criteria = _loaded_relationship_items(role, "criteria")
-    if loaded_criteria is None:
-        # Bounded fan-out (≤32 per role) makes lazy load acceptable here.
-        try:
-            loaded_criteria = list(role.criteria or [])
-        except Exception:
-            loaded_criteria = []
-    criteria = [
-        RoleCriterionResponse.model_validate(c)
-        for c in loaded_criteria
-        if getattr(c, "deleted_at", None) is None
-    ]
+    if summary:
+        screening_pack_template = None
+        tech_interview_pack_template = None
+        criteria: list[RoleCriterionResponse] = []
+    else:
+        role_templates = build_role_interview_pack_templates(role)
+        screening_pack_template = (
+            role.screening_pack_template
+            if isinstance(role.screening_pack_template, dict)
+            else role_templates.get("screening")
+        )
+        tech_interview_pack_template = (
+            role.tech_interview_pack_template
+            if isinstance(role.tech_interview_pack_template, dict)
+            else role_templates.get("tech_stage_2")
+        )
+        loaded_criteria = _loaded_relationship_items(role, "criteria")
+        if loaded_criteria is None:
+            # Bounded fan-out (≤32 per role) makes lazy load acceptable here.
+            try:
+                loaded_criteria = list(role.criteria or [])
+            except Exception:
+                loaded_criteria = []
+        criteria = [
+            RoleCriterionResponse.model_validate(c)
+            for c in loaded_criteria
+            if getattr(c, "deleted_at", None) is None
+        ]
     return RoleResponse(
         id=role.id,
         organization_id=role.organization_id,
         name=role.name,
-        description=role.description,
+        description=None if summary else role.description,
         criteria=criteria,
         source=role.source,
         workable_job_id=role.workable_job_id,
@@ -313,10 +325,10 @@ def role_to_response(
         ),
         workable_job_live=workable_job_syncable(role),
         job_spec_filename=role.job_spec_filename,
-        job_spec_text=role.job_spec_text,
+        job_spec_text=None if summary else role.job_spec_text,
         job_spec_uploaded_at=role.job_spec_uploaded_at,
         job_spec_present=role_has_job_spec(role),
-        interview_focus=role.interview_focus,
+        interview_focus=None if summary else role.interview_focus,
         interview_focus_generated_at=role.interview_focus_generated_at,
         screening_pack_template=screening_pack_template,
         tech_interview_pack_template=tech_interview_pack_template,

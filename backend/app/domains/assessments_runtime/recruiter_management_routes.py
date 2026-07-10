@@ -346,7 +346,7 @@ def list_assessments(
     total = q.count()
     assessments = q.offset(offset).limit(limit).all()
     return {
-        "items": [assessment_to_response(a, db) for a in assessments],
+        "items": [assessment_to_response(a, db, summary=True) for a in assessments],
         "total": total,
         "limit": limit,
         "offset": offset,

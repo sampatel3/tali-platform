@@ -374,9 +374,19 @@ def _decisions_in_window(
     role_id: Optional[int],
     parsed_from: Optional[datetime],
     parsed_to: Optional[datetime],
-) -> List[AgentDecision]:
+) -> List[Any]:
+    # Select only the scalar columns the KPI aggregation reads — the full
+    # AgentDecision row carries reasoning (Text) + several JSON blobs
+    # (evidence, token_spend, input_fingerprint …) that this endpoint never
+    # touches. The returned Rows still expose .decision_type/.status/
+    # .human_disposition/.confidence for the helpers below.
     q = (
-        db.query(AgentDecision)
+        db.query(
+            AgentDecision.decision_type,
+            AgentDecision.status,
+            AgentDecision.human_disposition,
+            AgentDecision.confidence,
+        )
         .filter(AgentDecision.organization_id == org_id)
     )
     if role_id is not None:
@@ -386,6 +396,26 @@ def _decisions_in_window(
     if parsed_to is not None:
         q = q.filter(AgentDecision.created_at <= parsed_to)
     return q.order_by(desc(AgentDecision.created_at)).all()
+
+
+def _count_decisions_in_window(
+    db: Session,
+    org_id: int,
+    *,
+    role_id: Optional[int],
+    parsed_from: Optional[datetime],
+    parsed_to: Optional[datetime],
+) -> int:
+    q = db.query(func.count(AgentDecision.id)).filter(
+        AgentDecision.organization_id == org_id
+    )
+    if role_id is not None:
+        q = q.filter(AgentDecision.role_id == role_id)
+    if parsed_from is not None:
+        q = q.filter(AgentDecision.created_at >= parsed_from)
+    if parsed_to is not None:
+        q = q.filter(AgentDecision.created_at <= parsed_to)
+    return int(q.scalar() or 0)
 
 
 # Decision statuses that mean the decision is still in the recruiter's
@@ -487,7 +517,7 @@ def get_reporting_summary(
     decisions = _decisions_in_window(
         db, org_id, role_id=role_id, parsed_from=parsed_from, parsed_to=parsed_to,
     )
-    prior_decisions = _decisions_in_window(
+    prior_decisions_count = _count_decisions_in_window(
         db, org_id, role_id=role_id, parsed_from=prior_from, parsed_to=prior_to,
     )
 
@@ -553,7 +583,7 @@ def get_reporting_summary(
     if task_id is not None:
         prior_asmnt_q = prior_asmnt_q.filter(Assessment.task_id == task_id)
     prior_assessments = prior_asmnt_q.count()
-    prior_decisions_made = len(prior_decisions) + prior_assessments
+    prior_decisions_made = prior_decisions_count + prior_assessments
 
     # ── Org spend rollup across agent-enabled roles ────────────────────
     agent_roles = (
@@ -565,17 +595,17 @@ def get_reporting_summary(
         )
         .all()
     )
+    # One batched GROUP BY for MTD spend across the org (same helper the Hub
+    # uses) instead of a per-role month_to_date_spend_cents N+1.
+    spend_map = budget_guard.spend_by_role_map(db, organization_id=org_id)
     spent_total = 0
     budget_total = 0
     role_spend: List[Tuple[Role, int]] = []
     for role in agent_roles:
-        try:
-            spent = budget_guard.month_to_date_spend_cents(db, role=role)
-        except Exception:
-            spent = 0
-        spent_total += int(spent or 0)
+        spent = int(spend_map.get(role.id, 0) or 0)
+        spent_total += spent
         budget_total += int(role.monthly_usd_budget_cents or 0)
-        role_spend.append((role, int(spent or 0)))
+        role_spend.append((role, spent))
 
     over_pct: Optional[float] = None
     top_role_name: Optional[str] = None
@@ -588,25 +618,30 @@ def get_reporting_summary(
             top_role_name = top[0].name
 
     # ── Funnel counts (org-wide or role-scoped) ────────────────────────
-    app_q = db.query(CandidateApplication).filter(
+    # One GROUP BY over pipeline_stage + a single hired count, instead of
+    # hydrating every CandidateApplication row (cv_text etc.) just to bucket
+    # them in Python. total_applied is every application in scope.
+    funnel_base = db.query(CandidateApplication).filter(
         CandidateApplication.organization_id == org_id,
     )
     if role_id is not None:
-        app_q = app_q.filter(CandidateApplication.role_id == role_id)
-    applications = app_q.all()
+        funnel_base = funnel_base.filter(CandidateApplication.role_id == role_id)
+    stage_count_rows = (
+        funnel_base.with_entities(
+            func.lower(CandidateApplication.pipeline_stage),
+            func.count(CandidateApplication.id),
+        )
+        .group_by(func.lower(CandidateApplication.pipeline_stage))
+        .all()
+    )
+    stage_counts_map = {str(stage or ""): int(count or 0) for stage, count in stage_count_rows}
+    total_applied = sum(stage_counts_map.values())
+    hired_count = (
+        funnel_base.filter(func.lower(CandidateApplication.application_outcome) == "hired").count()
+    )
     funnel: List[Dict[str, Any]] = []
-    total_applied = len(applications)
     for label, key in _FUNNEL_STAGES:
-        if key == "_hired":
-            count = sum(
-                1 for a in applications
-                if str(a.application_outcome or "").lower() == "hired"
-            )
-        else:
-            count = sum(
-                1 for a in applications
-                if str(a.pipeline_stage or "").lower() == key
-            )
+        count = hired_count if key == "_hired" else stage_counts_map.get(key, 0)
         pct = round((count / total_applied) * 100.0, 1) if total_applied else 0.0
         funnel.append({"label": label, "key": key, "count": count, "percentage": pct})
 

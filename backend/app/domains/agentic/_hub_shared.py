@@ -13,11 +13,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, desc, func, or_
 from sqlalchemy.orm import Session
 
 from ...models.agent_decision import AgentDecision
 from ...models.agent_needs_input import AgentNeedsInput
+from ...models.agent_run import AgentRun
+from ...models.candidate import Candidate
+from ...models.candidate_application import CandidateApplication
+from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.decision_feedback import DecisionFeedback
 from ...models.role import Role
 from ...models.user import User
@@ -166,6 +170,16 @@ class OrgKpiPayload(BaseModel):
 
 class OrgStatusPayload(OrgKpiPayload):
     last_decision_at: Optional[datetime]
+    # Additive fields for the global header strip (AgentBar). They let the bar
+    # derive its on/paused/tick/budget state from this single org poll instead
+    # of fanning out /roles + per-role /agent/status every 30s. ``current_run``
+    # is truthy iff any agent run is in flight (drives the pulse ring);
+    # ``last_activity`` is the most recent org-wide agent/recruiter event with a
+    # pre-annotated ``summary`` (drives the tick line); ``paused_reason`` is one
+    # representative reason from a paused agent-enabled role.
+    current_run: Optional[dict] = None
+    last_activity: Optional[dict] = None
+    paused_reason: Optional[str] = None
 
 
 class RoleBreakdownRow(BaseModel):
@@ -360,6 +374,97 @@ def feedback_payload(
     )
 
 
+# ---------------------------------------------------------------------------
+# Org-status header extras (AgentBar)
+# ---------------------------------------------------------------------------
+
+
+def org_header_extras(db: Session, *, organization_id: int) -> dict[str, Any]:
+    """``{current_run, last_activity, paused_reason}`` for the global AgentBar.
+
+    All org-scoped aggregates (one row each) so the bar can derive its
+    on/paused/tick/pulse state from the single org-status poll instead of
+    fanning out /roles + per-role /agent/status every 30s. See
+    ``OrgStatusPayload`` for the field contract.
+    """
+    current_run_row = (
+        db.query(AgentRun.id)
+        .filter(
+            AgentRun.organization_id == organization_id,
+            AgentRun.status == "running",
+        )
+        .order_by(desc(AgentRun.started_at))
+        .first()
+    )
+    current_run = {"id": int(current_run_row.id)} if current_run_row is not None else None
+
+    # Most recent agent/recruiter activity org-wide, with candidate + role name,
+    # pre-annotated with a ``summary`` sentence so the bar's tick renders as a
+    # sentence without any per-role fan-out.
+    activity_row = (
+        db.query(CandidateApplicationEvent, Candidate, Role.name)
+        .join(
+            CandidateApplication,
+            CandidateApplication.id == CandidateApplicationEvent.application_id,
+        )
+        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
+        .outerjoin(Role, Role.id == CandidateApplication.role_id)
+        .filter(
+            CandidateApplicationEvent.organization_id == organization_id,
+            CandidateApplicationEvent.actor_type.in_(("agent", "recruiter")),
+        )
+        .order_by(desc(CandidateApplicationEvent.created_at))
+        .limit(1)
+        .first()
+    )
+    last_activity = None
+    if activity_row is not None:
+        event, candidate, role_name = activity_row
+        candidate_name = getattr(candidate, "full_name", None) if candidate else None
+        subject = candidate_name or f"application #{int(event.application_id)}"
+        summary = {
+            "pipeline_stage_changed": f"Advanced {subject}",
+            "application_outcome_changed": f"Updated outcome on {subject}",
+            "agent_paused": f"Paused — {event.reason or 'budget reached'}",
+        }.get(
+            str(event.event_type),
+            event.reason or str(event.event_type or "").replace("_", " ") or None,
+        )
+        if summary and role_name:
+            summary = f"{summary} · {role_name}"
+        last_activity = {
+            "event_type": str(event.event_type),
+            "reason": event.reason,
+            "actor_type": str(event.actor_type),
+            "application_id": int(event.application_id),
+            "candidate_name": candidate_name,
+            "created_at": event.created_at.isoformat() if event.created_at else None,
+            "summary": summary or (role_name or None),
+        }
+
+    # One representative reason from a paused agent-enabled role (drives the
+    # panel's "auto-paused vs deliberate pause" copy).
+    paused_reason = (
+        db.query(Role.agent_paused_reason)
+        .filter(
+            Role.organization_id == organization_id,
+            Role.deleted_at.is_(None),
+            Role.agentic_mode_enabled.is_(True),
+            Role.agent_paused_at.isnot(None),
+            Role.agent_paused_reason.isnot(None),
+        )
+        .order_by(desc(Role.agent_paused_at))
+        .limit(1)
+        .scalar()
+    )
+
+    return {
+        "current_run": current_run,
+        "last_activity": last_activity,
+        "paused_reason": paused_reason,
+    }
+
+
 __all__ = [
     "FEEDBACK_REVERT_GRACE",
     "SNOOZE_DURATION",
@@ -382,4 +487,5 @@ __all__ = [
     "RevertResult",
     "RealisedOutcomeRow",
     "feedback_payload",
+    "org_header_extras",
 ]
