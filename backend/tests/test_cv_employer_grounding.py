@@ -93,6 +93,56 @@ class TestEmployerIsGrounded:
         assert employer_is_grounded("J.P. Goldman", cv) is False
 
 
+class TestIntrawordSpaceFallback:
+    """PDF extraction can inject stray spaces inside words (application
+    62340: cv_text holds "C apgemini, India" plus "c ode", "t ime", "201 1"
+    from the same extractor). The fallback must ground those without opening
+    the door to matches buried inside unrelated longer words.
+    """
+
+    # Faithful to the prod artifact: split employer name amid other
+    # extractor-mangled words.
+    SPLIT_CV = (
+        "Senior Consultant C apgemini, India wrote clean c ode and improved "
+        "build t ime since 201 1"
+    )
+
+    def setup_method(self):
+        self.cv = normalize_for_grounding(self.SPLIT_CV)
+
+    def test_split_employer_grounds(self):
+        assert employer_is_grounded("Capgemini", self.cv) is True
+
+    def test_split_employer_with_legal_suffix_grounds(self):
+        assert employer_is_grounded("Capgemini Ltd.", self.cv) is True
+
+    def test_split_multiword_employer_grounds(self):
+        cv = normalize_for_grounding("Data Engineer at Cox Communi cations")
+        assert employer_is_grounded("Cox Communications", cv) is True
+
+    def test_substring_of_split_word_does_not_ground(self):
+        # "gemini" sits inside the reassembled "c apgemini" but doesn't start
+        # on an original token boundary — must not ground.
+        assert employer_is_grounded("Gemini", self.cv) is False
+
+    def test_join_across_word_boundary_does_not_ground(self):
+        # Space-stripping SCRAMBLED_CV turns "Chess and" into "chessand",
+        # which contains "sand" — a mid-word edge must be rejected.
+        cv = normalize_for_grounding(SCRAMBLED_CV)
+        assert employer_is_grounded("Sand", cv) is False
+
+    def test_match_inside_longer_word_does_not_ground(self):
+        cv = normalize_for_grounding("Drove innovation across the org")
+        assert employer_is_grounded("Innova", cv) is False
+
+    def test_scattered_tokens_still_do_not_ground(self):
+        # The module's core invariant: "Arabian" and "Technologies" appear in
+        # SCRAMBLED_CV but never adjacent — the fallback must not rescue it,
+        # since stripping spaces still leaves the intervening words in place.
+        cv = normalize_for_grounding(SCRAMBLED_CV)
+        assert employer_is_grounded("Arabian Technologies LLC", cv) is False
+
+
 class TestGroundCvSections:
     def _blob(self):
         return {
