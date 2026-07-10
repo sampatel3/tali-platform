@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { TaaliTile } from '../../shared/ui/Branding';
 import { PageLink } from '../../shared/ui/PageLink';
@@ -149,6 +149,14 @@ const useFrameLoadGuard = () => {
 
 export const DemoShowcasePage = ({ onNavigate }) => {
   const [active, setActive] = useState('workflow');
+  // Each iframe boots a full copy of the SPA, so only load a tab the first
+  // time it becomes active (then keep it mounted so re-clicks stay instant).
+  // Loading all five on mount fired five parallel app boots on the prospect-
+  // facing walkthrough — the landing CTA target, worst on mobile.
+  const [visited, setVisited] = useState(() => new Set(['workflow']));
+  useEffect(() => {
+    setVisited((prev) => (prev.has(active) ? prev : new Set(prev).add(active)));
+  }, [active]);
   const guard = useFrameLoadGuard();
   const tab = SHOWCASE_TABS.find((t) => t.k === active) || SHOWCASE_TABS[0];
   const idx = SHOWCASE_TABS.findIndex((t) => t.k === active);
@@ -254,7 +262,7 @@ export const DemoShowcasePage = ({ onNavigate }) => {
             <div className="mc-show-frame-stage">
               <iframe
                 title={t.label}
-                src={t.src}
+                src={visited.has(t.k) ? t.src : undefined}
                 sandbox="allow-scripts allow-same-origin"
                 referrerPolicy="no-referrer"
                 onLoad={guard(t)}

@@ -286,10 +286,18 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       }
     };
     void tick();
-    const id = window.setInterval(tick, ORG_STATUS_POLL_MS);
+    const id = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void tick();
+    }, ORG_STATUS_POLL_MS);
+    const onVisibility = () => {
+      if (typeof document !== 'undefined' && !document.hidden) void tick();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       cancelled = true;
       window.clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);
 
@@ -377,8 +385,18 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
 
   useEffect(() => {
     void loadAgents();
-    const id = window.setInterval(() => { void loadAgents(); }, AGENTS_POLL_MS);
-    return () => window.clearInterval(id);
+    const id = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void loadAgents();
+    }, AGENTS_POLL_MS);
+    const onVisibility = () => {
+      if (typeof document !== 'undefined' && !document.hidden) void loadAgents();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [loadAgents]);
 
   // Selecting an agent focuses both the chat dock and the decision feed on that

@@ -355,6 +355,12 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const initialSection = initialHashSection || canonicalSection(pathSegment);
 
   const [activeSection, setActiveSection] = useState(initialSection);
+  // Sections mount lazily on first visit and then stay mounted (kept behind
+  // ``hidden`` so their state survives tab switches). This stops every fetch-
+  // heavy panel — clients, developers, background jobs, usage — from mounting
+  // and firing its list request the moment /settings loads, and keeps
+  // BackgroundJobsPanel's 5s poll from running before its tab is opened.
+  const [visitedSections, setVisitedSections] = useState(() => new Set([initialSection]));
   const [orgData, setOrgData] = useState(null);
   const [orgLoading, setOrgLoading] = useState(true);
   const [workspaceForm, setWorkspaceForm] = useState(DEFAULT_WORKSPACE_SETTINGS);
@@ -1322,6 +1328,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const navigateToSection = (sectionId) => {
     const next = canonicalSection(sectionId);
     setActiveSection(next);
+    setVisitedSections((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
     if (typeof window !== 'undefined' && window.history?.replaceState) {
       const hash = next === 'org' ? '' : `#${next}`;
       // Collapse any /settings/<section> path the user landed on via a
@@ -1448,7 +1455,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   title="Hiring departments"
                   subtitle="Whoever a requisition is for — an external client like ADCB or an internal team like Engineering. Add one, then assign it to a requisition to track its rate, margin, and open / filled jobs; filter the Jobs page by department to see each one's pipeline."
                 >
-                  <ClientsManager />
+                  {visitedSections.has('clients') ? <ClientsManager /> : null}
 
                   {/* The role template — what every new role captures + its JD.
                       Lives here with the hiring setup; links to its own editor. */}
@@ -1476,7 +1483,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   title="Developers"
                   subtitle="API keys for the Taali public API. Keys are scoped to this workspace; the secret is shown once on creation."
                 >
-                  <ApiKeysPanel />
+                  {visitedSections.has('developers') ? <ApiKeysPanel /> : null}
                 </SectionPanel>
               </div>
 
@@ -1613,7 +1620,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   title="Background jobs"
                   subtitle="Recent infrastructure runs — decision approvals, scoring, CV fetch, Workable sync, and talent data sync. The agent fleet lives on the Analytics page."
                 >
-                  <BackgroundJobsPanel />
+                  {visitedSections.has('jobs') ? <BackgroundJobsPanel /> : null}
                 </SectionPanel>
               </div>
 
@@ -2320,7 +2327,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   title="Usage"
                   subtitle="AI spend across your workspace — daily totals and a breakdown by surface."
                 >
-                  <UsagePanel />
+                  {visitedSections.has('usage') ? <UsagePanel /> : null}
                 </SectionPanel>
               </div>
 

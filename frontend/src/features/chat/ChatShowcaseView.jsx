@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { Suspense, lazy, useMemo, useState } from 'react';
 import { ArrowUp, Sparkles } from 'lucide-react';
 
 import './chat.css';
@@ -6,7 +6,9 @@ import './chat.css';
 // styling here. The live /chat page rides these in globally via Home; the
 // standalone showcase iframe must pull them in itself.
 import '../home/agentchat/agentchat.css';
-import GraphView from './GraphView';
+// Lazy so cytoscape (~455 kB) stays out of the showcase path until a
+// message actually carries a graph payload.
+const GraphView = lazy(() => import('./GraphView'));
 import CandidateGrid from './CandidateGrid';
 import ToolCallCard from './ToolCallCard';
 import CandidateEvidenceCard from './CandidateEvidenceCard';
@@ -571,7 +573,11 @@ const AskCenter = () => (
                   ) : (
                     <>
                       <CandidateGrid rows={m.tool.result.applications} />
-                      {m.tool.result.graph ? <GraphView graph={m.tool.result.graph} /> : null}
+                      {m.tool.result.graph ? (
+                        <Suspense fallback={null}>
+                          <GraphView graph={m.tool.result.graph} />
+                        </Suspense>
+                      ) : null}
                     </>
                   )}
                 </>
