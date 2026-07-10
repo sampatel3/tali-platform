@@ -385,6 +385,9 @@ class ApplicationDetailResponse(ApplicationResponse):
     workable_comments: list[dict[str, Any]] = Field(default_factory=list)
     workable_questionnaire_answers: list[dict[str, Any]] = Field(default_factory=list)
     workable_activity_log: list[dict[str, Any]] = Field(default_factory=list)
+    # Structured recruiter interview feedback, newest-first. Recruiter-internal;
+    # None on client shares (stripped in application_detail_payload).
+    interview_feedback: Optional[list[dict[str, Any]]] = None
 
 
 class ApplicationCvUploadResponse(BaseModel):

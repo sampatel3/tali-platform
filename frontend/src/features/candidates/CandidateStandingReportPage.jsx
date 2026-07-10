@@ -41,6 +41,7 @@ import { CandidateSnapshotCard } from './CandidateSnapshotCard';
 import { CvDocumentViewer } from './CvDocumentViewer';
 import { CvMatchReview } from './CvMatchReview';
 import { PrepQuestionCard } from './PrepQuestionCard';
+import { InterviewFeedbackSection } from './InterviewFeedbackSection';
 import { VerdictDetail } from './VerdictDetail';
 import {
   getErrorMessage,
@@ -1581,6 +1582,21 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           </div>
           {/* Interview transcript capture moved to the "Notes & context" tab
               (PR3) — it's add-info, not prep reference material. */}
+
+          {/* Structured interview feedback — recruiters record what actually
+              happened (round, recommendation, 5-Ds ratings, probe results,
+              notes). Hidden on client shares (the payload strips it anyway);
+              read-only on recruiter share links (entries arrive with the
+              payload but the viewer is unauthenticated, so no record/edit). */}
+          {!isClientView && application?.id ? (
+            <InterviewFeedbackSection
+              applicationId={application.id}
+              interviewKit={application?.candidate_interview_kit}
+              initialFeedback={application?.interview_feedback}
+              rolesApi={rolesApi}
+              readOnly={isInterviewView}
+            />
+          ) : null}
         </div>
 
         <div className={`pane ${activeTab === 'notes' ? 'active' : ''}`} data-p="notes" data-internal-only={isClientView ? '' : undefined}>
