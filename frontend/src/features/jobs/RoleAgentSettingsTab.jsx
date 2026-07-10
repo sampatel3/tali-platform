@@ -68,6 +68,7 @@ const RoleAgentSettingsTab = ({
   // family of actions immediately; auto-skip-assessment reroutes strong
   // candidates past the assessment stage into the advance queue.
   const autoReject = Boolean(role?.auto_reject);
+  const autoRejectPreScreen = Boolean(role?.auto_reject_pre_screen);
   const autoPromote = Boolean(role?.auto_promote);
   const autoSkipAssessment = Boolean(role?.auto_skip_assessment);
   // When the linked Workable req is archived/closed/draft, Workable refuses
@@ -304,6 +305,12 @@ const RoleAgentSettingsTab = ({
               value: autoReject,
               title: 'Auto-reject',
               sub: 'Below-threshold candidates are rejected immediately (pre-screen, scoring, and assessment stages). Off: every reject lands in the Decision Hub for one-click approval.',
+            },
+            {
+              key: 'auto_reject_pre_screen',
+              value: autoRejectPreScreen,
+              title: 'Auto-reject pre-screen only',
+              sub: 'Only candidates failing the cheap pre-screen gate are rejected immediately. Rejects of fully-scored candidates still queue in the Decision Hub. Auto-reject above covers this and more.',
             },
             {
               key: 'auto_promote',

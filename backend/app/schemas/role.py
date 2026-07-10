@@ -95,6 +95,7 @@ class RoleUpdate(BaseModel):
     # HITL toggles. All default False on the model — sending `null`
     # leaves the existing value unchanged.
     auto_reject: Optional[bool] = None
+    auto_reject_pre_screen: Optional[bool] = None
     auto_promote: Optional[bool] = None
     auto_skip_assessment: Optional[bool] = None
     # Universal monthly USD cap (cents) for ALL Anthropic spend on the role.
@@ -194,6 +195,7 @@ class RoleResponse(BaseModel):
     agent_token_budget_per_cycle: Optional[int] = None
     agent_decision_budget_per_cycle: Optional[int] = None
     auto_reject: bool = False
+    auto_reject_pre_screen: bool = False
     auto_promote: bool = False
     auto_skip_assessment: bool = False
     monthly_usd_budget_cents: Optional[int] = None

@@ -275,7 +275,9 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "Adjust this role agent's settings. Only set the fields the recruiter "
             "asks to change. monthly_budget_cents = monthly spend cap in cents "
             "(e.g. 5000 = $50/mo). auto_reject = execute reject decisions without "
-            "review. auto_promote = send assessments without review. "
+            "review. auto_reject_pre_screen = narrower: only pre-screen-stage "
+            "rejects execute immediately; scored-candidate rejects still queue "
+            "for review. auto_promote = send assessments without review. "
             "auto_skip_assessment = bypass the assessment stage entirely; strong "
             "candidates queue as advance-to-interview decisions instead of "
             "receiving an assessment invite. Raising the "
@@ -286,6 +288,7 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "monthly_budget_cents": {"type": ["integer", "null"]},
                 "auto_reject": {"type": ["boolean", "null"]},
+                "auto_reject_pre_screen": {"type": ["boolean", "null"]},
                 "auto_promote": {"type": ["boolean", "null"]},
                 "auto_skip_assessment": {"type": ["boolean", "null"]},
             },
@@ -505,6 +508,7 @@ def _role_overview(db: Session, role: Role) -> dict[str, Any]:
             "paused_reason": role.agent_paused_reason,
             "monthly_budget_cents": role.monthly_usd_budget_cents,
             "auto_reject": bool(role.auto_reject),
+            "auto_reject_pre_screen": bool(role.auto_reject_pre_screen),
             "auto_promote": bool(role.auto_promote),
             "auto_skip_assessment": bool(role.auto_skip_assessment),
         },
@@ -826,6 +830,7 @@ def dispatch_tool(
             role,
             monthly_budget_cents=int(mbc) if mbc is not None else None,
             auto_reject=args.get("auto_reject"),
+            auto_reject_pre_screen=args.get("auto_reject_pre_screen"),
             auto_promote=args.get("auto_promote"),
             auto_skip_assessment=args.get("auto_skip_assessment"),
         )

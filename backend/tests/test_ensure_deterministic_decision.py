@@ -131,6 +131,34 @@ def test_skip_toggle_queues_advance_despite_task(db):
     assert "auto-skip" in basis
 
 
+def test_skip_toggle_flip_converts_pending_send_cards(db):
+    """Flipping auto_skip_assessment ON converts an already-pending
+    send_assessment card into an advance_to_interview card (Codex #866) —
+    and flipping OFF converts it back."""
+    org, role = _seed_role(db, score_threshold=50, with_task=True)
+    app = _add_app(db, org, role, role_fit=80.0)
+    assert bds.ensure_deterministic_decision(db, app=app, role=role) == "send_assessment"
+    db.commit()
+
+    role.auto_skip_assessment = True
+    db.commit()
+    converted = bds.reconcile_pending_positive_decisions(db, role=role)
+    db.commit()
+    assert converted == 1
+    decs = _pending(db, role)
+    assert len(decs) == 1
+    assert decs[0].decision_type == "advance_to_interview"
+
+    role.auto_skip_assessment = False
+    db.commit()
+    converted = bds.reconcile_pending_positive_decisions(db, role=role)
+    db.commit()
+    assert converted == 1
+    decs = _pending(db, role)
+    assert len(decs) == 1
+    assert decs[0].decision_type == "send_assessment"
+
+
 def test_noop_when_pending_already_exists(db):
     org, role = _seed_role(db, score_threshold=50)
     app = _add_app(db, org, role, role_fit=30.0)

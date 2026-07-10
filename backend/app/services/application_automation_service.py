@@ -205,8 +205,11 @@ def run_auto_reject_if_needed(
         return {**decision, "performed": False}
 
     # Per-role HITL gate. We disqualify in Workable directly ONLY when the role
-    # explicitly opted in (``auto_reject``) AND the decision is
-    # ``auto_disqualify_eligible`` (org Workable switch or agent-managed role).
+    # explicitly opted in — the full ``auto_reject`` toggle OR the narrower
+    # ``auto_reject_pre_screen`` one (this function IS the pre-screen path:
+    # ``evaluate_auto_reject_decision`` defers to full scoring once a cv_match
+    # score exists) — AND the decision is ``auto_disqualify_eligible`` (org
+    # Workable switch or agent-managed role).
     # Otherwise — including agent-off roles, where the reject is still a valid
     # deterministic decision — surface a Decision Hub card for manual review.
     # This is what lets a below-threshold candidate reach the Hub without the
@@ -214,7 +217,10 @@ def run_auto_reject_if_needed(
     # (The original design deferred this to the agent cycle, but the cohort
     # planner never surveyed below-threshold candidates so 270 stranded in prod.)
     auto_disqualify_eligible = bool(decision.get("auto_disqualify_eligible", True))
-    if role is not None and not (bool(getattr(role, "auto_reject", False)) and auto_disqualify_eligible):
+    auto_reject_opted_in = bool(getattr(role, "auto_reject", False)) or bool(
+        getattr(role, "auto_reject_pre_screen", False)
+    )
+    if role is not None and not (auto_reject_opted_in and auto_disqualify_eligible):
         # Not eligible for direct Workable disqualify → recruiter approves the
         # reject manually; surface a Decision Hub card instead.
         return _divert_pre_screen_reject_to_card(

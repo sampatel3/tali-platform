@@ -135,6 +135,7 @@ def survey_role_state(db: Session, *, organization_id: int, role_id: int) -> dic
         "agentic_mode_enabled": bool(role.agentic_mode_enabled),
         "agent_paused_at": role.agent_paused_at.isoformat() if role.agent_paused_at else None,
         "auto_reject": bool(getattr(role, "auto_reject", False)),
+        "auto_reject_pre_screen": bool(getattr(role, "auto_reject_pre_screen", False)),
         "auto_promote": bool(getattr(role, "auto_promote", False)),
         "auto_skip_assessment": bool(getattr(role, "auto_skip_assessment", False)),
         "monthly_usd_budget_cents": role.monthly_usd_budget_cents,

@@ -35,13 +35,14 @@ def _seed_org(db, *, workable=True) -> Organization:
     return org
 
 
-def _seed_role(db, org, *, auto_reject=True, agentic=True) -> Role:
+def _seed_role(db, org, *, auto_reject=True, agentic=True, auto_reject_pre_screen=False) -> Role:
     role = Role(
         organization_id=org.id,
         name="Data Engineer",
         source="manual",
         agentic_mode_enabled=agentic,
         auto_reject=auto_reject,
+        auto_reject_pre_screen=auto_reject_pre_screen,
         score_threshold=50,
         monthly_usd_budget_cents=0,
         job_spec_text="Requirements\n- Python\n",
@@ -176,3 +177,44 @@ def test_workable_success_still_disqualifies(db):
     assert result["performed"] is True
     assert app.application_outcome == "rejected"
     assert _pending_card(db, app) is None
+
+
+def test_pre_screen_only_toggle_disqualifies_directly(db):
+    """auto_reject_pre_screen=True (full auto_reject OFF) still opts this
+    pre-screen path into the direct disqualify — it IS the pre-screen stage."""
+    org = _seed_org(db, workable=True)
+    role = _seed_role(db, org, auto_reject=False, agentic=True, auto_reject_pre_screen=True)
+    app = _seed_app(db, org, role)
+
+    with patch.object(svc, "evaluate_auto_reject_decision", return_value=dict(_BELOW)), \
+         patch.object(
+             svc,
+             "disqualify_candidate_in_workable",
+             return_value={"success": True, "action": "disqualify"},
+         ):
+        result = svc.run_auto_reject_if_needed(
+            db=db, org=org, app=app, role=role, actor_type="system"
+        )
+
+    assert result["performed"] is True
+    assert app.application_outcome == "rejected"
+    assert _pending_card(db, app) is None
+
+
+def test_both_reject_toggles_off_cards_instead(db):
+    """Neither auto_reject nor auto_reject_pre_screen → no direct disqualify;
+    the below-threshold verdict surfaces as a Decision Hub card."""
+    org = _seed_org(db, workable=True)
+    role = _seed_role(db, org, auto_reject=False, agentic=True)
+    app = _seed_app(db, org, role)
+
+    with patch.object(svc, "evaluate_auto_reject_decision", return_value=dict(_BELOW)), \
+         patch.object(svc, "disqualify_candidate_in_workable") as disqualify:
+        result = svc.run_auto_reject_if_needed(
+            db=db, org=org, app=app, role=role, actor_type="system"
+        )
+
+    disqualify.assert_not_called()
+    assert result["performed"] is False
+    assert result["state"] == "awaiting_recruiter_approval"
+    assert _pending_card(db, app) is not None

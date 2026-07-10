@@ -1549,6 +1549,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               if (!Number.isFinite(numericRoleId)) return;
               const labels = {
                 auto_reject: 'Auto-reject',
+                auto_reject_pre_screen: 'Auto-reject pre-screen only',
                 auto_promote: 'Auto-promote',
                 auto_skip_assessment: 'Auto skip assessment',
               };
