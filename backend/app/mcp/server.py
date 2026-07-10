@@ -118,6 +118,18 @@ class _open_session:  # noqa: N801 — context-manager-as-class is intentional
 # ---------------------------------------------------------------------------
 
 
+def _strip_application_counts(role_payload: dict[str, Any]) -> dict[str, Any]:
+    """Remove funnel-volume fields from a role payload.
+
+    ``applications_count`` / ``stage_counts`` are application metrics — the
+    public REST API gates the analogous role-metrics endpoint behind
+    ``applications:read``, so a roles-only key must not read them here either.
+    """
+    role_payload.pop("applications_count", None)
+    role_payload.pop("stage_counts", None)
+    return role_payload
+
+
 @mcp_app.tool(
     name="list_roles",
     description=(
@@ -132,7 +144,15 @@ def list_roles(
     include_stage_counts: bool = False,
 ) -> list[dict[str, Any]]:
     with _open_session(ctx, SCOPE_ROLES_READ) as (db, user):
-        return handlers.list_roles(db, user, include_stage_counts=include_stage_counts)
+        can_read_applications = user.has_scope(SCOPE_APPLICATIONS_READ)
+        roles = handlers.list_roles(
+            db,
+            user,
+            include_stage_counts=include_stage_counts and can_read_applications,
+        )
+        if not can_read_applications:
+            roles = [_strip_application_counts(r) for r in roles]
+        return roles
 
 
 @mcp_app.tool(
@@ -144,7 +164,10 @@ def list_roles(
 )
 def get_role(ctx: Context, role_id: int) -> dict[str, Any]:
     with _open_session(ctx, SCOPE_ROLES_READ) as (db, user):
-        return handlers.get_role(db, user, role_id=role_id)
+        role = handlers.get_role(db, user, role_id=role_id)
+        if not user.has_scope(SCOPE_APPLICATIONS_READ):
+            role = _strip_application_counts(role)
+        return role
 
 
 @mcp_app.tool(

@@ -605,6 +605,41 @@ def test_api_key_scope_missing_denies_application_tools(client, db, org_user):
     assert "scope" in text
 
 
+def test_api_key_roles_only_strips_application_counts(client, db, org_user):
+    """A roles:read-only key sees the role catalog without funnel volume.
+
+    applications_count / stage_counts are application metrics (the public REST
+    API gates role metrics behind applications:read), so they're stripped from
+    list_roles and get_role for roles-only keys — even when stage counts are
+    explicitly requested.
+    """
+    from app.models.api_key import SCOPE_ROLES_READ
+
+    _headers, _user, org_id = org_user
+    role = _create_role_via_db(db, organization_id=org_id, name="CountsRole")
+    _create_application(
+        db, organization_id=org_id, role=role, full_name="Counted",
+        email="counted@x.test", taali_score=70.0,
+    )
+    secret = _mint_key(db, organization_id=org_id, scopes=[SCOPE_ROLES_READ])
+
+    rpc_list = _mcp_call(
+        client, _key_headers(secret), "tools/call",
+        {"name": "list_roles", "arguments": {"include_stage_counts": True}},
+    )
+    for row in _tool_payload(rpc_list):
+        assert "applications_count" not in row
+        assert "stage_counts" not in row
+
+    rpc_role = _mcp_call(
+        client, _key_headers(secret), "tools/call",
+        {"name": "get_role", "arguments": {"role_id": role.id}},
+    )
+    payload = _tool_payload(rpc_role)
+    assert "applications_count" not in payload
+    assert "stage_counts" not in payload
+
+
 def test_api_key_scope_gates_resources(client, db, org_user):
     """Resources honour the same scope mapping as their sibling tools."""
     from app.models.api_key import SCOPE_ROLES_READ
