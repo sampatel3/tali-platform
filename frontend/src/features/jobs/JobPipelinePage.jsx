@@ -592,7 +592,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     let preScreenFiltered = 0;
     let noCv = 0;
     for (const application of unscoredApplications) {
-      if (!application?.cv_uploaded_at && !application?.cv_filename) {
+      // has_cv_text mirrors the auto-scorer's exact cv_text filter (a CV file
+      // can exist while extraction produced nothing). Fall back to the file
+      // metadata for cached payloads written before the field existed.
+      const hasCvText = application?.has_cv_text
+        ?? Boolean(application?.cv_uploaded_at || application?.cv_filename);
+      if (!hasCvText) {
         noCv += 1;
         continue;
       }

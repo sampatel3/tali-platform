@@ -570,13 +570,14 @@ Banking transformation experience
     };
     apiClient.roles.listApplications.mockResolvedValue({ data: [
       // Pre-screen filtered: score 12 < 30 cutoff, CV predates the run.
-      { ...base, id: 1, candidate_id: 1, candidate_name: 'Filtered Fay', pre_screen_score: 12, cv_uploaded_at: '2026-04-01T00:00:00Z', pre_screen_run_at: '2026-04-02T00:00:00Z' },
-      // No CV at all — nothing to score.
-      { ...base, id: 2, candidate_id: 2, candidate_name: 'Nocv Ned' },
-      // Never pre-screened, has a CV → scoreable.
-      { ...base, id: 3, candidate_id: 3, candidate_name: 'Ready Ria', cv_uploaded_at: '2026-04-01T00:00:00Z' },
+      { ...base, id: 1, candidate_id: 1, candidate_name: 'Filtered Fay', has_cv_text: true, pre_screen_score: 12, cv_uploaded_at: '2026-04-01T00:00:00Z', pre_screen_run_at: '2026-04-02T00:00:00Z' },
+      // CV file exists but extraction produced no text — the auto-scorer
+      // filters on cv_text, so this is held back, not "ready to score".
+      { ...base, id: 2, candidate_id: 2, candidate_name: 'Nocv Ned', has_cv_text: false, cv_filename: 'ned.pdf', cv_uploaded_at: '2026-04-01T00:00:00Z' },
+      // Never pre-screened, has CV text → scoreable.
+      { ...base, id: 3, candidate_id: 3, candidate_name: 'Ready Ria', has_cv_text: true, cv_uploaded_at: '2026-04-01T00:00:00Z' },
       // Screened out BUT uploaded a newer CV since the run → scoreable again.
-      { ...base, id: 4, candidate_id: 4, candidate_name: 'Fresh Finn', pre_screen_score: 12, cv_uploaded_at: '2026-04-03T00:00:00Z', pre_screen_run_at: '2026-04-02T00:00:00Z' },
+      { ...base, id: 4, candidate_id: 4, candidate_name: 'Fresh Finn', has_cv_text: true, pre_screen_score: 12, cv_uploaded_at: '2026-04-03T00:00:00Z', pre_screen_run_at: '2026-04-02T00:00:00Z' },
     ] });
 
     renderPipeline();
@@ -597,8 +598,10 @@ Banking transformation experience
       created_at: '2026-04-26T01:00:00Z', updated_at: '2026-04-26T01:00:00Z',
     };
     apiClient.roles.listApplications.mockResolvedValue({ data: [
-      { ...base, id: 1, candidate_id: 1, candidate_name: 'Filtered Fay', pre_screen_score: 12, cv_uploaded_at: '2026-04-01T00:00:00Z', pre_screen_run_at: '2026-04-02T00:00:00Z' },
-      { ...base, id: 2, candidate_id: 2, candidate_name: 'Filtered Flo', pre_screen_score: 8, cv_uploaded_at: '2026-04-01T00:00:00Z', pre_screen_run_at: '2026-04-02T00:00:00Z' },
+      { ...base, id: 1, candidate_id: 1, candidate_name: 'Filtered Fay', has_cv_text: true, pre_screen_score: 12, cv_uploaded_at: '2026-04-01T00:00:00Z', pre_screen_run_at: '2026-04-02T00:00:00Z' },
+      { ...base, id: 2, candidate_id: 2, candidate_name: 'Filtered Flo', has_cv_text: true, pre_screen_score: 8, cv_uploaded_at: '2026-04-01T00:00:00Z', pre_screen_run_at: '2026-04-02T00:00:00Z' },
+      // No has_cv_text field at all (stale cached payload) and no CV file
+      // metadata → falls back to the proxy and reads as no-CV.
       { ...base, id: 3, candidate_id: 3, candidate_name: 'Nocv Ned' },
     ] });
 
