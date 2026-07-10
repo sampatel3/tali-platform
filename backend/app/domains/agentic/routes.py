@@ -168,6 +168,12 @@ class AgentDecisionPayload(BaseModel):
     age_seconds: int = 0
     confidence_band: Optional[str] = None
     cost_usd_cents: int = 0
+    # A score job (CvScoreJob pending/running) is currently re-computing this
+    # candidate's score — e.g. the recruiter pressed Re-evaluate on an
+    # old-engine score, or an agent-chat bulk re-score touched them. The queue
+    # greys the row + card and disables actions until the fresh score lands,
+    # so nothing is approved on a score that's being replaced mid-flight.
+    rescore_in_flight: bool = False
 
 
 class AgentRunPayload(BaseModel):
@@ -287,6 +293,7 @@ def _decision_to_payload(
     is_stale: bool = False,
     staleness_reasons: Optional[list[str]] = None,
     staleness_summary: Optional[str] = None,
+    rescore_in_flight: bool = False,
 ) -> AgentDecisionPayload:
     # C5: derive presentational fields here so the API answers "is this
     # safe to approve, how old is it, how expensive was it" without
@@ -408,6 +415,7 @@ def _decision_to_payload(
         is_stale=is_stale,
         staleness_reasons=staleness_reasons or [],
         staleness_summary=staleness_summary,
+        rescore_in_flight=rescore_in_flight,
         age_seconds=age_seconds,
         confidence_band=_confidence_band(confidence_value),
         cost_usd_cents=cost_cents,
@@ -539,6 +547,29 @@ def list_agent_decisions(
         ):
             apps_by_id[int(app.id)] = app
 
+    # One query: which of these candidates have a score job in flight right
+    # now (Re-evaluate on an old-engine score, agent-chat bulk re-score, …)?
+    # The queue greys those rows and disables their actions until the fresh
+    # score lands, so a recruiter never approves a score being replaced.
+    rescoring_app_ids: set[int] = set()
+    if all_app_ids:
+        from ...models.cv_score_job import (
+            SCORE_JOB_PENDING,
+            SCORE_JOB_RUNNING,
+            CvScoreJob,
+        )
+
+        rescoring_app_ids = {
+            int(row[0])
+            for row in db.query(CvScoreJob.application_id)
+            .filter(
+                CvScoreJob.application_id.in_(all_app_ids),
+                CvScoreJob.status.in_((SCORE_JOB_PENDING, SCORE_JOB_RUNNING)),
+            )
+            .distinct()
+            .all()
+        }
+
     # One cache for the whole page: pending rows in a queue typically share
     # a handful of roles, so this collapses the per-role criteria/note
     # lookups from O(rows) to O(distinct roles).
@@ -568,6 +599,7 @@ def list_agent_decisions(
                 is_stale=is_stale,
                 staleness_reasons=reasons,
                 staleness_summary=summary,
+                rescore_in_flight=int(decision.application_id) in rescoring_app_ids,
             )
         )
     return payloads
