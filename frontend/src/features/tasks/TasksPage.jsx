@@ -4,16 +4,12 @@ import { useParams } from 'react-router-dom';
 
 import { useToast } from '../../context/ToastContext';
 import { tasks as tasksApi } from '../../shared/api';
+import { getErrorMessage } from '../../shared/getErrorMessage';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { Select, Spinner } from '../../shared/ui/TaaliPrimitives';
 import { GeneratedDraftsPanel } from './GeneratedDraftsPanel';
 
 const AssessmentPage = lazy(() => import('../assessment_runtime/AssessmentPage'));
-
-const getErrorMessage = (error, fallback) => (
-  error?.response?.data?.detail
-  || fallback
-);
 
 const normalizeTaskRole = (task) => (
   String(task?.role || task?.role_name || task?.category || 'General engineering').trim()

@@ -8,6 +8,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { aedToUsd, formatAed } from '../../lib/currency';
 import { organizations as orgsApi, billing as billingApi, team as teamApi } from '../../shared/api';
+import { getErrorMessage } from '../../shared/getErrorMessage';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import {
   Button,
@@ -155,20 +156,6 @@ const workableStageLabel = (stage) => (
   || stage?.id
   || ''
 );
-
-const getErrorMessage = (error, fallback) => {
-  const detail = error?.response?.data?.detail;
-  if (
-    typeof detail === 'string'
-    && detail.length > 0
-    && detail.length < 200
-    && !detail.trim().startsWith('{')
-    && !detail.trim().startsWith('[')
-  ) {
-    return detail;
-  }
-  return fallback;
-};
 
 const initialsFor = (value) => {
   const letters = String(value || '')

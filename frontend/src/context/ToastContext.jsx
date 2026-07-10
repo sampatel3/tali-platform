@@ -43,9 +43,15 @@ export function ToastProvider({ children }) {
       const next = [entry, ...prev];
       return next.length > ACTIVITY_CAP ? next.slice(0, ACTIVITY_CAP) : next;
     });
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 5000);
+    // Errors are frequently the sole feedback a user gets that an action
+    // failed. Auto-dismissing them after 5s means a recruiter who glanced
+    // away never learns something broke, so error toasts persist until they
+    // explicitly dismiss. Every other severity still auto-clears.
+    if (type !== 'error') {
+      setTimeout(() => {
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+      }, 5000);
+    }
   }, []);
 
   const dismiss = useCallback((id) => {

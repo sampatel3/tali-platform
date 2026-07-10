@@ -2,23 +2,10 @@ import React, { useEffect, useState } from 'react';
 
 import { apiKeys as apiKeysApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
+import { getErrorMessage } from '../../shared/getErrorMessage';
 
 // Read-only defaults when minting a key without touching the scope list.
 const READ_ONLY_DEFAULTS = ['roles:read', 'applications:read', 'assessments:read'];
-
-const getErrorMessage = (error, fallback) => {
-  const detail = error?.response?.data?.detail;
-  if (
-    typeof detail === 'string'
-    && detail.length > 0
-    && detail.length < 200
-    && !detail.trim().startsWith('{')
-    && !detail.trim().startsWith('[')
-  ) {
-    return detail;
-  }
-  return fallback;
-};
 
 const fmtDate = (value) => {
   if (!value) return '—';

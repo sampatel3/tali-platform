@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, FileSearch, Loader2 } from 'lucide-react';
 
 import { assessments } from '../../shared/api';
+import { getErrorMessage } from '../../shared/getErrorMessage';
 import { ChatComposer, ChatMarkdown } from '../../shared/chat';
 
 const MESSAGE_BUFFER_LIMIT = 60;
@@ -27,17 +28,13 @@ const generateRequestId = () => {
 
 const errorMessageFromException = (err) => {
   // A stalled connection trips the per-request timeout in assessmentsClient
-  // (axios raises ECONNABORTED). There's no response body to read, so give
-  // the candidate a clear "try again" rather than the generic network line.
+  // (axios raises ECONNABORTED). Keep the candidate-facing "Claude" wording
+  // here (assessments say Claude by design) rather than the shared generic
+  // timeout line.
   if (err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT') {
     return 'Claude took too long — try again.';
   }
-  const detail = err?.response?.data?.detail;
-  if (typeof detail === 'string' && detail.trim()) return detail;
-  if (detail && typeof detail === 'object' && typeof detail.message === 'string' && detail.message.trim()) {
-    return detail.message;
-  }
-  return "Your message didn't go through. Check your connection and try again.";
+  return getErrorMessage(err, "Your message didn't go through. Check your connection and try again.");
 };
 
 const MessageRow = ({ entry }) => {

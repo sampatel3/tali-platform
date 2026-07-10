@@ -1401,6 +1401,10 @@ button.eng-badge-button:focus-visible {
   margin-top: 2px;
   color: var(--taali-purple, #7d56f3);
 }
+/* A failed job must not read as a purple/success completion — flag it. */
+.bg-jobs-icon-failed {
+  color: var(--taali-danger);
+}
 .bg-jobs-body {
   flex: 1 1 auto;
   min-width: 0;
