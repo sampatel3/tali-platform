@@ -13,8 +13,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "136_add_interview_feedback"
-down_revision = "135_add_anthropic_batch_jobs"
+revision = "137_add_interview_feedback"
+down_revision = "136_add_assessment_preview_viewed_at"
 branch_labels = None
 depends_on = None
 
