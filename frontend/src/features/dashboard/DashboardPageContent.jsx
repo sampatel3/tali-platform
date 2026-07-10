@@ -39,8 +39,11 @@ const isCompletedStatus = (status) => {
 const isAwaitingScore = (raw) => {
   if (!raw) return false;
   if (!isCompletedStatus(raw.status)) return false;
-  const scored = raw.scored_at || raw.final_score != null || raw.taali_score != null
-    || raw.assessment_score != null;
+  const scored = raw.scored_at
+    || raw.final_score != null
+    || raw.taali_score != null
+    || raw.assessment_score != null
+    || raw.score != null;
   return !scored;
 };
 

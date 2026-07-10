@@ -111,7 +111,7 @@ export default function RoleFeedbackNotes({ roleId }) {
             padding: '10px 12px',
             borderRadius: 10,
             border: '1px solid var(--line)',
-            background: 'var(--bg-1)',
+            background: 'var(--bg-2)',
             color: 'var(--ink)',
             fontFamily: 'inherit',
             fontSize: 14,
@@ -171,7 +171,7 @@ export default function RoleFeedbackNotes({ roleId }) {
               <li
                 key={note.id}
                 style={{
-                  background: 'var(--bg-1)',
+                  background: 'var(--bg-2)',
                   border: '1px solid var(--line)',
                   borderRadius: 12,
                   padding: '12px 14px',

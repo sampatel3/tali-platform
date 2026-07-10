@@ -408,7 +408,7 @@
   padding: 4px 11px;
   border-radius: 999px;
   border: 1px solid var(--line);
-  background: var(--card, #fff);
+  background: var(--bg-2);
   font-size: 0.75rem;
   color: var(--ink-2);
   cursor: pointer;
@@ -436,12 +436,12 @@
   border-radius: 999px;
   font-size: 0.75rem;
   font-weight: 600;
-  background: var(--purple-50, color-mix(in srgb, var(--purple) 12%, transparent));
+  background: var(--purple-soft);
   color: var(--purple-2);
   border: 1px solid color-mix(in srgb, var(--purple) 24%, transparent);
 }
 .req-client-badge.is-empty {
-  background: var(--bg-1, transparent);
+  background: var(--bg-3);
   color: var(--mute);
   border-color: var(--line);
   font-weight: 500;
@@ -708,7 +708,7 @@
   font-family: var(--font-mono);
   font-size: 0.72rem;
   color: var(--purple);
-  background: var(--card, #fff);
+  background: var(--bg-2);
   border: 1px solid color-mix(in oklab, var(--purple) 24%, transparent);
   padding: 1px 7px;
   border-radius: 5px;
