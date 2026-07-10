@@ -10,7 +10,7 @@
     "files": {
       ".gitignore": ".venv/\n.pytest_cache/\n__pycache__/\n",
       "requirements.txt": "pytest>=8.0.0\n",
-      "README.md": "# Bronze Ingestion Pipeline\n\nThe reusable job every source uses to land raw data into the Bronze layer\n(Iceberg on S3). It pulls from an on-prem OLTP source, writes partitioned\nIceberg data, and is supposed to do so efficiently — incremental where it\ncan, partitioned for pruning, and sized so we don't drown S3 in tiny files.\n\n## The problem\nRight now it full-extracts ~2 TB every night, writes everything unpartitioned\nas millions of tiny files, and downstream queries scan the whole table. See\n`diagnostics/job_run.log`. The primitives in `ingestion/` are stubbed.\n\n## Local workflow\n1. Create a virtualenv\n2. Install `requirements.txt`\n3. Run `pytest -q --tb=short`\n\nThis strips the real Spark/Iceberg/S3 runtime — you implement the *decisions*\n(extraction mode, partition spec, S3 layout, file sizing, write plan) as plain\nPython the job would drive.\n",
+      "README.md": "# Bronze Ingestion Pipeline\n\nThe reusable job every source uses to land raw data into the Bronze layer\n(Iceberg on S3). It pulls from an on-prem OLTP source, writes partitioned\nIceberg data, and is supposed to do so efficiently — incremental where it\ncan, partitioned for pruning, and sized so we don't drown S3 in tiny files.\n\n## The problem\nRight now it full-extracts ~2 TB every night, writes everything unpartitioned\nas millions of tiny files, and downstream queries scan the whole table. See\n`diagnostics/job_run.log`. The primitives in `ingestion/` are stubbed.\n\n## Local workflow\n1. Create a virtualenv\n2. Install `requirements.txt`\n3. Run `pytest -q --tb=short`\n\nThis strips the real Spark/Iceberg/S3 runtime — you implement the *decisions*\n(extraction mode, partition spec, S3 layout, file sizing, write plan) as plain\nPython the job would drive.\n\n## Working with the agent\n\nWork the way you genuinely work. If keeping a short `CLAUDE.md`/`AGENTS.md`\ncontext file, sketching a `PLAN.md` before building, or re-running the tests\nas you go is part of your practice, do it here — load-bearing practice is\nnoticed. Nothing here requires it, and ritual files written for show don't\nhelp you.\n",
       "ARCHITECTURE.md": "# Ingestion shape (source -> Bronze)\n\n1. **Extract** from on-prem (full vs incremental by watermark).\n2. **Partition**: pick the Iceberg partition transforms for the data + query\n   patterns (day-partition event time; bucket a high-cardinality filter key).\n3. **Layout**: write under the Hive-style Iceberg path `root/k=v/k=v`.\n4. **File sizing**: target ~128-512 MB files (avoid the small-file problem).\n5. **Optimise the Spark write**: repartition by partition cols, prune,\n   push predicates down.\n\nAll five are stubbed in `ingestion/`. `ingestion/pipeline.py` wires them\ntogether and is correct once the primitives are.\n",
       "RUNBOOK.md": "# Ingestion incident\n\n## Immediate expectations\n- Stop the nightly full extract from hammering the on-prem OLTP DB.\n- Partition the Bronze table so downstream queries prune instead of full-scan.\n- Size output files so we stop writing millions of tiny objects to S3.\n- Keep the primitives composable — every source reuses this library.\n\n## Mental model\nCorrectness + query/cost efficiency first; clever Spark tuning second.\n",
       "diagnostics/job_run.log": "2026-02-27T01:10:02Z WARNING extract mode=full rows=2,140,889,201 (no watermark predicate applied)\n2026-02-27T01:48:55Z ERROR on-prem source p95 query latency 41s during extract window (OLTP contention)\n2026-02-27T03:22:10Z WARNING wrote 6,002,219 objects to s3://bronze/orders/ avg_object_size=180KB\n2026-02-27T03:22:11Z WARNING table has 0 partitions; downstream 'WHERE created_at = DATE' scans full table\n2026-02-27T08:05:33Z ERROR finance query on yesterday's orders scanned 2.1 TB, cost alert fired\n",
@@ -41,7 +41,7 @@
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.35,
+      "weight": 0.3,
       "grader": "interrogation_outcome"
     },
     "output_scrutiny": {
@@ -62,8 +62,14 @@
         "poor": "Never runs the tests, or submits on the agent's say-so with no verification of any kind."
       }
     },
+    "ai_native_practice": {
+      "weight": 0.1,
+      "grader": "practice_outcome",
+      "part": "applied",
+      "fluency": "description"
+    },
     "ingestion_correctness": {
-      "weight": 0.18,
+      "weight": 0.15,
       "lens": "deliverable",
       "criteria": {
         "excellent": "Shipped plan_extraction (watermark predicate vs full), iceberg_partition_spec (day + bucket), and s3_partition_path (Hive-style k=v layout) are correct against the spec/tests. Judge the artifact; directing the agent to a correct implementation counts fully.",
@@ -72,7 +78,7 @@
       }
     },
     "write_optimization_correctness": {
-      "weight": 0.12,
+      "weight": 0.1,
       "lens": "deliverable",
       "criteria": {
         "excellent": "Shipped target_file_count (correct sizing math + empty-batch edge) and optimize_write (repartition by partition cols, file count, pruning + pushdown) are correct. Credit the working artifact regardless of who typed it.",
@@ -184,6 +190,11 @@
         "job_requirement": "Owns production data quality — validates pipeline changes before they ship",
         "task_artifact": "Test runs and diff review captured in the process trace before submission",
         "rubric_dimension": "verification_before_done"
+      },
+      {
+        "job_requirement": "Works AI-natively — sets up context, plans, and verifies as part of normal delivery",
+        "task_artifact": "Context file / plan artifacts in the final repo + verification in the process trace",
+        "rubric_dimension": "ai_native_practice"
       }
     ]
   },
