@@ -464,3 +464,188 @@ def test_resource_role_returns_markdown(client, db, org_user):
     body = contents[0]["text"]
     assert "Platform Eng" in body
     assert "Distributed systems work." in body
+
+
+# ---------------------------------------------------------------------------
+# API-key auth (tali_* keys alongside JWT on the same /mcp mount)
+# ---------------------------------------------------------------------------
+
+
+def _mint_key(db, *, organization_id, scopes=None, expires_at=None, revoked=False):
+    """Mint a tali_* API key and return its one-time plaintext secret."""
+    from app.services.api_key_service import mint_api_key
+
+    minted = mint_api_key(
+        db,
+        organization_id=organization_id,
+        name="test-key",
+        scopes=scopes,
+        is_test=True,
+        expires_at=expires_at,
+    )
+    if revoked:
+        from app.services.api_key_service import _utcnow
+
+        minted.api_key.revoked_at = _utcnow()
+        db.commit()
+    return minted.secret
+
+
+def _key_headers(secret):
+    return {"Authorization": f"Bearer {secret}"}
+
+
+def test_api_key_happy_path_returns_org_scoped_data(client, db, org_user):
+    """A tali_* key with default read scopes reaches org-scoped tool data."""
+    _headers, _user, org_id = org_user
+    role = _create_role_via_db(db, organization_id=org_id, name="KeyRole")
+    secret = _mint_key(db, organization_id=org_id)  # default scopes = full read
+
+    rpc = _mcp_call(
+        client, _key_headers(secret), "tools/call",
+        {"name": "list_roles", "arguments": {}},
+    )
+    rows = _tool_payload(rpc)
+    assert {r["name"] for r in rows} == {"KeyRole"}
+    assert rows[0]["role_id"] == role.id
+
+
+def test_api_key_via_x_api_key_header(client, db, org_user):
+    """The X-API-Key header is accepted as an alternative to the bearer slot."""
+    _headers, _user, org_id = org_user
+    _create_role_via_db(db, organization_id=org_id, name="HeaderRole")
+    secret = _mint_key(db, organization_id=org_id)
+
+    rpc = _mcp_call(
+        client, {"X-API-Key": secret}, "tools/call",
+        {"name": "list_roles", "arguments": {}},
+    )
+    rows = _tool_payload(rpc)
+    assert {r["name"] for r in rows} == {"HeaderRole"}
+
+
+def test_api_key_cross_org_isolation(client, db, org_user):
+    """A key minted for org B cannot see org A's data."""
+    _headers, _user, org_a = org_user
+    _create_role_via_db(db, organization_id=org_a, name="OrgARole")
+
+    from app.models.organization import Organization
+
+    org_b = Organization(name="Org B", slug="org-b")
+    db.add(org_b)
+    db.commit()
+    _create_role_via_db(db, organization_id=org_b.id, name="OrgBRole")
+
+    secret_b = _mint_key(db, organization_id=org_b.id)
+    rpc = _mcp_call(
+        client, _key_headers(secret_b), "tools/call",
+        {"name": "list_roles", "arguments": {}},
+    )
+    rows = _tool_payload(rpc)
+    assert {r["name"] for r in rows} == {"OrgBRole"}
+
+
+def test_api_key_revoked_is_rejected(client, db, org_user):
+    _headers, _user, org_id = org_user
+    secret = _mint_key(db, organization_id=org_id, revoked=True)
+    rpc = _mcp_call(
+        client, _key_headers(secret), "tools/call",
+        {"name": "list_roles", "arguments": {}},
+    )
+    result = rpc["result"]
+    assert result["isError"] is True
+    text = (result.get("content") or [{}])[0].get("text", "").lower()
+    assert "api key" in text
+
+
+def test_api_key_expired_is_rejected(client, db, org_user):
+    from datetime import timedelta
+
+    from app.services.api_key_service import _utcnow
+
+    _headers, _user, org_id = org_user
+    secret = _mint_key(
+        db, organization_id=org_id, expires_at=_utcnow() - timedelta(hours=1)
+    )
+    rpc = _mcp_call(
+        client, _key_headers(secret), "tools/call",
+        {"name": "list_roles", "arguments": {}},
+    )
+    assert rpc["result"]["isError"] is True
+
+
+def test_api_key_scope_missing_denies_application_tools(client, db, org_user):
+    """A roles:read-only key is denied on applications:read tools but allowed on roles."""
+    from app.models.api_key import SCOPE_ROLES_READ
+
+    _headers, _user, org_id = org_user
+    role = _create_role_via_db(db, organization_id=org_id, name="ScopeRole")
+    app = _create_application(
+        db, organization_id=org_id, role=role, full_name="Scoped",
+        email="scoped@x.test", taali_score=80.0,
+    )
+    secret = _mint_key(db, organization_id=org_id, scopes=[SCOPE_ROLES_READ])
+
+    # roles:read tool -> allowed
+    rpc_roles = _mcp_call(
+        client, _key_headers(secret), "tools/call",
+        {"name": "list_roles", "arguments": {}},
+    )
+    rows = _tool_payload(rpc_roles)
+    assert {r["name"] for r in rows} == {"ScopeRole"}
+
+    # applications:read tool -> denied on scope
+    rpc_apps = _mcp_call(
+        client, _key_headers(secret), "tools/call",
+        {"name": "get_application", "arguments": {"application_id": app.id}},
+    )
+    result = rpc_apps["result"]
+    assert result["isError"] is True
+    text = (result.get("content") or [{}])[0].get("text", "").lower()
+    assert "scope" in text
+
+
+def test_api_key_scope_gates_resources(client, db, org_user):
+    """Resources honour the same scope mapping as their sibling tools."""
+    from app.models.api_key import SCOPE_ROLES_READ
+
+    _headers, _user, org_id = org_user
+    role = _create_role_via_db(db, organization_id=org_id, name="ResRole")
+    app = _create_application(
+        db, organization_id=org_id, role=role, full_name="R",
+        email="r2@x.test", taali_score=60.0,
+    )
+    secret = _mint_key(db, organization_id=org_id, scopes=[SCOPE_ROLES_READ])
+
+    # role resource -> allowed under roles:read
+    rpc_role = _mcp_call(
+        client, _key_headers(secret), "resources/read",
+        {"uri": f"tali://role/{role.id}"},
+    )
+    assert rpc_role["result"]["contents"][0]["mimeType"] == "text/markdown"
+
+    # application resource -> requires applications:read -> denied
+    rpc_app = _mcp_call(
+        client, _key_headers(secret), "resources/read",
+        {"uri": f"tali://application/{app.id}"},
+    )
+    assert "error" in rpc_app
+
+
+def test_jwt_path_unchanged_has_full_read_access(client, db, org_user):
+    """JWT (session) principals are exempt from scope gates — no regression."""
+    headers, _user, org_id = org_user
+    role = _create_role_via_db(db, organization_id=org_id, name="JwtRole")
+    app = _create_application(
+        db, organization_id=org_id, role=role, full_name="J",
+        email="j@x.test", taali_score=91.0,
+    )
+    # roles tool
+    rpc_roles = _mcp_call(client, headers, "tools/call", {"name": "list_roles", "arguments": {}})
+    assert {r["name"] for r in _tool_payload(rpc_roles)} == {"JwtRole"}
+    # applications tool — no scope check applied to JWT principals
+    rpc_app = _mcp_call(
+        client, headers, "tools/call",
+        {"name": "get_application", "arguments": {"application_id": app.id}},
+    )
+    assert _tool_payload(rpc_app)["application_id"] == app.id
