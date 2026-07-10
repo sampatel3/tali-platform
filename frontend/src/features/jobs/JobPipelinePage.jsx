@@ -2075,11 +2075,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           </div>
         </Dialog>
 
+        {/* Candidates in table order, not raw fetch order — the backend
+            freezes the submitted order into the pack, so the client sees the
+            same ranking the recruiter curated on screen. */}
         <SubmittalPackDialog
           open={submittalDialogOpen}
           roleId={numericRoleId}
           roleTitle={role?.name || ''}
-          applications={roleApplications.filter((a) => selectedAppIds.has(a.id))}
+          applications={sortedTableApplications.filter((a) => selectedAppIds.has(a.id))}
           onClose={() => setSubmittalDialogOpen(false)}
         />
 
