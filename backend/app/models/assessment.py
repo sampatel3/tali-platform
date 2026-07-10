@@ -96,6 +96,9 @@ class Assessment(Base):
     invite_delivered_at = Column(DateTime(timezone=True), nullable=True)
     invite_opened_at = Column(DateTime(timezone=True), nullable=True)
     invite_bounced_at = Column(DateTime(timezone=True), nullable=True)
+    # First hit of the candidate preview/welcome page — the funnel step
+    # between "opened the invite email" and "clicked Start".
+    preview_viewed_at = Column(DateTime(timezone=True), nullable=True)
     credit_consumed_at = Column(DateTime(timezone=True), nullable=True)
     # Prompt scoring fields (Phase 2)
     prompt_quality_score = Column(Float, nullable=True)

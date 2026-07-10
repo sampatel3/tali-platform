@@ -144,6 +144,7 @@ def get_analytics(
             "total_candidates": 0,
             "total_tasks": 0,
             "completed_count": 0,
+            "timed_out_count": 0,
             "completion_rate": 0,
             "top_score": None,
             "avg_score": None,
@@ -174,6 +175,15 @@ def get_analytics(
     total = len(assessments)
     completed = [assessment for assessment in assessments if _is_completed(assessment) and assessment.completed_at]
     completed_count = len(completed)
+    # Timeout-completions are a distinct engagement outcome (the candidate
+    # walked away and the server finalized their work) — surface them
+    # separately instead of hiding them inside completed_count.
+    timed_out_count = sum(
+        1
+        for assessment in completed
+        if str(getattr(assessment.status, "value", assessment.status) or "").lower()
+        == AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT.value
+    )
 
     weekly_completion: list[dict] = []
     now = datetime.now(timezone.utc)
@@ -217,6 +227,7 @@ def get_analytics(
         "total_candidates": unique_candidate_count,
         "total_tasks": unique_task_count,
         "completed_count": completed_count,
+        "timed_out_count": timed_out_count,
         "completion_rate": completion_rate,
         "top_score": top_score,
         "avg_score": avg_score,

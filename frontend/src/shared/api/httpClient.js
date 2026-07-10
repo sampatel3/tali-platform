@@ -4,6 +4,13 @@ const API_URL = (import.meta.env.VITE_API_URL || '').replace(/[\r\n\s]+/g, '').t
 
 const api = axios.create({
   baseURL: `${API_URL}/api/v1`,
+  // A dropped connection (common on the UAE→us-east4 hop) would otherwise hang
+  // a request forever — the browser waits on OS TCP retransmission and the
+  // promise never rejects, freezing "Working…" states with locked composers.
+  // 60s is a sane default for normal reads/writes; long-poll or streaming
+  // callers (e.g. the assessment Claude chat) pass their own larger per-request
+  // `timeout` to override this. axios rejects with code 'ECONNABORTED' on hit.
+  timeout: 60000,
   headers: {
     'Content-Type': 'application/json',
   },

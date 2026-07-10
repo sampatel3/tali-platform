@@ -17,6 +17,7 @@ export const RegisterPage = ({ onNavigate }) => {
   const updateField = (field) => (e) => setForm((prev) => ({ ...prev, [field]: e.target.value }));
 
   const handleRegister = async () => {
+    if (loading) return;
     setError('');
     if (!form.email || !form.password || !form.full_name) {
       setError('Email, password, and full name are required');
@@ -105,7 +106,7 @@ export const RegisterPage = ({ onNavigate }) => {
           <div>
             <p style={{ margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--ink)' }}>{form.email}</p>
             <p style={{ margin: '4px 0 0', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>
-              Click the link in the email to activate your account. The link expires in 24 hours.
+              Click the link to confirm your email. The link expires in 24 hours.
             </p>
           </div>
         </div>
@@ -158,68 +159,68 @@ export const RegisterPage = ({ onNavigate }) => {
         </div>
       ) : null}
 
-      <AuthField
-        label="Work email"
-        name="email"
-        type="email"
-        autoComplete="email"
-        placeholder="you@company.com"
-        value={form.email}
-        onChange={updateField('email')}
-        helper="We'll use your domain to find teammates to invite."
-      />
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+      <form onSubmit={(e) => { e.preventDefault(); handleRegister(); }}>
         <AuthField
-          label="Full name"
-          name="full_name"
-          autoComplete="name"
-          placeholder="Sam Patel"
-          value={form.full_name}
-          onChange={updateField('full_name')}
+          label="Work email"
+          name="email"
+          type="email"
+          autoComplete="email"
+          placeholder="you@company.com"
+          value={form.email}
+          onChange={updateField('email')}
+          helper="We'll use your domain to find teammates to invite."
         />
-        <AuthField
-          label="Company"
-          name="organization_name"
-          autoComplete="organization"
-          placeholder="Deeplight AI"
-          value={form.organization_name}
-          onChange={updateField('organization_name')}
-        />
-      </div>
-      <AuthField
-        label="Password"
-        name="password"
-        type="password"
-        autoComplete="new-password"
-        placeholder="••••••••"
-        value={form.password}
-        onChange={updateField('password')}
-        helper="At least 8 characters — longer is stronger."
-      />
-
-      <div style={{ display: 'flex', gap: 4, margin: '-8px 0 14px' }}>
-        {[1, 2, 3, 4, 5].map((step) => (
-          <span
-            key={step}
-            style={{
-              flex: 1,
-              height: 3,
-              borderRadius: 2,
-              background: step <= Math.min(4, Math.floor(form.password.length / 3)) ? 'var(--purple)' : 'var(--line)',
-            }}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <AuthField
+            label="Full name"
+            name="full_name"
+            autoComplete="name"
+            placeholder="Sam Patel"
+            value={form.full_name}
+            onChange={updateField('full_name')}
           />
-        ))}
-      </div>
+          <AuthField
+            label="Company"
+            name="organization_name"
+            autoComplete="organization"
+            placeholder="Deeplight AI"
+            value={form.organization_name}
+            onChange={updateField('organization_name')}
+          />
+        </div>
+        <AuthField
+          label="Password"
+          name="password"
+          type="password"
+          autoComplete="new-password"
+          placeholder="••••••••"
+          value={form.password}
+          onChange={updateField('password')}
+          helper="At least 8 characters — longer is stronger."
+        />
 
-      <button
-        type="button"
-        className="mc-auth-cta"
-        onClick={handleRegister}
-        disabled={loading}
-        onKeyDown={(e) => e.key === 'Enter' && handleRegister()}
-      >
-        {loading ? 'Creating account...' : 'Create account →'}
-      </button>
+        <div style={{ display: 'flex', gap: 4, margin: '-8px 0 14px' }}>
+          {[1, 2, 3, 4, 5].map((step) => (
+            <span
+              key={step}
+              style={{
+                flex: 1,
+                height: 3,
+                borderRadius: 2,
+                background: step <= Math.min(5, Math.floor(form.password.length / 3)) ? 'var(--purple)' : 'var(--line)',
+              }}
+            />
+          ))}
+        </div>
+
+        <button
+          type="submit"
+          className="mc-auth-cta"
+          disabled={loading}
+        >
+          {loading ? 'Creating account...' : 'Create account →'}
+        </button>
+      </form>
 
       <p style={{ marginTop: 16, fontSize: 12, lineHeight: 1.5, color: 'var(--mute)' }}>
         By creating an account you agree to our Terms and Privacy. We never train models on your candidate data.

@@ -44,6 +44,9 @@ import { StatsCard, StatusBadge } from './shared/ui/DashboardAtoms';
 const LandingPage = lazy(() =>
   import('./features/marketing/LandingPage').then((m) => ({ default: m.LandingPage }))
 );
+const NotFoundPage = lazy(() =>
+  import('./features/marketing/NotFoundPage').then((m) => ({ default: m.NotFoundPage }))
+);
 const HomePage = lazy(() =>
   import('./features/home/HomePage').then((m) => ({ default: m.HomePage }))
 );
@@ -188,6 +191,12 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     || pathname.startsWith('/assessments/')
     || pathname.startsWith('/candidates/')
     || pathname.startsWith('/settings')
+    // Recruiter-only routes that render full chrome before any API call, so a
+    // logged-out visit must be caught here rather than by the httpClient's 401
+    // hard-reload bounce. Keep in sync with isPublicPath in httpClient.js.
+    || pathname.startsWith('/chat')
+    || pathname.startsWith('/tasks/')
+    || pathname.startsWith('/admin')
   );
 };
 
@@ -963,7 +972,18 @@ function AppContent() {
       <Route path="/assessment/:assessmentId" element={<CandidateWelcomeWithIdRoute />} />
       <Route path="/assessment/live" element={<AssessmentLiveRoute />} />
 
-      <Route path="*" element={<Navigate to="/" replace />} />
+      {/* Unknown URL → a real 404 with a way back, instead of silently
+          teleporting to "/" (which then bounced authed users to /home and hid
+          the fact that the link was broken). Legacy aliases are individually
+          routed above, so they never reach this. */}
+      <Route
+        path="*"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <NotFoundPage />
+          </Suspense>
+        )}
+      />
       </Routes>
     </>
   );

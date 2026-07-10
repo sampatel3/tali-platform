@@ -53,6 +53,7 @@ from ...schemas.assessment import (
     DemoBookingResponse,
     DemoAssessmentStartRequest,
     RepoFileSaveRequest,
+    RuntimeEventRequest,
     SubmitRequest,
 )
 
@@ -513,6 +514,22 @@ def preview_assessment(token: str, db: Session = Depends(get_db)):
 
     extra_data = task.extra_data if isinstance(task.extra_data, dict) else {}
     start_gate = get_assessment_start_gate(assessment, db)
+
+    # Funnel telemetry: stamp the FIRST preview view (repeat visits don't
+    # rewrite it) so opened-email → previewed → started is a visible chain.
+    if getattr(assessment, "preview_viewed_at", None) is None:
+        assessment.preview_viewed_at = utcnow()
+        append_assessment_timeline_event(
+            assessment,
+            "preview_viewed",
+            {"can_start": bool(start_gate.get("can_start"))},
+        )
+        try:
+            db.commit()
+        except Exception:
+            logger.exception("Failed to commit preview_viewed assessment_id=%s", assessment.id)
+            db.rollback()
+
     return {
         "assessment_id": assessment.id,
         "token": assessment.token,
@@ -742,6 +759,48 @@ def execute_code(
         logger.exception("Failed to commit code_execute timeline event assessment_id=%s", assessment.id)
         db.rollback()
     return result
+
+
+# First-minutes engagement telemetry. Half of assessment dropout happens in
+# the first 5-10 minutes; these once-per-type beacons make that segment
+# visible (runtime booted, first file opened) alongside the existing
+# first_prompt event. Telemetry only: never blocks, never touches the
+# sandbox, no-op outside IN_PROGRESS.
+_RUNTIME_EVENT_TYPES = frozenset({"runtime_loaded", "file_opened"})
+
+
+@router.post("/{assessment_id}/runtime-event")
+def record_runtime_event(
+    assessment_id: int,
+    data: RuntimeEventRequest,
+    x_assessment_token: str = Header(..., description="Assessment access token"),
+    db: Session = Depends(get_db),
+):
+    """Record a once-per-type candidate engagement beacon on the timeline."""
+    assessment = get_active_assessment(assessment_id, db)
+    validate_assessment_token(assessment, x_assessment_token)
+    event_type = str(data.event_type or "").strip()
+    if event_type not in _RUNTIME_EVENT_TYPES:
+        raise HTTPException(status_code=400, detail="Unsupported runtime event type")
+    already = any(
+        isinstance(event, dict) and event.get("event_type") == event_type
+        for event in (assessment.timeline or [])
+    )
+    if already:
+        return {"recorded": False, "reason": "already_recorded"}
+    payload = {}
+    if event_type == "runtime_loaded" and assessment.started_at is not None:
+        payload["seconds_since_start"] = int(
+            (utcnow() - ensure_utc(assessment.started_at)).total_seconds()
+        )
+    append_assessment_timeline_event(assessment, event_type, payload)
+    try:
+        db.commit()
+    except Exception:
+        logger.exception("Failed to commit runtime event assessment_id=%s", assessment.id)
+        db.rollback()
+        return {"recorded": False, "reason": "commit_failed"}
+    return {"recorded": True}
 
 
 @router.post("/{assessment_id}/repo-file")

@@ -18,6 +18,20 @@ const DISCOVERY_POLL_MS = 10_000;
 
 const STORAGE_KEY = 'tali_tracked_batch_roles';
 
+// A batch is still worth polling only while it's running or being cancelled;
+// any other status (succeeded / failed / cancelled / not_found) is terminal and
+// the loop can stop hitting that role. Mirrors the org-wide sync loops' guard.
+const POLL_ACTIVE_STATES = new Set(['running', 'cancelling', 'pending', 'queued', 'starting']);
+const isPollActive = (data) => {
+  if (!data) return true; // no data yet → keep polling until the first status lands
+  const status = String(data.status ?? '').toLowerCase();
+  if (!status) return true; // unknown shape → don't prune, stay safe
+  return POLL_ACTIVE_STATES.has(status);
+};
+// True while the tab is backgrounded — we skip fetches (but keep the loop's
+// timer alive) so hidden tabs don't hammer the API. Guarded for SSR/tests.
+const docHidden = () => (typeof document !== 'undefined' && document.hidden);
+
 function loadPersistedRoleIds() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -206,22 +220,36 @@ export function JobStatusProvider({ children }) {
     const poll = async () => {
       if (cancelled) return;
       const ids = [...trackedRef.current];
-      if (ids.length > 0) {
+      // Skip the network round-trip while the tab is backgrounded — the timer
+      // still reschedules, so polling resumes the moment the tab is visible.
+      if (ids.length > 0 && !docHidden()) {
         const results = await Promise.allSettled(
           ids.map((roleId) =>
             rolesApi?.batchScoreStatus(roleId).then((r) => ({ roleId, data: r?.data })),
           ),
         );
         if (cancelled) return;
+        const done = [];
         setJobs((prev) => {
           const next = { ...prev };
           for (const r of results) {
             if (r.status === 'fulfilled' && r.value?.data) {
               next[r.value.roleId] = r.value.data;
+              if (!isPollActive(r.value.data)) done.push(Number(r.value.roleId));
             }
           }
           return next;
         });
+        // Stop polling terminal batches — their last status stays in `jobs` for
+        // display until dismissed, but we don't keep hitting the API for a job
+        // that's finished. Prune in place (no version bump) so the running loop
+        // simply skips them next tick instead of restarting.
+        if (done.length) {
+          const nextTracked = new Set(trackedRef.current);
+          done.forEach((id) => nextTracked.delete(id));
+          trackedRef.current = nextTracked;
+          persistRoleIds(nextTracked);
+        }
       }
       if (!cancelled) timer = setTimeout(poll, ROLE_POLL_MS);
     };
@@ -242,22 +270,30 @@ export function JobStatusProvider({ children }) {
     const poll = async () => {
       if (cancelled) return;
       const ids = [...trackedFetchRef.current];
-      if (ids.length > 0) {
+      if (ids.length > 0 && !docHidden()) {
         const results = await Promise.allSettled(
           ids.map((roleId) =>
             rolesApi?.fetchCvsStatus(roleId).then((r) => ({ roleId, data: r?.data })),
           ),
         );
         if (cancelled) return;
+        const done = [];
         setFetchJobs((prev) => {
           const next = { ...prev };
           for (const r of results) {
             if (r.status === 'fulfilled' && r.value?.data) {
               next[r.value.roleId] = r.value.data;
+              if (!isPollActive(r.value.data)) done.push(Number(r.value.roleId));
             }
           }
           return next;
         });
+        if (done.length) {
+          const nextTracked = new Set(trackedFetchRef.current);
+          done.forEach((id) => nextTracked.delete(id));
+          trackedFetchRef.current = nextTracked;
+          persistToKey(FETCH_STORAGE_KEY, nextTracked);
+        }
       }
       if (!cancelled) timer = setTimeout(poll, ROLE_POLL_MS);
     };
@@ -273,22 +309,30 @@ export function JobStatusProvider({ children }) {
     const poll = async () => {
       if (cancelled) return;
       const ids = [...trackedPreScreenRef.current];
-      if (ids.length > 0) {
+      if (ids.length > 0 && !docHidden()) {
         const results = await Promise.allSettled(
           ids.map((roleId) =>
             rolesApi?.batchPreScreenStatus(roleId).then((r) => ({ roleId, data: r?.data })),
           ),
         );
         if (cancelled) return;
+        const done = [];
         setPreScreenJobs((prev) => {
           const next = { ...prev };
           for (const r of results) {
             if (r.status === 'fulfilled' && r.value?.data) {
               next[r.value.roleId] = r.value.data;
+              if (!isPollActive(r.value.data)) done.push(Number(r.value.roleId));
             }
           }
           return next;
         });
+        if (done.length) {
+          const nextTracked = new Set(trackedPreScreenRef.current);
+          done.forEach((id) => nextTracked.delete(id));
+          trackedPreScreenRef.current = nextTracked;
+          persistToKey(PRESCREEN_STORAGE_KEY, nextTracked);
+        }
       }
       if (!cancelled) timer = setTimeout(poll, ROLE_POLL_MS);
     };
@@ -304,22 +348,30 @@ export function JobStatusProvider({ children }) {
     const poll = async () => {
       if (cancelled) return;
       const ids = [...trackedProcessRef.current];
-      if (ids.length > 0) {
+      if (ids.length > 0 && !docHidden()) {
         const results = await Promise.allSettled(
           ids.map((roleId) =>
             rolesApi?.processRoleStatus(roleId).then((r) => ({ roleId, data: r?.data })),
           ),
         );
         if (cancelled) return;
+        const done = [];
         setProcessJobs((prev) => {
           const next = { ...prev };
           for (const r of results) {
             if (r.status === 'fulfilled' && r.value?.data) {
               next[r.value.roleId] = r.value.data;
+              if (!isPollActive(r.value.data)) done.push(Number(r.value.roleId));
             }
           }
           return next;
         });
+        if (done.length) {
+          const nextTracked = new Set(trackedProcessRef.current);
+          done.forEach((id) => nextTracked.delete(id));
+          trackedProcessRef.current = nextTracked;
+          persistToKey(PROCESS_STORAGE_KEY, nextTracked);
+        }
       }
       if (!cancelled) timer = setTimeout(poll, ROLE_POLL_MS);
     };
@@ -335,16 +387,18 @@ export function JobStatusProvider({ children }) {
     let timer = null;
     const poll = async () => {
       if (cancelled) return;
-      try {
-        const r = await rolesApi?.syncGraphStatus();
-        if (cancelled) return;
-        setGraphSyncJob(r?.data ?? null);
-        const status = String(r?.data?.status ?? '').toLowerCase();
-        if (status !== 'running' && status !== 'cancelling') {
-          // Done — leave the last status visible until dismissed.
-          setGraphSyncTracked(false);
-        }
-      } catch {}
+      if (!docHidden()) {
+        try {
+          const r = await rolesApi?.syncGraphStatus();
+          if (cancelled) return;
+          setGraphSyncJob(r?.data ?? null);
+          const status = String(r?.data?.status ?? '').toLowerCase();
+          if (status !== 'running' && status !== 'cancelling') {
+            // Done — leave the last status visible until dismissed.
+            setGraphSyncTracked(false);
+          }
+        } catch {}
+      }
       if (!cancelled) timer = setTimeout(poll, ROLE_POLL_MS);
     };
     poll();
@@ -358,16 +412,18 @@ export function JobStatusProvider({ children }) {
     let timer = null;
     const poll = async () => {
       if (cancelled) return;
-      try {
-        const r = await rolesApi?.workableSyncStatus();
-        if (cancelled) return;
-        setWorkableSyncJob(r?.data ?? null);
-        const status = String(r?.data?.workable_last_sync_status ?? r?.data?.status ?? '').toLowerCase();
-        const inProgress = !!r?.data?.sync_in_progress;
-        if (!inProgress && status !== 'running' && status !== 'cancelling') {
-          setWorkableSyncTracked(false);
-        }
-      } catch {}
+      if (!docHidden()) {
+        try {
+          const r = await rolesApi?.workableSyncStatus();
+          if (cancelled) return;
+          setWorkableSyncJob(r?.data ?? null);
+          const status = String(r?.data?.workable_last_sync_status ?? r?.data?.status ?? '').toLowerCase();
+          const inProgress = !!r?.data?.sync_in_progress;
+          if (!inProgress && status !== 'running' && status !== 'cancelling') {
+            setWorkableSyncTracked(false);
+          }
+        } catch {}
+      }
       if (!cancelled) timer = setTimeout(poll, ROLE_POLL_MS);
     };
     poll();
@@ -389,6 +445,11 @@ export function JobStatusProvider({ children }) {
 
     const discover = async () => {
       if (cancelled) return;
+      if (docHidden()) {
+        // Backgrounded tab — don't discover, just reschedule.
+        timer = setTimeout(discover, DISCOVERY_POLL_MS);
+        return;
+      }
       try {
         const res = await rolesApi.activeBatchScores();
         const active = res?.data?.active ?? [];

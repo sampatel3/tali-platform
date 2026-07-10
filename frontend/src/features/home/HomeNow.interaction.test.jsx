@@ -1,0 +1,133 @@
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react';
+import { vi } from 'vitest';
+
+import { HomeNow } from './HomeNow';
+
+// Interaction-correctness guards on the hub review queue:
+//  - Enter in the bulk-approve modal must not submit until every advancing role
+//    has a Workable stage picked (silent skips are forbidden).
+//  - a/t/s action shortcuts must not fire while a confirm/override modal is open.
+
+const approveDecision = vi.fn();
+const bulkApproveDecisions = vi.fn();
+const snoozeDecision = vi.fn();
+const getWorkableStages = vi.fn();
+
+vi.mock('../../shared/api', () => ({
+  agent: {
+    approveDecision: (...a) => approveDecision(...a),
+    bulkApproveDecisions: (...a) => bulkApproveDecisions(...a),
+    bulkOverrideDecisions: vi.fn().mockResolvedValue({ data: {} }),
+    overrideDecision: vi.fn().mockResolvedValue({ data: {} }),
+    snoozeDecision: (...a) => snoozeDecision(...a),
+    reEvaluateDecision: vi.fn().mockResolvedValue({ data: {} }),
+    listDecisions: vi.fn().mockResolvedValue({ data: [] }),
+  },
+  organizations: {
+    getWorkableStages: (...a) => getWorkableStages(...a),
+  },
+}));
+
+const mkAdvance = (id, name) => ({
+  id,
+  decision_type: 'advance_to_interview',
+  status: 'pending',
+  candidate_name: name,
+  candidate_email: `${name.split(' ')[0].toLowerCase()}@example.com`,
+  application_id: id * 10,
+  role_id: 53,
+  role_name: 'Data Engineer',
+  workable_job_id: 'de-shortcode',
+  created_at: '2026-06-07T10:00:00Z',
+  reasoning: 'Strong fit.',
+  taali_score: 80,
+});
+
+const renderHome = (overrides = {}) => {
+  const decisions = [mkAdvance(1, 'Miguel Parracho')];
+  const reload = vi.fn().mockResolvedValue(undefined);
+  const utils = render(
+    <HomeNow
+      decisions={decisions}
+      pendingOrdered={decisions}
+      selectedId={1}
+      setSelectedId={vi.fn()}
+      loading={false}
+      filters={{ status: 'pending', role_id: null, type: null, q: null }}
+      setFilters={vi.fn()}
+      rolesBreakdown={[]}
+      reload={reload}
+      onNavigate={vi.fn()}
+      questionsInDock
+      {...overrides}
+    />,
+  );
+  return { ...utils, reload };
+};
+
+describe('HomeNow — bulk-approve Enter gate', () => {
+  beforeEach(() => {
+    bulkApproveDecisions.mockReset().mockResolvedValue({ data: { approved: 1, failures: [] } });
+    // A role WITH advanceable stages, so a stage pick is genuinely required.
+    getWorkableStages.mockReset().mockResolvedValue({
+      data: { stages: [{ slug: 'phone_screen', name: 'Phone screen', kind: 'interview' }] },
+    });
+  });
+
+  it('Enter does NOT submit the bulk approve while a required stage is unpicked', async () => {
+    const { container } = renderHome();
+
+    // Open the bulk-approve modal.
+    fireEvent.click(within(container).getByRole('button', { name: /Approve 1 visible/i }));
+    // Stages load into the modal.
+    await waitFor(() => expect(getWorkableStages).toHaveBeenCalled());
+    await within(container).findByText(/Move advancing candidates to which Workable stage/i);
+
+    // Enter with no stage picked — the empty-map submit that used to slip
+    // through must be blocked.
+    act(() => { fireEvent.keyDown(document, { key: 'Enter' }); });
+    expect(bulkApproveDecisions).not.toHaveBeenCalled();
+
+    // Confirm button is disabled too (the gate the button already had).
+    const confirmBtn = within(container).getByRole('button', { name: /^Approve 1$/i });
+    expect(confirmBtn).toBeDisabled();
+  });
+
+  it('Enter submits once every advancing role has a stage picked', async () => {
+    const { container } = renderHome();
+    fireEvent.click(within(container).getByRole('button', { name: /Approve 1 visible/i }));
+    await waitFor(() => expect(getWorkableStages).toHaveBeenCalled());
+
+    // Pick the stage.
+    const pill = await within(container).findByRole('radio', { name: /Phone screen/i });
+    fireEvent.click(pill);
+
+    act(() => { fireEvent.keyDown(document, { key: 'Enter' }); });
+    await waitFor(() => expect(bulkApproveDecisions).toHaveBeenCalledTimes(1));
+    // The stage map is sent, not null.
+    const [, , stages] = bulkApproveDecisions.mock.calls[0];
+    expect(stages).toEqual({ 53: 'phone_screen' });
+  });
+});
+
+describe('HomeNow — action shortcuts are suppressed while a modal is open', () => {
+  beforeEach(() => {
+    snoozeDecision.mockReset().mockResolvedValue({ data: {} });
+    getWorkableStages.mockReset().mockResolvedValue({
+      data: { stages: [{ slug: 'phone_screen', name: 'Phone screen', kind: 'interview' }] },
+    });
+  });
+
+  it("'s' does not snooze the decision behind an open Override/Advance-confirm modal", async () => {
+    const { container } = renderHome();
+
+    // Pressing 'a' on the selected advance decision opens the confirm modal
+    // (alternativeFor) — an advance_to_interview approval routes through it.
+    act(() => { fireEvent.keyDown(document, { key: 'a' }); });
+    await within(container).findByRole('dialog');
+
+    // With the modal open, 's' must not reach the decision underneath.
+    act(() => { fireEvent.keyDown(document, { key: 's' }); });
+    expect(snoozeDecision).not.toHaveBeenCalled();
+  });
+});

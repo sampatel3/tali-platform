@@ -147,7 +147,19 @@ export const OverrideModal = ({
 
   return (
     <div className="rq-modal-backdrop" onClick={() => !submitting && onClose?.()}>
-      <div className="rq-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="rq-modal"
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+        tabIndex={-1}
+        // When a stage pick is required the textarea isn't autofocused, so focus
+        // would otherwise stay on the trigger behind the backdrop — move it into
+        // the dialog on open. (When the textarea IS autofocused this is a no-op.)
+        ref={(el) => {
+          if (el && requireStagePick && !el.contains(document.activeElement)) el.focus();
+        }}
+      >
         <div className="rq-modal-head">
           <div>
             <span className="kicker" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
