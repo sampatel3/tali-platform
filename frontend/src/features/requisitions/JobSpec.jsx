@@ -137,6 +137,22 @@ export const renderJobSpec = (template, brief) => {
   return substitute(tpl, brief);
 };
 
+// Does this rendered markdown still carry the "(to be captured)" gap marker?
+// Publish uses this as a last-line safety check — a marked-up spec must never
+// reach the public job page.
+export const hasPlaceholders = (markdown) => String(markdown || '').includes(TBC);
+
+// Drop every line that still contains the "(to be captured)" gap marker, so a
+// forced publish never ships an unfilled placeholder to candidates. We remove
+// the WHOLE line (a bullet or a heading value line reading only "(to be
+// captured)") rather than blanking the marker, which would leave a stray "- "
+// or an empty heading behind.
+export const stripPlaceholderLines = (markdown) =>
+  String(markdown || '')
+    .split('\n')
+    .filter((line) => !line.includes(TBC))
+    .join('\n');
+
 export function JobSpec({
   template,
   brief,
@@ -189,7 +205,10 @@ export function JobSpec({
         {editing ? (
           <div className="rq-jobspec-edit">
             <div className="rq-jobspec-bar">
-              <span className="rq-jobspec-bar-label">Editing job spec — markdown</span>
+              <span className="rq-jobspec-bar-label">
+                Editing job spec
+                <span className="rq-jobspec-bar-hint">Formatting uses simple markdown — plain text is fine.</span>
+              </span>
               <div className="rq-jobspec-bar-actions">
                 <button
                   type="button"

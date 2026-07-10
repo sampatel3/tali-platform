@@ -60,12 +60,12 @@ const ToolResultRender = ({ part }) => {
 const Message = React.memo(({ msg, isStreaming }) => {
   if (msg.role === 'user') {
     const text = msg.parts.find((p) => p.type === 'text')?.text || '';
-    return <ChatMessage role="user" text={text} />;
+    return <ChatMessage role="user" text={text} time={msg.createdAt} />;
   }
 
   const isEmpty = !msg.parts.length;
   return (
-    <ChatMessage role="assistant">
+    <ChatMessage role="assistant" time={msg.createdAt}>
       {/* search-preview tags each assistant turn with a mono "TAALI" kicker. */}
       <div className="cp-who">Taali</div>
       {isEmpty && isStreaming ? <ThinkingDots label="thinking…" /> : null}
@@ -131,7 +131,7 @@ const scrollParentOf = (el) => {
   return null;
 };
 
-const Thread = ({ messages, isStreaming, error }) => {
+const Thread = ({ messages, isStreaming, error, onRetry }) => {
   const endRef = useRef(null);
   // Whether the user was pinned to the bottom *before* this render grew the
   // thread. Tracked on scroll so a mid-stream scroll-up is respected while
@@ -169,6 +169,11 @@ const Thread = ({ messages, isStreaming, error }) => {
         <div className="cp-error">
           <div className="cp-error-title">{fr.title}</div>
           <div className="cp-error-detail">{fr.detail}</div>
+          {onRetry ? (
+            <button type="button" className="cp-error-retry" onClick={onRetry}>
+              Try again
+            </button>
+          ) : null}
         </div>
       ) : null}
       <div ref={endRef} />

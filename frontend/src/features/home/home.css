@@ -250,6 +250,14 @@
   min-width: 0;
 }
 
+.rq-search.is-disabled {
+  opacity: 0.55;
+}
+
+.rq-search.is-disabled input {
+  cursor: not-allowed;
+}
+
 .rq-key {
   display: inline-block;
   font-family: var(--font-mono);

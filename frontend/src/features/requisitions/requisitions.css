@@ -706,6 +706,19 @@ a.rq-btn-sm { text-decoration: none; }
   text-transform: uppercase;
   color: var(--mute);
 }
+/* Plain-English one-liner beside the "Editing job spec" label — not mono/caps
+   so it reads as guidance, not a control. */
+.rq-jobspec-bar-hint {
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--mute);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .rq-jobspec-bar-actions {
   display: flex;
   align-items: center;
@@ -1008,6 +1021,42 @@ a.rq-btn-sm { text-decoration: none; }
   color: var(--amber-ink);
   font-size: 0.8125rem;
   flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.rq-error-text { flex: 1; min-width: 0; }
+/* Dismiss (X) on the error banner — inherits the amber-ink text colour. */
+.rq-error-dismiss {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: -2px -4px 0 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.12s, background 0.12s;
+}
+.rq-error-dismiss:hover {
+  opacity: 1;
+  background: color-mix(in oklab, var(--amber) 18%, transparent);
+}
+/* Read-only note for a brief that's already applied to a live role. */
+.rq-applied-note {
+  margin: 0;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-2);
+  color: var(--mute);
+  font-size: 0.8125rem;
+  flex-shrink: 0;
 }
 /* No-selection state — a bordered card filling the main column so the empty
    page still reads as the gapped-card shell (matches the rail card beside it). */
@@ -1024,6 +1073,9 @@ a.rq-btn-sm { text-decoration: none; }
   min-height: 0;
 }
 .rq-blank-card { max-width: 420px; }
+/* Primary CTA on the empty-state card — the only way in on narrow viewports
+   (the sidebar's "New requisition" is hidden below 860px). */
+.rq-blank-cta { margin: 20px auto 0; }
 .rq-blank-glyph {
   width: 52px;
   height: 52px;
@@ -1054,6 +1106,70 @@ a.rq-btn-sm { text-decoration: none; }
   animation: rq-spin 0.7s linear infinite;
 }
 @keyframes rq-spin { to { transform: rotate(360deg); } }
+
+/* ---- Loading skeletons ----
+   A shimmering hairline used for sidebar rows (first load) and the switching
+   header, so we never flash the previous requisition or the empty copy. */
+.rq-skel-line {
+  display: block;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    var(--bg-3) 0%,
+    color-mix(in oklab, var(--bg-3) 55%, var(--bg-2)) 50%,
+    var(--bg-3) 100%
+  );
+  background-size: 200% 100%;
+  animation: rq-shimmer 1.3s ease-in-out infinite;
+}
+@keyframes rq-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.rq-side-item.is-skeleton { cursor: default; pointer-events: none; }
+.rq-skel-title { width: 70%; height: 12px; margin-bottom: 8px; }
+.rq-skel-meta { width: 45%; height: 9px; }
+
+/* Switching requisitions — a skeleton over the WHOLE main panel (header +
+   body), so the previous requisition's title/status/thread never leak under
+   the newly-selected item. */
+.rq-switching {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.rq-switching-head {
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.rq-skel-h1 { width: 42%; height: 22px; margin-bottom: 12px; }
+.rq-skel-sub { width: 26%; height: 12px; }
+.rq-switching-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--mute);
+  font-size: 0.8125rem;
+}
+.rq-switching-note { font-size: 0.8125rem; color: var(--mute); }
+
+/* Publish button + its "N required fields still needed" hint, stacked. */
+.rq-publish-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+.rq-publish-hint {
+  font-size: 0.6875rem;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
 
 /* Narrow viewports: drop the detail card and let the conversation card fill
    the column (the JD / Brief don't fit a phone; the chat is the priority). */

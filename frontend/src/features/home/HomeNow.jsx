@@ -93,6 +93,54 @@ const TYPE_CATEGORY_EXPANSION = {
   assessment: ['send_assessment', 'resend_assessment_invite'],
 };
 
+// Debounced queue search. Typing updates a local input immediately (so the
+// field feels responsive) but only commits `q` to the shared filters ~250ms
+// after the last keystroke — each committed value recreates loadDecisions and
+// fires an uncached listDecisions fetch, so without this every keystroke was a
+// separate UAE→us-east4 round-trip. URL persistence still works because we
+// commit through the same setFilters path. In the Assessment-stage (invited)
+// view the list isn't searchable server-side, so we disable the box with a hint
+// instead of firing requests that visibly do nothing.
+const SearchInput = ({ filters, setFilters }) => {
+  const invited = filters.view === 'invited';
+  const [text, setText] = useState(filters.q || '');
+  const committed = useRef(filters.q || '');
+
+  // Keep the field in sync when q changes from outside typing (e.g. URL nav,
+  // clearing a filter) — but not while the user is mid-type toward a value we
+  // haven't committed yet.
+  useEffect(() => {
+    const q = filters.q || '';
+    if (q !== committed.current) {
+      committed.current = q;
+      setText(q);
+    }
+  }, [filters.q]);
+
+  useEffect(() => {
+    if (text === committed.current) return undefined;
+    const t = setTimeout(() => {
+      committed.current = text;
+      setFilters((f) => ({ ...f, q: text || null }));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [text, setFilters]);
+
+  return (
+    <span className={`rq-search${invited ? ' is-disabled' : ''}`}>
+      <Search size={13} strokeWidth={2} aria-hidden="true" />
+      <input
+        placeholder={invited ? 'Search unavailable on this view' : 'Search candidates, IDs, reasoning…'}
+        value={invited ? '' : text}
+        disabled={invited}
+        onChange={(e) => setText(e.target.value)}
+        aria-label="Search decisions"
+        title={invited ? "Search isn't available in the Assessment-stage view yet." : undefined}
+      />
+    </span>
+  );
+};
+
 const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
   <div className="rq-toolbar">
     <div className="rq-toolbar-l">
@@ -161,15 +209,7 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount }) => (
     </div>
     <div className="rq-toolbar-r">
       {bulkAction}
-      <span className="rq-search">
-        <Search size={13} strokeWidth={2} aria-hidden="true" />
-        <input
-          placeholder="Search candidates, IDs, reasoning…"
-          value={filters.q || ''}
-          onChange={(e) => setFilters((f) => ({ ...f, q: e.target.value || null }))}
-          aria-label="Search decisions"
-        />
-      </span>
+      <SearchInput filters={filters} setFilters={setFilters} />
     </div>
   </div>
 );
@@ -505,7 +545,7 @@ export const HomeNow = ({
   filters,
   setFilters,
   rolesBreakdown,
-  reload,
+  reload: reloadProp,
   onNavigate,
   // When the agent chat dock is present it owns the agent's questions, so the
   // feed hides its own needs-input block to avoid duplicating them.
@@ -513,6 +553,15 @@ export const HomeNow = ({
 }) => {
   const { showToast } = useToast() || { showToast: () => {} };
   const [busyId, setBusyId] = useState(null);
+  // Bumped every time we reload after an action, so the RecentDecisions list
+  // re-fetches and the call the recruiter just made shows up there immediately
+  // (it fetches RESOLVED decisions, which the hub's pending feed doesn't cover).
+  const [recentRefresh, setRecentRefresh] = useState(0);
+  const reload = useCallback(async (...args) => {
+    const r = await reloadProp?.(...args);
+    setRecentRefresh((v) => v + 1);
+    return r;
+  }, [reloadProp]);
   // Invited-candidate tracker ("Assessment pending" view). Fetched on demand
   // from the applications list — these are sent assessments, not decisions, so
   // they don't ride the decision queue's data flow.
@@ -886,6 +935,12 @@ export const HomeNow = ({
 
   const runBulkApprove = async () => {
     if (!bulkConfirm) return;
+    // Never advance with an incomplete stage map — the same gate the Confirm
+    // button enforces (bulkStagesReady). Without this a caller (e.g. the Enter
+    // key) could submit with stages={}, silently advancing candidates on Tali's
+    // internal stage with nothing posted to Workable. Bulk actions must collect
+    // their required inputs.
+    if (!bulkStagesReady) return;
     const { ids, count } = bulkConfirm;
     const stages = { ...bulkStages };
     setBulkConfirm(null);
@@ -1012,7 +1067,7 @@ export const HomeNow = ({
   useEffect(() => {
     const onKey = (e) => {
       if (invitedView) return;  // invited tracker has no decision under focus
-      if (teachFor || bulkConfirm) return;  // an open modal owns the keyboard
+      if (teachFor || bulkConfirm || alternativeFor) return;  // an open modal owns the keyboard
       if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
       const tag = (e.target?.tagName || '').toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
@@ -1030,19 +1085,23 @@ export const HomeNow = ({
     // — re-binding on each pending row is cheap and keeps the closure
     // pointing at the right target.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, selected?.status, teachFor, bulkConfirm, invitedView]);
+  }, [selected?.id, selected?.status, teachFor, bulkConfirm, alternativeFor, invitedView]);
 
-  // Esc cancels / Enter confirms the bulk-approve modal.
+  // Esc cancels / Enter confirms the bulk-approve modal. Enter only fires once
+  // every advancing role has its stage picked (bulkStagesReady) — matching the
+  // Confirm button's disabled state so the natural confirm key can't bypass the
+  // required Workable stage pick. We depend on bulkStagesReady (and re-bind
+  // runBulkApprove) so the handler never closes over a stale empty stage map.
   useEffect(() => {
     if (!bulkConfirm) return undefined;
     const onKey = (e) => {
       if (e.key === 'Escape') { e.preventDefault(); setBulkConfirm(null); }
-      if (e.key === 'Enter') { e.preventDefault(); runBulkApprove(); }
+      if (e.key === 'Enter' && bulkStagesReady) { e.preventDefault(); runBulkApprove(); }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bulkConfirm]);
+  }, [bulkConfirm, bulkStagesReady]);
 
   return (
     <section className="home-section">
@@ -1125,7 +1184,7 @@ export const HomeNow = ({
           {/* Minimal recent-decisions list — who, what was decided, when, and a
               link to the report. Find a candidate again after they've moved on;
               the full audit trail lives on Analytics → Decision log. */}
-          <RecentDecisions roleId={filters.role_id} collapsedCount={5} />
+          <RecentDecisions roleId={filters.role_id} collapsedCount={5} refreshKey={recentRefresh} />
         </>
       )}
 
@@ -1168,6 +1227,12 @@ export const HomeNow = ({
             aria-labelledby="rq-bulk-title"
             style={{ width: 'min(480px, 100%)' }}
             onClick={(e) => e.stopPropagation()}
+            tabIndex={-1}
+            // Move focus into the dialog on open so keyboard/screen-reader users
+            // land inside it (focus otherwise stays on the "Approve N" trigger
+            // behind the backdrop) — this is also what keeps stray a/t/s
+            // shortcuts from reaching the decision underneath.
+            ref={(el) => { if (el && !el.contains(document.activeElement)) el.focus(); }}
           >
             <div className="rq-modal-head">
               <div>
