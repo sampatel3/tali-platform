@@ -90,13 +90,45 @@ def _significant_tokens(company: str) -> list[str]:
     return tokens
 
 
+def _grounds_despite_intraword_spaces(tokens: list[str], normalized_cv: str) -> bool:
+    """Fallback for PDF extractors that inject stray spaces inside words.
+
+    Real example (application 62340): cv_text contains "C apgemini, India"
+    (alongside "c ode" and "t ime" from the same extractor), so the
+    whole-token match misses "Capgemini". Here we strip ALL spaces from the
+    normalized CV and look for the company's tokens joined without spaces —
+    but only accept a hit whose start AND end fall on original token
+    boundaries. The matched region is then a concatenation of complete CV
+    tokens, so "sand" can never ground against "chess and" (chessand) and
+    "innova" can never ground against "innovation": a mid-word edge is
+    rejected. Scattered tokens stay unmatched too — "arabian ... technologies"
+    with words in between never yields "arabiantechnologies" contiguously.
+    """
+    joined = "".join(tokens)
+    stripped = normalized_cv.replace(" ", "")
+    boundaries = {0}
+    position = 0
+    for token in normalized_cv.split():
+        position += len(token)
+        boundaries.add(position)
+    start = stripped.find(joined)
+    while start != -1:
+        if start in boundaries and (start + len(joined)) in boundaries:
+            return True
+        start = stripped.find(joined, start + 1)
+    return False
+
+
 def employer_is_grounded(company: str, normalized_cv: str) -> bool:
     """True when ``company``'s significant tokens appear, contiguous and
     whole-token, in the already-normalized CV text.
 
     Whole-token containment (space-padded) keeps "Cox Communications" from
     matching a CV that only says "Cox" inside an unrelated phrase, while a
-    single distinctive token ("Syngenta") still grounds.
+    single distinctive token ("Syngenta") still grounds. When that fails, a
+    conservative fallback tolerates extractor-injected spaces inside words
+    ("C apgemini" grounds "Capgemini") — see
+    :func:`_grounds_despite_intraword_spaces`.
     """
     if not normalized_cv:
         # No text to verify against — don't flag everything as fabricated.
@@ -106,7 +138,9 @@ def employer_is_grounded(company: str, normalized_cv: str) -> bool:
         return False
     needle = " " + " ".join(tokens) + " "
     haystack = " " + normalized_cv + " "
-    return needle in haystack
+    if needle in haystack:
+        return True
+    return _grounds_despite_intraword_spaces(tokens, normalized_cv)
 
 
 def ground_cv_sections(blob: dict, cv_text: str) -> list[dict]:
