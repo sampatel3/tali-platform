@@ -169,6 +169,7 @@ def sweep_pending_applications(
     )
     from ..services.claude_client_resolver import get_metered_client
     from ..services.pricing_service import Feature
+    from ..services.workable_actions_service import WORKABLE_NON_LIVE_JOB_STATES
     from . import cache as cache_module
     from .apply import parse_and_store_cv_sections
 
@@ -188,7 +189,7 @@ def sweep_pending_applications(
             # the whole scan window with skipped rows and starve live ones.
             func.coalesce(
                 Role.workable_job_data["state"].as_string(), ""
-            ).notin_(["closed", "archived"]),
+            ).notin_(list(WORKABLE_NON_LIVE_JOB_STATES)),
             # Recruiter fill-marks live on job_status (often with no
             # Workable payload at all). NULL = never marked = live.
             or_(

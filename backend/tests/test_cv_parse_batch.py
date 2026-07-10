@@ -174,10 +174,15 @@ def test_sweep_submits_per_org_and_dedupes_in_flight(db, monkeypatch):
 def test_sweep_excludes_closed_and_archived_roles(db, monkeypatch):
     """Apps on dead reqs are excluded in SQL — the 2026-06 audit's
     dead-req-spend lesson. Covers both Workable states (closed/archived)
+    — the shared WORKABLE_NON_LIVE_JOB_STATES set incl. draft —
     and recruiter fill-marks on job_status (which often have no Workable
     payload at all). Manual roles without either count as live."""
     org, live_role, live_app = _seed_app(db, email="live@x.test")
-    for state, email in (("archived", "arch@x.test"), ("closed", "closed@x.test")):
+    for state, email in (
+        ("archived", "arch@x.test"),
+        ("closed", "closed@x.test"),
+        ("draft", "draft@x.test"),
+    ):
         dead_role = Role(
             organization_id=org.id,
             name=f"dead-{state}",
