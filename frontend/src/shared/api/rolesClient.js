@@ -79,6 +79,17 @@ export const roles = {
   addApplicationNote: (applicationId, note, forAgent = true, extra = {}) =>
     api.post(`/applications/${applicationId}/notes`, { note, for_agent: forAgent, ...extra }),
   generateApplicationInterviewDebrief: (applicationId, data = {}) => api.post(`/applications/${applicationId}/interview-debrief`, data),
+  // Structured interview feedback — a recruiter's record of what happened in an
+  // interview (round, recommendation, optional 5-Ds ratings, per-probe results,
+  // notes). Recruiter-internal; joined by the score↔outcome calibration script.
+  listInterviewFeedback: (applicationId) =>
+    api.get(`/applications/${applicationId}/interview-feedback`),
+  createInterviewFeedback: (applicationId, data) =>
+    api.post(`/applications/${applicationId}/interview-feedback`, data),
+  updateInterviewFeedback: (applicationId, feedbackId, data) =>
+    api.patch(`/applications/${applicationId}/interview-feedback/${feedbackId}`, data),
+  deleteInterviewFeedback: (applicationId, feedbackId) =>
+    api.delete(`/applications/${applicationId}/interview-feedback/${feedbackId}`),
   downloadApplicationReport: (applicationId) => api.get(`/applications/${applicationId}/report.pdf`, { responseType: 'blob' }),
   downloadApplicationDocument: (applicationId, docType = 'cv', config = {}) =>
     api.get(`/applications/${applicationId}/documents/${docType}`, { responseType: 'blob', ...config }),

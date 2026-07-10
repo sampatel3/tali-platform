@@ -5,6 +5,7 @@ from .candidate import Candidate
 from .candidate_application import CandidateApplication
 from .candidate_application_event import CandidateApplicationEvent
 from .application_interview import ApplicationInterview
+from .interview_feedback import INTERVIEW_RECOMMENDATIONS, InterviewFeedback
 from .role import Role, role_tasks
 from .role_brief import BRIEF_SOURCES, BRIEF_STATUSES, RoleBrief
 from .client import (
@@ -185,6 +186,8 @@ __all__ = [
     "CandidateApplication",
     "CandidateApplicationEvent",
     "ApplicationInterview",
+    "InterviewFeedback",
+    "INTERVIEW_RECOMMENDATIONS",
     "Role",
     "role_tasks",
     "RoleBrief",

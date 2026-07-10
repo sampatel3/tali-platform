@@ -974,6 +974,33 @@ def _assessment_history_for_application(app: CandidateApplication) -> list[dict[
     ]
 
 
+def _interview_feedback_for_application(app: CandidateApplication) -> list[dict[str, Any]]:
+    """Structured interview feedback for the detail payload, newest-first.
+
+    Reads via the app's own session so the recruiter detail view and the
+    recruiter share-link view (both attach ``app`` to a session) surface the
+    same rows without threading ``db`` through the payload signature.
+    """
+    from sqlalchemy.orm import Session as _Session
+
+    from ...models.interview_feedback import InterviewFeedback
+    from .interview_feedback_routes import interview_feedback_to_dict
+
+    session = _Session.object_session(app)
+    if session is None:
+        return []
+    rows = (
+        session.query(InterviewFeedback)
+        .filter(
+            InterviewFeedback.application_id == app.id,
+            InterviewFeedback.organization_id == app.organization_id,
+        )
+        .order_by(InterviewFeedback.created_at.desc(), InterviewFeedback.id.desc())
+        .all()
+    )
+    return [interview_feedback_to_dict(fb) for fb in rows]
+
+
 # Sentinel so callers can pass an explicit ``score_status`` (including
 # ``None``) and be distinguished from "not supplied — compute it yourself".
 _UNSET = object()
@@ -1227,6 +1254,10 @@ def application_detail_payload(
     payload["workable_questionnaire_answers"] = workable_questionnaire_answers(candidate, app)
     payload["workable_activity_log"] = workable_activity_log(candidate, app)
 
+    # Recruiter-internal structured interview feedback, newest-first. Detail-only
+    # and stripped from client shares below (same treatment as notes / prep).
+    payload["interview_feedback"] = _interview_feedback_for_application(app)
+
     if client_safe:
         # Strip recruiter-internal fields so an external client share
         # (e.g. a hiring-manager-at-a-customer link) cannot read recruiter
@@ -1235,6 +1266,7 @@ def application_detail_payload(
         # frontend client view also hides these tabs.
         payload["notes"] = None
         payload["candidate_interview_kit"] = None
+        payload["interview_feedback"] = None
         payload["assessment_history"] = []
         # Recruiter-internal interview prep / transcripts must never reach an
         # external client share.
