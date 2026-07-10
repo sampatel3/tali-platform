@@ -2284,10 +2284,10 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         <div className="settings-billing-card">
                           <div className="settings-summary-label">Card on file</div>
                           <div className="settings-summary-value">
-                            {orgData?.stripe_customer_id ? 'Connected' : 'No card yet'}
+                            {orgData?.has_billing_account ? 'Connected' : 'No card yet'}
                           </div>
                           <div className="settings-summary-note">
-                            {orgData?.stripe_customer_id ? (
+                            {orgData?.has_billing_account ? (
                               <button
                                 type="button"
                                 className="settings-link-button"

@@ -356,15 +356,11 @@ function AppContent() {
     setStartedAssessmentData(startData);
   };
 
-  const navigateToCandidate = (candidate, sourcePage = 'assessments') => {
+  const navigateToCandidate = (candidate) => {
+    // Back navigation now lives in the ?from= breadcrumb model in
+    // CandidateStandingReportPage — the old candidateDetailBackTo state was
+    // written here but never read, so it (and its setters) are gone.
     setSelectedCandidate(candidate);
-    if (sourcePage === 'candidates') {
-      setCandidateDetailBackTo({ page: 'candidates', label: 'Back to Candidates' });
-    } else if (sourcePage === 'jobs') {
-      setCandidateDetailBackTo({ page: 'jobs', label: 'Back to Jobs' });
-    } else {
-      setCandidateDetailBackTo({ page: 'assessments', label: 'Back to Assessments' });
-    }
     navigateToPage('candidate-detail', {
       candidateDetailAssessmentId: candidate?.id || candidate?._raw?.id || null,
     });
@@ -782,9 +778,11 @@ function AppContent() {
               replace
               to={`/candidates/${selectedCandidate._raw.application_id}?tab=assessment`}
             />
-          ) : (loadingCandidateDetail || !candidateDetailFetchFailed) ? (
-            // "No candidate loaded yet" is a loading state, not an error — only
-            // the confirmed-failure branch below shows the error panel.
+          ) : (loadingCandidateDetail || (selectedCandidate == null && !candidateDetailFetchFailed)) ? (
+            // Still fetching (nothing loaded yet and no failure) is a loading
+            // state, not an error — so a deep link doesn't flash the panel on
+            // first paint. Once the fetch resolves (a legacy assessment with no
+            // application, or a confirmed failure) we fall through to the panel.
             <div className="min-h-screen flex items-center justify-center">
               <Loader2 size={28} className="animate-spin" style={{ color: 'var(--purple)' }} />
             </div>

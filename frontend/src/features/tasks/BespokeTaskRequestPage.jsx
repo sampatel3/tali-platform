@@ -4,6 +4,7 @@ import { ArrowLeft, Check, Mail } from 'lucide-react';
 import { PageHero } from '../../shared/layout/PageHero';
 import { Select } from '../../shared/ui/TaaliPrimitives';
 import { useToast } from '../../context/ToastContext';
+import { useAuth } from '../../context/AuthContext';
 import { getErrorMessage } from '../../shared/getErrorMessage';
 import api from '../../shared/api/httpClient';
 
@@ -11,6 +12,7 @@ const TAALI_EMAIL = 'hello@taali.ai';
 
 export const BespokeTaskRequestPage = ({ onNavigate, NavComponent = null }) => {
   const { showToast } = useToast();
+  const { user } = useAuth();
   const [role, setRole] = useState('');
   const [seniority, setSeniority] = useState('mid');
   const [skills, setSkills] = useState('');
@@ -49,6 +51,8 @@ export const BespokeTaskRequestPage = ({ onNavigate, NavComponent = null }) => {
         skills: skills.trim(),
         scenario: scenario.trim(),
         deadline: deadline.trim(),
+        // So Taali has a reply address — the success copy promises a reply.
+        requester_email: user?.email || '',
       });
       setSubmitted(true);
     } catch (err) {
