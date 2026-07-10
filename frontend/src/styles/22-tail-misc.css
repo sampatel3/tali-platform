@@ -835,6 +835,19 @@
   font-size: 0.8125rem;
 }
 
+/* Candidates-table windowing footer — "Show more" reveals the next page of
+   rows so a thousand-applicant role doesn't mount every <tr> at once. */
+.ctable-more {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 0.25rem 0.25rem;
+}
+.ctable-more-count {
+  color: var(--mute);
+  font-size: 0.75rem;
+}
+
 /* ===========================================================================
    Candidate Overview tab — HANDOFF v2 §5.1 / canvas cand-overview
    Hero band + signal cards + 6-dim bar grid + 4-card evidence row.

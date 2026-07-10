@@ -1763,6 +1763,12 @@ button.eng-badge-button:focus-visible {
   text-align: center;
   margin-bottom: 12px;
 }
+/* Re-score in flight: grey everything under the banner (matching the hub's
+   .rq-hybrid-detail.is-rescoring treatment) so nothing invites a click on the
+   soon-to-be-replaced score. The status banner itself stays full-opacity. */
+.dossier-rail .is-rescoring > *:not([role="status"]) {
+  opacity: 0.55;
+}
 @keyframes drFlow {
   0% { background-position: 0% 50%; }
   50% { background-position: 100% 50%; }
