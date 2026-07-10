@@ -465,13 +465,14 @@ def validate_task_spec(spec: Dict[str, Any]) -> TaskSpecValidationResult:
         rubric_dimensions: set[str] = set()
     else:
         rubric_dimensions = set(evaluation_rubric.keys())
-        # 4-6 dimensions. The lens model (decision/deliverable) drives the
-        # natural count per task — e.g. data_quality is 4 (diagnosis +
-        # interrogation + 2 deliverable). The old "exactly 5" was an
-        # artificial constraint from the pre-lens rubric design.
-        if not (4 <= len(rubric_dimensions) <= 6):
+        # 4-7 dimensions. The lens model drives the natural count per task —
+        # e.g. data_quality is 4 (diagnosis + interrogation + 2 deliverable);
+        # the flagship pattern is 7 (2 decision + discernment + diligence +
+        # observed practice + 2 deliverable). The generator still authors
+        # 4-6; 7 is headroom for hand-tuned flagships, not a target.
+        if not (4 <= len(rubric_dimensions) <= 7):
             errors.append(
-                f"evaluation_rubric must define 4-6 dimensions; got {len(rubric_dimensions)}"
+                f"evaluation_rubric must define 4-7 dimensions; got {len(rubric_dimensions)}"
             )
 
     errors.extend(validate_rubric_weights(evaluation_rubric))
