@@ -255,20 +255,30 @@ def fetch_integrity(conn, org_id: int, from_dt, to_dt) -> dict:
     }
 
 
-def fetch_latest_bias_audit(conn, org_id: int) -> Optional[dict]:
+def fetch_latest_bias_audit(conn, org_id: int, *, to_dt=None) -> Optional[dict]:
+    """Latest bias audit AT OR BEFORE the report window's upper bound.
+
+    A June pack generated after a July audit must not present the July
+    PASS/FAIL as if it existed in June.
+    """
+    bound = "AND bar.audited_at <= :to_dt" if to_dt is not None else ""
+    params = {"org": org_id}
+    if to_dt is not None:
+        params["to_dt"] = to_dt
     row = conn.execute(
         text(
-            """
+            f"""
             SELECT bar.id, bar.policy_version_id, bar.audited_at, bar.passed,
                    bar.metrics_json, bar.violations_json
             FROM bias_audit_results bar
             JOIN policy_versions pv ON pv.id = bar.policy_version_id
             WHERE pv.organization_id = :org
+            {bound}
             ORDER BY bar.audited_at DESC, bar.id DESC
             LIMIT 1
             """
         ),
-        {"org": org_id},
+        params,
     ).first()
     if row is None:
         return None
@@ -356,13 +366,20 @@ def section_oversight(oversight: dict) -> str:
     approved = sum(int(d["n"]) for d in dispositions if d["human_disposition"] == "approved")
     overridden = sum(int(d["n"]) for d in dispositions if d["human_disposition"] == "overridden")
     taught = sum(int(d["n"]) for d in dispositions if d["human_disposition"] == "taught")
-    resolved_disp = approved + overridden + taught
+    # Roles with auto_promote resolve advances as human_disposition='auto_approved'
+    # (agent_runtime/tool_registry). Excluding them would overstate human review:
+    # 100 auto-approvals + 1 override must not read as "100% overridden".
+    auto_approved = sum(
+        int(d["n"]) for d in dispositions if d["human_disposition"] == "auto_approved"
+    )
+    resolved_disp = approved + overridden + taught + auto_approved
 
     def pct(n: int) -> str:
         return f"{(n / resolved_disp * 100):.1f}%" if resolved_disp else "n/a"
 
-    lines.append(f"- resolved decisions (with a human disposition): **{resolved_disp}**")
-    lines.append(f"- approved: {approved} ({pct(approved)})")
+    lines.append(f"- resolved decisions (with a disposition): **{resolved_disp}**")
+    lines.append(f"- human-approved: {approved} ({pct(approved)})")
+    lines.append(f"- auto-approved (role auto_promote, no human review): {auto_approved} ({pct(auto_approved)})")
     lines.append(f"- overridden: {overridden} ({pct(overridden)})")
     lines.append(f"- taught (send-back & correct): {taught} ({pct(taught)})")
     lines.append(
@@ -536,7 +553,7 @@ def main() -> None:
         volume = fetch_volume(conn, args.org_id, from_dt, to_dt)
         oversight = fetch_oversight(conn, args.org_id, from_dt, to_dt)
         integrity = fetch_integrity(conn, args.org_id, from_dt, to_dt)
-        latest = fetch_latest_bias_audit(conn, args.org_id)
+        latest = fetch_latest_bias_audit(conn, args.org_id, to_dt=to_dt)
 
     pack = build_pack(
         org_id=args.org_id,

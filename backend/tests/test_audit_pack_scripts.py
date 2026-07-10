@@ -295,3 +295,21 @@ def test_iso_to_bound_snaps_date_only_to_end_of_day():
     assert air._iso("2026-06-30").hour == 0
     import scripts.aedt_audit_pack as ap
     assert ap._iso("2026-06-30", end_of_day=True).hour == 23
+
+
+def test_oversight_includes_auto_approved_bucket():
+    """auto_promote roles resolve with human_disposition='auto_approved'; the
+    oversight denominator must include them or 100 auto-approvals + 1 override
+    reads as 100% overridden."""
+    import scripts.aedt_audit_pack as ap
+
+    text_out = ap.section_oversight({
+        "dispositions": [
+            {"human_disposition": "auto_approved", "status": "approved", "n": 100},
+            {"human_disposition": "overridden", "status": "overridden", "n": 1},
+        ],
+        "latencies_seconds": [],
+        "top_override_reasons": [],
+    })
+    assert "auto-approved (role auto_promote, no human review): 100 (99.0%)" in text_out
+    assert "overridden: 1 (1.0%)" in text_out
