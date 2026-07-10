@@ -283,24 +283,31 @@ def test_bulk_skips_workable_disqualified(db):
     assert _pending(db, role) == []
 
 
-def test_bulk_skips_post_handover_interview(db):
-    """(d) A candidate the recruiter advanced past handover in Workable
-    (technical interview) is a positive signal — never reject on role-fit."""
+def test_bulk_decides_post_handover_interview_normally(db):
+    """(d) A candidate the recruiter advanced past handover in Workable (e.g.
+    moved to Technical Interview before the application entered Taali) is
+    decided like everyone else: the reject verdict becomes a normal HITL card
+    whose evidence carries the Workable stage so approve surfaces can warn.
+    Nothing is auto-executed."""
     org, role = _seed_role(db, score_threshold=50, with_task=False)
-    app = _add_app(db, org, role, role_fit=20.0)  # low score would reject
+    app = _add_app(db, org, role, role_fit=20.0)  # low score → reject verdict
     app.workable_stage = "Technical Interview"
     db.commit()
 
     summary = decide_role_cohort(db, role=role)
-    assert summary.get("skipped_post_handover", 0) == 1
-    assert _pending(db, role) == []  # NOT rejected
+    assert summary.get("skipped_post_handover", 0) == 0
+    pending = _pending(db, role)
+    assert len(pending) == 1
+    assert pending[0].decision_type == "reject"
+    assert pending[0].status == "pending"  # HITL card, never auto-applied
+    assert pending[0].evidence.get("workable_stage") == "Technical Interview"
 
 
-def test_decide_post_handover_defers_mid_interview_reject(db):
+def test_decide_post_handover_mid_interview_reject_cards(db):
     """A reject-worthy candidate the recruiter is INTERVIEWING in Workable
-    (non-terminal post-handover) is deferred: decide_post_handover returns None,
-    does NOT pull advanced→review, and queues NO reject card — so they can never
-    be stranded in 'review' once that card is later discarded."""
+    (non-terminal post-handover) still gets the HITL reject card — Taali's
+    honest second opinion. A candidate frozen as 'advanced' is pulled back to
+    review so the card reads live; nothing writes to Workable."""
     from app.services.bulk_decision_service import decide_post_handover
 
     org, role = _seed_role(db, score_threshold=50, with_task=False)
@@ -313,9 +320,11 @@ def test_decide_post_handover_defers_mid_interview_reject(db):
     result = decide_post_handover(db, app=app, role=role)
     db.commit()
 
-    assert result is None  # deferred to the recruiter's live interview
-    assert app.pipeline_stage == "advanced"  # NOT pulled back to review
-    assert _pending(db, role) == []  # no reject card queued
+    assert result == "reject"
+    assert app.pipeline_stage == "review"  # pulled back to host the live card
+    pending = _pending(db, role)
+    assert len(pending) == 1
+    assert pending[0].status == "pending"  # HITL — never auto-applied
 
 
 def test_decide_post_handover_terminal_reject_still_surfaces(db):

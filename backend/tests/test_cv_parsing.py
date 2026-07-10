@@ -381,3 +381,105 @@ def test_apply_falls_back_to_candidate_text(monkeypatch):
 
     assert wrote is True
     assert captured["text"] == "candidate-level raw text"
+
+
+# ---------- failure caching (deterministic failures stop re-billing) ----------
+#
+# 2026-07 cost audit: a CV whose parse deterministically failed schema
+# validation was re-billed on every sync trigger (86 parses of one
+# application over 18 days) because only successes were cached. These pin
+# the fix: deterministic failures land in the cache and short-circuit the
+# next attempt; transient failures stay uncached so they genuinely retry.
+
+from app.cv_parsing import cache as cache_module  # noqa: E402
+from app.cv_parsing.schemas import ParsedCV  # noqa: E402
+
+
+@pytest.fixture()
+def _cache_db(monkeypatch):
+    from tests.conftest import TestingSessionLocal, engine
+
+    import app.platform.database as pdb
+    from app.models.cv_parse_cache import CvParseCache
+
+    CvParseCache.__table__.create(bind=engine, checkfirst=True)
+    monkeypatch.setattr(pdb, "SessionLocal", TestingSessionLocal)
+    yield
+    with engine.connect() as conn:
+        conn.execute(CvParseCache.__table__.delete())
+        conn.commit()
+
+
+def test_deterministic_failure_is_cached_and_stops_rebilling(_cache_db):
+    cv = SAMPLE_CV + "\nunique-marker: failure-cache-1"
+    out = parse_cv(cv, client=_stub(_text("no tool"), _text("still no tool")))
+    assert out.parse_failed is True
+
+    class _MustNotCall:
+        def create(self, **kwargs):
+            raise AssertionError("cached failure must prevent a billed API call")
+
+    out2 = parse_cv(cv, client=_StubClient(messages=_MustNotCall()))
+    assert out2.parse_failed is True
+    assert out2.cache_hit is True
+    assert "validation_failed_after_retry" in out2.error_reason
+
+
+def test_transient_failure_is_not_cached(_cache_db):
+    cv = SAMPLE_CV + "\nunique-marker: failure-cache-2"
+
+    class _Exploding:
+        def create(self, **kwargs):
+            raise RuntimeError("overloaded")
+
+    out = parse_cv(cv, client=_StubClient(messages=_Exploding()))
+    assert out.parse_failed is True
+    assert "claude_call_failed" in out.error_reason
+
+    # The next trigger retries for real — and can succeed.
+    out2 = parse_cv(cv, client=_stub(_tu(VALID_PARSE_PAYLOAD)))
+    assert out2.parse_failed is False
+    assert out2.cache_hit is False
+
+
+def test_cache_set_success_overwrites_cached_failure(_cache_db):
+    key = cache_module.compute_cache_key(
+        cv_text="overwrite-case", prompt_version="p1", model_version="m1"
+    )
+    failed = ParsedCV.failed(
+        reason="validation_failed_after_retry: nope",
+        prompt_version="p1",
+        model_version="m1",
+    )
+    cache_module.set(key, failed)
+    cached = cache_module.get(key)
+    assert cached is not None and cached.parse_failed is True
+
+    ok = ParsedCV.from_sections(
+        ParsedCVSections.model_validate(VALID_PARSE_PAYLOAD),
+        prompt_version="p1",
+        model_version="m1",
+    )
+    cache_module.set(key, ok)
+    cached = cache_module.get(key)
+    assert cached is not None and cached.parse_failed is False
+
+
+def test_cache_set_failure_never_overwrites_cached_success(_cache_db):
+    key = cache_module.compute_cache_key(
+        cv_text="no-downgrade-case", prompt_version="p1", model_version="m1"
+    )
+    ok = ParsedCV.from_sections(
+        ParsedCVSections.model_validate(VALID_PARSE_PAYLOAD),
+        prompt_version="p1",
+        model_version="m1",
+    )
+    cache_module.set(key, ok)
+    failed = ParsedCV.failed(
+        reason="validation_failed_after_retry: nope",
+        prompt_version="p1",
+        model_version="m1",
+    )
+    cache_module.set(key, failed)
+    cached = cache_module.get(key)
+    assert cached is not None and cached.parse_failed is False

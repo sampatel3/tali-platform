@@ -381,8 +381,8 @@ export const LandingPage = ({ onNavigate }) => {
               <div className="agent-header-inner">
                 <div className="agent-header-left">
                   <div className="ah-headings">
-                    <div className="ah-kicker">JOBS · 5 ACTIVE ROLES</div>
-                    <div className="ah-title-row"><h1>5 active <em>roles</em></h1></div>
+                    <div className="ah-kicker">JOBS · 5 LIVE ROLES</div>
+                    <div className="ah-title-row"><h1>5 live <em>roles</em></h1></div>
                     <p className="ah-subtitle">You&apos;re hiring. Star a role to keep its candidates flowing in automatically.</p>
                   </div>
                 </div>

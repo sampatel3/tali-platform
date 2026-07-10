@@ -31,9 +31,6 @@ from typing import Any, Optional
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..domains.assessments_runtime.pipeline_service import (
-    is_post_handover_workable_stage,
-)
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.candidate_application_event import CandidateApplicationEvent
@@ -176,14 +173,13 @@ def queue_pre_screen_reject(
     # creation/revival logic so both paths are covered.
     if _pre_screen_passed(application):
         return None
-    # Respect the human-validation signal. A post-handover Workable stage
-    # (phone/technical/final interview, offer, hired) means a recruiter has
-    # already advanced this candidate. The agent prompt forbids rejecting such
-    # a candidate on score alone (system_prompt EXTERNAL PIPELINE STAGE); the
-    # cheap pre-screen reject path runs without that prompt, so it must enforce
-    # the same rule here — never card a reject for someone a human advanced.
-    if is_post_handover_workable_stage(getattr(application, "workable_stage", None)):
-        return None
+    # A post-handover Workable stage (phone/technical/final interview, offer,
+    # hired — e.g. the recruiter advanced them there before the application
+    # entered Taali) does NOT suppress the card: the candidate is decided like
+    # everyone else, and every approve surface warns that acting on the reject
+    # disqualifies someone already advanced in Workable. Only the AUTOMATED
+    # Workable disqualify is hard-blocked for such candidates (the
+    # ``auto_disqualify_eligible`` rail in decision_policy.auto_reject).
     # Require a GENUINE pre-screen run. ``pre_screen_recommendation`` /
     # ``pre_screen_score_100`` can be stamped by a cv_match snapshot refresh
     # without any pre-screen ever running (e.g. a cv_match 'no' whose numeric
@@ -659,18 +655,10 @@ def reconcile_pre_screen_reject_decisions(
     )
     discarded = 0
     for decision, app in pending_cards:
-        if is_post_handover_workable_stage(app.workable_stage):
-            # A recruiter advanced them past handover in Workable after this
-            # card was emitted — never ask to reject a human-validated
-            # candidate. Discard so the queue self-heals (the emit loop's
-            # guard then refuses to re-create it).
-            decision.status = "discarded"
-            decision.resolved_at = now
-            decision.resolution_note = (
-                "superseded: candidate advanced past handover in Workable"
-            )[:500]
-            discarded += 1
-            continue
+        # A post-handover Workable stage does NOT discard the card — Taali's
+        # pre-screen reject stays a live HITL second opinion (approve surfaces
+        # warn the recruiter; nothing auto-executes it). Only a threshold
+        # change that invalidates the verdict discards below.
         if _below_threshold(
             app.pre_screen_score_100,
             app.pre_screen_recommendation,
@@ -786,8 +774,10 @@ def retract_advances_below_threshold(
 
     No-op for agent-off roles, for ``auto_reject`` roles (same carve-out as the
     reject reconcile), and when ``threshold`` is None (no cutoff to judge
-    against). Never retracts a candidate a recruiter advanced past handover in
-    Workable. Returns ``{"discarded": int}``.
+    against). A post-handover Workable stage does not exempt the candidate —
+    they are re-decided like everyone else and the replacement reject card
+    carries the mid-interview warning on every approve surface. Returns
+    ``{"discarded": int}``.
     """
     if not bool(getattr(role, "agentic_mode_enabled", False)):
         return {"discarded": 0}
@@ -817,8 +807,6 @@ def retract_advances_below_threshold(
     )
     discarded = 0
     for decision, app in pending:
-        if is_post_handover_workable_stage(app.workable_stage):
-            continue
         if not _below_threshold(
             app.pre_screen_score_100, app.pre_screen_recommendation, threshold
         ):

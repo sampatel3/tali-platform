@@ -53,6 +53,12 @@ const EMPTY_PROGRESS = { status: 'idle', total: 0, scored: 0, errors: 0, include
 const EMPTY_FETCH_PROGRESS = { status: 'idle', total: 0, fetched: 0, errors: 0 };
 const EMPTY_PRE_SCREEN_PROGRESS = { status: 'idle', total: 0, processed: 0, errors: 0, refresh: false };
 const EMPTY_CONFIRM = { open: false, action: null, bullets: [], loading: false, dryRunLoading: false };
+
+// Mirror of backend settings.PRE_SCREEN_THRESHOLD (config.py). The agent's
+// auto-scoring pass (_auto_enqueue_scoring) skips unscored candidates whose
+// pre-screen score sits below this cutoff — they were screened OUT, and
+// re-scoring them just reproduces the same verdict.
+const PRE_SCREEN_FILTER_THRESHOLD = 30;
 // Kanban columns + segmented stage filters — keys are the shared funnel
 // buckets (applicationFunnelBucket) so they read identically to the funnel.
 const PIPELINE_STAGE_ORDER = [
@@ -574,6 +580,40 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     activeApplications.filter((application) => application?.cv_match_score == null)
   ), [activeApplications]);
 
+  // "New CVs" must reflect what the agent's auto-scoring pass would actually
+  // pick up (backend _auto_enqueue_scoring), not every null-score app —
+  // otherwise a pre-screen-filtered cohort reads as "35 ready to score" while
+  // the agent (correctly) touches none of them, and looks stuck. Held back:
+  // pre-screen-filtered (screened OUT below the global cutoff, no newer CV
+  // since that run) and no-CV (nothing to score). The backend's third skip —
+  // error backoff — isn't visible in the list payload, so it isn't mirrored.
+  const newCvBreakdown = useMemo(() => {
+    let scoreable = 0;
+    let preScreenFiltered = 0;
+    let noCv = 0;
+    for (const application of unscoredApplications) {
+      // has_cv_text mirrors the auto-scorer's exact cv_text filter (a CV file
+      // can exist while extraction produced nothing). Fall back to the file
+      // metadata for cached payloads written before the field existed.
+      const hasCvText = application?.has_cv_text
+        ?? Boolean(application?.cv_uploaded_at || application?.cv_filename);
+      if (!hasCvText) {
+        noCv += 1;
+        continue;
+      }
+      const cvAt = Date.parse(application?.cv_uploaded_at || '');
+      const runAt = Date.parse(application?.pre_screen_run_at || '');
+      const freshCv = Number.isFinite(cvAt) && Number.isFinite(runAt) && cvAt > runAt;
+      const preScreen = Number(application?.pre_screen_score);
+      if (Number.isFinite(preScreen) && preScreen < PRE_SCREEN_FILTER_THRESHOLD && !freshCv) {
+        preScreenFiltered += 1;
+      } else {
+        scoreable += 1;
+      }
+    }
+    return { scoreable, preScreenFiltered, noCv };
+  }, [unscoredApplications]);
+
   const thresholdValue = useMemo(
     () => resolveOptionalPercent(role?.score_threshold),
     [role?.score_threshold]
@@ -615,12 +655,24 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         value: formatCount(role?.active_candidates_count || activeApplications.length || 0),
         sub: `${formatCount(role?.stage_counts?.completed || 0)} completed`,
       },
-      {
-        key: 'unscored',
-        label: 'New CVs',
-        value: formatCount(unscoredApplications.length),
-        sub: unscoredApplications.length > 0 ? 'ready to score' : 'all visible CVs scored',
-      },
+      (() => {
+        const { scoreable, preScreenFiltered, noCv } = newCvBreakdown;
+        const held = [
+          preScreenFiltered > 0 ? `${formatCount(preScreenFiltered)} pre-screen filtered` : null,
+          noCv > 0 ? `${formatCount(noCv)} no CV` : null,
+        ].filter(Boolean);
+        return {
+          key: 'unscored',
+          label: 'New CVs',
+          value: formatCount(scoreable),
+          sub: held.length
+            ? [scoreable > 0 ? 'ready to score' : null, ...held].filter(Boolean).join(' · ')
+            : (scoreable > 0 ? 'ready to score' : 'all visible CVs scored'),
+          subTitle: held.length
+            ? 'Pre-screen filtered candidates scored below the pre-screen cutoff and are only re-run when a newer CV arrives; no-CV candidates have nothing to score. Neither is picked up by auto-scoring.'
+            : null,
+        };
+      })(),
       {
         key: 'below-threshold',
         label: 'Below threshold',
@@ -648,7 +700,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         sub: budget.sub,
       },
     ];
-  }, [activeApplications.length, agentStatus, belowThresholdCount, role, thresholdValue, unscoredApplications.length]);
+  }, [activeApplications.length, agentStatus, belowThresholdCount, newCvBreakdown, role, thresholdValue]);
 
   const groupedApplications = useMemo(() => [
     ...PIPELINE_STAGE_ORDER.map((stage) => ({

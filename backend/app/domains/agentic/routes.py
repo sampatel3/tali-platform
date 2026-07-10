@@ -30,6 +30,9 @@ from ...actions import override_decision as override_decision_action
 from ...actions.types import Actor
 from ...agent_runtime import budget_guard
 from ...deps import get_current_user
+from ...domains.assessments_runtime.pipeline_service import (
+    is_post_handover_workable_stage,
+)
 from ...domains.assessments_runtime.role_support import is_resolved
 from ...services.cv_score_orchestrator import supersede_pending_decisions_for_app
 from ...models.agent_decision import AGENT_DECISION_STATUSES, AgentDecision
@@ -141,6 +144,14 @@ class AgentDecisionPayload(BaseModel):
     # can fetch this role's Workable stages for the Advance / Skip & advance
     # stage <select> without a second round-trip.
     workable_job_id: Optional[str] = None
+    # The candidate's LIVE Workable stage + whether it is post-handover
+    # (phone/technical/final interview, offer, hired). Approve surfaces use it
+    # to warn before a reject is approved for a candidate a human recruiter
+    # already advanced in Workable — advice, never a block. Read from the
+    # application at serialization time (not frozen on the decision) so a
+    # stage move after the card was queued still warns correctly.
+    candidate_workable_stage: Optional[str] = None
+    candidate_post_handover: bool = False
     # A2 + C5: trust signals computed on every read so recruiters see
     # input freshness, confidence, age and cost without opening the
     # expand-out. ``is_stale`` is the boolean gate the Hub uses to
@@ -385,6 +396,15 @@ def _decision_to_payload(
         ),
         requirements=requirements,
         workable_job_id=getattr(role, "workable_job_id", None) if role else None,
+        candidate_workable_stage=(
+            getattr(application, "workable_stage", None) if application else None
+        ),
+        candidate_post_handover=bool(
+            application is not None
+            and is_post_handover_workable_stage(
+                getattr(application, "workable_stage", None)
+            )
+        ),
         is_stale=is_stale,
         staleness_reasons=staleness_reasons or [],
         staleness_summary=staleness_summary,
