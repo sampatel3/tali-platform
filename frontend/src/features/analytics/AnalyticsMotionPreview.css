@@ -1,0 +1,71 @@
+/* Scoped Motion for /analytics-preview. The page shell (.an-page, .an-pulse,
+   .an-pcell, .an-card, .an-conv, .an-bars, .vtabs) comes from 25-analytics.css
+   and 24-shared-vtabs.css (globally imported) — this file only positions the
+   bespoke chart and layers the funnel/override bar-grow keyframes onto the real
+   OutcomesTab, all gated behind prefers-reduced-motion: no-preference. */
+
+.amp-root {
+  position: relative;
+  min-height: 100vh;
+  background: var(--bg-1, #fff);
+}
+
+/* Bespoke SVG chart card. */
+.amp-chart-card { margin-top: 14px; }
+.amp-chart-svg {
+  display: block;
+  width: 100%;
+  height: 190px;
+  margin-top: 8px;
+  overflow: visible;
+}
+
+/* The active-tab underline that slides between tabs (Motion layout). Sits at
+   the bottom edge of the vtab so it reads as the tab indicator. */
+.amp-vtab { position: relative; }
+.amp-underline {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--purple);
+}
+
+.amp-tab-placeholder { margin-top: 16px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Funnel conversion bars grow from the left as the tab enters. */
+  .amp-outcomes .an-conv .cfill {
+    transform-origin: left center;
+    animation: ampGrowX 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .amp-outcomes .an-conv .an-convrow:nth-child(1) .cfill { animation-delay: 0.20s; }
+  .amp-outcomes .an-conv .an-convrow:nth-child(2) .cfill { animation-delay: 0.28s; }
+  .amp-outcomes .an-conv .an-convrow:nth-child(3) .cfill { animation-delay: 0.36s; }
+  .amp-outcomes .an-conv .an-convrow:nth-child(4) .cfill { animation-delay: 0.44s; }
+  .amp-outcomes .an-conv .an-convrow:nth-child(5) .cfill { animation-delay: 0.52s; }
+  .amp-outcomes .an-conv .an-convrow:nth-child(6) .cfill { animation-delay: 0.60s; }
+
+  /* Override-rate-over-time bars rise from the baseline. */
+  .amp-outcomes .an-bars .bk {
+    transform-origin: bottom center;
+    animation: ampGrowY 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .amp-outcomes .an-bars .an-bar:nth-child(1) .bk { animation-delay: 0.24s; }
+  .amp-outcomes .an-bars .an-bar:nth-child(2) .bk { animation-delay: 0.32s; }
+  .amp-outcomes .an-bars .an-bar:nth-child(3) .bk { animation-delay: 0.40s; }
+  .amp-outcomes .an-bars .an-bar:nth-child(4) .bk { animation-delay: 0.48s; }
+  .amp-outcomes .an-bars .an-bar:nth-child(5) .bk { animation-delay: 0.56s; }
+  .amp-outcomes .an-bars .an-bar:nth-child(6) .bk { animation-delay: 0.64s; }
+}
+
+@keyframes ampGrowX {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+@keyframes ampGrowY {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}

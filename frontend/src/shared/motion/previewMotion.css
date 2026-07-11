@@ -1,0 +1,74 @@
+/* One-shot fade+rise entrance for the shared Reveal wrapper. A plain CSS
+   animation (fill: both, runs once on mount) — can't get stuck the way a
+   Motion state-gated wrapper can around the heavy real components these
+   previews embed. Gated behind prefers-reduced-motion so reduced-motion users
+   get the final state with no movement. */
+@media (prefers-reduced-motion: no-preference) {
+  .pv-reveal {
+    animation: pvFadeUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+}
+@keyframes pvFadeUp {
+  from { opacity: 0; transform: translateY(var(--pv-y, 16px)); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Floating preview-switcher chip shared by /jobs-preview, /report-preview and
+   /analytics-preview. Same visual language as HomeMotionPreview's .hmp-badge so
+   the whole tour feels like one thing. Preview-only chrome. */
+
+.pv-switch {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 80;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--purple) 12%, var(--bg-1, #fff));
+  border: 1px solid color-mix(in oklab, var(--purple) 30%, var(--line));
+  box-shadow: var(--shadow-md, 0 6px 24px rgba(0, 0, 0, 0.12));
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  color: var(--purple-2, var(--purple));
+}
+
+.pv-switch-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--purple);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple) 24%, transparent);
+}
+
+.pv-switch-badge { font-weight: 600; }
+
+.pv-switch-links {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pv-switch-link {
+  font: inherit;
+  text-decoration: none;
+  color: inherit;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.pv-switch-link:hover {
+  background: color-mix(in oklab, var(--purple) 16%, transparent);
+}
+.pv-switch-link.is-current {
+  border-color: color-mix(in oklab, var(--purple) 34%, var(--line));
+  background: color-mix(in oklab, var(--purple) 20%, transparent);
+  font-weight: 700;
+}
+
+@media (max-width: 640px) {
+  .pv-switch { flex-wrap: wrap; max-width: calc(100vw - 32px); }
+}

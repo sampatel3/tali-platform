@@ -1,0 +1,14 @@
+/* Scoped tweaks for /jobs-preview. The role-card grid, chips and Workable strip
+   all reuse the production classes from 05-roles-postings.css (globally
+   imported) — this file only sets the preview root and gives the filter row a
+   little breathing room, since the real page nests it in more chrome. */
+
+.jmp-root {
+  position: relative;
+  min-height: 100vh;
+  background: var(--bg-1, #fff);
+}
+
+.jmp-root .filter-row {
+  margin: 18px 0 4px;
+}
