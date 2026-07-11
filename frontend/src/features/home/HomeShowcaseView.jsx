@@ -35,7 +35,7 @@ const prov = (hoursAgo, version = '2.1.0') => ({
 // role_name (RolePill), taali_score (ScoreChip), confidence ("agent N%
 // confident"), score_summary.score_provenance (ScoreProvenance), and
 // evidence.{cells,trace} for the detail panel.
-const INITIAL_FEED_ROWS = [
+export const INITIAL_FEED_ROWS = [
   {
     id: 28,
     status: 'pending',
@@ -160,7 +160,7 @@ const INITIAL_FEED_ROWS = [
   },
 ];
 
-const SHOWCASE_AGENT = {
+export const SHOWCASE_AGENT = {
   on: true,
   paused: false,
   pending: 3,
@@ -170,7 +170,7 @@ const SHOWCASE_AGENT = {
   inFlight: false,
 };
 
-const SHOWCASE_KPIS = [
+export const SHOWCASE_KPIS = [
   { key: 'awaiting', label: 'Awaiting you', value: '103', emph: true, sub: '85 not yet decided by the agent' },
   { key: 'today', label: 'Decisions today', value: '14', sub: '11 auto-applied' },
   { key: 'budget', label: 'Org budget · MTD', value: '$18', unit: '/ $50', bar: { pct: 36, over: false }, sub: '36% · proj $44 EOM' },
@@ -179,7 +179,7 @@ const SHOWCASE_KPIS = [
 
 // The agent rail — every live role, so you can click one and steer (or activate)
 // its agent. Mix of on / paused / off so the dock's states are visible.
-const SHOWCASE_AGENTS = [
+export const SHOWCASE_AGENTS = [
   { role_id: 109, role_name: 'Senior Backend Engineer', group: 'on_paused', agent_enabled: true, unread_messages: 0, open_questions: 1, pending_decisions: 85, last_message_preview: 'Capped salary at AED 25k · re-screened 4', budget_cap_cents: 5000, budget_spent_cents: 1820 },
   { role_id: 110, role_name: 'Data Engineer', group: 'on_paused', agent_enabled: true, unread_messages: 0, open_questions: 0, pending_decisions: 12, last_message_preview: 'Idle · waiting for new candidates', budget_cap_cents: 5000, budget_spent_cents: 640 },
   { role_id: 111, role_name: 'AI Delivery Lead', group: 'on_paused', agent_enabled: false, agent_paused: true, agent_paused_reason: 'paused by recruiter', pending_decisions: 3, last_message_preview: '' },
@@ -251,7 +251,7 @@ const DRAFT_CARD = {
 // The agent chat dock — the central new surface. Static-but-real: it renders the
 // shared <ChatMessage>/<ChatComposer> + the live impact / draft-task cards, fed
 // with fixture data, so it looks exactly like the product.
-const ShowcaseDock = ({ onAct }) => {
+export const ShowcaseDock = ({ onAct }) => {
   const [input, setInput] = useState('');
   const submit = (text) => {
     setInput('');

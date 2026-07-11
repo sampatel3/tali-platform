@@ -99,6 +99,13 @@ const ChatShowcaseView = lazy(() =>
 const HomeShowcaseView = lazy(() =>
   import('./features/home/HomeShowcaseView').then((m) => ({ default: m.HomeShowcaseView }))
 );
+// Internal, no-auth PREVIEW of the real /home Hub with the Motion library
+// applied (/home-preview). Same production components + fixtures as
+// HomeShowcaseView; motion.dev adds the agent-ON flip, queue-advance, tickers
+// and reveals. Fixture data only — no APIs, not in isProtectedRecruiterPath.
+const HomeMotionPreview = lazy(() =>
+  import('./features/home/HomeMotionPreview').then((m) => ({ default: m.HomeMotionPreview }))
+);
 const TopReportPage = lazy(() => import('./features/chat/TopReportPage'));
 const SubmittalPackPage = lazy(() => import('./features/jobs/SubmittalPackPage'));
 const CandidateStandingReportPage = lazy(() =>
@@ -565,6 +572,17 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <LandingPreviewPage onNavigate={navigateToPage} />
+          </Suspense>
+        )}
+      />
+      {/* Internal Motion preview of the real Home Hub. Public, no-auth — not in
+          isProtectedRecruiterPath, fixture data only so no httpClient
+          isPublicPath entry is needed. */}
+      <Route
+        path="/home-preview"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <HomeMotionPreview />
           </Suspense>
         )}
       />
