@@ -158,6 +158,99 @@ def test_refresh_requires_auth(client):
     assert resp.status_code == 401
 
 
+def test_refresh_refuses_token_minted_before_password_change(client):
+    headers, email = auth_headers(client)
+
+    # Password changed AFTER this token was minted → the token must not slide
+    _set_user_fields(
+        email, password_changed_at=datetime.now(timezone.utc) + timedelta(seconds=5)
+    )
+    resp = client.post("/api/v1/auth/jwt/refresh", headers=headers)
+    assert resp.status_code == 401
+
+    # Change in the past (before mint) → refresh works
+    _set_user_fields(
+        email, password_changed_at=datetime.now(timezone.utc) - timedelta(hours=1)
+    )
+    resp = client.post("/api/v1/auth/jwt/refresh", headers=headers)
+    assert resp.status_code == 200
+
+
+def test_password_reset_stamps_refresh_anchor_and_clears_lockout(client):
+    email = "reset-anchor@test.com"
+    register_user(client, email=email)
+    verify_user(email)
+    _set_user_fields(
+        email,
+        failed_login_attempts=3,
+        locked_until=datetime.now(timezone.utc) + timedelta(minutes=10),
+    )
+
+    # Build the reset token exactly as fastapi-users' forgot_password does
+    # (it binds the token to a fingerprint of the current password hash).
+    from fastapi_users.jwt import generate_jwt
+    from fastapi_users.password import PasswordHelper
+
+    user = _get_user(email)
+    reset_token = generate_jwt(
+        {
+            "sub": str(user.id),
+            "password_fgpt": PasswordHelper().hash(user.hashed_password),
+            "aud": "fastapi-users:reset",
+        },
+        settings.SECRET_KEY,
+        3600,
+    )
+    resp = client.post(
+        "/api/v1/auth/reset-password",
+        json={"token": reset_token, "password": "BrandNewPass1!"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    user = _get_user(email)
+    assert user.failed_login_attempts == 0
+    assert user.locked_until is None
+    assert user.password_changed_at is not None
+
+
+def test_accept_invite_clears_lockout_and_stamps_anchor(client):
+    headers, _ = auth_headers(client, organization_name="InviteLockOrg")
+    resp = client.post(
+        "/api/v1/users/invite",
+        json={"email": "locked-invitee@test.com", "full_name": "Locked Invitee"},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+
+    # Attacker hammered the pending invite's login before it was accepted
+    _set_user_fields(
+        "locked-invitee@test.com",
+        failed_login_attempts=settings.AUTH_LOCKOUT_THRESHOLD,
+        locked_until=datetime.now(timezone.utc) + timedelta(minutes=10),
+    )
+
+    from app.domains.identity_access.user_routes import generate_invite_token
+
+    invite_token = generate_invite_token(_get_user("locked-invitee@test.com"))
+    resp = client.post(
+        "/api/v1/auth/accept-invite",
+        json={"token": invite_token, "password": "InviteePass1!"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    user = _get_user("locked-invitee@test.com")
+    assert user.failed_login_attempts == 0
+    assert user.locked_until is None
+    assert user.password_changed_at is not None
+
+    # The freshly minted accept-invite token can slide
+    token = resp.json()["access_token"]
+    resp = client.post(
+        "/api/v1/auth/jwt/refresh", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 200, resp.text
+
+
 # ---------------------------------------------------------------------------
 # auth_events audit trail
 # ---------------------------------------------------------------------------

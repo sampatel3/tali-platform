@@ -13,8 +13,9 @@ from fastapi_users import BaseUserManager, FastAPIUsers, IntegerIDMixin, Invalid
 from fastapi_users import exceptions as fu_exceptions
 from fastapi_users.authentication import AuthenticationBackend, BearerTransport, JWTStrategy
 from fastapi_users.db import SQLAlchemyUserDatabase
+from fastapi_users.jwt import generate_jwt
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import case, select, update as sa_update
+from sqlalchemy import and_, case, null, select, update as sa_update
 
 from ...models.auth_event import (
     AUTH_EVENT_ACCOUNT_LOCKED,
@@ -124,35 +125,35 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
             credentials.password, user.hashed_password
         )
         if not verified:
-            if locked_until:
-                # A lock that already expired starts a fresh count
-                attempts = 1
-                await self.user_db.update(
-                    user, {"failed_login_attempts": 1, "locked_until": None}
-                )
-            else:
-                # Single atomic increment — concurrent bad logins must not
-                # lose counts to a read-modify-write race, and the lock is
-                # set in the same statement the moment the threshold is hit.
-                lock_at = now + timedelta(minutes=settings.AUTH_LOCKOUT_MINUTES)
-                result = await session.execute(
-                    sa_update(User)
-                    .where(User.id == user.id)
-                    .values(
-                        failed_login_attempts=User.failed_login_attempts + 1,
-                        locked_until=case(
-                            (
-                                User.failed_login_attempts + 1
-                                >= settings.AUTH_LOCKOUT_THRESHOLD,
-                                lock_at,
-                            ),
-                            else_=User.locked_until,
+            # ONE atomic statement — concurrent bad logins must not lose
+            # counts to a read-modify-write race, in either branch: an
+            # expired lock starts a fresh count of 1 (and clears the lock);
+            # otherwise increment, setting the lock in the same statement
+            # the moment the threshold is hit.
+            lock_at = now + timedelta(minutes=settings.AUTH_LOCKOUT_MINUTES)
+            expired_lock = and_(User.locked_until.is_not(None), User.locked_until <= now)
+            result = await session.execute(
+                sa_update(User)
+                .where(User.id == user.id)
+                .values(
+                    failed_login_attempts=case(
+                        (expired_lock, 1),
+                        else_=User.failed_login_attempts + 1,
+                    ),
+                    locked_until=case(
+                        (expired_lock, null()),
+                        (
+                            User.failed_login_attempts + 1
+                            >= settings.AUTH_LOCKOUT_THRESHOLD,
+                            lock_at,
                         ),
-                    )
-                    .returning(User.failed_login_attempts)
+                        else_=User.locked_until,
+                    ),
                 )
-                attempts = result.scalar_one()
-                await session.commit()
+                .returning(User.failed_login_attempts)
+            )
+            attempts = result.scalar_one()
+            await session.commit()
             event_type = AUTH_EVENT_LOGIN_FAILED
             metadata = {"reason": "bad_password", "failed_attempts": attempts}
             if attempts >= settings.AUTH_LOCKOUT_THRESHOLD:
@@ -317,10 +318,17 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
             logger.exception("Failed to send password reset email to %s", user.email)
 
     async def on_after_reset_password(self, user: User, request: Optional[Request] = None) -> None:
-        # A completed reset also clears any active lockout — the user just
-        # proved account ownership via the emailed token.
-        if user.failed_login_attempts or user.locked_until is not None:
-            await self.user_db.update(user, {"failed_login_attempts": 0, "locked_until": None})
+        # A completed reset clears any active lockout (the user just proved
+        # account ownership via the emailed token) and stamps
+        # password_changed_at so pre-reset tokens can no longer refresh.
+        await self.user_db.update(
+            user,
+            {
+                "failed_login_attempts": 0,
+                "locked_until": None,
+                "password_changed_at": datetime.now(timezone.utc),
+            },
+        )
         await record_auth_event_async(
             self.user_db.session,
             AUTH_EVENT_PASSWORD_RESET_COMPLETED,
@@ -328,6 +336,16 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
             organization_id=user.organization_id,
             email=user.email,
         )
+
+    async def on_after_update(
+        self, user: User, update_dict: dict, request: Optional[Request] = None
+    ) -> None:
+        # Password changed via the users router (PATCH /users/me or admin
+        # update): stamp the revocation anchor like a reset does.
+        if "password" in update_dict or "hashed_password" in update_dict:
+            await self.user_db.update(
+                user, {"password_changed_at": datetime.now(timezone.utc)}
+            )
 
     async def on_after_request_verify(
         self, user: User, token: str, request: Optional[Request] = None
@@ -359,8 +377,23 @@ async def get_user_manager(user_db: SQLAlchemyUserDatabase = Depends(get_user_db
 bearer_transport = BearerTransport(tokenUrl="/api/v1/auth/jwt/login")
 
 
-def get_jwt_strategy() -> JWTStrategy:
-    return JWTStrategy(
+class IssuedAtJWTStrategy(JWTStrategy):
+    """JWTStrategy that also stamps ``iat``, so /auth/jwt/refresh can refuse
+    to slide tokens minted before the user's last password change."""
+
+    async def write_token(self, user) -> str:
+        data = {
+            "sub": str(user.id),
+            "aud": self.token_audience,
+            "iat": int(datetime.now(timezone.utc).timestamp()),
+        }
+        return generate_jwt(
+            data, self.encode_key, self.lifetime_seconds, algorithm=self.algorithm
+        )
+
+
+def get_jwt_strategy() -> IssuedAtJWTStrategy:
+    return IssuedAtJWTStrategy(
         secret=settings.SECRET_KEY,
         lifetime_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )

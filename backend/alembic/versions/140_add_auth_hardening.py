@@ -52,9 +52,13 @@ def upgrade() -> None:
         sa.Column("failed_login_attempts", sa.Integer(), nullable=False, server_default="0"),
     )
     op.add_column("users", sa.Column("locked_until", sa.DateTime(timezone=True), nullable=True))
+    op.add_column(
+        "users", sa.Column("password_changed_at", sa.DateTime(timezone=True), nullable=True)
+    )
 
 
 def downgrade() -> None:
+    op.drop_column("users", "password_changed_at")
     op.drop_column("users", "locked_until")
     op.drop_column("users", "failed_login_attempts")
     op.drop_index("ix_auth_events_created_at", table_name="auth_events")

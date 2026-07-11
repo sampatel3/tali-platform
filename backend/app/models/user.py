@@ -31,6 +31,11 @@ class User(SQLAlchemyBaseUserTable[int], Base):
     locked_until: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Revocation anchor for /auth/jwt/refresh: tokens minted (iat) before this
+    # instant refuse to slide, so a leaked token can't outlive a password reset.
+    password_changed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
