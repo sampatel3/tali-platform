@@ -21,6 +21,7 @@ from .templates import (
     email_verification_html,
     password_reset_html,
     results_notification_html,
+    team_invite_html,
 )
 
 
@@ -335,6 +336,33 @@ class EmailService:
             return {"success": True, "email_id": email_id}
         except Exception as e:
             logger.error("Failed to send password reset to %s: %s", to_email, str(e))
+            return {"success": False, "email_id": ""}
+
+    def send_team_invite(
+        self,
+        to_email: str,
+        inviter_name: str,
+        org_name: str,
+        accept_link: str,
+    ) -> dict:
+        try:
+            logger.info("Sending team invite to %s (org=%s)", to_email, org_name)
+            html_body = team_invite_html(
+                inviter_name=inviter_name,
+                org_name=org_name,
+                accept_link=accept_link,
+            )
+            email = _send_resend_email({
+                "from": self.from_email,
+                "to": [to_email],
+                "subject": f"You're invited to join {org_name} on {BRAND_NAME}",
+                "html": html_body,
+            }, recipient=to_email)
+            email_id = email.get("id", "") if isinstance(email, dict) else str(email)
+            logger.info("Team invite sent successfully (email_id=%s, to=%s)", email_id, to_email)
+            return {"success": True, "email_id": email_id}
+        except Exception as e:
+            logger.error("Failed to send team invite to %s: %s", to_email, str(e))
             return {"success": False, "email_id": ""}
 
     def send_assessment_nudge(

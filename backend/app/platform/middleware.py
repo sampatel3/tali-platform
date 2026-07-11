@@ -29,6 +29,7 @@ def _rate_limit_key(ip: str, path: str) -> str:
         or "/api/v1/auth/jwt/login" in path
         or "/api/v1/auth/register" in path
         or "/api/v1/auth/forgot-password" in path
+        or "/api/v1/auth/accept-invite" in path
     ):
         return f"auth:{ip}"
     # Token-based candidate endpoints (start, upload-cv) — tighter limit

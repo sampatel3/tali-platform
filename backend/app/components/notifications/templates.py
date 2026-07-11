@@ -720,3 +720,39 @@ def password_reset_html(reset_link: str) -> str:
         body=body,
         footer=_taali_footer_brand("If this wasn&rsquo;t you, no action is needed."),
     )
+
+
+def team_invite_html(inviter_name: str, org_name: str, accept_link: str) -> str:
+    inviter = _h(inviter_name) or "A teammate"
+    org = _h(org_name) or "their team"
+    link = _h(accept_link)
+    intro = _taali_intro(
+        _taali_paragraph(
+            f'<strong style="color:#1d1730;font-weight:600;">{inviter}</strong> '
+            f'invited you to join '
+            f'<strong style="color:#1d1730;font-weight:600;">{org}</strong> '
+            f'on <strong style="color:#1d1730;font-weight:600;">{BRAND_NAME}</strong>.'
+        )
+        + _taali_paragraph(
+            'Set a password to activate your account and get started.'
+        )
+    )
+    body = (
+        intro
+        + _taali_cta_row("Accept invite", link)
+        + _taali_link_fallback(link)
+        + _taali_notice_card(
+            f"This invite link expires in 7 days. If you weren&rsquo;t "
+            f"expecting it, you can ignore this email."
+        )
+    )
+    return _render_taali_email(
+        title=f"You&rsquo;re invited to {org} — {BRAND_NAME}",
+        preview=f"{inviter} invited you to join {org} on {BRAND_NAME}. Link expires in 7 days.",
+        eyebrow_left="Team invite",
+        eyebrow_right=BRAND_NAME,
+        subtitle=BRAND_NAME,
+        headline="Join your team",
+        body=body,
+        footer=_taali_footer_brand("If this wasn&rsquo;t expected, no action is needed."),
+    )

@@ -329,6 +329,12 @@ app.include_router(
     prefix="/api/v1/auth",
     tags=["auth"],
 )
+# Team-invite routes (invite/list/resend/DELETE) mount BEFORE the
+# FastAPI-Users users router so our org-scoped ``DELETE /users/{id}``
+# (soft-remove) wins over FastAPI-Users' superuser-only hard delete at the
+# same path. The remaining FastAPI-Users routes (GET/PATCH /{id}, /me) don't
+# collide and are still served below.
+app.include_router(users_router, prefix="/api/v1")
 app.include_router(
     fastapi_users.get_users_router(UserRead, UserUpdate),
     prefix="/api/v1/users",
@@ -339,7 +345,6 @@ app.include_router(assessments_router, prefix="/api/v1")
 app.include_router(pool_rescore_router, prefix="/api/v1")
 app.include_router(organizations_router, prefix="/api/v1")
 app.include_router(org_criteria_router, prefix="/api/v1")
-app.include_router(users_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")
