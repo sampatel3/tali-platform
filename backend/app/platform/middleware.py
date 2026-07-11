@@ -6,7 +6,7 @@ from urllib.parse import parse_qs
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
-from .request_context import set_request_id
+from .request_context import set_client_meta, set_request_id
 from ..domains.identity_access.access_policy import evaluate_login_access
 
 logger = logging.getLogger("tali.middleware")
@@ -83,6 +83,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
         request.state.request_id = request_id
         set_request_id(request_id)
+        set_client_meta(_get_client_ip(request), request.headers.get("user-agent"))
         response = await call_next(request)
 
         duration_ms = (time.time() - start_time) * 1000

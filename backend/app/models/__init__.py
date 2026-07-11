@@ -1,5 +1,6 @@
 from .user import User
 from .organization import Organization
+from .auth_event import AUTH_EVENT_TYPES, AuthEvent
 from .assessment import Assessment, AssessmentStatus
 from .candidate import Candidate
 from .candidate_application import CandidateApplication

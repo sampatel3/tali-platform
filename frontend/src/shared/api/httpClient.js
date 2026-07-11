@@ -81,6 +81,90 @@ export const sendClientIntakeChat = (token, { message = '', files = [] } = {}) =
 export const submitClientIntake = (token) =>
   axios.post(`${intakeBase(token)}/submit`);
 
+// ---- Sliding session ----
+// Access tokens expire after 30 minutes. Rather than silently logging active
+// users out mid-work (the old behavior), we note when the current token was
+// issued and swap it for a fresh one via POST /auth/jwt/refresh once it's
+// REFRESH_TOKEN_AFTER_MS old — triggered by any API activity and by a
+// visible-tab heartbeat. Idle sessions still expire with the last token.
+export const REFRESH_TOKEN_AFTER_MS = 10 * 60 * 1000;
+
+const TOKEN_KEY = 'taali_access_token';
+const TOKEN_ISSUED_AT_KEY = 'taali_token_issued_at';
+
+export const setAccessToken = (token) => {
+  localStorage.setItem(TOKEN_KEY, token);
+  localStorage.setItem(TOKEN_ISSUED_AT_KEY, String(Date.now()));
+};
+
+export const clearAccessToken = () => {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(TOKEN_ISSUED_AT_KEY);
+};
+
+// Exported for tests. A missing/garbled issued-at stamp counts as stale so
+// sessions created before this feature shipped refresh on their next request.
+export const shouldRefreshToken = (issuedAtRaw, now = Date.now()) => {
+  const issuedAt = Number(issuedAtRaw);
+  if (!issuedAtRaw || !Number.isFinite(issuedAt)) return true;
+  return now - issuedAt > REFRESH_TOKEN_AFTER_MS;
+};
+
+// The session slides only for a PRESENT user: every refresh (interceptor
+// trigger and heartbeat alike) requires input in the last USER_IDLE_CUTOFF_MS.
+// Without this, a visible-but-unattended tab — or one kept warm by background
+// polling — would mint fresh tokens forever and never idle out.
+export const USER_IDLE_CUTOFF_MS = 15 * 60 * 1000;
+
+// Exported for tests.
+export const isUserActive = (lastActivityAt, now = Date.now()) => (
+  Number.isFinite(Number(lastActivityAt)) && now - Number(lastActivityAt) <= USER_IDLE_CUTOFF_MS
+);
+
+let lastUserActivityAt = Date.now(); // page load counts as activity
+
+if (typeof window !== 'undefined') {
+  ['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach((evt) => {
+    window.addEventListener(evt, () => { lastUserActivityAt = Date.now(); }, { passive: true, capture: true });
+  });
+}
+
+let refreshInFlight = null;
+
+const maybeRefreshToken = () => {
+  if (refreshInFlight) return;
+  if (!isUserActive(lastUserActivityAt)) return;
+  const tokenAtStart = localStorage.getItem(TOKEN_KEY);
+  if (!tokenAtStart) return;
+  if (!shouldRefreshToken(localStorage.getItem(TOKEN_ISSUED_AT_KEY))) return;
+  refreshInFlight = api
+    .post('/auth/jwt/refresh')
+    .then(({ data }) => {
+      // The session may have changed while this was in flight (logout, or
+      // logout + login as someone else) — only store the result if the token
+      // we refreshed is still the active one.
+      if (data?.access_token && localStorage.getItem(TOKEN_KEY) === tokenAtStart) {
+        setAccessToken(data.access_token);
+      }
+    })
+    // A 401 here means the token is already dead — the response interceptor
+    // below handles the logout; any other failure just retries next trigger.
+    .catch(() => {})
+    .finally(() => {
+      refreshInFlight = null;
+    });
+};
+
+// Heartbeat so a user reading/typing without firing API calls stays signed in.
+// Only ticks while the tab is visible; the user-activity gate inside
+// maybeRefreshToken keeps an unattended tab from sliding forever.
+// (Skipped under vitest — a live interval would keep test workers alive.)
+if (typeof window !== 'undefined' && typeof document !== 'undefined' && import.meta.env?.MODE !== 'test') {
+  setInterval(() => {
+    if (document.visibilityState === 'visible') maybeRefreshToken();
+  }, 60 * 1000);
+}
+
 const isAuthEndpoint = (url = '') => (
   url.includes('/auth/jwt/login')
   || url.includes('/auth/register')
@@ -142,6 +226,11 @@ api.interceptors.request.use((config) => {
   const isCandidateTokenEndpoint = url.includes('/assessments/token/') && url.includes('/start');
   if (token && !isCandidateTokenEndpoint) {
     config.headers.Authorization = `Bearer ${token}`;
+    // Any authenticated activity slides the session forward (skip auth
+    // endpoints and the refresh call itself to avoid loops).
+    if (!isAuthEndpoint(url) && !url.includes('/auth/jwt/refresh')) {
+      maybeRefreshToken();
+    }
   }
   return config;
 });
@@ -151,8 +240,14 @@ api.interceptors.response.use(
   (error) => {
     const status = Number(error.response?.status || 0);
     const url = String(error.config?.url || '');
-    if (status === 401 && !isAuthEndpoint(url)) {
-      localStorage.removeItem('taali_access_token');
+    // A 401 from a request signed with a token that is no longer the active
+    // one (stale in-flight call racing a logout + re-login) must not clear
+    // the CURRENT session.
+    const currentToken = localStorage.getItem(TOKEN_KEY);
+    const sentAuth = String(error.config?.headers?.Authorization || '');
+    const isStaleSessionRequest = Boolean(currentToken) && sentAuth !== `Bearer ${currentToken}`;
+    if (status === 401 && !isAuthEndpoint(url) && !isStaleSessionRequest) {
+      clearAccessToken();
       localStorage.removeItem('taali_user');
       window.dispatchEvent(new Event('auth:logout'));
       if (typeof window !== 'undefined' && !isPublicPath(window.location.pathname, window.location.search)) {

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi_users.jwt import generate_jwt
+from fastapi_users.jwt import decode_jwt, generate_jwt
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
@@ -14,20 +16,65 @@ from ...schemas.user import AcceptInviteRequest, Token
 from .access_policy import email_domain, normalize_allowed_domains
 from .password_policy import check_password_strength
 from .user_routes import decode_invite_token
-from .users_fastapi import auth_backend
+from .users_fastapi import (
+    _as_utc,
+    auth_backend,
+    bearer_transport,
+    current_active_user,
+    get_jwt_strategy,
+)
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
 def _mint_login_token(user: User) -> str:
     """Mint a JWT identical to the one the FastAPI-Users login endpoint
-    returns, so the frontend can log the user straight in after accepting."""
-    data = {"sub": str(user.id), "aud": auth_backend.get_strategy().token_audience}
+    returns (including ``iat``, which /auth/jwt/refresh checks against
+    password_changed_at), so the frontend can log the user straight in
+    after accepting."""
+    data = {
+        "sub": str(user.id),
+        "aud": auth_backend.get_strategy().token_audience,
+        "iat": int(datetime.now(timezone.utc).timestamp()),
+    }
     return generate_jwt(
         data,
         settings.SECRET_KEY,
         settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
+
+
+@router.post("/jwt/refresh")
+async def refresh_jwt(
+    user: User = Depends(current_active_user),
+    raw_token: str = Depends(bearer_transport.scheme),
+):
+    """Sliding session: exchange a still-valid access token for a fresh one.
+
+    The frontend calls this in the background once the stored token is ~10
+    minutes old, so active users are never logged out by the 30-minute JWT
+    expiry. An idle session still dies when the last token expires — there is
+    deliberately no long-lived refresh token.
+
+    Tokens minted before the user's last password change (compared via the
+    ``iat`` claim) refuse to slide: without this, a leaked token could
+    outlive a password reset by refreshing forever, whereas pre-sliding it
+    aged out after ACCESS_TOKEN_EXPIRE_MINUTES.
+    """
+    strategy = get_jwt_strategy()
+    password_changed_at = _as_utc(user.password_changed_at)
+    if password_changed_at is not None:
+        try:
+            claims = decode_jwt(raw_token, settings.SECRET_KEY, strategy.token_audience)
+        except Exception:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        iat = claims.get("iat")
+        # int() truncation on both sides keeps a same-second mint (accept-invite
+        # stamps password_changed_at then immediately mints) refreshable.
+        if not iat or int(iat) < int(password_changed_at.timestamp()):
+            raise HTTPException(status_code=401, detail="Token predates password change")
+    token = await strategy.write_token(user)
+    return {"access_token": token, "token_type": "bearer"}
 
 
 class SsoCheckRequest(BaseModel):
@@ -140,6 +187,11 @@ def accept_invite(
 
     user.hashed_password = get_password_hash(body.password)
     user.is_verified = True
+    # Accepting the invite proves ownership (like a password reset): clear any
+    # lockout accrued against the pending row and stamp the refresh anchor.
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    user.password_changed_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(user)
 
