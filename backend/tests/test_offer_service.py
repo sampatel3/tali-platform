@@ -190,3 +190,55 @@ def test_fix_c_partial_group_is_not_fully_approved(db):
     transition_offer(db, o, "pending_approval")
     record_approval(db, o, a1, acting_user_id=1, approved=True)
     assert offer_is_fully_approved(o) is False  # one row still pending
+
+
+# --- Codex P2 fixes: approver validation + version-race retry ------------------
+
+def test_add_approval_rejects_unknown_approver(db):
+    org, app = _app(db)
+    o = create_offer(db, organization_id=org.id, application_id=app.id)
+    with pytest.raises(HTTPException) as e:
+        add_approval(db, o, group_order=0, approver_user_id=999999)
+    assert e.value.status_code == 404
+
+
+def test_add_approval_rejects_cross_org_approver(db):
+    org, app = _app(db)
+    other = Organization(name="Other", slug="other-appr")
+    db.add(other)
+    db.flush()
+    outsider = _user(db, other.id, email="outsider@appr.test")
+    o = create_offer(db, organization_id=org.id, application_id=app.id)
+    with pytest.raises(HTTPException) as e:
+        add_approval(db, o, group_order=0, approver_user_id=outsider.id)
+    assert e.value.status_code == 404
+
+
+def test_create_offer_version_race_retries_once(db, monkeypatch):
+    """Two overlapping creates read the same max(version); the loser's insert
+    hits uq_offers_application_version and retries with a fresh read."""
+    import app.domains.assessments_runtime.offer_service as offer_service_module
+
+    org, app = _app(db)
+    o1 = create_offer(db, organization_id=org.id, application_id=app.id)
+    assert o1.version == 1
+
+    real = offer_service_module._next_offer_version
+    calls = {"n": 0}
+
+    def stale_then_real(session, application_id):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return o1.version  # stale read — this version is already taken
+        return real(session, application_id)
+
+    monkeypatch.setattr(offer_service_module, "_next_offer_version", stale_then_real)
+    o2 = create_offer(db, organization_id=org.id, application_id=app.id)
+    assert calls["n"] == 2  # first insert collided, retry re-read the max
+    assert o2.version == 2 and o1.version == 1
+    versions = sorted(
+        v for (v,) in db.query(offer_service_module.Offer.version)
+        .filter(offer_service_module.Offer.application_id == app.id)
+        .all()
+    )
+    assert versions == [1, 2]

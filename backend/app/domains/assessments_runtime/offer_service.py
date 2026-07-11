@@ -14,8 +14,10 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException
 from sqlalchemy import func as sa_func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ...models.user import User
 from ...models.offer import (
     OFFER_STATUS_ACCEPTED,
     OFFER_STATUS_APPROVED,
@@ -95,29 +97,48 @@ def create_offer(
         if custom_fields is None and template.custom_fields is not None:
             custom_fields = dict(template.custom_fields)
 
+    def _build() -> Offer:
+        return Offer(
+            organization_id=organization_id,
+            application_id=application_id,
+            version=_next_offer_version(db, application_id),
+            status=OFFER_STATUS_DRAFT,
+            base_salary_amount=base_salary_amount,
+            currency=currency,
+            pay_frequency=pay_frequency,
+            signing_bonus=signing_bonus,
+            equity_units=equity_units,
+            starts_at=starts_at,
+            expires_at=expires_at,
+            custom_fields=custom_fields,
+            created_by_user_id=created_by_user_id,
+        )
+
+    # Concurrent creates for the same application can both read the same
+    # max(version); uq_offers_application_version turns the loser's insert into
+    # an IntegrityError. Scope the insert in a savepoint (so only this nested
+    # transaction rolls back — same pattern as queue_decision) and retry once
+    # with a fresh max read.
+    try:
+        with db.begin_nested():
+            offer = _build()
+            db.add(offer)
+            db.flush()
+    except IntegrityError:
+        with db.begin_nested():
+            offer = _build()
+            db.add(offer)
+            db.flush()
+    return offer
+
+
+def _next_offer_version(db: Session, application_id: int) -> int:
     current_max = (
         db.query(sa_func.max(Offer.version))
         .filter(Offer.application_id == application_id)
         .scalar()
     )
-    offer = Offer(
-        organization_id=organization_id,
-        application_id=application_id,
-        version=int(current_max or 0) + 1,
-        status=OFFER_STATUS_DRAFT,
-        base_salary_amount=base_salary_amount,
-        currency=currency,
-        pay_frequency=pay_frequency,
-        signing_bonus=signing_bonus,
-        equity_units=equity_units,
-        starts_at=starts_at,
-        expires_at=expires_at,
-        custom_fields=custom_fields,
-        created_by_user_id=created_by_user_id,
-    )
-    db.add(offer)
-    db.flush()
-    return offer
+    return int(current_max or 0) + 1
 
 
 def transition_offer(db: Session, offer: Offer, to_status: str) -> Offer:
@@ -164,6 +185,24 @@ def add_approval(
     group_quorum: int = 1,
     approver_user_id: int | None = None,
 ) -> OfferApproval:
+    # An assigned approver must be a real user in the offer's organization —
+    # a typo'd, deleted, or cross-org id could never record the approval
+    # (record_approval matches on the stored id and offers are only reachable
+    # inside their own org), leaving the offer stuck in pending_approval.
+    if approver_user_id is not None:
+        approver = (
+            db.query(User)
+            .filter(
+                User.id == approver_user_id,
+                User.organization_id == offer.organization_id,
+            )
+            .first()
+        )
+        if approver is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Approver not found in this organization",
+            )
     approval = OfferApproval(
         group_order=group_order,
         group_quorum=group_quorum,

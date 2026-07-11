@@ -7,8 +7,8 @@ template) that an offer can be created from (prefills the typed comp fields).
 carries a Python-side ``default=True`` (a string server_default of 'true' broke
 ``.is_(True)`` on sqlite), so rows are only ever written through the ORM.
 
-Revision ID: 146_add_offer_templates
-Revises: 145_add_job_hiring_team
+Revision ID: 147_add_offer_templates
+Revises: 146_add_job_hiring_team
 Create Date: 2026-07-11
 """
 from __future__ import annotations
@@ -16,8 +16,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "146_add_offer_templates"
-down_revision = "145_add_job_hiring_team"
+revision = "147_add_offer_templates"
+down_revision = "146_add_job_hiring_team"
 branch_labels = None
 depends_on = None
 

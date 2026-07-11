@@ -3,8 +3,8 @@
 Additive: ``offers`` (typed compensation inline, versioned, status machine) +
 ``offer_approvals`` (sequential approval groups).
 
-Revision ID: 144_add_offers
-Revises: 143_audit_event_immutability
+Revision ID: 145_add_offers
+Revises: 144_add_email_suppressions_and_prospects
 Create Date: 2026-07-11
 """
 from __future__ import annotations
@@ -12,8 +12,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "144_add_offers"
-down_revision = "143_audit_event_immutability"
+revision = "145_add_offers"
+down_revision = "144_add_email_suppressions_and_prospects"
 branch_labels = None
 depends_on = None
 
@@ -47,6 +47,9 @@ def upgrade() -> None:
         sa.Column("created_by_user_id", sa.Integer(), sa.ForeignKey("users.id"), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True)),
+        sa.UniqueConstraint(
+            "application_id", "version", name="uq_offers_application_version"
+        ),
     )
     op.create_index("ix_offers_id", "offers", ["id"])
     op.create_index(

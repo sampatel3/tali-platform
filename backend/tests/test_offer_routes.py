@@ -180,3 +180,45 @@ def test_offer_is_org_scoped(client, db):
     db.commit()
     r = client.post(f"/api/v1/applications/{other_app.id}/offers", json={}, headers=headers)
     assert r.status_code == 404
+
+
+def test_add_approval_with_invalid_approver_is_404(client, db):
+    headers, email = auth_headers(client)
+    app_id = _seed_application(db, _org_id(db, email))
+    oid = client.post(
+        f"/api/v1/applications/{app_id}/offers", json={}, headers=headers
+    ).json()["id"]
+
+    # Unknown user id.
+    r = client.post(
+        f"/api/v1/offers/{oid}/approvals",
+        json={"group_order": 0, "approver_user_id": 999999},
+        headers=headers,
+    )
+    assert r.status_code == 404
+
+    # A user from another organization.
+    other = Organization(name="OtherAppr", slug="other-appr-rt")
+    db.add(other)
+    db.flush()
+    outsider = User(
+        email="outsider@appr-rt.test", hashed_password="x", is_active=True,
+        is_superuser=False, is_verified=False, organization_id=other.id, role="member",
+    )
+    db.add(outsider)
+    db.commit()
+    r = client.post(
+        f"/api/v1/offers/{oid}/approvals",
+        json={"group_order": 0, "approver_user_id": outsider.id},
+        headers=headers,
+    )
+    assert r.status_code == 404
+
+    # A real same-org user is accepted.
+    me = db.query(User).filter(User.email == email).first()
+    r = client.post(
+        f"/api/v1/offers/{oid}/approvals",
+        json={"group_order": 0, "approver_user_id": me.id},
+        headers=headers,
+    )
+    assert r.status_code == 201 and r.json()["approver_user_id"] == me.id

@@ -5,8 +5,8 @@ team with a per-job role (hiring_manager / recruiter / interviewer /
 coordinator). Distinct from the org-wide ``users.role``. Nothing enforces it
 yet — it is the data model for per-job authorization + later scorecard work.
 
-Revision ID: 145_add_job_hiring_team
-Revises: 144_add_offers
+Revision ID: 146_add_job_hiring_team
+Revises: 145_add_offers
 Create Date: 2026-07-11
 """
 from __future__ import annotations
@@ -14,8 +14,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "145_add_job_hiring_team"
-down_revision = "144_add_offers"
+revision = "146_add_job_hiring_team"
+down_revision = "145_add_offers"
 branch_labels = None
 depends_on = None
 

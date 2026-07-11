@@ -7,6 +7,7 @@ from sqlalchemy import (
     Integer,
     JSON,
     String,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -62,6 +63,12 @@ class Offer(Base):
     __tablename__ = "offers"
     __table_args__ = (
         Index("ix_offers_org_application", "organization_id", "application_id"),
+        # Versioned-offer contract: one row per (application, version). Also
+        # what makes the concurrent create_offer version race detectable —
+        # see offer_service.create_offer's savepoint + retry.
+        UniqueConstraint(
+            "application_id", "version", name="uq_offers_application_version"
+        ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
