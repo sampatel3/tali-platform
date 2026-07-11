@@ -178,6 +178,186 @@ def test_apply_rate_limited(client, db, monkeypatch):
     assert codes[2] == 429
 
 
+def test_reapply_after_soft_delete_restores_application(client, db):
+    """The (candidate_id, role_id) unique constraint spans soft-deleted rows —
+    a re-apply must reactivate the soft-deleted row, not 500/409."""
+    from datetime import datetime, timezone
+
+    org, role, page = _published_page(db, slug="softdel")
+    db.commit()
+    first = client.post(_url(page), data={"full_name": "S", "email": "s@x.test"})
+    assert first.status_code == 200, first.text
+    app_id = first.json()["application_id"]
+
+    db.expire_all()
+    app = db.query(CandidateApplication).filter_by(id=app_id).first()
+    app.deleted_at = datetime.now(timezone.utc)
+    app.application_outcome = "rejected"
+    db.commit()
+
+    second = client.post(_url(page), data={"full_name": "S", "email": "s@x.test"})
+    assert second.status_code == 200, second.text
+    assert second.json()["application_id"] == app_id  # same row, reactivated
+
+    db.expire_all()
+    assert db.query(CandidateApplication).count() == 1  # never a second row
+    app = db.query(CandidateApplication).filter_by(id=app_id).first()
+    assert app.deleted_at is None
+    assert app.application_outcome == "open" and app.pipeline_stage == "applied"
+    event = (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == app_id,
+            CandidateApplicationEvent.event_type == "reapplied",
+        )
+        .first()
+    )
+    assert event is not None  # fresh applied event recorded
+
+
+def test_reapply_knockout_fail_revives_discarded_card(client, db):
+    """A re-application that fails the knockout again revives the prior
+    (system-discarded) reject card instead of erroring on the idempotency key
+    — and never loses the restored application."""
+    from datetime import datetime, timezone
+
+    org, role, page = _published_page(db, slug="revive")
+    create_role_question(
+        db, org.id, role.id,
+        prompt="Authorized to work locally?", kind="boolean",
+        required=True, knockout=True, knockout_expected=[True],
+    )
+    db.commit()
+
+    first = client.post(
+        _url(page), data={"full_name": "R", "email": "r@x.test", "answers": "{}"}
+    )
+    assert first.status_code == 200
+    app_id = first.json()["application_id"]
+
+    db.expire_all()
+    now = datetime.now(timezone.utc)
+    decision = (
+        db.query(AgentDecision).filter(AgentDecision.application_id == app_id).one()
+    )
+    decision.status = "discarded"
+    decision.resolved_at = now
+    app = db.query(CandidateApplication).filter_by(id=app_id).first()
+    app.deleted_at = now
+    db.commit()
+
+    second = client.post(
+        _url(page), data={"full_name": "R", "email": "r@x.test", "answers": "{}"}
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["application_id"] == app_id
+
+    db.expire_all()
+    app = db.query(CandidateApplication).filter_by(id=app_id).first()
+    assert app.deleted_at is None  # restore survived the card re-queue
+    decision = (
+        db.query(AgentDecision).filter(AgentDecision.application_id == app_id).one()
+    )
+    assert decision.status == "pending"  # revived, not duplicated
+
+
+def test_concurrent_first_time_apply_stale_read_converges(client, db, monkeypatch):
+    """Two concurrent first-time applies for the same person: the first resolve
+    misses (stale read), but the post-insert double-check adopts the older
+    concurrent row — one candidate, no duplicates."""
+    from app.domains.job_pages import apply_service
+
+    org, role, page = _published_page(db, slug="staleread")
+    concurrent = Candidate(
+        organization_id=org.id, email="stale@x.test", full_name="Concurrent"
+    )
+    db.add(concurrent)
+    db.commit()
+    concurrent_id = concurrent.id
+
+    real_resolve = apply_service.resolve_candidate
+    calls = {"n": 0}
+
+    def _miss_then_real(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None  # stale read: concurrent insert not yet visible
+        return real_resolve(*args, **kwargs)
+
+    monkeypatch.setattr(apply_service, "resolve_candidate", _miss_then_real)
+
+    r = client.post(_url(page), data={"full_name": "Stale", "email": "stale@x.test"})
+    assert r.status_code == 200, r.text
+    db.expire_all()
+    assert db.query(Candidate).filter_by(email="stale@x.test").count() == 1
+    app = (
+        db.query(CandidateApplication)
+        .filter_by(id=r.json()["application_id"])
+        .first()
+    )
+    assert app.candidate_id == concurrent_id  # converged on the older row
+
+
+def test_phone_match_backfills_missing_email(client, db):
+    org, role, page = _published_page(db, slug="bf-email")
+    c = Candidate(
+        organization_id=org.id, email=None, full_name="Phone Only",
+        phone="+971 50 202 2165", phone_normalized="502022165",
+    )
+    db.add(c)
+    db.commit()
+    cid = c.id
+
+    r = client.post(
+        _url(page),
+        data={"full_name": "Phone Only", "email": "found@x.test", "phone": "0502022165"},
+    )
+    assert r.status_code == 200, r.text
+    db.expire_all()
+    c = db.query(Candidate).filter_by(id=cid).first()
+    assert c.email == "found@x.test"  # empty email filled from the submission
+    assert db.query(Candidate).count() == 1
+
+
+def test_email_match_backfills_missing_phone(client, db):
+    org, role, page = _published_page(db, slug="bf-phone")
+    c = Candidate(organization_id=org.id, email="mail@x.test", full_name="Mail Only")
+    db.add(c)
+    db.commit()
+    cid = c.id
+
+    r = client.post(
+        _url(page),
+        data={"full_name": "Mail Only", "email": "mail@x.test", "phone": "+971 50 202 2165"},
+    )
+    assert r.status_code == 200, r.text
+    db.expire_all()
+    c = db.query(Candidate).filter_by(id=cid).first()
+    assert c.phone == "+971 50 202 2165"
+    assert c.phone_normalized == "502022165"
+
+
+def test_populated_email_never_overwritten(client, db):
+    org, role, page = _published_page(db, slug="bf-pin")
+    c = Candidate(
+        organization_id=org.id, email="orig@x.test", full_name="Pinned",
+        phone="+971 50 202 2165", phone_normalized="502022165",
+    )
+    db.add(c)
+    db.commit()
+    cid = c.id
+
+    # Phone matches; a DIFFERENT email is provided — must not overwrite.
+    r = client.post(
+        _url(page),
+        data={"full_name": "Pinned", "email": "new@x.test", "phone": "0502022165"},
+    )
+    assert r.status_code == 200, r.text
+    db.expire_all()
+    c = db.query(Candidate).filter_by(id=cid).first()
+    assert c.email == "orig@x.test"  # populated value pinned
+
+
 def test_apply_double_submit_race_recovers(client, db, monkeypatch):
     """A concurrent insert wins the unique (candidate, role) race — the route
     catches IntegrityError and returns the idempotent success, not a 500."""

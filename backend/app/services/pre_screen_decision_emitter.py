@@ -377,6 +377,27 @@ def queue_knockout_reject(
             body["disqualification_reason_id"] = int(disqualification_reason_id)
 
         key = _knockout_idempotency_key(int(application.id))
+
+        # A prior card can exist NON-pending under this app's knockout key — a
+        # re-application over a soft-deleted row whose earlier card was
+        # discarded/expired. Revive it (fresh knockout verdict, same card)
+        # unless a HUMAN resolved it; a recruiter resolution is never reopened
+        # (the reject still surfaces via the app's auto_reject_* stamps).
+        prior = (
+            db.query(AgentDecision)
+            .filter(AgentDecision.idempotency_key == key)
+            .first()
+        )
+        if prior is not None:
+            if prior.resolved_by_user_id is None:
+                prior.status = "pending"
+                prior.resolved_at = None
+                prior.resolution_note = None
+                prior.reasoning = reasoning
+                prior.evidence = body
+                db.flush()
+            return prior
+
         decision = AgentDecision(
             organization_id=int(organization_id),
             role_id=int(role.id),
@@ -394,15 +415,17 @@ def queue_knockout_reject(
             active_capabilities={},
             token_spend={},
         )
-        db.add(decision)
         try:
-            db.flush()
+            # SAVEPOINT, not a session rollback: the caller's transaction also
+            # carries the just-created application (and, on re-apply, its
+            # restore) — a full rollback on an idempotency-key race would
+            # strand the applicant with no application at all.
+            with db.begin_nested():
+                db.add(decision)
+                db.flush()
         except IntegrityError:
-            # A card already exists for this app's knockout key (e.g. a retried
-            # request). Return the existing row rather than duplicating. The app
-            # was created earlier in this same transaction, so on the normal
-            # first-apply path this branch does not fire.
-            db.rollback()
+            # A concurrent request inserted the card between the pre-check and
+            # this flush. Return the winning row rather than duplicating.
             return (
                 db.query(AgentDecision)
                 .filter(AgentDecision.idempotency_key == key)
