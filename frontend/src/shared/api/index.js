@@ -14,6 +14,9 @@ export { candidates } from './candidatesClient';
 export { team } from './teamClient';
 export { agent } from './agentClient';
 export { agentChat } from './agentChatClient';
+export { offers } from './offersClient';
+export { offerTemplates } from './offerTemplatesClient';
+export { hiringTeam } from './hiringTeamClient';
 export {
   getCachedDocumentBlob,
   prefetchDocumentBlob,
