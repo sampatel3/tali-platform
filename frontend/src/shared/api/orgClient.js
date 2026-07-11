@@ -21,6 +21,18 @@ export const organizations = {
   }),
   cancelWorkableSync: (runId = null) => api.post('/workable/sync/cancel', runId != null ? { run_id: runId } : {}),
   clearWorkableData: () => api.post('/workable/clear'),
+  // Bullhorn ATS integration (mirrors the Workable surface; staging-only until
+  // the BULLHORN_ENABLED flag is on — every call 503s otherwise). The connect
+  // body carries the API-user password ONE-TIME for the automated OAuth
+  // exchange; the backend uses it in-memory only and never persists it.
+  connectBullhorn: ({ username, client_id, client_secret, password }) =>
+    api.post('/bullhorn/connect', { username, client_id, client_secret, password }),
+  getBullhornStatus: () => api.get('/bullhorn/status'),
+  syncBullhorn: (data = {}) => api.post('/bullhorn/sync', { mode: 'full', ...data }),
+  getBullhornSyncStatus: () => api.get('/bullhorn/sync/status'),
+  cancelBullhornSync: () => api.post('/bullhorn/sync/cancel', {}),
+  getBullhornStageMap: () => api.get('/bullhorn/stage-map'),
+  replaceBullhornStageMap: (mappings) => api.put('/bullhorn/stage-map', { mappings }),
   // Workspace criteria — Settings → AI agent chip composer.
   listCriteria: () => api.get('/organizations/me/criteria'),
   createCriterion: (data) => api.post('/organizations/me/criteria', data),

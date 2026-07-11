@@ -81,12 +81,16 @@
   flex: 1;
   min-width: 180px;
 }
+/* Match the sentence-case form-label used by every other Settings form
+   (.settings-panel .field > .k) — this form only renders inside Settings,
+   so a mono-uppercase label here read as inconsistent with the rest. */
 .cl-field-label {
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--mute);
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
 }
 .cl-input {
   width: 100%;

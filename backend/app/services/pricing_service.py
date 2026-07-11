@@ -155,6 +155,9 @@ class Feature(str, Enum):
     REQUISITION_INTAKE = "requisition_intake"  # requisition_intake_agent (single-shot brief extraction)
     REQUISITION_INTAKE_CHAT = "requisition_intake_chat"  # requisition_chat_service (conversational intake turn)
     REQUISITION_CLIENT_INTAKE = "requisition_client_intake"  # client_intake (no-login client-scoped intake turn)
+    SOURCING_SEARCH = "sourcing_search"  # sourcing_assist_service (LinkedIn X-ray/boolean expansion)
+    SOURCING_OUTREACH_DRAFT = "sourcing_outreach_draft"  # sourcing_assist_service (paste-a-profile outreach)
+    OUTREACH_DRAFT = "outreach_draft"  # outreach_tasks (per-message campaign draft)
     OTHER = "other"
 
 
@@ -326,6 +329,27 @@ _FEATURE_PRICING: dict[Feature, FeaturePricing] = {
         # the role via the shared link). Same 2× shape as the recruiter intake
         # chat — same AI work, just a client-scoped prompt + hidden economics.
         feature=Feature.REQUISITION_CLIENT_INTAKE,
+        markup_multiplier=Decimal("2.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.SOURCING_SEARCH: FeaturePricing(
+        # Recruiter-facing sourcing assist (LinkedIn X-ray/boolean expansion).
+        # Same 2× shape as taali_chat/interview_focus — recruiter-facing AI.
+        feature=Feature.SOURCING_SEARCH,
+        markup_multiplier=Decimal("2.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.SOURCING_OUTREACH_DRAFT: FeaturePricing(
+        # Paste-a-profile first-touch outreach draft. Recruiter-facing AI → 2×.
+        feature=Feature.SOURCING_OUTREACH_DRAFT,
+        markup_multiplier=Decimal("2.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.OUTREACH_DRAFT: FeaturePricing(
+        # Per-message campaign draft (one metered Haiku call per recipient in a
+        # generate run). Recruiter-facing AI → 2×, same shape as the
+        # paste-a-profile draft above.
+        feature=Feature.OUTREACH_DRAFT,
         markup_multiplier=Decimal("2.0"),
         cache_hit_multiplier=Decimal("0.10"),
     ),
@@ -512,6 +536,9 @@ def estimate_reservation(feature: Feature | str) -> int:
         Feature.REQUISITION_INTAKE: 12_000,       # ~$0.012 per single-shot extraction
         Feature.REQUISITION_INTAKE_CHAT: 12_000,  # ~$0.012 per chat turn (vision-capable)
         Feature.REQUISITION_CLIENT_INTAKE: 12_000,  # ~$0.012 per client-scoped chat turn
+        Feature.SOURCING_SEARCH: 6_000,           # ~$0.006 per Haiku search expansion (2× markup)
+        Feature.SOURCING_OUTREACH_DRAFT: 6_000,   # ~$0.006 per Haiku outreach draft (2× markup)
+        Feature.OUTREACH_DRAFT: 6_000,            # ~$0.006 per Haiku campaign-message draft (2× markup)
         Feature.OTHER: 5_000,
     }
     if isinstance(feature, str):

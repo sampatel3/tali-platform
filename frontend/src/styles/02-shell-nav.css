@@ -698,6 +698,41 @@
   line-height: 1.5;
 }
 
+/* Error note (e.g. Workable "Last error: …"). Without a rule this was
+   naked red text jammed against the stat grid above it; contain it in a
+   soft-danger note so it reads as a bordered callout, not stray text. */
+.settings-hint {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--taali-danger-border);
+  border-radius: 10px;
+  background: var(--taali-danger-soft);
+  color: var(--taali-danger);
+  font-size: 0.78125rem;
+  line-height: 1.5;
+}
+
+/* Read-only informational schedule (Workable "Sync schedule"). Replaces an
+   inline fontSize:13 magic number so it matches the other field copy. */
+.wk-schedule-list {
+  display: grid;
+  gap: 4px;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+/* Multi-field settings rows. Base rule lives here (the only other
+   `.row-form` rule is the max-width:860px collapse to block). A child can
+   opt into a full-width span with `grid-column: 1 / -1`. Without this the
+   fields stacked flush with no gap and sat on top of the next divider. */
+.row-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 18px;
+  align-items: start;
+}
+
 .settings-invite-form {
   display: grid;
   grid-template-columns: 1fr 1fr auto;

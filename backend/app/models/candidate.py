@@ -19,6 +19,9 @@ class Candidate(Base):
     marketing_consent = Column(Boolean, default=True)
     workable_candidate_id = Column(String)
     workable_data = Column(JSON)
+    # Bullhorn ATS identity + raw payload (see docs/BULLHORN_BUILD_PLAN.md §3).
+    bullhorn_candidate_id = Column(String, nullable=True, index=True)
+    bullhorn_data = Column(JSON, nullable=True)
 
     # Rich profile fields (populated from Workable payload)
     headline = Column(String, nullable=True)

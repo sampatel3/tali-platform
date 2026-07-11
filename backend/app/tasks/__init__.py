@@ -57,6 +57,17 @@ from .workable_tasks import (
     retry_workable_disqualify_task,
     run_workable_op_task,
 )
+# Eager-import bullhorn_tasks so the worker registers the Bullhorn full-sync
+# runner AND the two incremental beat sweeps (event poll + nightly reconcile).
+# Same eager-import trap as above: a task enqueued/scheduled without this would
+# NotRegistered on the worker and drop silently — and beat references the two
+# sweep task names. Gated inside each task/runner (cheap no-op when
+# BULLHORN_ENABLED is off or the org isn't connected).
+from .bullhorn_tasks import (  # noqa: F401
+    bullhorn_event_poll_sweep,
+    bullhorn_reconcile_sweep,
+    run_bullhorn_sync_run_task,
+)
 # Eager-import reconciliation_tasks so the daily Anthropic billing
 # reconciliation beat task lands in the worker registry. Same trap as
 # the imports above — beat will fire ``reconcile_anthropic_usage`` on
@@ -134,6 +145,14 @@ from .graph_ingest_tasks import (
 # flush. The beat schedule references this task name; without the import the
 # worker NotRegistered's it. No-op unless WORKABLE_PROVIDER_ENABLED is set.
 from .workable_provider_tasks import flush_workable_provider
+# Eager-import outreach_tasks so the worker registers the campaign draft +
+# send tasks. The /outreach/campaigns generate + send routes enqueue these;
+# without this import the worker NotRegistered's them and drafts never get
+# written / approved messages never send. Same trap as the imports above.
+from .outreach_tasks import (
+    generate_campaign_drafts,
+    send_campaign_messages,
+)
 
 __all__ = [
     "celery_app",
@@ -157,6 +176,9 @@ __all__ = [
     "run_workable_sync_run_task",
     "retry_workable_disqualify_task",
     "run_workable_op_task",
+    "run_bullhorn_sync_run_task",
+    "bullhorn_event_poll_sweep",
+    "bullhorn_reconcile_sweep",
     "reconcile_anthropic_usage",
     "agent_manual_run",
     "agent_daily_review_sweep",
@@ -179,4 +201,6 @@ __all__ = [
     "sync_interview_to_graph",
     "sync_event_to_graph",
     "flush_workable_provider",
+    "generate_campaign_drafts",
+    "send_campaign_messages",
 ]

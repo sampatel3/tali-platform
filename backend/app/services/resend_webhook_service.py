@@ -109,16 +109,145 @@ def _event_email_id(payload: dict[str, Any]) -> Optional[str]:
     return str(val).strip() if val else None
 
 
-def apply_resend_event(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
-    """Apply one Resend event to its assessment. Best-effort, idempotent.
+def _event_recipient(payload: dict[str, Any]) -> Optional[str]:
+    """Recipient address from a Resend event payload.
 
-    Returns a small status dict for the route's ack body.
+    Resend puts recipients in ``data.to`` (a list, or occasionally a bare
+    string). We suppress the first recipient — invites are single-recipient.
+    """
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    to = data.get("to")
+    if isinstance(to, list) and to:
+        first = to[0]
+        return str(first).strip() if first else None
+    if isinstance(to, str) and to.strip():
+        return to.strip()
+    return None
+
+
+def _maybe_suppress_global(db: Session, status: str, payload: dict[str, Any]) -> None:
+    """On a hard bounce / complaint, add a platform-global suppression.
+
+    Best-effort and non-fatal: a failure here must never break the invite
+    delivery tracking that ``apply_resend_event`` performs. Global (org NULL)
+    rows protect the shared sender domain across every org.
+    """
+    if status not in ("bounced", "complained"):
+        return
+    recipient = _event_recipient(payload)
+    if not recipient:
+        return
+    try:
+        # Imported lazily so the webhook service doesn't pull the suppression
+        # service (and its settings/config) at module import time.
+        from .email_suppression_service import suppress
+
+        suppress(
+            db,
+            email=recipient,
+            reason=status,
+            source="webhook",
+            organization_id=None,
+        )
+    except Exception:  # pragma: no cover — never break invite tracking
+        logger.warning("Failed to record global suppression for a %s event", status)
+
+
+def _apply_outreach_event(
+    db: Session, email_id: str, status: str
+) -> Optional[dict[str, Any]]:
+    """Apply an event to an outreach message correlated by ``resend_email_id``.
+
+    Additive to the assessment path — same event loop, a second lookup. Returns
+    an ack dict when the id matches an outreach message, else None so the caller
+    falls through to the assessment lookup. Ratchets status (never downgrades),
+    stamps the specific timestamp, and refreshes the campaign counts rollup
+    opportunistically. Bounce/complaint global suppression is already handled by
+    ``_maybe_suppress_global`` in the caller."""
+    from ..models.outreach_campaign import (
+        MESSAGE_STATUS_RANK,
+        OutreachCampaign,
+        OutreachMessage,
+    )
+
+    message = (
+        db.query(OutreachMessage)
+        .filter(OutreachMessage.resend_email_id == email_id)
+        .first()
+    )
+    if message is None:
+        return None
+
+    now = datetime.now(timezone.utc)
+    is_failure = status in _FAILURE_STATUSES
+
+    if status == "delivered":
+        message.delivered_at = message.delivered_at or now
+    elif status == "opened":
+        message.opened_at = message.opened_at or now
+    elif status == "clicked":
+        message.clicked_at = message.clicked_at or now
+
+    if is_failure:
+        # bounced / complained / failed — record the terminal state.
+        message.status = status
+    elif MESSAGE_STATUS_RANK.get(status, 0) >= MESSAGE_STATUS_RANK.get(
+        message.status, 0
+    ):
+        message.status = status
+
+    db.commit()
+
+    # Opportunistic counts rollup — best-effort, never breaks the ack.
+    try:
+        from ..domains.outreach.campaign_service import compute_counts
+
+        campaign = (
+            db.query(OutreachCampaign)
+            .filter(OutreachCampaign.id == message.campaign_id)
+            .first()
+        )
+        if campaign is not None:
+            campaign.counts = compute_counts(db, campaign.id)
+            db.commit()
+    except Exception:  # pragma: no cover — rollup is non-critical
+        logger.warning("outreach counts rollup failed for message %s", message.id)
+
+    return {
+        "status": "applied",
+        "event": f"email.{status}" if status else "",
+        "outreach_message_id": int(message.id),
+        "message_status": message.status,
+    }
+
+
+def apply_resend_event(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Apply one Resend event to its assessment or outreach message.
+
+    Best-effort, idempotent. Correlates by the Resend message id we stored at
+    send time — assessments via ``Assessment.invite_email_id``, outreach via
+    ``OutreachMessage.resend_email_id``. Returns a small status dict for the
+    route's ack body.
     """
     event_type = str(payload.get("type") or "").strip()  # e.g. "email.delivered"
     status = event_type.split(".", 1)[1] if "." in event_type else event_type
+
+    # Deliverability guardrail: a hard bounce / complaint suppresses the address
+    # globally regardless of whether we can correlate it to a tracked invite —
+    # it protects the shared sender domain. Best-effort; never raises.
+    _maybe_suppress_global(db, status, payload)
+
     email_id = _event_email_id(payload)
     if not email_id:
         return {"status": "ignored", "reason": "no_email_id", "event": event_type}
+
+    # Outreach correlation first (additive, second lookup). Falls through to the
+    # assessment path when the id isn't an outreach message.
+    outreach_ack = _apply_outreach_event(db, email_id, status)
+    if outreach_ack is not None:
+        return outreach_ack
 
     asmt = (
         db.query(Assessment)

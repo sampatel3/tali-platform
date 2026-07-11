@@ -20,7 +20,7 @@ import { Brain, Check, Clock, Flag, RefreshCw, Sparkles, X } from 'lucide-react'
 
 import { ScoreRing } from '../../shared/ui/ScoreRing';
 import { ScoreProvenance } from './ScoreProvenance';
-import { DECISION_ACTIONS, DEFAULT_ACTIONS } from '../../shared/decisions/decisionActions';
+import { DECISION_ACTIONS, DEFAULT_ACTIONS, REJECT_CONSEQUENCE_COPY, isRejectDecisionType } from '../../shared/decisions/decisionActions';
 import { isPostHandoverWorkableStage } from '../../shared/metrics';
 
 const fmt = (v) => (v == null || Number.isNaN(Number(v)) ? '—' : Math.round(Number(v)));
@@ -101,10 +101,8 @@ export const DecisionRail = ({
   // Workable + send the rejection email. Surface that consequence on the one-click
   // primary button (the copy previously lived only in the alt-reject modal). The
   // stale/old-engine warning still takes precedence in the tooltip.
-  const isRejectDecision = isActionable
-    && (decision.decision_type === 'reject' || decision.decision_type === 'skip_assessment_reject');
-  const rejectConsequence = 'Disqualifies them in Workable and sends the rejection email.';
-  const primaryButtonTitle = primaryTitle ?? (isRejectDecision ? rejectConsequence : undefined);
+  const isRejectDecision = isActionable && isRejectDecisionType(decision.decision_type);
+  const primaryButtonTitle = primaryTitle ?? (isRejectDecision ? REJECT_CONSEQUENCE_COPY : undefined);
   const confPct = decision?.confidence != null && !Number.isNaN(Number(decision.confidence))
     ? Math.round(Number(decision.confidence) * 100)
     : null;
@@ -200,7 +198,7 @@ export const DecisionRail = ({
               <PrimaryIcon size={16} strokeWidth={2.2} aria-hidden="true" /> {spec.primaryLabel}
             </button>
             {isRejectDecision ? (
-              <div className="dr-rec-conf">{rejectConsequence}</div>
+              <div className="dr-rec-conf">{REJECT_CONSEQUENCE_COPY}</div>
             ) : null}
             <div className="dr-rec-kl">
               <Sparkles size={14} strokeWidth={2.2} aria-hidden="true" /> Agent recommends

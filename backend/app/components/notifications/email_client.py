@@ -395,6 +395,63 @@ class EmailService:
             logger.error("Failed to send assessment nudge to %s: %s", candidate_email, str(exc))
             return {"success": False, "email_id": ""}
 
+    def send_outreach_email(
+        self,
+        *,
+        to_email: str,
+        subject: str,
+        text_body: str,
+        html_body: str,
+        reply_to: str,
+        unsubscribe_url: str,
+        display_name: str | None = None,
+    ) -> dict:
+        """Send ONE outreach-campaign message. The single send path for campaigns.
+
+        Policy rails encoded here (the send task builds the body + footer; this
+        method guarantees the wire-level headers):
+        - ``reply_to`` is REQUIRED and set to the creating recruiter's email so
+          replies reach a real person, never the no-reply address.
+        - ``List-Unsubscribe`` header carries the URL form (RFC 8058) so Gmail /
+          Outlook render a native one-click unsubscribe; the visible footer link
+          in the body is the human path (both point at the same signed token).
+        - ``List-Unsubscribe-Post`` advertises one-click POST support.
+
+        Both ``text_body`` and ``html_body`` are passed through verbatim — the
+        caller is responsible for having appended the unsubscribe footer and
+        replaced the CTA placeholder before calling. ``display_name`` sets the
+        inbox from-name (the org's outbound brand)."""
+        try:
+            payload: dict = {
+                "from": _compose_from(base=self.from_email, display_name=display_name),
+                "to": [to_email],
+                "subject": subject,
+                "text": text_body,
+                "html": html_body,
+                "reply_to": reply_to,
+                "headers": {
+                    "List-Unsubscribe": f"<{unsubscribe_url}>",
+                    "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+                },
+            }
+            email = _send_resend_email(payload, recipient=to_email)
+            email_id = email.get("id", "") if isinstance(email, dict) else str(email)
+            logger.info("Outreach email sent (email_id=%s, to=%s)", email_id, to_email)
+            return {"success": True, "email_id": email_id}
+        except Exception as e:
+            retryable, is_rate_limit = classify_send_error(e)
+            logger.error(
+                "Failed to send outreach email to %s (rate_limited=%s, retryable=%s): %s",
+                to_email, is_rate_limit, retryable, str(e),
+            )
+            return {
+                "success": False,
+                "email_id": "",
+                "error": str(e),
+                "rate_limited": is_rate_limit,
+                "retryable": retryable,
+            }
+
     def send_assessment_expiry_reminder(
         self,
         candidate_email: str,

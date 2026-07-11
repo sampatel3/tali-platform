@@ -295,6 +295,7 @@ from .domains.assessments_runtime.requisition_routes import (
 from .domains.assessments_runtime.clients_routes import router as clients_router
 from .domains.identity_access.user_routes import router as users_router
 from .api.v1.workable import router as workable_router
+from .api.v1.bullhorn import router as bullhorn_router
 from .api.v1.auth import router as auth_router
 from .api.v1.background_jobs import router as background_jobs_router
 from .domains.share_links import (
@@ -306,7 +307,21 @@ from .domains.submittal_packs import (
     public_router as submittal_packs_public_router,
     router as submittal_packs_router,
 )
+from .domains.outreach import (
+    campaigns_router,
+    interest_public_router,
+    prospects_router,
+    unsubscribe_public_router,
+)
 from .domains.assessments_runtime.pool_rescore_routes import router as pool_rescore_router
+from .domains.outreach import router as sourcing_assist_router
+from .domains.assessments_runtime.offer_routes import router as offers_router
+from .domains.assessments_runtime.offer_template_routes import (
+    router as offer_templates_router,
+)
+from .domains.assessments_runtime.job_hiring_team_routes import (
+    router as hiring_team_router,
+)
 
 # FastAPI-Users auth routers
 app.include_router(
@@ -355,9 +370,16 @@ app.include_router(roles_router, prefix="/api/v1")
 app.include_router(requisition_router, prefix="/api/v1")
 app.include_router(clients_router, prefix="/api/v1")
 app.include_router(workable_router, prefix="/api/v1")
+app.include_router(bullhorn_router, prefix="/api/v1")
 app.include_router(background_jobs_router, prefix="/api/v1")
 app.include_router(share_links_router, prefix="/api/v1")
 app.include_router(submittal_packs_router, prefix="/api/v1")
+app.include_router(prospects_router, prefix="/api/v1")
+app.include_router(sourcing_assist_router, prefix="/api/v1")
+app.include_router(campaigns_router, prefix="/api/v1")
+app.include_router(offers_router, prefix="/api/v1")
+app.include_router(offer_templates_router, prefix="/api/v1")
+app.include_router(hiring_team_router, prefix="/api/v1")
 from .decision_policy.routes import router as decision_policy_router  # noqa: E402
 from .domains.capabilities.routes import router as capability_flags_router  # noqa: E402
 from .services.threshold_calibration.routes import router as threshold_calibration_router  # noqa: E402
@@ -404,6 +426,13 @@ app.include_router(client_intake_public_router)
 from .domains.marketing_leads import public_router as marketing_leads_public_router  # noqa: E402
 
 app.include_router(marketing_leads_public_router)
+
+# Public one-click unsubscribe: GET/POST /api/v1/public/unsubscribe/{token}
+# (no auth) — the outreach opt-out. GET is read-only; POST records suppression.
+app.include_router(unsubscribe_public_router)
+# (no auth) — the outreach interest-capture CTA. GET ratchets the message to
+# 'interested' (idempotent) and 302s to the job page / thanks page.
+app.include_router(interest_public_router)
 
 # cv_match_v3.0 admin + override surface (gated server-side; flag controls runner)
 from .cv_matching.routes import (

@@ -155,3 +155,61 @@ def test_missing_email_id_is_ignored(db):
     res = apply_resend_event(db, {"type": "email.delivered", "data": {}})
     assert res["status"] == "ignored"
     assert res["reason"] == "no_email_id"
+
+
+# ---------------------------------------------------------------------------
+# Suppression wiring — bounce / complaint → platform-global suppression
+# ---------------------------------------------------------------------------
+
+
+def test_bounce_event_adds_global_suppression(db):
+    a = _make_assessment(db, "re_sup_b")
+    apply_resend_event(
+        db,
+        {
+            "type": "email.bounced",
+            "data": {"email_id": "re_sup_b", "to": ["Bounce@Example.com"]},
+        },
+    )
+    # Suppressed globally (org NULL), so it protects every org.
+    from app.services.email_suppression_service import is_suppressed
+
+    db.refresh(a)
+    assert is_suppressed(db, email="bounce@example.com", organization_id=a.organization_id) == "bounced"
+
+
+def test_complaint_event_adds_global_suppression(db):
+    apply_resend_event(
+        db,
+        {
+            "type": "email.complained",
+            "data": {"email_id": "re_unknown", "to": ["spam@example.com"]},
+        },
+    )
+    # Even with no matching assessment, the complaint suppresses the address.
+    from app.models.organization import Organization
+    from app.services.email_suppression_service import is_suppressed
+
+    org = Organization(name="Any", slug=f"org-any-{id(db)}")
+    db.add(org)
+    db.flush()
+    assert is_suppressed(db, email="spam@example.com", organization_id=org.id) == "complained"
+
+
+def test_delivered_event_does_not_suppress(db):
+    _make_assessment(db, "re_sup_d")
+    apply_resend_event(
+        db,
+        {
+            "type": "email.delivered",
+            "data": {"email_id": "re_sup_d", "to": ["fine@example.com"]},
+        },
+    )
+    from app.models.email_suppression import EmailSuppression
+
+    assert (
+        db.query(EmailSuppression)
+        .filter(EmailSuppression.email_normalized == "fine@example.com")
+        .first()
+        is None
+    )

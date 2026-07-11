@@ -36,7 +36,7 @@ import {
 } from '../../features/home/atoms';
 import { ScoreProvenance } from '../../features/candidates/ScoreProvenance';
 import { IntegrityFlags } from './IntegrityFlags';
-import { DECISION_ACTIONS, DEFAULT_ACTIONS } from './decisionActions';
+import { DECISION_ACTIONS, DEFAULT_ACTIONS, REJECT_CONSEQUENCE_COPY, isRejectDecisionType } from './decisionActions';
 import '../../features/home/home.css';
 
 // Absolute applied date ("12 Jun 2026") — same format as the ScoreProvenance
@@ -84,7 +84,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
   // interview/offer stage (possibly moved there before the application ever
   // reached Taali). Rejects stay fully approvable — Taali warns, never
   // blocks — but the recruiter must see what approving does before one click.
-  const isRejectType = decision.decision_type === 'reject' || decision.decision_type === 'skip_assessment_reject';
+  const isRejectType = isRejectDecisionType(decision.decision_type);
   const postHandoverWarn = isRejectType && Boolean(decision.candidate_post_handover);
   const spec = DECISION_ACTIONS[decision.decision_type] || DEFAULT_ACTIONS;
   const PrimaryIcon = spec.primaryIcon || Check;
@@ -93,6 +93,11 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
     : isStale
       ? 'Inputs changed since this was decided — this acts on them anyway. Re-evaluate first to refresh.'
       : undefined;
+  // Same reject consequence the candidate-report rail shows, from the shared
+  // source — so a recruiter approving a reject from the hub queue sees what it
+  // does (the hub card previously showed nothing). Stale/old-engine warning
+  // still wins the tooltip.
+  const primaryButtonTitle = primaryTitle ?? (isPending && isRejectType ? REJECT_CONSEQUENCE_COPY : undefined);
 
   return (
     <section className={`rq-hybrid-detail${rescoring ? ' is-rescoring' : ''}`}>
@@ -197,7 +202,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
             className="rq-rec-btn"
             onClick={() => onApprove(decision)}
             disabled={frozen}
-            title={primaryTitle}
+            title={primaryButtonTitle}
           >
             <PrimaryIcon size={16} strokeWidth={2.4} aria-hidden="true" />
             {spec.primaryLabel}
@@ -206,6 +211,9 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
             <Sparkles size={12} aria-hidden="true" /> Agent recommends
             {decision.confidence != null ? ` · Confidence ${Math.round(decision.confidence * 100)}%` : ''}
           </div>
+          {isRejectType ? (
+            <div className="rq-rec-conf">{REJECT_CONSEQUENCE_COPY}</div>
+          ) : null}
         </div>
       ) : null}
 

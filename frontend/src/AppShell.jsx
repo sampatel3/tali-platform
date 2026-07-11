@@ -75,8 +75,9 @@ const DemoLeadPage = lazy(() =>
 const DemoShowcasePage = lazy(() =>
   import('./features/marketing/DemoShowcasePage').then((m) => ({ default: m.DemoShowcasePage }))
 );
-// Internal, no-auth landing-design preview (/landing-preview?v=a|b). Two
-// value-led landing variants Sam eyeballs in prod; fixture data only, no APIs.
+// Internal, no-auth landing-design preview (/landing-preview?v=a|b|c). Landing
+// variants Sam eyeballs in prod (C — the cinematic "Turn hiring on" concept — is
+// the default); fixture data only, no APIs.
 const LandingPreviewPage = lazy(() =>
   import('./features/marketing/landing_preview/LandingPreviewPage').then((m) => ({ default: m.LandingPreviewPage }))
 );
@@ -102,6 +103,15 @@ const CandidateStandingReportPage = lazy(() =>
 );
 const JobsPage = lazy(() =>
   import('./features/jobs/JobsPage').then((m) => ({ default: m.JobsPage }))
+);
+const SourcingPage = lazy(() =>
+  import('./features/sourcing/SourcingPage')
+);
+const UnsubscribePage = lazy(() =>
+  import('./features/outreach/UnsubscribePage')
+);
+const OutreachThanksPage = lazy(() =>
+  import('./features/outreach/OutreachThanksPage')
 );
 const RequisitionsPage = lazy(() =>
   import('./features/requisitions/RequisitionsPage').then((m) => ({ default: m.RequisitionsPage }))
@@ -133,6 +143,9 @@ const SettingsPage = lazy(() =>
 const RequisitionTemplatePage = lazy(() =>
   import('./features/settings/RequisitionTemplatePage').then((m) => ({ default: m.RequisitionTemplatePage }))
 );
+const AtsAdminPage = lazy(() =>
+  import('./features/admin/AtsAdminPage').then((m) => ({ default: m.AtsAdminPage }))
+);
 const DecisionPolicyPage = lazy(() =>
   import('./features/decision_policy/DecisionPolicyPage')
 );
@@ -152,6 +165,8 @@ const BlogPostPage = lazy(() =>
 const isPublicCandidateSharePath = (pathname, search = '') => {
   if (pathname.startsWith('/c/')) return true;
   if (pathname.startsWith('/submittal/')) return true;
+  if (pathname.startsWith('/unsubscribe/')) return true;
+  if (pathname.startsWith('/outreach/thanks')) return true;
   const params = new URLSearchParams(search || '');
   const hasInterviewToken = params.get('view') === 'interview' && Boolean(String(params.get('k') || '').trim());
   if (pathname.startsWith('/candidates/') && hasInterviewToken) return true;
@@ -188,6 +203,7 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     '/home',
     '/jobs',
     '/requisitions',
+    '/sourcing',
     '/assessments',
     '/candidates',
     '/analytics',
@@ -206,6 +222,7 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     || pathname.startsWith('/chat')
     || pathname.startsWith('/tasks/')
     || pathname.startsWith('/admin')
+    || pathname.startsWith('/ats-admin')
   );
 };
 
@@ -627,6 +644,20 @@ function AppContent() {
         )}
       />
 
+      {/* Outreach foundations — sourced-prospect list + CSV import. Protected
+          recruiter surface (see isProtectedRecruiterPath). */}
+      <Route
+        path="/sourcing"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <SourcingPage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
+      />
+
       {/* Clients are managed directly in Settings → Clients (embedded
           ClientsManager); there is no standalone /clients page. Per-client
           pipeline lives on the Jobs page's client filter. */}
@@ -795,6 +826,29 @@ function AppContent() {
         )}
       />
 
+      {/* Public, no-auth one-click unsubscribe. GET validates + shows the org
+          name and masked email; the Unsubscribe button POSTs the opt-out. No
+          /api/v1 prefix path here and no recruiter session required. */}
+      <Route
+        path="/unsubscribe/:token"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <UnsubscribePage />
+          </Suspense>
+        )}
+      />
+
+      {/* Public, no-auth outreach thanks page — the CTA landing when a campaign
+          has no job page. Interest is recorded by the backend before redirect. */}
+      <Route
+        path="/outreach/thanks"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <OutreachThanksPage />
+          </Suspense>
+        )}
+      />
+
       <Route
         path="/candidate-detail"
         element={<Navigate replace to={candidateDetailAssessmentId ? `/assessments/${candidateDetailAssessmentId}` : '/assessments'} />}
@@ -889,6 +943,14 @@ function AppContent() {
       <Route
         path="/reporting"
         element={<Navigate replace to="/analytics" />}
+      />
+      <Route
+        path="/ats-admin"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <AtsAdminPage onNavigate={navigateToPage} NavComponent={DashboardNavWithMode} />
+          </Suspense>
+        )}
       />
 
       {/* Requisition spec template editor. A dedicated page (not a tab in the

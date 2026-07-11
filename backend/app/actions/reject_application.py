@@ -221,6 +221,88 @@ def _try_workable_disqualify(
     return "fallback"
 
 
+def _try_bullhorn_reject(
+    db: Session,
+    *,
+    app: CandidateApplication,
+    org: Optional[Organization],
+    actor: Actor,
+    reason: Optional[str],
+) -> bool:
+    """Reject via the Bullhorn provider when the org routes to Bullhorn.
+
+    Returns True when Bullhorn owned this org's write-back AND it succeeded (the
+    caller must NOT also try Workable). Returns False when either the org doesn't
+    route to Bullhorn OR the Bullhorn write-back FAILED (``needs_mapping`` /
+    ``api_error`` in non-strict paths): the caller then falls through to the
+    Workable path (a no-op for a Bullhorn-only org — the local reject already
+    stood in ``run()``). Records a ``bullhorn_rejected`` /
+    ``bullhorn_writeback_failed`` event, mirroring the Workable trail. Honours
+    strict mode: the provider raises ``WorkableWritebackError`` on failure so the
+    decision-batch can re-queue; that propagates (never swallowed), exactly like
+    the Workable disqualify.
+    """
+    from ..components.integrations.bullhorn.provider import BullhornProvider
+    from ..components.integrations.resolver import resolve_ats_provider
+    from ..services.workable_actions_service import WorkableWritebackError
+
+    provider = resolve_ats_provider(org, db)
+    if not isinstance(provider, BullhornProvider):
+        return False
+    if not (getattr(app, "bullhorn_job_submission_id", "") or "").strip():
+        # Bullhorn org but this application isn't linked — nothing to write; the
+        # local reject stands (Taali sends no candidate email). Handled.
+        return True
+    try:
+        result = provider.reject_application(app=app, role=getattr(app, "role", None), reason=reason)
+    except WorkableWritebackError:
+        raise  # strict (batch) path — propagate so the batch re-queues.
+    except Exception:  # pragma: no cover — defensive
+        logger.exception("bullhorn reject raised unexpectedly (application_id=%s)", app.id)
+        return True
+    if result.get("success"):
+        append_application_event(
+            db,
+            app=app,
+            event_type="bullhorn_rejected",
+            actor_type=actor.type,
+            actor_id=actor.event_actor_id,
+            reason=reason or result.get("message") or "Rejected in Bullhorn",
+            metadata={
+                "code": result.get("code"),
+                "bullhorn_status": result.get("config", {}).get("remote_status"),
+                "bullhorn_job_submission_id": app.bullhorn_job_submission_id,
+                "source": "reject_application",
+            },
+        )
+    else:
+        append_application_event(
+            db,
+            app=app,
+            event_type="bullhorn_writeback_failed",
+            actor_type=actor.type,
+            actor_id=actor.event_actor_id,
+            reason=result.get("message") or "Bullhorn reject failed",
+            metadata={
+                "code": result.get("code"),
+                "bullhorn_job_submission_id": app.bullhorn_job_submission_id,
+                "source": "reject_application",
+            },
+        )
+        logger.warning(
+            "bullhorn reject failed application_id=%s code=%s message=%s",
+            app.id,
+            result.get("code"),
+            result.get("message"),
+        )
+        # NOT handled: a failed write-back must not be treated as success. Return
+        # False so the caller falls through to the Workable path (a no-op for a
+        # Bullhorn-only org — the local reject already stood in ``run()``),
+        # mirroring the Workable write-back-failure behaviour.
+        return False
+    return True
+
+
 def notify_rejection(
     db: Session,
     *,
@@ -241,9 +323,15 @@ def notify_rejection(
     adds seconds the recruiter shouldn't wait on.
     """
     org = db.query(Organization).filter(Organization.id == app.organization_id).first()
-    # Disqualify in the ATS so Workable's disqualify-stage workflow notifies
-    # the candidate. The local candidate row's email is irrelevant — Taali
-    # sends no candidate email regardless; we only move the Workable status.
+    # Bullhorn-connected org → reject via the Bullhorn provider (writes the org's
+    # rejected-category JobSubmission status). Same gating contract: under strict
+    # mode a failure raises WorkableWritebackError so the decision-batch aborts +
+    # re-queues, identical to the Workable path. A no-op for non-Bullhorn orgs.
+    if _try_bullhorn_reject(db, app=app, org=org, actor=actor, reason=reason):
+        return
+    # Otherwise disqualify in Workable so its disqualify-stage workflow notifies
+    # the candidate. The local candidate row's email is irrelevant — Taali sends
+    # no candidate email regardless; we only move the ATS status.
     _try_workable_disqualify(
         db,
         app=app,

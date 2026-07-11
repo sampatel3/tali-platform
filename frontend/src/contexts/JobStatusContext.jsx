@@ -70,6 +70,10 @@ const JobStatusContext = createContext(null);
 
 export function JobStatusProvider({ children }) {
   const rolesApi = apiClient.roles ?? null;
+  // Bullhorn sync status/cancel already live on the organizations client
+  // (mirrors the Workable sync surface); reuse them here rather than
+  // duplicating the endpoints on rolesApi.
+  const orgsApi = apiClient.organizations ?? null;
   // Re-key auth-gated effects (discovery polling) on login state so they
   // re-run after a load-then-login — the provider is mounted at app root
   // and never remounts on authentication.
@@ -92,6 +96,11 @@ export function JobStatusProvider({ children }) {
   // Org-wide Workable sync — same single-active assumption.
   const [workableSyncJob, setWorkableSyncJob] = useState(null);
   const [workableSyncTracked, setWorkableSyncTracked] = useState(false);
+  // Org-wide Bullhorn sync — same single-active assumption. Bullhorn has no
+  // per-run table, so (unlike Workable) there's no run history — only the one
+  // live run tracked off the org's live progress marker.
+  const [bullhornSyncJob, setBullhornSyncJob] = useState(null);
+  const [bullhornSyncTracked, setBullhornSyncTracked] = useState(false);
 
   // tracked sets: role IDs we're actively polling for each job kind
   const trackedRef = useRef(new Set(loadPersistedRoleIds()));
@@ -430,6 +439,29 @@ export function JobStatusProvider({ children }) {
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [rolesApi, workableSyncTracked]);
 
+  // ── Org-wide Bullhorn sync polling ────────────────────────────────────────
+  useEffect(() => {
+    if (!bullhornSyncTracked) return undefined;
+    let cancelled = false;
+    let timer = null;
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const r = await orgsApi?.getBullhornSyncStatus();
+        if (cancelled) return;
+        setBullhornSyncJob(r?.data ?? null);
+        const status = String(r?.data?.last_sync_status ?? r?.data?.status ?? '').toLowerCase();
+        const inProgress = !!r?.data?.sync_in_progress;
+        if (!inProgress && status !== 'running' && status !== 'cancelling') {
+          setBullhornSyncTracked(false);
+        }
+      } catch {}
+      if (!cancelled) timer = setTimeout(poll, ROLE_POLL_MS);
+    };
+    poll();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [orgsApi, bullhornSyncTracked]);
+
   // ── Discovery polling — finds batches started from other pages/tabs ───────
   useEffect(() => {
     if (!rolesApi?.activeBatchScores) return undefined;
@@ -497,6 +529,26 @@ export function JobStatusProvider({ children }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── One-shot discovery on mount: pick up an in-flight Bullhorn sync ───────
+  useEffect(() => {
+    if (!orgsApi?.getBullhornSyncStatus) return;
+    if (typeof window !== 'undefined' && !localStorage.getItem('taali_access_token')) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await orgsApi.getBullhornSyncStatus();
+        if (cancelled) return;
+        if (r?.data?.sync_in_progress) {
+          setBullhornSyncJob(r.data);
+          setBullhornSyncTracked(true);
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+    // Run once on mount — orgsApi is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── One-shot discovery on mount: pick up an in-flight graph sync ──────────
   useEffect(() => {
     if (!rolesApi?.syncGraphStatus) return;
@@ -527,6 +579,7 @@ export function JobStatusProvider({ children }) {
   const trackRoleProcess = useCallback((roleId) => addTrackedProcess(roleId), [addTrackedProcess]);
   const trackGraphSync = useCallback(() => setGraphSyncTracked(true), []);
   const trackWorkableSync = useCallback(() => setWorkableSyncTracked(true), []);
+  const trackBullhornSync = useCallback(() => setBullhornSyncTracked(true), []);
 
   // Dismiss a completed/cancelled job and stop tracking it.
   const dismissJob = useCallback(
@@ -600,6 +653,11 @@ export function JobStatusProvider({ children }) {
     setWorkableSyncTracked(false);
   }, []);
 
+  const dismissBullhornSyncJob = useCallback(() => {
+    setBullhornSyncJob(null);
+    setBullhornSyncTracked(false);
+  }, []);
+
   const cancelGraphSync = useCallback(async () => {
     try {
       await rolesApi?.syncGraphCancel();
@@ -616,6 +674,13 @@ export function JobStatusProvider({ children }) {
     },
     [rolesApi],
   );
+
+  const cancelBullhornSync = useCallback(async () => {
+    try {
+      await orgsApi?.cancelBullhornSync();
+      setBullhornSyncJob((prev) => (prev ? { ...prev, status: 'cancelling' } : prev));
+    } catch {}
+  }, [orgsApi]);
 
   // Cancel a running batch. Updates local state optimistically; next poll
   // confirms the server-side status.
@@ -655,22 +720,26 @@ export function JobStatusProvider({ children }) {
     processJobs,
     graphSyncJob,
     workableSyncJob,
+    bullhornSyncJob,
     trackRole,
     trackRoleFetchCvs,
     trackRolePreScreen,
     trackRoleProcess,
     trackGraphSync,
     trackWorkableSync,
+    trackBullhornSync,
     dismissJob,
     dismissFetchJob,
     dismissPreScreenJob,
     dismissProcessJob,
     dismissGraphSyncJob,
     dismissWorkableSyncJob,
+    dismissBullhornSyncJob,
     cancelBatch,
     cancelFetchCvs,
     cancelGraphSync,
     cancelWorkableSync,
+    cancelBullhornSync,
     cancelProcessJob,
     trackedRoleIds: trackedRef.current,
     trackedFetchRoleIds: trackedFetchRef.current,

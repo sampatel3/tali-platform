@@ -79,6 +79,7 @@ from .usage_grant import (
     UsageGrant,
 )
 from .workable_sync_run import WorkableSyncRun
+from .ats_stage_map import AtsStageMap
 from .graph_sync_state import GraphSyncState
 from .background_job_run import (
     BackgroundJobRun,
@@ -178,6 +179,45 @@ from .workable_webhook_outbox import (
     WORKABLE_OUTBOX_STATUSES,
     WorkableWebhookOutbox,
 )
+from .email_suppression import (
+    SUPPRESSION_REASONS,
+    SUPPRESSION_REASON_RANK,
+    EmailSuppression,
+)
+from .prospect import (
+    PROSPECT_STATUSES,
+    Prospect,
+)
+from .offer import (
+    OFFER_STATUS_ACCEPTED,
+    OFFER_STATUS_APPROVED,
+    OFFER_STATUS_DECLINED,
+    OFFER_STATUS_DEPRECATED,
+    OFFER_STATUS_DRAFT,
+    OFFER_STATUS_EXPIRED,
+    OFFER_STATUS_PENDING_APPROVAL,
+    OFFER_STATUS_SENT,
+    OFFER_STATUSES,
+    OFFER_TEMPLATE_COMP_FIELDS,
+    OFFER_TERMINAL_STATUSES,
+    Offer,
+    OfferApproval,
+    OfferTemplate,
+)
+from .job_hiring_team import (
+    TEAM_ROLE_COORDINATOR,
+    TEAM_ROLE_HIRING_MANAGER,
+    TEAM_ROLE_INTERVIEWER,
+    TEAM_ROLE_RECRUITER,
+    TEAM_ROLES,
+    JobHiringTeam,
+)
+from .outreach_campaign import (
+    CAMPAIGN_STATUSES,
+    MESSAGE_STATUSES,
+    OutreachCampaign,
+    OutreachMessage,
+)
 
 __all__ = [
     "User",
@@ -251,6 +291,7 @@ __all__ = [
     "GRANT_MANUAL",
     "GRANT_TOPUP",
     "WorkableSyncRun",
+    "AtsStageMap",
     "GraphSyncState",
     "BackgroundJobRun",
     "JOB_KIND_SCORING_BATCH",
@@ -320,4 +361,33 @@ __all__ = [
     "WorkableWebhookOutbox",
     "WORKABLE_OUTBOX_KINDS",
     "WORKABLE_OUTBOX_STATUSES",
+    "EmailSuppression",
+    "SUPPRESSION_REASONS",
+    "SUPPRESSION_REASON_RANK",
+    "Prospect",
+    "PROSPECT_STATUSES",
+    "OutreachCampaign",
+    "OutreachMessage",
+    "CAMPAIGN_STATUSES",
+    "MESSAGE_STATUSES",
+    "Offer",
+    "OfferApproval",
+    "OfferTemplate",
+    "OFFER_STATUS_ACCEPTED",
+    "OFFER_STATUS_APPROVED",
+    "OFFER_STATUS_DECLINED",
+    "OFFER_STATUS_DEPRECATED",
+    "OFFER_STATUS_DRAFT",
+    "OFFER_STATUS_EXPIRED",
+    "OFFER_STATUS_PENDING_APPROVAL",
+    "OFFER_STATUS_SENT",
+    "OFFER_STATUSES",
+    "OFFER_TEMPLATE_COMP_FIELDS",
+    "OFFER_TERMINAL_STATUSES",
+    "JobHiringTeam",
+    "TEAM_ROLE_COORDINATOR",
+    "TEAM_ROLE_HIRING_MANAGER",
+    "TEAM_ROLE_INTERVIEWER",
+    "TEAM_ROLE_RECRUITER",
+    "TEAM_ROLES",
 ]

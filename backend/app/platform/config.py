@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     # Per-account login lockout: N consecutive failures locks the account for M minutes
     AUTH_LOCKOUT_THRESHOLD: int = 5
     AUTH_LOCKOUT_MINUTES: int = 15
+    # Per-key (or per-IP) rate limit for the public /mcp server. Since #890 the
+    # /mcp mount accepts tali_* API keys, so it is internet-facing and needs a
+    # limiter (route-level deps are bypassed by the ASGI mount). Bucketed on the
+    # API-key prefix when a tali_* token is presented, else on client IP. Same
+    # order of magnitude as the other RateLimitMiddleware buckets. Set to 0 to
+    # disable the /mcp limit.
+    MCP_RATE_LIMIT_PER_MINUTE: int = 60
 
     # E2B
     E2B_API_KEY: str = ""
@@ -558,6 +565,12 @@ class Settings(BaseSettings):
     MVP_DISABLE_WORKABLE: bool = True
     MVP_DISABLE_CALIBRATION: bool = False
     MVP_DISABLE_PROCTORING: bool = True
+
+    # Bullhorn ATS integration (staging-only; see docs/BULLHORN_BUILD_PLAN.md).
+    # OFF by default — every /bullhorn route + sync/event task is gated on this.
+    BULLHORN_ENABLED: bool = False
+    # Per-org event-subscription poll cadence for the incremental sync.
+    BULLHORN_EVENT_POLL_SECONDS: int = 180
 
     # TAALI score blending. assessment vs. role-fit (0.0..1.0 each); role-fit
     # is a 50/50 mix of CV fit and requirements fit. Weights are normalized in

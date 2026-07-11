@@ -17,6 +17,7 @@ import { Dialog, Button } from '../../shared/ui/TaaliPrimitives';
 import { SkeletonTable } from '../../shared/ui/Skeleton';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
+import { HiringTeamPanel } from './HiringTeamPanel';
 import { useRoleProgressPolling } from './useRoleProgressPolling';
 import { parseJobSpec, FormattedJobSpecSection } from './jobSpecFormatting';
 import { RequisitionSpecSections, JobStatusControl, ClientControl } from './RequisitionSpecSections';
@@ -39,6 +40,7 @@ import { CandidateTriageDrawer, candidateReportHref } from '../candidates/Candid
 import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSpecEditPanel } from './RoleSpecEditPanel';
+import { SourceCandidatesPanel } from './SourceCandidatesPanel';
 import { getErrorMessage, trimOrUndefined, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
 import {
   formatCount,
@@ -1709,6 +1711,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 <RequisitionSpecSections requisition={role.requisition} />
               ) : null}
 
+              {/* Source candidates — copy-paste LinkedIn X-ray/boolean + a
+                  paste-a-profile outreach draft. No LinkedIn API/automation. */}
+              {role?.id ? <SourceCandidatesPanel roleId={role.id} /> : null}
+
               <button
                 type="button"
                 className={`desc-toggle ${detailsExpanded ? 'open' : ''}`}
@@ -1768,6 +1774,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               ))}
             </div>
           </div>
+        ) : activeView === 'hiring-team' ? (
+          <HiringTeamPanel roleId={role?.id} />
         ) : (
           <>
             {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — KPI row
