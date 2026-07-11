@@ -134,14 +134,16 @@ let refreshInFlight = null;
 const maybeRefreshToken = () => {
   if (refreshInFlight) return;
   if (!isUserActive(lastUserActivityAt)) return;
-  if (!localStorage.getItem(TOKEN_KEY)) return;
+  const tokenAtStart = localStorage.getItem(TOKEN_KEY);
+  if (!tokenAtStart) return;
   if (!shouldRefreshToken(localStorage.getItem(TOKEN_ISSUED_AT_KEY))) return;
   refreshInFlight = api
     .post('/auth/jwt/refresh')
     .then(({ data }) => {
-      // The user may have logged out while this was in flight — storing the
-      // fresh token then would resurrect the cleared session.
-      if (data?.access_token && localStorage.getItem(TOKEN_KEY)) {
+      // The session may have changed while this was in flight (logout, or
+      // logout + login as someone else) — only store the result if the token
+      // we refreshed is still the active one.
+      if (data?.access_token && localStorage.getItem(TOKEN_KEY) === tokenAtStart) {
         setAccessToken(data.access_token);
       }
     })
@@ -238,7 +240,13 @@ api.interceptors.response.use(
   (error) => {
     const status = Number(error.response?.status || 0);
     const url = String(error.config?.url || '');
-    if (status === 401 && !isAuthEndpoint(url)) {
+    // A 401 from a request signed with a token that is no longer the active
+    // one (stale in-flight call racing a logout + re-login) must not clear
+    // the CURRENT session.
+    const currentToken = localStorage.getItem(TOKEN_KEY);
+    const sentAuth = String(error.config?.headers?.Authorization || '');
+    const isStaleSessionRequest = Boolean(currentToken) && sentAuth !== `Bearer ${currentToken}`;
+    if (status === 401 && !isAuthEndpoint(url) && !isStaleSessionRequest) {
       clearAccessToken();
       localStorage.removeItem('taali_user');
       window.dispatchEvent(new Event('auth:logout'));
