@@ -34,6 +34,7 @@ from fastapi_users import schemas
 class UserRead(schemas.BaseUser[int]):
     full_name: Optional[str] = None
     organization_id: Optional[int] = None
+    role: str = "member"
     created_at: Optional[datetime] = None  # serializes to ISO string in JSON
 
     model_config = {"from_attributes": True}
@@ -131,6 +132,8 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
             org = await self._create_signup_org(session, organization_name.strip())
             org_id = org.id
         user_dict["organization_id"] = org_id
+        # Whoever creates the org at signup owns it; everyone else joins as member.
+        user_dict["role"] = "owner" if org_id else "member"
         # Remove any field not on User model (e.g. organization_name) before create
         user_dict.pop("organization_name", None)
 

@@ -19,6 +19,11 @@ class User(SQLAlchemyBaseUserTable[int], Base):
     organization_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("organizations.id"), nullable=True, index=True
     )
+    # Org-level role: 'owner' | 'member'. Owners manage members and access
+    # settings; the first registered user of an org is its owner.
+    role: Mapped[str] = mapped_column(
+        String, nullable=False, default="member", server_default="member"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
