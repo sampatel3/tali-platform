@@ -12,7 +12,7 @@
 // decisions-per-day line + area draw in (pathLength / fade). Reduced motion →
 // final state via <MotionConfig reducedMotion="user"> + the reduced flag.
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { LazyMotion, domMax, MotionConfig, m } from 'motion/react';
 import { Bot, Brain, FlaskConical, History, TrendingUp } from 'lucide-react';
 
@@ -24,6 +24,7 @@ import {
   Reveal,
   PreviewSwitcher,
   useReducedMotionSync,
+  useRevealOnView,
 } from '../../shared/motion/previewMotion';
 import './AnalyticsMotionPreview.css';
 
@@ -157,6 +158,10 @@ const DecisionsChart = ({ data, reduced }) => {
 export const AnalyticsMotionPreview = () => {
   const reduced = useReducedMotionSync();
   const [tab, setTab] = useState('outcomes');
+  // The pulse band is above the fold, so it must reveal on mount — driven by
+  // the same single reveal trigger as every other section.
+  const pulseRef = useRef(null);
+  const pulseShown = useRevealOnView(pulseRef);
 
   const { summary, breakdown, trend, rolesBreakdown } = ANALYTICS_SHOWCASE;
   const k = summary.kpis;
@@ -170,7 +175,7 @@ export const AnalyticsMotionPreview = () => {
     <LazyMotion features={domMax} strict>
       <MotionConfig reducedMotion="user">
         <div data-brand="taali" className="amp-root">
-          <Reveal>
+          <Reveal reduced={reduced}>
             <AgentHeader
               breadcrumbs={[{ label: 'Analytics · last 30 days' }]}
               kicker="ANALYTICS · LAST 30 DAYS · ALL ROLES"
@@ -180,11 +185,14 @@ export const AnalyticsMotionPreview = () => {
           </Reveal>
 
           <div className="an-page">
-            {/* 6-stat pulse band — reproduced markup, values tick up. */}
+            {/* 6-stat pulse band — reproduced markup, values tick up. Gated on
+                the shared reveal trigger so it fills on mount (above the fold),
+                never only on scroll. */}
             <m.div
+              ref={pulseRef}
               className="an-pulse"
-              initial="hidden"
-              animate="show"
+              initial={reduced ? 'show' : 'hidden'}
+              animate={(reduced || pulseShown) ? 'show' : 'hidden'}
               variants={{ hidden: {}, show: { transition: { delayChildren: 0.1, staggerChildren: 0.06 } } }}
             >
               {[
@@ -232,7 +240,7 @@ export const AnalyticsMotionPreview = () => {
             {tab === 'outcomes' ? (
               <>
                 {/* Bespoke Motion SVG chart card — draws in. */}
-                <Reveal delay={0.1} className="an-card amp-chart-card">
+                <Reveal delay={0.1} className="an-card amp-chart-card" reduced={reduced}>
                   <div className="ch">
                     <div>
                       <div className="ct2">Agent decisions per day</div>
@@ -244,7 +252,7 @@ export const AnalyticsMotionPreview = () => {
 
                 {/* The REAL OutcomesTab on the authored fixture. Scoped CSS grows
                     its funnel + override bars on enter. */}
-                <Reveal delay={0.16} className="amp-outcomes">
+                <Reveal delay={0.16} className="amp-outcomes" reduced={reduced}>
                   <OutcomesTab
                     summary={summary}
                     breakdown={breakdown}

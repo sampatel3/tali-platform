@@ -109,7 +109,7 @@ export const ReportMotionPreview = () => {
                 {/* (1) The signature 5-Ds scorecard — the REAL AssessmentScorecard.
                     The .rmp-scorecard wrapper scopes the bar-fill + row-stagger
                     keyframes so the component itself stays untouched. */}
-                <Reveal delay={0.08} className="rmp-scorecard">
+                <Reveal delay={0.08} className="rmp-scorecard" reduced={reduced}>
                   <AssessmentScorecard assessment={completedAssessment} />
                 </Reveal>
 

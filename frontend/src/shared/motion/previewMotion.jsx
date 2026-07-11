@@ -5,8 +5,8 @@
 // single floating preview-switcher chip. Nothing here is used by a production
 // page — it exists only for the previews.
 
-import React, { useEffect, useState } from 'react';
-import { m, stagger } from 'motion/react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { m, stagger, useInView } from 'motion/react';
 
 import './previewMotion.css';
 
@@ -60,39 +60,56 @@ export const NumberTicker = ({ to, reduced, format = (n) => Math.round(n).toLoca
   return <>{format(display)}</>;
 };
 
-// One-shot fade+rise reveal. Uses initial→animate (NOT whileInView) for
-// above-the-fold sections so nothing is stuck hidden on first paint. Under
-// <MotionConfig reducedMotion="user"> the transform drops to the final state.
-export const Reveal = ({ children, className, style, delay = 0, y = 16 }) => (
-  <m.div
-    className={className}
-    style={style}
-    initial={{ opacity: 0, y }}
-    animate={{ opacity: 1, y: 0 }}
-    transition={{ duration: 0.5, ease: EASE_OUT, delay }}
-  >
-    {children}
-  </m.div>
-);
+// THE single reveal trigger for every preview. Returns true when the element
+// is scrolled into view (useInView) OR is already in the viewport on mount.
+//
+// The mount check is the whole point of this hook: `useInView` / `whileInView`
+// can miss the very first IntersectionObserver callback for content already in
+// view under LazyMotion, which left the above-the-fold sections of a preview
+// blank until the first scroll. We read the box in a LAYOUT effect (before
+// paint) so an above-the-fold section flips to "revealed" with no flash of
+// hidden. Every reveal in these previews is driven off this one hook, so no
+// mechanism can ever load hidden. A zero-box (jsdom / SSR) counts as in view so
+// tests reveal deterministically.
+export const useRevealOnView = (ref, { amount = 0.15 } = {}) => {
+  const inView = useInView(ref, { once: true, amount });
+  const [mountedInView, setMountedInView] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || typeof window === 'undefined' || typeof el.getBoundingClientRect !== 'function') return;
+    const r = el.getBoundingClientRect();
+    const zeroBox = r.width === 0 && r.height === 0 && r.top === 0 && r.bottom === 0;
+    if (zeroBox || (r.top < (window.innerHeight || 0) && r.bottom > 0)) setMountedInView(true);
+  }, [ref]);
+  return inView || mountedInView;
+};
 
-// On-scroll reveal for below-the-fold sections (report evidence cards). Under
-// reduced motion it renders a plain wrapper — final state, always visible, no
-// dependence on the IntersectionObserver ever firing.
-export const ScrollReveal = ({ children, reduced, className, style, y = 24, delay = 0 }) => {
-  if (reduced) return <div className={className} style={style}>{children}</div>;
+// One-shot fade+rise reveal driven by useRevealOnView: it reveals immediately
+// when in view on mount (no flash — the mount check runs before paint) and on
+// scroll otherwise, so it is safe both above and below the fold. Under reduced
+// motion it renders a plain wrapper — final state, always visible.
+export const Reveal = ({ children, className, style, delay = 0, y = 16, amount = 0.15, reduced = false }) => {
+  const ref = useRef(null);
+  const shown = useRevealOnView(ref, { amount });
+  if (reduced) return <div ref={ref} className={className} style={style}>{children}</div>;
   return (
     <m.div
+      ref={ref}
       className={className}
       style={style}
       initial={{ opacity: 0, y }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true, amount: 0.15 }}
+      animate={shown ? { opacity: 1, y: 0 } : undefined}
       transition={{ duration: 0.5, ease: EASE_OUT, delay }}
     >
       {children}
     </m.div>
   );
 };
+
+// Below-the-fold reveal — the same one hook, just a longer rise. Kept as a
+// distinct export so call sites read intent, but it is Reveal underneath so it
+// too reveals on mount-if-in-view (never only on scroll).
+export const ScrollReveal = ({ y = 24, ...props }) => <Reveal y={y} {...props} />;
 
 // Variants for a staggered grid of children (KPI tiles, role cards). Parent
 // gets `staggerContainer`, each child `staggerItem`.
