@@ -2270,6 +2270,17 @@ class WorkableSyncService:
 
         # Extract application-level Workable fields
         app.workable_sourced = candidate_payload.get("sourced", None)
+        # Applied date: the payload's created_at is per JOB APPLICATION (the
+        # Workable candidate id is per-application), so it belongs here — the
+        # candidate-level copy is last-sync-wins across a person's applications.
+        applied_raw = candidate_payload.get("created_at")
+        if isinstance(applied_raw, str) and applied_raw.strip():
+            try:
+                app.workable_created_at = datetime.fromisoformat(
+                    applied_raw.replace("Z", "+00:00")
+                )
+            except (ValueError, TypeError):
+                pass
         profile_url = candidate_payload.get("profile_url") or candidate_payload.get("url")
         if isinstance(profile_url, str) and profile_url.strip():
             app.workable_profile_url = sanitize_text_for_storage(profile_url.strip())

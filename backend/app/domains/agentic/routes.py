@@ -122,6 +122,10 @@ class AgentDecisionPayload(BaseModel):
     candidate_name: Optional[str] = None
     candidate_email: Optional[str] = None
     role_name: Optional[str] = None
+    # When the candidate applied to this role — application-level Workable
+    # created_at, falling back to the candidate-level copy (legacy rows), then
+    # to the local application created_at. Freshness signal on decision cards.
+    applied_at: Optional[datetime] = None
     # The candidate's headline Tali score, 0–100. Resolved by preferring the
     # score the agent stamped on this decision's evidence (frozen at decision
     # time, present even when the application's score cache is still "pending"),
@@ -395,6 +399,11 @@ def _decision_to_payload(
         candidate_name=getattr(candidate, "full_name", None) if candidate else None,
         candidate_email=getattr(candidate, "email", None) if candidate else None,
         role_name=getattr(role, "name", None) if role else None,
+        applied_at=(
+            (getattr(application, "workable_created_at", None) if application else None)
+            or (getattr(candidate, "workable_created_at", None) if candidate else None)
+            or (getattr(application, "created_at", None) if application else None)
+        ),
         taali_score=taali_score,
         score_summary=(
             {"score_provenance": score_provenance, "integrity": integrity}

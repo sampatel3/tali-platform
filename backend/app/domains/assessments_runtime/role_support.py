@@ -1147,6 +1147,11 @@ def application_to_response(
         candidate_experience=(candidate.experience_entries if candidate else None),
         candidate_summary=(candidate.summary if candidate else None),
         candidate_workable_created_at=(candidate.workable_created_at if candidate else None),
+        applied_at=(
+            app.workable_created_at
+            or (candidate.workable_created_at if candidate else None)
+            or app.created_at
+        ),
         workable_sourced=app.workable_sourced,
         workable_profile_url=app.workable_profile_url,
         workable_enriched=(candidate.workable_enriched if candidate else None),

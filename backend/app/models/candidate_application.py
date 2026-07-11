@@ -82,6 +82,10 @@ class CandidateApplication(Base):
     workable_answers = Column(JSON, nullable=True)
     workable_comments = Column(JSON, nullable=True)
     workable_activities = Column(JSON, nullable=True)
+    # When THIS application was created in Workable (= when the candidate
+    # applied to this job). Candidate.workable_created_at is the shared
+    # candidate-level copy, kept as fallback for rows synced before this column.
+    workable_created_at = Column(DateTime(timezone=True), nullable=True)
     rank_score = Column(Float, nullable=True)
     last_synced_at = Column(DateTime(timezone=True), nullable=True)
 
