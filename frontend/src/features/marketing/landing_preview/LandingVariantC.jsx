@@ -391,12 +391,24 @@ const PipelineSection = ({ reveal, reduced }) => {
     }
     const el = wrapRef.current;
     if (!el) return undefined;
+    let observerCalled = false;
     const obs = new IntersectionObserver(
-      ([entry]) => setInView(entry.isIntersecting),
+      ([entry]) => {
+        observerCalled = true;
+        setInView(entry.isIntersecting);
+      },
       { threshold: 0.15 },
     );
     obs.observe(el);
-    return () => obs.disconnect();
+    // A healthy observer reports once immediately; silence means it's
+    // broken in this browser — run the scene rather than show a dead panel.
+    const fallback = window.setTimeout(() => {
+      if (!observerCalled) setInView(true);
+    }, 3000);
+    return () => {
+      window.clearTimeout(fallback);
+      obs.disconnect();
+    };
   }, []);
 
   return (
@@ -441,8 +453,10 @@ const StandardSection = ({ reveal, reduced }) => {
     }
     const el = chatRef.current;
     if (!el) return undefined;
+    let observerCalled = false;
     const obs = new IntersectionObserver(
       ([entry]) => {
+        observerCalled = true;
         if (entry.isIntersecting && !startedRef.current) {
           startedRef.current = true;
           let i = 0;
@@ -458,7 +472,20 @@ const StandardSection = ({ reveal, reduced }) => {
       { threshold: 0.4 },
     );
     obs.observe(el);
-    return () => obs.disconnect();
+    // Same broken-observer fallback as the pipeline scene: a healthy
+    // observer reports once immediately; silence means it's broken —
+    // show the finished vignette rather than an empty panel.
+    const fallback = window.setTimeout(() => {
+      if (!observerCalled && !startedRef.current) {
+        startedRef.current = true;
+        setTyped(CHAT_TURNS.length);
+        setCaught(true);
+      }
+    }, 3000);
+    return () => {
+      window.clearTimeout(fallback);
+      obs.disconnect();
+    };
   }, [reduced]);
 
   return (
@@ -574,6 +601,18 @@ export const LandingVariantC = ({ onNavigate }) => {
     }, 200);
   }, [reduced]);
 
+  // The app body is light; behind this dark page any overscroll or paint
+  // gap flashes white. Darken the document while mounted, restore on leave.
+  useEffect(() => {
+    // body only — painting a background on <html> breaks composited
+    // scroll rendering here (whole page rasters black once scrolled).
+    const prevBody = document.body.style.backgroundColor;
+    document.body.style.backgroundColor = '#0a0714';
+    return () => {
+      document.body.style.backgroundColor = prevBody;
+    };
+  }, []);
+
   // Auto-flip ON ~1.4s after mount, unless the visitor already toggled.
   useEffect(() => {
     if (reduced || userToggledRef.current) return undefined;
@@ -616,7 +655,20 @@ export const LandingVariantC = ({ onNavigate }) => {
       { threshold: 0.25 },
     );
     revealRefs.current.forEach((node) => obs.observe(node));
-    return () => obs.disconnect();
+    // Belt and braces: if the observer never fires (blocked, broken, or
+    // never intersecting because of an ancestor quirk), content must still
+    // appear — an invisible marketing page is the one unacceptable failure.
+    const fallback = window.setTimeout(() => {
+      revealRefs.current.forEach((node) => {
+        if (node.getAttribute('data-shown') !== 'true') {
+          node.setAttribute('data-shown', 'true');
+        }
+      });
+    }, 2600);
+    return () => {
+      window.clearTimeout(fallback);
+      obs.disconnect();
+    };
   }, [reduced]);
 
   const scrollToVision = useCallback(() => {

@@ -87,13 +87,17 @@ export const VARIANT_C_CSS = `
   line-height: 0.98;
   letter-spacing: -0.045em;
   margin: 0 0 20px;
-  min-height: 1.1em;
+  /* Reserve space for the taller (wrapped) headline so the OFF↔ON swap
+     never shifts layout — a shift here scroll-jumps the whole hero. */
+  min-height: 2.05em;
+  display: grid;
+  align-items: center;
 }
 .lvc-h1-off, .lvc-h1-on {
+  grid-area: 1 / 1;
   display: block;
   transition: opacity 0.6s cubic-bezier(0.16,1,0.3,1);
 }
-.lvc-h1-on { position: absolute; inset: 0; }
 .lvc.is-on .lvc-h1-off { opacity: 0; }
 .lvc:not(.is-on) .lvc-h1-on { opacity: 0; pointer-events: none; }
 
