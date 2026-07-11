@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Literal, Optional
-from pydantic import AliasChoices, BaseModel, EmailStr, Field
+from pydantic import AliasChoices, BaseModel, EmailStr, Field, computed_field
 
 
 class UserCreate(BaseModel):
@@ -21,11 +21,28 @@ class UserResponse(BaseModel):
         default=False,
         validation_alias=AliasChoices("is_email_verified", "is_verified"),
     )
+    # Mirrors the FastAPI-Users ``is_verified`` column; drives ``status``.
+    is_verified: bool = False
     organization_id: Optional[int] = None
     role: str = "member"
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @computed_field
+    @property
+    def status(self) -> str:
+        """Invite lifecycle: an unverified user has a pending invite."""
+        return "active" if self.is_verified else "invited"
+
+
+class TeamInviteResponse(UserResponse):
+    """Invite/resend response: the user plus delivery outcome.
+
+    ``email_sent`` defaults so the model can be built from an ORM user via
+    ``model_validate`` and the flag set afterward."""
+
+    email_sent: bool = False
 
 
 class ResendVerificationRequest(BaseModel):
@@ -53,3 +70,14 @@ class TeamInviteRequest(BaseModel):
 
 class TeamRoleUpdateRequest(BaseModel):
     role: Literal["owner", "member"]
+
+
+class AcceptInviteRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=2000)
+    # Password rules (min 8 / max 72 bytes) are enforced in the route to
+    # return the same 422 shape as FastAPI-Users, so no bounds here.
+    password: str
+
+
+class ResendInviteResponse(BaseModel):
+    email_sent: bool

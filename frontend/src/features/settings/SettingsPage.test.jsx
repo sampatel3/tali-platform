@@ -34,6 +34,8 @@ vi.mock('../../shared/api', () => ({
     list: vi.fn(),
     invite: vi.fn(),
     setRole: vi.fn(),
+    resendInvite: vi.fn(),
+    remove: vi.fn(),
   },
 }));
 
@@ -128,7 +130,9 @@ describe('SettingsPage recruiter surface', () => {
     billingApi.usageBreakdown.mockResolvedValue({ data: { by_feature: [] } });
     billingApi.usageEvents.mockResolvedValue({ data: { events: [] } });
     teamApi.list.mockResolvedValue({ data: [] });
-    teamApi.invite.mockResolvedValue({ data: { id: 22, email: 'new@deeplight.ai', full_name: 'New Recruiter' } });
+    teamApi.invite.mockResolvedValue({ data: { id: 22, email: 'new@deeplight.ai', full_name: 'New Recruiter', status: 'invited', email_sent: true } });
+    teamApi.resendInvite.mockResolvedValue({ data: { email_sent: true } });
+    teamApi.remove.mockResolvedValue({ status: 204 });
   });
 
   it('renders the Email & transcripts section without crashing', async () => {
@@ -234,6 +238,134 @@ describe('SettingsPage recruiter surface', () => {
     // Access settings save is owner-only too.
     expect(screen.getByRole('button', { name: 'Save access settings' })).toBeDisabled();
     expect(screen.getByText('Only a workspace owner can change access settings.')).toBeInTheDocument();
+  });
+
+  it('appends the new row and toasts success after inviting a member', async () => {
+    renderSettingsRoute('/settings/members');
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('heading', { name: /Members/i }).length).toBeGreaterThan(0);
+    });
+
+    fireEvent.change(screen.getByPlaceholderText('Alex Weston'), { target: { value: 'New Recruiter' } });
+    fireEvent.change(screen.getByPlaceholderText('alex@company.com'), { target: { value: 'new@deeplight.ai' } });
+    fireEvent.click(screen.getByRole('button', { name: /Invite member/i }));
+
+    await waitFor(() => {
+      expect(teamApi.invite).toHaveBeenCalledWith({ email: 'new@deeplight.ai', full_name: 'New Recruiter' });
+      expect(screen.getByText('New Recruiter')).toBeInTheDocument();
+      expect(showToast).toHaveBeenCalledWith('Invite sent.', 'success');
+    });
+  });
+
+  it('warns when the invite is created but the email could not be sent', async () => {
+    teamApi.invite.mockResolvedValueOnce({
+      data: { id: 23, email: 'nomail@deeplight.ai', full_name: 'No Mail', status: 'invited', email_sent: false },
+    });
+    renderSettingsRoute('/settings/members');
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('heading', { name: /Members/i }).length).toBeGreaterThan(0);
+    });
+
+    fireEvent.change(screen.getByPlaceholderText('Alex Weston'), { target: { value: 'No Mail' } });
+    fireEvent.change(screen.getByPlaceholderText('alex@company.com'), { target: { value: 'nomail@deeplight.ai' } });
+    fireEvent.click(screen.getByRole('button', { name: /Invite member/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('No Mail')).toBeInTheDocument();
+      expect(showToast).toHaveBeenCalledWith('Invite created, but the email could not be sent. Use Resend invite.', 'warning');
+    });
+  });
+
+  it('toasts "Member restored." (no email warning) when re-inviting a removed verified member', async () => {
+    // A previously removed VERIFIED member is restored directly: the invite
+    // response carries status 'active' and email_sent false (no email goes
+    // out — they already have a password).
+    teamApi.invite.mockResolvedValueOnce({
+      data: { id: 24, email: 'back@deeplight.ai', full_name: 'Come Back', status: 'active', email_sent: false },
+    });
+    renderSettingsRoute('/settings/members');
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('heading', { name: /Members/i }).length).toBeGreaterThan(0);
+    });
+
+    fireEvent.change(screen.getByPlaceholderText('Alex Weston'), { target: { value: 'Come Back' } });
+    fireEvent.change(screen.getByPlaceholderText('alex@company.com'), { target: { value: 'back@deeplight.ai' } });
+    fireEvent.click(screen.getByRole('button', { name: /Invite member/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Come Back')).toBeInTheDocument();
+      expect(showToast).toHaveBeenCalledWith('Member restored.', 'success');
+    });
+    expect(showToast).not.toHaveBeenCalledWith(expect.stringContaining('could not be sent'), 'warning');
+  });
+
+  it('resends an invite for a pending member and toasts', async () => {
+    teamApi.list.mockResolvedValue({
+      data: [{ id: 8, email: 'pending@deeplight.ai', full_name: 'Pending Person', status: 'invited' }],
+    });
+    renderSettingsRoute('/settings/members');
+
+    await waitFor(() => {
+      expect(screen.getByText('Pending Person')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resend invite' }));
+
+    await waitFor(() => {
+      expect(teamApi.resendInvite).toHaveBeenCalledWith(8);
+      expect(showToast).toHaveBeenCalledWith('Invite resent.', 'success');
+    });
+  });
+
+  it('revokes a pending invite only after inline confirm', async () => {
+    teamApi.list.mockResolvedValue({
+      data: [{ id: 8, email: 'pending@deeplight.ai', full_name: 'Pending Person', status: 'invited' }],
+    });
+    renderSettingsRoute('/settings/members');
+
+    await waitFor(() => {
+      expect(screen.getByText('Pending Person')).toBeInTheDocument();
+    });
+
+    // First click arms the confirm — no request yet.
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke' }));
+    expect(teamApi.remove).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    await waitFor(() => {
+      expect(teamApi.remove).toHaveBeenCalledWith(8);
+      expect(showToast).toHaveBeenCalledWith('Invite revoked.', 'success');
+      expect(screen.queryByText('Pending Person')).not.toBeInTheDocument();
+    });
+  });
+
+  it('removes an active member (not the current user) after inline confirm', async () => {
+    teamApi.list.mockResolvedValue({
+      data: [
+        { id: 1, email: 'admin@taali.ai', full_name: 'Sam Patel', status: 'active', role: 'Owner' },
+        { id: 9, email: 'iris@deeplight.ai', full_name: 'Iris Park', status: 'active', role: 'Recruiter' },
+      ],
+    });
+    renderSettingsRoute('/settings/members');
+
+    await waitFor(() => {
+      expect(screen.getByText('Iris Park')).toBeInTheDocument();
+    });
+
+    // Only the non-self active row exposes a Remove action.
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(teamApi.remove).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    await waitFor(() => {
+      expect(teamApi.remove).toHaveBeenCalledWith(9);
+      expect(showToast).toHaveBeenCalledWith('Member removed.', 'success');
+      expect(screen.queryByText('Iris Park')).not.toBeInTheDocument();
+    });
   });
 
   it('shows write-back settings from granted scopes and requires an actor member before saving', async () => {

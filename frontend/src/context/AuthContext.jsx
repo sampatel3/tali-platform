@@ -23,16 +23,22 @@ export function AuthProvider({ children }) {
 
   const isAuthenticated = !!user;
 
-  const login = useCallback(async (email, password) => {
-    const { data } = await authApi.login(email, password);
-    localStorage.setItem('taali_access_token', data.access_token);
-
-    // Fetch user profile
+  // Finish signing a user in once we already hold an access token (login
+  // returns one; so does accept-invite). Store the token, then fetch and
+  // cache the profile — the exact tail of `login`, shared so callers never
+  // hand-roll localStorage writes.
+  const completeLogin = useCallback(async (accessToken) => {
+    localStorage.setItem('taali_access_token', accessToken);
     const { data: profile } = await authApi.me();
     localStorage.setItem('taali_user', JSON.stringify(profile));
     setUser(profile);
     return profile;
   }, []);
+
+  const login = useCallback(async (email, password) => {
+    const { data } = await authApi.login(email, password);
+    return completeLogin(data.access_token);
+  }, [completeLogin]);
 
   const register = useCallback(async (userData) => {
     const { data } = await authApi.register(userData);
@@ -89,7 +95,7 @@ export function AuthProvider({ children }) {
   }, [user]);
 
   return (
-    <AuthContext.Provider value={{ user, isAuthenticated, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, isAuthenticated, loading, login, completeLogin, register, logout }}>
       {children}
     </AuthContext.Provider>
   );
