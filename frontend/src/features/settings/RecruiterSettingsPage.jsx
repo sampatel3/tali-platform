@@ -1613,7 +1613,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       </div>
                     </div>
                     {firstSyncErrorText ? (
-                      <div className="settings-hint" style={{ color: 'var(--taali-danger)' }}>
+                      <div className="settings-hint">
                         Last error: {firstSyncErrorText}
                         {lastSyncErrors.length > 1 ? ` (+${lastSyncErrors.length - 1} more)` : ''}
                       </div>
@@ -1681,7 +1681,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     </label>
                     <div className="field" style={{ gridColumn: '1 / -1' }}>
                       <span className="k">Sync schedule</span>
-                      <div className="v" style={{ display: 'grid', gap: 4, fontSize: 13, lineHeight: 1.5 }}>
+                      <div className="v wk-schedule-list">
                         <div><strong>Jobs metadata</strong> — every 15 minutes (new postings + title/description edits)</div>
                         <div><strong>Starred role candidates</strong> — every 5 minutes</div>
                         <div><strong>Agent-mode role candidates</strong> — every 5 minutes</div>
