@@ -3,14 +3,20 @@ import { m, useScroll, useTransform } from 'motion/react';
 
 import { Reveal, Stagger, StaggerItem, Ticker } from './motion';
 import {
-  HeroMock,
-  RunMock,
   ScreenMock,
-  AssessMock,
   DecideMock,
   HandBackMock,
   LogoMarquee,
 } from './VariantEMocks';
+import {
+  HeroAgentStrip,
+  HeroDecisionArtifact,
+  FunnelFeedArtifact,
+  ScorecardArtifact,
+  ScreenPillarVisual,
+  AssessPillarVisual,
+  DecidePillarVisual,
+} from './VariantERealMocks';
 
 // ---------------------------------------------------------------------------
 // Content sections for landing variant E. Each carries the section-header triad
@@ -35,26 +41,9 @@ const SectionHead = ({ eyebrow, children, sub, center = true }) => (
 );
 
 // ── HERO ────────────────────────────────────────────────────────────────
-const AgentSwitch = ({ on, pressing, onToggle }) => (
-  <div className="lve-hero-toggle-row">
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      aria-label={on ? 'Agent on. Turn the agent off.' : 'Agent off. Turn the agent on.'}
-      className={`lve-switch${on ? ' is-on' : ''}${pressing ? ' is-pressing' : ''}`}
-      onClick={onToggle}
-    >
-      <span className="lve-switch-track" aria-hidden="true">
-        <span className="lve-switch-knob" />
-      </span>
-    </button>
-    <span className="lve-switch-caption">
-      agent: <b>{on ? 'on' : 'off'}</b>
-    </span>
-  </div>
-);
-
+// The signature beat: the REAL agent-ON strip (.abar) flips OFF → ON — its
+// animated dark-purple gradient lights up — and the hero product card (the real
+// AgentDecisionCard) populates alongside it. Simple and bold, like variant D.
 export const HeroSection = ({ on, pressing, onToggle, onNavigate }) => {
   const ref = useRef(null);
   const { scrollYProgress } = useScroll({ target: ref, offset: ['start start', 'end start'] });
@@ -84,11 +73,11 @@ export const HeroSection = ({ on, pressing, onToggle, onNavigate }) => {
                 Book a demo
               </button>
             </div>
-            <AgentSwitch on={on} pressing={pressing} onToggle={onToggle} />
+            <HeroAgentStrip on={on} pressing={pressing} onToggle={onToggle} />
           </Reveal>
 
-          <Reveal className="lve-hero-mock-wrap" amount={0.2} delay={0.1} y={26}>
-            <HeroMock on={on} />
+          <Reveal className={`lve-hero-mock-wrap${on ? ' is-on' : ''}`} amount={0.2} delay={0.1} y={26}>
+            <HeroDecisionArtifact />
           </Reveal>
         </div>
       </div>
@@ -119,9 +108,9 @@ export const ProductInAction = () => (
         </SectionHead>
       </Reveal>
       <Reveal amount={0.2} y={26}>
-        <RunMock />
+        <FunnelFeedArtifact />
         <p className="lve-run-caption">
-          A live loop of one candidate moving from applicant to advanced — screen, assess, decide, hand back.
+          The real Home queue — every call the agent made overnight, waiting for your approval. Nothing moves without you.
         </p>
       </Reveal>
     </div>
@@ -129,33 +118,29 @@ export const ProductInAction = () => (
 );
 
 // ── VALUE PILLARS ─────────────────────────────────────────────────────────
+// Each pillar is backed by a real product MICRO-VISUAL built from the live
+// atoms (feed rows, the 5-Ds axes, a decision-card header) — not a stock
+// icon+heading card. Unmistakably Taali.
 const PILLARS = [
   {
+    eyebrow: 'SCREEN',
     h: 'Screen every applicant in hours',
     p: "The agent reads every CV against the role's real requirements and gates weak fits with evidence. You review the shortlist.",
+    Visual: ScreenPillarVisual,
   },
   {
-    h: 'Measure how they actually work with AI',
-    p: 'A 30-minute assessment watches candidates pair with AI on real work — engineering or knowledge work. You read the transcript.',
+    eyebrow: 'ASSESS',
+    h: 'Measure how they work with AI',
+    p: 'A 30-minute assessment scores candidates across the 5 Ds from the actual transcript. You read the same rubric every time.',
+    Visual: AssessPillarVisual,
   },
   {
+    eyebrow: 'DECIDE',
     h: 'Defensible decisions, evidence attached',
     p: 'Every verdict is deterministic and cites the evidence behind it. You approve, override, or teach it back.',
+    Visual: DecidePillarVisual,
   },
 ];
-
-const PillarIcon = ({ i }) => {
-  const paths = [
-    <path key="a" d="M4 6h16M4 12h10M4 18h7" strokeLinecap="round" />,
-    <path key="b" d="M12 3l2.5 5 5.5.8-4 4 1 5.6L12 21l-5-2.9 1-5.6-4-4 5.5-.8z" strokeLinejoin="round" />,
-    <path key="c" d="M5 12l4 4 10-10" strokeLinecap="round" strokeLinejoin="round" />,
-  ];
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-      {paths[i]}
-    </svg>
-  );
-};
 
 export const ValuePillars = () => (
   <section className="lve-section" id="lve-pillars">
@@ -169,13 +154,16 @@ export const ValuePillars = () => (
         </SectionHead>
       </Reveal>
       <Stagger className="lve-pillars-grid">
-        {PILLARS.map((pillar, i) => (
-          <StaggerItem className="lve-pillar" key={pillar.h}>
-            <span className="lve-pillar-icon">
-              <PillarIcon i={i} />
-            </span>
-            <h3 className="lve-pillar-h">{pillar.h}</h3>
-            <p className="lve-pillar-p">{pillar.p}</p>
+        {PILLARS.map(({ eyebrow, h, p, Visual }) => (
+          <StaggerItem className="lve-pillar" key={h}>
+            <div className="lve-pillar-visual">
+              <Visual />
+            </div>
+            <div className="lve-pillar-eyebrow">
+              <span className="lve-eyebrow-dot" /> {eyebrow}
+            </div>
+            <h3 className="lve-pillar-h">{h}</h3>
+            <p className="lve-pillar-p">{p}</p>
           </StaggerItem>
         ))}
       </Stagger>
@@ -196,7 +184,7 @@ const BANDS = [
     eyebrow: 'ASSESS AI FLUENCY',
     h: 'Measure how candidates work with AI — engineering or knowledge work.',
     p: 'A task authored from your role, scored across five dimensions from the actual transcript. You read the same rubric for every candidate.',
-    Mock: AssessMock,
+    Mock: ScorecardArtifact,
     flip: true,
   },
   {

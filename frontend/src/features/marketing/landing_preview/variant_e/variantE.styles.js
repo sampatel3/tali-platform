@@ -194,67 +194,23 @@ export const VARIANT_E_CSS = `
 .lve-h1 em { font-style: normal; color: var(--lve-purple); }
 .lve-hero-sub { max-width: 40ch; margin: 0 0 28px; font-size: clamp(15px, 1.7vw, 18px); line-height: 1.55; color: var(--lve-ink-2); }
 .lve-hero-cta { display: flex; flex-wrap: wrap; gap: 12px; }
-.lve-hero-toggle-row { display: flex; align-items: center; gap: 12px; margin-top: 26px; }
 
-/* Subtle agent switch (grey → purple). Compact — half the poster size. */
-.lve-switch {
-  appearance: none; border: 0; padding: 0; cursor: pointer; background: none;
-  border-radius: 999px; flex-shrink: 0;
-  transition: transform 0.16s cubic-bezier(0.34,1.56,0.64,1);
-}
-.lve-switch:focus-visible { outline: 2px solid var(--lve-purple); outline-offset: 4px; }
-.lve-switch.is-pressing { transform: scale(0.94); }
-.lve-switch-track {
-  position: relative; display: block; width: 66px; height: 34px; border-radius: 999px;
-  background: linear-gradient(180deg, #e9e4f0, #d9d2e2); border: 1px solid var(--lve-line);
-  box-shadow: inset 0 1px 4px rgba(21,18,26,0.14);
-  transition: background 0.5s ease, border-color 0.5s ease, box-shadow 0.5s ease;
-}
-.lve-switch.is-on .lve-switch-track {
-  background: linear-gradient(120deg, var(--lve-purple-2), var(--lve-purple));
-  border-color: rgba(196,165,253,0.7);
-  box-shadow: inset 0 1px 4px rgba(74,45,128,0.3), 0 0 16px rgba(124,77,255,0.3);
-}
-.lve-switch-knob {
-  position: absolute; top: 3px; left: 3px; width: 28px; height: 28px; border-radius: 50%;
-  background: linear-gradient(160deg, #fff, #f0ecf7);
-  box-shadow: 0 3px 8px rgba(21,18,26,0.22);
-  transition: transform 0.32s cubic-bezier(0.34,1.56,0.64,1);
-}
-.lve-switch.is-on .lve-switch-knob { transform: translateX(32px); box-shadow: 0 4px 12px rgba(124,77,255,0.45); }
-.lve-switch-caption {
-  font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px;
-  letter-spacing: 0.12em; text-transform: uppercase; color: var(--lve-mute); transition: color 0.4s ease;
-}
-.lve-switch-caption b { color: var(--lve-mute); font-weight: 600; }
-.lve-switch.is-on ~ .lve-switch-caption b { color: var(--lve-purple); }
+/* FIX 1 — the REAL agent-ON strip (.abar) in the hero. The strip's own look /
+   animation comes from the global 13-page-hero-agentheader.css + the Taali
+   tokens (resolved via data-brand="taali" on the .lve root); we only re-size it
+   to fill the hero column instead of the header's fixed clamp width. */
+.lve-hero-abar { margin-top: 28px; max-width: 520px; }
+.lve-hero-abar .abar { width: 100%; }
 
-/* Hero product mock — compact candidate decision that assembles when ON. */
-.lve-hero-mock-wrap { position: relative; z-index: 1; perspective: 1200px; }
-.lve-hero-mock {
-  position: relative; width: 100%; max-width: 420px; margin: 0 auto;
-  border-radius: 18px; background: var(--lve-bg-2); border: 1px solid var(--lve-line);
-  box-shadow: 0 40px 90px -50px rgba(94,58,168,0.55), 0 2px 8px -4px rgba(21,18,26,0.06);
-  padding: 22px;
+/* Hero product card frame — reveals + lifts a touch the moment the agent flips
+   ON (the frame itself is always mounted; ON is the "populated" beat). */
+.lve-hero-mock-wrap { position: relative; z-index: 1; }
+.lve-hero-mock-wrap .lve-frame {
+  transition: box-shadow 0.55s ease, transform 0.55s ease, border-color 0.55s ease;
 }
-.lve-hm-head { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--lve-mute); }
-.lve-hm-head-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--lve-purple); box-shadow: 0 0 8px rgba(124,77,255,0.6); }
-.lve-hm-line { }
-.lve-hm-name { font-weight: 600; font-size: 17px; color: var(--lve-ink); }
-.lve-hm-role { font-size: 12.5px; color: var(--lve-mute); margin-top: 2px; }
-.lve-hm-bars { margin: 18px 0 6px; display: flex; flex-direction: column; gap: 11px; }
-.lve-hm-bar { display: grid; grid-template-columns: 104px 1fr; gap: 10px; align-items: center; }
-.lve-hm-bar-label { font-size: 11.5px; color: var(--lve-ink-2); }
-.lve-hm-bar-track { height: 6px; border-radius: 999px; background: rgba(21,18,26,0.06); overflow: hidden; }
-.lve-hm-bar-fill { display: block; height: 100%; border-radius: 999px; transform-origin: left; background: linear-gradient(90deg, var(--lve-purple-2), var(--lve-purple)); }
-.lve-hm-scorerow { display: flex; align-items: baseline; gap: 10px; margin-top: 10px; }
-.lve-hm-score { font-weight: 600; font-size: clamp(34px, 5vw, 46px); letter-spacing: -0.03em; color: var(--lve-purple); font-variant-numeric: tabular-nums; }
-.lve-hm-score-cap { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--lve-mute); }
-.lve-hm-stamp {
-  margin-top: 16px; display: inline-flex; align-items: center; gap: 7px;
-  font-size: 12.5px; font-weight: 600; color: #fff;
-  background: linear-gradient(135deg, var(--lve-purple), var(--lve-purple-2));
-  padding: 8px 14px; border-radius: 999px;
+.lve-hero-mock-wrap.is-on .lve-frame {
+  box-shadow: 0 48px 100px -46px rgba(94,58,168,0.6), 0 2px 8px -4px rgba(21,18,26,0.06);
+  border-color: rgba(196,165,253,0.6);
 }
 
 @media (min-width: 940px) {
@@ -334,17 +290,71 @@ export const VARIANT_E_CSS = `
 .lve-mock[data-animated] .lve-anim { opacity: 0; }
 .lve-mock[data-animated] .lve-anim-bar { transform: scaleX(0); }
 
-/* ── VALUE PILLARS ───────────────────────────────────────────────────── */
+/* ── FIX 2 — "live component" frame around embedded real product surfaces. ── */
+.lve-frame {
+  overflow: hidden; border-radius: 16px; background: var(--lve-bg-2);
+  border: 1px solid var(--lve-line);
+  box-shadow: 0 34px 80px -46px rgba(94,58,168,0.5), 0 2px 8px -4px rgba(21,18,26,0.06);
+}
+.lve-frame-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 11px 16px; border-bottom: 1px solid var(--lve-line);
+  font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; color: var(--lve-mute);
+}
+.lve-frame-dot { width: 9px; height: 9px; border-radius: 50%; background: rgba(21,18,26,0.14); }
+.lve-frame-dot:nth-child(1) { background: #e6b8c8; }
+.lve-frame-dot:nth-child(2) { background: #e8cfa0; }
+.lve-frame-dot:nth-child(3) { background: #b9d8bf; }
+.lve-frame-path { margin-left: 6px; }
+.lve-frame-live { margin-left: auto; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; color: var(--lve-purple); background: var(--lve-purple-soft); padding: 2px 9px; border-radius: 999px; }
+.lve-frame-body { padding: clamp(14px, 2.2vw, 22px); }
+/* The embedded real components self-size; keep them from forcing sideways
+   scroll inside the frame on narrow viewports. */
+.lve-frame-body > * { max-width: 100%; }
+
+/* ── VALUE PILLARS — FIX 3: bespoke, backed by real product micro-visuals. ── */
 .lve-pillars-grid { margin-top: 44px; display: grid; grid-template-columns: 1fr; gap: 18px; }
 .lve-pillar {
   border-radius: 16px; background: var(--lve-bg-2); border: 1px solid var(--lve-line);
-  box-shadow: 0 16px 44px -34px rgba(21,18,26,0.35); padding: 24px;
+  box-shadow: 0 16px 44px -34px rgba(21,18,26,0.35); padding: 20px;
+  display: flex; flex-direction: column;
 }
-.lve-pillar-icon { width: 40px; height: 40px; border-radius: 11px; display: inline-flex; align-items: center; justify-content: center; background: var(--lve-purple-soft); color: var(--lve-purple); margin-bottom: 16px; }
-.lve-pillar-icon svg { width: 20px; height: 20px; }
-.lve-pillar-h { font-weight: 600; font-size: 18px; letter-spacing: -0.01em; color: var(--lve-ink); margin: 0 0 8px; }
-.lve-pillar-p { font-size: 14px; line-height: 1.55; color: var(--lve-ink-2); margin: 0; }
+.lve-pillar-visual {
+  border-radius: 12px; border: 1px solid var(--lve-line);
+  background: color-mix(in oklab, var(--lve-bg) 60%, var(--lve-bg-2));
+  padding: 14px; margin-bottom: 18px; min-height: 132px;
+  display: flex; flex-direction: column; justify-content: center;
+}
+.lve-pillar-eyebrow {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--lve-purple);
+  margin-bottom: 10px;
+}
+.lve-pillar-h { font-weight: 600; font-size: 17px; letter-spacing: -0.01em; color: var(--lve-ink); margin: 0 0 8px; }
+.lve-pillar-p { font-size: 13.5px; line-height: 1.55; color: var(--lve-ink-2); margin: 0; }
 @media (min-width: 820px) { .lve-pillars-grid { grid-template-columns: repeat(3, 1fr); } }
+
+/* Pillar micro-visuals — composed from the REAL product atoms (feed rows, the
+   5-Ds axes, a decision-card header). --purple / --font-mono etc. resolve via
+   data-brand="taali" on the .lve root. */
+.lve-pv-screen { gap: 8px; }
+.lve-pv-row { display: flex; align-items: center; gap: 8px; }
+.lve-pv-name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600; color: var(--lve-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.lve-pv-ds { gap: 7px; }
+.lve-pv-ds-row { display: grid; grid-template-columns: 74px 1fr 22px; gap: 8px; align-items: center; }
+.lve-pv-ds-name { font-size: 11px; color: var(--lve-ink-2); }
+.lve-pv-ds-track { height: 6px; border-radius: 999px; background: rgba(21,18,26,0.06); overflow: hidden; }
+.lve-pv-ds-fill { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--purple-2, #4a2d80), var(--purple, #5e3aa8)); }
+.lve-pv-ds-val { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; color: var(--purple, #5e3aa8); text-align: right; }
+
+.lve-pv-decide { flex-direction: row; align-items: center; gap: 14px; }
+.lve-pv-decide-body { min-width: 0; }
+.lve-pv-decide-name { font-weight: 600; font-size: 15px; color: var(--lve-ink); }
+.lve-pv-decide-role { font-size: 11.5px; color: var(--lve-mute); margin: 1px 0 9px; }
+.lve-pv-decide-verdict { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lve-pv-decide-rec { display: inline-flex; align-items: center; gap: 4px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; color: var(--lve-mute); }
 
 /* ── DEEP FEATURE BANDS ──────────────────────────────────────────────── */
 .lve-bands { display: flex; flex-direction: column; gap: clamp(56px, 8vh, 96px); }

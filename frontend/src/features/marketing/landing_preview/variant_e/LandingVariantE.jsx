@@ -100,7 +100,7 @@ export const LandingVariantE = ({ onNavigate }) => {
   return (
     <LazyMotion features={domAnimation} strict>
       <MotionConfig reducedMotion="user">
-        <div className="lve">
+        <div className="lve" data-brand="taali">
           <style>{VARIANT_E_CSS}</style>
 
           <VariantENav onNavigate={onNavigate} />
