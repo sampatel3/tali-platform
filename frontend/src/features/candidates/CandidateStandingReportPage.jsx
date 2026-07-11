@@ -22,6 +22,7 @@ import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeScorecard } from '../../shared/assessment/fluency4d';
 import { ErrorBoundary } from '../../shared/ui/ErrorBoundary';
 import { OfferPanel } from './OfferPanel';
+import { ScorecardPanel } from './ScorecardPanel';
 import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAssessmentToCandidateView } from './assessmentViewModels';
 // ApplicationDecisionPanel intentionally NOT imported — PR3 retired the decision
 // recorder from the report body; the candidate's decision now lives in the
@@ -95,6 +96,9 @@ const REPORT_TABS = [
   // Offer lifecycle (create/approve/send + HRIS & e-sign handoff). Recruiter
   // app only — never shown on a share link.
   { id: 'offer', label: 'Offer', internalOnly: true },
+  // Interviewer scorecards: draft/submit your own card + the panel summary.
+  // Recruiter app only — never shown on a share link.
+  { id: 'scorecards', label: 'Scorecards', internalOnly: true },
 ];
 
 const INTERNAL_TABS = new Set(REPORT_TABS.filter((tab) => tab.internalOnly).map((tab) => tab.id));
@@ -2207,6 +2211,19 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             aria-labelledby="report-tab-offer"
           >
             <OfferPanel applicationId={application.id} />
+          </div>
+        ) : null}
+
+        {!isShareRoute && application?.id ? (
+          <div
+            className={`pane ${activeTab === 'scorecards' ? 'active' : ''}`}
+            data-p="scorecards"
+            data-internal-only=""
+            id="report-pane-scorecards"
+            role="tabpanel"
+            aria-labelledby="report-tab-scorecards"
+          >
+            <ScorecardPanel applicationId={application.id} rolesApi={rolesApi} />
           </div>
         ) : null}
           </main>
