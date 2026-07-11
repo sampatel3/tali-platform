@@ -220,6 +220,11 @@ export const roles = {
   // Background jobs panel: history listing across scoring batch / CV fetch / graph sync.
   // Workable sync history is at /workable/sync/runs.
   backgroundJobsRuns: (limit = 20) => api.get('/background-jobs/runs', { params: { limit } }),
+  // Sourcing assist (copy-paste artefacts — no LinkedIn API/scraping).
+  // Deterministic X-ray + LinkedIn boolean plus a metered refined expansion.
+  sourcingSearches: (roleId) => api.post(`/roles/${roleId}/sourcing-searches`),
+  // Paste-a-profile first-touch outreach draft. tone: warm|direct, channel: linkedin|email.
+  outreachDraft: (roleId, data) => api.post(`/roles/${roleId}/outreach-draft`, data),
   createAssessment: (applicationId, data) => api.post(`/applications/${applicationId}/assessments`, data),
   retakeAssessment: (applicationId, data) => api.post(`/applications/${applicationId}/assessments/retake`, data),
 };

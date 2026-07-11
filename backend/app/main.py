@@ -308,6 +308,7 @@ from .domains.submittal_packs import (
     router as submittal_packs_router,
 )
 from .domains.assessments_runtime.pool_rescore_routes import router as pool_rescore_router
+from .domains.outreach import router as sourcing_assist_router
 
 # FastAPI-Users auth routers
 app.include_router(
@@ -360,6 +361,7 @@ app.include_router(bullhorn_router, prefix="/api/v1")
 app.include_router(background_jobs_router, prefix="/api/v1")
 app.include_router(share_links_router, prefix="/api/v1")
 app.include_router(submittal_packs_router, prefix="/api/v1")
+app.include_router(sourcing_assist_router, prefix="/api/v1")
 from .decision_policy.routes import router as decision_policy_router  # noqa: E402
 from .domains.capabilities.routes import router as capability_flags_router  # noqa: E402
 from .services.threshold_calibration.routes import router as threshold_calibration_router  # noqa: E402
