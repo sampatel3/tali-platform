@@ -265,6 +265,23 @@ describe('LandingPreviewPage', () => {
     }
   });
 
+  it('grounds variant E in the real product components (v2 — abar strip, live feed, 5-Ds scorecard)', () => {
+    const { container } = renderAt('?v=e');
+    // FIX 1 — the REAL agent-ON strip (.abar) is mounted (not the old bespoke
+    // toggle), and its ON/OFF control is still the role="switch" the hero flips.
+    expect(container.querySelector('.abar')).toBeTruthy();
+    expect(screen.getByRole('switch')).toBeTruthy();
+    // FIX 2 — the three embedded real surfaces render, each in a "Live component"
+    // frame. The AgentDecisionCard (hero) + ActivityFeed (funnel) both name the
+    // fixture candidate; the real 5-Ds AssessmentScorecard renders its spine.
+    expect(screen.getAllByText('Maya Chen').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Agent recommends/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Your morning queue/i)).toBeTruthy();
+    expect(screen.getByText(/SCORECARD · THE 5 Ds/i)).toBeTruthy();
+    expect(screen.getAllByText('Delegation').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Live component/i).length).toBeGreaterThan(0);
+  });
+
   it('renders variant E with final mock states and no autoplay under reduced-motion', () => {
     stubMatchMedia(true);
     const { container } = renderAt('?v=e');
